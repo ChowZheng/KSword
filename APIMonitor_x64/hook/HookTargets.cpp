@@ -1,6 +1,9 @@
 #include "pch.h"
 #include "HookTargets.h"
 #include "HookEngine.h"
+#include "ClipboardGuardHook.h"
+#include "ClipboardGuardVTableHook.h"
+#include "ClipboardGuardWin32u.h"
 #include "../MonitorAgent.h"
 #include "../core/MonitorPipe.h"
 
@@ -481,11 +484,7 @@ namespace apimon
         using BitBltFn = BOOL(WINAPI*)(HDC, int, int, int, int, HDC, int, int, DWORD);
         using StretchBltFn = BOOL(WINAPI*)(HDC, int, int, int, int, HDC, int, int, int, int, DWORD);
         using DeleteObjectFn = BOOL(WINAPI*)(HGDIOBJ);
-        using OpenClipboardFn = BOOL(WINAPI*)(HWND);
-        using CloseClipboardFn = BOOL(WINAPI*)();
-        using GetClipboardDataFn = HANDLE(WINAPI*)(UINT);
-        using SetClipboardDataFn = HANDLE(WINAPI*)(UINT, HANDLE);
-        using EmptyClipboardFn = BOOL(WINAPI*)();
+        // 剪贴板相关的原函数指针类型定义已迁移到 hook/ClipboardGuardHook.h。
         using StartTraceWFn = ULONG(WINAPI*)(PTRACEHANDLE, LPCWSTR, PEVENT_TRACE_PROPERTIES);
         using StartTraceAFn = ULONG(WINAPI*)(PTRACEHANDLE, LPCSTR, PEVENT_TRACE_PROPERTIES);
         using ControlTraceWFn = ULONG(WINAPI*)(TRACEHANDLE, LPCWSTR, PEVENT_TRACE_PROPERTIES, ULONG);
@@ -1092,11 +1091,7 @@ namespace apimon
         InlineHookRecord g_bitBltHook{};
         InlineHookRecord g_stretchBltHook{};
         InlineHookRecord g_deleteObjectHook{};
-        InlineHookRecord g_openClipboardHook{};
-        InlineHookRecord g_closeClipboardHook{};
-        InlineHookRecord g_getClipboardDataHook{};
-        InlineHookRecord g_setClipboardDataHook{};
-        InlineHookRecord g_emptyClipboardHook{};
+        // 剪贴板相关的 InlineHookRecord 已迁移到 hook/ClipboardGuardHook.cpp。
         InlineHookRecord g_startTraceWHook{};
         InlineHookRecord g_startTraceAHook{};
         InlineHookRecord g_controlTraceWHook{};
@@ -1728,11 +1723,7 @@ namespace apimon
         BitBltFn g_bitBltOriginal = nullptr;
         StretchBltFn g_stretchBltOriginal = nullptr;
         DeleteObjectFn g_deleteObjectOriginal = nullptr;
-        OpenClipboardFn g_openClipboardOriginal = nullptr;
-        CloseClipboardFn g_closeClipboardOriginal = nullptr;
-        GetClipboardDataFn g_getClipboardDataOriginal = nullptr;
-        SetClipboardDataFn g_setClipboardDataOriginal = nullptr;
-        EmptyClipboardFn g_emptyClipboardOriginal = nullptr;
+        // 剪贴板相关的原函数指针定义已迁移到 hook/ClipboardGuardHook.cpp。
         StartTraceWFn g_startTraceWOriginal = nullptr;
         StartTraceAFn g_startTraceAOriginal = nullptr;
         ControlTraceWFn g_controlTraceWOriginal = nullptr;
@@ -3073,6 +3064,11 @@ namespace apimon
                 // - enableLoader 控制是否上报 LoadLibrary 事件；
                 // - 注册表/网络/Shell32 进程启动模块可能晚于 Agent 注入加载，因此启用这些分类时也要安装加载器 hook。
                 return configValue.enableLoader || configValue.enableRegistry || configValue.enableNetwork || configValue.enableProcess;
+            case ks::winapi_monitor::EventCategory::Clipboard:
+                // 剪贴板 hook 默认关闭：必须显式 enableClipboard，
+                // 不能像其它分类一样落到下面的 default true，否则普通 API 监控会话
+                // 会在用户没打开"剪贴板保护"时也悄悄装上剪贴板 hook。
+                return configValue.enableClipboard;
             default:
                 break;
             }
@@ -8426,21 +8422,11 @@ namespace apimon
             (HGDIOBJ objectHandle), (objectHandle),
             { AppendWideText(detailBuffer, L"object="); AppendHexText(detailBuffer, reinterpret_cast<std::uint64_t>(objectHandle)); })
 
-        APIMON_SIMPLE_BOOL_HOOK(HookedOpenClipboard, g_openClipboardOriginal, ks::winapi_monitor::EventCategory::Process, L"User32", L"OpenClipboard",
-            (HWND ownerWindow), (ownerWindow),
-            { AppendWideText(detailBuffer, L"owner="); AppendHexText(detailBuffer, reinterpret_cast<std::uint64_t>(ownerWindow)); })
-        APIMON_SIMPLE_BOOL_HOOK(HookedCloseClipboard, g_closeClipboardOriginal, ks::winapi_monitor::EventCategory::Process, L"User32", L"CloseClipboard",
-            (), (),
-            { detailBuffer[0] = L'\0'; })
-        APIMON_SIMPLE_HANDLE_HOOK(HANDLE, HookedGetClipboardData, g_getClipboardDataOriginal, ks::winapi_monitor::EventCategory::Process, L"User32", L"GetClipboardData",
-            (UINT formatValue), (formatValue),
-            { AppendWideText(detailBuffer, L"format="); AppendUnsignedText(detailBuffer, formatValue); AppendWideText(detailBuffer, L" handle="); AppendHexText(detailBuffer, reinterpret_cast<std::uint64_t>(resultHandle)); })
-        APIMON_SIMPLE_HANDLE_HOOK(HANDLE, HookedSetClipboardData, g_setClipboardDataOriginal, ks::winapi_monitor::EventCategory::Process, L"User32", L"SetClipboardData",
-            (UINT formatValue, HANDLE dataHandle), (formatValue, dataHandle),
-            { AppendWideText(detailBuffer, L"format="); AppendUnsignedText(detailBuffer, formatValue); AppendWideText(detailBuffer, L" input="); AppendHexText(detailBuffer, reinterpret_cast<std::uint64_t>(dataHandle)); AppendWideText(detailBuffer, L" handle="); AppendHexText(detailBuffer, reinterpret_cast<std::uint64_t>(resultHandle)); })
-        APIMON_SIMPLE_BOOL_HOOK(HookedEmptyClipboard, g_emptyClipboardOriginal, ks::winapi_monitor::EventCategory::Process, L"User32", L"EmptyClipboard",
-            (), (),
-            { detailBuffer[0] = L'\0'; })
+        // 剪贴板 8 个 Win32 平导出 hook（含本段原有的 5 个）与 2 个 OLE 平导出 hook
+        // 的函数体、原函数指针、InlineHookRecord 全部迁移到 hook/ClipboardGuardHook.cpp——
+        // 那五个需要在调用前先判定策略、按需短路原函数，不再适合复用
+        // APIMON_SIMPLE_BOOL_HOOK/APIMON_SIMPLE_HANDLE_HOOK 这两个"无条件调用原函数
+        // 再上报"的宏。g_bindings[] 里对应条目见下方 Clipboard 分类。
 
         // HookedFourthBatchTelemetry 作用：
         // - 输入：ETW session/provider/trace 句柄与控制参数；
@@ -9608,11 +9594,19 @@ namespace apimon
             { L"User32.dll", "GetForegroundWindow", ks::winapi_monitor::EventCategory::Process, &g_getForegroundWindowHook, reinterpret_cast<void*>(&HookedGetForegroundWindow), reinterpret_cast<void**>(&g_getForegroundWindowOriginal) },
             { L"User32.dll", "GetDC", ks::winapi_monitor::EventCategory::Process, &g_getDCHook, reinterpret_cast<void*>(&HookedGetDC), reinterpret_cast<void**>(&g_getDCOriginal) },
             { L"User32.dll", "ReleaseDC", ks::winapi_monitor::EventCategory::Process, &g_releaseDCHook, reinterpret_cast<void*>(&HookedReleaseDC), reinterpret_cast<void**>(&g_releaseDCOriginal) },
-            { L"User32.dll", "OpenClipboard", ks::winapi_monitor::EventCategory::Process, &g_openClipboardHook, reinterpret_cast<void*>(&HookedOpenClipboard), reinterpret_cast<void**>(&g_openClipboardOriginal) },
-            { L"User32.dll", "CloseClipboard", ks::winapi_monitor::EventCategory::Process, &g_closeClipboardHook, reinterpret_cast<void*>(&HookedCloseClipboard), reinterpret_cast<void**>(&g_closeClipboardOriginal) },
-            { L"User32.dll", "GetClipboardData", ks::winapi_monitor::EventCategory::Process, &g_getClipboardDataHook, reinterpret_cast<void*>(&HookedGetClipboardData), reinterpret_cast<void**>(&g_getClipboardDataOriginal) },
-            { L"User32.dll", "SetClipboardData", ks::winapi_monitor::EventCategory::Process, &g_setClipboardDataHook, reinterpret_cast<void*>(&HookedSetClipboardData), reinterpret_cast<void**>(&g_setClipboardDataOriginal) },
-            { L"User32.dll", "EmptyClipboard", ks::winapi_monitor::EventCategory::Process, &g_emptyClipboardHook, reinterpret_cast<void*>(&HookedEmptyClipboard), reinterpret_cast<void**>(&g_emptyClipboardOriginal) },
+            // 剪贴板 hook 统一归 Clipboard 分类（由 enableClipboard 单独控制安装，
+            // 不再随 enableProcess 一起装上），函数体/原指针/Hook 记录都在
+            // hook/ClipboardGuardHook.cpp 里定义，这里只是引用其符号。
+            { L"User32.dll", "OpenClipboard", ks::winapi_monitor::EventCategory::Clipboard, &g_openClipboardHook, reinterpret_cast<void*>(&HookedOpenClipboard), reinterpret_cast<void**>(&g_openClipboardOriginal) },
+            { L"User32.dll", "CloseClipboard", ks::winapi_monitor::EventCategory::Clipboard, &g_closeClipboardHook, reinterpret_cast<void*>(&HookedCloseClipboard), reinterpret_cast<void**>(&g_closeClipboardOriginal) },
+            { L"User32.dll", "GetClipboardData", ks::winapi_monitor::EventCategory::Clipboard, &g_getClipboardDataHook, reinterpret_cast<void*>(&HookedGetClipboardData), reinterpret_cast<void**>(&g_getClipboardDataOriginal) },
+            { L"User32.dll", "SetClipboardData", ks::winapi_monitor::EventCategory::Clipboard, &g_setClipboardDataHook, reinterpret_cast<void*>(&HookedSetClipboardData), reinterpret_cast<void**>(&g_setClipboardDataOriginal) },
+            { L"User32.dll", "EmptyClipboard", ks::winapi_monitor::EventCategory::Clipboard, &g_emptyClipboardHook, reinterpret_cast<void*>(&HookedEmptyClipboard), reinterpret_cast<void**>(&g_emptyClipboardOriginal) },
+            { L"User32.dll", "EnumClipboardFormats", ks::winapi_monitor::EventCategory::Clipboard, &g_enumClipboardFormatsHook, reinterpret_cast<void*>(&HookedEnumClipboardFormats), reinterpret_cast<void**>(&g_enumClipboardFormatsOriginal) },
+            { L"User32.dll", "IsClipboardFormatAvailable", ks::winapi_monitor::EventCategory::Clipboard, &g_isClipboardFormatAvailableHook, reinterpret_cast<void*>(&HookedIsClipboardFormatAvailable), reinterpret_cast<void**>(&g_isClipboardFormatAvailableOriginal) },
+            { L"User32.dll", "GetPriorityClipboardFormat", ks::winapi_monitor::EventCategory::Clipboard, &g_getPriorityClipboardFormatHook, reinterpret_cast<void*>(&HookedGetPriorityClipboardFormat), reinterpret_cast<void**>(&g_getPriorityClipboardFormatOriginal) },
+            { L"Ole32.dll", "OleGetClipboard", ks::winapi_monitor::EventCategory::Clipboard, &g_oleGetClipboardHook, reinterpret_cast<void*>(&HookedOleGetClipboard), reinterpret_cast<void**>(&g_oleGetClipboardOriginal) },
+            { L"Ole32.dll", "OleSetClipboard", ks::winapi_monitor::EventCategory::Clipboard, &g_oleSetClipboardHook, reinterpret_cast<void*>(&HookedOleSetClipboard), reinterpret_cast<void**>(&g_oleSetClipboardOriginal) },
             { L"Gdi32.dll", "CreateCompatibleDC", ks::winapi_monitor::EventCategory::Process, &g_createCompatibleDCHook, reinterpret_cast<void*>(&HookedCreateCompatibleDC), reinterpret_cast<void**>(&g_createCompatibleDCOriginal) },
             { L"Gdi32.dll", "DeleteDC", ks::winapi_monitor::EventCategory::Process, &g_deleteDCHook, reinterpret_cast<void*>(&HookedDeleteDC), reinterpret_cast<void**>(&g_deleteDCOriginal) },
             { L"Gdi32.dll", "CreateCompatibleBitmap", ks::winapi_monitor::EventCategory::Process, &g_createCompatibleBitmapHook, reinterpret_cast<void*>(&HookedCreateCompatibleBitmap), reinterpret_cast<void**>(&g_createCompatibleBitmapOriginal) },
@@ -10316,6 +10310,13 @@ namespace apimon
             || hasEnabledCategory;
         installedAny = InstallFakeSuccessHooks(&failureText) || installedAny;
         installedAny = InstallRawFallbackHooks() || installedAny;
+        // tier2：win32u 层剪贴板深度防御。只有 enableClipboard 打开、且策略里
+        // 至少一个方向是 BLOCK 时才会真正装上任何东西，函数内部自行判定，
+        // 这里无条件调用即可（与上面两行同一惯例）。
+        if (ActiveConfig().enableClipboard)
+        {
+            SyncClipboardWin32uHooks();
+        }
         if (!hasEnabledCategory)
         {
             if (errorTextOut != nullptr)
@@ -10352,6 +10353,12 @@ namespace apimon
         }
         UninstallRawFallbackHooks();
         UninstallFakeSuccessHooks();
+        // OleGetClipboard 拿到的 IDataObject 虚表补丁不挂在 g_bindings[] 的
+        // inline hook 生命周期里（它是运行期动态发现的，不是固定导出地址），
+        // 必须在这里单独复原，且要早于 DLL 可能被卸载的时间点。
+        UninstallAllClipboardDataObjectVTableHooks();
+        // tier2 win32u hook 同理是动态按策略安装的，不在 g_bindings[] 里。
+        UninstallAllClipboardWin32uHooks();
     }
     void RetryPendingHooks()
     {

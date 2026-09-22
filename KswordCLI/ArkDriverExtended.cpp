@@ -462,6 +462,7 @@ int commandArkDriverExtended(const int argc, wchar_t* argv[])
     if (subcommand == L"piddb") return finishResult(L"piddb", client.queryPiDdb(optionU32(args, L"--max-rows", KSWORD_ARK_PIDDB_DEFAULT_ROWS)));
     if (subcommand == L"cpu-power") return finishResult(L"cpu-power", client.queryCpuPowerState());
     if (subcommand == L"process-protect") return finishResult(L"process-protect", client.queryProcessProtectState());
+    if (subcommand == L"clipboard-policy") return finishResult(L"clipboard-policy", client.queryClipboardPolicyState());
     if (subcommand == L"raw-disk-backend") return finishResult(L"raw-disk-backend", client.queryRawDiskBackend(optionU32(args, L"--disk", 0U), optionU32(args, L"--backend", KSWORD_ARK_RAW_DISK_BACKEND_WINDOWS_STACK), optionU32(args, L"--flags", 0U)));
     if (subcommand == L"raw-disk-read")
     {

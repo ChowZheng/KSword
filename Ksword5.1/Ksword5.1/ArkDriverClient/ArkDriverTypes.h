@@ -59,6 +59,7 @@
 #include "../../../shared/driver/KswordArkUnloadedDriverIoctl.h"
 #include "../../../shared/driver/KswordArkSystemTimeIoctl.h"
 #include "../../../shared/driver/KswordArkResearchIoctl.h"
+#include "../../../shared/driver/KswordArkClipboardPolicyIoctl.h"
 
 namespace ksword::ark
 {
@@ -2514,6 +2515,17 @@ namespace ksword::ark
     {
         IoResult io;
         KSWORD_ARK_PROCESS_PROTECT_STATE_RESPONSE response{};
+    };
+
+    // ClipboardPolicyStateResult wraps the clipboard access policy table.
+    // 输入：无；DriverClient::queryClipboardPolicyState 负责填充。
+    // 处理：io 记录传输/协议结果，response 是驱动当前存着的完整策略规则表——
+    //       驱动本身不判定拦截，这张表只是原样回显给 UI 重建表格或给 CLI 核对。
+    // 返回：结构本身无方法；调用方先看 io.ok，再看 response.ruleCount。
+    struct ClipboardPolicyStateResult
+    {
+        IoResult io;
+        KSWORD_ARK_CLIPBOARD_POLICY_STATE_RESPONSE response{};
     };
 
     // CallbackRemoveResult wraps the legacy external-callback removal response packet.

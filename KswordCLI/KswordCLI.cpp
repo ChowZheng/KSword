@@ -61,6 +61,7 @@
 #include "../shared/driver/KswordArkTrustIoctl.h"
 #include "../shared/driver/KswordArkWin32kIoctl.h"
 #include "../shared/driver/KswordArkWslSiloIoctl.h"
+#include "../shared/driver/KswordArkClipboardPolicyIoctl.h"
 #include "ArkDriverExtended.h"
 
 #pragma comment(lib, "Iphlpapi.lib")
@@ -1263,6 +1264,8 @@ namespace
         { L"r0", L"piddb", L"KswordCLI.exe r0 piddb [--max-rows N]", L"Enumerate PiDDBCacheTable evidence without deleting entries.", L"Optional: --max-rows.", L"Backed by IOCTL_KSWORD_ARK_QUERY_PIDDB." },
         { L"r0", L"cpu-power", L"KswordCLI.exe r0 cpu-power", L"Query CPU power-management state and raw capability evidence.", L"No options.", L"Backed by IOCTL_KSWORD_ARK_QUERY_CPU_POWER." },
         { L"r0", L"process-protect", L"KswordCLI.exe r0 process-protect", L"Query the driver process-protection configuration and counters.", L"No options.", L"Backed by IOCTL_KSWORD_ARK_QUERY_PROCESS_PROTECT_STATE." },
+        { L"r0", L"clipboard-policy", L"KswordCLI.exe r0 clipboard-policy", L"Query the driver's stored clipboard access policy rule table.", L"No options.", L"Backed by IOCTL_KSWORD_ARK_QUERY_CLIPBOARD_POLICY; the driver only stores/echoes this table, enforcement happens in the injected Agent DLL." },
+        { L"r0", L"clipboard-policy-set-rules", L"KswordCLI.exe r0 clipboard-policy-set-rules --blob PATH", L"Load a raw clipboard policy config packet.", L"Required: --blob.", L"Backed by IOCTL_KSWORD_ARK_SET_CLIPBOARD_POLICY." },
         { L"r0", L"raw-disk-backend", L"KswordCLI.exe r0 raw-disk-backend [--disk N] [--backend N] [--flags 0xN]", L"Query the selected raw-disk read backend.", L"Optional: --disk defaults to 0, --backend defaults to Windows stack, --flags.", L"Backed by IOCTL_KSWORD_ARK_QUERY_RAW_DISK_BACKEND." },
         { L"r0", L"raw-disk-read", L"KswordCLI.exe r0 raw-disk-read --length N [--disk N] [--backend N] [--offset N] [--flags 0xN] [--hexdump]", L"Read a bounded raw-disk range for forensic inspection.", L"Required: --length. Optional: --disk, --backend, --offset, --flags, --hexdump.", L"Backed by IOCTL_KSWORD_ARK_READ_RAW_DISK; default display is capped at 256 bytes." },
         { L"r0", L"system-time", L"KswordCLI.exe r0 system-time", L"Query system-time virtualization and conflict state.", L"No options.", L"Backed by IOCTL_KSWORD_ARK_QUERY_SYSTEM_TIME." },
@@ -8419,6 +8422,15 @@ namespace
             if (argc >= 3 && argv[2] != nullptr && std::wstring(argv[2]) == L"object-type-procedures")
             {
                 return commandR0ObjectTypeProcedures(argc, argv);
+            }
+            // clipboard-policy-set-rules 单独拦截：它和 dyn/callback 的 set-rules 一样
+            // 需要 --blob 整包读入,不适合 commandArkDriverExtended 里那种单行 finishResult 形状；
+            // 只读的 "r0 clipboard-policy" 仍走下面的通用分发。
+            if (argc >= 3 && argv[2] != nullptr && std::wstring(argv[2]) == L"clipboard-policy-set-rules")
+            {
+                const NamedArgs args = parseNamedArgs(argc, argv, 3);
+                std::vector<std::uint8_t> blob = readRequiredBlobOption(args, L"--blob", kMaxCommandBytes);
+                return runNoOutputIoctl(L"IOCTL_KSWORD_ARK_SET_CLIPBOARD_POLICY", IOCTL_KSWORD_ARK_SET_CLIPBOARD_POLICY, blob.data(), checkedDwordSize(blob.size()), GENERIC_READ | GENERIC_WRITE);
             }
             return commandArkDriverExtended(argc, argv);
         }

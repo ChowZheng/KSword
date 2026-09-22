@@ -413,6 +413,8 @@ WSL silo and Linux PID/TID diagnostics.
 | `r0 piddb` | `KswordCLI.exe r0 piddb [--max-rows N]` | 枚举 PiDDBCacheTable 证据。 | 可选：--max-rows。 | `IOCTL_KSWORD_ARK_QUERY_PIDDB`，不删除条目。 |
 | `r0 cpu-power` | `KswordCLI.exe r0 cpu-power` | 查询 CPU 电源管理状态及原始能力证据。 | 无。 | `IOCTL_KSWORD_ARK_QUERY_CPU_POWER`。 |
 | `r0 process-protect` | `KswordCLI.exe r0 process-protect` | 查询进程保护配置和计数器。 | 无。 | `IOCTL_KSWORD_ARK_QUERY_PROCESS_PROTECT_STATE`。 |
+| `r0 clipboard-policy` | `KswordCLI.exe r0 clipboard-policy` | 查询驱动当前存储的剪贴板访问策略规则表。 | 无。 | `IOCTL_KSWORD_ARK_QUERY_CLIPBOARD_POLICY`；驱动只存表/回显，真正拦截判定在被注入目标进程的 Agent DLL 里。 |
+| `r0 clipboard-policy-set-rules` | `KswordCLI.exe r0 clipboard-policy-set-rules --blob PATH` | 加载一份原始剪贴板策略配置包并整体替换规则表。 | 必填：`--blob`。 | `IOCTL_KSWORD_ARK_SET_CLIPBOARD_POLICY`。 |
 | `r0 raw-disk-backend` | `KswordCLI.exe r0 raw-disk-backend [--disk N] [--backend N] [--flags 0xN]` | 查询指定原始磁盘读取后端。 | 可选：--disk 默认 0，--backend 默认 Windows stack，--flags。 | `IOCTL_KSWORD_ARK_QUERY_RAW_DISK_BACKEND`。 |
 | `r0 raw-disk-read` | `KswordCLI.exe r0 raw-disk-read --length N [--disk N] [--backend N] [--offset N] [--flags 0xN] [--hexdump]` | 读取受协议长度上限约束的原始磁盘范围。 | 必填：--length。可选：--disk、--backend、--offset、--flags、--hexdump。 | `IOCTL_KSWORD_ARK_READ_RAW_DISK`。 |
 | `r0 system-time` | `KswordCLI.exe r0 system-time` | 查询系统时间虚拟化和冲突状态。 | 无。 | `IOCTL_KSWORD_ARK_QUERY_SYSTEM_TIME`。 |

@@ -2,6 +2,7 @@
 
 #include "BootEditor/BootEditorTab.h"
 #include "ApplicationControlPage.h"
+#include "ClipboardGuard/ClipboardGuardPage.h"
 #include "ContextMenuCleaner/ContextMenuCleanerTab.h"
 #include "DisableDse/DisableDsePage.h"
 #include "Experimental/BugcheckGuardPage.h"
@@ -76,6 +77,7 @@ void MiscDock::initializeUi()
     m_contextMenuCleanerHostWidget = new QWidget(m_mainTabWidget);
     m_diskEditorHostWidget = new QWidget(m_mainTabWidget);
     m_applicationControlHostWidget = new QWidget(m_mainTabWidget);
+    m_clipboardGuardHostWidget = new QWidget(m_mainTabWidget);
     m_renderBenchmarkHostWidget = new QWidget(m_mainTabWidget);
     m_desktopDrawingHostWidget = new QWidget(m_mainTabWidget);
     m_windowInjectionHostWidget = new QWidget(m_mainTabWidget);
@@ -170,6 +172,20 @@ void MiscDock::initializeUi()
         m_applicationControlHostWidget,
         QIcon(QStringLiteral(":/Icon/process_details.svg")),
         QStringLiteral("应用控制"));
+
+    // 剪贴板保护页：
+    // - 按 PID/映像名/路径管理剪贴板读/写/枚举策略，规则整表下发到驱动持久保存；
+    // - 实际拦截发生在被注入到受管进程里的 APIMonitor_x64.dll（复用现有 hook 引擎）；
+    // - 驱动本身只存表、不判定拦截，详见 shared/driver/KswordArkClipboardPolicyIoctl.h。
+    m_clipboardGuardTabIndex = m_mainTabWidget->addTab(
+        m_clipboardGuardHostWidget,
+        QIcon(QStringLiteral(":/Icon/clipboard_guard.svg")),
+        QStringLiteral("剪贴板保护"));
+    ks::i18n::LanguageManager::instance().bindTab(
+        m_mainTabWidget,
+        m_clipboardGuardHostWidget,
+        QStringLiteral("misc.clipboard_guard.tab"),
+        QStringLiteral("剪贴板保护"));
 
     // 渲染基准页：
     // - 量化主窗口整树重绘、拖动掉帧、DWM 合成与目标窗口响应；
@@ -308,6 +324,15 @@ void MiscDock::ensureTabInitialized(const int tabIndex)
     if (tabIndex == m_applicationControlTabIndex)
     {
         initializeApplicationControlPage();
+        return;
+    }
+    if (tabIndex == m_clipboardGuardTabIndex)
+    {
+        initializeClipboardGuardPage();
+        if (m_clipboardGuardPage != nullptr)
+        {
+            m_clipboardGuardPage->notifyPageActivated();
+        }
         return;
     }
     if (tabIndex == m_renderBenchmarkTabIndex)
@@ -491,6 +516,18 @@ void MiscDock::initializeApplicationControlPage()
     QVBoxLayout* const hostLayout = buildHostLayout(m_applicationControlHostWidget);
     m_applicationControlPage = new ks::misc::ApplicationControlPage(m_applicationControlHostWidget);
     hostLayout->addWidget(m_applicationControlPage, 1);
+}
+
+void MiscDock::initializeClipboardGuardPage()
+{
+    if (m_clipboardGuardHostWidget == nullptr || m_clipboardGuardPage != nullptr)
+    {
+        return;
+    }
+
+    QVBoxLayout* const hostLayout = buildHostLayout(m_clipboardGuardHostWidget);
+    m_clipboardGuardPage = new ks::misc::ClipboardGuardPage(m_clipboardGuardHostWidget);
+    hostLayout->addWidget(m_clipboardGuardPage, 1);
 }
 
 void MiscDock::initializeRenderBenchmarkPage()

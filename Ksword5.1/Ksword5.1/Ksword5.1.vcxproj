@@ -263,6 +263,9 @@
     <ClCompile Include="MainWindow.Kvm.cpp" />
     <ClCompile Include="MiscDock\BootEditor\BootEditorTab.Actions.cpp" />
     <ClCompile Include="MiscDock\ApplicationControlPage.cpp" />
+    <ClCompile Include="MiscDock\ClipboardGuard\ClipboardGuardPage.cpp" />
+    <ClCompile Include="MiscDock\ClipboardGuard\ClipboardGuardPage.Session.cpp" />
+    <ClCompile Include="MiscDock\ClipboardGuard\ClipboardGuardPage.RuleEditor.cpp" />
     <ClCompile Include="MiscDock\SoundSource\SoundSourceDetector.cpp" />
     <ClCompile Include="MiscDock\SoundSource\SoundSourcePage.cpp" />
     <ClCompile Include="MiscDock\RenderBenchmark\RenderBenchmarkPage.cpp" />
@@ -558,6 +561,7 @@
     <ClCompile Include="ArkDriverClient\ArkDriverCapabilities.cpp" />
     <ClCompile Include="ArkDriverClient\ArkDriverProcess.cpp" />
     <ClCompile Include="ArkDriverClient\ArkDriverProcessProtect.cpp" />
+    <ClCompile Include="ArkDriverClient\ArkDriverClipboardPolicy.cpp" />
     <ClCompile Include="ArkDriverClient\ArkDriverWorkQueue.cpp" />
     <ClCompile Include="ArkDriverClient\ArkDriverHandle.cpp" />
     <ClCompile Include="ArkDriverClient\ArkDriverAlpc.cpp" />
@@ -758,6 +762,7 @@
     <ClInclude Include="MiscDock\DiskEditor\DiskEditorTab.h" />
     <QtMoc Include="MiscDock\DiskEditor\DiskMapWidget.h" />
     <QtMoc Include="MiscDock\MiscDock.h" />
+    <QtMoc Include="MiscDock\ClipboardGuard\ClipboardGuardPage.h" />
     <ClInclude Include="MinidumpDock\DumpAnalyzer.h" />
     <ClInclude Include="MinidumpDock\DumpByteView.h" />
     <ClInclude Include="MinidumpDock\DumpBugCheckText.h" />

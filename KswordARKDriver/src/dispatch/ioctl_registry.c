@@ -119,6 +119,8 @@ NTSTATUS KswordARKCallbackMonitorIoctlQuery(_In_ WDFDEVICE Device, _In_ WDFREQUE
 NTSTATUS KswordARKCallbackMonitorIoctlRead(_In_ WDFDEVICE Device, _In_ WDFREQUEST Request, _In_ size_t InputBufferLength, _In_ size_t OutputBufferLength, _Out_ size_t* BytesReturned);
 NTSTATUS KswordARKProcessProtectIoctlSetConfigHandler(_In_ WDFDEVICE Device, _In_ WDFREQUEST Request, _In_ size_t InputBufferLength, _In_ size_t OutputBufferLength, _Out_ size_t* BytesReturned);
 NTSTATUS KswordARKProcessProtectIoctlQueryStateHandler(_In_ WDFDEVICE Device, _In_ WDFREQUEST Request, _In_ size_t InputBufferLength, _In_ size_t OutputBufferLength, _Out_ size_t* BytesReturned);
+NTSTATUS KswordARKClipboardPolicyIoctlSetConfigHandler(_In_ WDFDEVICE Device, _In_ WDFREQUEST Request, _In_ size_t InputBufferLength, _In_ size_t OutputBufferLength, _Out_ size_t* BytesReturned);
+NTSTATUS KswordARKClipboardPolicyIoctlQueryStateHandler(_In_ WDFDEVICE Device, _In_ WDFREQUEST Request, _In_ size_t InputBufferLength, _In_ size_t OutputBufferLength, _Out_ size_t* BytesReturned);
 NTSTATUS KswordARKDynDataIoctlQueryStatus(_In_ WDFDEVICE Device, _In_ WDFREQUEST Request, _In_ size_t InputBufferLength, _In_ size_t OutputBufferLength, _Out_ size_t* BytesReturned);
 NTSTATUS KswordARKDynDataIoctlQueryFields(_In_ WDFDEVICE Device, _In_ WDFREQUEST Request, _In_ size_t InputBufferLength, _In_ size_t OutputBufferLength, _Out_ size_t* BytesReturned);
 NTSTATUS KswordARKDynDataIoctlQueryCapabilities(_In_ WDFDEVICE Device, _In_ WDFREQUEST Request, _In_ size_t InputBufferLength, _In_ size_t OutputBufferLength, _Out_ size_t* BytesReturned);
@@ -324,6 +326,9 @@ static const KSWORD_ARK_IOCTL_ENTRY g_KswordArkIoctlTable[] = {
     // 进程保护复用同一个对象回调，配置下发按"改变回调行为"处理，查询为只读。
     { IOCTL_KSWORD_ARK_SET_PROCESS_PROTECT_CONFIG, KswordARKProcessProtectIoctlSetConfigHandler, "IOCTL_KSWORD_ARK_SET_PROCESS_PROTECT_CONFIG", KSWORD_ARK_IOCTL_CAPABILITY_NONE, KSWORD_ARK_IOCTL_FLAG_NONE },
     { IOCTL_KSWORD_ARK_QUERY_PROCESS_PROTECT_STATE, KswordARKProcessProtectIoctlQueryStateHandler, "IOCTL_KSWORD_ARK_QUERY_PROCESS_PROTECT_STATE", KSWORD_ARK_IOCTL_CAPABILITY_NONE, KSWORD_ARK_IOCTL_FLAG_QUIET_SUCCESS },
+    // 剪贴板策略只是存表+回显，驱动不消费它；真正的拦截判定在用户态 Agent DLL 里。
+    { IOCTL_KSWORD_ARK_SET_CLIPBOARD_POLICY, KswordARKClipboardPolicyIoctlSetConfigHandler, "IOCTL_KSWORD_ARK_SET_CLIPBOARD_POLICY", KSWORD_ARK_IOCTL_CAPABILITY_NONE, KSWORD_ARK_IOCTL_FLAG_NONE },
+    { IOCTL_KSWORD_ARK_QUERY_CLIPBOARD_POLICY, KswordARKClipboardPolicyIoctlQueryStateHandler, "IOCTL_KSWORD_ARK_QUERY_CLIPBOARD_POLICY", KSWORD_ARK_IOCTL_CAPABILITY_NONE, KSWORD_ARK_IOCTL_FLAG_QUIET_SUCCESS },
     // 知识中心只读证据编排：只查中央注册表并采集当前 WDF/WDM 上下文。
     { IOCTL_KSWORD_ARK_QUERY_RESEARCH_TOPIC, KswordARKResearchIoctlQueryTopic, "IOCTL_KSWORD_ARK_QUERY_RESEARCH_TOPIC", KSWORD_ARK_IOCTL_CAPABILITY_NONE, KSWORD_ARK_IOCTL_FLAG_QUIET_SUCCESS },
     { IOCTL_KSWORD_ARK_QUERY_DYN_STATUS, KswordARKDynDataIoctlQueryStatus, "IOCTL_KSWORD_ARK_QUERY_DYN_STATUS", KSWORD_ARK_IOCTL_CAPABILITY_NONE, KSWORD_ARK_IOCTL_FLAG_NONE },

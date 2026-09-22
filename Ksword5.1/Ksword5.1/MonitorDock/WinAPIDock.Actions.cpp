@@ -1103,6 +1103,7 @@ bool WinAPIDock::writeSessionConfigFile(QString* errorTextOut) const
     outputStream << "enable_network=" << ((m_hookNetworkCheck != nullptr && m_hookNetworkCheck->isChecked()) ? 1 : 0) << '\n';
     outputStream << "enable_process=" << ((m_hookProcessCheck != nullptr && m_hookProcessCheck->isChecked()) ? 1 : 0) << '\n';
     outputStream << "enable_loader=" << ((m_hookLoaderCheck != nullptr && m_hookLoaderCheck->isChecked()) ? 1 : 0) << '\n';
+    outputStream << "enable_clipboard=" << ((m_hookClipboardCheck != nullptr && m_hookClipboardCheck->isChecked()) ? 1 : 0) << '\n';
     outputStream << "auto_inject_child=" << ((m_autoInjectChildCheck != nullptr && m_autoInjectChildCheck->isChecked()) ? 1 : 0) << '\n';
     outputStream << "enable_raw_fallback=" << ((m_rawFallbackCheck != nullptr && m_rawFallbackCheck->isChecked()) ? 1 : 0) << '\n';
     outputStream << "raw_use_default_denylist=" << ((m_rawDefaultDenyListCheck != nullptr && m_rawDefaultDenyListCheck->isChecked()) ? 1 : 0) << '\n';

@@ -211,6 +211,14 @@ Return Value:
             "KswordARKProcessProtectInitialize degraded %!STATUS!", status);
     }
 
+    // 剪贴板策略表不挂任何内核回调，纯粹是"存一张表供用户态 Agent 查询"，
+    // 与进程保护配置放在一起初始化，分配失败只关闭这一项能力。
+    status = KswordARKClipboardPolicyInitialize(controlDevice);
+    if (!NT_SUCCESS(status)) {
+        TraceEvents(TRACE_LEVEL_WARNING, TRACE_DRIVER,
+            "KswordARKClipboardPolicyInitialize degraded %!STATUS!", status);
+    }
+
     // 内核回调是可选能力，不再是整个驱动的加载门槛：某台机器上的 altitude
     // 冲突、回调槽位耗尽或资源不足只会关闭对应能力，KSword 的驱动、进程、
     // 线程、内存、句柄、内核审计等其它功能仍然可用。
@@ -334,6 +342,8 @@ Return Value:
     KswordARKCallbackUninitialize();
     // 对象回调已在上一步注销完毕，此时再没有前置例程会读保护配置，可以安全释放。
     KswordARKProcessProtectUninitialize();
+    // 剪贴板策略没有注册任何回调，卸载顺序上不依赖其它模块，这里跟着一起收尾即可。
+    KswordARKClipboardPolicyUninitialize();
     KswordARKDynDataUninitialize();
     TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_DRIVER, "%!FUNC! Exit");
 }

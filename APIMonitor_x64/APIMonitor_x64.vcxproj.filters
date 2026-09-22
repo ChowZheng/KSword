@@ -39,6 +39,18 @@
     <ClInclude Include="hook\HookTargets.h">
       <Filter>头文件\hook</Filter>
     </ClInclude>
+    <ClInclude Include="hook\ClipboardGuardCommon.h">
+      <Filter>头文件\hook</Filter>
+    </ClInclude>
+    <ClInclude Include="hook\ClipboardGuardHook.h">
+      <Filter>头文件\hook</Filter>
+    </ClInclude>
+    <ClInclude Include="hook\ClipboardGuardVTableHook.h">
+      <Filter>头文件\hook</Filter>
+    </ClInclude>
+    <ClInclude Include="hook\ClipboardGuardWin32u.h">
+      <Filter>头文件\hook</Filter>
+    </ClInclude>
     <ClInclude Include="MonitorAgent.h">
       <Filter>头文件</Filter>
     </ClInclude>
@@ -63,6 +75,18 @@
       <Filter>源文件\hook</Filter>
     </ClCompile>
     <ClCompile Include="hook\HookTargets.cpp">
+      <Filter>源文件\hook</Filter>
+    </ClCompile>
+    <ClCompile Include="hook\ClipboardGuardCommon.cpp">
+      <Filter>源文件\hook</Filter>
+    </ClCompile>
+    <ClCompile Include="hook\ClipboardGuardHook.cpp">
+      <Filter>源文件\hook</Filter>
+    </ClCompile>
+    <ClCompile Include="hook\ClipboardGuardVTableHook.cpp">
+      <Filter>源文件\hook</Filter>
+    </ClCompile>
+    <ClCompile Include="hook\ClipboardGuardWin32u.cpp">
       <Filter>源文件\hook</Filter>
     </ClCompile>
     <ClCompile Include="MonitorAgent.cpp">

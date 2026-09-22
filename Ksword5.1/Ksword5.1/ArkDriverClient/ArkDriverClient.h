@@ -884,6 +884,12 @@ namespace ksword::ark
             const std::vector<KSWORD_ARK_PROCESS_PROTECT_TRUSTED>& trustedEntries,
             unsigned long scanIntervalMs = KSWORD_ARK_PROCESS_PROTECT_SCAN_INTERVAL_DEFAULT_MS) const;
         ProcessProtectStateResult queryProcessProtectState() const;
+        // 剪贴板访问策略：同样是一次性全量替换。驱动只存表、不判定拦截，
+        // 真正的拦截发生在被注入目标进程的用户态 Agent DLL 里。
+        IoResult setClipboardPolicy(
+            unsigned long globalFlags,
+            const std::vector<KSWORD_ARK_CLIPBOARD_POLICY_RULE>& rules) const;
+        ClipboardPolicyStateResult queryClipboardPolicyState() const;
         IoResult answerCallbackEvent(const KSWORD_ARK_CALLBACK_ANSWER_REQUEST& request) const;
         IoResult cancelAllPendingCallbackDecisions() const;
         CallbackRemoveResult removeExternalCallback(const KSWORD_ARK_REMOVE_EXTERNAL_CALLBACK_REQUEST& request) const;

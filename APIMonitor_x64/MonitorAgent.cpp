@@ -3,6 +3,8 @@
 #include "core/MonitorPipe.h"
 #include "hook/HookEngine.h"
 #include "hook/HookTargets.h"
+#include "hook/ClipboardGuardCommon.h"
+#include "hook/ClipboardGuardWin32u.h"
 
 namespace apimon
 {
@@ -85,6 +87,19 @@ namespace apimon
             {
                 return false;
             }
+            // 顺带把剪贴板策略的最新取值刷进原子镜像：sessionId 没变说明还是同一个
+            // 会话，只是策略字段被 UI 原地重写了（右键"拦截读"这类操作）。真的检测
+            // 到 sessionId 变化时，调用方会立刻 RequestStop() 整体重建会话，
+            // InstallConfiguredHooks 用全新配置重新起步，这里刷新的镜像值会被
+            // 那次重建覆盖，不会遗留过期状态。这一步不引入新的 I/O——
+            // observedConfig 是本函数原本就要读的同一份 INI。
+            RefreshClipboardPolicyFromConfig(observedConfig);
+            // tier2 hook 的装/卸取决于最新策略，同一轮顺带同步，
+            // 保证"右键拦截读"之类的操作不但对 tier1 生效，也补上 win32u 深度防御。
+            if (observedConfig.enableClipboard)
+            {
+                SyncClipboardWin32uHooks();
+            }
             return observedConfig.sessionId != activeConfigValue.sessionId;
         }
 
@@ -124,6 +139,9 @@ namespace apimon
                 }
 
                 ReplaceActiveConfig(configValue);
+                // 初始化剪贴板策略的原子镜像，确保 InstallConfiguredHooks 之后
+                // 第一次 hook 调用就能读到正确的读/写/枚举动作，而不是默认值 Allow。
+                RefreshClipboardPolicyFromConfig(configValue);
                 std::wstring errorText;
                 if (!StartMonitorPipeServer(configValue, &errorText))
                 {

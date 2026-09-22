@@ -66,6 +66,7 @@
     "window.hwnd": "可用的顶层窗口句柄；服务型 runner 上通常不可用。",
     "profile.v4Blob": "guarded：operator 指定的 v4 DynData profile 包路径。",
     "callback.rulesBlob": "guarded：operator 指定的 callback 规则包路径。",
+    "clipboard.rulesBlob": "guarded：operator 指定的剪贴板策略规则包路径。",
     "redirect.rulesBlob": "guarded：operator 指定的重定向规则包路径。",
     "network.rulesBlob": "guarded：operator 指定的网络规则包路径。",
     "mutation.targetKind": "guarded：operator 指定的 mutation 目标类型。",
@@ -1394,6 +1395,21 @@
         [
           "r0",
           "process-protect"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 120
+    },
+    {
+      "id": "r0.clipboard-policy-state",
+      "tier": "probe",
+      "ioctls": [
+        "QUERY_CLIPBOARD_POLICY"
+      ],
+      "steps": [
+        [
+          "r0",
+          "clipboard-policy"
         ]
       ],
       "expect": "graceful",
@@ -2822,6 +2838,27 @@
         "callback.rulesBlob"
       ],
       "notes": "会改变全机 process/thread/image/registry 回调判定，可能拦住 runner 自身。"
+    },
+    {
+      "id": "guarded.clipboard-policy.set-rules",
+      "tier": "guarded",
+      "ioctls": [
+        "SET_CLIPBOARD_POLICY"
+      ],
+      "steps": [
+        [
+          "r0",
+          "clipboard-policy-set-rules",
+          "--blob",
+          "{clipboard.rulesBlob}"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 120,
+      "requires": [
+        "clipboard.rulesBlob"
+      ],
+      "notes": "只是整体替换驱动存的策略表，驱动本身不据此拦截，不会影响 runner 自身的剪贴板访问。"
     },
     {
       "id": "guarded.redirect.set-rules",

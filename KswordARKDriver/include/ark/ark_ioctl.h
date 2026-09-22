@@ -50,3 +50,4 @@
 #include "driver/KswordArkMutationIoctl.h"
 #include "driver/KswordArkProcessProtectIoctl.h"
 #include "driver/KswordArkResearchIoctl.h"
+#include "driver/KswordArkClipboardPolicyIoctl.h"

@@ -235,6 +235,7 @@ void WinAPIDock::initializeUi()
     m_hookNetworkCheck = new QCheckBox(QStringLiteral("网络 API"), categoryFrame);
     m_hookProcessCheck = new QCheckBox(QStringLiteral("进程 API"), categoryFrame);
     m_hookLoaderCheck = new QCheckBox(QStringLiteral("加载器 API"), categoryFrame);
+    m_hookClipboardCheck = new QCheckBox(QStringLiteral("剪贴板 API"), categoryFrame);
     m_autoInjectChildCheck = new QCheckBox(QStringLiteral("自动注入子进程"), categoryFrame);
     m_rawFallbackCheck = new QCheckBox(QStringLiteral("Raw 兜底 Hook（强类型优先）"), categoryFrame);
     m_rawDefaultDenyListCheck = new QCheckBox(QStringLiteral("启用默认高频/高风险黑名单"), categoryFrame);
@@ -254,6 +255,7 @@ void WinAPIDock::initializeUi()
     m_hookNetworkCheck->setChecked(true);
     m_hookProcessCheck->setChecked(true);
     m_hookLoaderCheck->setChecked(false);
+    m_hookClipboardCheck->setChecked(false);
     m_autoInjectChildCheck->setChecked(false);
     m_rawFallbackCheck->setChecked(true);
     m_rawDefaultDenyListCheck->setChecked(true);
@@ -271,6 +273,7 @@ void WinAPIDock::initializeUi()
     m_hookNetworkCheck->setToolTip(QStringLiteral("connect / WSAConnect / send / WSASend / sendto / recv / WSARecv / recvfrom 等网络相关 API。"));
     m_hookProcessCheck->setToolTip(QStringLiteral("CreateProcessW 等进程控制相关 API。"));
     m_hookLoaderCheck->setToolTip(QStringLiteral("LoadLibraryW / LoadLibraryExW 等模块加载相关 API。该类 Hook 对 GUI 进程稳定性风险更高，默认关闭。"));
+    m_hookClipboardCheck->setToolTip(QStringLiteral("OpenClipboard / GetClipboardData / SetClipboardData / OleGetClipboard 等剪贴板相关 API。独立于「进程 API」分类，也是「剪贴板保护」杂项页复用的同一套 Hook。"));
     m_autoInjectChildCheck->setToolTip(QStringLiteral("启用后，Agent 会在 CreateProcessW 成功时把同一个 APIMonitor_x64.dll 注入到新子进程；仅支持 x64 子进程。"));
     m_rawFallbackCheck->setToolTip(QStringLiteral("对强类型表未覆盖的已加载模块导出安装 Raw ABI 入口 Hook。强类型 Hook 优先，Raw 只记录模块/函数/地址等兜底信息。"));
     m_rawDefaultDenyListCheck->setToolTip(QStringLiteral("Raw 黑名单只影响兜底 Hook；强类型 Hook 不受影响。建议长期保持开启，避免字符串、堆、锁、时间等高频基础 API 刷爆日志。关闭后，下方额外黑名单仍然生效。"));
@@ -282,6 +285,7 @@ void WinAPIDock::initializeUi()
     categoryLayout->addWidget(m_hookNetworkCheck, 0);
     categoryLayout->addWidget(m_hookProcessCheck, 0);
     categoryLayout->addWidget(m_hookLoaderCheck, 0);
+    categoryLayout->addWidget(m_hookClipboardCheck, 0);
     categoryLayout->addWidget(m_autoInjectChildCheck, 0);
     categoryLayout->addWidget(m_rawFallbackCheck, 0);
     categoryLayout->addWidget(m_rawDefaultDenyListCheck, 0);

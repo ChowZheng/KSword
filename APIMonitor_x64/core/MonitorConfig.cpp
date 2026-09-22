@@ -145,6 +145,26 @@ namespace apimon
             return FakeSuccessReturnType::Scalar;
         }
 
+        // ParseClipboardPolicyAction 作用：
+        // - 输入：INI 里 clipboard_read_action 等键的原始文本，取值 "allow"/"block"/"log_only"
+        //   或直接的数字（与驱动协议 KSWORD_ARK_CLIPBOARD_POLICY_ACTION_* 一致）；
+        // - 处理：不识别的文本一律按 Allow 处理（fail-open 到"不拦截"而不是 fail-closed，
+        //   因为写错配置不该让一个原本没打算保护的进程被误拦)；
+        // - 返回：ClipboardPolicyAction 枚举值。
+        ClipboardPolicyAction ParseClipboardPolicyAction(const std::wstring& textValue)
+        {
+            const std::wstring lowerText = ToLowerWideCopy(TrimWideCopy(textValue));
+            if (lowerText == L"block" || lowerText == L"1")
+            {
+                return ClipboardPolicyAction::Block;
+            }
+            if (lowerText == L"log_only" || lowerText == L"logonly" || lowerText == L"2")
+            {
+                return ClipboardPolicyAction::LogOnly;
+            }
+            return ClipboardPolicyAction::Allow;
+        }
+
         FakeSuccessLastErrorKind ParseFakeSuccessLastErrorKind(const std::wstring& textValue)
         {
             const std::wstring lowerText = ToLowerWideCopy(TrimWideCopy(textValue));
@@ -313,6 +333,14 @@ namespace apimon
             L"fake_success_rules",
             L"");
         configValue.fakeSuccessRules = ParseFakeSuccessRules(configValue.fakeSuccessRulesText);
+
+        configValue.enableClipboard = QueryIniBool(configValue.configPath, L"enable_clipboard", false);
+        configValue.clipboardReadAction = ParseClipboardPolicyAction(
+            QueryIniText(configValue.configPath, L"clipboard_read_action", L"allow"));
+        configValue.clipboardWriteAction = ParseClipboardPolicyAction(
+            QueryIniText(configValue.configPath, L"clipboard_write_action", L"allow"));
+        configValue.clipboardEnumAction = ParseClipboardPolicyAction(
+            QueryIniText(configValue.configPath, L"clipboard_enum_action", L"allow"));
 
         const int rawDetailLimit = static_cast<int>(::GetPrivateProfileIntW(
             L"monitor",

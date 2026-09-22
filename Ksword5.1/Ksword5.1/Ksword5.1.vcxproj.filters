@@ -92,6 +92,15 @@
     <ClCompile Include="MiscDock\ApplicationControlPage.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="MiscDock\ClipboardGuard\ClipboardGuardPage.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="MiscDock\ClipboardGuard\ClipboardGuardPage.Session.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="MiscDock\ClipboardGuard\ClipboardGuardPage.RuleEditor.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="MiscDock\SoundSource\SoundSourceDetector.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -1219,6 +1228,9 @@
     <ClCompile Include="ArkDriverClient\ArkDriverProcessProtect.cpp">
       <Filter>Source Files\ArkDriverClient</Filter>
     </ClCompile>
+    <ClCompile Include="ArkDriverClient\ArkDriverClipboardPolicy.cpp">
+      <Filter>Source Files\ArkDriverClient</Filter>
+    </ClCompile>
     <ClCompile Include="ArkDriverClient\ArkDriverWorkQueue.cpp">
       <Filter>Source Files\ArkDriverClient</Filter>
     </ClCompile>
@@ -1389,6 +1401,9 @@
     <ClInclude Include="MiscDock\ApplicationControlPage.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <QtMoc Include="MiscDock\ClipboardGuard\ClipboardGuardPage.h">
+      <Filter>Header Files</Filter>
+    </QtMoc>
     <ClInclude Include="MiscDock\SoundSource\SoundSourceDetector.h">
       <Filter>Header Files</Filter>
     </ClInclude>

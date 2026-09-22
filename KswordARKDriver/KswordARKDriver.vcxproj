@@ -291,6 +291,8 @@
     <ClCompile Include="src\features\process_protect\process_protect_runtime.c" />
     <ClCompile Include="src\features\process_protect\process_protect_kernel.c" />
     <ClCompile Include="src\features\process_protect\process_protect_ioctl.c" />
+    <ClCompile Include="src\features\clipboard_policy\clipboard_policy_runtime.c" />
+    <ClCompile Include="src\features\clipboard_policy\clipboard_policy_ioctl.c" />
     <ClCompile Include="src\features\redirect\redirect_runtime.c" />
     <ClCompile Include="src\features\redirect\redirect_registry.c" />
     <ClCompile Include="src\features\redirect\redirect_file.c" />
@@ -404,6 +406,8 @@
     <ClInclude Include="src\features\process\process_crossview.h" />
     <ClInclude Include="include\ark\ark_process_protect.h" />
     <ClInclude Include="src\features\process_protect\process_protect_internal.h" />
+    <ClInclude Include="include\ark\ark_clipboard_policy.h" />
+    <ClInclude Include="src\features\clipboard_policy\clipboard_policy_internal.h" />
     <ClInclude Include="src\features\callback\callback_internal.h" />
     <ClInclude Include="src\features\callback\callback_extended_internal.h" />
     <ClInclude Include="src\features\callback\callback_extended_kernel.h" />
