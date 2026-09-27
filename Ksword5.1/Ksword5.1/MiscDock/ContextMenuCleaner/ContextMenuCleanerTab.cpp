@@ -1,6 +1,8 @@
 #include "ContextMenuCleanerTab.h"
 #include "../../Framework/PrivilegeElevationPrompt.h"
 #include "../../UI/VisibleTableWidget.h"
+#include "../../UI/CodeEditorWidget.h"
+#include "../../UI/DetailLayoutRegistry.h"
 
 #include "ContextMenuCleanerTab.Internal.h"
 #include "../../theme.h"
@@ -18,6 +20,7 @@
 #include <QMenu>
 #include <QMessageBox>
 #include <QPushButton>
+#include <QSplitter>
 #include <QTableWidget>
 #include <QTableWidgetItem>
 #include <QTabWidget>
@@ -47,6 +50,64 @@ void ContextMenuCleanerTab::initializeUi()
     m_rootLayout = new QVBoxLayout(this);
     m_rootLayout->setContentsMargins(6, 6, 6, 6);
     m_rootLayout->setSpacing(6);
+
+    // 页面级工具栏：整份菜单备份 / 恢复备份 / 当前分类耗时测量。
+    // 放在子页签上方，因为这三件事都是跨分类的操作（备份与恢复覆盖全部七类）。
+    m_pageToolbar = new QWidget(this);
+    QHBoxLayout* pageToolbarLayout = new QHBoxLayout(m_pageToolbar);
+    pageToolbarLayout->setContentsMargins(0, 0, 0, 0);
+    pageToolbarLayout->setSpacing(6);
+
+    m_backupButton = new QPushButton(QIcon(QStringLiteral(":/Icon/log_copy.svg")),
+        QStringLiteral("备份右键菜单"), m_pageToolbar);
+    m_backupButton->setToolTip(QStringLiteral(
+        "把全部七类 Shell 关联注册表导出成 JSON 文件，存放在 exe 同级目录的 ContextMenuBackups 下。\n"
+        "测量耗时会自动先做一次同样的备份。"));
+    m_restoreBackupButton = new QPushButton(QIcon(QStringLiteral(":/Icon/codeeditor_undo.svg")),
+        QStringLiteral("恢复备份"), m_pageToolbar);
+    m_restoreBackupButton->setToolTip(QStringLiteral(
+        "选择一份备份文件恢复右键菜单。恢复等于遗弃当前状态，因此恢复前会自动把当前状态另存一份。"));
+    m_latencyButton = new QPushButton(QIcon(QStringLiteral(":/Icon/log_track.svg")),
+        QStringLiteral("测量本页耗时"), m_pageToolbar);
+    m_latencyButton->setToolTip(QStringLiteral(
+        "测量当前分类对应右键菜单的耗时，并逐条算出各项的耗时贡献（差值法）。\n"
+        "仅桌面右键菜单可程序化测量；测量会短暂弹出菜单并自动关闭，不注入鼠标键盘。"));
+    m_latencyStopButton = new QPushButton(QStringLiteral("停止测量"), m_pageToolbar);
+    m_latencyStopButton->setEnabled(false);
+    m_latencyStopButton->setToolTip(QStringLiteral("请求中止当前测量，已测结果会保留"));
+    // 只有桌面右键菜单能程序化测量：其余分类干脆不显示测量入口，不给用户假按钮。
+    // 初次可见性由页签切换回调统一维护（默认停在 IE 右键菜单，属于不可测分类）。
+    m_latencyButton->setVisible(false);
+    m_latencyStopButton->setVisible(false);
+    m_latencyStatusLabel = new QLabel(QStringLiteral("尚未测量。"), m_pageToolbar);
+    m_latencyStatusLabel->setStyleSheet(
+        QStringLiteral("QLabel{color:%1;}").arg(KswordTheme::TextSecondaryHex()));
+
+    m_backupButton->setStyleSheet(KswordTheme::ThemedButtonStyle());
+    m_restoreBackupButton->setStyleSheet(KswordTheme::ThemedButtonStyle());
+    m_latencyButton->setStyleSheet(KswordTheme::ThemedButtonStyle());
+    m_latencyStopButton->setStyleSheet(KswordTheme::ThemedButtonStyle());
+
+    pageToolbarLayout->addWidget(m_backupButton);
+    pageToolbarLayout->addWidget(m_restoreBackupButton);
+    pageToolbarLayout->addSpacing(12);
+    pageToolbarLayout->addWidget(m_latencyButton);
+    pageToolbarLayout->addWidget(m_latencyStopButton);
+    pageToolbarLayout->addWidget(m_latencyStatusLabel, 1);
+    m_rootLayout->addWidget(m_pageToolbar);
+
+    connect(m_backupButton, &QPushButton::clicked, this, [this]() {
+        backupContextMenuToFile(true);
+    });
+    connect(m_restoreBackupButton, &QPushButton::clicked, this, [this]() {
+        restoreContextMenuFromFile();
+    });
+    connect(m_latencyButton, &QPushButton::clicked, this, [this]() {
+        startLatencyMeasurement();
+    });
+    connect(m_latencyStopButton, &QPushButton::clicked, this, [this]() {
+        cancelLatencyMeasurement();
+    });
 
     m_areaTabWidget = new QTabWidget(this);
     m_areaTabWidget->setObjectName(QStringLiteral("ksContextMenuCleanerAreaTabs"));
@@ -87,6 +148,17 @@ void ContextMenuCleanerTab::initializeUi()
             if (areaWidgets != nullptr && !areaWidgets->hasLoaded)
             {
                 refreshArea(area);
+            }
+
+            // 测量入口只在该分类真的存在可触发的右键菜单时出现（当前仅桌面右键菜单可测）。
+            const bool measurable = areaSupportsLatencyProbe(area);
+            if (m_latencyButton != nullptr)
+            {
+                m_latencyButton->setVisible(measurable);
+            }
+            if (m_latencyStopButton != nullptr)
+            {
+                m_latencyStopButton->setVisible(measurable);
             }
         });
 }
@@ -150,7 +222,10 @@ void ContextMenuCleanerTab::createAreaPage(const MenuArea area)
     toolbarLayout->addWidget(areaWidgets->copyButton);
     toolbarLayout->addWidget(areaWidgets->filterEdit, 1);
 
-    areaWidgets->table = new ks::ui::VisibleTableWidget(areaWidgets->page);
+    // 表格与详情编辑器必须放进同一个竖直分隔器：
+    // DetailLayoutHost 靠它识别“表格 + 详情”这一对控件，并接管四种详情布局。
+    QSplitter* splitter = new QSplitter(Qt::Vertical, areaWidgets->page);
+    areaWidgets->table = new ks::ui::VisibleTableWidget(splitter);
     areaWidgets->table->setColumnCount(kColumnCount);
     areaWidgets->table->setHorizontalHeaderLabels(QStringList{
         QStringLiteral("名称"),
@@ -160,7 +235,8 @@ void ContextMenuCleanerTab::createAreaPage(const MenuArea area)
         QStringLiteral("命令/处理器"),
         QStringLiteral("注册表位置"),
         QStringLiteral("状态"),
-        QStringLiteral("详情") });
+        QStringLiteral("详情"),
+        QStringLiteral("耗时") });
     areaWidgets->table->setSelectionBehavior(QAbstractItemView::SelectRows);
     areaWidgets->table->setSelectionMode(QAbstractItemView::ExtendedSelection);
     areaWidgets->table->setEditTriggers(QAbstractItemView::NoEditTriggers);
@@ -178,7 +254,23 @@ void ContextMenuCleanerTab::createAreaPage(const MenuArea area)
     areaWidgets->table->horizontalHeader()->setSectionResizeMode(kColumnRegistryPath, QHeaderView::Stretch);
     areaWidgets->table->horizontalHeader()->setSectionResizeMode(kColumnStatus, QHeaderView::ResizeToContents);
     areaWidgets->table->horizontalHeader()->setSectionResizeMode(kColumnDetail, QHeaderView::Stretch);
-    areaWidgets->layout->addWidget(areaWidgets->table, 1);
+    // 耗时列：由"测量本页耗时"填充（逐条差值法），未测量时为空。
+    areaWidgets->table->horizontalHeader()->setSectionResizeMode(kColumnLatency, QHeaderView::ResizeToContents);
+
+    // 详情编辑器：只读，承载当前选中行的完整信息。
+    // 这里只用既有字段拼文本，不新增表格列，也不改枚举逻辑。
+    areaWidgets->detailEditor = new CodeEditorWidget(splitter);
+    areaWidgets->detailEditor->setReadOnly(true);
+    splitter->setStretchFactor(0, 4);
+    splitter->setStretchFactor(1, 2);
+    areaWidgets->layout->addWidget(splitter, 1);
+
+    // 注册进详情布局系统：四种布局（下方折叠 / 行内展开 / 独立窗口 / 右侧）由全局设置决定，
+    // 本页只负责把选中行的文本写进 detailEditor，其余布局与展开状态全部由宿主维护。
+    ks::ui::DetailLayoutRegistry::registerHost(
+        areaWidgets->table,
+        areaWidgets->detailEditor,
+        areaWidgets->page);
 
     areaWidgets->statusLabel = new QLabel(QStringLiteral("尚未刷新。"), areaWidgets->page);
     areaWidgets->statusLabel->setWordWrap(true);
@@ -205,6 +297,11 @@ void ContextMenuCleanerTab::createAreaPage(const MenuArea area)
     connect(areaWidgets->table, &QTableWidget::customContextMenuRequested, this, [this, area](const QPoint& localPosition) {
         showAreaContextMenu(area, localPosition);
     });
+    // 选中行变化 → 重写详情文本；详情宿主随后按当前布局方案把它镜像出去
+    // （下方折叠展开该区、行内插入合成行、独立窗口刷新、右侧面板刷新）。
+    connect(areaWidgets->table, &QTableWidget::itemSelectionChanged, this, [this, area]() {
+        updateAreaDetail(area);
+    });
 
     m_areaTabWidget->addTab(areaWidgets->page, QIcon(areaIconPath(area)), areaTitle(area));
 }
@@ -220,6 +317,8 @@ void ContextMenuCleanerTab::refreshArea(const MenuArea area)
     const QVector<ContextMenuEntry> newEntries = enumerateEntriesForArea(area);
     areaWidgets->entries = newEntries;
     areaWidgets->hasLoaded = true;
+    // 重新枚举后上一轮的耗时结论已失效，先清空耗时列再重建。
+    clearLatencyColumn(area);
     rebuildAreaTable(area);
 
     kLogEvent event;
@@ -242,6 +341,9 @@ void ContextMenuCleanerTab::rebuildAreaTable(const MenuArea area)
     const QString filterText = areaWidgets->filterEdit != nullptr
         ? areaWidgets->filterEdit->text().trimmed().toLower()
         : QString();
+
+    // 重建数据前先让详情宿主收起行内详情：合成的行内控件引用的是即将失效的源行。
+    ks::ui::DetailLayoutRegistry::prepareDataRebuild(areaWidgets->detailEditor);
 
     areaWidgets->table->setSortingEnabled(false);
     areaWidgets->table->setRowCount(0);
@@ -305,6 +407,9 @@ void ContextMenuCleanerTab::rebuildAreaTable(const MenuArea area)
             .arg(areaWidgets->entries.size())
             .arg(visibleCount));
     }
+
+    // 重建后选中行已失效：重新同步一次详情文本（无选中行则回到引导占位）。
+    updateAreaDetail(area);
 }
 
 void ContextMenuCleanerTab::showAreaContextMenu(const MenuArea area, const QPoint& localPosition)
@@ -681,6 +786,109 @@ QString ContextMenuCleanerTab::areaIconPath(const MenuArea area)
         return QStringLiteral(":/Icon/desktop_switch.svg");
     }
     return QStringLiteral(":/Icon/process_open_folder.svg");
+}
+
+void ContextMenuCleanerTab::updateAreaDetail(const MenuArea area)
+{
+    AreaWidgets* areaWidgets = widgetsForArea(area);
+    if (areaWidgets == nullptr ||
+        areaWidgets->table == nullptr ||
+        areaWidgets->detailEditor == nullptr)
+    {
+        return;
+    }
+
+    // 行 → 条目的映射沿用表格项 Qt::UserRole 里保存的 entries 下标：
+    // 排序或筛选后 visual row 会变，但 UserRole 始终指向原始快照，因此这里不需要额外的对应表。
+    const int currentRow = areaWidgets->table->currentRow();
+    if (currentRow < 0)
+    {
+        applyAreaDetailPlaceholder(area);
+        return;
+    }
+
+    const QTableWidgetItem* anchorItem = areaWidgets->table->item(currentRow, kColumnName);
+    const int entryIndex = anchorItem != nullptr ? anchorItem->data(Qt::UserRole).toInt() : -1;
+    if (entryIndex < 0 || entryIndex >= areaWidgets->entries.size())
+    {
+        applyAreaDetailPlaceholder(area);
+        return;
+    }
+
+    // setText 在只读模式下按“程序生成的报告”处理：随语言切换重绘，也不会被误当成用户文件原文。
+    // 详情文本一变，DetailLayoutHost 就会按当前布局方案把它镜像到下方折叠区 / 行内 / 独立窗口。
+    areaWidgets->detailEditor->setText(buildEntryDetailText(areaWidgets->entries.at(entryIndex)));
+}
+
+void ContextMenuCleanerTab::applyAreaDetailPlaceholder(const MenuArea area)
+{
+    AreaWidgets* areaWidgets = widgetsForArea(area);
+    if (areaWidgets == nullptr || areaWidgets->detailEditor == nullptr)
+    {
+        return;
+    }
+
+    // 未刷新或未选中任何行时的引导文本：说明这一页能给出哪些信息，避免详情区一片空白。
+    // 整段写成一个字面量（不跨行拼接），这样 i18n 审计只需要登记一条源串。
+    areaWidgets->detailEditor->setText(QStringLiteral("【%1 详情】\n\n在上方表格中选择一行，这里显示该条 Shell 关联的完整信息：注册表根键与精确位置、命令或 CLSID 处理器、状态标记与删除粒度。\n\n详情显示方式可在设置中切换：下方折叠（默认）、行内展开、独立窗口、右侧面板。").arg(areaTitle(area)));
+}
+
+QString ContextMenuCleanerTab::buildEntryDetailText(const ContextMenuEntry& entry) const
+{
+    // 只用枚举阶段已经采集到的字段拼装文本，不新增数据来源，也不改表格列；
+    // CLSID 友好名与服务器路径复用 Internal.h 里既有的 HKCR 查询 helper。
+    QStringList lines;
+    lines.push_back(QStringLiteral("【%1】").arg(
+        entry.displayName.isEmpty() ? entry.itemName : entry.displayName));
+    lines.push_back(QString());
+    lines.push_back(QStringLiteral("分类        ：%1").arg(areaTitle(entry.area)));
+    lines.push_back(QStringLiteral("名称        ：%1").arg(entry.itemName));
+    lines.push_back(QStringLiteral("显示名      ：%1").arg(entry.displayName));
+    lines.push_back(QStringLiteral("类型        ：%1").arg(entry.entryKind));
+    lines.push_back(QStringLiteral("来源        ：%1").arg(entry.sourceGroup));
+    lines.push_back(QStringLiteral("根键        ：%1").arg(entry.rootLabel));
+    lines.push_back(QStringLiteral("注册表位置  ：%1").arg(registryTargetPathText(
+        entry.rootLabel,
+        entry.subKeyPath,
+        entry.deleteKind == DeleteKind::RegistryValue,
+        entry.valueName)));
+    lines.push_back(QStringLiteral("命令/处理器 ：%1").arg(entry.commandOrHandler));
+    lines.push_back(QStringLiteral("状态        ：%1").arg(entry.statusText));
+
+    if (!entry.clsidText.isEmpty())
+    {
+        lines.push_back(QString());
+        lines.push_back(QStringLiteral("CLSID       ：%1").arg(entry.clsidText));
+        const QString friendlyName = queryClsidFriendlyName(entry.clsidText);
+        if (!friendlyName.isEmpty())
+        {
+            lines.push_back(QStringLiteral("CLSID 名称  ：%1").arg(friendlyName));
+        }
+        const QString serverPath = queryClsidServerPath(entry.clsidText);
+        if (!serverPath.isEmpty())
+        {
+            lines.push_back(QStringLiteral("服务器      ：%1").arg(serverPath));
+        }
+    }
+
+    if (!entry.detailText.isEmpty())
+    {
+        lines.push_back(QString());
+        lines.push_back(QStringLiteral("补充详情："));
+        lines.push_back(entry.detailText);
+    }
+
+    lines.push_back(QString());
+    lines.push_back(QStringLiteral("删除粒度    ：%1").arg(
+        entry.deleteKind == DeleteKind::RegistryValue
+            ? QStringLiteral("仅删除注册表值 %1").arg(entry.valueName)
+            : QStringLiteral("删除整棵子键树")));
+    lines.push_back(QStringLiteral("本页可删除  ：%1").arg(
+        entry.canDelete
+            ? QStringLiteral("是")
+            : QStringLiteral("否（系统保护项或受策略限制）")));
+
+    return lines.join('\n');
 }
 
 } // namespace ks::misc

@@ -136,7 +136,7 @@
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
-      <GenerateDebugInformation>false</GenerateDebugInformation>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
       <LinkIncremental>false</LinkIncremental>
@@ -298,6 +298,8 @@
     <ClCompile Include="MiscDock\ContextMenuCleaner\ContextMenuCleanerTab.Explorer.cpp" />
     <ClCompile Include="MiscDock\ContextMenuCleaner\ContextMenuCleanerTab.Helpers.cpp" />
     <ClCompile Include="MiscDock\ContextMenuCleaner\ContextMenuCleanerTab.Registry.cpp" />
+    <ClCompile Include="MiscDock\ContextMenuCleaner\ContextMenuCleanerTab.BackupFile.cpp" />
+    <ClCompile Include="MiscDock\ContextMenuCleaner\ContextMenuCleanerTab.Latency.cpp" />
     <ClCompile Include="MemoryDock\MemoryDock.cpp" />
     <ClCompile Include="MemoryDock\MemoryDock.DriverMemoryRw.cpp" />
     <ClCompile Include="MemoryDock\MemoryDock.DriverMemorySource.cpp" />
@@ -519,6 +521,7 @@
     <ClCompile Include="ksword\process\process_cpu_core_etw_monitor.cpp" />
     <ClCompile Include="ksword\process\process.cpp" />
     <ClCompile Include="ksword\process\ProcessImageDeleteGuard.cpp" />
+    <ClCompile Include="ksword\window\context_menu_probe.cpp" />
     <ClCompile Include="ksword\service\service.cpp" />
     <ClCompile Include="ksword\startup\startup.cpp" />
     <ClCompile Include="ksword\startup\startup_hidden.cpp" />
@@ -682,6 +685,7 @@
     <ClInclude Include="ksword\process\process_cpu_core_etw_monitor.h" />
     <ClInclude Include="ksword\process\process.h" />
     <ClInclude Include="ksword\process\ProcessImageDeleteGuard.h" />
+    <ClInclude Include="ksword\window\context_menu_probe.h" />
     <ClInclude Include="ksword\profile\ProfileJsonLoader.h" />
     <ClInclude Include="ksword\service\service.h" />
     <ClInclude Include="ksword\startup\startup.h" />
@@ -1117,11 +1121,12 @@
     </ProjectReference>
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
-  <ItemGroup><MASM Include="OtherDock\DwmRemoteLoader.asm" /></ItemGroup>
+  <ItemGroup>
+    <MASM Include="OtherDock\DwmRemoteLoader.asm" />
+  </ItemGroup>
   <Import Project="$(VCTargetsPath)\BuildCustomizations\masm.targets" />
   <Target Name="CopyKswordDwmZOrderAgent" AfterTargets="Build">
-    <MSBuild Projects="$(MSBuildProjectDirectory)\..\..\DwmZOrderAgent\DwmZOrderAgent.vcxproj"
-             Targets="GetTargetPath" Properties="Configuration=$(Configuration);Platform=$(Platform)">
+    <MSBuild Projects="$(MSBuildProjectDirectory)\..\..\DwmZOrderAgent\DwmZOrderAgent.vcxproj" Targets="GetTargetPath" Properties="Configuration=$(Configuration);Platform=$(Platform)">
       <Output TaskParameter="TargetOutputs" ItemName="KswordDwmZOrderAgentTarget" />
     </MSBuild>
     <Copy SourceFiles="@(KswordDwmZOrderAgentTarget)" DestinationFolder="$(TargetDir)" SkipUnchangedFiles="true" />
@@ -1132,8 +1137,11 @@
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>
   <ItemGroup>
-    <ClCompile Include="UI\KvmGuestVmPanel.cpp"></ClCompile>
+    <ClCompile Include="UI\KvmGuestVmPanel.cpp">
+    </ClCompile>
     <ClInclude Include="UI\KvmGuestVmPanel.h" />
   </ItemGroup>
-  <ItemGroup><ClInclude Include="..\..\shared\driver\KswordArkHvmRequest.h" /></ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="..\..\shared\driver\KswordArkHvmRequest.h" />
+  </ItemGroup>
 </Project>

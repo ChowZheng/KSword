@@ -38,7 +38,19 @@ EXPECTED_COMMANDS = len(re.findall(
 assert EXPECTED_COMMANDS > 0
 assert len(json.loads(commands)['commands']) == EXPECTED_COMMANDS
 metrics = json.loads(subprocess.check_output([str(fixture), 'metrics']))
-assert metrics['version'] == 6 and metrics['backend'] == 2
+for invalid in ('metrics-old', 'metrics-short'):
+    rejected = subprocess.run([str(fixture), invalid], capture_output=True)
+    assert rejected.returncode != 0, invalid
+assert metrics['version'] == 9 and metrics['backend'] == 2
+cache = metrics['svmProcessors'][0]['nptCache']
+assert cache['valid'] == 1 and int(cache['sequence']) == 0x100000002
+assert int(cache['lookups']) == 0x100000010 and int(cache['hits']) == 0x10000000a
+assert int(cache['resets']) == 5 and int(cache['resetFailures']) == 1
+assert int(cache['ownerTransitions']) == 9 and int(cache['ownerCpuTransitions']) == 3
+assert int(cache['tlbRequests']) == 17
+assert int(cache['invlpgaCount']) == 8 and int(cache['shadowEpoch']) == 0x100000003
+assert cache['lastMissMask'] == '0x00000008' and len(cache['reasons']) == 18
+assert int(cache['reasons']['ownerChanged']) == 4 and int(cache['reasons']['l1Cr3']) == 2
 general = metrics['svmProcessors'][0]['general']
 assert general['valid'] == 1 and int(general['sequence']) == 0x100000002
 assert int(general['preparedEntries']) == 13 and int(general['hardwareExits']) == 12
@@ -70,3 +82,9 @@ result = subprocess.run(['powershell.exe', '-NoProfile', '-Command', script], ca
 assert result.returncode == 0, result.stderr
 print(result.stdout.decode('ascii').strip())
 print('QUERY_JSON_UTF8_ESCAPES=PASS (production formatter; simulated response only)')
+
+hot = metrics["svmProcessors"][0]["hotspots"]
+assert hot["valid"] == 1 and int(hot["sequence"]) == 0x100000002
+assert hot["levels"][0]["msrs"][0]["number"] == "0xC0000080"
+assert int(hot["levels"][0]["msrs"][0]["reads"]) == 0x100000003
+assert int(hot["levels"][1]["npf"]) == 99

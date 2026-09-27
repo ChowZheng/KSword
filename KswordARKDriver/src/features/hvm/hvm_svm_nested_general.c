@@ -150,6 +150,7 @@ NTSTATUS KswordSvmNestedInitializeGeneral(KSW_SVM_CPU* Cpu)
     nested->Msrs.VmCr = Cpu->Caps.VmCr; nested->Msrs.AddressMask = nested->Outer->AddressMask;
     /* NPT01 is immutable for the complete prepared lifetime. */
     nested->Config.OuterRoot = nested->Outer->RootPa; nested->Config.OuterPat = Cpu->Caps.Pat;
+    nested->Config.OuterImmutable = 1;
     /* Both translations use the unchanged hardware PAT encoding. */
     nested->Config.HardwarePat = Cpu->Caps.Pat; nested->Config.OuterBits = Cpu->Caps.PhysicalBits;
     /* NPT address/large-page/NX policy comes from this same processor's admitted capabilities. */
@@ -162,6 +163,7 @@ NTSTATUS KswordSvmNestedInitializeGeneral(KSW_SVM_CPU* Cpu)
     io->Operand.PhysicalBits = Cpu->Caps.PhysicalBits; io->Operand.Page1Gb = Cpu->Caps.Page1Gb;
     /* No physical callback allocates or retains a mapped pointer across calls. */
     io->Operand.Nx = nested->Config.OuterNx; io->Operand.Read = KswordSvmNestedRead; io->Operand.Context = nested;
+    io->Operand.ReadPage = KswordSvmNestedReadPage;
     /* Virtual capabilities cannot exceed what this prepared CPU can restore natively. */
     io->Policy.PhysicalBits = Cpu->Caps.PhysicalBits; io->Policy.AsidCount = Cpu->Caps.AsidCount;
     /* This first general contract still explicitly rejects unsupported CR4/EFER extensions. */
@@ -173,13 +175,19 @@ NTSTATUS KswordSvmNestedInitializeGeneral(KSW_SVM_CPU* Cpu)
     /* Both merged maps are hardware-contiguous prepared buffers. */
     io->MergedMsr = nested->MergedMaps; io->MergedIo = nested->MergedMaps + KSW_NSVM_MSRPM_BYTES;
     /* Guest-provided addresses are never substituted for these physical map identities. */
-    io->MsrPa = nested->MergedMapsPa; io->IoPa = nested->MergedMapsPa + KSW_NSVM_MSRPM_BYTES; io->Asid = 1;
+    io->MsrPa = nested->MergedMapsPa; io->IoPa = nested->MergedMapsPa + KSW_NSVM_MSRPM_BYTES;
+    if (io->Policy.AsidCount < 4U) { return STATUS_NOT_SUPPORTED; }
+    /* L1 uses hardware ASID 1. Give each CPU's L2 a stable private ASID so
+       NPT01 translations can never be reused for NPT02. */
+    io->Asid = 2U + ((ULONG)Cpu->Resource->Row.processorGroup << 8) + Cpu->Resource->Row.processorNumber;
+    if (!KswSvmAsidValid(io->Policy.AsidCount, io->Asid)) { io->Asid = 2U + (nested->CpuIdentity % (io->Policy.AsidCount - 2U)); }
     /* The initial L0 intercept set is immutable even when per-entry masking overlays change MISC1. */
     io->OuterPermissions.Flags = (unsigned)KswSvmRead64(Cpu->Guest, KSW_VMCB_MISC1);
     /* L1 cannot weaken a bit in either immutable outer bitmap. */
     io->OuterPermissions.Msr = Cpu->Msrpm; io->OuterPermissions.Io = Cpu->Iopm;
     /* Every virtual CPU uses its own cache epoch and composition pages. */
     io->Shadow = &nested->Shadow; io->Mmu = &nested->Config;
+    io->ReuseNpt = 1;
     /* Bind the ordinary register image instead of a driver-owned fixed probe marker. */
     RtlZeroMemory(&nested->GeneralExecution, sizeof(nested->GeneralExecution));
     /* Hardware RAX/RSP remain in VMCB, while other GPRs use the established assembly prefix. */
@@ -233,6 +241,10 @@ NTSTATUS KswordSvmNestedInitializeGeneral(KSW_SVM_CPU* Cpu)
     if (KswSvmNestedMachineInitialize(&nested->GeneralMachine) != KSW_NSVM_MACHINE_READY) { return STATUS_NOT_SUPPORTED; }
     /* This is bound-resource readiness; public activation and hardware success are separate evidence. */
     nested->GeneralHardwareExits = nested->GeneralLastHardwareExit = 0;
+    /* New residency starts its own zeroed hotspot epoch under lifecycle exclusion. */
+    RtlZeroMemory(&nested->Hotspots, sizeof(nested->Hotspots));
+    /* No count is readable until the first complete observation. */
+    nested->HotSequence = 0;
     /* Counters now describe this binding lifetime, matching the new machine transition counter. */
     nested->GeneralInitialized = 1;
     /* Assembly can observe this only after every platform callback and state owner has been initialized. */
@@ -258,6 +270,27 @@ ULONG KswordSvmNestedGeneralEntry(KSW_SVM_CPU* Cpu)
          action == KSW_NSVM_MACHINE_SHUTDOWN) ? KSW_HVM_FLIGHT_INTERNAL : 0U, 2U);
     /* Host IF is installed by assembly while physical GIF remains closed. */
     if (action == KSW_NSVM_MACHINE_READY) { Cpu->HostInterruptsAllowed = Cpu->Nested->GeneralMachine.Overlay.HostIf; }
+    /* Flush only after NPT02 publication/reset or an L1 TLB_CONTROL request. */
+    if (action == KSW_NSVM_MACHINE_READY) {
+        /* Preserve the virtual VMCB's architectural flush request without rebuilding NPT02. */
+        unsigned char requested = 0;
+        if (Cpu->Nested->Session.Phase == KSW_NSVM_SESSION_L2) {
+            requested = ((const unsigned char*)&Cpu->Nested->Session.Vmcb12)[KSW_VMCB_TLB];
+        }
+        /* This L0 gives the nested context one private ASID on this CPU. */
+        if (requested == 7U) {
+            Cpu->NestedTlbControl = requested;
+        } else if (requested == 1U || requested == 3U || Cpu->Nested->Shadow.FlushPending) {
+            /* Hardware TLB_CONTROL is expensive; flush only after an explicit
+               L1 request or publication/reset of the shadow NPT root. */
+            Cpu->NestedTlbControl = (Cpu->Caps.Features & 64U) ? 3U : 1U;
+        } else {
+            Cpu->NestedTlbControl = 0U;
+        }
+        Cpu->Nested->Shadow.FlushPending = 0;
+    } else {
+        Cpu->NestedTlbControl = 1U;
+    }
     /* Publish the complete result, including a retained failure/window action. */
     InterlockedIncrement64(&Cpu->Nested->GeneralSequence);
     /* WINDOW/FAULT/UNSUPPORTED never authorize a blind VMRUN. */
@@ -284,6 +317,15 @@ ULONG KswordSvmNestedGeneralExit(KSW_SVM_CPU* Cpu)
     ++Cpu->Nested->GeneralHardwareExits;
     /* Preserve raw hardware input even if a missing overlay makes machine dispatch fail before classification. */
     Cpu->Nested->GeneralLastHardwareExit = KswSvmRead64(Cpu->Guest, KSW_VMCB_EXITCODE);
+    /* Publish raw per-level counters before the dispatcher mutates RCX, RIP or session ownership. */
+    InterlockedIncrement64(&Cpu->Nested->HotSequence);
+    /* The shared short transaction does no guest memory access or root event processing. */
+    KswSvmHotObserve(&Cpu->Nested->Hotspots, Cpu->Nested->Session.Phase,
+        Cpu->Nested->GeneralLastHardwareExit, KswSvmRead64(Cpu->Guest, KSW_VMCB_RIP),
+        KswSvmRead64(Cpu->Guest, KSW_VMCB_EXITINFO1), KswSvmRead64(Cpu->Guest, KSW_VMCB_EXITINFO2),
+        (ULONG)Cpu->Gpr[1]);
+    /* Release the independently coherent counters before expensive general exit handling. */
+    InterlockedIncrement64(&Cpu->Nested->HotSequence);
     /* Raw terminal exits must be copied before MachineExit restores controls or reflects to L1. */
     KswNsvmObserve(Cpu, KSW_HVM_FLIGHT_EXIT,
         Cpu->Nested->GeneralLastHardwareExit == 0x7fULL ? KSW_HVM_FLIGHT_SHUTDOWN :
@@ -369,3 +411,4 @@ BOOLEAN KswordSvmNestedCompleteNative(KSW_SVM_CPU* Cpu)
     /* Do not clear counters, raw exits, failures, maps or NMI descriptors on the acknowledgement path. */
     InterlockedIncrement64(&nested->GeneralSequence); return TRUE;
 }
+

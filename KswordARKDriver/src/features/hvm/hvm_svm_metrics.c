@@ -29,6 +29,31 @@ static VOID KswSvmFlightMetrics(KSW_SVM_NESTED* Nested, KSWORD_HVM_FLIGHT_RECORD
     RtlZeroMemory(Output, sizeof(*Output));
 }
 
+/* Copy directly to the response: no multi-KiB kernel-stack temporary or waiting writer. */
+static VOID KswSvmHotMetrics(KSW_SVM_NESTED* Nested, KSWORD_HVM_HOTSPOTS* Output)
+{
+    /* Limit reader work even while every core is active. */
+    ULONG attempt;
+    /* No prepared general backend means no hotspot observations. */
+    if (!Nested) { return; }
+    /* Only the short raw-accounting transaction invalidates this copy. */
+    for (attempt = 0; attempt < 3; ++attempt) {
+        /* Acquire the writer sequence before reading the counters. */
+        LONG64 before = InterlockedCompareExchange64(&Nested->HotSequence, 0, 0);
+        /* Never interpret an unfinished or uninitialized record. */
+        if (!before || (before & 1)) { continue; }
+        /* The response buffer is held by the resource lifetime lock. */
+        RtlCopyMemory(Output, &Nested->Hotspots, sizeof(*Output));
+        /* Reject a mixed snapshot even when individual 64-bit reads were atomic. */
+        if (before == InterlockedCompareExchange64(&Nested->HotSequence, 0, 0)) {
+            /* Valid applies to this record alone; callers must not borrow general.valid. */
+            Output->sequence = (ULONGLONG)before; Output->valid = 1; return;
+        }
+    }
+    /* Failed snapshots are visibly invalid, never a fabricated activity delta. */
+    RtlZeroMemory(Output, sizeof(*Output));
+}
+
 /* No root CPU waits for telemetry: the reader makes at most three optimistic copies. */
 static VOID KswSvmGeneralMetrics(KSW_SVM_CPU* Cpu, KSWORD_ARK_HVM_SVM_GENERAL_METRICS* Output)
 {
@@ -72,6 +97,8 @@ static VOID KswSvmGeneralMetrics(KSW_SVM_CPU* Cpu, KSWORD_ARK_HVM_SVM_GENERAL_ME
         copy.delivered = nested->GeneralExecution.Pending.Delivered; copy.retried = nested->GeneralExecution.Pending.Retried;
         /* Cache eviction is a software action; hardware invalidation remains the separate TLB counter. */
         copy.cacheRecycles = nested->GeneralExecution.CacheRecycles;
+        copy.nptCache = nested->Session.CacheStats;
+        copy.invlpgaCount = nested->Session.Invalidations; copy.shadowEpoch = nested->Shadow.Epoch;
         /* These are virtual register values, not MSR probes of the query CPU. */
         copy.virtualEfer = nested->Msrs.Efer; copy.virtualHsave = nested->Msrs.Hsave;
         /* XSTATE values refer to the owner CPU's current virtual execution context. */
@@ -114,7 +141,7 @@ VOID KswordSvmMetrics(KSW_HVM_RUNTIME* Runtime, KSWORD_ARK_HVM_METRICS_RESPONSE*
         /* Cleanup does not overwrite the cause that required it. */
         output->failureStatus = (ULONG)cpu->FailureStatus; output->failureStage = cpu->FailureStage;
         /* The initial implementation reserves ASID one per processor. */
-        output->asid = 1;
+        output->asid = cpu->Nested && cpu->Nested->GeneralInitialized ? cpu->Nested->GeneralIo.Asid : 1;
         /* MSR validity is independent of whether a VMEXIT record exists. */
         output->msrValidMask = cpu->Caps.Valid; output->svmFeatures = cpu->Caps.Features;
         /* Preserve enumeration used by allocation and ASID selection. */
@@ -125,6 +152,8 @@ VOID KswordSvmMetrics(KSW_HVM_RUNTIME* Runtime, KSWORD_ARK_HVM_METRICS_RESPONSE*
         output->generation = Runtime->Generation;
         /* The diagnostic record has its own validity and survives a successful stop. */
         KswSvmFlightMetrics(cpu->Nested, &output->flight);
+        /* Hot counters remain queryable even when the broader general snapshot is busy. */
+        KswSvmHotMetrics(cpu->Nested, &output->hotspots);
         /* Prepared immutable resource addresses aid dump attribution. */
         output->vmcbPa = cpu->GuestPa; output->hsavePa = cpu->HsavePa; output->nptRootPa = state->Npt.RootPa;
         /* Observed VMRUN completions requested the baseline full flush. */

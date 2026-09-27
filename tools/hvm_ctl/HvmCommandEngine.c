@@ -7518,6 +7518,61 @@ static int DoProcess(HANDLE h, unsigned long op, unsigned long pid,
 }
 
 /* Flight data is already copied by the driver; printing never changes the recorder. */
+/* Emit exact bounded counters; consumers must reject invalid or saturated snapshots. */
+static void PrintNptCacheJson(const KSWORD_ARK_HVM_SVM_GENERAL_METRICS* general)
+{
+    static const char* const reasons[KSW_HVM_NPT_CACHE_REASONS] = {
+        "reuseDisabled", "cold", "epochChanged", "ownerChanged", "tlbGateReserved",
+        "vmcbHpa", "ncr3", "asid", "l1Cr0", "l1Cr3", "l1Cr4", "l1Efer", "l1Pat",
+        "outerRoot", "outerPat", "hardwarePat", "outerCapabilities", "innerCapabilities"
+    };
+    const KSWORD_HVM_NPT_CACHE_STATS* stats = &general->nptCache;
+    unsigned i;
+    printf(",\"nptCache\":{\"valid\":%lu,\"sequence\":\"%llu\",\"saturated\":%lu,"
+        "\"lookups\":\"%llu\",\"hits\":\"%llu\",\"resets\":\"%llu\",\"resetFailures\":\"%llu\","
+        "\"ownerTransitions\":\"%llu\",\"ownerCpuTransitions\":\"%llu\",\"tlbRequests\":\"%llu\","
+        "\"lastMissMask\":\"0x%08lX\",\"invlpgaCount\":\"%llu\",\"poolRecycles\":\"%llu\","
+        "\"shadowEpoch\":\"%llu\",\"reasons\":{",
+        general->valid, general->sequence, stats->saturated, stats->lookups, stats->hits,
+        stats->resets, stats->resetFailures, stats->ownerTransitions, stats->ownerCpuTransitions, stats->tlbRequests,
+        stats->lastMissMask, general->invlpgaCount,
+        general->cacheRecycles, general->shadowEpoch);
+    for (i = 0; i < KSW_HVM_NPT_CACHE_REASONS; ++i) {
+        printf("%s\"%s\":\"%llu\"", i ? "," : "", reasons[i], stats->reasons[i]);
+    }
+    printf("}}");
+}
+
+static void PrintHotspotsJson(const KSWORD_HVM_HOTSPOTS* hot)
+{
+    unsigned int level, code, slot;
+    printf(",\"hotspots\":{\"valid\":%lu,\"saturated\":%lu,\"sequence\":\"%llu\",\"invalidLevel\":\"%llu\",\"levels\":[",
+        hot->valid, hot->saturated, hot->sequence, hot->invalidLevel);
+    for (level = 0; level < 2; ++level) {
+        const KSWORD_HVM_HOT_LEVEL* row = &hot->levels[level];
+        int comma = 0;
+        printf("%s{\"level\":%u,\"total\":\"%llu\",\"npf\":\"%llu\",\"invalid\":\"%llu\",\"other\":\"%llu\","
+            "\"lastCode\":\"0x%016llX\",\"lastRip\":\"0x%016llX\",\"lastInfo1\":\"0x%016llX\",\"lastInfo2\":\"0x%016llX\","
+            "\"lastMsr\":\"0x%08lX\",\"msrOverflow\":\"%llu\",\"invalidMsrDirection\":\"%llu\",\"codes\":{",
+            level ? "," : "", level + 1, row->total, row->npf, row->invalid, row->other,
+            row->lastCode, row->lastRip, row->lastInfo1, row->lastInfo2, row->lastMsr,
+            row->msrOverflow, row->invalidMsrDirection);
+        for (code = 0; code < 256; ++code) {
+            if (row->codes[code]) {
+                printf("%s\"0x%02X\":\"%llu\"", comma ? "," : "", code, row->codes[code]); comma = 1;
+            }
+        }
+        printf("},\"msrs\":[");
+        for (slot = 0; slot < row->msrUsed && slot < KSW_HVM_HOT_MSR_SLOTS; ++slot) {
+            const KSWORD_HVM_HOT_MSR* msr = &row->msrs[slot];
+            printf("%s{\"number\":\"0x%08lX\",\"reads\":\"%llu\",\"writes\":\"%llu\",\"invalidDirection\":\"%llu\"}",
+                slot ? "," : "", msr->number, msr->reads, msr->writes, msr->invalidDirection);
+        }
+        printf("]}");
+    }
+    printf("]}");
+}
+
 static void PrintFlightJson(const KSWORD_HVM_FLIGHT_RECORDER* f)
 {
     unsigned i, j;
@@ -7674,7 +7729,8 @@ static int DoMetrics(HANDLE h, int asJson)
                    row->general.hardwareExits, row->general.exitCode, row->general.leaseToken, row->general.operandHostPa,
                    row->general.armedToken, row->general.retryToken, row->general.delivered, row->general.retried,
                    row->general.cacheRecycles, row->general.virtualEfer, row->general.virtualHsave, row->general.guestXcr0, row->general.guestXss);
-            PrintFlightJson(&row->flight); printf("}");
+            PrintNptCacheJson(&row->general);
+            PrintFlightJson(&row->flight); PrintHotspotsJson(&row->hotspots); printf("}");
         } else {
             printf("SVM cpu=%u:%u stage=%lu valid=%lu exit=0x%016llX info1=0x%016llX info2=0x%016llX flush=%llu\n",
                    (unsigned)row->group, (unsigned)row->number, row->stage, row->valid,

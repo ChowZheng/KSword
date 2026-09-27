@@ -17,6 +17,7 @@ unsigned int KswSvmNestedSessionTransfer(KSW_NSVM_SESSION* Session,
 {
     /* The same physical identity must survive both capture passes and writeback. */
     unsigned status;
+    KSW_SVM_U64 cacheToken = 0;
     /* This storage cannot be borrowed from a running or fault-retained VMRUN transaction. */
     if (!Session || !Io || !Io->Owners || !Io->Commit || !Current || Save > 1 ||
         Session->Phase != KSW_NSVM_SESSION_IDLE || Session->Lease.Token) { return KSW_NSVM_ACTION_UNSUPPORTED; }
@@ -25,9 +26,8 @@ unsigned int KswSvmNestedSessionTransfer(KSW_NSVM_SESSION* Session,
         /* The original image remains intact for diagnosis. */
         return KswNsvmTransferFault(Session);
     }
-    /* Resolve the operand without assuming GPA=HPA or borrowing VMCB12's own NCR3. */
-    status = KswSvmNestedReadOperandPage(&Io->Operand, OperandPa,
-        (unsigned char*)&Session->Vmcb12, &Session->OperandResult);
+    /* Resolve identity before leasing; defer the expensive snapshot until ownership is held. */
+    status = KswSvmNestedResolveOperand(&Io->Operand, OperandPa, &Session->OperandResult);
     /* A physical access failure is not the fabricated success of a zero-filled operand. */
     if (status != KSW_NNPT_OK) { return KswNsvmTransferFault(Session); }
     /* Retain identities before a writeback callback repurposes its diagnostic output. */
@@ -37,16 +37,22 @@ unsigned int KswSvmNestedSessionTransfer(KSW_NSVM_SESSION* Session,
         Io->CpuIdentity, &Session->Lease);
     /* Busy/exhaustion is an implementation admission result, not an invented #GP. */
     if (Session->OwnerStatus != KSW_NSVM_LEASE_OK) { return KSW_NSVM_ACTION_UNSUPPORTED; }
-    /* Re-read only after all monitor-managed users of this physical VMCB are excluded. */
-    status = KswSvmNestedReadOperandPage(&Io->Operand, OperandPa,
-        (unsigned char*)&Session->Vmcb12, &Session->OperandResult);
-    /* A remap cannot change the ownership identity after acquisition. */
-    if (status != KSW_NNPT_OK || Session->OperandResult.HostPa != Session->Lease.HostPa) {
-        /* The lease is released only by a later, independently proven native abort. */
-        return KswNsvmTransferFault(Session);
+    if (Session->Lease.PreviousToken) {
+        KswHvmNptCacheCount(&Session->CacheStats, &Session->CacheStats.ownerTransitions);
+        if (Session->Lease.PreviousCpuIdentity != Io->CpuIdentity) {
+            KswHvmNptCacheCount(&Session->CacheStats, &Session->CacheStats.ownerCpuTransitions);
+        }
     }
-    /* VMLOAD only copies its architectural subset; VMRUN automatic state remains current. */
-    if (Save) {
+    /* VMLOAD needs a post-lease snapshot; VMSAVE's writeback re-walks NPT01 with write access. */
+    if (!Save) {
+        status = KswSvmNestedReadOperandPage(&Io->Operand, OperandPa,
+            (unsigned char*)&Session->Vmcb12, &Session->OperandResult);
+        /* A remap cannot change the ownership identity after acquisition. */
+        if (status != KSW_NNPT_OK || Session->OperandResult.HostPa != Session->Lease.HostPa) {
+            /* The lease is released only by a later, independently proven native abort. */
+            return KswNsvmTransferFault(Session);
+        }
+    } else {
         /* Merge just VMLOAD-managed state into a private snapshot for whitelist writeback. */
         KswSvmNestedCopyVmload(&Session->Vmcb12, Current);
         /* The generic writer keeps controls, other state and reserved bits untouched. */
@@ -55,8 +61,13 @@ unsigned int KswSvmNestedSessionTransfer(KSW_NSVM_SESSION* Session,
         /* A partial output retains the same lease and its written-word progress. */
         if (status != KSW_NNPT_OK) { return KswNsvmTransferFault(Session); }
     }
+    if (Session->CacheValid && Session->CacheKey[0] == Session->Lease.HostPa &&
+        Session->CacheOwnerToken == Session->Lease.PreviousToken) {
+        cacheToken = Session->Lease.Token;
+    }
     /* End physical operand ownership only after the read/output transaction completed. */
     if (!KswSvmNestedOwnerRelease(Io->Owners, &Session->Lease)) { return KswNsvmTransferFault(Session); }
+    if (cacheToken) { Session->CacheOwnerToken = cacheToken; }
     /* The owned snapshot remains stable even when L1 changes the original page afterward. */
     if (!Save) { KswSvmNestedCopyVmload(Current, &Session->Vmcb12); }
     /* Caller completes this virtual instruction with its already validated hardware NRIP. */

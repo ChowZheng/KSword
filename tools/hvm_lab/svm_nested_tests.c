@@ -254,6 +254,85 @@ static int test_mmu(void)
     return 0;
 }
 __declspec(align(4096)) static KSW_SVM_U64 shadow_words[8][512];
+static MEMORY cached_expected;
+static KSW_SVM_U64 cached_bias;
+static int cached_read(void* context, KSW_SVM_U64 address, KSW_SVM_U64* value)
+{
+    if (address >= cached_bias) { address -= cached_bias; }
+    return read_word(context, address, value);
+}
+static int cached_compare(void* context, KSW_SVM_U64 address, KSW_SVM_U64 expected, KSW_SVM_U64 bits)
+{
+    if (address >= cached_bias) { address -= cached_bias; }
+    return compare_or(context, address, expected, bits);
+}
+static void setup_cached_mmu(KSW_NMMU_CONFIG* config, KSW_NMMU_IO* io, unsigned large)
+{
+    unsigned i;
+    setup_mmu(config, io);
+    if (!large) { return; }
+    for (i = 0; i < 4; ++i) { memcpy(memory.page[8 + i], memory.page[16 + i], 4096); }
+    cached_bias = large == 3 ? 0x200000ULL : (large == 4 ? 0x40000000ULL : 0);
+    if (large == 1 || large == 3) { memory.page[3][0] = cached_bias | 0x87; }
+    else { memory.page[2][0] = cached_bias | 0x87; }
+    if (cached_bias) { io->Read = cached_read; io->CompareOr = cached_compare; }
+}
+static int test_mmu_table_cache(void)
+{
+    KSW_NMMU_CONFIG config;
+    KSW_NMMU_IO io;
+    KSW_NMMU_RESULT baseline, fast;
+    unsigned large, access, baselineReads, baselineWrites, level, enabled;
+    for (large = 0; large < 5; ++large) {
+        for (access = 0; access <= 2; access += 2) {
+            setup_cached_mmu(&config, &io, large);
+            CHECK(KswSvmNestedMmuResolve(&config, &io, 0x2123, access, KSW_NMMU_FINAL, &baseline) == KSW_NNPT_OK);
+            cached_expected = memory;
+            baselineReads = memory.reads; baselineWrites = memory.writes;
+            setup_cached_mmu(&config, &io, large); config.OuterImmutable = 1;
+            CHECK(KswSvmNestedMmuResolve(&config, &io, 0x2123, access, KSW_NMMU_FINAL, &fast) == KSW_NNPT_OK);
+            if (large >= 3) { CHECK(fast.Outer.Address == cached_bias + 0x18123); }
+            CHECK(memory.reads < baselineReads && memory.writes < baselineWrites);
+            CHECK(!memcmp(memory.page, cached_expected.page, sizeof(memory.page)));
+            baseline.Reads = fast.Reads;
+            CHECK(!memcmp(&baseline, &fast, sizeof(fast)));
+            printf("NPT01_CACHE large=%u access=%u reads=%u->%u updates=%u->%u\n",
+                large, access, baselineReads, memory.reads, baselineWrites, memory.writes);
+        }
+    }
+    for (enabled = 0; enabled < 2; ++enabled) {
+        for (level = 0; level < 4; ++level) {
+            setup_mmu(&config, &io); config.OuterImmutable = enabled;
+            memory.mutateCas = ((KSW_SVM_U64)16 + level) * 4096 + (level == 3 ? 16 : 0);
+            CHECK(KswSvmNestedMmuResolve(&config, &io, 0x2123, KSW_NNPT_WRITE, KSW_NMMU_FINAL, &fast) == KSW_NNPT_RETRY);
+            CHECK(fast.Leaf == 0);
+            setup_mmu(&config, &io); config.OuterImmutable = enabled;
+            memory.failRead = ((KSW_SVM_U64)16 + level) * 4096 + (level == 3 ? 16 : 0);
+            CHECK(KswSvmNestedMmuResolve(&config, &io, 0x2123, 0, KSW_NMMU_FINAL, &fast) == KSW_NNPT_UNREADABLE);
+            CHECK(!fast.Leaf && fast.FaultOwner == KSW_NMMU_PHYSICAL && fast.FaultAddress == memory.failRead);
+        }
+    }
+    setup_mmu(&config, &io); config.OuterImmutable = 1;
+    CHECK(KswSvmNestedMmuResolve(&config, &io, 0x2123, 0, KSW_NMMU_TABLE, &fast) == KSW_NNPT_OK);
+    CHECK((fast.Leaf & 0x62) == 0x62);
+    memory.page[4][24] = 0x29007; ++config.Epoch;
+    CHECK(KswSvmNestedMmuResolve(&config, &io, 0x2123, 0, KSW_NMMU_FINAL, &fast) == KSW_NNPT_OK);
+    CHECK((fast.Leaf & KSW_NNPT_FRAME) == 0x29000 && !(fast.Leaf & 2));
+    memory.page[4][9] &= ~2ULL;
+    CHECK(KswSvmNestedMmuResolve(&config, &io, 0x2123, 0, KSW_NMMU_FINAL, &fast) == KSW_NNPT_FAULT);
+    CHECK(!fast.Leaf && fast.FaultOwner == KSW_NMMU_OUTER_TABLE && fast.FaultAddress == 0x9000);
+    setup_mmu(&config, &io); config.OuterImmutable = 1;
+    memory.page[19][2] |= 0x18;
+    CHECK(KswSvmNestedMmuResolve(&config, &io, 0x2123, 0, KSW_NMMU_FINAL, &fast) == KSW_NNPT_OK);
+    CHECK((fast.Leaf & 0x18) == 0x18);
+    config.HardwarePat = 0x0606060606060606ULL;
+    CHECK(KswSvmNestedMmuResolve(&config, &io, 0x2123, 0, KSW_NMMU_FINAL, &fast) == KSW_NNPT_UNSUPPORTED && !fast.Leaf);
+    setup_mmu(&config, &io); config.OuterImmutable = 1;
+    memory.page[19][2] |= KSW_NNPT_NX;
+    CHECK(KswSvmNestedMmuResolve(&config, &io, 0x2123, KSW_NNPT_EXECUTE, KSW_NMMU_FINAL, &fast) == KSW_NNPT_FAULT);
+    CHECK(!fast.Leaf && fast.FaultOwner == KSW_NMMU_INNER);
+    return 0;
+}
 static int test_large_span(void)
 {
     KSW_NSHADOW_PAGE pages[4];
@@ -276,20 +355,23 @@ static int test_large_span(void)
     config.Epoch = shadow.Epoch;
     CHECK(KswSvmNestedMmuResolve(&config, &io, 0x2123, 0, KSW_NMMU_FINAL, &r) == KSW_NNPT_OK);
     CHECK(r.Inner.LeafShift == 21 && r.Outer.LeafShift == 21);
-    CHECK(KswSvmNestedShadowInstall(&shadow, &r) == KSW_NSHADOW_OK && shadow.Used == 4);
-    for (i = 0; i < 512; ++i) {
-        CHECK(shadow_words[3][i] == ((0x400000 + 4096ULL * i) | 0x3d | KSW_NNPT_NX));
+    CHECK(KswSvmNestedShadowInstall(&shadow, &r) == KSW_NSHADOW_OK && shadow.Used == 3);
+    {
+        unsigned pat = (unsigned)(((r.Leaf >> 3) & 3ULL) | (((r.Leaf >> 7) & 1ULL) << 2));
+        KSW_SVM_U64 large = 0x400000ULL | (r.Leaf & (0x7ULL | 0x18ULL | 0x60ULL | KSW_NNPT_NX)) |
+            (KswNptLeafFlags(2U, pat) & ~7ULL);
+        CHECK(shadow_words[2][0] == large && (shadow_words[2][0] & 0x80ULL));
+        CHECK(shadow_words[3][0] == 0 && shadow_words[3][511] == 0);
     }
     CHECK(KswSvmNestedMmuResolve(&config, &io, 0x2123, 2, KSW_NMMU_FINAL, &r) == KSW_NNPT_OK);
     CHECK(KswSvmNestedShadowInstall(&shadow, &r) == KSW_NSHADOW_OK);
-    CHECK((shadow_words[3][2] & 0x42) == 0x42 && !(shadow_words[3][1] & 2));
+    CHECK((shadow_words[2][0] & 0x42) == 0x42);
     CHECK(KswSvmNestedShadowReset(&shadow) == KSW_NSHADOW_OK);
     config.Epoch = shadow.Epoch;
     CHECK(KswSvmNestedMmuResolve(&config, &io, 0x1ff123, 0, KSW_NMMU_FINAL, &r) == KSW_NNPT_OK);
     CHECK(KswSvmNestedShadowInstall(&shadow, &r) == KSW_NSHADOW_OK);
-    CHECK(shadow_words[3][0] == (0x40007f | KSW_NNPT_NX));
-    CHECK(shadow_words[3][511] == (0x5ff07f | KSW_NNPT_NX));
-    CHECK(shadow_words[2][1] == 0); /* No prefill outside either validated source span. */
+    CHECK((shadow_words[2][0] & KSW_NNPT_FRAME & ~0x1fffffULL) == 0x400000ULL && (shadow_words[2][0] & 0x80ULL));
+    CHECK(shadow_words[2][1] == 0); /* No mapping outside the validated source span. */
     return 0;
 }
 static int test_shadow(void)
@@ -320,7 +402,7 @@ static int test_shadow(void)
     CHECK(shadow_words[2][0] == 0x103007 && shadow_words[3][2] == r.Leaf);
     CHECK(shadow_words[3][1] == 0 && shadow_words[3][3] == 0);
     shadow.FlushPending = 0; /* Simulate the owning entry loop having consumed the flush request. */
-    CHECK(KswSvmNestedShadowInstall(&shadow, &r) == KSW_NSHADOW_OK && shadow.Used == 4 && shadow.FlushPending);
+    CHECK(KswSvmNestedShadowInstall(&shadow, &r) == KSW_NSHADOW_OK && shadow.Used == 4 && !shadow.FlushPending);
     /* Hardware may set Accessed on any intermediate table. */
     shadow_words[1][0] |= 0x20;
     CHECK(KswSvmNestedShadowInstall(&shadow, &r) == KSW_NSHADOW_OK && shadow.Used == 4);
@@ -476,11 +558,82 @@ static int test_resume_event(void)
     return 0;
 }
 
+static int test_npf_software_event(void)
+{
+    KSW_SVM_VMCB image, saved, reflected;
+    KSW_NSVM_EVENT_ENTRY entry, other;
+    unsigned i;
+    const KSW_SVM_U64 rip = 0xfffff806305fd103ULL;
+    memset(&image, 0, sizeof(image));
+    KswSvmWrite64(&image, KSW_VMCB_RIP, rip - 3);
+    KswSvmWrite64(&image, KSW_VMCB_RSP, 0xfffff80633aa0de8ULL);
+    KswSvmWrite64(&image, KSW_VMCB_RFLAGS, 0x10202);
+    KswSvmWrite64(&image, KSW_VMCB_CR2, 0x12340000);
+    KswSvmWrite64(&image, 0x68, 1);
+    KswSvmNestedCaptureEventEntry(&image, &entry, 0x871d8);
+    KswSvmWrite64(&image, KSW_VMCB_RIP, rip);
+    KswSvmWrite64(&image, KSW_VMCB_EXITCODE, 0x400);
+    KswSvmWrite64(&image, KSW_VMCB_EXITINFO1, 0x100000004ULL);
+    KswSvmWrite64(&image, KSW_VMCB_EXITINFO2, 0x60932d0);
+    KswSvmWrite64(&image, KSW_VMCB_EXITINTINFO, 0x8000042d);
+    saved = image;
+    CHECK(KswSvmNestedResumeEvent(&image) == KSW_NSVM_EVENT_NRIP_REQUIRED);
+    CHECK(KswSvmNestedResumeNpfEvent(&image, &entry, 0x871d8) == KSW_NSVM_EVENT_OK);
+    CHECK(!memcmp(&image, &saved, sizeof(image)));
+    CHECK(KswSvmNestedResumeNpfEvent(&image, NULL, 0x871d8) == KSW_NSVM_EVENT_NRIP_REQUIRED);
+    CHECK(KswSvmNestedResumeNpfEvent(&image, &entry, 0x871d9) == KSW_NSVM_EVENT_NRIP_REQUIRED);
+    other = entry; other.Valid = 0;
+    CHECK(KswSvmNestedResumeNpfEvent(&image, &other, 0x871d8) == KSW_NSVM_EVENT_NRIP_REQUIRED);
+    CHECK(!memcmp(&image, &saved, sizeof(image)));
+    KswSvmWrite64(&image, KSW_VMCB_EXITCODE, 0x61);
+    CHECK(KswSvmNestedResumeNpfEvent(&image, &entry, 0x871d8) == KSW_NSVM_EVENT_NRIP_REQUIRED);
+    image = saved;
+    KswSvmWrite64(&image, KSW_VMCB_EVENT, 0x8000042d);
+    KswSvmWrite64(&image, KSW_VMCB_NRIP, rip + 7);
+    KswSvmNestedCaptureEventEntry(&image, &entry, 0x871d8);
+    for (i = 0; i < 4; ++i) {
+        KswSvmWrite64(&image, KSW_VMCB_NRIP, 0);
+        KswSvmWrite64(&image, KSW_VMCB_EVENT, 0);
+        CHECK(KswSvmNestedResumeNpfEvent(&image, &entry, 0x871d8) == KSW_NSVM_EVENT_OK);
+        CHECK(KswSvmRead64(&image, KSW_VMCB_EVENT) == 0x8000042d);
+        CHECK(KswSvmRead64(&image, KSW_VMCB_NRIP) == rip + 7);
+        CHECK(KswSvmRead64(&image, KSW_VMCB_RIP) == rip);
+        KswSvmNestedCaptureEventEntry(&image, &entry, 0x871d8);
+    }
+    KswSvmWrite64(&image, KSW_VMCB_NRIP, 0);
+    saved = image;
+    for (i = 0; i < 6; ++i) {
+        other = entry;
+        if (i == 0) { ++other.Rip; }
+        if (i == 1) { ++other.CsBase; }
+        if (i == 2) { ++other.Cs; }
+        if (i == 3) { other.Event ^= 1; }
+        if (i == 4) { other.NextRip = other.Rip; }
+        if (i == 5) { other.NextRip = other.Rip + 16; }
+        CHECK(KswSvmNestedResumeNpfEvent(&image, &other, 0x871d8) == KSW_NSVM_EVENT_NRIP_REQUIRED);
+        CHECK(!memcmp(&image, &saved, sizeof(image)));
+    }
+    memset(&reflected, 0, sizeof(reflected));
+    KswSvmNestedReflectExit(&reflected, &image, 1);
+    CHECK(KswSvmRead64(&reflected, KSW_VMCB_EXITINTINFO) == 0x8000042d);
+    CHECK(KswSvmRead64(&reflected, KSW_VMCB_NRIP) == 0);
+    CHECK(KswSvmRead64(&reflected, KSW_VMCB_EVENT) == 0);
+    KswSvmWrite64(&image, KSW_VMCB_EXITINTINFO, 0);
+    CHECK(KswSvmNestedResumeNpfEvent(&image, &entry, 0x871d8) == KSW_NSVM_EVENT_OK);
+    CHECK(KswSvmRead64(&image, KSW_VMCB_EVENT) == 0);
+    KswSvmNestedCaptureEventEntry(&image, &entry, 0x871d9);
+    CHECK(entry.Event == 0 && entry.Owner == 0x871d9 && entry.NextRip == 0);
+    KswSvmWrite64(&image, KSW_VMCB_EXITINTINFO, 0x80001020);
+    CHECK(KswSvmNestedResumeNpfEvent(&image, &entry, 0x871d9) == KSW_NSVM_EVENT_INVALID);
+    CHECK(KswSvmNestedResumeNpfEvent(NULL, &entry, 0x871d9) == KSW_NSVM_EVENT_INVALID);
+    return 0;
+}
+
 int main(void)
 {
     KSW_NSVM_MSRS msrs = {0xd01, 0, 8, 0};
     KSW_SVM_U64 value;
-    if (test_walk() || test_ad() || test_mmu() || test_shadow() || test_large_span() || test_state() || test_resume_event()) { return 1; }
+    if (test_walk() || test_ad() || test_mmu() || test_mmu_table_cache() || test_shadow() || test_large_span() || test_state() || test_resume_event() || test_npf_software_event()) { return 1; }
     msrs.AddressMask = KswNptAddressMask(45);
     value = 0x1d01;
     CHECK(KswSvmNestedMsrAccess(&msrs, KSW_SVM_MSR_EFER, 1, &value) == KSW_NSVM_MSR_OK);

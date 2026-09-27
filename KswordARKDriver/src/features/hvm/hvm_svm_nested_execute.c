@@ -81,20 +81,35 @@ static unsigned KswNsvmResolve(KSW_NSVM_EXECUTION* Execution)
     KSW_SVM_U64 gpa = KswSvmRead64(Execution->Current, KSW_VMCB_EXITINFO2);
     /* Real failures and cache-capacity recycling are separate outcomes. */
     unsigned status;
-    /* A malicious or unstable guest table must not create an unbounded root-only retry loop. */
-    if (++Execution->NpfRetries > 64) { return KSW_NSVM_EXEC_FAULT; }
+    /* A stale shadow walk must not turn into a host bugcheck after the bounded retry budget.
+       Return the original NPF to L1 so its NPT12 owner can repair or reject the mapping. */
+    if (++Execution->NpfRetries > 64) {
+        Execution->NpfRetries = 0;
+        return KswSvmNestedReturnL1(Execution);
+    }
     /* All physical memory access goes through the prepared RAM/window callbacks. */
     status = KswSvmNestedMmuResolve(Execution->Io->Mmu, &Execution->MmuIo, gpa,
         (unsigned)(info & (KSW_NNPT_WRITE | KSW_NNPT_EXECUTE)), info & (KSW_NMMU_FINAL | KSW_NMMU_TABLE), &Execution->Translation);
     /* Concurrent A/D changes may be retried without advancing the faulting guest instruction. */
     if (status == KSW_NNPT_RETRY) {
         /* Keep interrupted event delivery intact through a recoverable page-table race. */
-        return KswSvmNestedResumeEvent(Execution->Current) == KSW_NSVM_EVENT_OK ? KSW_NSVM_EXEC_RESUME : KSW_NSVM_EXEC_FAULT;
+        return KswSvmNestedResumeNpfEvent(Execution->Current, &Execution->EventEntry, Execution->Session->Lease.Token) == KSW_NSVM_EVENT_OK ? KSW_NSVM_EXEC_RESUME : KSW_NSVM_EXEC_FAULT;
     }
     /* Only a fault owned by the inner page-table translation can be reflected as guest NPF. */
     if (status == KSW_NNPT_FAULT && Execution->Translation.FaultOwner == KSW_NMMU_INNER) {
         /* Fault address and context come from the validated walker, never a host PA. */
-        KswSvmWrite64(Execution->Current, KSW_VMCB_EXITINFO1, Execution->Translation.FaultInfo);
+        /* The L0 walk supplies the low access bits; the hardware exit supplies
+           the stage (page-table or final) that L1 must repair.  Do not rewrite
+           a table fault as final: VMware uses the distinction when updating
+           its shadow NPT12 mapping. */
+        {
+            KSW_SVM_U64 rawStage = info & (KSW_NMMU_FINAL | KSW_NMMU_TABLE);
+            KSW_SVM_U64 walkStage = Execution->Translation.FaultInfo & (KSW_NMMU_FINAL | KSW_NMMU_TABLE);
+            KSW_SVM_U64 stage = (rawStage == KSW_NMMU_FINAL || rawStage == KSW_NMMU_TABLE) ? rawStage : walkStage;
+            if (stage != KSW_NMMU_FINAL && stage != KSW_NMMU_TABLE) { stage = KSW_NMMU_FINAL; }
+            KswSvmWrite64(Execution->Current, KSW_VMCB_EXITINFO1,
+                (Execution->Translation.FaultInfo & ~(KSW_NMMU_FINAL | KSW_NMMU_TABLE)) | stage);
+        }
         /* EXITCODE remains the original NPF from the combined hardware guest. */
         KswSvmWrite64(Execution->Current, KSW_VMCB_EXITINFO2, Execution->Translation.FaultAddress);
         /* L1 may repair its own mapping and execute VMRUN again. */
@@ -111,14 +126,14 @@ static unsigned KswNsvmResolve(KSW_NSVM_EXECUTION* Execution)
         /* Do not install the now-stale candidate; the next NPF performs a fresh source walk. */
         Execution->Io->Mmu->Epoch = Execution->Io->Shadow->Epoch; ++Execution->CacheRecycles;
         /* Assembly must issue TLB_CONTROL=1 before reentry into the emptied root. */
-        return KswSvmNestedResumeEvent(Execution->Current) == KSW_NSVM_EVENT_OK ? KSW_NSVM_EXEC_RESUME : KSW_NSVM_EXEC_FAULT;
+        return KswSvmNestedResumeNpfEvent(Execution->Current, &Execution->EventEntry, Execution->Session->Lease.Token) == KSW_NSVM_EVENT_OK ? KSW_NSVM_EXEC_RESUME : KSW_NSVM_EXEC_FAULT;
     }
     /* Wrong epoch or corrupt storage is not a reason to widen guest permissions. */
     if (status != KSW_NSHADOW_OK) { return KSW_NSVM_EXEC_FAULT; }
     /* An installed page is progress; future faults receive their own bounded retry budget. */
     Execution->NpfRetries = 0;
     /* NPF during an injected event needs that same interrupted event on retry. */
-    return KswSvmNestedResumeEvent(Execution->Current) == KSW_NSVM_EVENT_OK ? KSW_NSVM_EXEC_RESUME : KSW_NSVM_EXEC_FAULT;
+    return KswSvmNestedResumeNpfEvent(Execution->Current, &Execution->EventEntry, Execution->Session->Lease.Token) == KSW_NSVM_EVENT_OK ? KSW_NSVM_EXEC_RESUME : KSW_NSVM_EXEC_FAULT;
 }
 
 /* Called by a platform event bridge only after it can enforce the requested physical masks. */

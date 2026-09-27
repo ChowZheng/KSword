@@ -280,6 +280,8 @@ unsigned KswSvmNestedMachineExit(KSW_NSVM_MACHINE* Machine)
     if (action == KSW_NSVM_EXEC_UNSUPPORTED) { return KswNsvmMachineResult(Machine, KSW_NSVM_MACHINE_UNSUPPORTED); }
     /* Instruction reflection uses the same backlog restriction as physical-event reflection. */
     if (action == KSW_NSVM_EXEC_EVENT_BLOCKED) { return KswNsvmMachineResult(Machine, KSW_NSVM_MACHINE_WINDOW); }
+    /* Only the NPF resolver may reflect an L2 fault.  Other faults indicate
+       an incomplete L0 transaction and must not be disguised as L1 exits. */
     /* No unrecognized action permits a blind hardware retry. */
     return KswNsvmMachineResult(Machine, action == KSW_NSVM_EXEC_RESUME ? KSW_NSVM_MACHINE_READY : KSW_NSVM_MACHINE_FAULT);
 }
@@ -453,6 +455,8 @@ SelectCurrent:
     if (Machine->Transitions == ~0ULL) { return KswNsvmMachineResult(Machine, KSW_NSVM_MACHINE_FAULT); }
     /* This counts prepared attempts; only real exits count as hardware execution. */
     ++Machine->Transitions;
+    KswSvmNestedCaptureEventEntry(execution->Current, &execution->EventEntry,
+        execution->Session->Phase == KSW_NSVM_SESSION_L2 ? execution->Session->Lease.Token : 0);
     /* Assembly still must install Overlay.HostIf with GIF=0 and request a full TLB flush. */
     return KswNsvmMachineResult(Machine, KSW_NSVM_MACHINE_READY);
 }

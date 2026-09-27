@@ -465,6 +465,9 @@ private:
         bool kernelQuerySucceeded = false;      // 内核进程查询是否成功。
         std::size_t kernelEnumeratedCount = 0;  // 内核枚举得到的进程数量。
         std::size_t kernelOnlyCount = 0;        // 仅内核可见（疑似隐藏）进程数量。
+        std::size_t kernelUnconfirmedCount = 0; // CID 弱证据数量，不进入主列表。
+        std::size_t kernelTerminatingCount = 0; // CID 退出残留数量，不进入主列表。
+        bool kernelEnumerationComplete = false; // totalCount/returnedCount 是否完整。
         std::string kernelQueryDetailText;      // 内核查询诊断文本（错误或统计）。
     };
 
@@ -799,7 +802,7 @@ private:
       void executeExperimentalFirmwareRebootAction();
     void executeTerminateThreadAction();
     void executeR0TerminateThreadAction();
-    void updateUsageSummaryInHeader(const std::vector<DisplayRow>& displayRows);
+    void updateUsageSummaryInHeader();
 
     // ======== 进程活动记录与时间轴 ========
     bool isProcessActivityMetricEnabled(ProcessActivityMetric metric) const;

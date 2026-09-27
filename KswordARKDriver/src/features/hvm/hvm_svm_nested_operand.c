@@ -18,6 +18,31 @@ static unsigned int KswNsvmOperandFail(unsigned char* Destination,
     return Status;
 }
 
+/* Resolve the L1 operand through NPT01 without paying for an unlocked snapshot. */
+unsigned int KswSvmNestedResolveOperand(const KSW_NSVM_OPERAND_IO* Io,
+    KSW_SVM_U64 GuestPa, KSW_NSVM_OPERAND_RESULT* Result)
+{
+    KSW_NNPT_WALK walk;
+    unsigned int status;
+    const KSW_NSVM_OPERAND_RESULT empty = {0};
+    if (!Result) { return KSW_NNPT_UNSUPPORTED; }
+    *Result = empty; Result->GuestPa = GuestPa;
+    if (!Io || !Io->Read || (GuestPa & 4095ULL)) {
+        Result->Status = KSW_NNPT_UNSUPPORTED;
+        return Result->Status;
+    }
+    status = KswSvmNestedNptWalk(Io->Root, GuestPa, Io->PhysicalBits, Io->Page1Gb,
+        Io->Nx, 0, Io->Read, Io->Context, &walk);
+    if (status != KSW_NNPT_OK) { Result->Status = status; return status; }
+    if (((Io->Pat >> (8U * walk.PatIndex)) & 0xffULL) != 6ULL) {
+        Result->Status = KSW_NNPT_UNSUPPORTED;
+        return Result->Status;
+    }
+    Result->HostPa = walk.Address;
+    Result->Status = KSW_NNPT_OK;
+    return KSW_NNPT_OK;
+}
+
 /* Perform one bounded copy while the caller holds the prepared NPT01 lifetime. */
 unsigned int KswSvmNestedReadOperandPage(const KSW_NSVM_OPERAND_IO* Io,
     KSW_SVM_U64 GuestPa, unsigned char* Destination, KSW_NSVM_OPERAND_RESULT* Result)
@@ -51,8 +76,11 @@ unsigned int KswSvmNestedReadOperandPage(const KSW_NSVM_OPERAND_IO* Io,
     }
     /* A 4-KiB aligned GPA remains aligned through supported 4K/2M/1G mappings. */
     Result->HostPa = walk.Address;
-    /* Every read still passes the trusted RAM inventory check in the platform callback. */
-    for (offset = 0; offset < 4096U; offset += 8U) {
+    if (Io->ReadPage) {
+        if (!Io->ReadPage(Io->Context, walk.Address, Destination, &Result->Words) || Result->Words != 512U) {
+            return KswNsvmOperandFail(Destination, Result, KSW_NNPT_UNREADABLE);
+        }
+    } else for (offset = 0; offset < 4096U; offset += 8U) {
         /* The current page's full physical range is within the successfully walked leaf. */
         if (!Io->Read(Io->Context, walk.Address + offset, &value)) {
             /* Preserve partial progress, but remove the partial data itself. */
