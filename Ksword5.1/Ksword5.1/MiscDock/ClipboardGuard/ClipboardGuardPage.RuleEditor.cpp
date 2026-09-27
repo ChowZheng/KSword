@@ -279,6 +279,47 @@ namespace ks::misc
         refreshProcessListAndSessionsAsync();
     }
 
+    void ClipboardGuardPage::toggleGlobalMonitor(const bool enabled)
+    {
+        if (enabled)
+        {
+            if (hasEnabledGlobalRule())
+            {
+                // 规则表里已经有一条启用的全局规则（例如从驱动回读时就带着），
+                // 不重复添加第二条。
+                return;
+            }
+            ClipboardGuardRule globalRule;
+            globalRule.ruleId = m_nextLocalRuleId++;
+            globalRule.enabled = true;
+            globalRule.targetKind = 4U; // KSWORD_ARK_CLIPBOARD_POLICY_TARGET_KIND_ALL
+            globalRule.ruleName = QStringLiteral("全局监控");
+            // 默认三个方向都只是"仅记录"：全局监控的目的是看见，不是拦截；
+            // 需要真正拦截某个进程时，用规则表针对那个进程单独加一条更具体的规则，
+            // findMatchingRule 已经保证具体规则优先于这条全局规则生效。
+            globalRule.readAction = 2U;  // LOG_ONLY
+            globalRule.writeAction = 2U; // LOG_ONLY
+            globalRule.enumAction = 2U;  // LOG_ONLY
+            m_rules.push_back(globalRule);
+        }
+        else
+        {
+            // 关闭时把已启用的全局规则整条移除（理论上只会有一条，但遍历删除
+            // 更稳妥，不假设"只可能有一条"这个不变式永远成立）。
+            m_rules.erase(
+                std::remove_if(m_rules.begin(), m_rules.end(), [](const ClipboardGuardRule& ruleValue) {
+                    return ruleValue.targetKind == 4U;
+                }),
+                m_rules.end());
+        }
+
+        refreshRuleTable();
+        syncRulesToDriver();
+        // 关闭全局监控后立即重新核对一遍：不再匹配任何规则的进程会话会被这次
+        // 扫描回收，不用等到进程真的退出。
+        refreshProcessListAndSessionsAsync();
+    }
+
     void ClipboardGuardPage::showClipboardContentsForSelectedRow()
     {
         // 现取当前剪贴板内容，不依赖历史日志——按用户方案的建议，默认不长期落盘正文，

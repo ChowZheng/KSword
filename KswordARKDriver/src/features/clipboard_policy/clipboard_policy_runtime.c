@@ -202,6 +202,9 @@ Routine Description:
             return STATUS_INVALID_PARAMETER;
         }
         break;
+    case KSWORD_ARK_CLIPBOARD_POLICY_TARGET_KIND_ALL:
+        // 全局规则不依赖 targetProcessId/targetImage，本身即视为合法。
+        break;
     default:
         // 未知匹配方式一律拒绝，不允许静默当成 NONE 处理。
         return STATUS_INVALID_PARAMETER;

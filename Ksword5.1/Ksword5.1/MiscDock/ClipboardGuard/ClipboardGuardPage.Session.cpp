@@ -5,6 +5,7 @@
 
 #include <QApplication>
 #include <QBrush>
+#include <QCheckBox>
 #include <QCoreApplication>
 #include <QDateTime>
 #include <QDir>
@@ -16,10 +17,12 @@
 #include <QPointer>
 #include <QPushButton>
 #include <QSaveFile>
+#include <QSignalBlocker>
 #include <QTableWidget>
 #include <QTableWidgetItem>
 #include <QTextStream>
 #include <QThreadPool>
+#include <QUuid>
 
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -27,6 +30,7 @@
 #include <Windows.h>
 
 #include <algorithm>
+#include <iterator>
 
 // ============================================================
 // ClipboardGuardPage.Session.cpp
@@ -114,6 +118,7 @@ namespace ks::misc
             case 1: targetText = QString::number(ruleValue.targetProcessId); kindText = QStringLiteral("PID"); break;
             case 2: targetText = ruleValue.targetImage; kindText = QStringLiteral("映像名"); break;
             case 3: targetText = ruleValue.targetImage; kindText = QStringLiteral("完整路径"); break;
+            case 4: targetText = QStringLiteral("（全部进程）"); kindText = QStringLiteral("全局"); break;
             default: kindText = QStringLiteral("未设置"); break;
             }
             const auto actionText = [](const quint32 actionValue) {
@@ -132,6 +137,22 @@ namespace ks::misc
             m_ruleTable->setItem(row, 5, createReadOnlyItem(actionText(ruleValue.enumAction)));
             m_ruleTable->setItem(row, 6, createReadOnlyItem(ruleValue.enabled ? QStringLiteral("是") : QStringLiteral("否")));
         }
+
+        // 复选框状态跟着规则表一起刷新，避免"手动删掉全局规则行"之后复选框
+        // 还留在勾选状态这种两处状态各说各话的情况；阻塞信号防止这次同步
+        // 反过来触发一次 toggleGlobalMonitor。
+        if (m_globalMonitorCheck != nullptr)
+        {
+            const QSignalBlocker blocker(m_globalMonitorCheck);
+            m_globalMonitorCheck->setChecked(hasEnabledGlobalRule());
+        }
+    }
+
+    bool ClipboardGuardPage::hasEnabledGlobalRule() const
+    {
+        return std::any_of(m_rules.cbegin(), m_rules.cend(), [](const ClipboardGuardRule& ruleValue) {
+            return ruleValue.enabled && ruleValue.targetKind == 4U;
+        });
     }
 
     void ClipboardGuardPage::syncRulesToDriver()
@@ -204,9 +225,21 @@ namespace ks::misc
 
     const ClipboardGuardRule* ClipboardGuardPage::findMatchingRule(const ks::process::ProcessRecord& processRecord) const
     {
+        return findMatchingRuleIn(m_rules, processRecord);
+    }
+
+    const ClipboardGuardRule* ClipboardGuardPage::findMatchingRuleIn(
+        const std::vector<ClipboardGuardRule>& rules, const ks::process::ProcessRecord& processRecord)
+    {
         const QString imagePath = QString::fromStdString(processRecord.imagePath);
-        const QString imageName = QFileInfo(imagePath).fileName();
-        for (const ClipboardGuardRule& ruleValue : m_rules)
+        const QString imageName = imagePath.isEmpty()
+            ? QString::fromStdString(processRecord.processName)
+            : QFileInfo(imagePath).fileName();
+        // globalRulePointer：命中的全局规则先记下来，不立即返回——具体规则
+        // （PID/映像名/路径）必须优先于全局规则，哪怕它在规则表里排在全局规则
+        // 后面；这样"全局仅记录 + 对某个进程单独设拦截"才能按预期生效。
+        const ClipboardGuardRule* globalRulePointer = nullptr;
+        for (const ClipboardGuardRule& ruleValue : rules)
         {
             if (!ruleValue.enabled)
             {
@@ -233,18 +266,29 @@ namespace ks::misc
                     return &ruleValue;
                 }
                 break;
+            case 4: // ALL：全局监控，先记下来，等具体规则都查完了再决定用不用它。
+                globalRulePointer = &ruleValue;
+                break;
             default:
                 break;
             }
         }
-        return nullptr;
+        return globalRulePointer;
     }
 
     bool ClipboardGuardPage::writeSessionConfigForPid(
-        const std::uint32_t pid, const ClipboardGuardRule& matchedRule, QString* const errorTextOut) const
+        const std::uint32_t pid, const ClipboardGuardRule& matchedRule,
+        const QString& sessionId, QString* const errorTextOut) const
     {
         const QString configPath = QString::fromStdWString(ks::winapi_monitor::buildConfigPathForPid(pid));
-        QDir().mkpath(QFileInfo(configPath).absolutePath());
+        if (!QDir().mkpath(QFileInfo(configPath).absolutePath()))
+        {
+            if (errorTextOut != nullptr)
+            {
+                *errorTextOut = QStringLiteral("无法创建会话目录：%1").arg(QFileInfo(configPath).absolutePath());
+            }
+            return false;
+        }
 
         QSaveFile configFile(configPath);
         if (!configFile.open(QIODevice::WriteOnly | QIODevice::Text))
@@ -269,7 +313,7 @@ namespace ks::misc
         outputStream << "[monitor]\n";
         outputStream << "pipe_name=" << QString::fromStdWString(ks::winapi_monitor::buildPipeNameForPid(pid)) << '\n';
         outputStream << "stop_flag_path=" << QString::fromStdWString(ks::winapi_monitor::buildStopFlagPathForPid(pid)) << '\n';
-        outputStream << "session_id=clipboard_guard_" << pid << "_" << QDateTime::currentMSecsSinceEpoch() << '\n';
+        outputStream << "session_id=" << sessionId << '\n';
         outputStream << "agent_dll_path=" << QDir::toNativeSeparators(QCoreApplication::applicationDirPath() + QStringLiteral("/APIMonitor_x64.dll")) << '\n';
         // 只开剪贴板分类，不随手把通用文件/注册表/网络/进程/加载器监控一起打开——
         // "剪贴板保护"和通用 API 监控是两个不同的使用场景，这里只要剪贴板这一份。
@@ -285,7 +329,8 @@ namespace ks::misc
         outputStream << "clipboard_write_action=" << actionKeyword(matchedRule.writeAction) << '\n';
         outputStream << "clipboard_enum_action=" << actionKeyword(matchedRule.enumAction) << '\n';
 
-        if (!configFile.commit())
+        outputStream.flush();
+        if (outputStream.status() != QTextStream::Ok || !configFile.commit())
         {
             if (errorTextOut != nullptr)
             {
@@ -293,49 +338,110 @@ namespace ks::misc
             }
             return false;
         }
+        // 新配置完整提交后再撤销上一次会话的停止标记；否则常驻 Agent
+        // 在 WaitForNextSessionConfig 中会一直等待，无法重启同一 PID 的监控。
+        const QString stopFlagPath = QString::fromStdWString(ks::winapi_monitor::buildStopFlagPathForPid(pid));
+        if (QFile::exists(stopFlagPath) && !QFile::remove(stopFlagPath))
+        {
+            if (errorTextOut != nullptr)
+            {
+                *errorTextOut = QStringLiteral("会话配置已写入，但无法撤销停止标记：%1").arg(stopFlagPath);
+            }
+            return false;
+        }
         return true;
     }
 
-    void ClipboardGuardPage::ensureProcessProtected(const ks::process::ProcessRecord& processRecord, const ClipboardGuardRule& matchedRule)
+    bool ClipboardGuardPage::ensureProcessProtected(
+        const ks::process::ProcessRecord& processRecord, const ClipboardGuardRule& matchedRule, QString* const errorTextOut)
     {
-        bool alreadySessioned = false;
+        QString existingSessionId;
+        bool actionsUnchanged = false;
+        bool pipeThreadExited = false;
         {
             std::lock_guard<std::mutex> lock(m_sessionsMutex);
-            alreadySessioned = std::any_of(m_sessions.cbegin(), m_sessions.cend(),
-                [pid = processRecord.pid](const std::unique_ptr<Session>& sessionPointer) {
-                    return sessionPointer != nullptr && sessionPointer->pid == pid;
-                });
-        }
-
-        if (!alreadySessioned)
-        {
-            const QString agentDllPath = QDir::toNativeSeparators(QCoreApplication::applicationDirPath() + QStringLiteral("/APIMonitor_x64.dll"));
-            std::string injectError;
-            if (!ks::process::InjectDllByPath(processRecord.pid, agentDllPath.toStdString(), &injectError))
+            for (const std::unique_ptr<Session>& sessionPointer : m_sessions)
             {
-                if (m_statusLabel != nullptr)
+                if (sessionPointer != nullptr && sessionPointer->pid == processRecord.pid)
                 {
-                    m_statusLabel->setText(QStringLiteral("注入 PID=%1 失败：%2")
-                        .arg(processRecord.pid).arg(QString::fromStdString(injectError)));
+                    existingSessionId = sessionPointer->sessionId;
+                    pipeThreadExited = sessionPointer->pipeThreadExited.load();
+                    actionsUnchanged = sessionPointer->readAction == matchedRule.readAction
+                        && sessionPointer->writeAction == matchedRule.writeAction
+                        && sessionPointer->enumAction == matchedRule.enumAction;
+                    break;
                 }
-                return;
             }
         }
+        if (pipeThreadExited)
+        {
+            teardownSession(processRecord.pid);
+            existingSessionId.clear();
+        }
+        if (!existingSessionId.isEmpty() && actionsUnchanged)
+        {
+            return true;
+        }
+
+        const bool newSession = existingSessionId.isEmpty();
+        const QString sessionId = newSession
+            ? QUuid::createUuid().toString(QUuid::WithoutBraces)
+            : existingSessionId;
 
         QString writeError;
-        if (!writeSessionConfigForPid(processRecord.pid, matchedRule, &writeError))
+        if (!writeSessionConfigForPid(processRecord.pid, matchedRule, sessionId, &writeError))
         {
-            if (m_statusLabel != nullptr)
+            if (errorTextOut != nullptr)
             {
-                m_statusLabel->setText(writeError);
+                *errorTextOut = writeError;
             }
-            return;
+            return false;
         }
 
-        if (!alreadySessioned)
+        if (newSession)
         {
-            startPipeReadThreadForPid(processRecord.pid);
+            // 先启动管道客户端，再注入 Agent；它建立服务端后即可连接。
+            startPipeReadThreadForPid(processRecord.pid, sessionId, matchedRule);
+            const auto residentIt = m_residentAgentCreationTimes.find(processRecord.pid);
+            const bool reuseResidentAgent = processRecord.creationTime100ns != 0
+                && residentIt != m_residentAgentCreationTimes.cend()
+                && residentIt->second == processRecord.creationTime100ns;
+            if (!reuseResidentAgent)
+            {
+                const QString agentDllPath = QDir::toNativeSeparators(QCoreApplication::applicationDirPath() + QStringLiteral("/APIMonitor_x64.dll"));
+                std::string injectError;
+                if (!ks::process::InjectDllByPath(processRecord.pid, agentDllPath.toUtf8().toStdString(), &injectError))
+                {
+                    teardownSession(processRecord.pid);
+                    if (errorTextOut != nullptr)
+                    {
+                        *errorTextOut = QStringLiteral("注入 PID=%1 失败：%2")
+                            .arg(processRecord.pid).arg(QString::fromStdString(injectError));
+                    }
+                    return false;
+                }
+                if (processRecord.creationTime100ns != 0)
+                {
+                    m_residentAgentCreationTimes[processRecord.pid] = processRecord.creationTime100ns;
+                }
+            }
         }
+        else
+        {
+            std::lock_guard<std::mutex> lock(m_sessionsMutex);
+            for (const std::unique_ptr<Session>& sessionPointer : m_sessions)
+            {
+                if (sessionPointer != nullptr && sessionPointer->pid == processRecord.pid
+                    && sessionPointer->sessionId == sessionId)
+                {
+                    sessionPointer->readAction = matchedRule.readAction;
+                    sessionPointer->writeAction = matchedRule.writeAction;
+                    sessionPointer->enumAction = matchedRule.enumAction;
+                    break;
+                }
+            }
+        }
+        return true;
     }
 
     void ClipboardGuardPage::teardownSession(const std::uint32_t pid)
@@ -363,22 +469,25 @@ namespace ks::misc
         }
 
         sessionPointer->stopFlag.store(true);
-        const std::uintptr_t handleValue = sessionPointer->pipeHandleValue.exchange(0);
-        if (handleValue != 0)
-        {
-            // 主动关闭句柄打断阻塞中的 ReadFile，避免等目标进程自然退出才能 join。
-            ::CloseHandle(reinterpret_cast<HANDLE>(handleValue));
-        }
         if (sessionPointer->pipeThread != nullptr && sessionPointer->pipeThread->joinable())
         {
+            // ReadFile 是由管道线程发起的同步 I/O；跨线程 CloseHandle 不能可靠
+            // 取消它，还可能和读取线程的 CloseHandle 双重关闭同一个句柄。
+            // 请求取消后由读取线程自己关闭管道句柄。
+            ::CancelSynchronousIo(sessionPointer->pipeThread->native_handle());
             sessionPointer->pipeThread->join();
         }
     }
 
-    void ClipboardGuardPage::startPipeReadThreadForPid(const std::uint32_t pid)
+    void ClipboardGuardPage::startPipeReadThreadForPid(
+        const std::uint32_t pid, const QString& sessionId, const ClipboardGuardRule& rule)
     {
         auto sessionPointer = std::make_unique<Session>();
         sessionPointer->pid = pid;
+        sessionPointer->sessionId = sessionId;
+        sessionPointer->readAction = rule.readAction;
+        sessionPointer->writeAction = rule.writeAction;
+        sessionPointer->enumAction = rule.enumAction;
         Session* const sessionRawPointer = sessionPointer.get();
 
         const QString pipeNameText = QString::fromStdWString(ks::winapi_monitor::buildPipeNameForPid(pid));
@@ -390,6 +499,7 @@ namespace ks::misc
             {
                 if (sessionRawPointer->stopFlag.load())
                 {
+                    sessionRawPointer->pipeThreadExited.store(true);
                     return;
                 }
                 pipeHandle = ::CreateFileW(
@@ -401,6 +511,7 @@ namespace ks::misc
                 const DWORD lastError = ::GetLastError();
                 if (lastError != ERROR_FILE_NOT_FOUND && lastError != ERROR_PIPE_BUSY)
                 {
+                    sessionRawPointer->pipeThreadExited.store(true);
                     return;
                 }
                 ::WaitNamedPipeW(reinterpret_cast<LPCWSTR>(pipeNameText.utf16()), 250);
@@ -408,6 +519,7 @@ namespace ks::misc
             }
             if (pipeHandle == INVALID_HANDLE_VALUE)
             {
+                sessionRawPointer->pipeThreadExited.store(true);
                 return;
             }
 
@@ -416,15 +528,36 @@ namespace ks::misc
             while (!sessionRawPointer->stopFlag.load())
             {
                 ks::winapi_monitor::ApiMonitorEventPacket packetValue{};
-                DWORD bytesRead = 0;
-                const BOOL readOk = ::ReadFile(pipeHandle, &packetValue, kPacketSize, &bytesRead, nullptr);
-                if (readOk == FALSE || bytesRead == 0)
+                DWORD packetBytesRead = 0;
+                while (packetBytesRead < kPacketSize && !sessionRawPointer->stopFlag.load())
+                {
+                    DWORD bytesRead = 0;
+                    const BOOL readOk = ::ReadFile(pipeHandle,
+                        reinterpret_cast<unsigned char*>(&packetValue) + packetBytesRead,
+                        kPacketSize - packetBytesRead, &bytesRead, nullptr);
+                    if (readOk == FALSE || bytesRead == 0)
+                    {
+                        break;
+                    }
+                    packetBytesRead += bytesRead;
+                }
+                if (packetBytesRead != kPacketSize)
                 {
                     break;
                 }
-                if (bytesRead < sizeof(packetValue) || packetValue.size != sizeof(packetValue)
+                if (packetValue.size != sizeof(packetValue)
                     || packetValue.version != ks::winapi_monitor::kProtocolVersion)
                 {
+                    continue;
+                }
+                if (packetValue.category == static_cast<std::uint32_t>(ks::winapi_monitor::EventCategory::Internal))
+                {
+                    // 管道连上后 Agent 还要安装 Hook；只有收到确认事件，
+                    // 页面才能把该进程计入“当前受保护进程”。
+                    if (wideBufferToText(packetValue.apiName) == QStringLiteral("HooksInstalled"))
+                    {
+                        sessionRawPointer->hooksInstalled.store(true);
+                    }
                     continue;
                 }
                 // 只关心剪贴板分类；本会话的 INI 已经只开了这一类，这里再过滤一层双保险。
@@ -448,6 +581,8 @@ namespace ks::misc
             {
                 ::CloseHandle(reinterpret_cast<HANDLE>(storedHandleValue));
             }
+            sessionRawPointer->hooksInstalled.store(false);
+            sessionRawPointer->pipeThreadExited.store(true);
         });
 
         std::lock_guard<std::mutex> lock(m_sessionsMutex);
@@ -524,6 +659,7 @@ namespace ks::misc
 
     QString ClipboardGuardPage::resolveProcessNameForPid(const quint32 pid)
     {
+        std::lock_guard<std::mutex> lock(m_processNameCacheMutex);
         const auto cacheIt = m_processNameCache.find(pid);
         if (cacheIt != m_processNameCache.end())
         {
@@ -540,61 +676,137 @@ namespace ks::misc
             return;
         }
 
+        // m_rules 只能在 UI 线程读写（规则编辑对话框、toggleGlobalMonitor 等都在 UI 线程改它），
+        // 这里先拷一份快照带进后台线程，后台线程全程不碰 m_rules 本体，避免和规则编辑产生数据竞争。
+        std::vector<ClipboardGuardRule> rulesSnapshot = m_rules;
+
+        // 用本页面私有的 m_scanThreadPool 而不是全局线程池提交——见 .h 里
+        // m_scanThreadPool 的注释和析构函数里 waitForDone() 的说明。
         QPointer<ClipboardGuardPage> guardThis(this);
-        QThreadPool::globalInstance()->start([guardThis]() {
+        m_scanThreadPool.start([guardThis, rulesSnapshot = std::move(rulesSnapshot)]() {
             std::vector<ks::process::ProcessRecord> processList =
                 ks::process::EnumerateProcesses(ks::process::ProcessEnumStrategy::Auto);
 
-            QMetaObject::invokeMethod(qApp, [guardThis, processList = std::move(processList)]() mutable {
+            std::unordered_map<quint32, QString> processNameCache;
+            processNameCache.reserve(processList.size());
+            for (const ks::process::ProcessRecord& processRecord : processList)
+            {
+                processNameCache.emplace(processRecord.pid, QString::fromStdString(processRecord.processName));
+            }
+
+            // 按当前规则逐一核对：命中就确保已保护，退出的进程回收会话。
+            // PID 0/4（System Idle/System）不是可注入的普通进程；本进程自己
+            // 也没必要监控自己——全局规则打开后这两类会被排除，避免每轮都
+            // 白跑一次注入尝试。
+            //
+            // 这整段匹配 + 注入 + 会话回收必须留在这个后台线程里跑完：全局监控打开时
+            // 命中的进程可能有一两百个，每个 ensureProcessProtected 都可能触发一次同步
+            // 的 CreateRemoteThread 注入调用（单次最坏情况等到 InjectDllByPath 内部
+            // 10 秒超时）；之前这段逻辑排回了 UI 线程执行，累计耗时超过系统判定无响应
+            // 的阈值，2026-09-22 20:29:42 的 Windows Error Reporting AppHangB1 记录
+            // （Ksword5.1.exe 被系统判定无响应并关闭）就是这里卡死的。
+            const std::uint32_t selfPid = static_cast<std::uint32_t>(::GetCurrentProcessId());
+            std::vector<std::uint32_t> matchedPids;
+            int failureCount = 0;
+            QString lastErrorText;
+            for (const ks::process::ProcessRecord& processRecord : processList)
+            {
+                if (processRecord.pid == 0U || processRecord.pid == 4U || processRecord.pid == selfPid)
+                {
+                    continue;
+                }
+                const ClipboardGuardRule* const matchedRule =
+                    ClipboardGuardPage::findMatchingRuleIn(rulesSnapshot, processRecord);
+                if (matchedRule == nullptr)
+                {
+                    continue;
+                }
                 if (guardThis.isNull())
                 {
-                    guardThis->m_processScanInFlight.store(false);
+                    return;
+                }
+                matchedPids.push_back(processRecord.pid);
+                QString errorText;
+                if (!guardThis->ensureProcessProtected(processRecord, *matchedRule, &errorText))
+                {
+                    ++failureCount;
+                    lastErrorText = errorText;
+                }
+            }
+
+            if (guardThis.isNull())
+            {
+                return;
+            }
+
+            std::vector<std::uint32_t> sessionPids;
+            {
+                std::lock_guard<std::mutex> lock(guardThis->m_sessionsMutex);
+                for (const std::unique_ptr<Session>& sessionPointer : guardThis->m_sessions)
+                {
+                    if (sessionPointer != nullptr)
+                    {
+                        sessionPids.push_back(sessionPointer->pid);
+                    }
+                }
+            }
+            for (const std::uint32_t sessionPid : sessionPids)
+            {
+                if (std::find(matchedPids.cbegin(), matchedPids.cend(), sessionPid) == matchedPids.cend())
+                {
+                    // 进程退出或规则被删除/禁用：回收会话。写停止标记对已退出的进程是安全的空操作。
+                    guardThis->teardownSession(sessionPid);
+                }
+            }
+            for (auto residentIt = guardThis->m_residentAgentCreationTimes.begin();
+                residentIt != guardThis->m_residentAgentCreationTimes.end();)
+            {
+                const bool stillRunning = std::any_of(processList.cbegin(), processList.cend(),
+                    [residentIt](const ks::process::ProcessRecord& processRecord) {
+                        return processRecord.pid == residentIt->first
+                            && processRecord.creationTime100ns == residentIt->second;
+                    });
+                residentIt = stillRunning ? std::next(residentIt)
+                    : guardThis->m_residentAgentCreationTimes.erase(residentIt);
+            }
+
+            // 到这里为止全部工作都已经做完；剩下的只是把结果排回 UI 线程展示，
+            // 这一段本身很轻量，不会再造成卡顿。
+            const std::size_t ruleCount = rulesSnapshot.size();
+            std::size_t protectedCount = 0;
+            {
+                std::lock_guard<std::mutex> lock(guardThis->m_sessionsMutex);
+                for (const std::unique_ptr<Session>& sessionPointer : guardThis->m_sessions)
+                {
+                    if (sessionPointer != nullptr && sessionPointer->hooksInstalled.load()
+                        && !sessionPointer->pipeThreadExited.load())
+                    {
+                        ++protectedCount;
+                    }
+                }
+            }
+            QMetaObject::invokeMethod(qApp, [guardThis, processNameCache = std::move(processNameCache),
+                ruleCount, protectedCount, failureCount, lastErrorText]() mutable {
+                if (guardThis.isNull())
+                {
                     return;
                 }
 
-                guardThis->m_processNameCache.clear();
-                for (const ks::process::ProcessRecord& processRecord : processList)
                 {
-                    guardThis->m_processNameCache.emplace(
-                        processRecord.pid, QString::fromStdString(processRecord.processName));
-                }
-
-                // 按当前规则逐一核对：命中就确保已保护，退出的进程回收会话。
-                std::vector<std::uint32_t> matchedPids;
-                for (const ks::process::ProcessRecord& processRecord : processList)
-                {
-                    const ClipboardGuardRule* const matchedRule = guardThis->findMatchingRule(processRecord);
-                    if (matchedRule != nullptr)
-                    {
-                        matchedPids.push_back(processRecord.pid);
-                        guardThis->ensureProcessProtected(processRecord, *matchedRule);
-                    }
-                }
-
-                std::vector<std::uint32_t> sessionPids;
-                {
-                    std::lock_guard<std::mutex> lock(guardThis->m_sessionsMutex);
-                    for (const std::unique_ptr<Session>& sessionPointer : guardThis->m_sessions)
-                    {
-                        if (sessionPointer != nullptr)
-                        {
-                            sessionPids.push_back(sessionPointer->pid);
-                        }
-                    }
-                }
-                for (const std::uint32_t sessionPid : sessionPids)
-                {
-                    if (std::find(matchedPids.cbegin(), matchedPids.cend(), sessionPid) == matchedPids.cend())
-                    {
-                        // 进程退出或规则被删除/禁用：回收会话。写停止标记对已退出的进程是安全的空操作。
-                        guardThis->teardownSession(sessionPid);
-                    }
+                    std::lock_guard<std::mutex> lock(guardThis->m_processNameCacheMutex);
+                    guardThis->m_processNameCache = std::move(processNameCache);
                 }
 
                 if (guardThis->m_statusLabel != nullptr)
                 {
-                    guardThis->m_statusLabel->setText(QStringLiteral("规则 %1 条，当前受保护进程 %2 个。")
-                        .arg(guardThis->m_rules.size()).arg(matchedPids.size()));
+                    QString statusText = QStringLiteral("规则 %1 条，当前受保护进程 %2 个。")
+                        .arg(ruleCount).arg(protectedCount);
+                    if (failureCount > 0)
+                    {
+                        statusText += QStringLiteral(" 有 %1 个进程处理失败，最后一次错误：%2")
+                            .arg(failureCount).arg(lastErrorText);
+                    }
+                    guardThis->m_statusLabel->setText(statusText);
                 }
                 guardThis->m_processScanInFlight.store(false);
             }, Qt::QueuedConnection);

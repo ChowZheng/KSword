@@ -51,10 +51,14 @@
 // PID       ：只匹配一个具体进程，进程退出后该规则自然失效。
 // IMAGE_NAME：匹配映像文件名（不含目录），忽略大小写，例如 notepad.exe。
 // IMAGE_PATH：匹配映像完整路径，去盘符后大小写无关后缀匹配。
+// ALL       ：匹配系统上的全部进程（"全局监控"）。targetProcessId/targetImage
+//             都不生效；R3 侧在匹配顺序上把它当最低优先级——命中任何一条更具体
+//             的规则时优先用那条的动作，只有都不命中才落到这条全局规则。
 #define KSWORD_ARK_CLIPBOARD_POLICY_TARGET_KIND_NONE 0UL
 #define KSWORD_ARK_CLIPBOARD_POLICY_TARGET_KIND_PID 1UL
 #define KSWORD_ARK_CLIPBOARD_POLICY_TARGET_KIND_IMAGE_NAME 2UL
 #define KSWORD_ARK_CLIPBOARD_POLICY_TARGET_KIND_IMAGE_PATH 3UL
+#define KSWORD_ARK_CLIPBOARD_POLICY_TARGET_KIND_ALL 4UL
 
 // ------------------------------------------------------------
 // 动作：读/写/枚举各自独立取值，不是一个总开关

@@ -2,6 +2,7 @@
 #include "../../theme.h"
 
 #include <QAction>
+#include <QCheckBox>
 #include <QHBoxLayout>
 #include <QBrush>
 #include <QHeaderView>
@@ -55,6 +56,13 @@ namespace ks::misc
 
     ClipboardGuardPage::~ClipboardGuardPage()
     {
+        // 必须最先等 m_scanThreadPool 排空：refreshProcessListAndSessionsAsync 提交
+        // 的后台任务会解引用 QPointer<ClipboardGuardPage>（非线程安全，只是靠"任务
+        // 存活期间对象不会开始析构"这个前提保证它读到的值不被并发修改）。这里不等的话，
+        // 任务里的 guardThis->ensureProcessProtected(...) 等调用可能正好撞上下面这些
+        // 成员已经开始销毁的过程，是一个真实的 use-after-free。
+        m_scanThreadPool.waitForDone();
+
         // 页面销毁前必须先让所有会话线程退场，否则线程回调里的 QPointer 判空
         // 之外还会残留没有 join 的 std::thread，析构 std::thread 会直接 terminate。
         std::vector<std::uint32_t> pidList;
@@ -112,12 +120,23 @@ namespace ks::misc
         m_refreshButton->setToolTip(QStringLiteral("立即重新扫描进程列表并按当前规则注入/移除保护，不必等待下一次自动轮询。"));
         m_refreshButton->setStyleSheet(buildToolButtonStyle());
 
+        // 全局监控：勾选后新增一条 targetKind=ALL 的规则，覆盖系统上几乎全部
+        // 进程；默认三个方向都只是"仅记录"，不新增任何拦截面，避免一勾选就
+        // 打断全机复制粘贴。具体进程规则（PID/名称/路径）优先级更高，两者
+        // 都命中时以具体规则的动作为准，见 findMatchingRule 的判定顺序。
+        m_globalMonitorCheck = new QCheckBox(QStringLiteral("全局监控（记录所有进程的剪贴板访问）"), this);
+        m_globalMonitorCheck->setToolTip(QStringLiteral(
+            "注入到系统上几乎所有进程以观察剪贴板访问，事件表里能看到任意进程的读/写/枚举；"
+            "默认只记录不拦截，需要拦截某个进程时仍然用规则表单独设置该进程的动作。"
+            "注入的进程数量可能达到一两百个，会有一定性能开销。"));
+
         m_statusLabel = new QLabel(this);
         m_statusLabel->setText(QStringLiteral("尚未加载策略。"));
 
         m_toolbarLayout->addWidget(m_addRuleButton);
         m_toolbarLayout->addWidget(m_removeRuleButton);
         m_toolbarLayout->addWidget(m_refreshButton);
+        m_toolbarLayout->addWidget(m_globalMonitorCheck);
         m_toolbarLayout->addStretch(1);
         m_toolbarLayout->addWidget(m_statusLabel);
         m_rootLayout->addLayout(m_toolbarLayout);
@@ -178,7 +197,10 @@ namespace ks::misc
         m_uiFlushTimer->setInterval(200);
 
         m_processPollTimer = new QTimer(this);
-        m_processPollTimer->setInterval(2000);
+        // 1 秒轮询：比初版的 2 秒更贴近"实时"，新启动的进程能更快被发现/注入；
+        // 扫描本身在 QThreadPool 后台线程执行，缩短间隔不会卡 UI 线程，
+        // 代价只是后台扫描更频繁（单次扫描本身通常在数十毫秒量级）。
+        m_processPollTimer->setInterval(1000);
     }
 
     void ClipboardGuardPage::initializeConnections()
@@ -186,6 +208,7 @@ namespace ks::misc
         connect(m_addRuleButton, &QPushButton::clicked, this, &ClipboardGuardPage::openAddProcessRuleDialog);
         connect(m_removeRuleButton, &QPushButton::clicked, this, &ClipboardGuardPage::removeSelectedRule);
         connect(m_refreshButton, &QPushButton::clicked, this, &ClipboardGuardPage::refreshProcessListAndSessionsAsync);
+        connect(m_globalMonitorCheck, &QCheckBox::toggled, this, &ClipboardGuardPage::toggleGlobalMonitor);
         connect(m_columnPresetAButton, &QPushButton::clicked, this, [this]() { applyColumnLayout(ClipboardGuardColumnLayout::PresetA); });
         connect(m_columnPresetBButton, &QPushButton::clicked, this, [this]() { applyColumnLayout(ClipboardGuardColumnLayout::PresetB); });
         connect(m_eventTable, &QWidget::customContextMenuRequested, this, &ClipboardGuardPage::showEventTableContextMenu);
