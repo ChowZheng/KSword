@@ -681,12 +681,60 @@ KswordARKHvmEptFindWatch(
     return NULL;
 }
 
+/*
+ * Retire a watch whose hit path won the atomic transition but could not
+ * finish restoring the page.
+ *
+ * Only the first-hit owner moved the lifecycle, so only it may move it again;
+ * a loser that failed to repair its own view must not stomp on the winner's
+ * record.  The three callers all return FALSE right after, which takes the
+ * whole machine out of VMX non-root, so this is the last chance to leave the
+ * record in a state that describes what happened.
+ *
+ * FAULTED rather than TRIGGERED: TRIGGERED is transient, and the stop path
+ * only converts ARMED, so a record left there would stay "handling a hit"
+ * forever.  FAULTED rather than DISARMED or INVALIDATED: no evidence was
+ * recorded, and an access did happen - both of those would state something
+ * that is not true.
+ *
+ * Parameters:
+ *   Slot - the watch rule whose lifecycle this processor owns.
+ *   Plan - the hit plan returned by the shared decision header.
+ * Returns nothing; the caller reports the failure by its own return value.
+ */
+static VOID
+KswordARKHvmEptFaultWatchAfterCas(
+    _Inout_ KSW_HVM_EPT_RULE_SLOT* Slot,
+    _In_ const KSW_HVM_WATCH_HIT_PLAN* Plan
+    )
+{
+    /* Reject missing inputs on a path that must never dereference NULL. */
+    if (Slot == NULL ||
+        Plan == NULL) {
+        /* Return without touching an invalid record. */
+        return;
+    }
+    /* Only the owner of the first touch may move this lifecycle. */
+    if (Plan->OwnsFirstHit == 0U) {
+        /* Return: a loser must not overwrite the owner's state. */
+        return;
+    }
+    /* Publish the terminal fault state for this watch. */
+    InterlockedExchange(
+        &Slot->WatchState,
+        (LONG)KSWORD_ARK_HVM_EPT_WATCH_STATE_FAULTED);
+}
+
 VOID
 KswordARKHvmEptInvalidateWatchesLocked(
     _Inout_ KSW_HVM_RUNTIME* Runtime
     )
 {
     ULONG index = 0UL;
+    /* Records whether this pass actually restored any leaf permission. */
+    BOOLEAN restored = FALSE;
+    /* Lifecycle state read before this pass attempted to retire the watch. */
+    LONG previousState = 0L;
 
     /* Reject a missing runtime during defensive teardown. */
     if (Runtime == NULL) {
@@ -708,15 +756,29 @@ KswordARKHvmEptInvalidateWatchesLocked(
             continue;
         }
         /*
-         * Only ARMED watches change.  A DISARMED one already produced its
-         * evidence and that evidence stays true regardless of what residency
-         * does next; overwriting it would erase a real observation.
+         * Only ARMED watches change lifecycle state.  A DISARMED one already
+         * produced its evidence and that evidence stays true regardless of
+         * what residency does next; overwriting it would erase a real
+         * observation.
          */
-        if (InterlockedCompareExchange(
-                &rule->WatchState,
-                (LONG)KSWORD_ARK_HVM_EPT_WATCH_STATE_INVALIDATED,
-                (LONG)KSWORD_ARK_HVM_EPT_WATCH_STATE_ARMED) !=
-            (LONG)KSWORD_ARK_HVM_EPT_WATCH_STATE_ARMED) {
+        previousState = InterlockedCompareExchange(
+            &rule->WatchState,
+            (LONG)KSWORD_ARK_HVM_EPT_WATCH_STATE_INVALIDATED,
+            (LONG)KSWORD_ARK_HVM_EPT_WATCH_STATE_ARMED);
+        /*
+         * Two more states still need their page repaired even though their
+         * lifecycle must not move.
+         *
+         * TRIGGERED means a hit is in flight; FAULTED means one won the
+         * transition and then failed to restore the page.  Both can leave a
+         * leaf that still denies access while no rule claims it any more, and
+         * the next processor to touch that page aggregates to "unruled" -
+         * the whole-machine fail-closed path.  Skipping them here is how that
+         * leak survived teardown.
+         */
+        if (previousState != (LONG)KSWORD_ARK_HVM_EPT_WATCH_STATE_ARMED &&
+            previousState != (LONG)KSWORD_ARK_HVM_EPT_WATCH_STATE_TRIGGERED &&
+            previousState != (LONG)KSWORD_ARK_HVM_EPT_WATCH_STATE_FAULTED) {
             /* Continue to the next bounded rule record. */
             continue;
         }
@@ -727,6 +789,30 @@ KswordARKHvmEptInvalidateWatchesLocked(
             Runtime,
             rule->PhysicalAddress,
             rule->PageCount);
+        /* Remember that a leaf changed so the flush below is not skipped. */
+        restored = TRUE;
+    }
+    /*
+     * Flush the stale restrictive translations this pass just removed.
+     *
+     * Every other path that recomputes a leaf (ADD, REARM, CLEAR) invalidates
+     * right after; this one never did.  The caller runs it while processors
+     * are still in VMX non-root - that placement is deliberate, precisely
+     * "because the permissions have to be restored while the processors can
+     * still be invalidated" - so without the flush a sibling processor keeps
+     * using the old restricted translation and takes an EPT violation for a
+     * page no rule claims any more.  That aggregates to "unruled", which is
+     * the whole-machine fail-closed devirtualization path: a teardown would
+     * end by faulting the machine it was trying to shut down cleanly.
+     *
+     * A failed flush is not escalated here.  This helper is on the teardown
+     * path and has no way to report; the stop sequence that follows takes
+     * every processor out of VMX non-root anyway, which retires the stale
+     * translations along with the EPT pointer that produced them.
+     */
+    if (restored) {
+        /* Drop stale translations on every processor still resident. */
+        (VOID)KswordARKHvmResidentInvalidateEpt(Runtime->EptPointer);
     }
 }
 
@@ -1141,6 +1227,59 @@ KswordARKHvmEptRuleControlLocked(
                     NULL,
                     &conflictOwnerId,
                     &conflictOwnerKind)) {
+                /* Publish the stable leaf-conflict protocol status. */
+                Response->status =
+                    KSWORD_ARK_HVM_EPT_RULE_STATUS_LEAF_CONFLICT;
+                /* Publish which mechanism owns the page instead. */
+                Response->conflictOwnerId = conflictOwnerId;
+                Response->conflictOwnerKind = conflictOwnerKind;
+                /* Publish the authoritative conflict failure. */
+                Response->lastStatus = STATUS_SHARING_VIOLATION;
+                /* Return a protocol-level result successfully. */
+                return STATUS_SUCCESS;
+            }
+        } else {
+            ULONGLONG ownedIndex = 0ULL;
+            ULONG conflictOwnerId = 0UL;
+            ULONG conflictOwnerKind = 0UL;
+
+            /*
+             * An ordinary rule must not land on a page a view or a watch owns.
+             *
+             * The ownership test used to run only for watches, which made the
+             * "one page, one owner" rule enforceable from one side only: a
+             * plain tripwire could be installed straight on top of a watched
+             * page, and the GUI lets a user pick any physical address.  The
+             * damage shows up later and far away - the hit path finds a watch
+             * sharing its page with another rule, cannot resolve the watch,
+             * and takes the whole machine out of VMX non-root, which is
+             * exactly the outcome this feature exists to avoid.
+             *
+             * Rule-on-rule overlap stays allowed.  Two ordinary rules want the
+             * same thing from the leaf (fewer permissions), so they compose;
+             * it is the view and the watch that want opposite values, and they
+             * are the only owners named here.
+             */
+            for (ownedIndex = 0ULL;
+                 ownedIndex < Request->pageCount;
+                 ++ownedIndex) {
+                /* Test one page of the requested range for an owner. */
+                if (!KswordARKHvmEptPageHasOwner(
+                        Runtime,
+                        Request->physicalAddress +
+                            (ownedIndex * KSW_HVM_PAGE_BYTES),
+                        NULL,
+                        &conflictOwnerId,
+                        &conflictOwnerKind)) {
+                    /* Continue to the next bounded page of the range. */
+                    continue;
+                }
+                /* Let another ordinary rule share the page as before. */
+                if (conflictOwnerKind ==
+                    KSWORD_ARK_HVM_WATCH_CONFLICT_RULE) {
+                    /* Continue to the next bounded page of the range. */
+                    continue;
+                }
                 /* Publish the stable leaf-conflict protocol status. */
                 Response->status =
                     KSWORD_ARK_HVM_EPT_RULE_STATUS_LEAF_CONFLICT;
@@ -1659,6 +1798,8 @@ KswordARKHvmEptHandleViolation(
             physicalPage);
         /* Fail closed when split metadata is unexpectedly unavailable. */
         if (watchEntry == NULL) {
+            /* Retire the lifecycle so it cannot stay in the transient state. */
+            KswordARKHvmEptFaultWatchAfterCas(watchSlot, &plan);
             /* Report that the resident dispatcher must devirtualize. */
             return FALSE;
         }
@@ -1680,6 +1821,8 @@ KswordARKHvmEptHandleViolation(
 
             /* Fail closed rather than leave this processor still denied. */
             if (localEntry == NULL) {
+                /* Retire the lifecycle so it cannot stay in the transient state. */
+                KswordARKHvmEptFaultWatchAfterCas(watchSlot, &plan);
                 /* Report that the resident dispatcher must devirtualize. */
                 return FALSE;
             }
@@ -1695,6 +1838,8 @@ KswordARKHvmEptHandleViolation(
                 invalidatePointer != 0ULL
                     ? invalidatePointer
                     : Runtime->EptPointer) != 0U) {
+            /* Retire the lifecycle so it cannot stay in the transient state. */
+            KswordARKHvmEptFaultWatchAfterCas(watchSlot, &plan);
             /* Report that the resident dispatcher must devirtualize. */
             return FALSE;
         }

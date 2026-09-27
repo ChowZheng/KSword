@@ -5167,8 +5167,12 @@ namespace
             for (std::size_t i = 0; i < majorCount; ++i)
             {
                 const auto& major = response->majorFunctions[i];
+                // slot 是这一项函数指针本身的地址，dispatch 是它当前指向的入口。
+                // 两个都打出来：要监视"谁改了这张表"用的是前者，而它在旧驱动
+                // 上为 0 —— 那时这一行会明确显示 0x0，而不是看起来像个地址。
                 std::wcout << L"  major[" << i << L"] fn=" << major.majorFunction
                            << L" flags=0x" << std::hex << major.flags
+                           << L" slot=" << hex64(major.slotAddress)
                            << L" dispatch=" << hex64(major.dispatchAddress)
                            << L" moduleBase=" << hex64(major.moduleBase)
                            << std::dec << L" module='" << fixedWide(major.moduleName, KSWORD_ARK_DRIVER_MODULE_NAME_CHARS) << L"'\n";

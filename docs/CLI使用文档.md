@@ -403,7 +403,7 @@ WSL silo and Linux PID/TID diagnostics.
 | `r0 image-signature` | `KswordCLI.exe r0 image-signature --path PATH [--module-base VA] [--flags 0xN]` | 读取 Authenticode 证书表和 CI 证据。 | 必填：--path。可选：--module-base、--flags。 | `IOCTL_KSWORD_ARK_QUERY_IMAGE_SIGNATURE`。 |
 | `r0 debug-output` | `KswordCLI.exe r0 debug-output [--after-sequence N] [--max-records N] [--limit N]` | 读取内核调试输出环。 | 可选：--after-sequence、--max-records、--limit。 | `IOCTL_KSWORD_ARK_DEBUG_OUTPUT_DRAIN`，不改变捕获状态。 |
 | `r0 hvm-status` | `KswordCLI.exe r0 hvm-status` | 查询 HVM v6 的 VMX/EPT 或实验性 SVM/NPT 生命周期与能力状态。 | 无。 | `IOCTL_KSWORD_ARK_QUERY_HVM`。 |
-| `r0 hvm-metrics` | `KswordCLI.exe r0 hvm-metrics` | 查询转换计时有效性及 INVEPT、替换页资源计数。 | 无。 | `IOCTL_KSWORD_ARK_HVM_METRICS` v8；完整逐核 JSON：`hvm_ctl --json metrics`，包括影子 EPT 缓存、A/D 维护计数。主程序“完整操作”使用同一引擎。 |
+| `r0 hvm-metrics` | `KswordCLI.exe r0 hvm-metrics` | 查询转换计时有效性及 INVEPT、替换页资源计数。 | 无。 | `IOCTL_KSWORD_ARK_HVM_METRICS` v8；完整逐核 JSON：`hvm_ctl --json metrics`，包括影子 EPT 缓存、A/D 维护计数。 |
 | `r0 hvm-events` | `KswordCLI.exe r0 hvm-events [--after-sequence N] [--max-rows N]` | 读取 HVM 事件环，不清空事件。 | 可选：--after-sequence、--max-rows。 | `IOCTL_KSWORD_ARK_HVM_EVENTS`。 |
 | `r0 ioctl-registry` | `KswordCLI.exe r0 ioctl-registry [--flags 0xN] [--max-entries N]` | 查询驱动已注册的 IOCTL 分发表。 | 可选：--flags、--max-entries。 | `IOCTL_KSWORD_ARK_QUERY_IOCTL_REGISTRY`。 |
 | `r0 timer-dpc` | `KswordCLI.exe r0 timer-dpc [--max-entries N] [--max-per-bucket N]` | 枚举内核定时器与 DPC 证据。 | 可选：--max-entries、--max-per-bucket。 | `IOCTL_KSWORD_ARK_ENUM_TIMER_DPC`。 |
@@ -427,10 +427,12 @@ WSL silo and Linux PID/TID diagnostics.
 | `r0 win32k-events` | `KswordCLI.exe r0 win32k-events [--flags 0xN] [--session-id N] [--pid PID] [--tid TID] [--max-entries N]` | 查询基于 PDB 的 WinEvent Hook 证据。 | 可选：--flags、--session-id、--pid、--tid、--max-entries。 | `IOCTL_KSWORD_ARK_QUERY_WIN32K_EVENT_HOOKS`。 |
 
 
-### HVM 后代页控制与主程序入口
+### HVM 后代页控制（探针工具 `hvm_ctl`）
 
-主程序 HVM 面板的“完整操作”和 `hvm_ctl.exe` 编译同一份
-`HvmCommandCatalog.c`、`HvmCommandEngine.c`。`hvm_ctl --json commands`
+`hvm_ctl.exe` 是独立探针工具，不随主程序发布，也**不再**与主程序共用命令目录——
+主程序那个“完整操作”子页、`--ksword-hvm-command` 入口与 `KvmCommandPanel` 都已删除
+（见 `docs/next/hvm-gui-command-parity.md`），`HvmCommandCatalog.c` / `HvmCommandEngine.c`
+现在只由 `tools/hvm_ctl/` 编译。`hvm_ctl --json commands`
 是命令、参数、默认值和范围的权威目录；`--parse-only` 验证参数且不打开驱动。
 
 | 命令 | 参数与结果 |
@@ -461,7 +463,7 @@ HVM v6 在 `status.svmProbe` 增加 `rejectReason`/`rejectReasonName`、`stateVa
 AMD 的 self-test 包含已知 CPUID 退出和完整原生返回；`selfcheck` 只读，不替代它。
 `stop`、`teardown` 不要求重新提供进入许可。生命周期 generation 每次控制递增，powerGeneration 才是跨电源检查使用的代次。
 AMD 不支持 nested、EPTP switch、local EPT、VMREAD benchmark、一次性 Intel guest 或驱动内置 Intel soak；由实验采集脚本执行多核循环和压力。
-完整操作与 hvm_ctl 共用命令目录、help 和引擎；旧 HVM/metrics 协议版本明确拒绝。
+旧 HVM/metrics 协议版本明确拒绝。
 新增 `prepare-svm-probe`、`self-test-svm-nested` 专用命令：前者分配每核嵌套探针资源，后者执行驱动拥有的固定内层 VMRUN→CPUID→退出反射→原生返回序列。两者只能用于 AMD；先从已释放状态准备，完成后使用 `teardown`。该准备配置禁止 `resident`，不会向正常 Windows 宣传可运行任意内层 VMM。
 
 实验性通用 AMD 路径使用独立命令 `prepare-svm-general → self-test → resident-svm-general → stop → teardown`，共享标志 `ENABLE_NESTED_SVM=0x00010000`，HVM v6 结构不变。准备与启动模式必须一致；普通 `prepare/resident` 仍隐藏 SVM，探针准备不能通过省略标志改为常驻。Intel 明确拒绝该 AMD 标志。通用模式逐核绑定当前 Windows 状态和退出协调器，采用相同全核启动/回滚和停止互锁；有虚拟 SVM 所有权、L2 执行或未完成事件时停止返回忙，不能直接卸载。嵌套实现报告 PARTIAL；这些命令是后续实验入口，**没有完整 L2 OS/内层并发通过证据**，不应在日常实体机上直接试运行。

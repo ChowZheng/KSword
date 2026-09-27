@@ -956,10 +956,19 @@
     <ClCompile Include="UI\KvmWatch.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="UI\KvmWatchEvidence.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="UI\KvmWatchPanel.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="UI\KvmWatchPanel.Evidence.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="UI\KvmWatchDialog.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\KvmWatchEventDialog.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="UI\KvmEventDialog.cpp">
@@ -1721,6 +1730,12 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="UI\KvmControl.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="UI\KvmWatchPanel.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="UI\KvmWatchEventDialog.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <QtMoc Include="UI\CodeEditorWidget.h">

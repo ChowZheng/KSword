@@ -2289,6 +2289,12 @@ namespace ksword::ark
         std::uint64_t dispatchAddress = 0;     // dispatch 入口地址，仅展示。
         std::uint64_t moduleBase = 0;          // 所属模块基址，仅展示。
         std::wstring moduleName;               // 所属模块名。
+        // slotAddress：&DriverObject->MajorFunction[i]，即这个函数指针本身住在哪。
+        //
+        // 与 dispatchAddress 回答两个不同的问题：那个是"现在指向哪段代码"，
+        // 这个是"谁改了这张表"要监视的地址。旧驱动不回填它，此时为 0，
+        // 调用方必须据此禁用槽位监视入口而不是拿 0 去装一条监视。
+        std::uint64_t slotAddress = 0;
     };
 
     // DriverStartIoEntry 是 DriverObject->DriverStartIo 单行模型，三态见 KSWORD_ARK_DRIVER_START_IO_STATE_*。

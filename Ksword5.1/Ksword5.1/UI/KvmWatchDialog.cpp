@@ -250,6 +250,23 @@ namespace ks::ui
         std::thread([safeParent, watchTarget, label]() {
             const ksword::kvm::KvmWatchResult result =
                 ksword::kvm::addWatch(watchTarget);
+            /*
+             * 安装成功就把标签记下来。
+             *
+             * 标签必须等到这一刻才存得下去：watchId 由驱动分配，在 addWatch
+             * 返回之前根本不存在。存的是驱动回填的那一行，因为身份指纹（地址
+             * 种类、请求地址、请求长度、实际监视页）要以驱动的读数为准——
+             * 用请求值去拼指纹，虚拟地址翻译出来的页就对不上了。
+             *
+             * 恰好一行才存。ADD 只回填它自己那一条（整表快照是 WATCH_QUERY 的
+             * 事），所以行数不是 1 就说明这次回填不是我们以为的那个形状——
+             * 那时宁可让"目标"列显示地址，也不能把一句描述挂到一条不确定是
+             * 哪个目标的记录上。
+             */
+            if (result.ok && result.watches.size() == 1)
+            {
+                ksword::kvm::rememberWatchLabel(result.watches.first(), label);
+            }
             QMetaObject::invokeMethod(
                 qApp,
                 [safeParent, result, label]() {

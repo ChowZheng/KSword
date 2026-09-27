@@ -766,6 +766,25 @@ typedef struct _KSWORD_ARK_DRIVER_MAJOR_FUNCTION_ENTRY
     unsigned long long dispatchAddress;
     unsigned long long moduleBase;
     wchar_t moduleName[KSWORD_ARK_DRIVER_MODULE_NAME_CHARS];
+    /*
+     * 这一项槽位本身的内核地址，也就是 &DriverObject->MajorFunction[i]。
+     *
+     * 追加在结构尾部而不是插进中间：中间插字段会让既有字段的偏移平移，而增量
+     * 构建出来的 .sys 与 GUI 只要有一边没重建，读到的就是错位的值——那种故障
+     * 没有任何编译期或运行期提示。
+     *
+     * 它与 dispatchAddress 回答的是两个不同的问题：dispatchAddress 是"这一项
+     * 现在指向哪段代码"，slotAddress 是"这个指针本身存在哪"。要监视"谁改了这
+     * 张表"，必须用后者；R3 推不出来，因为 MajorFunction 在 DRIVER_OBJECT 里
+     * 的偏移是内核结构布局，用户态写死一个数就是把内核布局假设搬到了用户态。
+     *
+     * 顺带纠正一个已经被写进界面注释的错误假设：MajorFunction 槽位与
+     * DriverObject 并**不**保证落在同一个 4 KiB 页上。DRIVER_OBJECT 是池分配、
+     * 按 16 字节对齐，x64 上 sizeof 为 0x150 而该数组在偏移 0x70，对象基址的
+     * 页内偏移超过 0xE90 时尾部若干项就落到下一页去了。而 watch 恒定只覆盖一
+     * 页，所以"监视整个 DriverObject 就等于监视了每一项"是不成立的。
+     */
+    unsigned long long slotAddress;
 } KSWORD_ARK_DRIVER_MAJOR_FUNCTION_ENTRY;
 
 typedef struct _KSWORD_ARK_DRIVER_DEVICE_ENTRY

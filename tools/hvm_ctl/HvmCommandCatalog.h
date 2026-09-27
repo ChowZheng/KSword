@@ -26,6 +26,9 @@ typedef enum HVM_COMMAND_HANDLER {
     HvmWatchSelfTest, HvmWatchSelfTestRead, HvmWatchSelfTestExec,
     HvmWatchSelfTestSmp, HvmWatchSelfTestRemap, HvmWatchSelfTestEvidence,
     HvmWatchSelfTestConflict, HvmWatchSelfTestRestart, HvmWatchSelfTestProcess,
+    /* Clear the whole rule table.  Appended after the existing watch handlers:
+       only the two trailing sentinels shift, and both are matched by name. */
+    HvmWatchClear,
     HvmHelp, HvmCommands
 } HVM_COMMAND_HANDLER;
 

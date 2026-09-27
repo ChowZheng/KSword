@@ -358,6 +358,17 @@ Return Value:
         row->majorFunction = majorIndex;
         dispatchAddress = (PVOID)DriverObject->MajorFunction[majorIndex];
         row->dispatchAddress = (ULONGLONG)(ULONG_PTR)dispatchAddress;
+        /*
+         * Report where the pointer itself lives, not only what it points at.
+         *
+         * "Who rewrote this table" can only be watched on the slot address;
+         * user mode cannot derive it, because the offset of MajorFunction
+         * inside DRIVER_OBJECT is kernel structure layout.  We already hold
+         * the array here, so handing back its element address costs nothing
+         * and keeps that layout assumption on this side of the boundary.
+         */
+        row->slotAddress =
+            (ULONGLONG)(ULONG_PTR)&DriverObject->MajorFunction[majorIndex];
         KswordARKResolveModuleForAddress(
             ModuleInfo,
             dispatchAddress,
