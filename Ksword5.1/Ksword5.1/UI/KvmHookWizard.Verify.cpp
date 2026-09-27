@@ -40,10 +40,10 @@
 namespace
 {
     // 驱动接受的物理地址上界：KSW_HVM_MAX_MAPPED_PHYSICAL
-    // = 512 GiB * 16 个 PML4 项 = 8 TiB（hvm_internal.h:54-56），
+    // = 512 GiB * 128 个 PML4 项 = 64 TiB（hvm_internal.h），
     // 安装时与页对齐一起被查（hvm_ept_view.c:288-295）。
     // 客户端复述它是为了把拒绝提前到预检，而不是等驱动回一个 INVALID_REQUEST。
-    constexpr quint64 kMaxMappedPhysical = 0x80000000000ULL;
+    constexpr quint64 kMaxMappedPhysical = 0x400000000000ULL;
 
     // 常驻观察的轮询间隔。1 秒既跟得上人手动触发目标函数，
     // 又不至于把驱动侧状态锁打满。
@@ -563,15 +563,15 @@ namespace ks::ui
         else if (plan.pageBasePhysical >= kMaxMappedPhysical)
         {
             geometryVerdict = KvmCheckVerdict::Fail;
-            geometryConclusion = ks::i18n::sourceText(QStringLiteral("目标物理页超出 EPT 后端接受的 8 TiB 窗口，驱动会回 INVALID_REQUEST（hvm_ept_view.c:288-295）。"));
+            geometryConclusion = ks::i18n::sourceText(QStringLiteral("目标物理页超出 EPT 后端接受的 64 TiB 窗口，驱动会回 INVALID_REQUEST（hvm_ept_view.c:288-295）。"));
         }
         else
         {
-            geometryConclusion = ks::i18n::sourceText(QStringLiteral("页对齐且在 8 TiB 窗口内。请注意驱动**只**查这两条：它不查目标页是不是 RAM，也不查这一页归谁——地址算错的后果是给一页无关内存挂上 HOOK，而且全程不会有人报错。"));
+            geometryConclusion = ks::i18n::sourceText(QStringLiteral("页对齐且在 64 TiB 窗口内。请注意驱动**只**查这两条：它不查目标页是不是 RAM，也不查这一页归谁——地址算错的后果是给一页无关内存挂上 HOOK，而且全程不会有人报错。"));
         }
         rows.append(makeRow(
             static_cast<int>(KvmHookPreflightCriterion::TargetPageGeometry),
-            ks::i18n::sourceText(QStringLiteral("目标页几何：页对齐且小于 8 TiB")),
+            ks::i18n::sourceText(QStringLiteral("目标页几何：页对齐且小于 64 TiB")),
             ks::i18n::sourceText(QStringLiteral("resolved=%1；virtualAddress=%2；fullPhysicalAddress=%3；pageBasePhysical=%4；pageOffset=%5"))
                 .arg(flagText(plan.resolved))
                 .arg(hex64(plan.virtualAddress))
