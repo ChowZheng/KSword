@@ -1,4 +1,7 @@
 #include "SystemMemoryAuditPage.h"
+#include "PhysicalPageAttributionPage.h"
+#include "HyperVMemoryPage.h"
+#include "MemoryAttributionChart.h"
 
 #include "../Internationalization/LanguageManager.h"
 #include "../theme.h"
@@ -281,7 +284,7 @@ namespace
         { "kswordMemoryAuditTileTitleInUse", "In use" },
         { "kswordMemoryAuditTileTitleAvailable", "Available" },
         { "kswordMemoryAuditTileTitleCommit", "Commit" },
-        { "kswordMemoryAuditTileTitleUnattributed", "Unattributed" }
+        { "kswordMemoryAuditTileTitleUnattributed", "Snapshot remainder" }
     } };
 
     // summaryTileObjectName 作用：
@@ -636,6 +639,8 @@ void SystemMemoryAuditPage::initializeUi()
     m_filterEdit->setPlaceholderText(localized("Filter process, category, file, tag, or address"));
     controls->addWidget(m_refreshButton);
     controls->addWidget(m_userResidencyScanButton);
+    m_pfnScanButton = new QPushButton(localized("PFN deep attribution"), this);
+    controls->addWidget(m_pfnScanButton);
     controls->addWidget(m_autoRefreshCheck);
     controls->addWidget(m_intervalSpin);
     controls->addSpacing(12);
@@ -701,6 +706,9 @@ void SystemMemoryAuditPage::initializeUi()
     QWidget* const overviewPage = new QWidget(m_detailTabs);
     QVBoxLayout* const overviewLayout = new QVBoxLayout(overviewPage);
     overviewLayout->setContentsMargins(0, 0, 0, 0);
+    m_snapshotChart = new MemoryAttributionChart(overviewPage);
+    m_snapshotChart->selected = [this](int) { m_detailTabs->setCurrentWidget(m_pfnPage); };
+    overviewLayout->addWidget(m_snapshotChart);
     m_overviewTree = new QTreeWidget(overviewPage);
     m_overviewTree->setColumnCount(6);
     m_overviewTree->setHeaderLabels(QStringList{
@@ -765,6 +773,11 @@ void SystemMemoryAuditPage::initializeUi()
     m_detailTabs->addTab(processPage, localized("Kernel process snapshot"));
     m_detailTabs->addTab(poolPage, localized("Pool tags"));
     m_detailTabs->addTab(bigPoolPage, localized("Big Pool allocations"));
+    m_pfnPage = new PhysicalPageAttributionPage(m_detailTabs);
+    m_detailTabs->addTab(m_pfnPage, localized("Physical page attribution"));
+    m_hyperVPage = new HyperVMemoryPage(m_detailTabs);
+    m_detailTabs->addTab(m_hyperVPage, localized("Hyper-V / host memory"));
+    m_pfnPage->snapshotReady = [this](const std::shared_ptr<ksword::pfn::Scan>& scan) { m_hyperVPage->setPfnContext(scan); };
     ks::i18n::LanguageManager::instance().bindTab(
         m_detailTabs, overviewPage, QStringLiteral("memory.audit.tab.distribution"), QStringLiteral("物理内存分布"));
     ks::i18n::LanguageManager::instance().bindTab(
@@ -911,10 +924,26 @@ void SystemMemoryAuditPage::updateSummaryTiles()
     m_unattributedLabel->setText(QStringLiteral("%1 (%2)").arg(
         formatBytes(m_snapshot.unattributedResidentBytes),
         formatPercent(m_snapshot.unattributedResidentBytes, m_snapshot.totalPhysicalBytes)));
+    if (m_snapshotChart != nullptr)
+    {
+        m_snapshotChart->setSegments({
+            { localized("Available"), m_snapshot.availableBytes, 17 },
+            { localized("Process private"), m_snapshot.processPrivateResidentBytes, 0 },
+            { localized("Nonpaged pool"), m_snapshot.nonPagedPoolBytes, 5 },
+            { localized("Paged pool resident"), m_snapshot.pagedPoolResidentBytes, 4 },
+            { localized("Kernel / driver resident"), m_snapshot.systemCodeResidentBytes + m_snapshot.systemDriverResidentBytes, 12 },
+            { localized("Modified pages"), m_snapshot.modifiedBytes + m_snapshot.modifiedNoWriteBytes, 7 },
+            { localized("Snapshot remainder"), m_snapshot.unattributedResidentBytes, -1 }
+        }, localized("Fast snapshot estimate. Click to open physical-page attribution."));
+    }
 }
 
 void SystemMemoryAuditPage::initializeConnections()
 {
+    connect(m_pfnScanButton, &QPushButton::clicked, this, [this]() {
+        m_detailTabs->setCurrentWidget(m_pfnPage);
+        m_pfnPage->startScan();
+    });
     connect(m_refreshButton, &QPushButton::clicked, this, [this]() {
         m_startUserResidencyScanAfterSnapshot = true;
         refreshSnapshot();
@@ -944,12 +973,19 @@ void SystemMemoryAuditPage::initializeConnections()
         updateStatus();
         });
     connect(m_autoRefreshTimer, &QTimer::timeout, this, [this]() {
-        if (isVisible())
+        if (isVisible() && m_detailTabs->currentWidget() != m_pfnPage && m_detailTabs->currentWidget() != m_hyperVPage)
         {
             refreshSnapshot();
         }
         });
     connect(m_detailTabs, &QTabWidget::currentChanged, this, [this]() {
+        const bool showSnapshot = m_detailTabs->currentWidget() != m_pfnPage && m_detailTabs->currentWidget() != m_hyperVPage;
+        m_detailText->setVisible(showSnapshot);
+        m_statusLabel->setVisible(showSnapshot);
+        for (QLabel* value : { m_installedLabel, m_totalLabel, m_inUseLabel, m_availableLabel, m_commitLabel, m_unattributedLabel })
+        {
+            value->parentWidget()->setVisible(showSnapshot);
+        }
         scheduleCurrentDetailViewRebuild();
         updateDetails();
     });
@@ -1093,6 +1129,7 @@ void SystemMemoryAuditPage::runDdmaCrossCheck()
 
 void SystemMemoryAuditPage::retranslateUi()
 {
+    m_pfnScanButton->setText(localized("PFN deep attribution"));
     m_refreshButton->setText(localized("Refresh snapshot"));
     m_refreshButton->setToolTip(localized("Re-collect the whole-machine physical memory snapshot."));
     m_userResidencyScanButton->setText(localized("Deep scan user-mode residency"));
@@ -1133,6 +1170,8 @@ void SystemMemoryAuditPage::retranslateUi()
     m_detailTabs->setTabText(2, localized("Kernel process snapshot"));
     m_detailTabs->setTabText(3, localized("Pool tags"));
     m_detailTabs->setTabText(4, localized("Big Pool allocations"));
+    m_detailTabs->setTabText(5, localized("Physical page attribution"));
+    m_detailTabs->setTabText(6, localized("Hyper-V / host memory"));
 
     // 摘要卡片的上行小标题是局部控件，按 objectName 回查后逐格重译。
     for (const SummaryTileTitle& titleEntry : kSummaryTileTitles)
@@ -1255,6 +1294,7 @@ void SystemMemoryAuditPage::applySnapshot(Snapshot snapshot, const std::uint64_t
     m_previousBigPoolBytes = std::move(currentBigPoolBytes);
 
     m_snapshot = std::move(snapshot);
+    m_hyperVPage->setSnapshotContext(m_snapshot.sampledAt, m_snapshot.unattributedResidentBytes);
     const QString warningSignature = m_snapshot.errors.join(QChar(0x1F));
     if (!warningSignature.isEmpty() &&
         warningSignature != m_lastSnapshotWarningSignature)

@@ -350,6 +350,14 @@
     <ClCompile Include="src\features\callback\callback_external_minifilter.c" />
     <ClCompile Include="src\features\callback\callback_external_safe.c" />
     <ClCompile Include="src\features\memory\memory_physical.c" />
+    <ClCompile Include="src\features\memory\memory_pfn_ioctl.c">
+      <WarningLevel>Level4</WarningLevel>
+      <TreatWarningAsError>true</TreatWarningAsError>
+    </ClCompile>
+    <ClCompile Include="src\features\memory\memory_pfn_mappings_ioctl.c">
+      <WarningLevel>Level4</WarningLevel>
+      <TreatWarningAsError>true</TreatWarningAsError>
+    </ClCompile>
     <ClCompile Include="src\features\memory\memory_physical_layout.c" />
     <ClCompile Include="src\features\memory\memory_pagetable.c" />
     <ClCompile Include="src\features\memory\memory_kernel_exec_scan.c" />
@@ -369,6 +377,8 @@
     </MASM>
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="..\shared\driver\KswordArkPfnIoctl.h" />
+    <ClInclude Include="..\third_party\systeminformer_dyn\PfnNative.h" />
     <ClInclude Include="Device.h" />
     <ClInclude Include="Driver.h" />
     <ClInclude Include="include\ark\ark_device.h" />

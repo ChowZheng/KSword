@@ -15,6 +15,7 @@ Environment:
 --*/
 
 #include "ioctl_registry.h"
+#include "driver/KswordArkPfnIoctl.h"
 #include "ark/ark_ioctl.h"
 #include "driver/KswordArkMutationIoctl.h"
 #include "driver/KswordArkDeviceAuditIoctl.h"
@@ -98,6 +99,8 @@ NTSTATUS KswordARKKernelIoctlForceUnloadDriver(_In_ WDFDEVICE Device, _In_ WDFRE
 NTSTATUS KswordARKKernelIoctlControlDriverCommunication(_In_ WDFDEVICE Device, _In_ WDFREQUEST Request, _In_ size_t InputBufferLength, _In_ size_t OutputBufferLength, _Out_ size_t* BytesReturned);
 NTSTATUS KswordARKKernelIoctlQueryDriverIntegrity(_In_ WDFDEVICE Device, _In_ WDFREQUEST Request, _In_ size_t InputBufferLength, _In_ size_t OutputBufferLength, _Out_ size_t* BytesReturned);
 NTSTATUS KswordARKKernelIoctlQueryCpuHardware(_In_ WDFDEVICE Device, _In_ WDFREQUEST Request, _In_ size_t InputBufferLength, _In_ size_t OutputBufferLength, _Out_ size_t* BytesReturned);
+NTSTATUS KswordARKMemoryIoctlQueryPfnBatch(WDFDEVICE, WDFREQUEST, size_t, size_t, size_t*);
+NTSTATUS KswordARKMemoryIoctlQueryPfnMappings(WDFDEVICE, WDFREQUEST, size_t, size_t, size_t*);
 NTSTATUS KswordARKKernelIoctlQueryPhysicalMemoryLayout(_In_ WDFDEVICE Device, _In_ WDFREQUEST Request, _In_ size_t InputBufferLength, _In_ size_t OutputBufferLength, _Out_ size_t* BytesReturned);
 NTSTATUS KswordARKKernelIoctlQueryIoctlRegistry(_In_ WDFDEVICE Device, _In_ WDFREQUEST Request, _In_ size_t InputBufferLength, _In_ size_t OutputBufferLength, _Out_ size_t* BytesReturned);
 NTSTATUS KswordARKKernelIoctlEnumTimerDpc(_In_ WDFDEVICE Device, _In_ WDFREQUEST Request, _In_ size_t InputBufferLength, _In_ size_t OutputBufferLength, _Out_ size_t* BytesReturned);
@@ -304,6 +307,8 @@ static const KSWORD_ARK_IOCTL_ENTRY g_KswordArkIoctlTable[] = {
     { IOCTL_KSWORD_ARK_CONTROL_DRIVER_IMAGE, KswordARKKernelIoctlControlDriverImage, "IOCTL_KSWORD_ARK_CONTROL_DRIVER_IMAGE", KSWORD_ARK_IOCTL_CAPABILITY_NONE, KSWORD_ARK_IOCTL_FLAG_NONE },
     { IOCTL_KSWORD_ARK_QUERY_DRIVER_INTEGRITY, KswordARKKernelIoctlQueryDriverIntegrity, "IOCTL_KSWORD_ARK_QUERY_DRIVER_INTEGRITY", KSWORD_ARK_IOCTL_CAPABILITY_NONE, KSWORD_ARK_IOCTL_FLAG_NONE },
     { IOCTL_KSWORD_ARK_QUERY_CPU_HARDWARE, KswordARKKernelIoctlQueryCpuHardware, "IOCTL_KSWORD_ARK_QUERY_CPU_HARDWARE", KSWORD_ARK_IOCTL_CAPABILITY_NONE, KSWORD_ARK_IOCTL_FLAG_QUIET_SUCCESS },
+    { IOCTL_KSWORD_ARK_QUERY_PFN_BATCH, KswordARKMemoryIoctlQueryPfnBatch, "IOCTL_KSWORD_ARK_QUERY_PFN_BATCH", KSWORD_ARK_IOCTL_CAPABILITY_NONE, KSWORD_ARK_IOCTL_FLAG_QUIET_SUCCESS },
+    { IOCTL_KSWORD_ARK_QUERY_PFN_MAPPINGS, KswordARKMemoryIoctlQueryPfnMappings, "IOCTL_KSWORD_ARK_QUERY_PFN_MAPPINGS", KSWORD_ARK_IOCTL_CAPABILITY_NONE, KSWORD_ARK_IOCTL_FLAG_QUIET_SUCCESS },
     { IOCTL_KSWORD_ARK_QUERY_PHYSICAL_MEMORY_LAYOUT, KswordARKKernelIoctlQueryPhysicalMemoryLayout, "IOCTL_KSWORD_ARK_QUERY_PHYSICAL_MEMORY_LAYOUT", KSWORD_ARK_IOCTL_CAPABILITY_NONE, KSWORD_ARK_IOCTL_FLAG_QUIET_SUCCESS },
     { IOCTL_KSWORD_ARK_QUERY_IOCTL_REGISTRY, KswordARKKernelIoctlQueryIoctlRegistry, "IOCTL_KSWORD_ARK_QUERY_IOCTL_REGISTRY", KSWORD_ARK_IOCTL_CAPABILITY_NONE, KSWORD_ARK_IOCTL_FLAG_QUIET_SUCCESS },
     { IOCTL_KSWORD_ARK_ENUM_TIMER_DPC, KswordARKKernelIoctlEnumTimerDpc, "IOCTL_KSWORD_ARK_ENUM_TIMER_DPC", KSWORD_ARK_IOCTL_CAPABILITY_NONE, KSWORD_ARK_IOCTL_FLAG_QUIET_SUCCESS },

@@ -96,6 +96,12 @@
     </Inf>
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="..\shared\driver\KswordArkPfnIoctl.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\third_party\systeminformer_dyn\PfnNative.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="Device.h">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -1206,6 +1212,12 @@
       <Filter>Source Files\Features\Callback</Filter>
     </ClCompile>
     <ClCompile Include="src\features\memory\memory_physical.c">
+      <Filter>Source Files\Features\Memory</Filter>
+    </ClCompile>
+    <ClCompile Include="src\features\memory\memory_pfn_ioctl.c">
+      <Filter>Source Files\Features\Memory</Filter>
+    </ClCompile>
+    <ClCompile Include="src\features\memory\memory_pfn_mappings_ioctl.c">
       <Filter>Source Files\Features\Memory</Filter>
     </ClCompile>
     <ClCompile Include="src\features\memory\memory_physical_layout.c">

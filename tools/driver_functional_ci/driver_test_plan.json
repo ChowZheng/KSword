@@ -35,7 +35,7 @@
     ],
     "patternWaivers": {},
     "gapBudget": {
-      "no-cli-path": 18
+      "no-cli-path": 20
     },
     "targetGuards": {
       "harness-owned-process": "命令里的 PID 必须等于本次运行 spawn 的一次性目标进程。",
@@ -3199,6 +3199,16 @@
       "ioctl": "TERMINATE_THREAD",
       "reason": "no-cli-path",
       "detail": "KswordCLI 当前没有对应子命令，无法在本 harness 内触发；属于覆盖缺口，不是安全排除。"
+    },
+    {
+      "ioctl": "QUERY_PFN_BATCH",
+      "reason": "no-cli-path",
+      "detail": "PFN 只读范围、身份与归属查询；GUI 客户端支持，CLI 尚无协议入口，属于覆盖缺口。"
+    },
+    {
+      "ioctl": "QUERY_PFN_MAPPINGS",
+      "reason": "no-cli-path",
+      "detail": "有界工作集 VA 到 PFN 只读映射；GUI 客户端支持，CLI 尚无协议入口，属于覆盖缺口。"
     },
     {
       "ioctl": "WRITE_PHYSICAL_MEMORY",
