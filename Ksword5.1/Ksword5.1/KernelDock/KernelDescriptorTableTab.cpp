@@ -4,6 +4,8 @@
 #include "../ArkDriverClient/ArkDriverClient.h"
 #include "../UI/IntegrityRiskPresentation.h"
 #include "../UI/KernelDisassemblyDialog.h"
+// IDT/GDT 表项、它指向的代码、以及这张表所在页的 PTE，三条监视共用统一入口。
+#include "../UI/KvmWatchDialog.h"
 #include "../UI/TableInteractionSupport.h"
 #include "../UI/VisibleTableWidget.h"
 #include "../theme.h"
@@ -999,6 +1001,38 @@ void KernelDescriptorTableTab::showCopyMenu(const QPoint& position)
             == KSWORD_ARK_DRIVER_INTEGRITY_CLASS_IDT_HANDLER
         && m_rows[sourceIndex].descriptorBase != 0U;
     instructionView->setEnabled(canOpenInstructionView);
+
+    /*
+     * HVM 监视入口。
+     *
+     * 三个请求在 menu.exec() **之前**就算好并存进局部量，而不是等选完再去
+     * 读 m_rows[sourceIndex]。理由是这一页的刷新走
+     * std::thread(...).detach() 加 Qt::QueuedConnection 回投，而 menu.exec()
+     * 本身是一个嵌套事件循环——菜单开着的那几秒里整张 m_rows 可以被换掉。
+     * 那时按 sourceIndex 取到的是另一行，而后果不是报错，是悄悄监视了一页
+     * 毫不相干的内存。上面那条"指令视图"就是 exec 之后才取的，属于既有形态，
+     * 这里不跟着它错。
+     */
+    const WatchPlan watchPlan = buildWatchPlan(sourceIndex);
+    menu.addSeparator();
+    QAction* const watchEntry = menu.addAction(kernelText(
+        "kernel.descriptor.menu.hvm_watch_entry",
+        QStringLiteral("HVM 监视：下一次写入这一个表项")));
+    watchEntry->setEnabled(watchPlan.entryValid);
+    watchEntry->setToolTip(watchPlan.entryTip);
+    QAction* const watchTarget = menu.addAction(kernelText(
+        "kernel.descriptor.menu.hvm_watch_target",
+        QStringLiteral("HVM 监视：下一次执行这一项指向的代码")));
+    watchTarget->setEnabled(watchPlan.targetValid);
+    watchTarget->setToolTip(watchPlan.targetTip);
+    QAction* const watchPte = menu.addAction(kernelText(
+        "kernel.descriptor.menu.hvm_watch_pte",
+        QStringLiteral("HVM 监视：下一次写入这张表所在页的页表项")));
+    watchPte->setEnabled(watchPlan.pteValid);
+    watchPte->setToolTip(kernelText(
+        "kernel.descriptor.menu.hvm_watch_pte.tip",
+        QStringLiteral("盯的不是表本身，而是指向它的那一项页表项——回答的是「谁把这张表重映射到别处了」。表被整体搬走时，表内容一个字节都不用改。")));
+
     QAction* selected = menu.exec(m_table->viewport()->mapToGlobal(position));
     if (selected == copyCell && index.isValid())
     {
@@ -1031,4 +1065,210 @@ void KernelDescriptorTableTab::showCopyMenu(const QPoint& position)
                 .arg(descriptor.processorGroup)
                 .arg(descriptor.processorNumber));
     }
+    // 三条监视都用 exec 之前算好的 watchPlan，不再回头读 m_rows。
+    else if (selected == watchEntry && watchPlan.entryValid)
+    {
+        ks::ui::HvmWatchRequest request;
+        request.virtualAddress = true;
+        request.address = watchPlan.entryAddress;
+        request.length = watchPlan.entryLength;
+        request.access = KSWORD_ARK_HVM_EPT_ACCESS_WRITE;
+        request.label = watchPlan.entryLabel;
+        ks::ui::openHvmWatch(this, request);
+    }
+    else if (selected == watchTarget && watchPlan.targetValid)
+    {
+        ks::ui::HvmWatchRequest request;
+        request.virtualAddress = true;
+        request.address = watchPlan.targetAddress;
+        request.length = 1ULL;
+        request.access = KSWORD_ARK_HVM_EPT_ACCESS_EXECUTE;
+        request.label = watchPlan.targetLabel;
+        ks::ui::openHvmWatch(this, request);
+    }
+    else if (selected == watchPte && watchPlan.pteValid)
+    {
+        ks::ui::openHvmWatchOnPte(
+            this, watchPlan.pteSourceAddress, watchPlan.pteLabel);
+    }
+}
+
+/*
+ * buildWatchPlan：在弹出菜单之前，把这一行能建的三条监视全部算好。
+ *
+ * 入参 SourceIndex 是 m_rows 的下标（不是表格行号——表格可排序）。
+ * 出参是一份自足的快照：地址、长度、标签、启用与否、以及每一项的提示文字。
+ * 菜单关闭后只读这份快照，不再碰 m_rows。
+ *
+ * 为什么整份算好而不是选完再算：menu.exec() 是嵌套事件循环，而本页的刷新是
+ * 后台线程加 QueuedConnection 回投的，菜单开着时 m_rows 可以被整体替换。
+ * 那之后按同一个下标取到的是另一行，而这种错不报错，只是监视了别处。
+ */
+KernelDescriptorTableTab::WatchPlan
+KernelDescriptorTableTab::buildWatchPlan(const std::size_t sourceIndex) const
+{
+    WatchPlan plan;
+    if (sourceIndex >= m_rows.size())
+    {
+        plan.entryTip = kernelText(
+            "kernel.descriptor.menu.hvm_watch.no_row",
+            QStringLiteral("请先选中一行。"));
+        plan.targetTip = plan.entryTip;
+        return plan;
+    }
+    const ksword::ark::DriverIntegrityEvidenceEntry& row = m_rows[sourceIndex];
+    const bool isDescriptor =
+        row.evidenceClass == KSWORD_ARK_DRIVER_INTEGRITY_CLASS_IDT_HANDLER ||
+        row.evidenceClass == KSWORD_ARK_DRIVER_INTEGRITY_CLASS_GDT_DESCRIPTOR;
+    /*
+     * 中断对象行混在同一张表里，而且有两类**没有可用地址**的行必须挡掉。
+     *
+     * 一类是布局未验证说明行：它的 objectAddress 不是 0 而是 KPRCB 地址，
+     * 所以 "!= 0" 这个常见判据挡不住它——照着装下去就是对 KPRCB 那一页开
+     * 写监视。它的标志是 group/number/vector 被置成 0xFFFFFFFF。
+     * 另一类是 ordinal == 3 的汇总行，同样没有单项地址。
+     */
+    const bool isInterruptObject =
+        row.evidenceClass == KSWORD_ARK_DRIVER_INTEGRITY_CLASS_INTERRUPT_OBJECT &&
+        row.processorGroup != 0xFFFFFFFFU &&
+        row.processorNumber != 0xFFFFFFFFU &&
+        row.vector != 0xFFFFFFFFU &&
+        row.ordinal <= 2U;
+    // 驱动自己都没读出这一项时不放行：安装会在翻译处失败，说明不了问题。
+    const bool readFailed =
+        (row.descriptorFlags & KSWORD_ARK_DESCRIPTOR_FLAG_READ_FAILED) != 0U;
+    const QString tableName = m_tableKind == KernelDescriptorTableKind::Idt
+        ? QStringLiteral("IDT")
+        : QStringLiteral("GDT");
+    const QString whereText = kernelText(
+        "kernel.descriptor.menu.hvm_watch.where",
+        QStringLiteral("%1[%2]（CPU %3:%4）"))
+        .arg(tableName)
+        .arg(row.vector)
+        .arg(row.processorGroup)
+        .arg(row.processorNumber);
+
+    if (isDescriptor && !readFailed && row.objectAddress != 0ULL)
+    {
+        plan.entryValid = true;
+        plan.entryAddress = row.objectAddress;
+        /*
+         * 长度用驱动回报的描述符宽度，并且**收到本页剩余字节**。
+         *
+         * 不把"表项跨页"当成禁用条件：表基址未对齐正是 IDT_TABLE_RELOCATED
+         * 要查的情形，在那一刻把入口灰掉，等于在最该监视的时候关掉它。
+         * 跨页时硬件仍然只覆盖前一页，所以把 length 收到实际覆盖的那一段，
+         * 并在提示里说明——收窄的是"命中算不算落在你的目标上"这个判据，
+         * 不是硬件监视范围。
+         */
+        const unsigned long long width = row.descriptorSize != 0U
+            ? static_cast<unsigned long long>(row.descriptorSize)
+            : 16ULL;
+        const unsigned long long remaining =
+            0x1000ULL - (row.objectAddress & 0xFFFULL);
+        plan.entryLength = width <= remaining ? width : remaining;
+        // 同一个表项地址在几个 CPU 上重复，就说几个——不写死"每核一份"。
+        std::size_t sameAddress = 0;
+        for (const ksword::ark::DriverIntegrityEvidenceEntry& other : m_rows)
+        {
+            if (other.evidenceClass == row.evidenceClass &&
+                other.vector == row.vector &&
+                other.objectAddress == row.objectAddress)
+            {
+                ++sameAddress;
+            }
+        }
+        plan.entryLabel = kernelText(
+            "kernel.descriptor.menu.hvm_watch_entry.label",
+            QStringLiteral("%1 表项"))
+            .arg(whereText);
+        plan.entryTip = kernelText(
+            "kernel.descriptor.menu.hvm_watch_entry.tip",
+            QStringLiteral("盯这一项本身（%1 字节），等下一次有人改它。这一项的地址在 %2 个 CPU 行上是同一个，所以装一条就覆盖了那几个核；其余核的同名向量若指向别的表，要各装一条。%3"))
+            .arg(plan.entryLength)
+            .arg(sameAddress)
+            .arg(width > remaining
+                ? kernelText(
+                    "kernel.descriptor.menu.hvm_watch_entry.tip_split",
+                    QStringLiteral("注意：这一项横跨页边界，硬件只覆盖它在前一页的 %1 字节，后面 %2 字节不在被监视的页上。"))
+                    .arg(remaining).arg(width - remaining)
+                : QString());
+    }
+    else if (isInterruptObject && row.objectAddress != 0ULL)
+    {
+        plan.entryValid = true;
+        plan.entryAddress = row.objectAddress;
+        // KINTERRUPT 的大小是版本相关的 Windows 结构布局，不在 R3 写死；
+        // 给 0 表示整页，并在提示里说清楚这是退路而不是精确到字段。
+        plan.entryLength = 0ULL;
+        plan.entryLabel = kernelText(
+            "kernel.descriptor.menu.hvm_watch_entry.interrupt_label",
+            QStringLiteral("KINTERRUPT 0x%1（%2）"))
+            .arg(row.objectAddress, 0, 16)
+            .arg(whereText);
+        plan.entryTip = kernelText(
+            "kernel.descriptor.menu.hvm_watch_entry.interrupt_tip",
+            QStringLiteral("盯中断对象**基址所在的那一页**。协议没有回报被改的那个函数指针槽位自己的地址，所以只能到页粒度：同页任何写入都会先把这条一次性监视吃掉，命中后不能直接说成「有人改了 ServiceRoutine」。"));
+    }
+    else
+    {
+        plan.entryTip = readFailed
+            ? kernelText(
+                "kernel.descriptor.menu.hvm_watch.read_failed",
+                QStringLiteral("驱动读不出这一项的内容，装上的监视多半会在地址翻译处失败。"))
+            : kernelText(
+                "kernel.descriptor.menu.hvm_watch.no_entry_address",
+                QStringLiteral("这一行没有可监视的表项地址（汇总行、或本机结构布局未验证的说明行）。"));
+    }
+
+    // 指向的目标：描述符行是 handler / 段基址，中断对象行是 ISR 指针的值。
+    if ((isDescriptor || isInterruptObject) && !readFailed)
+    {
+        const unsigned long long target = isDescriptor
+            ? row.descriptorBase
+            : row.targetAddress;
+        if (target != 0ULL)
+        {
+            plan.targetValid = true;
+            plan.targetAddress = target;
+            plan.targetLabel = kernelText(
+                "kernel.descriptor.menu.hvm_watch_target.label",
+                QStringLiteral("%1 指向的代码 0x%2"))
+                .arg(whereText)
+                .arg(target, 0, 16);
+            plan.targetTip = kernelText(
+                "kernel.descriptor.menu.hvm_watch_target.tip",
+                QStringLiteral("盯这一项现在指向的那段代码，回答的是「它有没有在被调用」——与「谁改了这一项」是两个不同的问题。注意多个向量的 handler 很可能同在一个可执行页上，一条一次性执行监视可能先被某个无关的热向量触发。"));
+        }
+        else
+        {
+            plan.targetTip = kernelText(
+                "kernel.descriptor.menu.hvm_watch_target.none",
+                QStringLiteral("这一行没有记录指向的目标地址。"));
+        }
+    }
+    else
+    {
+        plan.targetTip = plan.entryTip;
+    }
+
+    /*
+     * 表所在页的页表项。
+     *
+     * 用表基址而不是表项地址：要问的是"谁把这张表重映射到别处了"，那是整张
+     * 表的映射，而不是某一项。表基址为零（中断对象行不填）时不提供。
+     */
+    if (isDescriptor && row.descriptorTableBase != 0ULL)
+    {
+        plan.pteValid = true;
+        plan.pteSourceAddress = row.descriptorTableBase;
+        plan.pteLabel = kernelText(
+            "kernel.descriptor.menu.hvm_watch_pte.label",
+            QStringLiteral("%1 表（CPU %2:%3，基址 0x%4）"))
+            .arg(tableName)
+            .arg(row.processorGroup)
+            .arg(row.processorNumber)
+            .arg(row.descriptorTableBase, 0, 16);
+    }
+    return plan;
 }

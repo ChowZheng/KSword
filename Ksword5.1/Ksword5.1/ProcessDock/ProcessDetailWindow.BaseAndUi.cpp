@@ -5351,6 +5351,90 @@ void ProcessDetailWindow::initializeKernelObjectTab()
     offsetFormLayout->addRow(QStringLiteral("SectionObject"), m_kernelObjectSectionObjectOffsetValue);
     m_kernelObjectLayout->addWidget(offsetGroup);
 
+    /*
+     * HVM 内存监视入口。
+     *
+     * 这一页上面那几组回答的是「现在长什么样」，这一组回答的是「下一次是谁
+     * 动的」。四个按钮对应四个不同的问题，不是同一件事的四个粒度：
+     *
+     *   ActiveProcessLinks  谁把这个进程从活动链表里摘了（进程隐藏）
+     *   Token 槽位          谁把这个进程的令牌整个换掉了（token stealing）
+     *   保护与签名          谁改了 PPL 保护级别
+     *   进程名              谁改了 ImageFileName
+     *
+     * 地址一律是 EPROCESS 基址加上**驱动回报的**字段偏移。这与在 R3 写死
+     * 0x4B8 之类的常数不是同一回事：偏移由 DynData 在 R0 解析并随响应带回，
+     * 用户态只负责相加；偏移问不出来时是一个明确的哨兵值，按钮会禁用并说明
+     * 原因，而不是拿一个缺省值去算出一个看起来合法的地址。
+     *
+     * 每次点击都重新问一次 R0，而不是复用「刷新 Section」那一次的结果：
+     * 进程可能已经退出，EPROCESS 可能已经被回收，用旧地址装监视会盯到一页
+     * 已经属于别人的内存上。
+     */
+    QGroupBox* const watchGroup =
+        new QGroupBox(QStringLiteral("HVM 内存监视（下一次是谁动的）"), kernelObjectContent);
+    QVBoxLayout* const watchGroupLayout = new QVBoxLayout(watchGroup);
+    watchGroupLayout->setContentsMargins(8, 8, 8, 8);
+    watchGroupLayout->setSpacing(6);
+
+    QLabel* const watchHint = new QLabel(
+        QStringLiteral("对 EPROCESS 的单个字段建立首次访问监视：命中时记下访问者的 RIP、模块与地址空间，原访问照常完成，常驻不会退出。硬件实际监视的是该字段所在的整个 4 KiB 页——EPROCESS 是池分配的大结构，会横跨多页，所以每个字段都按它自己的地址单独装，不存在“监视整个 EPROCESS”这回事。"),
+        watchGroup);
+    watchHint->setWordWrap(true);
+    watchGroupLayout->addWidget(watchHint);
+
+    QGridLayout* const watchButtons = new QGridLayout();
+    m_watchActiveProcessLinksButton = new QPushButton(
+        QStringLiteral("监视 ActiveProcessLinks"), watchGroup);
+    m_watchActiveProcessLinksButton->setToolTip(
+        QStringLiteral("谁把这个进程从活动进程链表里摘出去——进程隐藏最直接的那一步。监视的是这个进程自己的 LIST_ENTRY（两个指针，16 字节）。"));
+    m_watchTokenSlotButton = new QPushButton(
+        QStringLiteral("监视 Token 槽位"), watchGroup);
+    m_watchTokenSlotButton->setToolTip(
+        QStringLiteral("谁把这个进程的令牌整个换掉了（token stealing）。盯的是 EPROCESS 里那个 EX_FAST_REF 槽位本身，不是它指向的令牌对象——换令牌改的正是这 8 字节。"));
+    m_watchTokenObjectButton = new QPushButton(
+        QStringLiteral("监视令牌对象所在页"), watchGroup);
+    m_watchTokenObjectButton->setToolTip(
+        QStringLiteral("谁改了这个令牌自身的内容（特权位、完整性级别）。注意令牌对象可以被多个进程共享引用，所以这一页上的命中不一定来自本进程；要问“本进程的令牌被换了吗”，用上面那个槽位监视。"));
+    m_watchProtectionButton = new QPushButton(
+        QStringLiteral("监视保护与签名级别"), watchGroup);
+    m_watchProtectionButton->setToolTip(
+        QStringLiteral("谁改了 PPL 保护级别。三个字节（SignatureLevel / SectionSignatureLevel / Protection）在所有已知 profile 上都相邻，这里按驱动回报的三个偏移取最小值起头、覆盖到最大值，不写死顺序也不写死长度。"));
+    m_watchImageNameButton = new QPushButton(
+        QStringLiteral("监视进程名"), watchGroup);
+    m_watchImageNameButton->setToolTip(
+        QStringLiteral("谁改了 EPROCESS 里那个短进程名。它常被用来让进程在只看这个字段的工具里改头换面。"));
+    m_watchProcessPteButton = new QPushButton(
+        QStringLiteral("监视 EPROCESS 所在页的页表项"), watchGroup);
+    m_watchProcessPteButton->setToolTip(
+        QStringLiteral("谁改了 EPROCESS 基址那一页的映射。盯的不是结构本身，而是指向它的那一项 PTE——整页被重映射时结构内容一个字节都不用改。"));
+    watchButtons->addWidget(m_watchActiveProcessLinksButton, 0, 0);
+    watchButtons->addWidget(m_watchTokenSlotButton, 0, 1);
+    watchButtons->addWidget(m_watchTokenObjectButton, 0, 2);
+    watchButtons->addWidget(m_watchProtectionButton, 1, 0);
+    watchButtons->addWidget(m_watchImageNameButton, 1, 1);
+    watchButtons->addWidget(m_watchProcessPteButton, 1, 2);
+    watchGroupLayout->addLayout(watchButtons);
+
+    m_watchStatusLabel = new QLabel(QString(), watchGroup);
+    m_watchStatusLabel->setWordWrap(true);
+    watchGroupLayout->addWidget(m_watchStatusLabel);
+    m_kernelObjectLayout->addWidget(watchGroup);
+
+    // 六个按钮共用一条路径，只有"取哪个字段"不同。
+    connect(m_watchActiveProcessLinksButton, &QPushButton::clicked, this,
+        [this]() { startKernelFieldWatch(KernelFieldWatchTarget::ActiveProcessLinks); });
+    connect(m_watchTokenSlotButton, &QPushButton::clicked, this,
+        [this]() { startKernelFieldWatch(KernelFieldWatchTarget::TokenSlot); });
+    connect(m_watchTokenObjectButton, &QPushButton::clicked, this,
+        [this]() { startKernelFieldWatch(KernelFieldWatchTarget::TokenObject); });
+    connect(m_watchProtectionButton, &QPushButton::clicked, this,
+        [this]() { startKernelFieldWatch(KernelFieldWatchTarget::Protection); });
+    connect(m_watchImageNameButton, &QPushButton::clicked, this,
+        [this]() { startKernelFieldWatch(KernelFieldWatchTarget::ImageFileName); });
+    connect(m_watchProcessPteButton, &QPushButton::clicked, this,
+        [this]() { startKernelFieldWatch(KernelFieldWatchTarget::ProcessObjectPte); });
+
     QGroupBox* sectionGroup = new QGroupBox(QStringLiteral("Section / ControlArea 映射关系"), kernelObjectContent);
     QVBoxLayout* sectionGroupLayout = new QVBoxLayout(sectionGroup);
     sectionGroupLayout->setContentsMargins(8, 8, 8, 8);

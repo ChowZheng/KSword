@@ -1210,6 +1210,28 @@ namespace ksword::ark
         std::uint64_t virtualAddress = 0;   // virtualAddress：请求的虚拟地址。
         std::uint64_t physicalAddress = 0;  // physicalAddress：翻译结果；resolved 为假时无意义。
         std::uint64_t cr3PhysicalAddress = 0; // cr3PhysicalAddress：目标进程页表根。
+        /*
+         * 四级表项**自己**的物理地址，与它们的值是两回事。
+         *
+         * 要回答"谁改了这个地址的映射"，需要的是表项自己住在哪（可以对它建
+         * 监视），而不是表项当前的内容。驱动一直都在回报这四个值——它就是
+         * 按这些地址把表项读出来的——只是此前没抄进 R3 模型，于是界面上
+         * 谁也拿不到。
+         *
+         * 有效性判据是 fieldFlags 里对应的 *_PRESENT 位，**不是** resolved。
+         * 那个位的名字有误导：它的意思是"这一级走到了、地址已填"，不是
+         * "P 位为 1"。一个 P=0 的 PTE 会让 resolved 为假，而它的地址早就
+         * 算出来了——"盯着一个当前不存在的 PTE 等它被填上"恰恰是最该做的
+         * 一条监视，用 resolved 当门会把它白白挡掉。
+         *
+         * 注意 pml4e 是**每进程一份**：x64 上每个进程有自己的 PML4 页，内核
+         * 半区的 PML4E 是逐进程的副本。对它建监视只覆盖发起查询的那个进程
+         * 的那一份，别的进程改自己的副本不会响。下面三级才是共享的。
+         */
+        std::uint64_t pml4ePhysicalAddress = 0;
+        std::uint64_t pdptePhysicalAddress = 0;
+        std::uint64_t pdePhysicalAddress = 0;
+        std::uint64_t ptePhysicalAddress = 0;
         std::uint32_t pageSize = 0;     // pageSize：终端映射页大小（4KB/2MB/1GB）。
         std::uint32_t largePageType = 0; // largePageType：KSWORD_ARK_PAGE_TABLE_LARGE_PAGE_*。
         std::uint32_t protection = 0;   // protection：KSWORD_ARK_MEMORY_PROTECTION_* 汇总位。
