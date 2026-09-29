@@ -124,6 +124,9 @@ private:
         TokenWrap,
         TokenOutput,
         TokenEditorStatus,
+        TokenPrivilegeName,
+        TokenPrivilegeAction,
+        TokenPrivilegeApply,
 
         TokenSwitchRefresh = 1600,
         TokenSwitchApply,
@@ -452,6 +455,7 @@ private:
     void ApplyTokenSwitches();
     void ApplyRawTokenValue();
     void RefreshTokenReport();
+    void ApplyTokenPrivilege();
     void RefreshTokenSwitches();
     void RefreshSectionReport();
     void RenderSectionReport();
