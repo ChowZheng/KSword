@@ -665,6 +665,16 @@ ks::settings::AppearanceSettings ks::settings::loadAppearanceSettings()
         .toString(loadedSettings.utilizationFloatingThemeMode).trimmed().toLower();
     loadedSettings.utilizationFloatingThemeMode = floatingThemeMode == QStringLiteral("dark")
         || floatingThemeMode == QStringLiteral("light") ? floatingThemeMode : QStringLiteral("follow_main");
+    loadedSettings.utilizationFloatingFollowTitle = rootObject
+        .value(QStringLiteral("utilization_floating_follow_title")).toString();
+    loadedSettings.utilizationFloatingFollowExecutable = rootObject
+        .value(QStringLiteral("utilization_floating_follow_executable")).toString();
+    loadedSettings.utilizationFloatingFollowOffsetX = rootObject
+        .value(QStringLiteral("utilization_floating_follow_offset_x")).toInt();
+    loadedSettings.utilizationFloatingFollowOffsetY = rootObject
+        .value(QStringLiteral("utilization_floating_follow_offset_y")).toInt();
+    loadedSettings.utilizationFloatingFollowClickThrough = rootObject
+        .value(QStringLiteral("utilization_floating_follow_click_through")).toBool(false);
 
     // 透明背景效果只接受既定枚举文本，未知值回退 auto，避免拼写残留破坏材质决策。
     const QString translucencyMaterialText = rootObject
@@ -916,6 +926,12 @@ bool ks::settings::saveAppearanceSettings(const AppearanceSettings& settings, QS
         settings.utilizationFloatingThemeMode == QStringLiteral("dark")
             || settings.utilizationFloatingThemeMode == QStringLiteral("light")
             ? settings.utilizationFloatingThemeMode : QStringLiteral("follow_main"));
+    rootObject.insert(QStringLiteral("utilization_floating_follow_title"), settings.utilizationFloatingFollowTitle);
+    rootObject.insert(QStringLiteral("utilization_floating_follow_executable"), settings.utilizationFloatingFollowExecutable);
+    rootObject.insert(QStringLiteral("utilization_floating_follow_offset_x"), settings.utilizationFloatingFollowOffsetX);
+    rootObject.insert(QStringLiteral("utilization_floating_follow_offset_y"), settings.utilizationFloatingFollowOffsetY);
+    rootObject.insert(QStringLiteral("utilization_floating_follow_click_through"),
+        settings.utilizationFloatingFollowClickThrough);
     rootObject.insert(
         QStringLiteral("background_translucency_material"),
         settings.backgroundTranslucencyMaterial.trimmed().isEmpty()

@@ -2131,6 +2131,12 @@
     "hardware.utilization.floating.top_most": "置顶",
     "hardware.utilization.floating.switch_dark": "切换深色",
     "hardware.utilization.floating.switch_light": "切换浅色",
+    "hardware.utilization.floating.follow": "窗口跟随",
+    "hardware.utilization.floating.stop_follow": "取消跟随",
+    "hardware.utilization.floating.click_through": "点击穿透",
+    "hardware.utilization.floating.pick_prompt": "请点击目标窗口",
+    "hardware.utilization.floating.pick_cancel": "取消",
+    "hardware.utilization.floating.topmost_error": "置顶窗口不可跟随",
     "hardware.utilization.card.memory": "内存",
     "hardware.utilization.card.disk.prefix": "磁盘",
     "hardware.utilization.card.network.prefix": "以太网",
@@ -34771,6 +34777,11 @@
     "这个地址落在%1大页映射上，映射到 %2 那一级就结束了，没有 PTE 这一项可以监视。\n\n上一级表项覆盖的范围比一页大 512 倍，把它当成「这个地址的页表项」来监视会得到一个范围完全不同的结论，所以这里不替你那么做。": "这个地址落在%1大页映射上，映射到 %2 那一级就结束了，没有 PTE 这一项可以监视。\n\n上一级表项覆盖的范围比一页大 512 倍，把它当成「这个地址的页表项」来监视会得到一个范围完全不同的结论，所以这里不替你那么做。",
     "页表游走没有走到 PTE 这一级，取不到表项地址（查询状态 %1）。": "页表游走没有走到 PTE 这一级，取不到表项地址（查询状态 %1）。",
     "驱动读不出这一项的内容，装上的监视多半会在地址翻译处失败。": "驱动读不出这一项的内容，装上的监视多半会在地址翻译处失败。",
-    "；注意这个字段横跨页边界，硬件只覆盖它在前一页的 %1 字节": "；注意这个字段横跨页边界，硬件只覆盖它在前一页的 %1 字节"
+    "；注意这个字段横跨页边界，硬件只覆盖它在前一页的 %1 字节": "；注意这个字段横跨页边界，硬件只覆盖它在前一页的 %1 字节",
+    "窗口跟随": "窗口跟随",
+    "取消跟随": "取消跟随",
+    "点击穿透": "点击穿透",
+    "请点击目标窗口": "请点击目标窗口",
+    "置顶窗口不可跟随": "置顶窗口不可跟随"
   }
 }

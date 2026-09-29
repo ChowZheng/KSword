@@ -35,6 +35,7 @@
 #include <QCoreApplication>
 #include <QContextMenuEvent>
 #include <QDateTime>
+#include <QDialog>
 #include <QEasingCurve>
 #include <QEvent>
 #include <QFrame>
@@ -50,6 +51,7 @@
 #include <QListWidgetItem>
 #include <QList>
 #include <QMenu>
+#include <QMessageBox>
 #include <QMetaObject>
 #include <QModelIndex>
 #include <QMouseEvent>
@@ -63,6 +65,7 @@
 #include <QRunnable>
 #include <QScrollArea>
 #include <QScreen>
+#include <QScrollBar>
 #include <QShowEvent>
 #include <QSizePolicy>
 #include <QSplitter>
@@ -84,8 +87,10 @@
 #include <bit>
 #include <cmath>
 #include <cstring>
+#include <functional>
 #include <limits>
 #include <mutex>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -3414,6 +3419,100 @@ namespace
     private:
         QColor m_backgroundColor;
     };
+
+    class UtilizationFollowMirror final : public QWidget
+    {
+    public:
+        explicit UtilizationFollowMirror(QWidget* source, QWidget* parent)
+            : QWidget(parent), m_source(source)
+        {
+            setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Expanding);
+        }
+
+    protected:
+        void paintEvent(QPaintEvent*) override
+        {
+            QWidget* const source = m_source.data();
+            if (source == nullptr || source->width() <= 0 || source->height() <= 0)
+            {
+                return;
+            }
+            QPainter painter(this);
+            painter.scale(static_cast<qreal>(width()) / source->width(),
+                static_cast<qreal>(height()) / source->height());
+            source->render(&painter, QPoint(), QRegion(),
+                QWidget::DrawWindowBackground | QWidget::DrawChildren);
+        }
+
+    private:
+        QPointer<QWidget> m_source;
+    };
+
+    HHOOK utilizationPickHook = nullptr;
+    std::function<void(HWND)> utilizationPickCallback;
+    HWND utilizationFollowHookTarget = nullptr;
+    std::function<void(DWORD)> utilizationFollowCallback;
+
+    LRESULT CALLBACK utilizationMousePickProc(int code, WPARAM message, LPARAM data)
+    {
+        if (code == HC_ACTION && message == WM_LBUTTONDOWN && utilizationPickCallback)
+        {
+            const auto* const mouseData = reinterpret_cast<const MSLLHOOKSTRUCT*>(data);
+            const HWND picked = ::WindowFromPoint(mouseData->pt);
+            const auto callback = utilizationPickCallback;
+            QTimer::singleShot(0, qApp, [callback, picked]() { callback(picked); });
+        }
+        return ::CallNextHookEx(utilizationPickHook, code, message, data);
+    }
+
+    void CALLBACK utilizationFollowEventProc(HWINEVENTHOOK, DWORD event, HWND window,
+        LONG objectId, LONG childId, DWORD, DWORD)
+    {
+        if (window == utilizationFollowHookTarget && objectId == OBJID_WINDOW
+            && childId == CHILDID_SELF && utilizationFollowCallback)
+        {
+            const auto callback = utilizationFollowCallback;
+            QTimer::singleShot(0, qApp, [callback, event]() { callback(event); });
+        }
+    }
+
+    void CALLBACK utilizationForegroundEventProc(HWINEVENTHOOK, DWORD, HWND,
+        LONG, LONG, DWORD, DWORD)
+    {
+        if (utilizationFollowCallback)
+        {
+            const auto callback = utilizationFollowCallback;
+            QTimer::singleShot(0, qApp, [callback]() { callback(EVENT_SYSTEM_FOREGROUND); });
+        }
+    }
+
+    QString utilizationWindowTitle(HWND window)
+    {
+        const int length = ::GetWindowTextLengthW(window);
+        if (length <= 0) return {};
+        std::wstring title(static_cast<std::size_t>(length) + 1, L'\0');
+        const int copied = ::GetWindowTextW(window, title.data(), length + 1);
+        return copied > 0 ? QString::fromWCharArray(title.data(), copied) : QString();
+    }
+
+    QString utilizationWindowExecutable(HWND window)
+    {
+        DWORD processId = 0;
+        ::GetWindowThreadProcessId(window, &processId);
+        if (processId == 0) return {};
+        const HANDLE process = ::OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, processId);
+        if (process == nullptr) return {};
+        std::wstring path(32768, L'\0');
+        DWORD length = static_cast<DWORD>(path.size());
+        const bool succeeded = ::QueryFullProcessImageNameW(process, 0, path.data(), &length) != FALSE;
+        ::CloseHandle(process);
+        return succeeded ? QString::fromWCharArray(path.data(), static_cast<int>(length)) : QString();
+    }
+
+    bool utilizationWindowIsTopMost(HWND window)
+    {
+        return (::GetWindowLongPtrW(window, GWL_EXSTYLE) & WS_EX_TOPMOST) != 0;
+    }
 }
 
 HardwareDock::HardwareDock(QWidget* parent)
@@ -3432,6 +3531,10 @@ HardwareDock::HardwareDock(QWidget* parent)
     m_utilizationPreferencesSaveTimer->setInterval(350);
     connect(m_utilizationPreferencesSaveTimer, &QTimer::timeout,
         this, &HardwareDock::saveUtilizationFloatingPreferences);
+    m_utilizationFollowTimer = new QTimer(this);
+    m_utilizationFollowTimer->setInterval(250);
+    connect(m_utilizationFollowTimer, &QTimer::timeout,
+        this, &HardwareDock::synchronizeUtilizationFollow);
 
     // 启动阶段先填充占位文本，避免首帧等待 PowerShell 导致窗口卡住。
     m_cachedOverviewStaticText = QStringLiteral("硬件概览加载中，请稍候...");
@@ -3454,6 +3557,11 @@ HardwareDock::HardwareDock(QWidget* parent)
 
 HardwareDock::~HardwareDock()
 {
+    clearUtilizationFollowHooks();
+    delete m_utilizationPickDialog.data();
+    m_utilizationPickDialog = nullptr;
+    delete m_utilizationFollowMirror.data();
+    m_utilizationFollowMirror = nullptr;
     if (m_utilizationPreferencesSaveTimer != nullptr && m_utilizationPreferencesSaveTimer->isActive())
     {
         saveUtilizationFloatingPreferences();
@@ -3506,11 +3614,19 @@ bool HardwareDock::eventFilter(QObject* watchedObject, QEvent* eventObject)
     QWidget* const eventWidget = qobject_cast<QWidget*>(watchedObject);
     QWidget* const floatingWindow = m_utilizationFloatingWindow.data();
     if (eventObject != nullptr && floatingWindow != nullptr && eventWidget != nullptr
-        && (eventWidget == floatingWindow || floatingWindow->isAncestorOf(eventWidget)))
+        && (eventWidget == floatingWindow || floatingWindow->isAncestorOf(eventWidget))
+        && (m_utilizationPickDialog == nullptr
+            || (eventWidget != m_utilizationPickDialog
+                && !m_utilizationPickDialog->isAncestorOf(eventWidget))))
     {
         if (eventObject->type() == QEvent::Close && eventWidget == floatingWindow)
         {
-            QTimer::singleShot(0, this, [this]() { restoreUtilizationFloatingWindow(); });
+            if (m_utilizationFollowTarget != nullptr && m_utilizationFollowClickThrough) return true;
+            QTimer::singleShot(0, this, [this]()
+            {
+                if (m_utilizationFollowTarget != nullptr) stopUtilizationFollow(false, true);
+                else restoreUtilizationFloatingWindow();
+            });
             return true;
         }
         if (eventObject->type() == QEvent::KeyPress)
@@ -3518,7 +3634,12 @@ bool HardwareDock::eventFilter(QObject* watchedObject, QEvent* eventObject)
             const auto* keyEvent = static_cast<QKeyEvent*>(eventObject);
             if (keyEvent->key() == Qt::Key_Escape)
             {
-                QTimer::singleShot(0, this, [this]() { restoreUtilizationFloatingWindow(); });
+                if (m_utilizationFollowTarget != nullptr && m_utilizationFollowClickThrough) return true;
+                QTimer::singleShot(0, this, [this]()
+                {
+                    if (m_utilizationFollowTarget != nullptr) stopUtilizationFollow(false, true);
+                    else restoreUtilizationFloatingWindow();
+                });
                 return true;
             }
             if (keyEvent->modifiers() & Qt::ControlModifier)
@@ -3597,7 +3718,8 @@ bool HardwareDock::eventFilter(QObject* watchedObject, QEvent* eventObject)
             QAction* const topMostAction = menu.addAction(ks::i18n::contextText(
                 QStringLiteral("hardware.utilization.floating.top_most"), QStringLiteral("置顶")));
             topMostAction->setCheckable(true);
-            topMostAction->setChecked(m_utilizationFloatingTopMost);
+            topMostAction->setChecked(m_utilizationFollowTarget == nullptr && m_utilizationFloatingTopMost);
+            topMostAction->setEnabled(m_utilizationFollowTarget == nullptr);
             connect(topMostAction, &QAction::toggled, this, [this, floatingWindow](const bool enabled)
             {
                 m_utilizationFloatingTopMost = enabled;
@@ -3619,6 +3741,26 @@ bool HardwareDock::eventFilter(QObject* watchedObject, QEvent* eventObject)
                 applyUtilizationFloatingTheme();
                 m_utilizationPreferencesSaveTimer->start();
             });
+            if (m_utilizationFollowTarget == nullptr)
+            {
+                QAction* const followAction = menu.addAction(ks::i18n::contextText(
+                    QStringLiteral("hardware.utilization.floating.follow"), QStringLiteral("窗口跟随")));
+                connect(followAction, &QAction::triggered, this,
+                    &HardwareDock::beginUtilizationWindowPick);
+            }
+            else
+            {
+                QAction* const clickThroughAction = menu.addAction(ks::i18n::contextText(
+                    QStringLiteral("hardware.utilization.floating.click_through"), QStringLiteral("点击穿透")));
+                clickThroughAction->setCheckable(true);
+                clickThroughAction->setChecked(m_utilizationFollowClickThrough);
+                connect(clickThroughAction, &QAction::toggled, this,
+                    &HardwareDock::setUtilizationFollowClickThrough);
+                QAction* const detachAction = menu.addAction(ks::i18n::contextText(
+                    QStringLiteral("hardware.utilization.floating.stop_follow"), QStringLiteral("取消跟随")));
+                connect(detachAction, &QAction::triggered, this,
+                    [this]() { stopUtilizationFollow(false, true); });
+            }
             menu.exec(contextEvent->globalPos());
             return true;
         }
@@ -3627,8 +3769,30 @@ bool HardwareDock::eventFilter(QObject* watchedObject, QEvent* eventObject)
             const auto* mouseEvent = static_cast<QMouseEvent*>(eventObject);
             if (mouseEvent->button() == Qt::LeftButton)
             {
-                QTimer::singleShot(0, this, [this]() { restoreUtilizationFloatingWindow(); });
+                QTimer::singleShot(0, this, [this]()
+                {
+                    if (m_utilizationFollowTarget != nullptr)
+                    {
+                        stopUtilizationFollow(false, true);
+                    }
+                    else
+                    {
+                        restoreUtilizationFloatingWindow();
+                    }
+                });
                 return true;
+            }
+        }
+        if (eventObject->type() == QEvent::Move && eventWidget == floatingWindow
+            && m_utilizationFollowTarget != nullptr && !m_utilizationFollowSyncing)
+        {
+            RECT targetRect{}, floatRect{};
+            if (::GetWindowRect(static_cast<HWND>(m_utilizationFollowTarget), &targetRect) != FALSE
+                && ::GetWindowRect(reinterpret_cast<HWND>(floatingWindow->winId()), &floatRect) != FALSE)
+            {
+                m_utilizationFollowOffset = QPoint(floatRect.left - targetRect.left,
+                    floatRect.top - targetRect.top);
+                m_utilizationPreferencesSaveTimer->start();
             }
         }
         if (eventObject->type() == QEvent::Resize && eventWidget == floatingWindow)
@@ -3730,6 +3894,17 @@ bool HardwareDock::eventFilter(QObject* watchedObject, QEvent* eventObject)
                     qRound(std::min(widthRatio, heightRatio) * 100.0), 25, 300);
                 m_utilizationPreferencesSaveTimer->start();
             }
+            if (m_utilizationFollowTarget != nullptr && consumeRelease)
+            {
+                RECT targetRect{}, floatRect{};
+                if (::GetWindowRect(static_cast<HWND>(m_utilizationFollowTarget), &targetRect) != FALSE
+                    && ::GetWindowRect(reinterpret_cast<HWND>(floatingWindow->winId()), &floatRect) != FALSE)
+                {
+                    m_utilizationFollowOffset = QPoint(floatRect.left - targetRect.left,
+                        floatRect.top - targetRect.top);
+                    m_utilizationPreferencesSaveTimer->start();
+                }
+            }
             m_utilizationDragArmed = false;
             m_utilizationDragging = false;
             m_utilizationResizeEdges = {};
@@ -3741,7 +3916,8 @@ bool HardwareDock::eventFilter(QObject* watchedObject, QEvent* eventObject)
     }
 
     if (eventObject != nullptr && eventObject->type() == QEvent::MouseButtonDblClick
-        && m_utilizationFloatingMode == UtilizationFloatingMode::None
+        && (m_utilizationFloatingMode == UtilizationFloatingMode::None
+            || m_utilizationFollowTarget != nullptr)
         && m_sideTabWidget != nullptr && m_sideTabWidget->currentWidget() == m_utilizationPage
         && eventWidget != nullptr)
     {
@@ -3751,9 +3927,14 @@ bool HardwareDock::eventFilter(QObject* watchedObject, QEvent* eventObject)
             QWidget* const sidebarViewport = m_utilizationSidebarList != nullptr
                 ? m_utilizationSidebarList->viewport() : nullptr;
             if (sidebarViewport != nullptr
-                && (eventWidget == sidebarViewport || sidebarViewport->isAncestorOf(eventWidget)))
+                && (eventWidget == sidebarViewport || sidebarViewport->isAncestorOf(eventWidget)
+                    || eventWidget == m_utilizationFollowMirror))
             {
-                openUtilizationFloatingWindow(true);
+                if (m_utilizationFollowTarget != nullptr)
+                {
+                    stopUtilizationFollow(m_utilizationFollowClickThrough, true);
+                }
+                else openUtilizationFloatingWindow(true);
                 return true;
             }
             QWidget* const detailPage = m_utilizationDetailStack != nullptr
@@ -3761,9 +3942,46 @@ bool HardwareDock::eventFilter(QObject* watchedObject, QEvent* eventObject)
             if (detailPage != nullptr
                 && (eventWidget == detailPage || detailPage->isAncestorOf(eventWidget)))
             {
-                openUtilizationFloatingWindow(false);
+                if (m_utilizationFollowTarget != nullptr)
+                {
+                    stopUtilizationFollow(m_utilizationFollowClickThrough, true);
+                }
+                else openUtilizationFloatingWindow(false);
                 return true;
             }
+        }
+    }
+
+    if (m_utilizationFollowMirror != nullptr
+        && eventWidget == m_utilizationFollowMirror.data()
+        && m_utilizationFloatingMode == UtilizationFloatingMode::Sidebar
+        && m_utilizationSidebarList != nullptr && eventObject != nullptr)
+    {
+        if (eventObject->type() == QEvent::MouseButtonPress)
+        {
+            const auto* mouseEvent = static_cast<QMouseEvent*>(eventObject);
+            if (mouseEvent->button() == Qt::LeftButton)
+            {
+                const int sourceY = qRound(mouseEvent->position().y()
+                    * m_utilizationSidebarList->height()
+                    / std::max(1, eventWidget->height()));
+                if (QListWidgetItem* const item = m_utilizationSidebarList->itemAt(8, sourceY))
+                {
+                    m_utilizationSidebarList->setCurrentItem(item);
+                    eventWidget->update();
+                }
+                return true;
+            }
+        }
+        if (eventObject->type() == QEvent::Wheel)
+        {
+            const auto* wheelEvent = static_cast<QWheelEvent*>(eventObject);
+            if (QScrollBar* const bar = m_utilizationSidebarList->verticalScrollBar())
+            {
+                bar->setValue(bar->value() - wheelEvent->angleDelta().y());
+                eventWidget->update();
+            }
+            return true;
         }
     }
 
@@ -4279,6 +4497,11 @@ void HardwareDock::openUtilizationFloatingWindow(const bool sidebarMode)
     m_utilizationFloatingBackgroundOpacityPercent = preferences.utilizationFloatingBackgroundOpacityPercent;
     m_utilizationFloatingTopMost = preferences.utilizationFloatingTopMost;
     m_utilizationFloatingThemeMode = preferences.utilizationFloatingThemeMode;
+    m_utilizationFollowTitle = preferences.utilizationFloatingFollowTitle;
+    m_utilizationFollowExecutable = preferences.utilizationFloatingFollowExecutable;
+    m_utilizationFollowOffset = QPoint(preferences.utilizationFloatingFollowOffsetX,
+        preferences.utilizationFloatingFollowOffsetY);
+    m_utilizationFollowClickThrough = preferences.utilizationFloatingFollowClickThrough;
 
     QSize initialSize(220, 320);
     if (!sidebarMode)
@@ -4389,6 +4612,321 @@ void HardwareDock::openUtilizationFloatingWindow(const bool sidebarMode)
     floatingWindow->activateWindow();
     mainWindow->hide();
     scheduleUtilizationLayoutRefresh();
+    if (!m_utilizationFollowTitle.isEmpty() && !m_utilizationFollowExecutable.isEmpty())
+    {
+        struct MatchContext
+        {
+            QString title;
+            QString executable;
+            HWND found = nullptr;
+        } match{ m_utilizationFollowTitle, m_utilizationFollowExecutable };
+        ::EnumWindows([](HWND candidate, LPARAM parameter) -> BOOL
+        {
+            auto* const context = reinterpret_cast<MatchContext*>(parameter);
+            if (utilizationWindowTitle(candidate) != context->title
+                || utilizationWindowExecutable(candidate).compare(
+                    context->executable, Qt::CaseInsensitive) != 0)
+            {
+                return TRUE;
+            }
+            if (context->found == nullptr || ::IsWindowVisible(candidate) != FALSE)
+            {
+                context->found = candidate;
+            }
+            return ::IsWindowVisible(candidate) == FALSE;
+        }, reinterpret_cast<LPARAM>(&match));
+        if (match.found != nullptr && !utilizationWindowIsTopMost(match.found))
+        {
+            attachUtilizationWindow(match.found, true);
+        }
+        else if (match.found != nullptr)
+        {
+            QMessageBox::warning(floatingWindow,
+                ks::i18n::contextText(QStringLiteral("hardware.utilization.floating.follow"),
+                    QStringLiteral("窗口跟随")),
+                ks::i18n::contextText(QStringLiteral("hardware.utilization.floating.topmost_error"),
+                    QStringLiteral("置顶窗口不可跟随")));
+        }
+    }
+}
+
+void HardwareDock::beginUtilizationWindowPick()
+{
+    if (m_utilizationFloatingWindow == nullptr || m_utilizationFollowTarget != nullptr
+        || m_utilizationPickDialog != nullptr)
+    {
+        return;
+    }
+    QDialog* const prompt = new QDialog(m_utilizationFloatingWindow.data(),
+        Qt::Tool | Qt::FramelessWindowHint | Qt::WindowStaysOnTopHint);
+    prompt->setAttribute(Qt::WA_DeleteOnClose);
+    QVBoxLayout* const layout = new QVBoxLayout(prompt);
+    layout->addWidget(new QLabel(ks::i18n::contextText(
+        QStringLiteral("hardware.utilization.floating.pick_prompt"),
+        QStringLiteral("请点击目标窗口")), prompt));
+    QPushButton* const cancel = new QPushButton(ks::i18n::contextText(
+        QStringLiteral("hardware.utilization.floating.pick_cancel"),
+        QStringLiteral("取消")), prompt);
+    layout->addWidget(cancel);
+    connect(cancel, &QPushButton::clicked, prompt, &QDialog::reject);
+    connect(prompt, &QDialog::finished, this, [this]()
+    {
+        if (utilizationPickHook != nullptr)
+        {
+            ::UnhookWindowsHookEx(utilizationPickHook);
+            utilizationPickHook = nullptr;
+        }
+        utilizationPickCallback = {};
+        m_utilizationPickDialog = nullptr;
+    });
+    m_utilizationPickDialog = prompt;
+    const QPointer<HardwareDock> guard(this);
+    utilizationPickCallback = [guard](HWND picked)
+    {
+        if (guard != nullptr) guard->finishUtilizationWindowPick(picked);
+    };
+    utilizationPickHook = ::SetWindowsHookExW(WH_MOUSE_LL, utilizationMousePickProc,
+        ::GetModuleHandleW(nullptr), 0);
+    if (utilizationPickHook == nullptr)
+    {
+        utilizationPickCallback = {};
+        prompt->deleteLater();
+        m_utilizationPickDialog = nullptr;
+        return;
+    }
+    prompt->show();
+    prompt->move(m_utilizationFloatingWindow->geometry().center() - prompt->rect().center());
+}
+
+void HardwareDock::finishUtilizationWindowPick(void* pickedWindow)
+{
+    if (m_utilizationPickDialog == nullptr || m_utilizationFloatingWindow == nullptr)
+    {
+        return;
+    }
+    HWND target = static_cast<HWND>(pickedWindow);
+    if (target == nullptr || ::IsWindow(target) == FALSE) return;
+    target = ::GetAncestor(target, GA_ROOT);
+    DWORD processId = 0;
+    ::GetWindowThreadProcessId(target, &processId);
+    if (processId == ::GetCurrentProcessId() || target == ::GetDesktopWindow()) return;
+    const QString title = utilizationWindowTitle(target);
+    const QString executable = utilizationWindowExecutable(target);
+    if (title.isEmpty() || executable.isEmpty()) return;
+    if (utilizationWindowIsTopMost(target))
+    {
+        QMessageBox::warning(m_utilizationPickDialog.data(),
+            ks::i18n::contextText(QStringLiteral("hardware.utilization.floating.follow"),
+                QStringLiteral("窗口跟随")),
+            ks::i18n::contextText(QStringLiteral("hardware.utilization.floating.topmost_error"),
+                QStringLiteral("置顶窗口不可跟随")));
+        return;
+    }
+    m_utilizationPickDialog->accept();
+    attachUtilizationWindow(target, false);
+}
+
+void HardwareDock::attachUtilizationWindow(void* targetWindow, const bool restoreSavedOffset)
+{
+    HWND target = static_cast<HWND>(targetWindow);
+    QWidget* const floatingWindow = m_utilizationFloatingWindow.data();
+    QWidget* const source = m_utilizationFloatingPage.data();
+    QWidget* const mainWindow = m_utilizationOriginalMainWindow.data();
+    if (target == nullptr || ::IsWindow(target) == FALSE || utilizationWindowIsTopMost(target)
+        || floatingWindow == nullptr || source == nullptr || mainWindow == nullptr
+        || m_utilizationFollowTarget != nullptr)
+    {
+        return;
+    }
+    RECT targetRect{}, floatRect{};
+    if (::GetWindowRect(target, &targetRect) == FALSE
+        || ::GetWindowRect(reinterpret_cast<HWND>(floatingWindow->winId()), &floatRect) == FALSE)
+    {
+        return;
+    }
+    if (!restoreSavedOffset)
+    {
+        m_utilizationFollowOffset = QPoint(floatRect.left - targetRect.left,
+            floatRect.top - targetRect.top);
+    }
+    m_utilizationFollowTitle = utilizationWindowTitle(target);
+    m_utilizationFollowExecutable = utilizationWindowExecutable(target);
+    m_utilizationFollowTarget = target;
+    QWidget* const mirror = new UtilizationFollowMirror(source,
+        m_utilizationFloatingMode == UtilizationFloatingMode::Sidebar
+            ? static_cast<QWidget*>(m_utilizationBodySplitter)
+            : static_cast<QWidget*>(m_utilizationDetailStack));
+    m_utilizationFollowMirror = mirror;
+    if (m_utilizationFloatingMode == UtilizationFloatingMode::Sidebar)
+    {
+        m_utilizationBodySplitter->insertWidget(0, mirror);
+        if (m_utilizationSavedSplitterSizes.size() == 2)
+        {
+            m_utilizationBodySplitter->setSizes(m_utilizationSavedSplitterSizes);
+        }
+    }
+    else
+    {
+        m_utilizationDetailStack->insertWidget(std::max(0, m_utilizationSavedDetailIndex), mirror);
+        m_utilizationDetailStack->setCurrentWidget(mirror);
+    }
+    mainWindow->show();
+    const HWND floatHandle = reinterpret_cast<HWND>(floatingWindow->winId());
+    ::SetWindowPos(floatHandle, HWND_NOTOPMOST, 0, 0, 0, 0,
+        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+    utilizationFollowHookTarget = target;
+    const QPointer<HardwareDock> guard(this);
+    utilizationFollowCallback = [guard, target](DWORD event)
+    {
+        if (guard == nullptr || guard->m_utilizationFollowTarget != target) return;
+        if (event == EVENT_OBJECT_DESTROY) guard->stopUtilizationFollow(true, false);
+        else guard->synchronizeUtilizationFollow();
+    };
+    DWORD processId = 0;
+    ::GetWindowThreadProcessId(target, &processId);
+    m_utilizationFollowEventHook = ::SetWinEventHook(EVENT_OBJECT_DESTROY,
+        EVENT_OBJECT_LOCATIONCHANGE, nullptr, utilizationFollowEventProc,
+        processId, 0, WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
+    m_utilizationFollowForegroundHook = ::SetWinEventHook(EVENT_SYSTEM_FOREGROUND,
+        EVENT_SYSTEM_FOREGROUND, nullptr, utilizationForegroundEventProc,
+        0, 0, WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
+    setUtilizationFollowClickThrough(m_utilizationFollowClickThrough);
+    m_utilizationFollowTimer->start();
+    synchronizeUtilizationFollow();
+    m_utilizationPreferencesSaveTimer->start();
+}
+
+void HardwareDock::clearUtilizationFollowHooks()
+{
+    if (utilizationPickHook != nullptr)
+    {
+        ::UnhookWindowsHookEx(utilizationPickHook);
+        utilizationPickHook = nullptr;
+    }
+    utilizationPickCallback = {};
+    if (m_utilizationFollowEventHook != nullptr)
+    {
+        ::UnhookWinEvent(static_cast<HWINEVENTHOOK>(m_utilizationFollowEventHook));
+        m_utilizationFollowEventHook = nullptr;
+    }
+    if (m_utilizationFollowForegroundHook != nullptr)
+    {
+        ::UnhookWinEvent(static_cast<HWINEVENTHOOK>(m_utilizationFollowForegroundHook));
+        m_utilizationFollowForegroundHook = nullptr;
+    }
+    utilizationFollowHookTarget = nullptr;
+    utilizationFollowCallback = {};
+    if (m_utilizationFollowTimer != nullptr) m_utilizationFollowTimer->stop();
+}
+
+void HardwareDock::setUtilizationFollowClickThrough(const bool enabled)
+{
+    if (m_utilizationFollowTarget == nullptr || m_utilizationFloatingWindow == nullptr) return;
+    m_utilizationFollowClickThrough = enabled;
+    const HWND handle = reinterpret_cast<HWND>(m_utilizationFloatingWindow->winId());
+    LONG_PTR style = ::GetWindowLongPtrW(handle, GWL_EXSTYLE);
+    if (enabled) style |= WS_EX_TRANSPARENT | WS_EX_LAYERED;
+    else style &= ~static_cast<LONG_PTR>(WS_EX_TRANSPARENT);
+    ::SetWindowLongPtrW(handle, GWL_EXSTYLE, style);
+    ::SetWindowPos(handle, nullptr, 0, 0, 0, 0,
+        SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+    m_utilizationPreferencesSaveTimer->start();
+}
+
+void HardwareDock::synchronizeUtilizationFollow()
+{
+    HWND target = static_cast<HWND>(m_utilizationFollowTarget);
+    QWidget* const floatingWindow = m_utilizationFloatingWindow.data();
+    if (target == nullptr || floatingWindow == nullptr) return;
+    if (::IsWindow(target) == FALSE)
+    {
+        stopUtilizationFollow(true, false);
+        return;
+    }
+    if (utilizationWindowIsTopMost(target))
+    {
+        stopUtilizationFollow(true, false);
+        QMessageBox::warning(m_utilizationFloatingWindow.data(),
+            ks::i18n::contextText(QStringLiteral("hardware.utilization.floating.follow"),
+                QStringLiteral("窗口跟随")),
+            ks::i18n::contextText(QStringLiteral("hardware.utilization.floating.topmost_error"),
+                QStringLiteral("置顶窗口不可跟随")));
+        return;
+    }
+    if (m_utilizationFollowMirror != nullptr) m_utilizationFollowMirror->update();
+    if (::IsWindowVisible(target) == FALSE || ::IsIconic(target) != FALSE)
+    {
+        floatingWindow->hide();
+        return;
+    }
+    if (m_utilizationDragArmed || m_utilizationDragging) return;
+    RECT targetRect{};
+    if (::GetWindowRect(target, &targetRect) == FALSE) return;
+    m_utilizationFollowSyncing = true;
+    if (!floatingWindow->isVisible()) floatingWindow->show();
+    const HWND floatHandle = reinterpret_cast<HWND>(floatingWindow->winId());
+    if (utilizationWindowIsTopMost(floatHandle))
+    {
+        ::SetWindowPos(floatHandle, HWND_NOTOPMOST, 0, 0, 0, 0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+    }
+    HWND preceding = ::GetWindow(target, GW_HWNDPREV);
+    const bool alreadyAboveTarget = preceding == floatHandle;
+    ::SetWindowPos(floatHandle, alreadyAboveTarget ? nullptr
+            : preceding != nullptr ? preceding : HWND_TOP,
+        targetRect.left + m_utilizationFollowOffset.x(),
+        targetRect.top + m_utilizationFollowOffset.y(), 0, 0,
+        SWP_NOSIZE | SWP_NOACTIVATE | (alreadyAboveTarget ? SWP_NOZORDER : 0));
+    m_utilizationFollowSyncing = false;
+}
+
+void HardwareDock::stopUtilizationFollow(const bool showNormalCard, const bool clearSavedTarget)
+{
+    if (m_utilizationFollowTarget == nullptr) return;
+    const bool savedClickThrough = m_utilizationFollowClickThrough;
+    clearUtilizationFollowHooks();
+    setUtilizationFollowClickThrough(false);
+    m_utilizationFollowTarget = nullptr;
+    if (!clearSavedTarget) m_utilizationFollowClickThrough = savedClickThrough;
+    QWidget* const mirror = m_utilizationFollowMirror.data();
+    m_utilizationFollowMirror = nullptr;
+    if (mirror != nullptr)
+    {
+        if (m_utilizationFloatingMode == UtilizationFloatingMode::Sidebar)
+        {
+            mirror->setParent(nullptr);
+        }
+        else
+        {
+            m_utilizationDetailStack->removeWidget(mirror);
+        }
+        delete mirror;
+    }
+    if (clearSavedTarget)
+    {
+        m_utilizationFollowTitle.clear();
+        m_utilizationFollowExecutable.clear();
+        m_utilizationFollowOffset = {};
+        m_utilizationFollowClickThrough = false;
+    }
+    m_utilizationPreferencesSaveTimer->start();
+    if (showNormalCard)
+    {
+        if (QWidget* const mainWindow = m_utilizationOriginalMainWindow.data()) mainWindow->hide();
+        if (QWidget* const floatingWindow = m_utilizationFloatingWindow.data())
+        {
+            floatingWindow->show();
+            ::SetWindowPos(reinterpret_cast<HWND>(floatingWindow->winId()),
+                m_utilizationFloatingTopMost ? HWND_TOPMOST : HWND_NOTOPMOST,
+                0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+            floatingWindow->raise();
+            floatingWindow->activateWindow();
+        }
+    }
+    else
+    {
+        restoreUtilizationFloatingWindow();
+    }
 }
 
 void HardwareDock::restoreUtilizationFloatingWindow()
@@ -4397,6 +4935,9 @@ void HardwareDock::restoreUtilizationFloatingWindow()
     {
         return;
     }
+    clearUtilizationFollowHooks();
+    delete m_utilizationPickDialog.data();
+    m_utilizationPickDialog = nullptr;
 
     QWidget* const floatingWindow = m_utilizationFloatingWindow.data();
     QWidget* const borrowedWidget = m_utilizationFloatingPage.data();
@@ -4833,6 +5374,11 @@ void HardwareDock::saveUtilizationFloatingPreferences()
     preferences.utilizationFloatingBackgroundOpacityPercent = m_utilizationFloatingBackgroundOpacityPercent;
     preferences.utilizationFloatingTopMost = m_utilizationFloatingTopMost;
     preferences.utilizationFloatingThemeMode = m_utilizationFloatingThemeMode;
+    preferences.utilizationFloatingFollowTitle = m_utilizationFollowTitle;
+    preferences.utilizationFloatingFollowExecutable = m_utilizationFollowExecutable;
+    preferences.utilizationFloatingFollowOffsetX = m_utilizationFollowOffset.x();
+    preferences.utilizationFloatingFollowOffsetY = m_utilizationFollowOffset.y();
+    preferences.utilizationFloatingFollowClickThrough = m_utilizationFollowClickThrough;
     ks::settings::saveAppearanceSettings(preferences);
 }
 

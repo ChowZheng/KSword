@@ -120,6 +120,11 @@ namespace ks::settings
         int utilizationFloatingBackgroundOpacityPercent = 100;
         bool utilizationFloatingTopMost = true;
         QString utilizationFloatingThemeMode = QStringLiteral("follow_main");
+        QString utilizationFloatingFollowTitle;
+        QString utilizationFloatingFollowExecutable;
+        int utilizationFloatingFollowOffsetX = 0;
+        int utilizationFloatingFollowOffsetY = 0;
+        bool utilizationFloatingFollowClickThrough = false;
         QString backgroundTranslucencyMaterial = QStringLiteral("auto");
         int backgroundBlurRadiusPercent = 0;
         int acrylicTintOpacityPercent = 75;

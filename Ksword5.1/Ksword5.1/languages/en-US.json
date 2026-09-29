@@ -2131,6 +2131,12 @@
     "hardware.utilization.floating.top_most": "Always on Top",
     "hardware.utilization.floating.switch_dark": "Switch to Dark",
     "hardware.utilization.floating.switch_light": "Switch to Light",
+    "hardware.utilization.floating.follow": "Follow Window",
+    "hardware.utilization.floating.stop_follow": "Stop Following",
+    "hardware.utilization.floating.click_through": "Click Through",
+    "hardware.utilization.floating.pick_prompt": "Click the target window",
+    "hardware.utilization.floating.pick_cancel": "Cancel",
+    "hardware.utilization.floating.topmost_error": "Topmost windows cannot be followed",
     "hardware.utilization.card.memory": "Memory",
     "hardware.utilization.card.disk.prefix": "Disk",
     "hardware.utilization.card.network.prefix": "Ethernet",
@@ -34771,6 +34777,11 @@
     "这个地址落在%1大页映射上，映射到 %2 那一级就结束了，没有 PTE 这一项可以监视。\n\n上一级表项覆盖的范围比一页大 512 倍，把它当成「这个地址的页表项」来监视会得到一个范围完全不同的结论，所以这里不替你那么做。": "This address falls on a %1 large-page mapping, which ends at the %2 level, so there is no PTE to watch.\n\nThe level above covers 512 times more than a page; watching it as if it were \"this address's page-table entry\" would produce a conclusion about a completely different range, so that substitution is not made for you.",
     "页表游走没有走到 PTE 这一级，取不到表项地址（查询状态 %1）。": "The page-table walk did not reach the PTE level, so no entry address is available (query status %1).",
     "驱动读不出这一项的内容，装上的监视多半会在地址翻译处失败。": "The driver cannot read this entry's contents, so a watch armed on it would most likely fail at address translation.",
-    "；注意这个字段横跨页边界，硬件只覆盖它在前一页的 %1 字节": "; note this field crosses a page boundary and the hardware covers only its first %1 byte(s) on the earlier page"
+    "；注意这个字段横跨页边界，硬件只覆盖它在前一页的 %1 字节": "; note this field crosses a page boundary and the hardware covers only its first %1 byte(s) on the earlier page",
+    "窗口跟随": "Follow Window",
+    "取消跟随": "Stop Following",
+    "点击穿透": "Click Through",
+    "请点击目标窗口": "Click the target window",
+    "置顶窗口不可跟随": "Topmost windows cannot be followed"
   }
 }

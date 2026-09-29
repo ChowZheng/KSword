@@ -27,6 +27,7 @@ KSword 主程序位于 `Ksword5.1/Ksword5.1`（Qt 6.9.3 Widgets + Qt Advanced Do
 - 硬件利用率浮窗跨不同缩放显示器时，不要用 `QMouseEvent::globalPosition()` 的增量反复调用 `QWidget::move()`：窗口位置与鼠标坐标在 DPI 切换后可能落在不同逻辑坐标系，使尺寸累积漂移。达到拖动阈值后调用 `QWindow::startSystemMove()`，Windows 兜底走原生 `WM_NCLBUTTONDOWN/HTCAPTION`；边缘缩放仍由原生 `WM_NCHITTEST` 处理。
 - 利用率浮窗的缩放、背景不透明度、置顶、独立主题保存在 `AppearanceSettings` 的浮窗专用字段。只在浮窗上设置 `WA_TranslucentBackground` 并自绘带 alpha 的表面色，不能使用 `setWindowOpacity`，否则文字和图表一起变淡。Windows 分层窗口的背景在配置为 0% 时仍需绘制 1/255 alpha，以保留空白区域的鼠标命中和整窗拖动；配置值继续记为 0%。
 - 利用率浮窗缩放内容时，以借用页面原本的字体、QSS 字号、布局边距/间距为基线重算，回主窗口前恢复原值；左侧卡片还需同步缩放列表行高与自绘坐标。浮窗独立切深浅色时，只改根 palette 不足以覆盖子控件已有的 `palette(text)` QSS；对子控件用浮窗 palette 的实色替换文字 token，并保存原 QSS/palette 供返回时恢复。Shift+滚轮在 Windows 可能作为水平滚轮到达，处理 `angleDelta().y()` 为零时的 `x()`。
+- 利用率浮窗跟随外部窗口时，原采样与绘图控件仍留在浮窗，主界面原插槽放实时渲染镜像；两处共用同一采样源。用 `WindowFromPoint` 选顶层窗口，按完整标题与进程路径重找；跟随事件使用 `SetWinEventHook` 的异步回调加定时兜底，原生 HWND 矩形和相对位移统一使用物理像素。目标置顶时拒绝跟随；跟随时浮窗自身强制非置顶，普通模式保留用户原置顶配置。点击穿透仅对跟随态设置 `WS_EX_TRANSPARENT`，主界面性能区双击负责退出穿透。
 
 **全局基线样式只允许颜色/边框，禁止 min-height/padding 等几何属性**——app 级几何会穿透局部样式破坏紧凑布局（曾导致主窗口标题栏按钮被撑高、最大化后标题文字上偏）。
 
