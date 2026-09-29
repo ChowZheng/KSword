@@ -39,6 +39,15 @@ struct DirectoryEnumerationResult {
     bool virtualDriveRoot = false;
 };
 
+enum class DirectorySource {
+    Win32,
+    Driver,
+    IrpRelated,
+    IrpBaseFs,
+    IrpVpbFs,
+    IrpDevice
+};
+
 // FileSystemEnumerator performs file-system discovery for the lightweight file
 // module. Inputs are normalized Windows paths; processing uses only
 // GetLogicalDriveStringsW, GetLogicalDrives, FindFirstFileW and FindNextFileW
@@ -48,7 +57,9 @@ public:
     // enumerate returns drives when directory is empty, otherwise it lists the
     // requested directory. It never blocks on recursive traversal and never
     // throws; failures are reported in errorCode/statusText.
-    DirectoryEnumerationResult enumerate(const std::wstring& directory, bool useDriver = false) const;
+    DirectoryEnumerationResult enumerate(
+        const std::wstring& directory,
+        DirectorySource source = DirectorySource::Win32) const;
 
     // formatAttributes converts WIN32_FIND_DATAW attributes into compact text.
     // Input is a DWORD attribute bitset; output is suitable for a list column.
@@ -66,6 +77,8 @@ private:
     DirectoryEnumerationResult enumerateDrives() const;
     DirectoryEnumerationResult enumerateDirectory(const std::wstring& directory) const;
     DirectoryEnumerationResult enumerateDirectoryByDriver(const std::wstring& directory) const;
+    DirectoryEnumerationResult enumerateDirectoryByIrp(
+        const std::wstring& directory, DirectorySource source) const;
 };
 
 } // namespace Ksword::Features::File

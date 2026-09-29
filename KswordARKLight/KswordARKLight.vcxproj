@@ -281,6 +281,7 @@
     <ClCompile Include="..\Ksword5.1\Ksword5.1\ArkDriverClient\ArkDriverWorkQueue.cpp" />
     <ClCompile Include="..\Ksword5.1\Ksword5.1\ArkDriverClient\ArkDriverCallback.cpp" />
     <ClCompile Include="..\Ksword5.1\Ksword5.1\ArkDriverClient\ArkDriverCallbackMonitor.cpp" />
+    <ClCompile Include="..\Ksword5.1\Ksword5.1\ArkDriverClient\ArkDriverFileIrp.cpp" />
     <ClCompile Include="..\Ksword5.1\Ksword5.1\ArkDriverClient\ArkDriverBugcheck.cpp" />
     <ClCompile Include="..\Ksword5.1\Ksword5.1\ArkDriverClient\ArkDriverCapabilities.cpp" />
     <ClCompile Include="..\Ksword5.1\Ksword5.1\ArkDriverClient\ArkDriverCapability.cpp" />
