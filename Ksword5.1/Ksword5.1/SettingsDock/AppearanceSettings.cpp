@@ -391,6 +391,10 @@ namespace
         defaultSettings.backgroundImagePath = QStringLiteral("Style/ksword_background.png");
         defaultSettings.backgroundOpacityPercent = 35;
         defaultSettings.backgroundTransparencyEnabled = false;
+        defaultSettings.utilizationFloatingScalePercent = 100;
+        defaultSettings.utilizationFloatingBackgroundOpacityPercent = 100;
+        defaultSettings.utilizationFloatingTopMost = true;
+        defaultSettings.utilizationFloatingThemeMode = QStringLiteral("follow_main");
         defaultSettings.backgroundTranslucencyMaterial = QStringLiteral("auto");
         defaultSettings.backgroundBlurRadiusPercent = 0;
         defaultSettings.acrylicTintOpacityPercent = 75;
@@ -647,6 +651,20 @@ ks::settings::AppearanceSettings ks::settings::loadAppearanceSettings()
     loadedSettings.backgroundTransparencyEnabled = rootObject
         .value(QStringLiteral("background_transparency_enabled"))
         .toBool(loadedSettings.backgroundTransparencyEnabled);
+    loadedSettings.utilizationFloatingScalePercent = std::clamp(rootObject
+        .value(QStringLiteral("utilization_floating_scale_percent"))
+        .toInt(loadedSettings.utilizationFloatingScalePercent), 50, 300);
+    loadedSettings.utilizationFloatingBackgroundOpacityPercent = std::clamp(rootObject
+        .value(QStringLiteral("utilization_floating_background_opacity_percent"))
+        .toInt(loadedSettings.utilizationFloatingBackgroundOpacityPercent), 0, 100);
+    loadedSettings.utilizationFloatingTopMost = rootObject
+        .value(QStringLiteral("utilization_floating_top_most"))
+        .toBool(loadedSettings.utilizationFloatingTopMost);
+    const QString floatingThemeMode = rootObject
+        .value(QStringLiteral("utilization_floating_theme_mode"))
+        .toString(loadedSettings.utilizationFloatingThemeMode).trimmed().toLower();
+    loadedSettings.utilizationFloatingThemeMode = floatingThemeMode == QStringLiteral("dark")
+        || floatingThemeMode == QStringLiteral("light") ? floatingThemeMode : QStringLiteral("follow_main");
 
     // 透明背景效果只接受既定枚举文本，未知值回退 auto，避免拼写残留破坏材质决策。
     const QString translucencyMaterialText = rootObject
@@ -889,6 +907,15 @@ bool ks::settings::saveAppearanceSettings(const AppearanceSettings& settings, QS
     rootObject.insert(QStringLiteral("background_image_path"), settings.backgroundImagePath);
     rootObject.insert(QStringLiteral("background_opacity_percent"), clampOpacityPercent(settings.backgroundOpacityPercent));
     rootObject.insert(QStringLiteral("background_transparency_enabled"), settings.backgroundTransparencyEnabled);
+    rootObject.insert(QStringLiteral("utilization_floating_scale_percent"),
+        std::clamp(settings.utilizationFloatingScalePercent, 50, 300));
+    rootObject.insert(QStringLiteral("utilization_floating_background_opacity_percent"),
+        std::clamp(settings.utilizationFloatingBackgroundOpacityPercent, 0, 100));
+    rootObject.insert(QStringLiteral("utilization_floating_top_most"), settings.utilizationFloatingTopMost);
+    rootObject.insert(QStringLiteral("utilization_floating_theme_mode"),
+        settings.utilizationFloatingThemeMode == QStringLiteral("dark")
+            || settings.utilizationFloatingThemeMode == QStringLiteral("light")
+            ? settings.utilizationFloatingThemeMode : QStringLiteral("follow_main"));
     rootObject.insert(
         QStringLiteral("background_translucency_material"),
         settings.backgroundTranslucencyMaterial.trimmed().isEmpty()

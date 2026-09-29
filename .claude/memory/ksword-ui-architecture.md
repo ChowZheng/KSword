@@ -25,6 +25,7 @@ KSword 主程序位于 `Ksword5.1/Ksword5.1`（Qt 6.9.3 Widgets + Qt Advanced Do
 - 独立窗口中的懒加载 `QTabWidget` 必须隔离页面动态 `minimumSizeHint`：页面栈使用零最小尺寸和 `QSizePolicy::Ignored`，顶层窗口只保留响应式最低尺寸，禁止用 `maximumWidth` 对抗内容传播。纵向表单页应放入 `QScrollArea`，使切页和异步控件挂载不改变用户当前窗口尺寸，同时保留自由拖大和最大化能力。
 - 主窗口是 FramelessWindowHint + 自绘 `Framework/CustomTitleBar`；其余子窗口全是原生标题栏。
 - 硬件利用率浮窗跨不同缩放显示器时，不要用 `QMouseEvent::globalPosition()` 的增量反复调用 `QWidget::move()`：窗口位置与鼠标坐标在 DPI 切换后可能落在不同逻辑坐标系，使尺寸累积漂移。达到拖动阈值后调用 `QWindow::startSystemMove()`，Windows 兜底走原生 `WM_NCLBUTTONDOWN/HTCAPTION`；边缘缩放仍由原生 `WM_NCHITTEST` 处理。
+- 利用率浮窗的缩放、背景不透明度、置顶、独立主题保存在 `AppearanceSettings` 的浮窗专用字段。只在浮窗上设置 `WA_TranslucentBackground` 并自绘带 alpha 的表面色，不能使用 `setWindowOpacity`，否则文字和图表一起变淡。Windows 分层窗口的背景在配置为 0% 时仍需绘制 1/255 alpha，以保留空白区域的鼠标命中和整窗拖动；配置值继续记为 0%。
 
 **全局基线样式只允许颜色/边框，禁止 min-height/padding 等几何属性**——app 级几何会穿透局部样式破坏紧凑布局（曾导致主窗口标题栏按钮被撑高、最大化后标题文字上偏）。
 

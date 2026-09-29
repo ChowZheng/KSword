@@ -116,6 +116,10 @@ namespace ks::settings
         QString backgroundImagePath = QStringLiteral("Style/ksword_background.png");
         int backgroundOpacityPercent = 35;
         bool backgroundTransparencyEnabled = false;
+        int utilizationFloatingScalePercent = 100;
+        int utilizationFloatingBackgroundOpacityPercent = 100;
+        bool utilizationFloatingTopMost = true;
+        QString utilizationFloatingThemeMode = QStringLiteral("follow_main");
         QString backgroundTranslucencyMaterial = QStringLiteral("auto");
         int backgroundBlurRadiusPercent = 0;
         int acrylicTintOpacityPercent = 75;

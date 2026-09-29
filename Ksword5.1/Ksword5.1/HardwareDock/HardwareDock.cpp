@@ -11,6 +11,7 @@
 #include "HardwareHwidDispatchPage.h"
 #include "HardwareI8042AuditPage.h"
 #include "../Internationalization/LanguageManager.h"
+#include "../SettingsDock/AppearanceSettings.h"
 
 // ============================================================
 // HardwareDock.cpp
@@ -32,6 +33,7 @@
 #include <QBrush>
 #include <QClipboard>
 #include <QCoreApplication>
+#include <QContextMenuEvent>
 #include <QDateTime>
 #include <QEasingCurve>
 #include <QEvent>
@@ -75,6 +77,7 @@
 #include <QVariant>
 #include <QVariantAnimation>
 #include <QWindow>
+#include <QWheelEvent>
 
 #include <algorithm>
 #include <atomic>
@@ -3352,12 +3355,31 @@ namespace
     class UtilizationFloatingWindow final : public QWidget
     {
     public:
-        UtilizationFloatingWindow()
-            : QWidget(nullptr, Qt::Window | Qt::FramelessWindowHint | Qt::WindowStaysOnTopHint)
+        explicit UtilizationFloatingWindow(const bool topMost)
+            : QWidget(nullptr, Qt::Window | Qt::FramelessWindowHint
+                | (topMost ? Qt::WindowStaysOnTopHint : Qt::WindowFlags{}))
         {
+            setAttribute(Qt::WA_TranslucentBackground);
+            setAutoFillBackground(false);
+        }
+
+        void setBackground(const QColor& color, const int opacityPercent)
+        {
+            m_backgroundColor = color;
+            // A fully zero-alpha layered HWND becomes mouse-transparent on Windows.
+            // One alpha unit is visually clear while preserving full-window hit testing.
+            m_backgroundColor.setAlpha(opacityPercent == 0 ? 1
+                : qRound(std::clamp(opacityPercent, 0, 100) * 255.0 / 100.0));
+            update();
         }
 
     protected:
+        void paintEvent(QPaintEvent*) override
+        {
+            QPainter painter(this);
+            painter.fillRect(rect(), m_backgroundColor);
+        }
+
         bool nativeEvent(const QByteArray& eventType, void* message, qintptr* result) override
         {
             MSG* const nativeMessage = static_cast<MSG*>(message);
@@ -3388,6 +3410,9 @@ namespace
             }
             return QWidget::nativeEvent(eventType, message, result);
         }
+
+    private:
+        QColor m_backgroundColor;
     };
 }
 
@@ -3402,6 +3427,11 @@ HardwareDock::HardwareDock(QWidget* parent)
 
     initializeUi();
     initializeConnections();
+    m_utilizationPreferencesSaveTimer = new QTimer(this);
+    m_utilizationPreferencesSaveTimer->setSingleShot(true);
+    m_utilizationPreferencesSaveTimer->setInterval(350);
+    connect(m_utilizationPreferencesSaveTimer, &QTimer::timeout,
+        this, &HardwareDock::saveUtilizationFloatingPreferences);
 
     // 启动阶段先填充占位文本，避免首帧等待 PowerShell 导致窗口卡住。
     m_cachedOverviewStaticText = QStringLiteral("硬件概览加载中，请稍候...");
@@ -3424,6 +3454,10 @@ HardwareDock::HardwareDock(QWidget* parent)
 
 HardwareDock::~HardwareDock()
 {
+    if (m_utilizationPreferencesSaveTimer != nullptr && m_utilizationPreferencesSaveTimer->isActive())
+    {
+        saveUtilizationFloatingPreferences();
+    }
     qApp->removeEventFilter(this);
     // The floating window is parentless so that hiding the main window does not hide it.
     // Its borrowed child must be destroyed with the dock during application shutdown.
@@ -3487,6 +3521,89 @@ bool HardwareDock::eventFilter(QObject* watchedObject, QEvent* eventObject)
                 QTimer::singleShot(0, this, [this]() { restoreUtilizationFloatingWindow(); });
                 return true;
             }
+            if (keyEvent->modifiers() & Qt::ControlModifier)
+            {
+                const bool shift = keyEvent->modifiers() & Qt::ShiftModifier;
+                const int key = keyEvent->key();
+                const bool plus = key == Qt::Key_Plus || key == Qt::Key_Equal;
+                const bool minus = key == Qt::Key_Minus || key == Qt::Key_Underscore;
+                if (key == Qt::Key_0 && !shift)
+                {
+                    m_utilizationFloatingScalePercent = 100;
+                    m_utilizationFloatingBackgroundOpacityPercent = 100;
+                    resizeUtilizationFloatingWindow();
+                    applyUtilizationFloatingTheme();
+                    m_utilizationPreferencesSaveTimer->start();
+                    return true;
+                }
+                if (plus || minus)
+                {
+                    if (shift)
+                    {
+                        m_utilizationFloatingBackgroundOpacityPercent = std::clamp(
+                            m_utilizationFloatingBackgroundOpacityPercent + (plus ? -5 : 5), 0, 100);
+                        applyUtilizationFloatingTheme();
+                    }
+                    else
+                    {
+                        m_utilizationFloatingScalePercent = std::clamp(
+                            m_utilizationFloatingScalePercent + (plus ? 10 : -10), 50, 300);
+                        resizeUtilizationFloatingWindow();
+                    }
+                    m_utilizationPreferencesSaveTimer->start();
+                    return true;
+                }
+            }
+        }
+        if (eventObject->type() == QEvent::Wheel)
+        {
+            const auto* wheelEvent = static_cast<QWheelEvent*>(eventObject);
+            if ((wheelEvent->modifiers() & Qt::ControlModifier)
+                && !(wheelEvent->modifiers() & Qt::ShiftModifier))
+            {
+                const int delta = wheelEvent->angleDelta().y();
+                if (delta != 0)
+                {
+                    m_utilizationFloatingScalePercent = std::clamp(
+                        m_utilizationFloatingScalePercent + (delta > 0 ? 10 : -10), 50, 300);
+                    resizeUtilizationFloatingWindow();
+                    m_utilizationPreferencesSaveTimer->start();
+                }
+                return true;
+            }
+        }
+        if (eventObject->type() == QEvent::ContextMenu)
+        {
+            const auto* contextEvent = static_cast<QContextMenuEvent*>(eventObject);
+            QMenu menu(floatingWindow);
+            menu.setPalette(floatingWindow->palette());
+            QAction* const topMostAction = menu.addAction(ks::i18n::contextText(
+                QStringLiteral("hardware.utilization.floating.top_most"), QStringLiteral("置顶")));
+            topMostAction->setCheckable(true);
+            topMostAction->setChecked(m_utilizationFloatingTopMost);
+            connect(topMostAction, &QAction::toggled, this, [this, floatingWindow](const bool enabled)
+            {
+                m_utilizationFloatingTopMost = enabled;
+                const HWND handle = reinterpret_cast<HWND>(floatingWindow->winId());
+                ::SetWindowPos(handle, enabled ? HWND_TOPMOST : HWND_NOTOPMOST,
+                    0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+                m_utilizationPreferencesSaveTimer->start();
+            });
+            const bool darkMode = m_utilizationFloatingThemeMode == QStringLiteral("dark")
+                || (m_utilizationFloatingThemeMode == QStringLiteral("follow_main")
+                    && KswordTheme::IsDarkModeEnabled());
+            QAction* const themeAction = menu.addAction(ks::i18n::contextText(
+                darkMode ? QStringLiteral("hardware.utilization.floating.switch_light")
+                    : QStringLiteral("hardware.utilization.floating.switch_dark"),
+                darkMode ? QStringLiteral("切换浅色") : QStringLiteral("切换深色")));
+            connect(themeAction, &QAction::triggered, this, [this, darkMode]()
+            {
+                m_utilizationFloatingThemeMode = darkMode ? QStringLiteral("light") : QStringLiteral("dark");
+                applyUtilizationFloatingTheme();
+                m_utilizationPreferencesSaveTimer->start();
+            });
+            menu.exec(contextEvent->globalPos());
+            return true;
         }
         if (eventObject->type() == QEvent::MouseButtonDblClick)
         {
@@ -3548,8 +3665,8 @@ bool HardwareDock::eventFilter(QObject* watchedObject, QEvent* eventObject)
                     if (m_utilizationResizeEdges & Qt::RightEdge) nextGeometry.setRight(nextGeometry.right() + delta.x());
                     if (m_utilizationResizeEdges & Qt::TopEdge) nextGeometry.setTop(nextGeometry.top() + delta.y());
                     if (m_utilizationResizeEdges & Qt::BottomEdge) nextGeometry.setBottom(nextGeometry.bottom() + delta.y());
-                    const int minimumWidth = m_utilizationFloatingMode == UtilizationFloatingMode::Sidebar ? 140 : 320;
-                    if (nextGeometry.width() >= minimumWidth && nextGeometry.height() >= 160)
+                    const int minimumWidth = m_utilizationFloatingMode == UtilizationFloatingMode::Sidebar ? 100 : 160;
+                    if (nextGeometry.width() >= minimumWidth && nextGeometry.height() >= 100)
                     {
                         floatingWindow->setGeometry(nextGeometry);
                     }
@@ -4121,6 +4238,12 @@ void HardwareDock::openUtilizationFloatingWindow(const bool sidebarMode)
         return;
     }
 
+    const auto preferences = ks::settings::loadAppearanceSettings();
+    m_utilizationFloatingScalePercent = preferences.utilizationFloatingScalePercent;
+    m_utilizationFloatingBackgroundOpacityPercent = preferences.utilizationFloatingBackgroundOpacityPercent;
+    m_utilizationFloatingTopMost = preferences.utilizationFloatingTopMost;
+    m_utilizationFloatingThemeMode = preferences.utilizationFloatingThemeMode;
+
     QSize initialSize(220, 320);
     if (!sidebarMode)
     {
@@ -4152,15 +4275,17 @@ void HardwareDock::openUtilizationFloatingWindow(const bool sidebarMode)
     {
         targetScreen = QGuiApplication::primaryScreen();
     }
+    m_utilizationFloatingBaseSize = initialSize;
+    initialSize = QSize(std::max(1, initialSize.width() * m_utilizationFloatingScalePercent / 100),
+        std::max(1, initialSize.height() * m_utilizationFloatingScalePercent / 100));
     if (targetScreen != nullptr)
     {
         const QRect workArea = targetScreen->availableGeometry();
         initialSize = initialSize.boundedTo(workArea.size());
     }
 
-    QWidget* const floatingWindow = new UtilizationFloatingWindow();
-    floatingWindow->setAutoFillBackground(true);
-    floatingWindow->setMinimumSize(sidebarMode ? QSize(140, 160) : QSize(320, 160));
+    QWidget* const floatingWindow = new UtilizationFloatingWindow(m_utilizationFloatingTopMost);
+    floatingWindow->setMinimumSize(sidebarMode ? QSize(100, 100) : QSize(160, 100));
     QVBoxLayout* const floatingLayout = new QVBoxLayout(floatingWindow);
     // The borrowed chart page has its own size hints; they must not lock the
     // frameless top-level window to its initial dimensions.
@@ -4171,6 +4296,8 @@ void HardwareDock::openUtilizationFloatingWindow(const bool sidebarMode)
     m_utilizationOriginalMainWindow = mainWindow;
     m_utilizationFloatingWindow = floatingWindow;
     m_utilizationFloatingPage = sourceWidget;
+    m_utilizationBorrowedPalette = sourceWidget->palette();
+    m_utilizationBorrowedHadPalette = sourceWidget->testAttribute(Qt::WA_SetPalette);
     m_utilizationSavedSplitterSizes = m_utilizationBodySplitter->sizes();
     m_utilizationFloatingMode = sidebarMode
         ? UtilizationFloatingMode::Sidebar : UtilizationFloatingMode::Detail;
@@ -4201,6 +4328,8 @@ void HardwareDock::openUtilizationFloatingWindow(const bool sidebarMode)
         sourceWidget->show();
     }
 
+    applyUtilizationFloatingTheme();
+
     floatingWindow->resize(initialSize);
     QPoint targetPosition = sourceGlobalPosition;
     if (targetScreen != nullptr)
@@ -4229,6 +4358,10 @@ void HardwareDock::restoreUtilizationFloatingWindow()
     QWidget* const floatingWindow = m_utilizationFloatingWindow.data();
     QWidget* const borrowedWidget = m_utilizationFloatingPage.data();
     QWidget* const mainWindow = m_utilizationOriginalMainWindow.data();
+    if (m_utilizationPreferencesSaveTimer != nullptr && m_utilizationPreferencesSaveTimer->isActive())
+    {
+        saveUtilizationFloatingPreferences();
+    }
     const UtilizationFloatingMode mode = m_utilizationFloatingMode;
     m_utilizationFloatingMode = UtilizationFloatingMode::None;
     m_utilizationDragArmed = false;
@@ -4265,11 +4398,41 @@ void HardwareDock::restoreUtilizationFloatingWindow()
         borrowedWidget->show();
     }
 
+    if (borrowedWidget != nullptr)
+    {
+        if (m_utilizationBorrowedHadPalette)
+        {
+            borrowedWidget->setPalette(m_utilizationBorrowedPalette);
+        }
+        else
+        {
+            borrowedWidget->setPalette(QPalette());
+            borrowedWidget->setAttribute(Qt::WA_SetPalette, false);
+        }
+        if (mode == UtilizationFloatingMode::Detail)
+        {
+            const QColor titleColor = KswordTheme::TextPrimaryColor();
+            const QColor legendColor = KswordTheme::TextSecondaryColor();
+            for (QWidget* const child : borrowedWidget->findChildren<QWidget*>())
+            {
+                if (auto* const view = dynamic_cast<QChartView*>(child))
+                {
+                    if (QChart* const chart = view->chart())
+                    {
+                        chart->setTitleBrush(QBrush(titleColor));
+                        chart->legend()->setLabelColor(legendColor);
+                    }
+                }
+            }
+        }
+    }
+
     m_utilizationHiddenDetailWidgets.clear();
     m_utilizationFloatingPage = nullptr;
     m_utilizationFloatingWindow = nullptr;
     m_utilizationOriginalMainWindow = nullptr;
     m_utilizationSavedDetailIndex = -1;
+    m_utilizationBorrowedHadPalette = false;
     m_utilizationSavedSplitterSizes.clear();
     delete floatingWindow;
 
@@ -4280,6 +4443,95 @@ void HardwareDock::restoreUtilizationFloatingWindow()
         mainWindow->activateWindow();
     }
     scheduleUtilizationLayoutRefresh();
+}
+
+void HardwareDock::resizeUtilizationFloatingWindow()
+{
+    QWidget* const floatingWindow = m_utilizationFloatingWindow.data();
+    if (floatingWindow == nullptr || m_utilizationFloatingBaseSize.isEmpty())
+    {
+        return;
+    }
+    QScreen* screen = floatingWindow->screen();
+    if (screen == nullptr)
+    {
+        screen = QGuiApplication::primaryScreen();
+    }
+    const QSize desiredSize(
+        std::max(1, m_utilizationFloatingBaseSize.width() * m_utilizationFloatingScalePercent / 100),
+        std::max(1, m_utilizationFloatingBaseSize.height() * m_utilizationFloatingScalePercent / 100));
+    const QRect workArea = screen != nullptr ? screen->availableGeometry() : QRect(floatingWindow->geometry());
+    const QSize boundedSize = desiredSize.boundedTo(workArea.size()).expandedTo(floatingWindow->minimumSize());
+    QRect geometry(QPoint(0, 0), boundedSize);
+    geometry.moveCenter(floatingWindow->geometry().center());
+    geometry.moveLeft(std::clamp(geometry.left(), workArea.left(),
+        std::max(workArea.left(), workArea.right() - geometry.width() + 1)));
+    geometry.moveTop(std::clamp(geometry.top(), workArea.top(),
+        std::max(workArea.top(), workArea.bottom() - geometry.height() + 1)));
+    floatingWindow->setGeometry(geometry);
+}
+
+void HardwareDock::applyUtilizationFloatingTheme()
+{
+    auto* const floatingWindow = static_cast<UtilizationFloatingWindow*>(m_utilizationFloatingWindow.data());
+    if (floatingWindow == nullptr)
+    {
+        return;
+    }
+    const bool darkMode = m_utilizationFloatingThemeMode == QStringLiteral("dark")
+        || (m_utilizationFloatingThemeMode == QStringLiteral("follow_main")
+            && KswordTheme::IsDarkModeEnabled());
+    const bool followMain = m_utilizationFloatingThemeMode == QStringLiteral("follow_main");
+    const QColor backgroundColor = followMain ? KswordTheme::SurfaceColor()
+        : KswordTheme::DefaultSurfaceColor(darkMode);
+    const QColor textColor = followMain ? KswordTheme::TextPrimaryColor()
+        : KswordTheme::DefaultTextPrimaryColor(darkMode);
+    const QColor secondaryTextColor = followMain ? KswordTheme::TextSecondaryColor()
+        : KswordTheme::DefaultTextSecondaryColor(darkMode);
+    QPalette floatingPalette = floatingWindow->palette();
+    floatingPalette.setColor(QPalette::Window, backgroundColor);
+    floatingPalette.setColor(QPalette::Base, backgroundColor);
+    floatingPalette.setColor(QPalette::AlternateBase, followMain ? KswordTheme::SurfaceAltColor()
+        : KswordTheme::DefaultSurfaceAltColor(darkMode));
+    floatingPalette.setColor(QPalette::WindowText, textColor);
+    floatingPalette.setColor(QPalette::Text, textColor);
+    floatingPalette.setColor(QPalette::ButtonText, textColor);
+    floatingPalette.setColor(QPalette::PlaceholderText, secondaryTextColor);
+    floatingPalette.setColor(QPalette::Mid, followMain ? KswordTheme::BorderColor()
+        : KswordTheme::DefaultBorderColor(darkMode));
+    floatingWindow->setPalette(floatingPalette);
+    floatingWindow->setBackground(backgroundColor, m_utilizationFloatingBackgroundOpacityPercent);
+    QWidget* const borrowedWidget = m_utilizationFloatingPage.data();
+    if (borrowedWidget != nullptr)
+    {
+        borrowedWidget->setPalette(floatingPalette);
+        borrowedWidget->update();
+        for (QWidget* const child : borrowedWidget->findChildren<QWidget*>())
+        {
+            if (auto* const view = dynamic_cast<QChartView*>(child))
+            {
+                if (QChart* const chart = view->chart())
+                {
+                    chart->setTitleBrush(QBrush(textColor));
+                    chart->legend()->setLabelColor(secondaryTextColor);
+                }
+            }
+        }
+    }
+}
+
+void HardwareDock::saveUtilizationFloatingPreferences()
+{
+    if (m_utilizationPreferencesSaveTimer != nullptr)
+    {
+        m_utilizationPreferencesSaveTimer->stop();
+    }
+    auto preferences = ks::settings::loadAppearanceSettings();
+    preferences.utilizationFloatingScalePercent = m_utilizationFloatingScalePercent;
+    preferences.utilizationFloatingBackgroundOpacityPercent = m_utilizationFloatingBackgroundOpacityPercent;
+    preferences.utilizationFloatingTopMost = m_utilizationFloatingTopMost;
+    preferences.utilizationFloatingThemeMode = m_utilizationFloatingThemeMode;
+    ks::settings::saveAppearanceSettings(preferences);
 }
 
 void HardwareDock::applyInitialUtilizationSplitterSize()
@@ -6800,6 +7052,11 @@ void HardwareDock::refreshAllViews()
         networkRxAverageBytesPerSec,
         networkTxAverageBytesPerSec,
         gpuUsageAveragePercent);
+    if (m_utilizationFloatingMode == UtilizationFloatingMode::Detail)
+    {
+        // Device discovery can add chart views after the page has been floated.
+        applyUtilizationFloatingTheme();
+    }
     // 高度重排只在 resize/tab 切换时执行，避免每秒重算导致核心图容器抖动。
 
     // 周期刷新策略：

@@ -13,6 +13,7 @@
 #include <QStringList>
 #include <QPointer>
 #include <QPoint>
+#include <QPalette>
 #include <QRect>
 #include <QVector>
 #include <QWidget>
@@ -402,6 +403,9 @@ private:
     void adjustUtilizationChartHeights();
     void openUtilizationFloatingWindow(bool sidebarMode);
     void restoreUtilizationFloatingWindow();
+    void resizeUtilizationFloatingWindow();
+    void applyUtilizationFloatingTheme();
+    void saveUtilizationFloatingPreferences();
     QWidget* utilizationChartBottomWidget(const UtilizationNavEntry& entry) const;
     std::vector<QWidget*> utilizationDetailWidgets(const UtilizationNavEntry& entry) const;
     PerformanceNavCard* addUtilizationSidebarCard(
@@ -593,6 +597,14 @@ private:
     std::vector<std::pair<QPointer<QWidget>, bool>> m_utilizationHiddenDetailWidgets;
     QList<int> m_utilizationSavedSplitterSizes;
     int m_utilizationSavedDetailIndex = -1;
+    QPalette m_utilizationBorrowedPalette;
+    bool m_utilizationBorrowedHadPalette = false;
+    QSize m_utilizationFloatingBaseSize;
+    int m_utilizationFloatingScalePercent = 100;
+    int m_utilizationFloatingBackgroundOpacityPercent = 100;
+    bool m_utilizationFloatingTopMost = true;
+    QString m_utilizationFloatingThemeMode = QStringLiteral("follow_main");
+    QTimer* m_utilizationPreferencesSaveTimer = nullptr;
     QPoint m_utilizationDragStartGlobal;
     QRect m_utilizationResizeStartGeometry;
     Qt::Edges m_utilizationResizeEdges;
