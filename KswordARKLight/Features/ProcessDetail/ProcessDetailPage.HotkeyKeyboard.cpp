@@ -11,6 +11,7 @@
 #include <array>
 #include <chrono>
 #include <cstdint>
+#include <cstdlib>
 #include <cwchar>
 #include <cwctype>
 #include <filesystem>
@@ -41,6 +42,8 @@ struct HotkeyCandidate final {
     std::uint32_t hotkeyId = 0;
     std::uint32_t modifiers = 0;
     std::uint32_t virtualKey = 0;
+    bool hasR0Snapshot = false;
+    KSWORD_ARK_KEYBOARD_HOTKEY_ENTRY r0Snapshot{};
 };
 
 // HookCandidate 是 R0 键盘钩子链的值对象；地址仅供审计展示。
@@ -173,6 +176,79 @@ std::wstring FormatHotkey(std::uint32_t modifiers, std::uint32_t virtualKey) {
     }
     result += VirtualKeyText(virtualKey);
     return result;
+}
+
+// ParseHotkeyText 接受主程序热键编辑框常用的组合键写法。
+bool ParseHotkeyText(const std::wstring& text, std::uint32_t& modifiers, std::uint32_t& virtualKey) {
+    modifiers = 0;
+    virtualKey = 0;
+    std::size_t begin = 0;
+    while (begin < text.size()) {
+        const std::size_t end = text.find(L'+', begin);
+        std::wstring part = text.substr(begin, end == std::wstring::npos ? end : end - begin);
+        const auto first = part.find_first_not_of(L" \t");
+        if (first == std::wstring::npos) return false;
+        part = part.substr(first, part.find_last_not_of(L" \t") - first + 1);
+        std::transform(part.begin(), part.end(), part.begin(), [](wchar_t ch) { return std::towupper(ch); });
+        if (end != std::wstring::npos) {
+            std::uint32_t bit = 0;
+            if (part == L"CTRL" || part == L"CONTROL") bit = MOD_CONTROL;
+            else if (part == L"SHIFT") bit = MOD_SHIFT;
+            else if (part == L"ALT") bit = MOD_ALT;
+            else if (part == L"WIN" || part == L"WINDOWS") bit = MOD_WIN;
+            if (bit == 0 || (modifiers & bit) != 0) return false;
+            modifiers |= bit;
+            begin = end + 1;
+            continue;
+        }
+        if (part.size() == 1 &&
+            ((part[0] >= L'A' && part[0] <= L'Z') || (part[0] >= L'0' && part[0] <= L'9'))) {
+            virtualKey = static_cast<std::uint32_t>(part[0]);
+        } else if (part.size() >= 2 && part[0] == L'F') {
+            wchar_t* tail = nullptr;
+            const unsigned long number = std::wcstoul(part.c_str() + 1, &tail, 10);
+            if (!tail || *tail != L'\0' || number < 1 || number > 24) return false;
+            virtualKey = VK_F1 + static_cast<std::uint32_t>(number) - 1;
+        } else {
+            constexpr std::pair<const wchar_t*, std::uint32_t> keys[] = {
+                {L"ESC", VK_ESCAPE}, {L"ESCAPE", VK_ESCAPE}, {L"TAB", VK_TAB},
+                {L"ENTER", VK_RETURN}, {L"RETURN", VK_RETURN}, {L"SPACE", VK_SPACE},
+                {L"BACKSPACE", VK_BACK}, {L"DELETE", VK_DELETE}, {L"DEL", VK_DELETE},
+                {L"INSERT", VK_INSERT}, {L"HOME", VK_HOME}, {L"END", VK_END},
+                {L"PAGEUP", VK_PRIOR}, {L"PAGEDOWN", VK_NEXT}, {L"LEFT", VK_LEFT},
+                {L"RIGHT", VK_RIGHT}, {L"UP", VK_UP}, {L"DOWN", VK_DOWN},
+                {L"PAUSE", VK_PAUSE}, {L"PRINTSCREEN", VK_SNAPSHOT}
+            };
+            for (const auto& key : keys) {
+                if (part == key.first) { virtualKey = key.second; break; }
+            }
+            if (virtualKey == 0 && part.rfind(L"VK_0X", 0) == 0) {
+                wchar_t* tail = nullptr;
+                const unsigned long number = std::wcstoul(part.c_str() + 5, &tail, 16);
+                if (tail && *tail == L'\0' && number > 0 && number <= 0xFF) {
+                    virtualKey = static_cast<std::uint32_t>(number);
+                }
+            }
+        }
+        return virtualKey != 0;
+    }
+    return false;
+}
+
+std::wstring MutationFailureText(const ksword::ark::KeyboardHotkeyMutationResult& result) {
+    if (!result.io.ok) return Utf8ToWide(result.io.message);
+    switch (result.response.status) {
+    case KSWORD_ARK_KEYBOARD_MUTATION_STATUS_INVALID_REQUEST: return L"驱动拒绝了无效请求。";
+    case KSWORD_ARK_KEYBOARD_MUTATION_STATUS_CONFIRMATION_REQUIRED: return L"驱动要求重新确认。";
+    case KSWORD_ARK_KEYBOARD_MUTATION_STATUS_UNSUPPORTED_BUILD: return L"win32k 内部布局未经验证。";
+    case KSWORD_ARK_KEYBOARD_MUTATION_STATUS_CALLER_CONTEXT_REQUIRED: return L"必须从交互桌面 GUI 线程执行。";
+    case KSWORD_ARK_KEYBOARD_MUTATION_STATUS_STALE_SNAPSHOT: return L"对象或链表已变化，请刷新。";
+    case KSWORD_ARK_KEYBOARD_MUTATION_STATUS_UNSAFE_TARGET: return L"目标不是可安全修改的普通独立热键。";
+    case KSWORD_ARK_KEYBOARD_MUTATION_STATUS_CONFLICT: return L"热键组合已被占用。";
+    case KSWORD_ARK_KEYBOARD_MUTATION_STATUS_OPERATION_FAILED: return L"写后验证失败，已尝试回滚。";
+    case KSWORD_ARK_KEYBOARD_MUTATION_STATUS_SAFETY_DENIED: return L"内核安全策略拒绝。";
+    default: return L"驱动返回状态 " + std::to_wstring(result.response.status);
+    }
 }
 
 // KeyboardStatusText 显示 R0 返回的总体枚举状态，PARTIAL 不能按成功隐藏。
@@ -588,6 +664,34 @@ void CollectR0Hotkeys(
         candidate.detailText = L"Bucket=" + std::to_wstring(source.bucketIndex) +
             L" Depth=" + std::to_wstring(source.depth) +
             L" Flags=" + HexText(source.entryFlags) + L" | " + source.detail;
+        candidate.hasR0Snapshot =
+            (source.entryFlags & KSWORD_ARK_KEYBOARD_HOTKEY_ENTRY_FLAG_MUTABLE) != 0U;
+        if (candidate.hasR0Snapshot) {
+            auto& row = candidate.r0Snapshot;
+            row.source = source.source;
+            row.status = source.status;
+            row.flags = source.flags;
+            row.bucketIndex = source.bucketIndex;
+            row.depth = source.depth;
+            row.modifiers = source.modifiers;
+            row.modifierFlags2 = source.modifierFlags2;
+            row.virtualKey = source.virtualKey;
+            row.hotkeyId = source.hotkeyId;
+            row.processId = source.processId;
+            row.threadId = source.threadId;
+            row.hotkeyObject = source.hotkeyObject;
+            row.nextHotkeyObject = source.nextHotkeyObject;
+            row.sessionGlobals = source.sessionGlobals;
+            row.threadInfo = source.threadInfo;
+            row.windowHandle = source.windowHandle;
+            row.destinationHandle = source.destinationHandle;
+            row.callbackAddress = source.callbackAddress;
+            row.childListFlink = source.childListFlink;
+            row.childListBlink = source.childListBlink;
+            row.snapshotHash = source.snapshotHash;
+            row.objectSize = source.objectSize;
+            row.entryFlags = source.entryFlags;
+        }
         AddCandidate(rows, dedupe, std::move(candidate));
     }
 }
@@ -702,8 +806,11 @@ bool ProcessDetailPage::CreateHotkeyTab() {
     const TabIndex tab = TabIndex::Hotkey;
     HWND refresh = AddButton(tab, HotkeyRefresh, L"↻", 6, 6, 34, kToolbarHeight);
     AddButtonTooltip(pages_[static_cast<std::size_t>(tab)].hwnd, refresh, L"刷新当前进程的窗口、菜单、PE 资源、快捷方式和 R0 热键表");
-    AddLabel(tab, HotkeyStatus, L"● 尚未刷新进程热键", 48, 8, -6, 24);
-    if (!AddList(tab, HotkeyList, 6, 44, -6, -6)) {
+    AddEdit(tab, HotkeyInput, L"", false, false, 48, 6, 160, kToolbarHeight);
+    AddButton(tab, HotkeyEdit, L"R0 修改", 214, 6, 80, kToolbarHeight);
+    AddButton(tab, HotkeyDelete, L"R0 删除", 300, 6, 80, kToolbarHeight);
+    AddLabel(tab, HotkeyStatus, L"● 尚未刷新进程热键；输入 Ctrl+Alt+K 等组合后选中 R0 行", 6, 42, -6, 24);
+    if (!AddList(tab, HotkeyList, 6, 72, -6, -6)) {
         return false;
     }
     RebuildHotkeyList();
@@ -752,11 +859,57 @@ void ProcessDetailPage::PopulateKeyboardTab() {
 
 // HandleHotkeyCommand 处理进程热键页的刷新按钮命令。
 bool ProcessDetailPage::HandleHotkeyCommand(int controlId) {
-    if (controlId != HotkeyRefresh) {
-        return false;
+    if (controlId == HotkeyRefresh) { RefreshHotkeys(); return true; }
+    if (controlId == HotkeyEdit) { MutateSelectedHotkey(false); return true; }
+    if (controlId == HotkeyDelete) { MutateSelectedHotkey(true); return true; }
+    return false;
+}
+
+void ProcessDetailPage::MutateSelectedHotkey(bool remove) {
+    const wchar_t* title = remove ? L"R0 删除热键" : L"R0 修改热键";
+    if (hotkeyTask_ && hotkeyTask_->running()) return;
+    const int selected = SelectedListRow(Control(TabIndex::Hotkey, HotkeyList));
+    if (selected < 0 || static_cast<std::size_t>(selected) >= hotkeyEntries_.size()) {
+        ::MessageBoxW(hwnd_, L"请先选择一条 R0 热键记录。", title, MB_OK | MB_ICONINFORMATION);
+        return;
     }
+    const ProcessHotkeyEntry row = hotkeyEntries_[static_cast<std::size_t>(selected)];
+    if (row.sourceText != L"R0 RegisterHotKey" || !row.hasR0Snapshot) {
+        ::MessageBoxW(hwnd_, L"该项不是具有完整安全快照的普通独立 R0 热键。", title, MB_OK | MB_ICONWARNING);
+        return;
+    }
+    std::uint32_t modifiers = 0;
+    std::uint32_t virtualKey = 0;
+    if (!remove) {
+        if (!ParseHotkeyText(ControlText(TabIndex::Hotkey, HotkeyInput), modifiers, virtualKey)) {
+            ::MessageBoxW(hwnd_, L"请输入 Ctrl、Shift、Alt、Win 加字母、数字、F1-F24 或常用功能键。", title, MB_OK | MB_ICONWARNING);
+            return;
+        }
+        modifiers |= row.modifiers & MOD_NOREPEAT;
+    }
+    const std::wstring message = remove
+        ? L"驱动将重新验证完整快照，并在内核 USER 临界区删除普通独立热键。\n\n确认删除 " +
+            row.hotkeyText + L"（" + row.objectText + L"）？"
+        : L"驱动将重新验证完整快照，仅修改 RegisterHotKey 组合键。\n\n确认将 " +
+            row.hotkeyText + L" 修改为 " + FormatHotkey(modifiers, virtualKey) + L"？";
+    if (::MessageBoxW(hwnd_, message.c_str(), title, MB_YESNO | MB_DEFBUTTON2 | MB_ICONWARNING) != IDYES) return;
+    const auto result = ksword::ark::DriverClient().mutateKeyboardHotkey(
+        row.r0Snapshot,
+        remove ? KSWORD_ARK_KEYBOARD_MUTATION_OPERATION_DELETE : KSWORD_ARK_KEYBOARD_MUTATION_OPERATION_EDIT,
+        modifiers,
+        virtualKey);
+    const std::uint32_t requiredFlag = remove
+        ? KSWORD_ARK_KEYBOARD_MUTATION_RESPONSE_CHANGED
+        : KSWORD_ARK_KEYBOARD_MUTATION_RESPONSE_OTHER_BYTES_SAME;
+    if (!result.io.ok || result.response.status != KSWORD_ARK_KEYBOARD_MUTATION_STATUS_OK ||
+        (result.response.responseFlags & requiredFlag) == 0U) {
+        const std::wstring failure = L"热键操作失败：" + MutationFailureText(result);
+        ::MessageBoxW(hwnd_, failure.c_str(), title, MB_OK | MB_ICONERROR);
+        RefreshHotkeys();
+        return;
+    }
+    ::MessageBoxW(hwnd_, remove ? L"热键已删除。" : L"热键已修改。", title, MB_OK | MB_ICONINFORMATION);
     RefreshHotkeys();
-    return true;
 }
 
 // HandleKeyboardCommand 处理键盘页的刷新按钮命令。
@@ -798,6 +951,8 @@ void ProcessDetailPage::RefreshHotkeys() {
                 entry.hotkeyId = source.hotkeyId;
                 entry.modifiers = source.modifiers;
                 entry.virtualKey = source.virtualKey;
+                entry.hasR0Snapshot = source.hasR0Snapshot;
+                entry.r0Snapshot = source.r0Snapshot;
                 snapshot.entries.push_back(std::move(entry));
             }
             const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -850,6 +1005,8 @@ void ProcessDetailPage::RefreshKeyboard() {
                 entry.hotkeyId = source.hotkeyId;
                 entry.modifiers = source.modifiers;
                 entry.virtualKey = source.virtualKey;
+                entry.hasR0Snapshot = source.hasR0Snapshot;
+                entry.r0Snapshot = source.r0Snapshot;
                 snapshot.hotkeys.push_back(std::move(entry));
             }
             const std::vector<HookCandidate> hooks = CollectR0KeyboardHooks(processId, diagnostic);

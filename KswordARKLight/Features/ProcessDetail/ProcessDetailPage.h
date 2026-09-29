@@ -174,6 +174,9 @@ private:
         HotkeyRefresh = 1800,
         HotkeyStatus,
         HotkeyList,
+        HotkeyInput,
+        HotkeyEdit,
+        HotkeyDelete,
 
         // 键盘页控件：通过内部分栏在热键表和 WH_KEYBOARD 钩子链之间切换。
         KeyboardRefresh = 1900,
@@ -455,6 +458,7 @@ private:
     void RefreshPebReport();
     void ApplyPebEdits();
     void RefreshHotkeys();
+    void MutateSelectedHotkey(bool remove);
     void RefreshKeyboard();
     void RebuildHotkeyList();
     void RebuildKeyboardList();
