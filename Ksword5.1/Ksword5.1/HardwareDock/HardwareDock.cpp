@@ -3567,7 +3567,7 @@ bool HardwareDock::eventFilter(QObject* watchedObject, QEvent* eventObject)
                     if (wheelEvent->modifiers() & Qt::ShiftModifier)
                     {
                         m_utilizationFloatingBackgroundOpacityPercent = std::clamp(
-                            m_utilizationFloatingBackgroundOpacityPercent + (delta > 0 ? -5 : 5), 0, 100);
+                            m_utilizationFloatingBackgroundOpacityPercent + (delta > 0 ? 5 : -5), 0, 100);
                         applyUtilizationFloatingTheme();
                     }
                     else
