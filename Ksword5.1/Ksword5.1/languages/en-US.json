@@ -16810,6 +16810,7 @@
     "[ProcessDetailWindow] executeSuspendProcessAction: pid=": "[ProcessDetailWindow] executeSuspendProcessAction: pid=",
     "[ProcessDetailWindow] executeTerminateProcessAction: actionOk=": "[ProcessDetailWindow] executeTerminateProcessAction: actionOk=",
     "[ProcessDetailWindow] executeTerminateProcessAction: pid=": "[ProcessDetailWindow] executeTerminateProcessAction: pid=",
+    "[ProcessDetailWindow] 逐方法结束进程, pid=": "[ProcessDetailWindow] single termination method, pid=",
     "[ProcessDetailWindow] executeTerminateProcessComboAction: pid=": "[ProcessDetailWindow] executeTerminateProcessComboAction: pid=",
     "[ProcessDetailWindow] executeTerminateThreadsAction: actionOk=": "[ProcessDetailWindow] executeTerminateThreadsAction: actionOk=",
     "[ProcessDetailWindow] executeTerminateThreadsAction: pid=": "[ProcessDetailWindow] executeTerminateThreadsAction: pid=",

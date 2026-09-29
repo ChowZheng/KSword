@@ -628,13 +628,7 @@ private:
     void terminateCurrentModuleThread();
 
     // ======== 操作页动作 ========
-    void executeTerminateProcessAction();
-    // executeTerminateProcessComboAction 作用：
-    // - 执行与进程列表右键“结束进程”一致的多方法组合结束动作；
-    // - 输入为当前详情页绑定 PID，处理过程按固定方法链逐项尝试；
-    // - 返回值：无，动作结果统一写日志。
-    void executeTerminateProcessComboAction();
-    void executeTerminateThreadsAction();
+    void executeSingleTerminateMethodAction(std::size_t methodIndex);
     void executeR0SuspendSelectedThreadAction();
     void executeR0ResumeSelectedThreadAction();
       void executeDriverThreadAction(unsigned long action, unsigned long terminateMethod = KSWORD_ARK_DRIVER_THREAD_TERMINATE_METHOD_NONE);

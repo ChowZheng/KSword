@@ -938,6 +938,7 @@
     <ClInclude Include="..\..\shared\evidence\ImageDiff.h" />
     <ClInclude Include="..\..\shared\evidence\MemoryRegionEvidence.h" />
     <ClInclude Include="..\..\shared\evidence\InjectionSurvey.h" />
+    <ClInclude Include="..\..\shared\ProcessTerminateMethods.h" />
     <ClInclude Include="..\..\shared\crash\WinCrashHandler.h" />
     <ClInclude Include="ArkDriverClient\ArkDriverCapabilities.h" />
     <ClInclude Include="..\..\third_party\zydis\Zydis.h" />

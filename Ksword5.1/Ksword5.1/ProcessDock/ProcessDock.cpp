@@ -7,6 +7,7 @@
 
 #include "../theme.h"
 #include "ProcessDetailWindow.h"
+#include "../../../shared/ProcessTerminateMethods.h"
 #include "ProcessMessageHookWindow.h"
 #include "../ArkDriverClient/ArkDriverClient.h"
 #include "../ksword/process/injection_trace_collector.h"
@@ -3641,77 +3642,11 @@ namespace
         return false;
     }
 
-    // TerminateMethodEntry 作用：描述一条"结束进程原理方法"。
-    //
-    // 这张表是**唯一来源**：组合链按顺序跑它，"高级结束进程"菜单按它逐条建项。
-    // 分两份写的话，菜单上的名字和实际执行的方法迟早会对不上，而那种错不会报错——
-    // 用户以为自己点的是 A，跑的是 B，失败原因还落在 A 头上。
-    struct TerminateMethodEntry
+    using TerminateMethodEntry = ks::process::TerminateMethodEntry;
+
+    const auto& terminateMethodTable()
     {
-        // 表里十四条方法**全在用户态**；菜单里那条横线以下才是 R0 那批。分类
-        // 不进界面，只用下面的注释分段——排列顺序仍按"请谁去结束"聚在一起，因为
-        // 同类方法的失败原因往往相同（作业对象那两条，目标不在任何 Job 里时一起
-        // 失败），改这张表的人需要知道这件事，用菜单的人不需要。
-        const char* methodName = nullptr;
-        std::function<bool(std::uint32_t, std::string*)> invokeMethod;
-    };
-
-    const std::vector<TerminateMethodEntry>& terminateMethodTable()
-    {
-        static const std::vector<TerminateMethodEntry> table =
-        {
-            // 直接请内核结束这个进程。最常规，也最容易被内核回调挡下来。
-            { "TerminateProcess(Kernel32)", [](std::uint32_t pid, std::string* d)
-                { return ks::process::TerminateProcessByWin32(pid, d); } },
-            { "NtTerminateProcess/ZwTerminateProcess", [](std::uint32_t pid, std::string* d)
-                { return ks::process::TerminateProcessByNtNative(pid, d); } },
-
-            // 请会话/终端服务去结束。走的是另一个服务进程，因此不吃调用方自己
-            // 的句柄权限，但目标必须属于某个会话。
-            { "WTSTerminateProcess(WTS API)", [](std::uint32_t pid, std::string* d)
-                { return ks::process::TerminateProcessByWtsApi(pid, d); } },
-            { "WinStationTerminateProcess(winsta)", [](std::uint32_t pid, std::string* d)
-                { return ks::process::TerminateProcessByWinStationApi(pid, d); } },
-
-            // 请作业对象连坐。目标不在任何 Job 里时这一组会一起失败——知道这点
-            // 就不必把组里另一条再试一遍。
-            { "TerminateJobObject(Job)", [](std::uint32_t pid, std::string* d)
-                { return ks::process::TerminateProcessByJobObject(pid, d); } },
-            { "NtTerminateJobObject/ZwTerminateJobObject", [](std::uint32_t pid, std::string* d)
-                { return ks::process::TerminateProcessByNtJobObject(pid, d); } },
-
-            // 请重启管理器出面。它会先让目标自己优雅退出，force 那条才强制。
-            { "RmShutdown(Restart Manager)", [](std::uint32_t pid, std::string* d)
-                { return ks::process::TerminateProcessByRestartManager(pid, false, d); } },
-            { "RmShutdown(Restart Manager, force)", [](std::uint32_t pid, std::string* d)
-                { return ks::process::TerminateProcessByRestartManager(pid, true, d); } },
-
-            // 绕开"拿不到有效句柄"这一类失败。
-            { "DuplicateHandle(-1)+TerminateProcess", [](std::uint32_t pid, std::string* d)
-                { return ks::process::TerminateProcessByDuplicateHandlePseudo(pid, d); } },
-
-            // 不结束进程本身，而是把它的线程逐个干掉。进程对象会留到最后一条
-            // 线程退出，所以"成功"之后目标可能还在列表里待一会儿。
-            { "TerminateThread(全部线程)", [](std::uint32_t pid, std::string* d)
-                { return ks::process::TerminateAllThreadsByPid(pid, d); } },
-            { "NtTerminateThread/ZwTerminateThread(全部线程)", [](std::uint32_t pid, std::string* d)
-                { return ks::process::TerminateAllThreadsByPidNtNative(pid, d); } },
-
-            // 借调试器身份。附加成功后脱离即杀，对拒绝常规结束的目标常常有效，
-            // 但目标已被别的调试器附加时整组都用不了。
-            { "DebugActiveProcess 调试附加", [](std::uint32_t pid, std::string* d)
-                { return ks::process::TerminateProcessByDebugAttach(pid, d); } },
-            { "ntsd -c q -p <pid>", [](std::uint32_t pid, std::string* d)
-                { return ks::process::TerminateProcessByNtsdCommand(pid, d); } },
-
-            // 这一条与上面所有方法都不同类：它**不请任何人结束这个进程**，
-            // 而是把目标必需的映射拆掉让它自己崩。因此没有"优雅退出"可言，
-            // 也可能只是让目标变成一个半死不活的状态。单独成组就是为了让人
-            // 在点之前看见这个区别。
-            { "NtUnmapViewOfSection 卸载 ntdll.dll", [](std::uint32_t pid, std::string* d)
-                { return ks::process::TerminateProcessByNtUnmapNtdll(pid, d); } }
-        };
-        return table;
+        return ks::process::TerminateMethodTable();
     }
 
     // isProcessPresentBySnapshot 作用：
@@ -16531,7 +16466,7 @@ void ProcessDock::executeTerminateProcessActions(
             // 方法表取自唯一来源（terminateMethodTable），与"高级结束进程"
             // 菜单用的是同一份。之前这里另有一份就地定义的副本，两处各改一次
             // 就会走散，而那种不一致不会报错。
-            const std::vector<TerminateMethodEntry>& terminateMethodList =
+            const auto& terminateMethodList =
                 terminateMethodTable();
 
             for (int roundIndex = 0; roundIndex < kTerminateRoundLimit && !processExited; ++roundIndex)

@@ -4596,9 +4596,17 @@ void ProcessDetailWindow::initializeActionTab()
     controlLayout->setVerticalSpacing(8);
 
     m_terminateActionCombo = new QComboBox(controlGroup);
-    m_terminateActionCombo->addItem(QIcon(":/Icon/process_terminate.svg"), "结束进程(组合方法链)", 2);
-    m_terminateActionCombo->addItem(QIcon(":/Icon/process_terminate.svg"), "TerminateProcess", 0);
-    m_terminateActionCombo->addItem(QIcon(":/Icon/process_terminate.svg"), "TerminateThread(全部线程)", 1);
+    for (std::size_t index = 0; index < ks::process::TerminateMethodTable().size(); ++index)
+    {
+        m_terminateActionCombo->addItem(
+            QIcon(":/Icon/process_terminate.svg"),
+            QString::fromUtf8(ks::process::TerminateMethodTable()[index].methodName),
+            static_cast<int>(index));
+    }
+    m_terminateActionCombo->addItem(
+        QIcon(":/Icon/process_terminate.svg"),
+        ks::i18n::sourceText(QStringLiteral("R0 驱动结束（四步：清保护 → ZwTerminate → 逐线程 → 清零内存）")),
+        static_cast<int>(ks::process::TerminateMethodTable().size()));
     m_terminateActionCombo->setToolTip("选择结束当前进程的执行方案");
     m_executeTerminateActionButton = buildTextActionButton(
         QStringLiteral("执行"),

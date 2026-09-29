@@ -1603,6 +1603,9 @@
     <ClInclude Include="..\..\shared\window\DwmProcessIdentity.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="..\..\shared\ProcessTerminateMethods.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="..\..\shared\window\DwmRemoteLoader.h">
       <Filter>Header Files</Filter>
     </ClInclude>
