@@ -30,3 +30,9 @@
 - 高版本 Windows API 必须按现有 `GetProcAddress` 范式延迟绑定；页面级 `Unsupported`/`Partial` 是正常结果，不能把一个可选诊断字段升级为进程启动前置条件。
 - 新驱动能力必须 capability-gated：旧驱动、未加载驱动或无管理员权限时，R3 浏览、导出、证据会话和原有管理入口继续可用。
 - 内存读取快照只来自已经成功的既有虚拟内存读 IOCTL；快照前进/后退只重放本地不可变字节，不重新读取目标或要求新协议。
+
+## 单独构建 Light 时跳过驱动与签名
+
+- 只构建 `KswordARKLight.vcxproj` 仍可能运行其 `BuildKswordArkDriverBeforeLightEmbed` 目标。需要显式传入 `/p:KswordArkLightEnsureDriverBuilt=false /p:KswordArkLightSkipDriverSign=true /p:KswordArkLightReuseSignedDriver=true`。
+- Light 的嵌入驱动准备步骤仍需要现有 `KswordARK.sys`；可把 `/p:OutDir=` 指向已有该文件的临时输出目录，避免占用中的仓库 Release EXE 阻止链接。
+- 每次构建后检查日志不含 `KswordARKDriver.vcxproj`、`signing`、`CSignTool`、`Sign-Ksword`，并确认 Light 构建退出码为 0。用户要求按功能分别编译、分别提交时，每次仅暂存本功能修改的文件。
