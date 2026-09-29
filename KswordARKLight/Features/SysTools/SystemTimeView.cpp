@@ -1,6 +1,7 @@
 #include "SystemTimeView.h"
 
 #include "SystemTimeInfo.h"
+#include "../../../Ksword5.1/Ksword5.1/ArkDriverClient/ArkDriverClient.h"
 #include "../../Ui/AsyncTask.h"
 #include "../../Ui/Controls.h"
 #include "../../Ui/LoadingOverlay.h"
@@ -11,6 +12,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <memory>
 #include <optional>
@@ -27,8 +29,19 @@ constexpr int kCopyButtonId = 67402;
 constexpr int kClockTextId = 67403;
 constexpr int kReportEditId = 67404;
 constexpr int kLoadingOverlayId = 67405;
+constexpr int kQueryButtonId = 67406;
+constexpr int kApplyButtonId = 67407;
+constexpr int kResetButtonId = 67408;
+constexpr int kBackendComboId = 67409;
+constexpr int kResolutionComboId = 67410;
+constexpr int kSpeedComboId = 67411;
+constexpr int kFactorEditId = 67412;
+constexpr int kAcknowledgeId = 67413;
+constexpr int kRiskTextId = 67414;
+constexpr int kR0StatusTextId = 67415;
 
 constexpr UINT kMsgCollectCompleted = WM_APP + 715;
+constexpr UINT kMsgStatusCompleted = WM_APP + 716;
 
 // kClockTimerId drives the header line only. The full report is not re-rendered
 // on the tick because it would fight the user's selection and the find bar in
@@ -38,7 +51,7 @@ constexpr UINT kClockIntervalMs = 1000;
 
 constexpr int kGap = 6;
 constexpr int kRowHeight = 24;
-constexpr int kHeaderHeight = kGap * 3 + kRowHeight * 2;
+constexpr int kHeaderHeight = 192;
 constexpr int kStatusHeight = 22;
 
 int Width(const RECT& rc) {
@@ -53,13 +66,139 @@ struct SystemTimeViewState final {
     HWND hwnd = nullptr;
     HWND refreshButton = nullptr;
     HWND copyButton = nullptr;
+    HWND queryButton = nullptr;
+    HWND applyButton = nullptr;
+    HWND resetButton = nullptr;
+    HWND backendCombo = nullptr;
+    HWND resolutionCombo = nullptr;
+    HWND speedCombo = nullptr;
+    HWND factorEdit = nullptr;
+    HWND acknowledge = nullptr;
+    HWND riskText = nullptr;
+    HWND r0StatusText = nullptr;
     HWND clockText = nullptr;
     HWND reportEdit = nullptr;
     HWND loadingOverlay = nullptr;
     std::wstring reportText;
-    std::wstring statusText = L"该页只读，不会修改系统时间或时间源配置。";
+    std::wstring statusText = L"系统时间报告与 R0 全局变速控制。";
     std::unique_ptr<Ksword::Ui::AsyncSnapshotTask<SystemTimeInfoSnapshot>> collectTask;
+    std::unique_ptr<Ksword::Ui::AsyncSnapshotTask<ksword::ark::SystemTimeQueryResult>> statusTask;
+    bool supported = false;
+    bool hypervAvailable = false;
+    bool active = false;
+    unsigned long generation = 0;
+    unsigned long currentBackend = KSWORD_ARK_SYSTEM_TIME_BACKEND_HYPERV_SHARED_QPC;
+    unsigned int clockTicks = 0;
 };
+
+bool Checked(HWND checkbox) {
+    return ::SendMessageW(checkbox, BM_GETCHECK, 0, 0) == BST_CHECKED;
+}
+
+void UpdateControlState(SystemTimeViewState& state) {
+    const bool backendHyperv = ::SendMessageW(state.backendCombo, CB_GETCURSEL, 0, 0) == 0;
+    ::EnableWindow(state.applyButton,
+        state.supported && Checked(state.acknowledge) && (!backendHyperv || state.hypervAvailable));
+    ::EnableWindow(state.resetButton, state.supported);
+    ::EnableWindow(state.backendCombo, state.supported && !state.active);
+    ::EnableWindow(state.resolutionCombo, state.supported && !state.active);
+}
+
+void BeginQueryStatus(SystemTimeViewState& state) {
+    if (!state.statusTask || state.statusTask->running()) { return; }
+    state.statusTask->request(
+        [] { return ksword::ark::DriverClient().querySystemTime(); },
+        [&state](std::uint64_t, std::optional<ksword::ark::SystemTimeQueryResult>&& query,
+            std::exception_ptr error) {
+            if (error || !query || !query->io.ok) {
+                state.supported = false;
+                ::SetWindowTextW(state.r0StatusText,
+                    query && query->unsupported ? L"R0 变速不可用：请更新驱动。" : L"R0 计时状态查询失败。");
+                UpdateControlState(state);
+                return;
+            }
+            const auto& response = query->response;
+            state.generation = response.generation;
+            state.currentBackend = response.backend;
+            state.supported = (response.stateFlags & KSWORD_ARK_SYSTEM_TIME_STATE_SUPPORTED) != 0;
+            state.active = (response.stateFlags & KSWORD_ARK_SYSTEM_TIME_STATE_ACTIVE) != 0;
+            state.hypervAvailable = (response.stateFlags &
+                (KSWORD_ARK_SYSTEM_TIME_STATE_HYPERV_PRESENT |
+                    KSWORD_ARK_SYSTEM_TIME_STATE_HYPERV_SHARED_PAGE)) ==
+                (KSWORD_ARK_SYSTEM_TIME_STATE_HYPERV_PRESENT |
+                    KSWORD_ARK_SYSTEM_TIME_STATE_HYPERV_SHARED_PAGE);
+            if (state.active) {
+                ::SendMessageW(state.backendCombo, CB_SETCURSEL,
+                    response.backend == KSWORD_ARK_SYSTEM_TIME_BACKEND_HAL_COMPAT ? 1 : 0, 0);
+                ::SendMessageW(state.resolutionCombo, CB_SETCURSEL,
+                    response.resolutionMode == KSWORD_ARK_SYSTEM_TIME_RESOLUTION_GUARDED ? 1 : 0, 0);
+            }
+            std::wstring status = state.supported ? L"R0 计时：" : L"R0 当前系统不支持安全接管；";
+            status += state.active ? L"正在变速" : L"原始速度 1x";
+            status += L"；倍率=" + std::to_wstring(response.factor) +
+                L"；代次=" + std::to_wstring(response.generation) +
+                L"；状态=" + std::to_wstring(response.status);
+            ::SetWindowTextW(state.r0StatusText, status.c_str());
+            UpdateControlState(state);
+        });
+}
+
+void ControlSpeed(SystemTimeViewState& state, bool reset) {
+    if (!state.supported) { return; }
+    unsigned long factor = 1;
+    if (!reset) {
+        if (!Checked(state.acknowledge)) { return; }
+        wchar_t factorText[24]{};
+        ::GetWindowTextW(state.factorEdit, factorText, static_cast<int>(std::size(factorText)));
+        wchar_t* end = nullptr;
+        factor = std::wcstoul(factorText, &end, 10);
+        if (end == factorText || *end != L'\0' || factor < KSWORD_ARK_SYSTEM_TIME_MIN_FACTOR ||
+            factor > KSWORD_ARK_SYSTEM_TIME_MAX_FACTOR) {
+            ::MessageBoxW(state.hwnd, L"倍率必须是 2 到 64 的整数。", L"系统全局变速", MB_OK | MB_ICONWARNING);
+            return;
+        }
+        const wchar_t* warning =
+            L"系统全局变速会接管内核性能计数器，也可能改写 Hyper-V 共享 QPC 页。\n"
+            L"动画、超时、音视频、网络和安全软件可能异常，严重时可能冻结或蓝屏。\n"
+            L"请先保存工作，并准备在异常时恢复 1x。是否继续？";
+        if (::MessageBoxW(state.hwnd, warning, L"系统全局变速风险确认",
+                MB_OKCANCEL | MB_ICONWARNING | MB_DEFBUTTON2) != IDOK) { return; }
+        if (::MessageBoxW(state.hwnd, L"最终确认修改整个系统的时间行为？",
+                L"最终确认", MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) != IDYES) { return; }
+    }
+    const unsigned long backend = reset ? state.currentBackend :
+        (::SendMessageW(state.backendCombo, CB_GETCURSEL, 0, 0) == 0
+            ? KSWORD_ARK_SYSTEM_TIME_BACKEND_HYPERV_SHARED_QPC
+            : KSWORD_ARK_SYSTEM_TIME_BACKEND_HAL_COMPAT);
+    const unsigned long resolution = ::SendMessageW(state.resolutionCombo, CB_GETCURSEL, 0, 0) == 1
+        ? KSWORD_ARK_SYSTEM_TIME_RESOLUTION_GUARDED
+        : KSWORD_ARK_SYSTEM_TIME_RESOLUTION_ORIGINAL_COMPAT;
+    const unsigned long command = reset ? KSWORD_ARK_SYSTEM_TIME_COMMAND_RESET :
+        (::SendMessageW(state.speedCombo, CB_GETCURSEL, 0, 0) == 0
+            ? KSWORD_ARK_SYSTEM_TIME_COMMAND_SPEED_UP
+            : KSWORD_ARK_SYSTEM_TIME_COMMAND_SLOW_DOWN);
+    const ksword::ark::DriverClient client;
+    const auto fresh = client.querySystemTime();
+    if (!fresh.io.ok || !state.supported) {
+        state.statusText = L"控制前无法读取 R0 状态，未执行修改。";
+        ::InvalidateRect(state.hwnd, nullptr, TRUE);
+        return;
+    }
+    const auto result = client.controlSystemTime(command, factor, backend, resolution,
+        fresh.response.generation, !reset);
+    if (!result.io.ok || result.response.status != KSWORD_ARK_SYSTEM_TIME_STATUS_OK) {
+        state.statusText = L"R0 计时控制失败：Win32=" + std::to_wstring(result.io.win32Error) +
+            L"，状态=" + std::to_wstring(result.response.status) +
+            L"，NTSTATUS=" + std::to_wstring(static_cast<unsigned long>(result.response.lastStatus));
+    } else {
+        state.statusText = reset ? L"已请求恢复连续计数 1x；关闭页面不会自动恢复变速。"
+            : L"已应用全局变速；关闭页面不会自动恢复，请用“恢复 1x”。";
+        ::SendMessageW(state.acknowledge, BM_SETCHECK, BST_UNCHECKED, 0);
+    }
+    BeginQueryStatus(state);
+    UpdateControlState(state);
+    ::InvalidateRect(state.hwnd, nullptr, TRUE);
+}
 
 bool CopyText(HWND owner, const std::wstring& text) {
     if (text.empty() || !::OpenClipboard(owner)) {
@@ -122,7 +261,7 @@ void BeginCollect(SystemTimeViewState& state) {
             if (state.reportEdit) {
                 ::SetWindowTextW(state.reportEdit, state.reportText.c_str());
             }
-            state.statusText = L"该页只读，不会修改系统时间或时间源配置。按 Ctrl+F 可在报告中查找。";
+            state.statusText = L"时间报告已刷新。按 Ctrl+F 可在报告中查找。";
             UpdateClockLine(state);
             ::InvalidateRect(state.hwnd, nullptr, TRUE);
         });
@@ -141,11 +280,21 @@ void LayoutView(SystemTimeViewState& state) {
     if (state.copyButton) {
         ::MoveWindow(state.copyButton, kGap * 2 + 64, firstRowY, 96, kRowHeight, TRUE);
     }
+    ::MoveWindow(state.queryButton, 174, firstRowY, 80, kRowHeight, TRUE);
+    ::MoveWindow(state.applyButton, 260, firstRowY, 88, kRowHeight, TRUE);
+    ::MoveWindow(state.resetButton, 354, firstRowY, 88, kRowHeight, TRUE);
 
     const int secondRowY = firstRowY + kRowHeight + kGap;
     if (state.clockText) {
         ::MoveWindow(state.clockText, kGap, secondRowY + 2, (std::max)(120, width - kGap * 2), kRowHeight - 2, TRUE);
     }
+    ::MoveWindow(state.riskText, kGap, 62, (std::max)(120, width - kGap * 2), 48, TRUE);
+    ::MoveWindow(state.backendCombo, kGap, 116, 185, 180, TRUE);
+    ::MoveWindow(state.resolutionCombo, 197, 116, 140, 180, TRUE);
+    ::MoveWindow(state.speedCombo, 343, 116, 125, 180, TRUE);
+    ::MoveWindow(state.factorEdit, 474, 116, 52, kRowHeight, TRUE);
+    ::MoveWindow(state.acknowledge, kGap, 145, (std::max)(120, width - kGap * 2), kRowHeight, TRUE);
+    ::MoveWindow(state.r0StatusText, kGap, 170, (std::max)(120, width - kGap * 2), 20, TRUE);
 
     const int reportTop = kHeaderHeight;
     const int reportHeight = (std::max)(0, height - reportTop - kStatusHeight - kGap);
@@ -161,10 +310,52 @@ bool CreateChildControls(SystemTimeViewState& state) {
     HWND hwnd = state.hwnd;
     state.refreshButton = Ksword::Ui::CreateButton(hwnd, kRefreshButtonId, L"刷新", 0, 0, 0, 0);
     state.copyButton = Ksword::Ui::CreateButton(hwnd, kCopyButtonId, L"复制报告", 0, 0, 0, 0);
+    state.queryButton = Ksword::Ui::CreateButton(hwnd, kQueryButtonId, L"R0状态", 0, 0, 0, 0);
+    state.applyButton = Ksword::Ui::CreateButton(hwnd, kApplyButtonId, L"应用变速", 0, 0, 0, 0);
+    state.resetButton = Ksword::Ui::CreateButton(hwnd, kResetButtonId, L"恢复 1x", 0, 0, 0, 0);
     state.clockText = Ksword::Ui::CreateText(hwnd, kClockTextId, L"", 0, 0, 0, 0);
-    if (!state.refreshButton || !state.copyButton || !state.clockText) {
+    state.riskText = Ksword::Ui::CreateText(hwnd, kRiskTextId,
+        L"⚠ 系统全局变速会接管内核性能计数器，Hyper-V 后端还会改写共享 QPC 页。"
+        L"可能导致系统冻结或蓝屏；请先保存工作，建议仅在虚拟机中使用。关闭页面不会自动恢复。",
+        0, 0, 0, 0);
+    state.r0StatusText = Ksword::Ui::CreateText(hwnd, kR0StatusTextId,
+        L"R0 状态等待查询…", 0, 0, 0, 0);
+    auto createCombo = [hwnd](int id) {
+        return ::CreateWindowExW(0, WC_COMBOBOXW, L"",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST,
+            0, 0, 1, 180, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)),
+            ::GetModuleHandleW(nullptr), nullptr);
+    };
+    state.backendCombo = createCombo(kBackendComboId);
+    state.resolutionCombo = createCombo(kResolutionComboId);
+    state.speedCombo = createCombo(kSpeedComboId);
+    state.factorEdit = ::CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"2",
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_NUMBER,
+        0, 0, 1, 1, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kFactorEditId)),
+        ::GetModuleHandleW(nullptr), nullptr);
+    state.acknowledge = ::CreateWindowExW(0, L"BUTTON",
+        L"我已保存工作，并理解该功能可能使系统不稳定",
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
+        0, 0, 1, 1, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kAcknowledgeId)),
+        ::GetModuleHandleW(nullptr), nullptr);
+    if (!state.refreshButton || !state.copyButton || !state.queryButton ||
+        !state.applyButton || !state.resetButton || !state.clockText || !state.riskText ||
+        !state.r0StatusText || !state.backendCombo || !state.resolutionCombo ||
+        !state.speedCombo || !state.factorEdit || !state.acknowledge) {
         return false;
     }
+    auto addCombo = [](HWND combo, const wchar_t* text) {
+        ::SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(text));
+    };
+    addCombo(state.backendCombo, L"Hyper-V 共享 QPC");
+    addCombo(state.backendCombo, L"HAL 兼容后端");
+    addCombo(state.resolutionCombo, L"兼容模式");
+    addCombo(state.resolutionCombo, L"安全模式");
+    addCombo(state.speedCombo, L"加速 N 倍");
+    addCombo(state.speedCombo, L"减速到 1/N");
+    ::SendMessageW(state.backendCombo, CB_SETCURSEL, 0, 0);
+    ::SendMessageW(state.resolutionCombo, CB_SETCURSEL, 0, 0);
+    ::SendMessageW(state.speedCombo, CB_SETCURSEL, 0, 0);
 
     state.reportEdit = ::CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"正在读取系统时间信息…",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL | WS_HSCROLL |
@@ -185,6 +376,7 @@ bool CreateChildControls(SystemTimeViewState& state) {
     }
 
     Ksword::Ui::SetWindowFontRecursive(hwnd);
+    UpdateControlState(state);
     return true;
 }
 
@@ -203,10 +395,12 @@ LRESULT CALLBACK SystemTimeViewProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                 return -1;
             }
             state->collectTask = std::make_unique<Ksword::Ui::AsyncSnapshotTask<SystemTimeInfoSnapshot>>(hwnd, kMsgCollectCompleted);
+            state->statusTask = std::make_unique<Ksword::Ui::AsyncSnapshotTask<ksword::ark::SystemTimeQueryResult>>(hwnd, kMsgStatusCompleted);
             LayoutView(*state);
             UpdateClockLine(*state);
             ::SetTimer(hwnd, kClockTimerId, kClockIntervalMs, nullptr);
             BeginCollect(*state);
+            BeginQueryStatus(*state);
         }
         return 0;
     case WM_SIZE:
@@ -217,12 +411,29 @@ LRESULT CALLBACK SystemTimeViewProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
     case WM_TIMER:
         if (state && wParam == kClockTimerId) {
             UpdateClockLine(*state);
+            if (++state->clockTicks % 2 == 0) { BeginQueryStatus(*state); }
             return 0;
         }
         break;
     case WM_COMMAND:
+        if (state && LOWORD(wParam) == kBackendComboId && HIWORD(wParam) == CBN_SELCHANGE) {
+            UpdateControlState(*state);
+            return 0;
+        }
         if (state && HIWORD(wParam) == BN_CLICKED) {
             switch (LOWORD(wParam)) {
+            case kAcknowledgeId:
+                UpdateControlState(*state);
+                return 0;
+            case kQueryButtonId:
+                BeginQueryStatus(*state);
+                return 0;
+            case kApplyButtonId:
+                ControlSpeed(*state, false);
+                return 0;
+            case kResetButtonId:
+                ControlSpeed(*state, true);
+                return 0;
             case kRefreshButtonId:
                 BeginCollect(*state);
                 return 0;
@@ -263,11 +474,16 @@ LRESULT CALLBACK SystemTimeViewProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
             state->collectTask->consume(hwnd, wParam, lParam);
             return 0;
         }
+        if (state && msg == kMsgStatusCompleted && state->statusTask) {
+            state->statusTask->consume(hwnd, wParam, lParam);
+            return 0;
+        }
         if (msg == WM_NCDESTROY && state) {
             ::KillTimer(hwnd, kClockTimerId);
             if (state->collectTask) {
                 state->collectTask->cancel();
             }
+            if (state->statusTask) { state->statusTask->cancel(); }
             delete state;
             ::SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
         }
