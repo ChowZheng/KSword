@@ -33,6 +33,7 @@ public:
 
     // clearSamples 作用：清空历史采样，供未来重置采样窗口使用。
     void clearSamples();
+    void setFloatingScaleFactor(double factor);
 
 protected:
     // paintEvent 作用：绘制网格、构成填充、占用折线与图例。
@@ -68,4 +69,5 @@ private:
     CompositionSample m_previousSample; // m_previousSample：最新采样点的动画起点。
     double m_animationProgress = 1.0; // m_animationProgress：最新采样点动画进度。
     bool m_hasPreviousSample = false; // m_hasPreviousSample：是否存在可用于插值的上一采样。
+    double m_floatingScaleFactor = 1.0;
 };

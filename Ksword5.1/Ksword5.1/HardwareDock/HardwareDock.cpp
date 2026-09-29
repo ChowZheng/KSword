@@ -3547,7 +3547,7 @@ bool HardwareDock::eventFilter(QObject* watchedObject, QEvent* eventObject)
                     else
                     {
                         m_utilizationFloatingScalePercent = std::clamp(
-                            m_utilizationFloatingScalePercent + (plus ? 10 : -10), 50, 300);
+                            m_utilizationFloatingScalePercent + (plus ? 10 : -10), 25, 300);
                         resizeUtilizationFloatingWindow();
                     }
                     m_utilizationPreferencesSaveTimer->start();
@@ -3558,15 +3558,24 @@ bool HardwareDock::eventFilter(QObject* watchedObject, QEvent* eventObject)
         if (eventObject->type() == QEvent::Wheel)
         {
             const auto* wheelEvent = static_cast<QWheelEvent*>(eventObject);
-            if ((wheelEvent->modifiers() & Qt::ControlModifier)
-                && !(wheelEvent->modifiers() & Qt::ShiftModifier))
+            if (wheelEvent->modifiers() & Qt::ControlModifier)
             {
-                const int delta = wheelEvent->angleDelta().y();
+                const QPoint wheelDelta = wheelEvent->angleDelta();
+                const int delta = wheelDelta.y() != 0 ? wheelDelta.y() : wheelDelta.x();
                 if (delta != 0)
                 {
-                    m_utilizationFloatingScalePercent = std::clamp(
-                        m_utilizationFloatingScalePercent + (delta > 0 ? 10 : -10), 50, 300);
-                    resizeUtilizationFloatingWindow();
+                    if (wheelEvent->modifiers() & Qt::ShiftModifier)
+                    {
+                        m_utilizationFloatingBackgroundOpacityPercent = std::clamp(
+                            m_utilizationFloatingBackgroundOpacityPercent + (delta > 0 ? -5 : 5), 0, 100);
+                        applyUtilizationFloatingTheme();
+                    }
+                    else
+                    {
+                        m_utilizationFloatingScalePercent = std::clamp(
+                            m_utilizationFloatingScalePercent + (delta > 0 ? 10 : -10), 25, 300);
+                        resizeUtilizationFloatingWindow();
+                    }
                     m_utilizationPreferencesSaveTimer->start();
                 }
                 return true;
@@ -3576,7 +3585,15 @@ bool HardwareDock::eventFilter(QObject* watchedObject, QEvent* eventObject)
         {
             const auto* contextEvent = static_cast<QContextMenuEvent*>(eventObject);
             QMenu menu(floatingWindow);
-            menu.setPalette(floatingWindow->palette());
+            const QPalette menuPalette = floatingWindow->palette();
+            menu.setPalette(menuPalette);
+            menu.setStyleSheet(QStringLiteral(
+                "QMenu{color:%1;background-color:%2;border:1px solid %3;}"
+                "QMenu::item:selected{color:%1;background-color:%4;}")
+                .arg(menuPalette.color(QPalette::Text).name(QColor::HexRgb),
+                    menuPalette.color(QPalette::Window).name(QColor::HexRgb),
+                    menuPalette.color(QPalette::Mid).name(QColor::HexRgb),
+                    menuPalette.color(QPalette::AlternateBase).name(QColor::HexRgb)));
             QAction* const topMostAction = menu.addAction(ks::i18n::contextText(
                 QStringLiteral("hardware.utilization.floating.top_most"), QStringLiteral("置顶")));
             topMostAction->setCheckable(true);
@@ -3618,6 +3635,7 @@ bool HardwareDock::eventFilter(QObject* watchedObject, QEvent* eventObject)
         {
             QTimer::singleShot(0, this, [this]()
             {
+                applyUtilizationFloatingContentScale();
                 if (m_utilizationFloatingMode == UtilizationFloatingMode::Sidebar)
                 {
                     syncUtilizationSidebarCardWidths();
@@ -3665,8 +3683,8 @@ bool HardwareDock::eventFilter(QObject* watchedObject, QEvent* eventObject)
                     if (m_utilizationResizeEdges & Qt::RightEdge) nextGeometry.setRight(nextGeometry.right() + delta.x());
                     if (m_utilizationResizeEdges & Qt::TopEdge) nextGeometry.setTop(nextGeometry.top() + delta.y());
                     if (m_utilizationResizeEdges & Qt::BottomEdge) nextGeometry.setBottom(nextGeometry.bottom() + delta.y());
-                    const int minimumWidth = m_utilizationFloatingMode == UtilizationFloatingMode::Sidebar ? 100 : 160;
-                    if (nextGeometry.width() >= minimumWidth && nextGeometry.height() >= 100)
+                    if (nextGeometry.width() >= floatingWindow->minimumWidth()
+                        && nextGeometry.height() >= floatingWindow->minimumHeight())
                     {
                         floatingWindow->setGeometry(nextGeometry);
                     }
@@ -3702,6 +3720,16 @@ bool HardwareDock::eventFilter(QObject* watchedObject, QEvent* eventObject)
         if (eventObject->type() == QEvent::MouseButtonRelease)
         {
             const bool consumeRelease = m_utilizationDragging || m_utilizationResizeEdges;
+            if (m_utilizationResizeEdges && !m_utilizationFloatingBaseSize.isEmpty())
+            {
+                const double widthRatio = static_cast<double>(floatingWindow->width())
+                    / m_utilizationFloatingBaseSize.width();
+                const double heightRatio = static_cast<double>(floatingWindow->height())
+                    / m_utilizationFloatingBaseSize.height();
+                m_utilizationFloatingScalePercent = std::clamp(
+                    qRound(std::min(widthRatio, heightRatio) * 100.0), 25, 300);
+                m_utilizationPreferencesSaveTimer->start();
+            }
             m_utilizationDragArmed = false;
             m_utilizationDragging = false;
             m_utilizationResizeEdges = {};
@@ -4109,6 +4137,14 @@ PerformanceNavCard* HardwareDock::addUtilizationSidebarCard(
     QListWidgetItem* itemPointer = new QListWidgetItem();
     // cardPointer 用途：实际绘制任务管理器风格缩略卡片。
     PerformanceNavCard* cardPointer = new PerformanceNavCard(m_utilizationSidebarList);
+    if (m_utilizationFloatingMode == UtilizationFloatingMode::Sidebar)
+    {
+        cardPointer->setFloatingScaleFactor(m_utilizationFloatingAppliedContentScale);
+        if (QWidget* const floatingWindow = m_utilizationFloatingWindow.data())
+        {
+            cardPointer->setFloatingThemeSurface(floatingWindow->palette().color(QPalette::Window));
+        }
+    }
     cardPointer->setTitleText(titleText);
     cardPointer->setSubtitleText(
         ks::i18n::contextText(
@@ -4285,7 +4321,9 @@ void HardwareDock::openUtilizationFloatingWindow(const bool sidebarMode)
     }
 
     QWidget* const floatingWindow = new UtilizationFloatingWindow(m_utilizationFloatingTopMost);
-    floatingWindow->setMinimumSize(sidebarMode ? QSize(100, 100) : QSize(160, 100));
+    floatingWindow->setMinimumSize(
+        std::max(sidebarMode ? 100 : 160, m_utilizationFloatingBaseSize.width() / 4),
+        std::max(100, m_utilizationFloatingBaseSize.height() / 4));
     QVBoxLayout* const floatingLayout = new QVBoxLayout(floatingWindow);
     // The borrowed chart page has its own size hints; they must not lock the
     // frameless top-level window to its initial dimensions.
@@ -4298,6 +4336,11 @@ void HardwareDock::openUtilizationFloatingWindow(const bool sidebarMode)
     m_utilizationFloatingPage = sourceWidget;
     m_utilizationBorrowedPalette = sourceWidget->palette();
     m_utilizationBorrowedHadPalette = sourceWidget->testAttribute(Qt::WA_SetPalette);
+    m_utilizationBorrowedFont = sourceWidget->font();
+    m_utilizationBorrowedHadFont = sourceWidget->testAttribute(Qt::WA_SetFont);
+    m_utilizationFloatingWidgetStyles.clear();
+    m_utilizationFloatingLayoutStyles.clear();
+    m_utilizationFloatingAppliedContentScale = 1.0;
     m_utilizationSavedSplitterSizes = m_utilizationBodySplitter->sizes();
     m_utilizationFloatingMode = sidebarMode
         ? UtilizationFloatingMode::Sidebar : UtilizationFloatingMode::Detail;
@@ -4328,9 +4371,9 @@ void HardwareDock::openUtilizationFloatingWindow(const bool sidebarMode)
         sourceWidget->show();
     }
 
-    applyUtilizationFloatingTheme();
-
     floatingWindow->resize(initialSize);
+    applyUtilizationFloatingTheme();
+    applyUtilizationFloatingContentScale();
     QPoint targetPosition = sourceGlobalPosition;
     if (targetScreen != nullptr)
     {
@@ -4358,6 +4401,7 @@ void HardwareDock::restoreUtilizationFloatingWindow()
     QWidget* const floatingWindow = m_utilizationFloatingWindow.data();
     QWidget* const borrowedWidget = m_utilizationFloatingPage.data();
     QWidget* const mainWindow = m_utilizationOriginalMainWindow.data();
+    restoreUtilizationFloatingContentScale();
     if (m_utilizationPreferencesSaveTimer != nullptr && m_utilizationPreferencesSaveTimer->isActive())
     {
         saveUtilizationFloatingPreferences();
@@ -4469,6 +4513,250 @@ void HardwareDock::resizeUtilizationFloatingWindow()
     geometry.moveTop(std::clamp(geometry.top(), workArea.top(),
         std::max(workArea.top(), workArea.bottom() - geometry.height() + 1)));
     floatingWindow->setGeometry(geometry);
+    applyUtilizationFloatingContentScale();
+}
+
+void HardwareDock::applyUtilizationFloatingContentScale(const bool forceRestyle)
+{
+    QWidget* const floatingWindow = m_utilizationFloatingWindow.data();
+    QWidget* const page = m_utilizationFloatingPage.data();
+    if (floatingWindow == nullptr || page == nullptr || m_utilizationFloatingBaseSize.isEmpty())
+    {
+        return;
+    }
+
+    const double widthRatio = static_cast<double>(floatingWindow->width())
+        / m_utilizationFloatingBaseSize.width();
+    const double heightRatio = static_cast<double>(floatingWindow->height())
+        / m_utilizationFloatingBaseSize.height();
+    const double scale = std::clamp(std::min(widthRatio, heightRatio), 0.25, 3.0);
+    QList<QWidget*> widgets = page->findChildren<QWidget*>();
+    widgets.prepend(page);
+    const bool allWidgetsCaptured = std::all_of(widgets.begin(), widgets.end(),
+        [this](QWidget* const widget)
+        {
+            return std::any_of(m_utilizationFloatingWidgetStyles.begin(),
+                m_utilizationFloatingWidgetStyles.end(), [widget](const FloatingWidgetStyleState& state)
+                {
+                    return state.widget == widget;
+                });
+        });
+    if (!forceRestyle && std::abs(scale - m_utilizationFloatingAppliedContentScale) < 0.005
+        && allWidgetsCaptured)
+    {
+        return;
+    }
+    m_utilizationFloatingAppliedContentScale = scale;
+
+    static const QRegularExpression fontSizePattern(
+        QStringLiteral(R"((font-size\s*:\s*)(\d+(?:\.\d+)?)(px|pt))"),
+        QRegularExpression::CaseInsensitiveOption);
+    auto scaledStyle = [scale](const QString& originalStyle)
+    {
+        QString result;
+        int cursor = 0;
+        auto matches = fontSizePattern.globalMatch(originalStyle);
+        while (matches.hasNext())
+        {
+            const auto match = matches.next();
+            result += originalStyle.mid(cursor, match.capturedStart(2) - cursor);
+            result += QString::number(std::max(1, qRound(match.captured(2).toDouble() * scale)));
+            cursor = match.capturedEnd(2);
+        }
+        result += originalStyle.mid(cursor);
+        return result;
+    };
+    const auto scaledPx = [scale](const int pixels)
+    {
+        return pixels < 0 ? pixels : qRound(pixels * scale);
+    };
+
+    for (QWidget* const widget : widgets)
+    {
+        auto existing = std::find_if(m_utilizationFloatingWidgetStyles.begin(),
+            m_utilizationFloatingWidgetStyles.end(), [widget](const FloatingWidgetStyleState& state)
+            {
+                return state.widget == widget;
+            });
+        if (existing == m_utilizationFloatingWidgetStyles.end())
+        {
+            m_utilizationFloatingWidgetStyles.push_back({ widget, widget->styleSheet(),
+                widget->palette(), widget->testAttribute(Qt::WA_SetPalette),
+                widget->minimumHeight(), widget->maximumHeight() });
+            existing = std::prev(m_utilizationFloatingWidgetStyles.end());
+        }
+        QPalette childPalette = existing->palette;
+        const QPalette floatingPalette = floatingWindow->palette();
+        for (const QPalette::ColorRole role : {
+            QPalette::Window, QPalette::WindowText, QPalette::Base,
+            QPalette::AlternateBase, QPalette::Mid, QPalette::Midlight,
+            QPalette::Dark, QPalette::Text, QPalette::PlaceholderText,
+            QPalette::Button, QPalette::ButtonText, QPalette::ToolTipBase,
+            QPalette::ToolTipText })
+        {
+            childPalette.setColor(role, floatingPalette.color(role));
+        }
+        widget->setPalette(childPalette);
+        QString style = scaledStyle(existing->styleSheet);
+        style.replace(QStringLiteral("palette(placeholder-text)"),
+            floatingPalette.color(QPalette::PlaceholderText).name(QColor::HexRgb), Qt::CaseInsensitive);
+        style.replace(QStringLiteral("palette(window-text)"),
+            floatingPalette.color(QPalette::WindowText).name(QColor::HexRgb), Qt::CaseInsensitive);
+        style.replace(QStringLiteral("palette(text)"),
+            floatingPalette.color(QPalette::Text).name(QColor::HexRgb), Qt::CaseInsensitive);
+        if (widget->styleSheet() != style)
+        {
+            widget->setStyleSheet(style);
+        }
+        if (qobject_cast<QLabel*>(widget) != nullptr
+            && existing->minimumHeight == existing->maximumHeight
+            && existing->maximumHeight > 0 && existing->maximumHeight < 200)
+        {
+            const int height = std::max(1, scaledPx(existing->maximumHeight));
+            widget->setFixedHeight(height);
+        }
+        if (auto* const card = dynamic_cast<PerformanceNavCard*>(widget))
+        {
+            card->setFloatingScaleFactor(scale);
+            card->setFloatingThemeSurface(floatingPalette.color(QPalette::Window));
+        }
+        if (auto* const memoryChart = dynamic_cast<MemoryCompositionHistoryWidget*>(widget))
+        {
+            memoryChart->setFloatingScaleFactor(scale);
+        }
+    }
+
+    QFont scaledFont = m_utilizationBorrowedFont;
+    if (scaledFont.pointSizeF() > 0)
+    {
+        scaledFont.setPointSizeF(std::max(1.0, scaledFont.pointSizeF() * scale));
+    }
+    else if (scaledFont.pixelSize() > 0)
+    {
+        scaledFont.setPixelSize(std::max(1, scaledPx(scaledFont.pixelSize())));
+    }
+    page->setFont(scaledFont);
+
+    for (QObject* const object : page->findChildren<QObject*>())
+    {
+        auto* const layout = dynamic_cast<QLayout*>(object);
+        if (layout == nullptr)
+        {
+            continue;
+        }
+        auto existing = std::find_if(m_utilizationFloatingLayoutStyles.begin(),
+            m_utilizationFloatingLayoutStyles.end(), [layout](const FloatingLayoutStyleState& state)
+            {
+                return state.layout == layout;
+            });
+        if (existing == m_utilizationFloatingLayoutStyles.end())
+        {
+            int horizontal = layout->spacing();
+            int vertical = layout->spacing();
+            if (auto* const grid = dynamic_cast<QGridLayout*>(layout))
+            {
+                horizontal = grid->horizontalSpacing();
+                vertical = grid->verticalSpacing();
+            }
+            m_utilizationFloatingLayoutStyles.push_back({ layout, layout->contentsMargins(),
+                layout->spacing(), horizontal, vertical });
+            existing = std::prev(m_utilizationFloatingLayoutStyles.end());
+        }
+        const QMargins& margins = existing->margins;
+        layout->setContentsMargins(scaledPx(margins.left()), scaledPx(margins.top()),
+            scaledPx(margins.right()), scaledPx(margins.bottom()));
+        if (existing->spacing >= 0)
+        {
+            layout->setSpacing(scaledPx(existing->spacing));
+        }
+        if (auto* const grid = dynamic_cast<QGridLayout*>(layout))
+        {
+            grid->setHorizontalSpacing(scaledPx(existing->horizontalSpacing));
+            grid->setVerticalSpacing(scaledPx(existing->verticalSpacing));
+        }
+    }
+
+    if (QLayout* const layout = floatingWindow->layout())
+    {
+        const int margin = std::max(0, scaledPx(4));
+        layout->setContentsMargins(margin, margin, margin, margin);
+    }
+    if (m_utilizationFloatingMode == UtilizationFloatingMode::Sidebar
+        && m_utilizationSidebarList != nullptr)
+    {
+        m_utilizationSidebarList->setMinimumWidth(std::max(1, scaledPx(140)));
+        syncUtilizationSidebarCardWidths();
+    }
+    else
+    {
+        adjustUtilizationChartHeights();
+    }
+}
+
+void HardwareDock::restoreUtilizationFloatingContentScale()
+{
+    QWidget* const page = m_utilizationFloatingPage.data();
+    if (page == nullptr)
+    {
+        return;
+    }
+    for (const FloatingWidgetStyleState& state : m_utilizationFloatingWidgetStyles)
+    {
+        if (QWidget* const widget = state.widget.data())
+        {
+            if (widget->styleSheet() != state.styleSheet)
+            {
+                widget->setStyleSheet(state.styleSheet);
+            }
+            widget->setPalette(state.palette);
+            if (!state.hadPalette)
+            {
+                widget->setAttribute(Qt::WA_SetPalette, false);
+            }
+            if (qobject_cast<QLabel*>(widget) != nullptr
+                && state.minimumHeight == state.maximumHeight
+                && state.maximumHeight > 0 && state.maximumHeight < 200)
+            {
+                widget->setMinimumHeight(state.minimumHeight);
+                widget->setMaximumHeight(state.maximumHeight);
+            }
+            if (auto* const card = dynamic_cast<PerformanceNavCard*>(widget))
+            {
+                card->setFloatingScaleFactor(1.0);
+                card->setFloatingThemeSurface(QColor());
+            }
+            if (auto* const memoryChart = dynamic_cast<MemoryCompositionHistoryWidget*>(widget))
+            {
+                memoryChart->setFloatingScaleFactor(1.0);
+            }
+        }
+    }
+    for (const FloatingLayoutStyleState& state : m_utilizationFloatingLayoutStyles)
+    {
+        if (QLayout* const layout = state.layout.data())
+        {
+            layout->setContentsMargins(state.margins);
+            layout->setSpacing(state.spacing);
+            if (auto* const grid = dynamic_cast<QGridLayout*>(layout))
+            {
+                grid->setHorizontalSpacing(state.horizontalSpacing);
+                grid->setVerticalSpacing(state.verticalSpacing);
+            }
+        }
+    }
+    page->setFont(m_utilizationBorrowedFont);
+    if (!m_utilizationBorrowedHadFont)
+    {
+        page->setAttribute(Qt::WA_SetFont, false);
+    }
+    if (m_utilizationFloatingMode == UtilizationFloatingMode::Sidebar
+        && m_utilizationSidebarList != nullptr)
+    {
+        m_utilizationSidebarList->setMinimumWidth(140);
+    }
+    m_utilizationFloatingWidgetStyles.clear();
+    m_utilizationFloatingLayoutStyles.clear();
+    m_utilizationFloatingAppliedContentScale = 1.0;
 }
 
 void HardwareDock::applyUtilizationFloatingTheme()
@@ -4489,6 +4777,9 @@ void HardwareDock::applyUtilizationFloatingTheme()
     const QColor secondaryTextColor = followMain ? KswordTheme::TextSecondaryColor()
         : KswordTheme::DefaultTextSecondaryColor(darkMode);
     QPalette floatingPalette = floatingWindow->palette();
+    const bool textPaletteChanged = floatingPalette.color(QPalette::Window) != backgroundColor
+        || floatingPalette.color(QPalette::Text) != textColor
+        || floatingPalette.color(QPalette::PlaceholderText) != secondaryTextColor;
     floatingPalette.setColor(QPalette::Window, backgroundColor);
     floatingPalette.setColor(QPalette::Base, backgroundColor);
     floatingPalette.setColor(QPalette::AlternateBase, followMain ? KswordTheme::SurfaceAltColor()
@@ -4499,8 +4790,19 @@ void HardwareDock::applyUtilizationFloatingTheme()
     floatingPalette.setColor(QPalette::PlaceholderText, secondaryTextColor);
     floatingPalette.setColor(QPalette::Mid, followMain ? KswordTheme::BorderColor()
         : KswordTheme::DefaultBorderColor(darkMode));
+    floatingPalette.setColor(QPalette::Midlight, followMain ? KswordTheme::BorderStrongColor()
+        : KswordTheme::DefaultBorderStrongColor(darkMode));
+    floatingPalette.setColor(QPalette::Dark, followMain ? KswordTheme::PaletteDarkColor()
+        : KswordTheme::DefaultPaletteDarkColor(darkMode));
+    floatingPalette.setColor(QPalette::Button, floatingPalette.color(QPalette::AlternateBase));
+    floatingPalette.setColor(QPalette::ToolTipBase, backgroundColor);
+    floatingPalette.setColor(QPalette::ToolTipText, textColor);
     floatingWindow->setPalette(floatingPalette);
     floatingWindow->setBackground(backgroundColor, m_utilizationFloatingBackgroundOpacityPercent);
+    if (textPaletteChanged || m_utilizationFloatingWidgetStyles.empty())
+    {
+        applyUtilizationFloatingContentScale(true);
+    }
     QWidget* const borrowedWidget = m_utilizationFloatingPage.data();
     if (borrowedWidget != nullptr)
     {
@@ -4588,7 +4890,9 @@ void HardwareDock::syncUtilizationSidebarCardWidths()
     }
     // QListWidget 的行宽始终由 viewport 决定；这里只固定行高，避免把某一轮
     // 初始布局得到的宽度写成后续 splitter 的隐性最小宽度。
-    const QSize nextSizeHint(0, 52);
+    const double sidebarScale = m_utilizationFloatingMode == UtilizationFloatingMode::Sidebar
+        ? m_utilizationFloatingAppliedContentScale : 1.0;
+    const QSize nextSizeHint(0, std::max(1, qRound(52 * sidebarScale)));
     bool itemSizeChanged = false;
 
     for (int rowIndex = 0; rowIndex < m_utilizationSidebarList->count(); ++rowIndex)
@@ -4644,6 +4948,11 @@ void HardwareDock::syncUtilizationSidebarCardWidths()
 
 void HardwareDock::adjustUtilizationChartHeights()
 {
+    const auto scaledDetailPx = [this](const int pixels)
+    {
+        return m_utilizationFloatingMode == UtilizationFloatingMode::Detail
+            ? std::max(1, qRound(pixels * m_utilizationFloatingAppliedContentScale)) : pixels;
+    };
     // applyFixedHeightIfChanged 作用：
     // - 仅在目标高度变化时写入最小/最大高度，避免无意义重排触发递归 resize；
     // - widgetPointer：待设置控件；heightValue：目标固定高度（像素）；
@@ -4708,9 +5017,11 @@ void HardwareDock::adjustUtilizationChartHeights()
     if (m_utilizationPage != nullptr && m_utilizationSidebarList != nullptr)
     {
         // cardHeight 用途：保持缩略图最小可读高度；多磁盘/多网卡/GPU 时由列表滚动承接溢出。
-        if (m_utilizationSidebarList->spacing() != 2)
+        const int cardSpacing = m_utilizationFloatingMode == UtilizationFloatingMode::Sidebar
+            ? std::max(0, qRound(2 * m_utilizationFloatingAppliedContentScale)) : 2;
+        if (m_utilizationSidebarList->spacing() != cardSpacing)
         {
-            m_utilizationSidebarList->setSpacing(2);
+            m_utilizationSidebarList->setSpacing(cardSpacing);
         }
         syncUtilizationSidebarCardWidths();
     }
@@ -4741,7 +5052,7 @@ void HardwareDock::adjustUtilizationChartHeights()
             cpuReferenceHeight = 240;
         }
 
-        const int titleHeight = 72;
+        const int titleHeight = scaledDetailPx(72);
         const int headerHeight = std::max(
             m_cpuModelLabel != nullptr ? m_cpuModelLabel->height() : 0,
             titleHeight);
@@ -4757,7 +5068,7 @@ void HardwareDock::adjustUtilizationChartHeights()
         // availableChartAreaHeight 用途：核心图可用高度；允许极小高度，保证页面整体不冒滚动条。
         const int availableChartAreaHeight = std::max(
             1,
-            cpuReferenceHeight - headerHeight - summaryHeight - detailHeight - 42);
+            cpuReferenceHeight - headerHeight - summaryHeight - detailHeight - scaledDetailPx(42));
         const int gridRows = std::max(1, m_cpuCoreGridRowCount);
         const int gridSpacing = std::max(0, m_coreChartGridLayout->verticalSpacing());
         // cellHeight 用途：每个逻辑处理器小卡片高度；低高度下继续压缩而不是让滚动条接管。
@@ -4812,9 +5123,10 @@ void HardwareDock::adjustUtilizationChartHeights()
             if (chartEntry.chartView != nullptr)
             {
                 const int titleReserveHeight = chartEntry.titleLabel != nullptr
-                    ? std::min(18, std::max(0, chartEntry.titleLabel->sizeHint().height()))
+                    ? std::min(scaledDetailPx(18), std::max(0, chartEntry.titleLabel->sizeHint().height()))
                     : 0;
-                const int chartHeight = std::max(1, cellHeight - titleReserveHeight - kCpuCoreChartChromeReservePx);
+                const int chartHeight = std::max(1, cellHeight - titleReserveHeight
+                    - scaledDetailPx(kCpuCoreChartChromeReservePx));
                 applyFixedHeightIfChanged(chartEntry.chartView, chartHeight);
             }
         }
@@ -4934,7 +5246,7 @@ void HardwareDock::adjustUtilizationChartHeights()
 
         const int titleHeight = std::max(
             m_gpuAdapterTitleLabel != nullptr ? m_gpuAdapterTitleLabel->sizeHint().height() : 0,
-            58);
+            scaledDetailPx(58));
         const int summaryHeight = m_gpuUtilSummaryLabel != nullptr
             ? m_gpuUtilSummaryLabel->sizeHint().height()
             : 20;
@@ -4943,14 +5255,14 @@ void HardwareDock::adjustUtilizationChartHeights()
             ? m_gpuUtilDetailLabel->sizeHint().height()
             : 22;
         // reservedHeight 用途：GPU 页非图表区预留高度（含布局间距与上下边距）。
-        const int reservedHeight = titleHeight + summaryHeight + detailHeight + 38;
+        const int reservedHeight = titleHeight + summaryHeight + detailHeight + scaledDetailPx(38);
         const int availableHeight = std::max(1, gpuReferenceHeight - reservedHeight);
 
         // engineAreaHeight 用途：分配给 2x2 引擎图区域的高度。
         const int engineAreaHeight = std::max(
             1,
             static_cast<int>(std::round(static_cast<double>(availableHeight) * 0.52)));
-        const int memoryAreaEachHeight = std::max(1, (availableHeight - engineAreaHeight - 8) / 2);
+        const int memoryAreaEachHeight = std::max(1, (availableHeight - engineAreaHeight - scaledDetailPx(8)) / 2);
         if (m_gpuEngineHostWidget != nullptr && m_gpuEngineGridLayout != nullptr)
         {
             const int rowSpacing = std::max(0, m_gpuEngineGridLayout->verticalSpacing());
@@ -4959,12 +5271,12 @@ void HardwareDock::adjustUtilizationChartHeights()
             {
                 if (chartEntry.chartView != nullptr)
                 {
-                    applyMaxHeightIfChanged(chartEntry.chartView, std::max(1, cellHeight - 10));
+                    applyMaxHeightIfChanged(chartEntry.chartView, std::max(1, cellHeight - scaledDetailPx(10)));
                 }
                 if (chartEntry.titleLabel != nullptr)
                 {
                     chartEntry.titleLabel->setMinimumHeight(0);
-                    chartEntry.titleLabel->setMaximumHeight(18);
+                    chartEntry.titleLabel->setMaximumHeight(scaledDetailPx(18));
                 }
             }
             applyMaxHeightIfChanged(m_gpuEngineHostWidget, engineAreaHeight);
@@ -5010,8 +5322,8 @@ void HardwareDock::adjustUtilizationChartHeights()
             continue;
         }
 
-        const int layoutSpacing = 6;
-        const int headerHeight = 58;
+        const int layoutSpacing = scaledDetailPx(6);
+        const int headerHeight = scaledDetailPx(58);
         const int summaryHeight = device.summaryLabel != nullptr
             ? device.summaryLabel->sizeHint().height()
             : 0;
@@ -5019,7 +5331,8 @@ void HardwareDock::adjustUtilizationChartHeights()
             && m_utilizationFloatingPage == device.pageWidget ? 0 : device.detailLabel != nullptr
             ? device.detailLabel->sizeHint().height()
             : 0;
-        const int reservedHeight = headerHeight + summaryHeight + detailHeight + layoutSpacing * 7 + 12;
+        const int reservedHeight = headerHeight + summaryHeight + detailHeight
+            + layoutSpacing * 7 + scaledDetailPx(12);
         const int graphAreaHeight = std::max(1, gpuReferenceHeight - reservedHeight);
         const int engineAreaHeight = std::max(1, graphAreaHeight / 2);
         const int memoryAreaEachHeight = std::max(1, graphAreaHeight / 4);
@@ -5032,12 +5345,12 @@ void HardwareDock::adjustUtilizationChartHeights()
             {
                 if (chartEntry.chartView != nullptr)
                 {
-                    applyMaxHeightIfChanged(chartEntry.chartView, std::max(1, cellHeight - 14));
+                    applyMaxHeightIfChanged(chartEntry.chartView, std::max(1, cellHeight - scaledDetailPx(14)));
                 }
                 if (chartEntry.titleLabel != nullptr)
                 {
                     chartEntry.titleLabel->setMinimumHeight(0);
-                    chartEntry.titleLabel->setMaximumHeight(18);
+                    chartEntry.titleLabel->setMaximumHeight(scaledDetailPx(18));
                 }
             }
             applyMaxHeightIfChanged(device.engineHostWidget, engineAreaHeight);

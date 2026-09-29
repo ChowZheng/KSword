@@ -233,6 +233,18 @@ QSize PerformanceNavCard::sizeHint() const
     return QSize(208, 52);
 }
 
+void PerformanceNavCard::setFloatingScaleFactor(const double factor)
+{
+    m_floatingScaleFactor = std::clamp(factor, 0.25, 3.0);
+    update();
+}
+
+void PerformanceNavCard::setFloatingThemeSurface(const QColor& surfaceColor)
+{
+    m_floatingThemeSurface = surfaceColor;
+    update();
+}
+
 
 int PerformanceNavCard::sampleCapacity() const
 {
@@ -245,12 +257,22 @@ void PerformanceNavCard::paintEvent(QPaintEvent* paintEventPointer)
 
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing, true);
+    painter.scale(m_floatingScaleFactor, m_floatingScaleFactor);
 
     // 卡片区域：改成透明底，仅保留边框高亮，避免计数器页左侧卡片遮住背景。
-    const QRect cardRect = rect().adjusted(1, 1, -1, -1);
+    const QRect logicalRect(0, 0,
+        std::max(1, qRound(width() / m_floatingScaleFactor)),
+        std::max(1, qRound(height() / m_floatingScaleFactor)));
+    const QRect cardRect = logicalRect.adjusted(1, 1, -1, -1);
+    const auto visibleSeriesColor = [this](const QColor& color)
+    {
+        return m_floatingThemeSurface.isValid()
+            ? KswordTheme::EnsureTextContrast(color, m_floatingThemeSurface, 3.0) : color;
+    };
+    const QColor accentColor = visibleSeriesColor(m_accentColor);
     // cardBorderColor 用途：当前卡片边框颜色；选中时更亮，不选中时仅保留弱轮廓。
     const QColor cardBorderColor = KswordTheme::WithAlpha(
-        m_accentColor,
+        accentColor,
         m_selected ? 210 : 86);
     QPen cardBorderPen(cardBorderColor);
     cardBorderPen.setWidthF(m_selected ? 1.2 : 0.8);
@@ -276,7 +298,7 @@ void PerformanceNavCard::paintEvent(QPaintEvent* paintEventPointer)
         std::max(1, cardRect.height() - sparkInset * 2));
     // sparkBorderColor 用途：缩略图边框颜色；选中时使用实色，未选中时降低透明度。
     const QColor sparkBorderColor = KswordTheme::WithAlpha(
-        m_accentColor,
+        accentColor,
         m_selected ? 220 : 150);
     if (showSparkChart)
     {
@@ -287,9 +309,9 @@ void PerformanceNavCard::paintEvent(QPaintEvent* paintEventPointer)
         painter.drawRect(sparkRect);
 
         // 网格线：浅色辅助线，提升趋势可读性但不喧宾夺主。
-        QPen gridPen(m_accentColor);
+        QPen gridPen(accentColor);
         gridPen.setWidthF(0.8);
-        gridPen.setColor(KswordTheme::WithAlpha(m_accentColor, 45));
+        gridPen.setColor(KswordTheme::WithAlpha(accentColor, 45));
         painter.setPen(gridPen);
         for (int rowIndex = 1; rowIndex < 4; ++rowIndex)
         {
@@ -378,11 +400,11 @@ void PerformanceNavCard::paintEvent(QPaintEvent* paintEventPointer)
     // 双线卡片先画次序列再画主序列，确保主线不会被遮住。
     if (showSparkChart && m_secondarySeriesVisible)
     {
-        drawSeriesPath(m_secondarySamples, m_secondarySeriesColor, m_previousSecondarySample);
+        drawSeriesPath(m_secondarySamples, visibleSeriesColor(m_secondarySeriesColor), m_previousSecondarySample);
     }
     if (showSparkChart)
     {
-        drawSeriesPath(m_primarySamples, m_primarySeriesColor, m_previousPrimarySample);
+        drawSeriesPath(m_primarySamples, visibleSeriesColor(m_primarySeriesColor), m_previousPrimarySample);
     }
 
     // 文本区域：主标题加粗，副标题使用次级颜色。

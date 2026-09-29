@@ -68,6 +68,8 @@ public:
 
     // sizeHint 作用：给 QListWidgetItem 提供推荐尺寸。
     [[nodiscard]] QSize sizeHint() const override;
+    void setFloatingScaleFactor(double factor);
+    void setFloatingThemeSurface(const QColor& surfaceColor);
 
     // sampleCapacity 作用：返回缩略图最多保留的采样点数。
     // 返回值：当前卡片允许的最大样本数。
@@ -102,4 +104,6 @@ private:
     double m_previousPrimarySample = 0.0; // m_previousPrimarySample：主线动画起点。
     double m_previousSecondarySample = 0.0; // m_previousSecondarySample：次线动画起点。
     double m_animationProgress = 1.0; // m_animationProgress：最新点动画进度。
+    double m_floatingScaleFactor = 1.0;
+    QColor m_floatingThemeSurface;
 };

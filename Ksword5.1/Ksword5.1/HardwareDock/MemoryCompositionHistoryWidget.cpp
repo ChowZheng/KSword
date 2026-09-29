@@ -119,6 +119,12 @@ void MemoryCompositionHistoryWidget::clearSamples()
     update();
 }
 
+void MemoryCompositionHistoryWidget::setFloatingScaleFactor(const double factor)
+{
+    m_floatingScaleFactor = std::clamp(factor, 0.25, 3.0);
+    update();
+}
+
 void MemoryCompositionHistoryWidget::paintEvent(QPaintEvent* paintEventPointer)
 {
     Q_UNUSED(paintEventPointer);
@@ -322,7 +328,8 @@ void MemoryCompositionHistoryWidget::drawLegend(QPainter& painter, const QRectF&
 
     // 图例原本 8pt，小到辨不出色块对应哪一项；下限提到 9pt——
     // 再大会撑破下面 58px 的标签宽度和 68px 的条目间距。
-    painter.setFont(QFont(painter.font().family(), std::max(painter.font().pointSize() - 1, 9)));
+    painter.setFont(QFont(painter.font().family(), std::max(
+        painter.font().pointSize() - 1, qRound(9 * m_floatingScaleFactor))));
     painter.setPen(textColor);
 
     double xValue = plotRect.left();

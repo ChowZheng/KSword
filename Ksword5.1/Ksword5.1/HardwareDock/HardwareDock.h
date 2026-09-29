@@ -14,6 +14,8 @@
 #include <QPointer>
 #include <QPoint>
 #include <QPalette>
+#include <QFont>
+#include <QLayout>
 #include <QRect>
 #include <QVector>
 #include <QWidget>
@@ -404,6 +406,8 @@ private:
     void openUtilizationFloatingWindow(bool sidebarMode);
     void restoreUtilizationFloatingWindow();
     void resizeUtilizationFloatingWindow();
+    void applyUtilizationFloatingContentScale(bool forceRestyle = false);
+    void restoreUtilizationFloatingContentScale();
     void applyUtilizationFloatingTheme();
     void saveUtilizationFloatingPreferences();
     QWidget* utilizationChartBottomWidget(const UtilizationNavEntry& entry) const;
@@ -599,6 +603,28 @@ private:
     int m_utilizationSavedDetailIndex = -1;
     QPalette m_utilizationBorrowedPalette;
     bool m_utilizationBorrowedHadPalette = false;
+    QFont m_utilizationBorrowedFont;
+    bool m_utilizationBorrowedHadFont = false;
+    struct FloatingWidgetStyleState
+    {
+        QPointer<QWidget> widget;
+        QString styleSheet;
+        QPalette palette;
+        bool hadPalette = false;
+        int minimumHeight = 0;
+        int maximumHeight = QWIDGETSIZE_MAX;
+    };
+    struct FloatingLayoutStyleState
+    {
+        QPointer<QLayout> layout;
+        QMargins margins;
+        int spacing = 0;
+        int horizontalSpacing = 0;
+        int verticalSpacing = 0;
+    };
+    std::vector<FloatingWidgetStyleState> m_utilizationFloatingWidgetStyles;
+    std::vector<FloatingLayoutStyleState> m_utilizationFloatingLayoutStyles;
+    double m_utilizationFloatingAppliedContentScale = 1.0;
     QSize m_utilizationFloatingBaseSize;
     int m_utilizationFloatingScalePercent = 100;
     int m_utilizationFloatingBackgroundOpacityPercent = 100;

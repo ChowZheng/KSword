@@ -653,7 +653,7 @@ ks::settings::AppearanceSettings ks::settings::loadAppearanceSettings()
         .toBool(loadedSettings.backgroundTransparencyEnabled);
     loadedSettings.utilizationFloatingScalePercent = std::clamp(rootObject
         .value(QStringLiteral("utilization_floating_scale_percent"))
-        .toInt(loadedSettings.utilizationFloatingScalePercent), 50, 300);
+        .toInt(loadedSettings.utilizationFloatingScalePercent), 25, 300);
     loadedSettings.utilizationFloatingBackgroundOpacityPercent = std::clamp(rootObject
         .value(QStringLiteral("utilization_floating_background_opacity_percent"))
         .toInt(loadedSettings.utilizationFloatingBackgroundOpacityPercent), 0, 100);
@@ -908,7 +908,7 @@ bool ks::settings::saveAppearanceSettings(const AppearanceSettings& settings, QS
     rootObject.insert(QStringLiteral("background_opacity_percent"), clampOpacityPercent(settings.backgroundOpacityPercent));
     rootObject.insert(QStringLiteral("background_transparency_enabled"), settings.backgroundTransparencyEnabled);
     rootObject.insert(QStringLiteral("utilization_floating_scale_percent"),
-        std::clamp(settings.utilizationFloatingScalePercent, 50, 300));
+        std::clamp(settings.utilizationFloatingScalePercent, 25, 300));
     rootObject.insert(QStringLiteral("utilization_floating_background_opacity_percent"),
         std::clamp(settings.utilizationFloatingBackgroundOpacityPercent, 0, 100));
     rootObject.insert(QStringLiteral("utilization_floating_top_most"), settings.utilizationFloatingTopMost);
