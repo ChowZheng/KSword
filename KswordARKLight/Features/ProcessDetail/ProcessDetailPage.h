@@ -434,6 +434,7 @@ private:
 
     void SuspendSelectedThread();
     void ResumeSelectedThread();
+    void SetSelectedThreadSuspendedByR0(bool suspended);
     void TerminateSelectedThread();
     void TerminateSelectedThreadByR0();
     void ShowSelectedThreadSummary();
