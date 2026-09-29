@@ -594,7 +594,6 @@ private:
     QList<int> m_utilizationSavedSplitterSizes;
     int m_utilizationSavedDetailIndex = -1;
     QPoint m_utilizationDragStartGlobal;
-    QPoint m_utilizationDragStartWindow;
     QRect m_utilizationResizeStartGeometry;
     Qt::Edges m_utilizationResizeEdges;
     bool m_utilizationDragArmed = false;

@@ -3525,7 +3525,6 @@ bool HardwareDock::eventFilter(QObject* watchedObject, QEvent* eventObject)
                 if (windowPosition.y() < kResizeBorder) m_utilizationResizeEdges |= Qt::TopEdge;
                 if (windowPosition.y() >= floatingWindow->height() - kResizeBorder) m_utilizationResizeEdges |= Qt::BottomEdge;
                 m_utilizationDragStartGlobal = globalPosition;
-                m_utilizationDragStartWindow = floatingWindow->pos();
                 m_utilizationResizeStartGeometry = floatingWindow->geometry();
                 m_utilizationDragArmed = true;
                 m_utilizationDragging = false;
@@ -3559,11 +3558,27 @@ bool HardwareDock::eventFilter(QObject* watchedObject, QEvent* eventObject)
                 if (!m_utilizationDragging && delta.manhattanLength() >= QApplication::startDragDistance())
                 {
                     m_utilizationDragging = true;
-                }
-                if (m_utilizationDragging)
-                {
-                    floatingWindow->move(m_utilizationDragStartWindow + delta);
-                    return true;
+                    m_utilizationDragArmed = false;
+                    // Qt global mouse positions and QWidget positions are expressed in
+                    // different logical coordinate spaces after a per-monitor DPI change.
+                    // Let the window manager move the HWND so crossing monitors cannot
+                    // feed a rescaled delta back into its geometry on every mouse move.
+                    QWindow* const windowHandle = floatingWindow->windowHandle();
+                    if (windowHandle != nullptr && windowHandle->startSystemMove())
+                    {
+                        return true;
+                    }
+                    const HWND nativeHandle = reinterpret_cast<HWND>(floatingWindow->winId());
+                    if (nativeHandle != nullptr && ::IsWindow(nativeHandle) != FALSE)
+                    {
+                        POINT cursorPosition{};
+                        ::GetCursorPos(&cursorPosition);
+                        ::ReleaseCapture();
+                        ::SendMessageW(nativeHandle, WM_NCLBUTTONDOWN, HTCAPTION,
+                            MAKELPARAM(cursorPosition.x, cursorPosition.y));
+                        return true;
+                    }
+                    m_utilizationDragging = false;
                 }
             }
         }
