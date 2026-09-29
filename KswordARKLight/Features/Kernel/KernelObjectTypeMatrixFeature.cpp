@@ -10,8 +10,8 @@ KernelFeatureDescriptor CreateObjectTypeMatrixDescriptor() {
     descriptor.id = KernelFeatureId::ObjectTypeMatrix;
     descriptor.title = L"对象类型矩阵";
     descriptor.category = L"对象命名空间";
-    descriptor.summary = L"保留对象类型矩阵入口：NtQueryObject ObjectTypesInformation 只读类型统计。";
-    descriptor.backend = KernelFeatureBackend::UserModeNative;
+    descriptor.summary = L"合并 NtQueryObject 类型统计与 R0 ObTypeIndexTable 槽位、索引和名称验证。";
+    descriptor.backend = KernelFeatureBackend::Hybrid;
     descriptor.requiresAdministrator = false;
     descriptor.mayModifyKernelState = false;
     return descriptor;

@@ -186,7 +186,8 @@ std::vector<std::wstring> CanonicalColumnNames(const KernelFeatureId featureId) 
     case KernelFeatureId::DeviceDriverObjects:
         return { L"目录路径", L"对象名称", L"对象类型", L"完整路径", L"目标路径", L"状态", L"能力提示" };
     case KernelFeatureId::ObjectTypeMatrix:
-        return { L"类型编号", L"类型名", L"对象数", L"句柄数", L"访问掩码", L"枚举策略" };
+        return { L"类型编号", L"类型名", L"R0 对象地址", L"R0 交叉验证",
+            L"对象数", L"句柄数", L"访问掩码", L"枚举策略" };
     case KernelFeatureId::CommunicationEndpoint:
         return { L"来源目录", L"名称", L"类型", L"完整路径", L"状态" };
     case KernelFeatureId::AtomTable:
@@ -306,6 +307,8 @@ std::vector<std::wstring> ColumnAliases(const KernelFeatureId featureId, const s
     if (featureId == KernelFeatureId::ObjectTypeMatrix) {
         if (columnName == L"类型编号") return { L"TypeIndex", L"Index" };
         if (columnName == L"类型名") return { L"Type" };
+        if (columnName == L"R0 对象地址") return { L"R0Address" };
+        if (columnName == L"R0 交叉验证") return { L"R0Validation" };
         if (columnName == L"对象数") return { L"Objects" };
         if (columnName == L"句柄数") return { L"Handles" };
         if (columnName == L"访问掩码") return { L"ValidAccess" };

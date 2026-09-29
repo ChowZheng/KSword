@@ -6196,6 +6196,8 @@ void KernelPage::RebuildObjectNamespaceListFromCache(const KernelFeatureId featu
                 rawValue(row, { L"Objects" }) + L" | " +
                 rawValue(row, { L"Handles" }) + L" | " +
                 rawValue(row, { L"ValidAccess" }) + L" | " +
+                rawValue(row, { L"R0Address" }) + L" | " +
+                rawValue(row, { L"R0Validation" }) + L" | " +
                 rawValue(row, { L"Detail", L"Status" });
             return primaryFilter.empty() || ContainsCaseInsensitive(merged, primaryFilter);
         }
@@ -8931,6 +8933,10 @@ std::wstring KernelPage::BuildOriginalStyleSelectedRowDetail(const KernelFeature
                << L"对象数: " << cell({ L"对象数", L"Objects" }) << L"\r\n"
                << L"句柄数: " << cell({ L"句柄数", L"Handles" }) << L"\r\n"
                << L"访问掩码: " << cell({ L"访问掩码", L"ValidAccess" }) << L"\r\n"
+               << L"R0 对象地址: " << cell({ L"R0Address" }) << L"\r\n"
+               << L"R0 交叉验证: " << cell({ L"R0Validation" }) << L"\r\n"
+               << L"R0 状态: " << cell({ L"R0Status" }) << L"\r\n"
+               << L"R0 身份哈希: " << cell({ L"R0IdentityHash" }) << L"\r\n"
                << L"枚举策略: " << cell({ L"枚举策略", L"Detail", L"Status" }) << L"\r\n";
         return detail.str();
     }
