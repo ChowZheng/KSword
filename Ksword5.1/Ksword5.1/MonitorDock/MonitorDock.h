@@ -133,11 +133,13 @@ private:
     // - 调用：ETW 会话栏枚举、展示与停止指定会话时复用。
     struct EtwSessionEntry
     {
-        QString sessionName;
-        QString modeText;
-        QString bufferText;
-        quint32 eventsLost = 0;
-        QString logFilePath;
+        QString sessionName;   // 活动会话名称，用于按名称控制会话。
+        QString modeText;      // 会话模式的界面文本。
+        QString bufferText;    // 缓冲区配置的界面文本。
+        quint32 eventsLost = 0; // 枚举时的丢失事件数。
+        quint32 logFileMode = 0; // 原始 ETW 模式，供私有会话刷新缓冲区使用。
+        GUID sessionGuid{};    // 枚举得到的会话 GUID，供 ControlTrace 使用。
+        QString logFilePath;   // 会话写入的 ETL 文件路径。
     };
 
 public:
@@ -697,8 +699,17 @@ private:
 
     // ========================= ETW 功能 ==========================
     void refreshEtwProvidersAsync();
+    // applyEtwSystemProviderSearchFilter：
+    // - 作用：按系统 Provider 搜索框内容隐藏或显示右侧列表行；
+    // - 调用：搜索文本变化以及 Provider 刷新完成后调用；
+    // - 入参/出参：无（直接读取成员控件并更新行可见性）。
+    void applyEtwSystemProviderSearchFilter();
     void refreshEtwSessionsAsync();
     void stopSelectedEtwSessions();
+    // flushSelectedEtwSessions：按当前表格选择异步刷新 ETW 会话缓冲区；无参数和返回值。
+    void flushSelectedEtwSessions();
+    // showEtwSessionContextMenu：在会话表右键位置打开控制菜单；入参为表格局部坐标。
+    void showEtwSessionContextMenu(const QPoint& position);
     void startEtwCapture();
     void stopEtwCapture();
     void setEtwCapturePaused(bool paused);
@@ -980,7 +991,12 @@ private:
     QLabel* m_etwSessionStatusLabel = nullptr;       // ETW 会话状态标签。
     QTableWidget* m_etwSessionTable = nullptr;       // ETW 会话表。
     QComboBox* m_etwPresetCategoryCombo = nullptr;   // ETW 预置模板分类筛选下拉框。
+    QPushButton* m_etwPresetSelectAllButton = nullptr; // ETW 预置模板可见项全选按钮。
+    QPushButton* m_etwPresetClearAllButton = nullptr; // ETW 预置模板可见项全取消按钮。
     QListWidget* m_etwPresetProviderList = nullptr;  // ETW 预置常用 Provider 勾选列表。
+    QLineEdit* m_etwSystemProviderSearchEdit = nullptr; // ETW 系统 Provider 搜索框。
+    QPushButton* m_etwSystemProviderSelectAllButton = nullptr; // ETW 系统 Provider 可见项全选按钮。
+    QPushButton* m_etwSystemProviderClearAllButton = nullptr; // ETW 系统 Provider 可见项全取消按钮。
     QListWidget* m_etwProviderList = nullptr;        // ETW Provider 复选列表。
     QLineEdit* m_etwManualProviderEdit = nullptr;    // 手动输入 Provider。
     QComboBox* m_etwLevelCombo = nullptr;            // 级别设置。
