@@ -407,6 +407,7 @@ private:
     void openUtilizationFloatingWindow(bool sidebarMode);
     void restoreUtilizationFloatingWindow();
     void resizeUtilizationFloatingWindow();
+    void captureUtilizationFloatingScale();
     void applyUtilizationFloatingContentScale(bool forceRestyle = false);
     void restoreUtilizationFloatingContentScale();
     void applyUtilizationFloatingTheme();
@@ -415,6 +416,7 @@ private:
     void finishUtilizationWindowPick(void* pickedWindow);
     void attachUtilizationWindow(void* targetWindow, bool restoreSavedOffset);
     void synchronizeUtilizationFollow();
+    void captureUtilizationFollowOffset();
     void stopUtilizationFollow(bool showNormalCard, bool clearSavedTarget);
     void setUtilizationFollowClickThrough(bool enabled);
     void clearUtilizationFollowHooks();
@@ -641,6 +643,7 @@ private:
     QString m_utilizationFollowTitle;
     QString m_utilizationFollowExecutable;
     QPoint m_utilizationFollowOffset;
+    bool m_utilizationFollowOffsetLogical = false;
     bool m_utilizationFollowClickThrough = false;
     void* m_utilizationFollowTarget = nullptr;
     void* m_utilizationFollowEventHook = nullptr;

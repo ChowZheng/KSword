@@ -673,6 +673,8 @@ ks::settings::AppearanceSettings ks::settings::loadAppearanceSettings()
         .value(QStringLiteral("utilization_floating_follow_offset_x")).toInt();
     loadedSettings.utilizationFloatingFollowOffsetY = rootObject
         .value(QStringLiteral("utilization_floating_follow_offset_y")).toInt();
+    loadedSettings.utilizationFloatingFollowOffsetLogical = rootObject
+        .value(QStringLiteral("utilization_floating_follow_offset_logical")).toBool(false);
     loadedSettings.utilizationFloatingFollowClickThrough = rootObject
         .value(QStringLiteral("utilization_floating_follow_click_through")).toBool(false);
 
@@ -930,6 +932,8 @@ bool ks::settings::saveAppearanceSettings(const AppearanceSettings& settings, QS
     rootObject.insert(QStringLiteral("utilization_floating_follow_executable"), settings.utilizationFloatingFollowExecutable);
     rootObject.insert(QStringLiteral("utilization_floating_follow_offset_x"), settings.utilizationFloatingFollowOffsetX);
     rootObject.insert(QStringLiteral("utilization_floating_follow_offset_y"), settings.utilizationFloatingFollowOffsetY);
+    rootObject.insert(QStringLiteral("utilization_floating_follow_offset_logical"),
+        settings.utilizationFloatingFollowOffsetLogical);
     rootObject.insert(QStringLiteral("utilization_floating_follow_click_through"),
         settings.utilizationFloatingFollowClickThrough);
     rootObject.insert(

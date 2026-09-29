@@ -31,6 +31,7 @@
 #include <QAction>
 #include <QApplication>
 #include <QBrush>
+#include <QBoxLayout>
 #include <QClipboard>
 #include <QCoreApplication>
 #include <QContextMenuEvent>
@@ -42,6 +43,7 @@
 #include <QGuiApplication>
 #include <QHBoxLayout>
 #include <QGridLayout>
+#include <QHash>
 #include <QHeaderView>
 #include <QIcon>
 #include <QKeyEvent>
@@ -65,6 +67,7 @@
 #include <QRunnable>
 #include <QScrollArea>
 #include <QScreen>
+#include <QSpacerItem>
 #include <QScrollBar>
 #include <QShowEvent>
 #include <QSizePolicy>
@@ -106,9 +109,11 @@
 #include <PowrProf.h>
 #include <Psapi.h>
 #include <d3dkmthk.h>
+#include <dwmapi.h>
 #include <dxgi1_6.h>
 #include <iphlpapi.h>
 #include <netioapi.h>
+#include <shellscalingapi.h>
 
 #pragma comment(lib, "Pdh.lib")
 #pragma comment(lib, "PowrProf.lib")
@@ -116,9 +121,27 @@
 #pragma comment(lib, "Gdi32.lib")
 #pragma comment(lib, "Dxgi.lib")
 #pragma comment(lib, "Iphlpapi.lib")
+#pragma comment(lib, "Dwmapi.lib")
+#pragma comment(lib, "Shcore.lib")
 
 namespace
 {
+    void applyUtilizationScrollBarStyle(QListWidget* list, const double scale)
+    {
+        if (list == nullptr || list->verticalScrollBar() == nullptr) return;
+        const int width = std::clamp(qRound(10.0 * scale), 6, 24);
+        const int radius = std::max(2, width / 2 - 1);
+        const int minimumLength = std::max(16, qRound(28.0 * scale));
+        list->verticalScrollBar()->setStyleSheet(QStringLiteral(
+            "QScrollBar:vertical{border:none;background:transparent;width:%1px;margin:2px 1px;}"
+            "QScrollBar::handle:vertical{background:palette(midlight);border:none;"
+            "border-radius:%2px;min-height:%3px;}"
+            "QScrollBar::handle:vertical:hover{background:palette(highlight);}"
+            "QScrollBar::add-line:vertical,QScrollBar::sub-line:vertical{height:0px;border:none;}"
+            "QScrollBar::add-page:vertical,QScrollBar::sub-page:vertical{background:transparent;}"
+        ).arg(width).arg(radius).arg(minimumLength));
+    }
+
     // hardwareR0QueryMutex 用途：
     // - 串行化 HardwareDock 内的健康快照与设备审计 IOCTL；
     // - 避免自动刷新和快速切页同时向同一驱动设备提交大体积查询。
@@ -3357,6 +3380,23 @@ namespace
 
 namespace
 {
+    bool utilizationPhysicalWindowRect(HWND window, RECT* rect)
+    {
+        return window != nullptr && rect != nullptr
+            && (SUCCEEDED(::DwmGetWindowAttribute(window, DWMWA_EXTENDED_FRAME_BOUNDS,
+                    rect, sizeof(*rect))) || ::GetWindowRect(window, rect) != FALSE);
+    }
+
+    UINT utilizationMonitorDpi(HWND window)
+    {
+        const HMONITOR monitor = ::MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST);
+        UINT dpiX = 96, dpiY = 96;
+        if (monitor != nullptr
+            && SUCCEEDED(::GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &dpiX, &dpiY))
+            && dpiX != 0) return dpiX;
+        return 96;
+    }
+
     class UtilizationFloatingWindow final : public QWidget
     {
     public:
@@ -3378,6 +3418,11 @@ namespace
             update();
         }
 
+        void setMoveFinishedHandler(std::function<void(bool)> handler)
+        {
+            m_moveFinishedHandler = std::move(handler);
+        }
+
     protected:
         void paintEvent(QPaintEvent*) override
         {
@@ -3388,6 +3433,19 @@ namespace
         bool nativeEvent(const QByteArray& eventType, void* message, qintptr* result) override
         {
             MSG* const nativeMessage = static_cast<MSG*>(message);
+            if (nativeMessage != nullptr && nativeMessage->message == WM_ENTERSIZEMOVE)
+                m_nativeResized = false;
+            if (nativeMessage != nullptr && nativeMessage->message == WM_SIZING)
+                m_nativeResized = true;
+            if (nativeMessage != nullptr && nativeMessage->message == WM_EXITSIZEMOVE
+                && m_moveFinishedHandler)
+            {
+                const bool resized = m_nativeResized;
+                QTimer::singleShot(0, this, [handler = m_moveFinishedHandler, resized]()
+                {
+                    handler(resized);
+                });
+            }
             if (nativeMessage != nullptr && nativeMessage->message == WM_NCHITTEST
                 && !isMaximized() && result != nullptr)
             {
@@ -3418,40 +3476,431 @@ namespace
 
     private:
         QColor m_backgroundColor;
+        std::function<void(bool)> m_moveFinishedHandler;
+        bool m_nativeResized = false;
     };
 
     class UtilizationFollowMirror final : public QWidget
     {
     public:
-        explicit UtilizationFollowMirror(QWidget* source, QWidget* parent)
-            : QWidget(parent), m_source(source)
+        struct WidgetStyle
+        {
+            QString sheet;
+            int minimumHeight = 0;
+            int maximumHeight = QWIDGETSIZE_MAX;
+        };
+        struct LayoutStyle
+        {
+            QMargins margins;
+            int spacing = 0;
+            int horizontalSpacing = 0;
+            int verticalSpacing = 0;
+        };
+        using WidgetStyleLookup = std::function<WidgetStyle(const QWidget*)>;
+        using LayoutStyleLookup = std::function<LayoutStyle(const QLayout*)>;
+
+        UtilizationFollowMirror(QWidget* source, QWidget* parent,
+            WidgetStyleLookup widgetStyle, LayoutStyleLookup layoutStyle)
+            : QWidget(parent), m_source(source), m_widgetStyle(std::move(widgetStyle)),
+              m_layoutStyle(std::move(layoutStyle))
         {
             setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Expanding);
+            auto* const layout = new QVBoxLayout(this);
+            layout->setContentsMargins(0, 0, 0, 0);
+            layout->setSpacing(0);
+            rebuild();
         }
 
-    protected:
-        void paintEvent(QPaintEvent*) override
+        void synchronize()
         {
             QWidget* const source = m_source.data();
-            if (source == nullptr || source->width() <= 0 || source->height() <= 0)
+            if (source == nullptr) return;
+            int sourceChartCount = dynamic_cast<QChartView*>(source) != nullptr ? 1 : 0;
+            for (QWidget* const child : source->findChildren<QWidget*>())
+                if (dynamic_cast<QChartView*>(child) != nullptr) ++sourceChartCount;
+            if (m_sidebarSource == nullptr && sourceChartCount != m_charts.size())
             {
-                return;
+                rebuild();
             }
-            QPainter painter(this);
-            painter.scale(static_cast<qreal>(width()) / source->width(),
-                static_cast<qreal>(height()) / source->height());
-            source->render(&painter, QPoint(), QRegion(),
-                QWidget::DrawWindowBackground | QWidget::DrawChildren);
+            for (const auto& [from, to] : m_labels)
+            {
+                if (from != nullptr && to != nullptr && to->text() != from->text())
+                    to->setText(from->text());
+            }
+            for (const auto& [from, to] : m_memories)
+            {
+                if (from != nullptr && to != nullptr) to->copyDisplayFrom(*from);
+            }
+            for (const ChartCopy& chart : m_charts)
+            {
+                if (chart.from == nullptr || chart.to == nullptr) continue;
+                for (const auto& [from, to] : chart.lines)
+                {
+                    if (from != nullptr && to != nullptr)
+                    {
+                        to->replace(from->points());
+                        to->setPen(from->pen());
+                    }
+                }
+                for (const auto& [from, to] : chart.axes)
+                {
+                    if (from != nullptr && to != nullptr) to->setRange(from->min(), from->max());
+                }
+                for (const auto& [from, to] : chart.barSets)
+                {
+                    if (from == nullptr || to == nullptr) continue;
+                    const QVector<qreal> values = from->values();
+                    for (int index = 0; index < values.size(); ++index)
+                    {
+                        if (index < to->count()) to->replace(index, values[index]);
+                        else to->append(values[index]);
+                    }
+                }
+                chart.to->chart()->setTitle(chart.from->chart()->title());
+                chart.to->chart()->setTitleBrush(QBrush(KswordTheme::TextPrimaryColor()));
+                chart.to->chart()->legend()->setLabelColor(KswordTheme::TextSecondaryColor());
+            }
+            synchronizeSidebar();
         }
 
     private:
+        struct ChartCopy
+        {
+            QPointer<QChartView> from;
+            QPointer<QChartView> to;
+            std::vector<std::pair<QPointer<QLineSeries>, QPointer<QLineSeries>>> lines;
+            std::vector<std::pair<QPointer<QValueAxis>, QPointer<QValueAxis>>> axes;
+            std::vector<std::pair<QPointer<QBarSet>, QPointer<QBarSet>>> barSets;
+        };
+
+        QChartView* cloneChartView(QChartView* from, QWidget* parent)
+        {
+            QChart* const original = from->chart();
+            auto* const chart = new QChart();
+            chart->setTitle(original->title());
+            chart->setTitleBrush(QBrush(KswordTheme::TextPrimaryColor()));
+            chart->setTitleFont(original->titleFont());
+            chart->setBackgroundVisible(original->isBackgroundVisible());
+            chart->setBackgroundRoundness(original->backgroundRoundness());
+            chart->setBackgroundBrush(original->backgroundBrush());
+            chart->setMargins(original->margins());
+            chart->setPlotAreaBackgroundVisible(original->isPlotAreaBackgroundVisible());
+            chart->setPlotAreaBackgroundBrush(original->plotAreaBackgroundBrush());
+            chart->setPlotAreaBackgroundPen(original->plotAreaBackgroundPen());
+            chart->setAnimationOptions(QChart::NoAnimation);
+            chart->legend()->setVisible(original->legend()->isVisible());
+            chart->legend()->setAlignment(original->legend()->alignment());
+            chart->legend()->setLabelColor(KswordTheme::TextSecondaryColor());
+            chart->legend()->setFont(original->legend()->font());
+
+            QHash<const QAbstractAxis*, QAbstractAxis*> axes;
+            ChartCopy copy;
+            for (QAbstractAxis* const fromAxis : original->axes())
+            {
+                QAbstractAxis* toAxis = nullptr;
+                if (auto* const value = dynamic_cast<QValueAxis*>(fromAxis))
+                {
+                    auto* const clone = new QValueAxis(chart);
+                    clone->setRange(value->min(), value->max());
+                    copy.axes.emplace_back(value, clone);
+                    toAxis = clone;
+                }
+                else if (auto* const category = dynamic_cast<QBarCategoryAxis*>(fromAxis))
+                {
+                    auto* const clone = new QBarCategoryAxis(chart);
+                    clone->append(category->categories());
+                    toAxis = clone;
+                }
+                if (toAxis == nullptr) continue;
+                toAxis->setLabelsVisible(fromAxis->labelsVisible());
+                toAxis->setGridLineVisible(fromAxis->isGridLineVisible());
+                toAxis->setMinorGridLineVisible(fromAxis->isMinorGridLineVisible());
+                toAxis->setLineVisible(fromAxis->isLineVisible());
+                toAxis->setLabelsBrush(fromAxis->labelsBrush());
+                toAxis->setTitleBrush(fromAxis->titleBrush());
+                toAxis->setLinePen(fromAxis->linePen());
+                toAxis->setGridLinePen(fromAxis->gridLinePen());
+                toAxis->setTitleText(fromAxis->titleText());
+                toAxis->setLabelFormat(fromAxis->labelFormat());
+                chart->addAxis(toAxis, fromAxis->alignment());
+                axes.insert(fromAxis, toAxis);
+            }
+
+            QHash<const QLineSeries*, QLineSeries*> lines;
+            const auto cloneLine = [&lines, &copy, chart](QLineSeries* sourceLine) -> QLineSeries*
+            {
+                if (sourceLine == nullptr) return nullptr;
+                if (QLineSeries* const existing = lines.value(sourceLine)) return existing;
+                auto* const line = new QLineSeries(chart);
+                line->setName(sourceLine->name());
+                line->setPen(sourceLine->pen());
+                line->replace(sourceLine->points());
+                lines.insert(sourceLine, line);
+                copy.lines.emplace_back(sourceLine, line);
+                return line;
+            };
+            for (QAbstractSeries* const fromSeries : original->series())
+            {
+                QAbstractSeries* toSeries = nullptr;
+                if (auto* const area = dynamic_cast<QAreaSeries*>(fromSeries))
+                {
+                    auto* const clone = new QAreaSeries(
+                        cloneLine(area->upperSeries()), cloneLine(area->lowerSeries()), chart);
+                    clone->setPen(area->pen());
+                    clone->setBrush(area->brush());
+                    toSeries = clone;
+                }
+                else if (auto* const line = dynamic_cast<QLineSeries*>(fromSeries))
+                {
+                    toSeries = cloneLine(line);
+                }
+                else if (auto* const bars = dynamic_cast<QBarSeries*>(fromSeries))
+                {
+                    auto* const clone = new QBarSeries(chart);
+                    for (QBarSet* const fromSet : bars->barSets())
+                    {
+                        auto* const toSet = new QBarSet(fromSet->label(), clone);
+                        for (const qreal value : fromSet->values()) toSet->append(value);
+                        toSet->setBrush(fromSet->brush());
+                        toSet->setBorderColor(fromSet->borderColor());
+                        toSet->setLabelBrush(fromSet->labelBrush());
+                        clone->append(toSet);
+                        copy.barSets.emplace_back(fromSet, toSet);
+                    }
+                    toSeries = clone;
+                }
+                if (toSeries == nullptr) continue;
+                toSeries->setName(fromSeries->name());
+                chart->addSeries(toSeries);
+                for (QAbstractAxis* const attached : fromSeries->attachedAxes())
+                {
+                    if (QAbstractAxis* const toAxis = axes.value(attached))
+                        toSeries->attachAxis(toAxis);
+                }
+            }
+            auto* const view = new QChartView(chart, parent);
+            view->setFrameShape(QFrame::NoFrame);
+            view->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+            view->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+            view->setSizeAdjustPolicy(QAbstractScrollArea::AdjustIgnored);
+            view->setRenderHint(QPainter::Antialiasing);
+            view->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+            copy.from = from;
+            copy.to = view;
+            m_charts.push_back(std::move(copy));
+            return view;
+        }
+
+        QWidget* cloneWidget(QWidget* from, QWidget* parent)
+        {
+            QWidget* to = nullptr;
+            if (auto* const label = qobject_cast<QLabel*>(from))
+            {
+                auto* const copy = new QLabel(label->text(), parent);
+                copy->setTextFormat(label->textFormat());
+                copy->setAlignment(label->alignment());
+                copy->setWordWrap(label->wordWrap());
+                copy->setTextInteractionFlags(label->textInteractionFlags());
+                m_labels.emplace_back(label, copy);
+                to = copy;
+            }
+            else if (auto* const list = qobject_cast<QListWidget*>(from))
+            {
+                auto* const copy = new QListWidget(parent);
+                copy->setFrameShape(QFrame::NoFrame);
+                copy->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+                copy->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+                copy->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
+                copy->setSpacing(2);
+                copy->setMinimumWidth(140);
+                applyUtilizationScrollBarStyle(copy, 1.0);
+                m_sidebarSource = list;
+                m_sidebarCopy = copy;
+                connect(copy, &QListWidget::currentRowChanged, copy,
+                    [source = QPointer<QListWidget>(list)](int row)
+                    {
+                        if (source != nullptr && row >= 0) source->setCurrentRow(row);
+                    });
+                to = copy;
+            }
+            else if (auto* const area = qobject_cast<QScrollArea*>(from))
+            {
+                auto* const copy = new QScrollArea(parent);
+                copy->setWidgetResizable(area->widgetResizable());
+                copy->setFrameShape(area->frameShape());
+                copy->setHorizontalScrollBarPolicy(area->horizontalScrollBarPolicy());
+                copy->setVerticalScrollBarPolicy(area->verticalScrollBarPolicy());
+                if (area->widget() != nullptr)
+                    copy->setWidget(cloneWidget(area->widget(), copy));
+                to = copy;
+            }
+            else if (auto* const memory = dynamic_cast<MemoryCompositionHistoryWidget*>(from))
+            {
+                auto* const copy = new MemoryCompositionHistoryWidget(parent);
+                m_memories.emplace_back(memory, copy);
+                to = copy;
+            }
+            else if (auto* const chart = dynamic_cast<QChartView*>(from))
+            {
+                to = cloneChartView(chart, parent);
+            }
+            else if (auto* const frame = qobject_cast<QFrame*>(from))
+            {
+                auto* const copy = new QFrame(parent);
+                copy->setFrameShape(frame->frameShape());
+                to = copy;
+            }
+            else
+            {
+                to = new QWidget(parent);
+            }
+            to->setSizePolicy(from->sizePolicy());
+            const WidgetStyle style = m_widgetStyle(from);
+            to->setStyleSheet(style.sheet);
+            if (qobject_cast<QLabel*>(to) != nullptr && style.minimumHeight == style.maximumHeight
+                && style.maximumHeight > 0 && style.maximumHeight < 200)
+                to->setFixedHeight(style.maximumHeight);
+            if (from->layout() != nullptr)
+                to->setLayout(cloneLayout(from->layout(), to));
+            return to;
+        }
+
+        QLayout* cloneLayout(QLayout* from, QWidget* parent)
+        {
+            QLayout* to = nullptr;
+            if (auto* const grid = dynamic_cast<QGridLayout*>(from))
+            {
+                auto* const copy = new QGridLayout();
+                for (int index = 0; index < grid->count(); ++index)
+                {
+                    int row = 0, column = 0, rowSpan = 1, columnSpan = 1;
+                    grid->getItemPosition(index, &row, &column, &rowSpan, &columnSpan);
+                    QLayoutItem* const item = grid->itemAt(index);
+                    if (QWidget* const widget = item->widget())
+                    {
+                        copy->addWidget(cloneWidget(widget, parent),
+                            row, column, rowSpan, columnSpan, item->alignment());
+                    }
+                    else if (QLayout* const nested = item->layout())
+                        copy->addLayout(cloneLayout(nested, parent), row, column, rowSpan, columnSpan);
+                    else if (QSpacerItem* const spacer = item->spacerItem())
+                        copy->addItem(new QSpacerItem(spacer->sizeHint().width(),
+                            spacer->sizeHint().height(), spacer->sizePolicy().horizontalPolicy(),
+                            spacer->sizePolicy().verticalPolicy()), row, column, rowSpan, columnSpan);
+                }
+                for (int row = 0; row < grid->rowCount(); ++row)
+                    copy->setRowStretch(row, grid->rowStretch(row));
+                for (int column = 0; column < grid->columnCount(); ++column)
+                    copy->setColumnStretch(column, grid->columnStretch(column));
+                to = copy;
+            }
+            else if (auto* const box = dynamic_cast<QBoxLayout*>(from))
+            {
+                auto* const copy = new QBoxLayout(box->direction());
+                for (int index = 0; index < box->count(); ++index)
+                {
+                    QLayoutItem* const item = box->itemAt(index);
+                    if (QWidget* const widget = item->widget())
+                    {
+                        copy->addWidget(cloneWidget(widget, parent),
+                            box->stretch(index), item->alignment());
+                    }
+                    else if (QLayout* const nested = item->layout())
+                        copy->addLayout(cloneLayout(nested, parent), box->stretch(index));
+                    else if (QSpacerItem* const spacer = item->spacerItem())
+                        copy->addSpacerItem(new QSpacerItem(spacer->sizeHint().width(),
+                            spacer->sizeHint().height(), spacer->sizePolicy().horizontalPolicy(),
+                            spacer->sizePolicy().verticalPolicy()));
+                }
+                to = copy;
+            }
+            else return new QVBoxLayout();
+            const LayoutStyle style = m_layoutStyle(from);
+            to->setContentsMargins(style.margins);
+            to->setSpacing(style.spacing);
+            if (auto* const grid = dynamic_cast<QGridLayout*>(to))
+            {
+                grid->setHorizontalSpacing(style.horizontalSpacing);
+                grid->setVerticalSpacing(style.verticalSpacing);
+            }
+            return to;
+        }
+
+        void synchronizeSidebar()
+        {
+            QListWidget* const source = m_sidebarSource.data();
+            QListWidget* const copy = m_sidebarCopy.data();
+            if (source == nullptr || copy == nullptr) return;
+            while (copy->count() < source->count())
+            {
+                auto* const item = new QListWidgetItem();
+                auto* const card = new PerformanceNavCard(copy);
+                item->setSizeHint(QSize(0, card->sizeHint().height()));
+                copy->addItem(item);
+                copy->setItemWidget(item, card);
+            }
+            while (copy->count() > source->count()) delete copy->takeItem(copy->count() - 1);
+            for (int row = 0; row < source->count(); ++row)
+            {
+                auto* const from = dynamic_cast<PerformanceNavCard*>(
+                    source->itemWidget(source->item(row)));
+                auto* const to = dynamic_cast<PerformanceNavCard*>(
+                    copy->itemWidget(copy->item(row)));
+                if (from != nullptr && to != nullptr) to->copyDisplayFrom(*from);
+            }
+            if (copy->currentRow() != source->currentRow()) copy->setCurrentRow(source->currentRow());
+        }
+
+        void rebuild()
+        {
+            QWidget* const source = m_source.data();
+            if (source == nullptr) return;
+            QLayout* const layout = this->layout();
+            while (QLayoutItem* const item = layout->takeAt(0))
+            {
+                delete item->widget();
+                delete item;
+            }
+            m_labels.clear();
+            m_memories.clear();
+            m_charts.clear();
+            m_sidebarSource = nullptr;
+            m_sidebarCopy = nullptr;
+            layout->addWidget(cloneWidget(source, this));
+            synchronizeSidebar();
+        }
+
         QPointer<QWidget> m_source;
+        WidgetStyleLookup m_widgetStyle;
+        LayoutStyleLookup m_layoutStyle;
+        std::vector<std::pair<QPointer<QLabel>, QPointer<QLabel>>> m_labels;
+        std::vector<std::pair<QPointer<MemoryCompositionHistoryWidget>,
+            QPointer<MemoryCompositionHistoryWidget>>> m_memories;
+        std::vector<ChartCopy> m_charts;
+        QPointer<QListWidget> m_sidebarSource;
+        QPointer<QListWidget> m_sidebarCopy;
     };
 
     HHOOK utilizationPickHook = nullptr;
     std::function<void(HWND)> utilizationPickCallback;
     HWND utilizationFollowHookTarget = nullptr;
+    HWND utilizationFollowFloatHandle = nullptr;
     std::function<void(DWORD)> utilizationFollowCallback;
+
+    void utilizationRaiseFloatWithTarget()
+    {
+        const HWND target = utilizationFollowHookTarget;
+        const HWND card = utilizationFollowFloatHandle;
+        if (target == nullptr || card == nullptr || ::IsWindow(target) == FALSE
+            || ::IsWindow(card) == FALSE || ::IsWindowVisible(target) == FALSE
+            || ::IsWindowVisible(card) == FALSE || ::IsIconic(target) != FALSE
+            || (::GetWindowLongPtrW(target, GWL_EXSTYLE) & WS_EX_TOPMOST) != 0)
+            return;
+        const HWND preceding = ::GetWindow(target, GW_HWNDPREV);
+        if (preceding != card)
+            ::SetWindowPos(card, preceding != nullptr ? preceding : HWND_TOP,
+                0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+    }
 
     LRESULT CALLBACK utilizationMousePickProc(int code, WPARAM message, LPARAM data)
     {
@@ -3471,16 +3920,20 @@ namespace
         if (window == utilizationFollowHookTarget && objectId == OBJID_WINDOW
             && childId == CHILDID_SELF && utilizationFollowCallback)
         {
+            if (event == EVENT_OBJECT_REORDER || event == EVENT_OBJECT_SHOW)
+                utilizationRaiseFloatWithTarget();
             const auto callback = utilizationFollowCallback;
             QTimer::singleShot(0, qApp, [callback, event]() { callback(event); });
         }
     }
 
-    void CALLBACK utilizationForegroundEventProc(HWINEVENTHOOK, DWORD, HWND,
+    void CALLBACK utilizationForegroundEventProc(HWINEVENTHOOK, DWORD, HWND foreground,
         LONG, LONG, DWORD, DWORD)
     {
         if (utilizationFollowCallback)
         {
+            if (foreground == utilizationFollowHookTarget)
+                utilizationRaiseFloatWithTarget();
             const auto callback = utilizationFollowCallback;
             QTimer::singleShot(0, qApp, [callback]() { callback(EVENT_SYSTEM_FOREGROUND); });
         }
@@ -3783,18 +4236,6 @@ bool HardwareDock::eventFilter(QObject* watchedObject, QEvent* eventObject)
                 return true;
             }
         }
-        if (eventObject->type() == QEvent::Move && eventWidget == floatingWindow
-            && m_utilizationFollowTarget != nullptr && !m_utilizationFollowSyncing)
-        {
-            RECT targetRect{}, floatRect{};
-            if (::GetWindowRect(static_cast<HWND>(m_utilizationFollowTarget), &targetRect) != FALSE
-                && ::GetWindowRect(reinterpret_cast<HWND>(floatingWindow->winId()), &floatRect) != FALSE)
-            {
-                m_utilizationFollowOffset = QPoint(floatRect.left - targetRect.left,
-                    floatRect.top - targetRect.top);
-                m_utilizationPreferencesSaveTimer->start();
-            }
-        }
         if (eventObject->type() == QEvent::Resize && eventWidget == floatingWindow)
         {
             QTimer::singleShot(0, this, [this]()
@@ -3895,16 +4336,7 @@ bool HardwareDock::eventFilter(QObject* watchedObject, QEvent* eventObject)
                 m_utilizationPreferencesSaveTimer->start();
             }
             if (m_utilizationFollowTarget != nullptr && consumeRelease)
-            {
-                RECT targetRect{}, floatRect{};
-                if (::GetWindowRect(static_cast<HWND>(m_utilizationFollowTarget), &targetRect) != FALSE
-                    && ::GetWindowRect(reinterpret_cast<HWND>(floatingWindow->winId()), &floatRect) != FALSE)
-                {
-                    m_utilizationFollowOffset = QPoint(floatRect.left - targetRect.left,
-                        floatRect.top - targetRect.top);
-                    m_utilizationPreferencesSaveTimer->start();
-                }
-            }
+                captureUtilizationFollowOffset();
             m_utilizationDragArmed = false;
             m_utilizationDragging = false;
             m_utilizationResizeEdges = {};
@@ -3928,7 +4360,9 @@ bool HardwareDock::eventFilter(QObject* watchedObject, QEvent* eventObject)
                 ? m_utilizationSidebarList->viewport() : nullptr;
             if (sidebarViewport != nullptr
                 && (eventWidget == sidebarViewport || sidebarViewport->isAncestorOf(eventWidget)
-                    || eventWidget == m_utilizationFollowMirror))
+                    || eventWidget == m_utilizationFollowMirror
+                    || (m_utilizationFollowMirror != nullptr
+                        && m_utilizationFollowMirror->isAncestorOf(eventWidget))))
             {
                 if (m_utilizationFollowTarget != nullptr)
                 {
@@ -3949,39 +4383,6 @@ bool HardwareDock::eventFilter(QObject* watchedObject, QEvent* eventObject)
                 else openUtilizationFloatingWindow(false);
                 return true;
             }
-        }
-    }
-
-    if (m_utilizationFollowMirror != nullptr
-        && eventWidget == m_utilizationFollowMirror.data()
-        && m_utilizationFloatingMode == UtilizationFloatingMode::Sidebar
-        && m_utilizationSidebarList != nullptr && eventObject != nullptr)
-    {
-        if (eventObject->type() == QEvent::MouseButtonPress)
-        {
-            const auto* mouseEvent = static_cast<QMouseEvent*>(eventObject);
-            if (mouseEvent->button() == Qt::LeftButton)
-            {
-                const int sourceY = qRound(mouseEvent->position().y()
-                    * m_utilizationSidebarList->height()
-                    / std::max(1, eventWidget->height()));
-                if (QListWidgetItem* const item = m_utilizationSidebarList->itemAt(8, sourceY))
-                {
-                    m_utilizationSidebarList->setCurrentItem(item);
-                    eventWidget->update();
-                }
-                return true;
-            }
-        }
-        if (eventObject->type() == QEvent::Wheel)
-        {
-            const auto* wheelEvent = static_cast<QWheelEvent*>(eventObject);
-            if (QScrollBar* const bar = m_utilizationSidebarList->verticalScrollBar())
-            {
-                bar->setValue(bar->value() - wheelEvent->angleDelta().y());
-                eventWidget->update();
-            }
-            return true;
         }
     }
 
@@ -4239,6 +4640,7 @@ void HardwareDock::initializeUtilizationTab()
             "QListWidget::item{border:none;padding:0px;margin:0px;}"
             "QListWidget::item:selected{background:transparent;}"));
     appendTransparentBackgroundStyle(m_utilizationSidebarList);
+    applyUtilizationScrollBarStyle(m_utilizationSidebarList, 1.0);
     m_utilizationBodySplitter->addWidget(m_utilizationSidebarList);
 
     m_utilizationDetailStack = new QStackedWidget(m_utilizationBodySplitter);
@@ -4501,6 +4903,7 @@ void HardwareDock::openUtilizationFloatingWindow(const bool sidebarMode)
     m_utilizationFollowExecutable = preferences.utilizationFloatingFollowExecutable;
     m_utilizationFollowOffset = QPoint(preferences.utilizationFloatingFollowOffsetX,
         preferences.utilizationFloatingFollowOffsetY);
+    m_utilizationFollowOffsetLogical = preferences.utilizationFloatingFollowOffsetLogical;
     m_utilizationFollowClickThrough = preferences.utilizationFloatingFollowClickThrough;
 
     QSize initialSize(220, 320);
@@ -4544,9 +4947,17 @@ void HardwareDock::openUtilizationFloatingWindow(const bool sidebarMode)
     }
 
     QWidget* const floatingWindow = new UtilizationFloatingWindow(m_utilizationFloatingTopMost);
+    static_cast<UtilizationFloatingWindow*>(floatingWindow)->setMoveFinishedHandler(
+        [guard = QPointer<HardwareDock>(this)](const bool resized)
+        {
+            if (guard == nullptr) return;
+            if (resized) guard->captureUtilizationFloatingScale();
+            if (guard->m_utilizationFollowTarget != nullptr)
+                guard->captureUtilizationFollowOffset();
+        });
     floatingWindow->setMinimumSize(
-        std::max(sidebarMode ? 100 : 160, m_utilizationFloatingBaseSize.width() / 4),
-        std::max(100, m_utilizationFloatingBaseSize.height() / 4));
+        std::max(sidebarMode ? 1 : 160, m_utilizationFloatingBaseSize.width() / 4),
+        std::max(sidebarMode ? 1 : 100, m_utilizationFloatingBaseSize.height() / 4));
     QVBoxLayout* const floatingLayout = new QVBoxLayout(floatingWindow);
     // The borrowed chart page has its own size hints; they must not lock the
     // frameless top-level window to its initial dimensions.
@@ -4739,23 +5150,56 @@ void HardwareDock::attachUtilizationWindow(void* targetWindow, const bool restor
         return;
     }
     RECT targetRect{}, floatRect{};
-    if (::GetWindowRect(target, &targetRect) == FALSE
-        || ::GetWindowRect(reinterpret_cast<HWND>(floatingWindow->winId()), &floatRect) == FALSE)
+    if (!utilizationPhysicalWindowRect(target, &targetRect)
+        || !utilizationPhysicalWindowRect(reinterpret_cast<HWND>(floatingWindow->winId()), &floatRect))
     {
         return;
     }
     if (!restoreSavedOffset)
     {
-        m_utilizationFollowOffset = QPoint(floatRect.left - targetRect.left,
-            floatRect.top - targetRect.top);
+        const double logicalRatio = 96.0 / utilizationMonitorDpi(target);
+        m_utilizationFollowOffset = QPoint(
+            qRound((floatRect.left - targetRect.left) * logicalRatio),
+            qRound((floatRect.top - targetRect.top) * logicalRatio));
+        m_utilizationFollowOffsetLogical = true;
+    }
+    else if (!m_utilizationFollowOffsetLogical)
+    {
+        // Older settings stored physical pixels. Convert once using the current
+        // target monitor so future moves retain the same logical distance.
+        const double logicalRatio = 96.0 / utilizationMonitorDpi(target);
+        m_utilizationFollowOffset = QPoint(
+            qRound(m_utilizationFollowOffset.x() * logicalRatio),
+            qRound(m_utilizationFollowOffset.y() * logicalRatio));
+        m_utilizationFollowOffsetLogical = true;
     }
     m_utilizationFollowTitle = utilizationWindowTitle(target);
     m_utilizationFollowExecutable = utilizationWindowExecutable(target);
     m_utilizationFollowTarget = target;
+    const auto originalWidgetStyle = [this](const QWidget* widget)
+        -> UtilizationFollowMirror::WidgetStyle
+    {
+        for (const FloatingWidgetStyleState& state : m_utilizationFloatingWidgetStyles)
+            if (state.widget == widget)
+                return { state.styleSheet, state.minimumHeight, state.maximumHeight };
+        return { widget->styleSheet(), widget->minimumHeight(), widget->maximumHeight() };
+    };
+    const auto originalLayoutStyle = [this](const QLayout* layout)
+        -> UtilizationFollowMirror::LayoutStyle
+    {
+        for (const FloatingLayoutStyleState& state : m_utilizationFloatingLayoutStyles)
+            if (state.layout == layout)
+                return { state.margins, state.spacing,
+                    state.horizontalSpacing, state.verticalSpacing };
+        return { layout->contentsMargins(), layout->spacing(),
+            layout->spacing(), layout->spacing() };
+    };
     QWidget* const mirror = new UtilizationFollowMirror(source,
         m_utilizationFloatingMode == UtilizationFloatingMode::Sidebar
             ? static_cast<QWidget*>(m_utilizationBodySplitter)
-            : static_cast<QWidget*>(m_utilizationDetailStack));
+            : static_cast<QWidget*>(m_utilizationDetailStack),
+        originalWidgetStyle, originalLayoutStyle);
+    mirror->setFont(m_utilizationBorrowedFont);
     m_utilizationFollowMirror = mirror;
     if (m_utilizationFloatingMode == UtilizationFloatingMode::Sidebar)
     {
@@ -4775,6 +5219,7 @@ void HardwareDock::attachUtilizationWindow(void* targetWindow, const bool restor
     ::SetWindowPos(floatHandle, HWND_NOTOPMOST, 0, 0, 0, 0,
         SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
     utilizationFollowHookTarget = target;
+    utilizationFollowFloatHandle = floatHandle;
     const QPointer<HardwareDock> guard(this);
     utilizationFollowCallback = [guard, target](DWORD event)
     {
@@ -4815,6 +5260,7 @@ void HardwareDock::clearUtilizationFollowHooks()
         m_utilizationFollowForegroundHook = nullptr;
     }
     utilizationFollowHookTarget = nullptr;
+    utilizationFollowFloatHandle = nullptr;
     utilizationFollowCallback = {};
     if (m_utilizationFollowTimer != nullptr) m_utilizationFollowTimer->stop();
 }
@@ -4853,15 +5299,21 @@ void HardwareDock::synchronizeUtilizationFollow()
                 QStringLiteral("置顶窗口不可跟随")));
         return;
     }
-    if (m_utilizationFollowMirror != nullptr) m_utilizationFollowMirror->update();
     if (::IsWindowVisible(target) == FALSE || ::IsIconic(target) != FALSE)
     {
         floatingWindow->hide();
+        if (m_utilizationFollowMirror != nullptr)
+            static_cast<UtilizationFollowMirror*>(m_utilizationFollowMirror.data())->synchronize();
         return;
     }
-    if (m_utilizationDragArmed || m_utilizationDragging) return;
+    if (m_utilizationDragArmed || m_utilizationDragging)
+    {
+        if (m_utilizationFollowMirror != nullptr)
+            static_cast<UtilizationFollowMirror*>(m_utilizationFollowMirror.data())->synchronize();
+        return;
+    }
     RECT targetRect{};
-    if (::GetWindowRect(target, &targetRect) == FALSE) return;
+    if (!utilizationPhysicalWindowRect(target, &targetRect)) return;
     m_utilizationFollowSyncing = true;
     if (!floatingWindow->isVisible()) floatingWindow->show();
     const HWND floatHandle = reinterpret_cast<HWND>(floatingWindow->winId());
@@ -4872,12 +5324,41 @@ void HardwareDock::synchronizeUtilizationFollow()
     }
     HWND preceding = ::GetWindow(target, GW_HWNDPREV);
     const bool alreadyAboveTarget = preceding == floatHandle;
-    ::SetWindowPos(floatHandle, alreadyAboveTarget ? nullptr
+    const int desiredX = targetRect.left
+        + qRound(m_utilizationFollowOffset.x() * utilizationMonitorDpi(target) / 96.0);
+    const int desiredY = targetRect.top
+        + qRound(m_utilizationFollowOffset.y() * utilizationMonitorDpi(target) / 96.0);
+    RECT floatRect{};
+    const bool alreadyPositioned = utilizationPhysicalWindowRect(floatHandle, &floatRect)
+        && floatRect.left == desiredX && floatRect.top == desiredY;
+    if (!alreadyPositioned || !alreadyAboveTarget)
+    {
+        ::SetWindowPos(floatHandle, alreadyAboveTarget ? nullptr
             : preceding != nullptr ? preceding : HWND_TOP,
-        targetRect.left + m_utilizationFollowOffset.x(),
-        targetRect.top + m_utilizationFollowOffset.y(), 0, 0,
-        SWP_NOSIZE | SWP_NOACTIVATE | (alreadyAboveTarget ? SWP_NOZORDER : 0));
+            desiredX, desiredY, 0, 0,
+            SWP_NOSIZE | SWP_NOACTIVATE | (alreadyAboveTarget ? SWP_NOZORDER : 0)
+                | (alreadyPositioned ? SWP_NOMOVE : 0));
+    }
     m_utilizationFollowSyncing = false;
+    if (m_utilizationFollowMirror != nullptr)
+        static_cast<UtilizationFollowMirror*>(m_utilizationFollowMirror.data())->synchronize();
+}
+
+void HardwareDock::captureUtilizationFollowOffset()
+{
+    HWND target = static_cast<HWND>(m_utilizationFollowTarget);
+    QWidget* const floatingWindow = m_utilizationFloatingWindow.data();
+    if (target == nullptr || floatingWindow == nullptr || m_utilizationFollowSyncing) return;
+    RECT targetRect{}, floatRect{};
+    if (!utilizationPhysicalWindowRect(target, &targetRect)
+        || !utilizationPhysicalWindowRect(reinterpret_cast<HWND>(floatingWindow->winId()), &floatRect))
+        return;
+    const double logicalRatio = 96.0 / utilizationMonitorDpi(target);
+    m_utilizationFollowOffset = QPoint(
+        qRound((floatRect.left - targetRect.left) * logicalRatio),
+        qRound((floatRect.top - targetRect.top) * logicalRatio));
+    m_utilizationFollowOffsetLogical = true;
+    m_utilizationPreferencesSaveTimer->start();
 }
 
 void HardwareDock::stopUtilizationFollow(const bool showNormalCard, const bool clearSavedTarget)
@@ -4907,6 +5388,7 @@ void HardwareDock::stopUtilizationFollow(const bool showNormalCard, const bool c
         m_utilizationFollowTitle.clear();
         m_utilizationFollowExecutable.clear();
         m_utilizationFollowOffset = {};
+        m_utilizationFollowOffsetLogical = true;
         m_utilizationFollowClickThrough = false;
     }
     m_utilizationPreferencesSaveTimer->start();
@@ -5055,6 +5537,20 @@ void HardwareDock::resizeUtilizationFloatingWindow()
         std::max(workArea.top(), workArea.bottom() - geometry.height() + 1)));
     floatingWindow->setGeometry(geometry);
     applyUtilizationFloatingContentScale();
+}
+
+void HardwareDock::captureUtilizationFloatingScale()
+{
+    QWidget* const floatingWindow = m_utilizationFloatingWindow.data();
+    if (floatingWindow == nullptr || m_utilizationFloatingBaseSize.isEmpty()) return;
+    const double widthRatio = static_cast<double>(floatingWindow->width())
+        / m_utilizationFloatingBaseSize.width();
+    const double heightRatio = static_cast<double>(floatingWindow->height())
+        / m_utilizationFloatingBaseSize.height();
+    m_utilizationFloatingScalePercent = std::clamp(
+        qRound(std::min(widthRatio, heightRatio) * 100.0), 25, 300);
+    applyUtilizationFloatingContentScale();
+    m_utilizationPreferencesSaveTimer->start();
 }
 
 void HardwareDock::applyUtilizationFloatingContentScale(const bool forceRestyle)
@@ -5226,6 +5722,7 @@ void HardwareDock::applyUtilizationFloatingContentScale(const bool forceRestyle)
         && m_utilizationSidebarList != nullptr)
     {
         m_utilizationSidebarList->setMinimumWidth(std::max(1, scaledPx(140)));
+        applyUtilizationScrollBarStyle(m_utilizationSidebarList, scale);
         syncUtilizationSidebarCardWidths();
     }
     else
@@ -5294,6 +5791,7 @@ void HardwareDock::restoreUtilizationFloatingContentScale()
         && m_utilizationSidebarList != nullptr)
     {
         m_utilizationSidebarList->setMinimumWidth(140);
+        applyUtilizationScrollBarStyle(m_utilizationSidebarList, 1.0);
     }
     m_utilizationFloatingWidgetStyles.clear();
     m_utilizationFloatingLayoutStyles.clear();
@@ -5378,6 +5876,7 @@ void HardwareDock::saveUtilizationFloatingPreferences()
     preferences.utilizationFloatingFollowExecutable = m_utilizationFollowExecutable;
     preferences.utilizationFloatingFollowOffsetX = m_utilizationFollowOffset.x();
     preferences.utilizationFloatingFollowOffsetY = m_utilizationFollowOffset.y();
+    preferences.utilizationFloatingFollowOffsetLogical = m_utilizationFollowOffsetLogical;
     preferences.utilizationFloatingFollowClickThrough = m_utilizationFollowClickThrough;
     ks::settings::saveAppearanceSettings(preferences);
 }

@@ -15019,6 +15019,7 @@
     "Shell 打开失败": "Shell open failed",
     "Shell 扩展白名单": "Shell extension whitelist",
     "Shell32.lib": "Shell32.lib",
+    "Shcore.lib": "Shcore.lib",
     "ShellDelayLoad": "ShellDelayLoad",
     "ShellDelayLoadUser": "ShellDelayLoadUser",
     "ShellExecute Hooks": "ShellExecute Hooks",

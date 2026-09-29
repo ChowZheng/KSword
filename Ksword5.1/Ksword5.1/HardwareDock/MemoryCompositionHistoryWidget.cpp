@@ -119,6 +119,20 @@ void MemoryCompositionHistoryWidget::clearSamples()
     update();
 }
 
+void MemoryCompositionHistoryWidget::copyDisplayFrom(const MemoryCompositionHistoryWidget& source)
+{
+    m_sampleAnimation->stop();
+    m_historyLength = source.m_historyLength;
+    m_sampleList = source.m_sampleList;
+    m_previousSampleCount = source.m_previousSampleCount;
+    m_historyWindowShifted = source.m_historyWindowShifted;
+    m_previousSample = source.m_previousSample;
+    m_animationProgress = source.m_animationProgress;
+    m_hasPreviousSample = source.m_hasPreviousSample;
+    m_floatingScaleFactor = 1.0;
+    update();
+}
+
 void MemoryCompositionHistoryWidget::setFloatingScaleFactor(const double factor)
 {
     m_floatingScaleFactor = std::clamp(factor, 0.25, 3.0);

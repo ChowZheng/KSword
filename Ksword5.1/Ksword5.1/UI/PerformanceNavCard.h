@@ -65,6 +65,7 @@ public:
 
     // clearSamples 作用：清空缩略折线历史数据。
     void clearSamples();
+    void copyDisplayFrom(const PerformanceNavCard& source);
 
     // sizeHint 作用：给 QListWidgetItem 提供推荐尺寸。
     [[nodiscard]] QSize sizeHint() const override;

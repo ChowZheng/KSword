@@ -190,6 +190,30 @@ void PerformanceNavCard::clearSamples()
     update();
 }
 
+void PerformanceNavCard::copyDisplayFrom(const PerformanceNavCard& source)
+{
+    m_sampleAnimation->stop();
+    m_titleText = source.m_titleText;
+    m_subtitleText = source.m_subtitleText;
+    m_accentColor = source.m_accentColor;
+    m_primarySeriesColor = source.m_primarySeriesColor;
+    m_secondarySeriesColor = source.m_secondarySeriesColor;
+    m_selected = source.m_selected;
+    m_primarySeriesFollowsAccentColor = source.m_primarySeriesFollowsAccentColor;
+    m_secondarySeriesVisible = source.m_secondarySeriesVisible;
+    m_primarySamples = source.m_primarySamples;
+    m_secondarySamples = source.m_secondarySamples;
+    m_maxSampleCount = source.m_maxSampleCount;
+    m_previousSampleCount = source.m_previousSampleCount;
+    m_historyWindowShifted = source.m_historyWindowShifted;
+    m_previousPrimarySample = source.m_previousPrimarySample;
+    m_previousSecondarySample = source.m_previousSecondarySample;
+    m_animationProgress = source.m_animationProgress;
+    m_floatingScaleFactor = 1.0;
+    m_floatingThemeSurface = {};
+    update();
+}
+
 void PerformanceNavCard::startLatestSampleAnimation(
     const double previousPrimarySample,
     const double previousSecondarySample)

@@ -33,6 +33,7 @@ public:
 
     // clearSamples 作用：清空历史采样，供未来重置采样窗口使用。
     void clearSamples();
+    void copyDisplayFrom(const MemoryCompositionHistoryWidget& source);
     void setFloatingScaleFactor(double factor);
 
 protected:

@@ -124,6 +124,7 @@ namespace ks::settings
         QString utilizationFloatingFollowExecutable;
         int utilizationFloatingFollowOffsetX = 0;
         int utilizationFloatingFollowOffsetY = 0;
+        bool utilizationFloatingFollowOffsetLogical = false;
         bool utilizationFloatingFollowClickThrough = false;
         QString backgroundTranslucencyMaterial = QStringLiteral("auto");
         int backgroundBlurRadiusPercent = 0;
