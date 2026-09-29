@@ -344,6 +344,9 @@
     <ClCompile Include="Features\Monitor\MonitorFeature.cpp">
       <Filter>Features\Monitor</Filter>
     </ClCompile>
+    <ClCompile Include="Features\Monitor\CallbackMonitorView.cpp">
+      <Filter>Features\Monitor</Filter>
+    </ClCompile>
     <ClCompile Include="Features\Network\NetworkFeature.cpp">
       <Filter>Features\Network</Filter>
     </ClCompile>
@@ -663,6 +666,9 @@
     <ClCompile Include="..\Ksword5.1\Ksword5.1\ArkDriverClient\ArkDriverCallback.cpp">
       <Filter>ArkDriverClient</Filter>
     </ClCompile>
+    <ClCompile Include="..\Ksword5.1\Ksword5.1\ArkDriverClient\ArkDriverCallbackMonitor.cpp">
+      <Filter>ArkDriverClient</Filter>
+    </ClCompile>
     <ClCompile Include="..\Ksword5.1\Ksword5.1\ArkDriverClient\ArkDriverBugcheck.cpp">
       <Filter>ArkDriverClient</Filter>
     </ClCompile>
@@ -972,6 +978,9 @@
       <Filter>Features\Monitor</Filter>
     </ClInclude>
     <ClInclude Include="Features\Monitor\MonitorFeature.h">
+      <Filter>Features\Monitor</Filter>
+    </ClInclude>
+    <ClInclude Include="Features\Monitor\CallbackMonitorView.h">
       <Filter>Features\Monitor</Filter>
     </ClInclude>
     <ClInclude Include="Features\Network\NetworkFeature.h">
