@@ -11,11 +11,15 @@
 #include "../Framework.h"
 
 #include <QStringList>
+#include <QPointer>
+#include <QPoint>
+#include <QRect>
 #include <QVector>
 #include <QWidget>
 
 #include <atomic>   // std::atomic_bool：异步探测任务互斥。
 #include <cstdint>  // std::uint64_t：保存采样累计值与时间戳。
+#include <utility>
 #include <vector>   // std::vector：保存每核图表与采样数据。
 
 class CodeEditorWidget;
@@ -396,6 +400,10 @@ private:
     void syncUtilizationSidebarCardWidths();
     void syncUtilizationSidebarSelection(int selectedRowIndex);
     void adjustUtilizationChartHeights();
+    void openUtilizationFloatingWindow(bool sidebarMode);
+    void restoreUtilizationFloatingWindow();
+    QWidget* utilizationChartBottomWidget(const UtilizationNavEntry& entry) const;
+    std::vector<QWidget*> utilizationDetailWidgets(const UtilizationNavEntry& entry) const;
     PerformanceNavCard* addUtilizationSidebarCard(
         QWidget* detailPage,
         const QString& titleText,
@@ -577,6 +585,20 @@ private:
     QListWidget* m_utilizationSidebarList = nullptr; // m_utilizationSidebarList：左侧性能卡片列表。
     QStackedWidget* m_utilizationDetailStack = nullptr; // m_utilizationDetailStack：右侧详情页栈。
     std::vector<UtilizationNavEntry> m_utilizationNavEntries; // m_utilizationNavEntries：左侧卡片到右侧页的映射。
+    enum class UtilizationFloatingMode { None, Sidebar, Detail };
+    UtilizationFloatingMode m_utilizationFloatingMode = UtilizationFloatingMode::None;
+    QPointer<QWidget> m_utilizationFloatingWindow;
+    QPointer<QWidget> m_utilizationFloatingPage;
+    QPointer<QWidget> m_utilizationOriginalMainWindow;
+    std::vector<std::pair<QPointer<QWidget>, bool>> m_utilizationHiddenDetailWidgets;
+    QList<int> m_utilizationSavedSplitterSizes;
+    int m_utilizationSavedDetailIndex = -1;
+    QPoint m_utilizationDragStartGlobal;
+    QPoint m_utilizationDragStartWindow;
+    QRect m_utilizationResizeStartGeometry;
+    Qt::Edges m_utilizationResizeEdges;
+    bool m_utilizationDragArmed = false;
+    bool m_utilizationDragging = false;
 
     // 左侧性能卡片。
     PerformanceNavCard* m_cpuNavCard = nullptr;      // m_cpuNavCard：CPU 导航卡片。
