@@ -1,4 +1,5 @@
 #include "ProcessDetailPage.h"
+#include "../../../Ksword5.1/Ksword5.1/ArkDriverClient/ArkDriverClient.h"
 
 #include <sddl.h>
 #include <winternl.h>
@@ -197,9 +198,41 @@ ProcessTokenReportSnapshot CollectTokenReportSnapshot(
     HANDLE rawToken = nullptr;
     if (!::OpenProcessToken(process.get(), TOKEN_QUERY, &rawToken)) {
         const DWORD error = ::GetLastError();
-        snapshot.statusText = L"● 刷新失败：无法打开目标令牌";
-        snapshot.reportText = L"OpenProcessToken failed: " + std::to_wstring(error);
-        snapshot.editorStatusText = L"行:1 列:1 字符:0 文件:<未命名> 模式:只读 编码:UTF-16";
+        const ksword::ark::ProcessTokenPrivilegeResult r0 =
+            ksword::ark::DriverClient().queryProcessTokenPrivileges(
+                processId, expectedProcessCreationTime100ns);
+        if (r0.io.ok &&
+            (r0.status == KSWORD_ARK_PROCESS_TOKEN_PRIVILEGE_STATUS_OK ||
+                r0.status == KSWORD_ARK_PROCESS_TOKEN_PRIVILEGE_STATUS_PARTIAL)) {
+            std::wostringstream report;
+            report << L"[Token Privileges / R0 Fallback]\r\nPID: " << processId
+                   << L"\r\nOpenProcessToken failed: " << error
+                   << L"\r\nR0 PrivilegeCount: " << r0.entries.size() << L"\r\n";
+            for (const ksword::ark::ProcessTokenPrivilegeEntry& entry : r0.entries) {
+                LUID luid{};
+                luid.LowPart = entry.luidLowPart;
+                luid.HighPart = entry.luidHighPart;
+                wchar_t name[256]{};
+                DWORD length = static_cast<DWORD>(std::size(name));
+                ::LookupPrivilegeNameW(nullptr, &luid, name, &length);
+                report << L"  - " << (*name ? name : L"<unknown>") << L" ["
+                       << ((entry.attributes & SE_PRIVILEGE_ENABLED) ? L"Enabled" : L"Disabled")
+                       << L"]\r\n";
+            }
+            if (r0.status == KSWORD_ARK_PROCESS_TOKEN_PRIVILEGE_STATUS_PARTIAL) {
+                report << L"R0 返回了部分特权结果。\r\n";
+            }
+            snapshot.reportText = report.str();
+            snapshot.statusText = L"● R3 令牌不可访问，已通过 R0 读取特权列表。";
+            snapshot.succeeded = true;
+        } else {
+            snapshot.statusText = L"● 刷新失败：R3 与 R0 均无法读取目标令牌特权";
+            snapshot.reportText = L"OpenProcessToken failed: " + std::to_wstring(error) +
+                L"\r\nR0 status: " + std::to_wstring(r0.status);
+        }
+        snapshot.editorStatusText = L"行:1 列:1 字符:" +
+            std::to_wstring(snapshot.reportText.size()) +
+            L" 文件:<未命名> 模式:只读 编码:UTF-16";
         return snapshot;
     }
 
