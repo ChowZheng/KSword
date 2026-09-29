@@ -1146,24 +1146,30 @@ ProcessActionResult ExecuteProcessAction(
         return result;
     }
 
-    if (actionId == ProcessActionId::R0SuspendProcess) {
+    if (actionId == ProcessActionId::R0SuspendProcess ||
+        actionId == ProcessActionId::R0ResumeProcess) {
+        const bool suspend = actionId == ProcessActionId::R0SuspendProcess;
         ProcessActionResult result;
-        result.title = L"R0挂起进程";
+        result.title = suspend ? L"R0挂起进程" : L"R0恢复进程";
         result.success = true;
         const ksword::ark::DriverClient driverClient;
         for (const ProcessSnapshotRow& target : buildActionTargets(selectedPids)) {
             const DWORD pid = target.processId;
             if (IsProtectedSystemPid(pid)) {
-                AppendIoLine(result.detail, pid, L"R0 suspend", false, L"protected system PID");
+                AppendIoLine(result.detail, pid, suspend ? L"R0 suspend" : L"R0 resume", false, L"protected system PID");
                 result.success = false;
                 continue;
             }
             Ksword::Core::UniqueHandle identityHold;
-            if (!HoldProcessIdentityForDriverAction(target, L"R0 suspend", true, result, identityHold)) {
+            if (!HoldProcessIdentityForDriverAction(target,
+                    suspend ? L"R0 suspend" : L"R0 resume", true, result, identityHold)) {
                 continue;
             }
-            const ksword::ark::IoResult io = driverClient.suspendProcess(static_cast<std::uint32_t>(pid));
-            AppendIoLine(result.detail, pid, L"R0 suspend", io.ok, Utf8ToWide(io.message));
+            const ksword::ark::IoResult io = suspend
+                ? driverClient.suspendProcess(static_cast<std::uint32_t>(pid))
+                : driverClient.resumeProcess(static_cast<std::uint32_t>(pid));
+            AppendIoLine(result.detail, pid, suspend ? L"R0 suspend" : L"R0 resume",
+                io.ok, Utf8ToWide(io.message));
             result.success = result.success && io.ok;
         }
         return result;

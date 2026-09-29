@@ -2566,6 +2566,7 @@ void ShowContextMenu(ProcessViewState& state, POINT screenPoint) {
     appendAction(r0Menu, ProcessActionId::R0TerminateProcess, L"R0结束进程", hasProcessSelection);
     appendAction(r0Menu, ProcessActionId::R0TerminateProcessTree, L"R0结束进程树", hasProcessSelection);
     appendAction(r0Menu, ProcessActionId::R0SuspendProcess, L"R0挂起进程", hasProcessSelection);
+    appendAction(r0Menu, ProcessActionId::R0ResumeProcess, L"R0恢复进程", hasProcessSelection);
     appendAction(r0Menu, ProcessActionId::RefreshPplProtectionLevel, L"刷新PPL保护级别", hasProcessSelection);
 
     HMENU pplMenu = ::CreatePopupMenu();

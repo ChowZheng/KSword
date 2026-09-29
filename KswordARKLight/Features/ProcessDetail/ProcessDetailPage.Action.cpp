@@ -138,11 +138,12 @@ bool ProcessDetailPage::CreateActionTab() {
     AddButton(tab, ActionEfficiencyOn, L"开效率", 110, 274, 94, 32);
     AddButton(tab, ActionEfficiencyOff, L"关效率", 212, 274, 94, 32);
     AddLabel(tab, 0, L"R0", 18, 314, 88, 28);
-    AddButton(tab, ActionR0Terminate, L"R0结束", 110, 312, 92, 32);
-    AddButton(tab, ActionR0Suspend, L"R0挂起", 210, 312, 92, 32);
-    AddButton(tab, ActionR0Ppl, L"R0 PPL", 310, 312, 92, 32);
-    AddButton(tab, ActionR0Hide, L"R0隐藏", 410, 312, 92, 32);
-    AddButton(tab, ActionR0Danger, L"R0危险", 510, 312, 92, 32);
+    AddButton(tab, ActionR0Terminate, L"R0结束", 110, 312, 76, 32);
+    AddButton(tab, ActionR0Suspend, L"R0挂起", 190, 312, 76, 32);
+    AddButton(tab, ActionR0Resume, L"R0恢复", 270, 312, 76, 32);
+    AddButton(tab, ActionR0Ppl, L"R0 PPL", 350, 312, 76, 32);
+    AddButton(tab, ActionR0Hide, L"R0隐藏", 430, 312, 76, 32);
+    AddButton(tab, ActionR0Danger, L"R0危险", 510, 312, 76, 32);
 
     AddGroup(tab, L"注入与载入", 6, 374, -6, 180);
     AddLabel(tab, 0, L"模式", 18, 400, 88, 28);
@@ -245,6 +246,7 @@ bool ProcessDetailPage::HandleActionCommand(int controlId) {
     case ActionEfficiencyOff: ExecuteProcessAction(static_cast<int>(ProcessActionId::DisableEfficiencyMode)); return true;
     case ActionR0Terminate: ExecuteProcessAction(static_cast<int>(ProcessActionId::R0TerminateProcess)); return true;
     case ActionR0Suspend: ExecuteProcessAction(static_cast<int>(ProcessActionId::R0SuspendProcess)); return true;
+    case ActionR0Resume: ExecuteProcessAction(static_cast<int>(ProcessActionId::R0ResumeProcess)); return true;
     case ActionR0Ppl: {
         HMENU menu = ::CreatePopupMenu();
         // 顺序与进程列表右键菜单一致：先 PPL(Type=1)，再完整 PP(Type=2)。

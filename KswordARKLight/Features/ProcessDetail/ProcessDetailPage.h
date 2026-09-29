@@ -107,6 +107,7 @@ private:
         ActionBrowseShellcode,
         ActionInjectShellcode,
         ActionStatus = 1330,
+        ActionR0Resume = 1360,
 
         ModuleRefresh = 1400,
         ModuleVerifySignature,
