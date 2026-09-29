@@ -845,6 +845,8 @@ namespace ksword::ark
             row.dispatchAddress = static_cast<std::uint64_t>(sourceEntry.dispatchAddress);
             row.moduleBase = static_cast<std::uint64_t>(sourceEntry.moduleBase);
             row.moduleName = fixedKernelWideToString(sourceEntry.moduleName, KSWORD_ARK_DRIVER_MODULE_NAME_CHARS);
+            // 槽位地址供"谁改了这张表"的监视用；旧驱动不回填它，保持 0。
+            row.slotAddress = static_cast<std::uint64_t>(sourceEntry.slotAddress);
             queryResult.majorFunctions.push_back(std::move(row));
         }
 

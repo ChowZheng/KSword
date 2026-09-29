@@ -27,6 +27,14 @@
 #include "../../../shared/driver/KswordArkThreadIoctl.h"
 
 // 前置声明：减少头文件依赖，提升编译速度。
+// applyKernelFieldWatch 按 const 引用收下 R0 详情，前置声明即可；
+// 完整定义只有 ProcessDetailWindow.HvmWatch.cpp 需要，不必让每个包含这份
+// 头文件的翻译单元都背上整套驱动客户端类型。
+namespace ksword::ark
+{
+    struct ProcessRuntimeDetailResult;
+}
+
 class QCheckBox;
 class QButtonGroup;
 class QComboBox;
@@ -387,6 +395,34 @@ private:
     // 参数：无。
     // 返回：无。
     void initializeKernelObjectTab();
+
+    // KernelFieldWatchTarget：「HVM 内存监视」那一组按钮各自盯什么。
+    //
+    // 分成六个而不是一个带参数的通用项：它们回答的是六个不同的问题，地址来源、
+    // 长度语义和失败原因都不一样，合成一个只会让每个调用点都要写一串它用不到
+    // 的参数，而「哪个零是哪一项」正是最容易写错又最难看出来的地方。
+    enum class KernelFieldWatchTarget
+    {
+        ActiveProcessLinks, // EPROCESS.ActiveProcessLinks，两个指针
+        TokenSlot,          // EPROCESS.Token 那个 EX_FAST_REF 槽位，一个指针
+        TokenObject,        // 槽位指向的 _TOKEN 对象基址所在页（可被多进程共享）
+        Protection,         // Protection / SignatureLevel / SectionSignatureLevel 三字节
+        ImageFileName,      // EPROCESS 里那个短进程名
+        ProcessObjectPte,   // EPROCESS 基址所在页的页表项
+    };
+
+    // startKernelFieldWatch：重新向 R0 问一次地址与偏移，然后建监视。
+    //
+    // 每次都重新问而不是复用上一次刷新的结果：进程可能已经退出，EPROCESS 可能
+    // 已经被回收，用旧地址装监视会盯到一页已经属于别人的内存。查询是阻塞
+    // IOCTL，所以放后台线程。
+    void startKernelFieldWatch(KernelFieldWatchTarget target);
+
+    // applyKernelFieldWatch：拿到 R0 详情之后把它换算成一条监视请求。
+    // 在 UI 线程执行。失败一律写进状态行说明原因，不静默返回。
+    void applyKernelFieldWatch(
+        const ksword::ark::ProcessRuntimeDetailResult& detail,
+        KernelFieldWatchTarget target);
     // initializeHotkeyTab 作用：
     // - 构建“进程热键”页面；
     // - 覆盖窗口激活热键、菜单快捷键、PE Accelerator 资源和 .lnk 快捷方式热键。
@@ -942,6 +978,14 @@ private:
     QLabel* m_kernelObjectObjectTableOffsetValue = nullptr; // ObjectTable 偏移。
     QLabel* m_kernelObjectSectionObjectOffsetValue = nullptr; // SectionObject 偏移。
     QPushButton* m_refreshSectionInfoButton = nullptr; // 刷新 Section/ControlArea 按钮。
+    // HVM 内存监视入口。六个按钮对应六个不同的问题，不是同一件事的六个粒度。
+    QPushButton* m_watchActiveProcessLinksButton = nullptr; // 谁把进程摘出活动链表。
+    QPushButton* m_watchTokenSlotButton = nullptr;          // 谁换掉了这个进程的令牌。
+    QPushButton* m_watchTokenObjectButton = nullptr;        // 谁改了令牌自身的内容。
+    QPushButton* m_watchProtectionButton = nullptr;         // 谁改了 PPL 保护级别。
+    QPushButton* m_watchImageNameButton = nullptr;          // 谁改了 EPROCESS 里的进程名。
+    QPushButton* m_watchProcessPteButton = nullptr;         // 谁改了 EPROCESS 那一页的映射。
+    QLabel* m_watchStatusLabel = nullptr;                   // 地址换算结果与失败原因。
     QLabel* m_sectionInfoStatusLabel = nullptr; // Section/ControlArea 查询状态。
     CodeEditorWidget* m_sectionInfoOutput = nullptr; // Section/ControlArea 详情文本输出。
     bool m_sectionInfoRefreshing = false; // Section 查询是否进行中。

@@ -13,6 +13,23 @@
   <PropertyGroup Label="Globals">
     <ProjectGuid>{DB322F56-140F-4CBF-8CF4-2D89B3DD293E}</ProjectGuid>
     <Keyword>QtVS_v304</Keyword>
+    <!--
+      显式要求 64 位宿主的编译器与链接器。
+
+      为什么不能靠默认：Microsoft.Cpp.ToolsetLocation.props 只在
+      PROCESSOR_ARCHITECTURE 为 AMD64 时才把 PreferredToolArchitecture 定成
+      x64，而仓库约定使用的是 "Program Files (x86)" 下那个**32 位** MSBuild，
+      它自己就是 32 位进程，看到的 PROCESSOR_ARCHITECTURE 是 x86。于是默认
+      条件恒不成立，整条工具链退回 HostX86 —— 那个链接器有 2 GiB 地址空间上
+      限，这个工程的 LTCG 代码生成阶段已经撞上去了（qbasicatomic.h 上报
+      "编译器的堆空间不足" C1002，随后链接器自己重启成 64 位再来一遍）。
+
+      这不是 AGENTS.md 里禁止的那几种绕法：那一条禁止的是改用
+      amd64\MSBuild.exe、换 LLVM、换 TargetName —— 那些是换一个构建入口来
+      躲开问题。这里换的是**工程声明自己要用哪套工具**，与调用方用哪个
+      MSBuild 无关，32 位和 64 位 MSBuild 下结果一致。
+    -->
+    <PreferredToolArchitecture>x64</PreferredToolArchitecture>
     <WindowsTargetPlatformVersion Condition="'$(Configuration)|$(Platform)' == 'Debug|x64'">10.0</WindowsTargetPlatformVersion>
     <WindowsTargetPlatformVersion Condition="'$(Configuration)|$(Platform)' == 'Release|x64'">10.0</WindowsTargetPlatformVersion>
     <QtMsBuild Condition="'$(QtMsBuild)' == '' and '$(KSWORD_QT_MSBUILD)' != '' and Exists('$(KSWORD_QT_MSBUILD)\qt.targets')">$(KSWORD_QT_MSBUILD)</QtMsBuild>
@@ -263,6 +280,9 @@
     <ClCompile Include="MainWindow.Kvm.cpp" />
     <ClCompile Include="MiscDock\BootEditor\BootEditorTab.Actions.cpp" />
     <ClCompile Include="MiscDock\ApplicationControlPage.cpp" />
+    <ClCompile Include="MiscDock\ClipboardGuard\ClipboardGuardPage.cpp" />
+    <ClCompile Include="MiscDock\ClipboardGuard\ClipboardGuardPage.Session.cpp" />
+    <ClCompile Include="MiscDock\ClipboardGuard\ClipboardGuardPage.RuleEditor.cpp" />
     <ClCompile Include="MiscDock\SoundSource\SoundSourceDetector.cpp" />
     <ClCompile Include="MiscDock\SoundSource\SoundSourcePage.cpp" />
     <ClCompile Include="MiscDock\RenderBenchmark\RenderBenchmarkPage.cpp" />
@@ -310,6 +330,14 @@
     <ClCompile Include="MemoryDock\MemoryDock.ProcessRegion.cpp" />
     <ClCompile Include="MemoryDock\MemoryDock.SearchParseAndFilter.cpp" />
     <ClCompile Include="MemoryDock\MemoryDock.SearchFlow.cpp" />
+    <ClCompile Include="MemoryDock\PhysicalPageScan.cpp" />
+    <ClCompile Include="MemoryDock\PhysicalPageMappings.cpp" />
+    <ClCompile Include="MemoryDock\PhysicalPageAttributionPage.cpp" />
+    <ClCompile Include="MemoryDock\MemoryAttributionChart.cpp" />
+    <ClCompile Include="MemoryDock\HyperVMemoryEvidence.cpp" />
+    <ClCompile Include="MemoryDock\HyperVMemoryProviders.cpp" />
+    <ClCompile Include="MemoryDock\HyperVMemoryPage.cpp" />
+    <ClCompile Include="ArkDriverClient\ArkDriverPfn.cpp" />
     <ClCompile Include="MemoryDock\SystemMemoryAuditPage.cpp" />
     <ClCompile Include="MemoryDock\MemoryAccessBackend.cpp" />
     <ClCompile Include="MemoryDock\DdmaPage.cpp" />
@@ -468,8 +496,12 @@
     <ClCompile Include="UI\KvmMsrPolicyDialog.cpp" />
     <ClCompile Include="UI\KvmProcessDialog.cpp" />
     <ClCompile Include="UI\KvmWatch.cpp" />
+    <ClCompile Include="UI\KvmWatchEvidence.cpp" />
     <ClCompile Include="UI\KvmWatchPanel.cpp" />
+    <ClCompile Include="UI\KvmWatchPanel.Evidence.cpp" />
     <ClCompile Include="UI\KvmWatchDialog.cpp" />
+    <ClCompile Include="UI\KvmWatchEventDialog.cpp" />
+    <ClCompile Include="ProcessDock\ProcessDetailWindow.HvmWatch.cpp" />
     <ClCompile Include="UI\KvmEventDialog.cpp" />
     <ClCompile Include="UI\KvmCrPolicyDialog.cpp" />
     <ClCompile Include="UI\CommandExecutionPopup.cpp" />
@@ -561,6 +593,7 @@
     <ClCompile Include="ArkDriverClient\ArkDriverCapabilities.cpp" />
     <ClCompile Include="ArkDriverClient\ArkDriverProcess.cpp" />
     <ClCompile Include="ArkDriverClient\ArkDriverProcessProtect.cpp" />
+    <ClCompile Include="ArkDriverClient\ArkDriverClipboardPolicy.cpp" />
     <ClCompile Include="ArkDriverClient\ArkDriverWorkQueue.cpp" />
     <ClCompile Include="ArkDriverClient\ArkDriverHandle.cpp" />
     <ClCompile Include="ArkDriverClient\ArkDriverAlpc.cpp" />
@@ -696,6 +729,8 @@
     <ClInclude Include="UI\KvmWriteAccessGate.h" />
     <ClInclude Include="UI\KvmHookPlan.h" />
     <ClInclude Include="UI\KvmControl.h" />
+    <ClInclude Include="UI\KvmWatchPanel.h" />
+    <ClInclude Include="UI\KvmWatchEventDialog.h" />
     <ClInclude Include="UI\EmbeddedRowDelegate.h" />
     <ClInclude Include="UI\DetailLayoutHost.h" />
     <ClInclude Include="UI\DetailLayoutRegistry.h" />
@@ -734,6 +769,16 @@
     <QtMoc Include="KernelDock\KernelDock.CallbackPromptManager.h" />
     <QtMoc Include="MemoryDock\MemoryDock.h" />
     <ClInclude Include="MemoryDock\MemoryDock.Internal.h" />
+    <ClInclude Include="MemoryDock\PhysicalPageScan.h" />
+    <ClInclude Include="MemoryDock\PhysicalPageMappings.h" />
+    <ClInclude Include="MemoryDock\PhysicalPageAttributionPage.h" />
+    <ClInclude Include="MemoryDock\MemoryAttributionChart.h" />
+    <ClInclude Include="MemoryDock\HyperVMemoryEvidence.h" />
+    <ClInclude Include="MemoryDock\HyperVMemoryPage.h" />
+    <ClInclude Include="ArkDriverClient\ArkDriverPfn.h" />
+    <ClInclude Include="..\..\shared\evidence\PfnAccounting.h" />
+    <ClInclude Include="..\..\shared\driver\KswordArkPfnIoctl.h" />
+    <ClInclude Include="..\..\third_party\systeminformer_dyn\PfnNative.h" />
     <ClInclude Include="MemoryDock\SystemMemoryAuditPage.h" />
     <ClInclude Include="MemoryDock\MemoryAccessBackend.h" />
     <ClInclude Include="MemoryDock\DdmaPage.h" />
@@ -762,6 +807,7 @@
     <ClInclude Include="MiscDock\DiskEditor\DiskEditorTab.h" />
     <QtMoc Include="MiscDock\DiskEditor\DiskMapWidget.h" />
     <QtMoc Include="MiscDock\MiscDock.h" />
+    <QtMoc Include="MiscDock\ClipboardGuard\ClipboardGuardPage.h" />
     <ClInclude Include="MinidumpDock\DumpAnalyzer.h" />
     <ClInclude Include="MinidumpDock\DumpByteView.h" />
     <ClInclude Include="MinidumpDock\DumpBugCheckText.h" />

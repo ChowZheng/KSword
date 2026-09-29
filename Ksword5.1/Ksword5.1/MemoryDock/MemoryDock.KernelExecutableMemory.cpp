@@ -312,8 +312,29 @@ namespace
             QAction* const watchExecute = watchMenu->addAction(QStringLiteral("执行"));
             QAction* const watchRead = watchMenu->addAction(QStringLiteral("读取"));
             watchMenu->setEnabled(rowAddress != 0ULL);
+            /*
+             * 另加一条：谁改了这一页的**映射**。
+             *
+             * 与上面三条问的不是一件事。上面盯页里的内容，这一条盯指向这一页
+             * 的那一项 PTE——一段可执行内核内存被整页重映射到别处时，页里一个
+             * 字节都不用改，上面三条永远不会响。
+             */
+            QAction* const watchPte = menu.addAction(
+                QStringLiteral("HVM 监视这一页的页表项（谁改了它的映射）"));
+            watchPte->setEnabled(rowAddress != 0ULL);
+            watchPte->setToolTip(QStringLiteral(
+                "盯的不是这一页的内容，而是指向它的那一项页表项。整页被重映射时内容不变，只有这一项会被改。"));
 
             QAction* const chosen = menu.exec(table->viewport()->mapToGlobal(localPosition));
+            if (chosen == watchPte && rowAddress != 0ULL)
+            {
+                ks::ui::openHvmWatchOnPte(
+                    table,
+                    rowAddress,
+                    QStringLiteral("可执行内核内存 %1")
+                        .arg(rowAddress, 16, 16, QLatin1Char('0')));
+                return;
+            }
             if (chosen == copyRowAction)
             {
                 QClipboard* clipboard = QApplication::clipboard();

@@ -27,6 +27,7 @@
     <ClCompile Include="..\Ksword5.1\Ksword5.1\ArkDriverClient\ArkDriverBlind.cpp"><Filter>源文件\ArkDriverClient</Filter></ClCompile>
     <ClCompile Include="..\Ksword5.1\Ksword5.1\ArkDriverClient\ArkDriverBugcheck.cpp"><Filter>源文件\ArkDriverClient</Filter></ClCompile>
     <ClCompile Include="..\Ksword5.1\Ksword5.1\ArkDriverClient\ArkDriverCallbackMonitor.cpp"><Filter>源文件\ArkDriverClient</Filter></ClCompile>
+    <ClCompile Include="..\Ksword5.1\Ksword5.1\ArkDriverClient\ArkDriverClipboardPolicy.cpp"><Filter>源文件\ArkDriverClient</Filter></ClCompile>
     <ClCompile Include="..\Ksword5.1\Ksword5.1\ArkDriverClient\ArkDriverDebugOutput.cpp"><Filter>源文件\ArkDriverClient</Filter></ClCompile>
     <ClCompile Include="..\Ksword5.1\Ksword5.1\ArkDriverClient\ArkDriverError.cpp"><Filter>源文件\ArkDriverClient</Filter></ClCompile>
     <ClCompile Include="..\Ksword5.1\Ksword5.1\ArkDriverClient\ArkDriverFile.cpp"><Filter>源文件\ArkDriverClient</Filter></ClCompile>

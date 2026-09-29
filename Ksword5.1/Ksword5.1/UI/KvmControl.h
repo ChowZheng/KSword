@@ -706,17 +706,112 @@ namespace ksword::kvm
     // rearmWatch：把一条已命中或已失效的 watch 重新武装，保留标识与历史。
     KvmWatchResult rearmWatch(unsigned long watchId);
 
-    // removeWatch/clearWatches：移除。clearWatches 复用 EPT 规则的 CLEAR，
-    // 因此会连同普通 EPT 规则一起清掉——调用点必须把这一点说给用户听。
+    // removeWatch：按编号撤销一条 watch 并恢复该页权限。受写权限门约束。
     KvmWatchResult removeWatch(unsigned long watchId);
+
+    // clearWatches：清空整张表。受写权限门约束。
+    //
+    // 它复用 EPT 规则的 CLEAR 操作，因此**会连同普通 EPT 规则一起清掉**——
+    // watch 与规则本来就是同一张表里的东西，协议里没有"只清 watch"这个操作。
+    // 调用点必须把这一点原样说给用户听：把它描述成"清空监视"，用户就会在
+    // 不知情的情况下丢掉自己装的 tripwire，而那件事没有任何提示。
+    KvmWatchResult clearWatches();
+
+    // KvmWatchHitEventKind：一次"去事件环里找这条 watch 的命中事件"的结果分类。
+    //
+    // 四态而不是"找到/没找到"：后三种都会表现为"看不到事件"，而它们要人做的
+    // 事完全不同——从未命中是结论，被挤出环是证据丢失（目标**确实**被动过），
+    // 环读不出来是这次查询自己没跑起来。压成一态就等于把"目标没被访问"这句
+    // 没有根据的话说给了用户。
+    enum class KvmWatchHitEventKind
+    {
+        // 这条 watch 从来没有命中过，所以没有事件可找。
+        NeverHit = 0,
+        // 事件还在环里，已经取回来了。
+        Found,
+        // watch 自己记着命中过，但那一行已经被后来的事件挤出了环。
+        Evicted,
+        // 环没读出来：驱动没在、常驻没跑、查询失败。
+        Unavailable,
+    };
+
+    // KvmWatchHitEvent：上面那次查询的完整结果。
+    struct KvmWatchHitEvent
+    {
+        KvmWatchHitEventKind kind = KvmWatchHitEventKind::NeverHit;
+        // kind 为 Found 时有效，是命中那一刻写进环里的整行。
+        KvmEventEntry event;
+        // 查询当时环里最新的序号，用来解释 Evicted：它比命中序号大多少，
+        // 就是这条证据被推走之前还剩多少行。
+        unsigned long long newestSequence = 0;
+        // 本次快照里被覆盖或不可用的行数，非零说明消费跟不上。
+        unsigned long droppedRows = 0;
+        // 面向用户的一句话说明，四态各自不同。
+        QString message;
+    };
+
+    // findWatchHitEvent：去事件环里找某条 watch 最近一次命中的那一行。
+    //
+    // watch 表自己已经存了 RIP / RSP / CR3 / GLA / GPA / 时间 / CPU，所以这一步
+    // **不是**为了拿那些字段；它要的是只存在于事件行里的东西——尤其是
+    // qualification（退出限定符，watch 行里没有这个字段）与事件序号的上下文。
+    //
+    // 入参 entry 用 watch 表快照里那一行：函数按它的 lastHitStatus 与
+    // lastHitSequence 决定要不要去读环，以及读不到时该判 Evicted 还是 NeverHit。
+    KvmWatchHitEvent findWatchHitEvent(const KvmWatchEntry& entry);
+
+    // ——— 目标标签 ———
+    //
+    // 协议里没有标签字段：watch 行是驱动存的，而"\Driver\Foo 的
+    // MajorFunction[IRP_MJ_DEVICE_CONTROL]"是一句只对人有意义的话，让内核背着
+    // 它没有任何收益。所以标签存在 R3 这一侧，按 watchId 索引。
+    //
+    // 但 watchId 是驱动分配的 ruleId，**会在驱动重载后从头开始**。只按编号存，
+    // 下一次装的另一条 watch 就会顶着上一条的描述显示出来——那不是缺了信息，
+    // 是显示了一句错的。所以每条标签同时存一份身份指纹（地址种类、请求地址、
+    // 请求长度、监视页），取回时逐项比对，对不上就当没有标签。
+
+    // rememberWatchLabel：记下一条 watch 的人话标签。
+    // entry 必须是安装成功后驱动回填的那一行（watchId 与监视页都已确定）。
+    // label 为空时等价于 forgetWatchLabel。
+    void rememberWatchLabel(const KvmWatchEntry& entry, const QString& label);
+
+    // watchLabel：取回标签。没存过、或身份指纹对不上时返回空串。
+    QString watchLabel(const KvmWatchEntry& entry);
+
+    // forgetWatchLabel：撤销 watch 时一并丢掉它的标签。
+    void forgetWatchLabel(unsigned long watchId);
+
+    // forgetAllWatchLabels：清空整张表时一并丢掉全部标签。
+    void forgetAllWatchLabels();
 
     // KvmWatchAttribution：把一个客户 RIP 归到某个已加载内核模块上。
     //
     // 只做"地址落在哪个模块的映像范围里"这一步。它在 R3 普通上下文做，不在
     // VMX root 做：那里解析 Windows 对象是拿整台机器冒险，而这一步晚几毫秒
     // 做完全不影响结论。
+    // KvmWatchAttributionKind：模块归因的四态。
+    //
+    // 与进程归因同一套分法，理由也一样：三种"没归出来"必须分开。把
+    // "这个地址确实不在任何已加载模块里"（一条可疑读数，值得继续查）和
+    // "这次查询自己没跑起来"（什么都没问出来）显示成同一句话，会让后者被
+    // 当成前者去读——那是把一次失败伪装成结论。
+    enum class KvmWatchAttributionKind
+    {
+        // 没有地址可归（传进来的是 0）。
+        Unavailable = 0,
+        // 地址落在某个已加载模块的映像范围内。
+        Resolved,
+        // 模块表读到了，逐个比过，这个地址不在任何模块里。这是结论。
+        NotFound,
+        // 模块表根本没读出来：符号解析不到、长度问不出、两次查询都失败。
+        Failed,
+    };
+
     struct KvmWatchAttribution
     {
+        KvmWatchAttributionKind kind = KvmWatchAttributionKind::Unavailable;
+        // resolved：kind == Resolved 的别名，保留给只关心"有没有模块名"的调用点。
         bool resolved = false;
         QString moduleName;
         QString modulePath;
@@ -739,8 +834,15 @@ namespace ksword::kvm
     };
 
     // attributeKernelAddress：把一个内核地址归到模块。
-    // 归不到任何已加载模块时 resolved 为假——那是一条结论（"未知可执行区域"），
-    // 不是失败，调用方应当据此提供打开内存/反汇编的入口而不是只显示 Unknown。
+    //
+    // 返回四态，调用方必须按态分开措辞：
+    //   Resolved     给出模块名与模块内偏移（有导出符号时还给符号）。
+    //   NotFound     模块表读到了、比过了，这个地址不在任何已加载模块里。这是
+    //                一条结论（"未知可执行区域"），本身就值得怀疑，所以要提供
+    //                打开内存 / 打开反汇编 / 查看所在页的入口，而不是只写 Unknown。
+    //   Failed       模块表没读出来。这时**不能**说"不属于任何模块"——那句话
+    //                没有根据。要说的是"这次归因没跑起来"。
+    //   Unavailable  没有地址可归。
     KvmWatchAttribution attributeKernelAddress(unsigned long long address);
 
     // KvmProcessAttribution：把命中现场的 CR3 归到一个进程上。
@@ -787,6 +889,19 @@ namespace ksword::kvm
     // describeWatchState/describeWatchAccess：把协议值翻译成可直接显示的文字。
     QString describeWatchState(unsigned long state);
     QString describeWatchAccess(unsigned long access);
+    // describeWatchHitTime：把命中时刻的性能计数值说成一句人能读的话。
+    //
+    // 驱动在 VM-exit 现场记的是 KeQueryPerformanceCounter 的计数，**不是**墙钟
+    // 时间——VMX root 里没有可以安全调用的时间转换例程。这个函数用用户态的
+    // QueryPerformanceCounter（读的是同一个系统级计数源）把它倒推成墙钟时间，
+    // 并且**在返回的文字里标明它是换算来的**：计数源在睡眠前后可能被重置，
+    // 而且换算发生在查看的那一刻而不是命中的那一刻。把它显示成一个干净的
+    // 时间戳，等于声称记下了一件没有记过的事。
+    //
+    // 入参 ticks：watch 行里的 lastHitTimestamp，零表示没采集。
+    // 返回：一行说明文字；换算不成立时只回报原始计数并说明原因。
+    QString describeWatchHitTime(unsigned long long ticks);
+
     // describeWatchConflict：冲突时说清楚是谁占着这一页。
     QString describeWatchConflict(unsigned long ownerKind, unsigned long ownerId);
 }

@@ -27,6 +27,7 @@
     <ClCompile Include="MemoryEvidenceTests.cpp"><Filter>Tests</Filter></ClCompile>
     <ClCompile Include="InjectionSurveyTests.cpp"><Filter>Tests</Filter></ClCompile>
     <ClCompile Include="HvmEptSwitchTests.cpp"><Filter>Tests</Filter></ClCompile>
+    <ClCompile Include="HvmWatchTests.cpp"><Filter>Tests</Filter></ClCompile>
     <ClCompile Include="HookPatchComposeTests.cpp"><Filter>Tests</Filter></ClCompile>
     <ClCompile Include="..\shared\evidence\HookPatchCompose.cpp"><Filter>Production\Evidence</Filter></ClCompile>
     <ClCompile Include="..\shared\evidence\PageTableWalk.cpp"><Filter>Production\Evidence</Filter></ClCompile>

@@ -1200,7 +1200,7 @@ namespace ksword::kvm
                 // 驱动把四种校验都归到这个码上，所以文案要把四种一起说出来，
                 // 否则用户只能靠猜来分辨是地址写错了还是版本对不上。
                 reason = ks::i18n::sourceText(
-                    QStringLiteral("请求被判为无效：目标物理地址未按四 KiB 页对齐、或超出驱动映射上界八 TiB、或协议版本与结构大小与驱动不符、或指定的代次与当前代次不一致"));
+                    QStringLiteral("请求被判为无效：目标物理地址未按四 KiB 页对齐、或超出驱动映射上界 64 TiB、或协议版本与结构大小与驱动不符、或指定的代次与当前代次不一致"));
                 break;
             case KSWORD_ARK_HVM_VIEW_STATUS_CONFIRMATION_REQUIRED:
                 reason = ks::i18n::sourceText(QStringLiteral("需要显式确认"));

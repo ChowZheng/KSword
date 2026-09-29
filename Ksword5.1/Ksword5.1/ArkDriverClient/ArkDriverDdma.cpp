@@ -120,6 +120,17 @@ namespace ksword::ark
         translateResult.virtualAddress = static_cast<std::uint64_t>(info.virtualAddress);
         translateResult.physicalAddress = static_cast<std::uint64_t>(info.physicalAddress);
         translateResult.cr3PhysicalAddress = static_cast<std::uint64_t>(info.cr3PhysicalAddress);
+        // 四级表项自己的物理地址。驱动就是按这些地址把表项读出来的，所以它们
+        // 一直都在响应里；抄过来是为了让界面能对"这个地址的映射由谁掌管"建监视。
+        // 有效性看 fieldFlags 里对应的 *_PRESENT 位，不要看 resolved。
+        translateResult.pml4ePhysicalAddress =
+            static_cast<std::uint64_t>(info.pml4ePhysicalAddress);
+        translateResult.pdptePhysicalAddress =
+            static_cast<std::uint64_t>(info.pdptePhysicalAddress);
+        translateResult.pdePhysicalAddress =
+            static_cast<std::uint64_t>(info.pdePhysicalAddress);
+        translateResult.ptePhysicalAddress =
+            static_cast<std::uint64_t>(info.ptePhysicalAddress);
         translateResult.pageSize = static_cast<std::uint32_t>(info.pageSize);
         translateResult.largePageType = static_cast<std::uint32_t>(info.largePageType);
         translateResult.protection = static_cast<std::uint32_t>(info.protection);

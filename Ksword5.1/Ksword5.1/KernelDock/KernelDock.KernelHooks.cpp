@@ -11,6 +11,8 @@
 #include "../OnlineScan/SandboxUploadActions.h"
 #include "../UI/CodeEditorWidget.h"
 #include "../UI/DetailLayoutRegistry.h"
+// SSSDT 槽位的首次写入监视走与 SSDT 页同一个统一入口，调用页不碰 EPT 细节。
+#include "../UI/KvmWatchDialog.h"
 #include "../theme.h"
 
 #include <QAbstractItemView>
@@ -3138,6 +3140,25 @@ void KernelDock::showShadowSsdtContextMenu(const QPoint& localPosition)
         && currentEntry->cleanBaselineAvailable
         && currentEntry->cleanBaselineDiffers
         && selectedIndices.size() == 1U);
+    /*
+     * SSSDT 槽位的首次写入监视。
+     *
+     * 与 SSDT 页同一个统一入口，形态也照它抄：SSSDT 行用的就是同一个
+     * KernelSsdtEntry，已经带着 tableEntryAddress 与 tableEntrySize，
+     * 所以这里不需要任何新的地址推导——推导槽位地址正是最容易算错、
+     * 而且算错了也不会报错的一步。
+     */
+    QAction* watchAction = menu.addAction(
+        kernelText(
+            "kernel.hooks.shadow.menu.hvm_watch",
+            QStringLiteral("HVM 监视：下一次写入这一槽位")));
+    watchAction->setEnabled(
+        currentEntry != nullptr
+        && currentEntry->tableEntryAddress != 0U
+        && selectedIndices.size() == 1U);
+    watchAction->setToolTip(kernelText(
+        "kernel.hooks.shadow.menu.hvm_watch.tip",
+        QStringLiteral("装一条首次访问监视，等下一次有人写这一槽位时记下访问者的 RIP、模块与地址空间。命中不阻止写入，也不会让常驻退出；硬件实际监视的是这一项所在的整个 4 KiB 页。")));
     menu.addSeparator();
     QMenu* copyMenu = menu.addMenu(QIcon(":/Icon/process_copy_row.svg"), kernelText("kernel.context.menu.copy", QStringLiteral("复制")));
     QAction* copyCurrentColumnAction = copyMenu->addAction(QIcon(":/Icon/process_copy_cell.svg"), kernelText("kernel.hooks.menu.copy_current_column", QStringLiteral("复制当前列（选中行）")));
@@ -3165,6 +3186,24 @@ void KernelDock::showShadowSsdtContextMenu(const QPoint& localPosition)
     if (selectedAction == refreshAction)
     {
         refreshShadowSsdtAsync();
+        return;
+    }
+    if (selectedAction == watchAction && currentEntry != nullptr)
+    {
+        ks::ui::HvmWatchRequest request;
+        request.virtualAddress = true;
+        request.address = currentEntry->tableEntryAddress;
+        // 槽宽由驱动回报（x64 上是 4 字节的编码偏移），不要写死。
+        request.length = currentEntry->tableEntrySize != 0U
+            ? currentEntry->tableEntrySize
+            : sizeof(std::uint32_t);
+        request.access = KSWORD_ARK_HVM_EPT_ACCESS_WRITE;
+        request.label = kernelText(
+            "kernel.hooks.shadow.menu.hvm_watch.label",
+            QStringLiteral("SSSDT 槽位 #%1 %2"))
+            .arg(currentEntry->serviceIndex)
+            .arg(currentEntry->serviceNameText);
+        ks::ui::openHvmWatch(this, request);
         return;
     }
     if (selectedAction == restoreAction)

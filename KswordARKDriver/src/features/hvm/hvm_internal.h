@@ -33,23 +33,20 @@ Environment:
 /* Define the byte span covered by one EPT PML4 entry. */
 #define KSW_HVM_ONE_512_GIB 0x8000000000ULL
 /*
- * Bound the identity map to a thirty-two-TiB guest-physical window.
+ * Bound the identity map to a sixty-four-TiB guest-physical window.
  *
- * The number is not a preference, it is CPUID.80000008H:EAX[7:0] on real
- * hardware.  This used to be 16 (eight TiB), chosen when every machine in
- * reach reported 39 or 42 physical-address bits.  An Intel Core Ultra 270K
- * reports **45** - thirty-two TiB - and the builder clipped the map, set
- * EPT_TRUNCATED, and residency refused.  The user was told "处理器不支持",
- * by a processor that supports every single thing this backend needs.
- * (issue #195 是另一件事；这一条是 issue #198。)
+ * The bound is sized against CPUID.80000008H:EAX[7:0] reports from real
+ * hardware.  The original 16-entry (eight-TiB) limit was expanded to 64
+ * entries for a 45-bit machine, but a reported 46-bit e5 system still needs
+ * twice that window.  The builder correctly marked its map truncated and
+ * refused residency, but the limit prevented an otherwise capable processor
+ * from starting.
  *
- * Sixty-four entries covers MAXPHYADDR <= 45 exactly.  It is deliberately not
- * larger: a machine reporting 46 bits will now say precisely what it needs
- * (see KSWORD_ARK_HVM_CONTROL_STATUS_EPT_WINDOW_TOO_SMALL) instead of blaming
- * the processor, and raising this number for a machine nobody has measured is
- * how the previous value came to be wrong in the first place.
+ * One hundred twenty-eight entries covers MAXPHYADDR <= 46 exactly.  A wider
+ * physical-address space receives the precise EPT_WINDOW_TOO_SMALL diagnostic
+ * instead of being blamed on the processor.
  */
-#define KSW_HVM_MAX_PML4_ENTRIES 64UL
+#define KSW_HVM_MAX_PML4_ENTRIES 128UL
 /*
  * Bound the page directories the identity map may own.
  *
@@ -60,10 +57,10 @@ Environment:
  * MMIO or reserved, are uniformly UC, and are published as a single one-GiB
  * leaf in the PDPT - no page directory at all.
  *
- * Kept at 8192 (the value implied by the old sixteen-entry window) rather than
- * at KSW_HVM_MAX_PML4_ENTRIES * 512: a directory per GiB across the new window
- * would be 32768 pages, 128 MiB of nonpaged pool, allocated at prepare on
- * every machine.  Eight TiB of *installed RAM* is the real bound here, and no
+ * Kept at 8192 (the former eight-TiB fine-grained page-directory budget)
+ * rather than at KSW_HVM_MAX_PML4_ENTRIES * 512: a directory per GiB across
+ * the 64-TiB address window would be 65536 pages, 256 MiB of nonpaged pool.
+ * Eight TiB of *installed RAM* remains the fine-grained RAM bound, and no
  * machine that has that much is short of the 32 MiB this costs.
  *
  * Exhausting it is reported, not silently clipped - see the builder.

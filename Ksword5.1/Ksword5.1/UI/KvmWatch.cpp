@@ -12,10 +12,16 @@
 #include <QDir>
 #include <QFile>
 #include <QHash>
+#include <QDateTime>
 #include <QLibrary>
 #include <QMutex>
 #include <QMutexLocker>
 #include <QPair>
+// 目标标签存在本机设置里：协议没有标签字段，而"这是哪个内核对象"只对人有意义。
+#include <QSettings>
+
+// 命中时间戳是 KeQueryPerformanceCounter 的计数值，换算成墙钟要 QPC 频率。
+#include <Windows.h>
 
 #include <algorithm>
 #include <iterator>
@@ -484,8 +490,25 @@ namespace ksword::kvm
             : KSWORD_ARK_HVM_WATCH_ADDRESS_PHYSICAL;
         // 实际监视的永远是整页；请求的地址与长度另外记，不参与对齐。
         request.physicalPage = physicalAddress & ~0xFFFULL;
-        request.requestedAddress = target.address;
-        request.requestedLength = target.length;
+        /*
+         * 「整页」在这里就地落成页基址 + 4096，而不是把 0 发下去。
+         *
+         * 上下游对 0 的含义正好相反：这一层和对话框把 0 读作"整页"，而命中路径
+         * 用的纯函数层把 0 读作"空区间，匹配不上任何东西"（那是刻意的，并且有
+         * 单测钉着）。驱动为了弥合这个分歧，在长度为 0 时把请求地址替换成**物理**
+         * 页基址、长度补成 4096——但命中时拿来比的是客户**线性**地址，两个地址
+         * 空间不可比，于是"落在请求范围内"对一个明确请求整页的目标恒为"否"，
+         * 而那句话是假的。同一个替换还会让界面把一个物理地址显示成"虚拟 0x…"，
+         * 并拿它去做重映射核对与读内存。
+         *
+         * 在这里落成具体值就绕开了那条分支：虚拟监视发下去的是页对齐的**虚拟**
+         * 地址，命中时与客户线性地址同一个地址空间，范围判定才成立。
+         */
+        const bool wholePage = target.length == 0ULL;
+        request.requestedAddress = wholePage
+            ? (target.address & ~0xFFFULL)
+            : target.address;
+        request.requestedLength = wholePage ? 4096ULL : target.length;
         const auto result = client.controlHvmEptWatch(request);
         return toWatchResult(result, actionName);
     }
@@ -522,6 +545,29 @@ namespace ksword::kvm
         return toWatchResult(result, actionName);
     }
 
+    /*
+     * clearWatches：清空整张表。
+     *
+     * 用的是 EPT 规则的 CLEAR，所以**普通 EPT 规则会跟着一起没**。协议里不存在
+     * "只清 watch"这个操作——watch 就是一条带 WATCH_ONCE 处置的规则，两者住在
+     * 同一张表里。这个副作用不在这里隐藏，也不在这里替用户判断可不可以接受：
+     * 函数如实做 CLEAR，由调用点在动手之前把它说清楚。
+     */
+    KvmWatchResult clearWatches()
+    {
+        const QString actionName =
+            ks::i18n::sourceText(QStringLiteral("清空内存监视与 EPT 规则"));
+        if (!isWriteAccessEnabled())
+        {
+            return denyWatchWithoutWriteAccess(actionName);
+        }
+        ksword::ark::DriverClient client;
+        ksword::ark::DriverClient::HvmEptWatchRequest request;
+        request.operation = KSWORD_ARK_HVM_EPT_RULE_CLEAR;
+        const auto result = client.controlHvmEptWatch(request);
+        return toWatchResult(result, actionName);
+    }
+
     KvmWatchAttribution attributeKernelAddress(const unsigned long long address)
     {
         KvmWatchAttribution attribution;
@@ -531,11 +577,23 @@ namespace ksword::kvm
                     QStringLiteral("ntdll"),
                     "NtQuerySystemInformation"));
 
-        if (query == nullptr ||
-            address == 0)
+        /*
+         * 三条"没归出来"的路径各有各的态。
+         *
+         * 它们的区别不是程度而是意思：地址为 0 是没东西可归；模块表读不出来
+         * 是这次归因没跑起来；比过一遍没匹配上才是"不在任何已加载模块里"这条
+         * 结论。混成一个 resolved=false，界面就会把一次查询失败渲染成一句
+         * 肯定句——而那句话本身正是用户会据以继续排查的可疑读数。
+         */
+        if (address == 0)
         {
-            // 解析不出来是一条结论，不是一次失败：调用方据此显示"未知可执行
-            // 区域"并给出打开内存/反汇编的入口，而不是只写一个 Unknown。
+            attribution.kind = KvmWatchAttributionKind::Unavailable;
+            return attribution;
+        }
+        if (query == nullptr)
+        {
+            // 连 NtQuerySystemInformation 都解析不到，模块表一行都没读过。
+            attribution.kind = KvmWatchAttributionKind::Failed;
             return attribution;
         }
         unsigned long needed = 0UL;
@@ -544,6 +602,7 @@ namespace ksword::kvm
         (void)query(kSystemModuleInformationClass, nullptr, 0UL, &needed);
         if (needed == 0UL)
         {
+            attribution.kind = KvmWatchAttributionKind::Failed;
             return attribution;
         }
         std::vector<unsigned char> buffer;
@@ -562,10 +621,17 @@ namespace ksword::kvm
             }
             if (attempt == 1)
             {
+                // 两次都失败，模块表没拿到；不能据此说这个地址不属于任何模块。
+                attribution.kind = KvmWatchAttributionKind::Failed;
                 return attribution;
             }
             needed = written != 0UL ? written : needed * 2U;
         }
+        /*
+         * 到这里模块表已经在手上，所以默认态从 Failed 变成 NotFound：
+         * 下面那个循环走完还没匹配上，才是真的"不在任何已加载模块里"。
+         */
+        attribution.kind = KvmWatchAttributionKind::NotFound;
         const auto* const list =
             reinterpret_cast<const SystemModuleList*>(buffer.data());
         const unsigned long count = list->count;
@@ -585,6 +651,7 @@ namespace ksword::kvm
             {
                 continue;
             }
+            attribution.kind = KvmWatchAttributionKind::Resolved;
             attribution.resolved = true;
             attribution.moduleBase = base;
             attribution.moduleSize = row.imageSize;
@@ -705,8 +772,19 @@ namespace ksword::kvm
                       .arg(attribution.imageName)
                       .arg(attribution.processId);
         case KvmProcessAttributionKind::NotFound:
+            /*
+             * 只说"扫过了、没对上"，不指定成因。
+             *
+             * 原来这句写的是"它多半已经退出了"，那是把四种可能收敛成一种。
+             * 协议自己就列了四条：地址空间已经拆掉、CR3 被回收、命中发生在
+             * 内核工作线程里，以及——在开了 KVA Shadow 的机器上必然发生的
+             * 那一条——命中来自用户态，用户 CR3 与内核 CR3 天生就不相等。
+             * 用户态命中在这类机器上**一定**落进这个分支，而那时"它多半已经
+             * 退出了"是一句确定而错误的解释，会让人去查一个还好好活着的进程
+             * 为什么不见了。
+             */
             return ks::i18n::sourceText(
-                QStringLiteral("扫过 %1 个进程都没有这个地址空间——它多半已经退出了"))
+                QStringLiteral("扫过 %1 个进程，没有一个的内核 CR3 与它相等。可能那个地址空间已经拆掉或 CR3 被回收，也可能这次命中来自用户态——开了 KVA Shadow 的机器上用户 CR3 与内核 CR3 本就不等"))
                 .arg(attribution.scannedProcesses);
         case KvmProcessAttributionKind::Failed:
             return ks::i18n::sourceText(

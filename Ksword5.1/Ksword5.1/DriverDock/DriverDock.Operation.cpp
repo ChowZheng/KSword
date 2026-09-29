@@ -3630,10 +3630,17 @@ void DriverDock::rebuildDriverObjectEvidenceViews()
         /*
          * DriverObject 自身的地址挂在表上，供右键的 HVM 监视用。
          *
-         * 存在表上而不是每行一份：它对整张表是同一个值，而 MajorFunction
-         * 槽位与 DriverObject 落在同一个 4 KiB 页上 —— EPT 是页粒度，所以
-         * "监视某一项槽位"与"监视这个 DriverObject"在硬件上本来就是一回事，
-         * 界面要照实说，不要假装能精确到一项。
+         * 存在表上而不是每行一份：它对整张表是同一个值。
+         *
+         * 这里原本写着"MajorFunction 槽位与 DriverObject 落在同一个 4 KiB 页
+         * 上，所以监视某一项与监视整个对象在硬件上是一回事"——**那句话是错的**。
+         * DRIVER_OBJECT 是池分配、按 16 字节对齐，x64 上 sizeof 为 0x150 而
+         * MajorFunction 数组在偏移 0x70；对象基址的页内偏移超过 0xE90 时，
+         * 尾部若干项就落到下一页去了，而一条 watch 恒定只覆盖一页。照那句话
+         * 做，用户以为自己盯住了 IRP_MJ_DEVICE_CONTROL，实际那一项根本不在被
+         * 监视的页上——而这种错的表现不是报错，是一句"没人动过"。
+         *
+         * 所以槽位地址由驱动逐项回报（slotAddress），随行存下，不在这里推导。
          */
         m_majorFunctionTable->setProperty(
             "ks_driver_object_address",
@@ -3650,6 +3657,15 @@ void DriverDock::rebuildDriverObjectEvidenceViews()
             /* dispatch 入口地址随行走：监视"谁执行了它"要用它，不是槽位地址。 */
             majorItem->setData(Qt::UserRole,
                 static_cast<qulonglong>(majorEntry.dispatchAddress));
+            /*
+             * 槽位地址另存一格：监视"谁改了这一项"要用的是它。
+             *
+             * 两个地址分开存而不是共用一格：它们回答不同的问题，而混用的后果
+             * 是监视装到了一段毫不相干的代码上，并且看起来完全正常。
+             * 旧驱动不回报 slotAddress，此时为 0，菜单据此禁用该入口。
+             */
+            majorItem->setData(Qt::UserRole + 1,
+                static_cast<qulonglong>(majorEntry.slotAddress));
             m_majorFunctionTable->setItem(rowIndex, 0, majorItem);
             m_majorFunctionTable->setItem(rowIndex, 1, createReadOnlyItem(formatCompactAddress(majorEntry.dispatchAddress)));
             m_majorFunctionTable->setItem(rowIndex, 2, createReadOnlyItem(QString::fromStdWString(majorEntry.moduleName).isEmpty()
@@ -3808,6 +3824,36 @@ void DriverDock::rebuildDriverObjectEvidenceViews()
                 ks::ui::integrity::riskText(row.riskFlags),
                 QString::number(row.confidence),
                 QString::fromStdWString(row.detail));
+            /*
+             * 原始地址随行存一份，供右键的 HVM 监视用。
+             *
+             * 表里显示的是压缩过的地址文本，从文本回解地址会在格式变一次之后
+             * 悄悄错位；而监视装错了页的表现不是报错，是一句"你的目标被访问了"
+             * 指着一段不相干的内存。所以存的是数值本身：
+             *   第 0 列 —— 证据类别，用来判断这一行是不是 FastIo（这张表混装
+             *              DRIVER_OBJECT / MAJOR_FUNCTION / START_IO / FAST_IO /
+             *              DRIVER_SECTION 五类）；
+             *   第 1 列 —— objectAddress，也就是槽位本身的地址；
+             *   第 2 列 —— targetAddress，槽位当前指向的例程入口。
+             */
+            if (QTableWidgetItem* const classItem =
+                    m_fastIoEvidenceTable->item(rowIndex, 0))
+            {
+                classItem->setData(Qt::UserRole,
+                    static_cast<qulonglong>(row.evidenceClass));
+            }
+            if (QTableWidgetItem* const slotItem =
+                    m_fastIoEvidenceTable->item(rowIndex, 1))
+            {
+                slotItem->setData(Qt::UserRole,
+                    static_cast<qulonglong>(row.objectAddress));
+            }
+            if (QTableWidgetItem* const targetItem =
+                    m_fastIoEvidenceTable->item(rowIndex, 2))
+            {
+                targetItem->setData(Qt::UserRole,
+                    static_cast<qulonglong>(row.targetAddress));
+            }
             // 整行高亮：FastIo/StartIo/DriverObject 证据里带 HIDDEN_HOOK 等位的行整行标红；
             // 此时排序已关闭，改颜色不会触发重排。
             ks::ui::integrity::applyRiskRowHighlight(m_fastIoEvidenceTable, rowIndex, row.riskFlags);

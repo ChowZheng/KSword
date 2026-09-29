@@ -79,7 +79,11 @@ namespace ks::winapi_monitor
         Network = 3,
         Process = 4,
         Loader = 5,
-        Internal = 6
+        Internal = 6,
+        // Clipboard：剪贴板保护专用分类，独立于 Process 之外，方便"剪贴板保护"
+        // 页面按 category 过滤自己的事件，不用跟通用进程类事件混在一起。
+        // 只追加不改已有数值，保持旧 Agent/旧 UI 组合的协议兼容。
+        Clipboard = 7
     };
 
     // ApiMonitorEventPacket：
@@ -210,6 +214,8 @@ namespace ks::winapi_monitor
             return L"加载器";
         case EventCategory::Internal:
             return L"内部";
+        case EventCategory::Clipboard:
+            return L"剪贴板";
         default:
             break;
         }

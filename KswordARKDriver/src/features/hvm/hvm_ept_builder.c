@@ -488,11 +488,12 @@ KswordARKHvmBuildEptLocked(
      *   uniformly UC already, so 512 two-MiB UC leaves and one one-GiB UC leaf
      *   translate identically - the only difference is a page directory.
      *
-     * The difference is not an optimisation.  At MAXPHYADDR 45 the window is
-     * thirty-two TiB; a directory per GiB is 32768 pages, 128 MiB of nonpaged
-     * pool, and sixteen million loop iterations, on every machine at prepare.
-     * That cost is what kept KSW_HVM_MAX_PML4_ENTRIES at 16 and left modern
-     * processors being told they were unsupported.
+     * The difference is not an optimisation.  At MAXPHYADDR 46 the window is
+     * sixty-four TiB; a directory per GiB is 65536 pages, 256 MiB of nonpaged
+     * pool, and over thirty-three million loop iterations.  That cost led to
+     * the original 16-entry limit and its later 64-entry limit.  Sparse one-GiB
+     * leaves now let the backend cover the full 128-entry window without
+     * allocating a page directory for every RAM-free GiB.
      *
      * Without the one-GiB capability there is no second granularity, so the
      * fallback is what this loop always did - and the page-directory budget

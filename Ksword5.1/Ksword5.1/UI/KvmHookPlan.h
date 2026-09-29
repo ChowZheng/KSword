@@ -5,7 +5,7 @@
 // 存在的理由：
 // - 今天装一条 HOOK 视图要用户自己做三件事——把符号/偏移换成虚拟地址、把虚拟地址
 //   翻译成物理地址、再把物理地址手算页对齐——其中任何一步算错，驱动都不会报错：
-//   它只查「页对齐」和「小于 8 TiB」两条（hvm_ept_view.c:288-295），既不查目标页
+//   它只查「页对齐」和「小于 64 TiB」两条（hvm_ept_view.c:288-295），既不查目标页
 //   是不是 RAM，也不查它归谁。算错的结果是给一页无关内存挂了 HOOK；
 // - 所以这一层的职责就是把那三步固化成一条不可跳过的管线，并把每一步的中间值都
 //   留在结构体里，让后面的预检、安装摘要、校验都引用同一份数字，而不是各算一遍。
@@ -210,7 +210,7 @@ namespace ks::ui
         Backend,
         // 视图表还有位置：已安装条数 < KSWORD_ARK_HVM_MAX_VIEWS（32）。
         ViewTableCapacity,
-        // 目标页几何：pageBasePhysical 页对齐且 < 8 TiB。驱动只查这两条。
+        // 目标页几何：pageBasePhysical 页对齐且 < 64 TiB。驱动只查这两条。
         TargetPageGeometry,
         // 补丁几何：ClassifyCrossPage 判为 InPage，且补丁非空。
         // 跨页在两种后端下都 fail-closed，直接拒绝，**不拆成两条视图**。
@@ -330,7 +330,7 @@ namespace ks::ui
             return static_cast<quint64>(pageOffset) + patchLength();
         }
 
-        // pageIsAligned：驱动只查这一条和 8 TiB 上界，所以这一条要在客户端先看。
+        // pageIsAligned：驱动只查这一条和 64 TiB 上界，所以这一条要在客户端先看。
         bool pageIsAligned() const noexcept
         {
             return (pageBasePhysical & 0xFFFULL) == 0ULL;

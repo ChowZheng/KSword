@@ -17,6 +17,7 @@
 #include "ark_bugcheck.h"
 #include "ark_callback.h"
 #include "ark_process_protect.h"
+#include "ark_clipboard_policy.h"
 #include "ark_kernel.h"
 #include "ark_dyndata.h"
 #include "ark_capability.h"

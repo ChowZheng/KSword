@@ -58,6 +58,34 @@ private:
     void showCurrentDetail();
     void restoreSelectedIdtBaseline();
     void showCopyMenu(const QPoint& position);
+
+    // WatchPlan：一行能建的三条 HVM 监视，在弹出菜单**之前**算好的快照。
+    //
+    // 之所以是快照而不是"选完再去查行"：菜单的 exec 是嵌套事件循环，而本页
+    // 刷新走后台线程加 QueuedConnection 回投，菜单开着的那几秒里 m_rows 可以
+    // 被整体换掉。那之后按同一个下标取到的是另一行——而这种错不报错，只是
+    // 把监视装到了一页毫不相干的内存上。
+    struct WatchPlan
+    {
+        // 表项本身（描述符行）或中断对象基址（KINTERRUPT 行）：写监视。
+        bool entryValid = false;
+        quint64 entryAddress = 0;
+        quint64 entryLength = 0;   // 0 表示整页（KINTERRUPT 大小不在 R3 写死）
+        QString entryLabel;
+        QString entryTip;          // 不可用时说明为什么，不留空按钮
+        // 这一项指向的代码：执行监视。
+        bool targetValid = false;
+        quint64 targetAddress = 0;
+        QString targetLabel;
+        QString targetTip;
+        // 这张表所在页的页表项：回答"谁把表重映射走了"。
+        bool pteValid = false;
+        quint64 pteSourceAddress = 0;  // 传给 openHvmWatchOnPte 的是表基址
+        QString pteLabel;
+    };
+
+    // buildWatchPlan：按 m_rows 下标算出上面那份快照。越界时返回全不可用。
+    WatchPlan buildWatchPlan(std::size_t sourceIndex) const;
     bool rowMatchesFilter(
         const ksword::ark::DriverIntegrityEvidenceEntry& row,
         std::size_t sourceIndex) const;

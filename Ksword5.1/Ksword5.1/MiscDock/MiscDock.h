@@ -30,6 +30,7 @@ namespace ks::misc
     class DisableDsePage;
     class RenderBenchmarkPage;
     class DesktopDrawingPage;
+    class ClipboardGuardPage;
 }
 
 class MiscDock final : public QWidget
@@ -80,6 +81,7 @@ private:
     void initializeContextMenuCleanerTab();
     void initializeDiskEditorTab();
     void initializeApplicationControlPage();
+    void initializeClipboardGuardPage();
     void initializeRenderBenchmarkPage();
     void initializeDesktopDrawingPage();
     void initializeWindowInjectionPage();
@@ -109,6 +111,7 @@ private:
     QWidget* m_contextMenuCleanerHostWidget = nullptr;  // m_contextMenuCleanerHostWidget：Shell 关联管理页占位控件。
     QWidget* m_diskEditorHostWidget = nullptr;          // m_diskEditorHostWidget：磁盘编辑页占位控件。
     QWidget* m_applicationControlHostWidget = nullptr;  // m_applicationControlHostWidget：应用控制页占位控件。
+    QWidget* m_clipboardGuardHostWidget = nullptr;      // m_clipboardGuardHostWidget：剪贴板保护页占位控件。
     QWidget* m_renderBenchmarkHostWidget = nullptr;     // m_renderBenchmarkHostWidget：渲染基准页占位控件。
     QWidget* m_desktopDrawingHostWidget = nullptr;      // 屏幕直接绘制页占位控件。
     QWidget* m_windowInjectionHostWidget = nullptr;
@@ -126,6 +129,7 @@ private:
     int m_contextMenuCleanerTabIndex = -1;  // m_contextMenuCleanerTabIndex：Shell 关联管理页页签索引。
     int m_diskEditorTabIndex = -1;          // m_diskEditorTabIndex：磁盘编辑页页签索引。
     int m_applicationControlTabIndex = -1;  // m_applicationControlTabIndex：应用控制页页签索引。
+    int m_clipboardGuardTabIndex = -1;      // m_clipboardGuardTabIndex：剪贴板保护页页签索引。
     int m_renderBenchmarkTabIndex = -1;     // m_renderBenchmarkTabIndex：渲染基准页页签索引。
     int m_desktopDrawingTabIndex = -1;      // 屏幕直接绘制页页签索引。
     int m_windowInjectionTabIndex = -1;
@@ -138,6 +142,7 @@ private:
     ks::misc::DiskEditorTab* m_diskEditorTab = nullptr; // m_diskEditorTab：磁盘编辑器页组件。
     ks::misc::ContextMenuCleanerTab* m_contextMenuCleanerTab = nullptr; // m_contextMenuCleanerTab：右键菜单清理页组件。
     ks::misc::ApplicationControlPage* m_applicationControlPage = nullptr; // m_applicationControlPage：应用控制页组件。
+    ks::misc::ClipboardGuardPage* m_clipboardGuardPage = nullptr; // m_clipboardGuardPage：剪贴板保护页组件。
     ks::misc::SoundSourcePage* m_soundSourcePage = nullptr; // m_soundSourcePage：全局输出声音来源检测页。
     ks::misc::SystemTimePage* m_systemTimePage = nullptr; // m_systemTimePage：系统全局变速控制页。
     ks::misc::VirtualLocationPage* m_virtualLocationPage = nullptr; // m_virtualLocationPage：系统默认位置伪装页。

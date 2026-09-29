@@ -166,6 +166,8 @@ static const HVM_COMMAND_SPEC g_commands[] = {
       { { "监视编号（十进制）", HvmDecimal32, NULL } } },
     { "watch-remove", "移除内存监视", "内存监视", "撤销一条监视并恢复该页权限。", HvmWatchRemove, 0, 0UL, 0UL, 1,
       { { "监视编号（十进制）", HvmDecimal32, NULL } } },
+    { "watch-clear", "清空内存监视与 EPT 规则", "内存监视", "清空整张表。注意名字比副作用小：监视与普通 EPT 规则住在同一张表里，协议没有「只清监视」这个操作，所以分离视图规则会被一起清掉，被它们占住的页权限也一并恢复。已命中监视保留的现场随之消失，要留证据请先 watch-list。", HvmWatchClear, 0, 0UL, 0UL, 0,
+      { { NULL, HvmDecimal32, NULL } } },
     { "watch-selftest", "内存监视端到端自检（写）", "内存监视", "在本进程里分配并锁住一页，装一条写监视，写它，再逐项核对命中现场：命中一次、自动解除、原写最终生效、第二次写不再命中、常驻处理器数不变。常驻没在跑或装不上时记 BLOCKED 而不是 FAIL。", HvmWatchSelfTest, 0, 0UL, 0UL, 0,
       { { NULL, HvmDecimal32, NULL } } },
     { "watch-selftest-read", "内存监视端到端自检（读）", "内存监视", "同写自检的流程，只把被监视的访问换成读。额外核对一条只有读才成立的判据：EPT 不允许可写而不可读，所以「只监视读」在硬件上必然连写也一起监视，实际访问掩码应当比请求的宽。", HvmWatchSelfTestRead, 0, 0UL, 0UL, 0,

@@ -730,6 +730,7 @@ function Resolve-RuntimeVariables {
             'callback.rulesBlob'    = 'KSWORD_CI_CALLBACK_RULES_BLOB'
             'redirect.rulesBlob'    = 'KSWORD_CI_REDIRECT_RULES_BLOB'
             'network.rulesBlob'     = 'KSWORD_CI_NETWORK_RULES_BLOB'
+            'clipboard.rulesBlob'   = 'KSWORD_CI_CLIPBOARD_POLICY_RULES_BLOB'
             'mutation.targetKind'   = 'KSWORD_CI_MUTATION_TARGET_KIND'
             'mutation.address'      = 'KSWORD_CI_MUTATION_ADDRESS'
             'mutation.beforeHex'    = 'KSWORD_CI_MUTATION_BEFORE_HEX'

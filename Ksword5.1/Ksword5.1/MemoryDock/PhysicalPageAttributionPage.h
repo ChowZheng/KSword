@@ -1,0 +1,60 @@
+#pragma once
+#include "PhysicalPageScan.h"
+#include "PhysicalPageMappings.h"
+#include <QWidget>
+#include <functional>
+class QLabel;
+class QPushButton;
+class QLineEdit;
+class QProgressBar;
+class QSpinBox;
+class QTableWidget;
+class QPlainTextEdit;
+class QTabWidget;
+class MemoryAttributionChart;
+
+class PhysicalPageAttributionPage final : public QWidget {
+public:
+    explicit PhysicalPageAttributionPage(QWidget* parent = nullptr);
+    ~PhysicalPageAttributionPage() override;
+    void startScan();
+    // Invoked on the UI thread after an immutable scan result has been published.
+    std::function<void(const std::shared_ptr<ksword::pfn::Scan>&)> snapshotReady;
+protected:
+    void changeEvent(QEvent*) override;
+private:
+    void poll();
+    void rebuild();
+    void rebuildGroups();
+    void selectCategory(int use);
+    void inspectPfn();
+    void showMappings(std::uint64_t pfn);
+    void startMappings();
+    void exportEvidence();
+    void retranslate();
+    QPushButton* m_scanButton = nullptr;
+    QPushButton* m_cancelButton = nullptr;
+    QPushButton* m_mappingButton = nullptr;
+    QPushButton* m_exportButton = nullptr;
+    QPushButton* m_inspectButton = nullptr;
+    QSpinBox* m_budget = nullptr;
+    QLabel* m_summary = nullptr;
+    QProgressBar* m_progress = nullptr;
+    QLineEdit* m_filter = nullptr;
+    QLineEdit* m_pfn = nullptr;
+    QPlainTextEdit* m_evidence = nullptr;
+    QPlainTextEdit* m_pageEvidence = nullptr;
+    QTableWidget* m_categories = nullptr;
+    QTableWidget* m_groups = nullptr;
+    QTableWidget* m_examples = nullptr;
+    QTableWidget* m_mappings = nullptr;
+    QTabWidget* m_tabs = nullptr;
+    MemoryAttributionChart* m_chart = nullptr;
+    int m_selectedCategory = -1;
+    std::shared_ptr<ksword::pfn::ScanJob> m_job;
+    std::shared_ptr<ksword::pfn::Scan> m_scan;
+    std::shared_ptr<ksword::pfn::MappingJob> m_mappingJob;
+    std::shared_ptr<ksword::pfn::Mappings> m_mappingScan;
+    struct Inspection;
+    std::shared_ptr<Inspection> m_inspection;
+};

@@ -44,9 +44,9 @@ namespace
 {
     // 目标物理地址上界。驱动只查「页对齐」和「小于这个数」两条
     // （hvm_ept_view.c:288-295 比的是 KSW_HVM_MAX_MAPPED_PHYSICAL =
-    //  KSW_HVM_ONE_512_GIB * KSW_HVM_MAX_PML4_ENTRIES = 0x8000000000 * 16）。
+    //  KSW_HVM_ONE_512_GIB * KSW_HVM_MAX_PML4_ENTRIES = 0x8000000000 * 128）。
     // 客户端先查一遍是为了把拒绝理由说清楚，不是为了替驱动做判定。
-    constexpr quint64 kMaxTargetPhysical = 0x80000000000ULL;
+    constexpr quint64 kMaxTargetPhysical = 0x400000000000ULL;
 
     // 一页的字节数。取算术层的常量而不是自己写 4096，是为了让两处永远相等。
     constexpr qsizetype kPageBytes =
@@ -542,7 +542,7 @@ namespace ks::ui
             // 写权限门关着、影子页长度不对。前者是预检的第一行。
             return Step::Preflight;
         case KSWORD_ARK_HVM_VIEW_STATUS_INVALID_REQUEST:
-            // 驱动只查页对齐与 8 TiB 上界两条，两条都属于目标几何。
+            // 驱动只查页对齐与 64 TiB 上界两条，两条都属于目标几何。
             return Step::Target;
         case KSWORD_ARK_HVM_VIEW_STATUS_CONFIRMATION_REQUIRED:
             // 与安全策略无关：这是 FORCE/确认位的形状问题，重来一次即可。
@@ -672,7 +672,7 @@ namespace ks::ui
             m_rawPaEdit);
         rawPaLayout->addLayout(rawPaForm);
         QLabel* const rawPaWarningLabel = new QLabel(
-            ks::i18n::sourceText(QStringLiteral("驱动对这条路径只校验页对齐与小于 8 TiB 两条，既不校验目标页是不是 RAM，也不校验它归谁。填错的结果是视图静默安装成功，然后对一页毫不相干的物理内存做执行重定向。")),
+            ks::i18n::sourceText(QStringLiteral("驱动对这条路径只校验页对齐与小于 64 TiB 两条，既不校验目标页是不是 RAM，也不校验它归谁。填错的结果是视图静默安装成功，然后对一页毫不相干的物理内存做执行重定向。")),
             rawPaPage);
         rawPaWarningLabel->setWordWrap(true);
         ApplyStatusRole(rawPaWarningLabel, StatusRole::Error);
@@ -1088,7 +1088,7 @@ namespace ks::ui
             {
                 resolution.ok = false;
                 resolution.message = ks::i18n::sourceText(
-                    QStringLiteral("页基址 %1 不小于 8 TiB，驱动会直接拒绝这一条。"))
+                    QStringLiteral("页基址 %1 不小于 64 TiB，驱动会直接拒绝这一条。"))
                     .arg(hexText(resolution.pageBasePhysical));
                 return resolution;
             }
@@ -1141,7 +1141,7 @@ namespace ks::ui
         {
             resolution.ok = false;
             resolution.message = ks::i18n::sourceText(
-                QStringLiteral("页基址 %1 不小于 8 TiB，驱动会直接拒绝这一条。"))
+                QStringLiteral("页基址 %1 不小于 64 TiB，驱动会直接拒绝这一条。"))
                 .arg(hexText(resolution.pageBasePhysical));
             return resolution;
         }

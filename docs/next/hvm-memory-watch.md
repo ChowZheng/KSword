@@ -173,7 +173,11 @@ CR3 原值上报，**不**反解 PID：KVA shadow、系统地址空间、内核�
 .\tools\hvm_ctl\hvm_ctl.exe --json watch-list
 .\tools\hvm_ctl\hvm_ctl.exe --json watch-rearm 17
 .\tools\hvm_ctl\hvm_ctl.exe --json watch-remove 17
+.\tools\hvm_ctl\hvm_ctl.exe --json watch-clear
 ```
+
+`watch-clear` 的名字比它的副作用小：协议里没有"只清监视"这个操作，监视与普通 EPT
+规则住在同一张表里，所以 CLEAR 会把分离视图规则一起清掉。命令说明里原样写着这一点。
 
 访问掩码：`1`=读 `2`=写 `4`=执行，可相加。JSON 输出含 `watchId`、`state`、
 `requestedAccess` / `effectiveAccess`、`physicalPage` 与 `effectiveBytes=4096`、
@@ -273,10 +277,90 @@ PASS，则等于凭空承认了一个没观测到的事实。两条检查因此�
 性能调优、完整 x86 指令模拟器、无限制 Continuous Watch、精确 post-instruction
 `New Value`、全量内核栈回溯、强制阻止目标访问、把 watch 做成安全边界。
 
-**P1 已做**：Memory / Kernel Disassembly / SSDT / DriverObject / Callback 五个
-页面的右键接入（`ks::ui::openHvmWatch(target)` 统一入口）、导出表符号解析、
+**P1 已做**：Memory / Kernel Disassembly / SSDT / SSSDT / DriverObject（整对象
+与 **MajorFunction 单项槽位**）/ FastIo（槽位与例程）/ Callback 的右键接入
+（`ks::ui::openHvmWatch(target)` 统一入口）、导出表符号解析、
 CR3 → 进程的 best-effort 归因（四态：Resolved / NotFound / Failed / Unavailable）、
 证据详情与复制/导出、"查看目标内存"与"查看模块"。
+
+## 2026-09-27 收尾轮
+
+对着 issue 二十四节逐条复核了一遍**代码**（不是复核上一轮的自述），补掉下面这些。
+分成"说错了"和"没做"两类，因为前一类比后一类危险：它们都不报错。
+
+### 说错了的（读起来正确、实际不成立）
+
+| 位置 | 原来怎么说 | 实际 |
+| --- | --- | --- |
+| `armedGeneration` 协议注释 | "代次对不上就说明跨过了没人看的空档" | `Generation` 每次 HVM 控制 IOCTL 都加一，装监视后必然要 `START_RESIDENT`（再加一代），所以**正常观察中的监视代次恒定对不上**；而真正的 fail-closed 故障不走控制路径、代次反而一致。两个方向都会错。权威判据是 `ARMED → INVALIDATED` 这个状态转换本身 |
+| `WATCH_ROW` 字段注释 | "实际监视的物理页与页内偏移" | 紧跟的第二个字段是 `pageCount`（watch 恒为 1），照注释去读会得到一个恒等于 1 的"偏移"。页内偏移由 R3 用 `requestedAddress & 0xFFF` 算 |
+| DriverObject 页注释 | "MajorFunction 槽位与 DriverObject 必在同一页，所以监视整个对象等于监视了每一项" | `DRIVER_OBJECT` 是池分配、16 字节对齐，x64 上 `sizeof` 0x150 而数组在偏移 0x70；基址页内偏移超过 0xE90 时**尾部若干项落到下一页**，而一条监视只覆盖一页 |
+| `openTargetMemory` 注释 | "读不到再退回物理页" | 代码是一次三元选择，虚拟读失败就直接返回。恰好在最需要看当前内容的场景（VA 已不指向那一页）里一个字都读不出来 |
+| `InvalidateWatchesLocked` 的调用点注释 | "放在 rendezvous 之前，因为权限必须趁处理器还能被失效时恢复" | 该函数从来没有 INVEPT 过 |
+| `docs/CLI使用文档.md` | "主程序完整操作与 `hvm_ctl` 共用命令目录" | 那条通路（子页、`--ksword-hvm-command`、`KvmCommandPanel`）已经整条删除 |
+
+### 没做的
+
+- **命中时间从来没有显示过**。驱动采集了（`KeQueryPerformanceCounter`）、协议带了、
+  R3 结构解析了，然后就断了：表格、详情、复制、导出、事件流五处全无。现在详情里
+  显示，并且**标明它是换算来的**——那是性能计数不是墙钟，换算依赖计数源没被重置。
+- **`clearWatches` 只活在一条注释里**，从未声明也从未实现；UI 没有"清空"、CLI 没有
+  `watch-clear`。两处都补上了，并且都如实说明副作用：协议没有"只清监视"这个操作，
+  CLEAR 清的是整张 EPT 规则表。
+- **面板从不读事件环**。watch 行里没有 `qualification`，那是"这次访问究竟是读、是写
+  还是取指，页当时还剩哪些权限"的原始读数，只存在于事件行里。新增"查看命中事件"，
+  结果四态：`Found` / `Evicted`（命中过但证据被挤出环）/ `NeverHit` / `Unavailable`
+  （这次查询没跑起来）。后三态在界面上极易长成同一句"无事件"，而结论完全不同。
+- **模块归因把失败说成结论**。三条早返回（解析不到 `NtQuerySystemInformation`、
+  问不出长度、两次查询都失败）与"比过一遍、确实不在任何模块里"返回同一个值，
+  界面渲染成肯定句"未知可执行区域"。改成四态；失败时不再把"查看模块"置灰——
+  灰掉等于把一次没跑起来的查询显示成一条结论。
+- **进程归因 NotFound 断言了单一成因**（"多半已经退出了"）。开了 KVA Shadow 的机器上
+  用户态命中**必然**落进这个分支，那时这句话是确定而错误的。
+- **`length=0` 上下游含义相反**。这一层与对话框把 0 读作"整页"，命中路径的纯函数层
+  把 0 读作"空区间，匹配不上任何东西"（刻意如此，有单测）。驱动为弥合分歧在长度为 0
+  时把请求地址换成**物理**页基址，而命中时拿来比的是客户**线性**地址——于是"落在请求
+  范围内"对一个明确请求整页的目标恒为"否"。修法是在服务层就落成页对齐虚拟地址 + 4096，
+  根本不走那条分支。按物理地址建的监视则一律显示"无法判断"，因为两个地址空间不可比。
+- **常驻没跑时界面显示"监视中 / 命中 0"**。规则表在常驻期间冻结，所以安装**必然**
+  发生在常驻停着的时候。照直显示，用户读到的是"这段时间没人动过"，而那段时间根本
+  没有人在看。状态改成"已武装（常驻未运行，还没有开始观察）"，详情里另加一行。
+- **§10 要求的三个入口只有一个**。"未知可执行区域"时除了反汇编，现在还有
+  "查看写入者内存"与"查看 RIP 所在页"（整页而不是 0x200——要判断一段不属于任何模块
+  的代码是什么，一小段看不出来）。
+
+### 驱动侧
+
+- **页归属只在装 watch 时查**，普通 EPT 规则可以合法地压到 watch 或分离视图的页上；
+  命中路径遇到同页的另一条规则会走全机 fail-closed 退虚拟化，正是本功能存在的意义
+  所在的反面。现在普通规则 ADD 也逐页查，但**只拒 view 与 watch**——规则与规则想要
+  的是同一件事（更少权限），它们本来就该共存。
+- **命中路径 CAS 成功后的三处 fail-closed 不回退状态**：叶项找不到、私有层次翻译不出、
+  INVEPT 失败，三处直接 return 而不动 `WatchState`。停机只把 ARMED 转 INVALIDATED，
+  于是那条记录**永久**停在"正在处理命中 / 命中 0"。现在转 FAULTED（协议里把 FAULTED
+  的语义从"只有安装期失败"扩到覆盖这一种，并写明为什么不能用 TRIGGERED 或 INVALIDATED）。
+- **失效 watch 时恢复了叶权限却不 INVEPT**。同一个 recompute 之后，ADD / REARM / CLEAR
+  三条路径都失效了，只有这条没有。同时让这个停机扫描也修复 TRIGGERED / FAULTED 的页，
+  否则会留下"没有任何规则声称拥有它、但 EPT 仍然拒绝"的叶项。
+- **`MajorFunction` 槽位地址**：`KSWORD_ARK_DRIVER_MAJOR_FUNCTION_ENTRY` 尾部追加
+  `slotAddress`（`&DriverObject->MajorFunction[i]`）。R3 推不出来——那个偏移是内核
+  结构布局，用户态写死一个数就是把内核布局假设搬到了用户态。旧驱动回 0，界面据此
+  禁用该入口并说明原因，而不是拿 0 去装一条监视。
+
+### 本轮验证边界
+
+编译机上全绿：主程序 Release 零错误、驱动 `/t:Rebuild` 零错误零警告且
+`Driver is 'Universal'`、`KswordARKLightTests` 18 个套件全过（`HVM watch` 157/157）、
+HVM 控制算术单测 85/85、i18n 审计 26413 条、`hvm_ctl` 目录 83 条命令与参数回归、
+私有 EPT 不变量、IOCTL 注册与访问策略（0 HIGH）、驱动功能矩阵计划、tracked JSON 2313 个。
+
+顺带把套件清单接进了 CI：`scripts/ksword-expected-suites.json` 此前只有手工验收脚本
+读它，CI 只判退出码——而退出码恰恰抓不到"整个套件没被链接进来"。新增
+`scripts/Test-KswordSuiteManifest.ps1`，两次变异（清单里加一个不存在的套件、
+把断言下限抬高一条）都被拦下。
+
+**没有实机验证**：本轮改了驱动，所以第二十二节 1–9 项需要在靶机上重跑一遍
+（`hvm_ctl` 的 `watch-selftest*` 系列，退出码即判定）。编译机证明不了 VMX 行为。
 
 **P2 已评估、结论是不做**：见 `docs/next/hvm-continuous-watch-feasibility.md`。
 四条候选路径里没有一条同时过 issue 给的四条准入门槛；唯一四关全过的 EPT 执行视图

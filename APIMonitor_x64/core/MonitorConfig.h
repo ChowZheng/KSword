@@ -32,6 +32,18 @@ namespace apimon
         Wsa = 2
     };
 
+    // ClipboardPolicyAction：
+    // - 剪贴板读/写/枚举三个方向各自独立取值；
+    // - 数值故意与驱动协议 KSWORD_ARK_CLIPBOARD_POLICY_ACTION_* 一致（尽管本
+    //   Agent 从不直接链接驱动协议头，只是约定同一套编码），主程序在把驱动
+    //   查回来的规则解析成这个进程的会话 INI 时不用做额外映射表。
+    enum class ClipboardPolicyAction : std::uint32_t
+    {
+        Allow = 0,
+        Block = 1,
+        LogOnly = 2
+    };
+
     struct FakeSuccessRule
     {
         std::wstring moduleName;                                    // moduleName：规则匹配的模块名，含或不含 .dll 均可由匹配层规范化。
@@ -69,6 +81,17 @@ namespace apimon
         std::wstring fakeSuccessRulesText;      // fakeSuccessRulesText：原始规则文本，用于自动注入子进程继承。
         std::size_t detailLimitChars = 256;     // detailLimitChars：详情文本截断长度。
         bool valid = false;                     // valid：当前配置是否通过基本校验。
+
+        // enableClipboard：剪贴板保护总开关。关闭时 Win32/OLE/win32u 三层剪贴板 hook
+        // 全部不安装，与其它 enableXxx 分类字段同级，但剪贴板 hook 不算进通用监控分类，
+        // 单独一个开关，因为它服务的是"剪贴板保护"这一具体功能而不是泛用 API 监控。
+        bool enableClipboard = false;
+        // clipboardReadAction/WriteAction/EnumAction：三个方向各自独立的策略动作，
+        // 由主程序按当前受管进程身份从驱动策略表解析后写进这个进程的会话 INI；
+        // ClipboardGuardHook.cpp 里的每个 hook 调用时都读取一次，支持热更新。
+        ClipboardPolicyAction clipboardReadAction = ClipboardPolicyAction::Allow;
+        ClipboardPolicyAction clipboardWriteAction = ClipboardPolicyAction::Allow;
+        ClipboardPolicyAction clipboardEnumAction = ClipboardPolicyAction::Allow;
     };
 
     bool LoadMonitorConfigForCurrentProcess(MonitorConfig* configOut, std::wstring* errorTextOut);

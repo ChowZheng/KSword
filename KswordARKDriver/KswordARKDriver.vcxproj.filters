@@ -47,6 +47,9 @@
     <Filter Include="Source Files\Features\ProcessProtect">
       <UniqueIdentifier>{5D2FA0BB-3E71-4A0E-9E64-1C9F0C6A7B21}</UniqueIdentifier>
     </Filter>
+    <Filter Include="Source Files\Features\ClipboardPolicy">
+      <UniqueIdentifier>{C65DD49D-3D91-4522-BD59-CC03C3FEC5CD}</UniqueIdentifier>
+    </Filter>
     <Filter Include="Source Files\Features\Redirect">
       <UniqueIdentifier>{A7C44443-B978-4F7F-A56D-7A5C20D07E31}</UniqueIdentifier>
     </Filter>
@@ -93,6 +96,12 @@
     </Inf>
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="..\shared\driver\KswordArkPfnIoctl.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\third_party\systeminformer_dyn\PfnNative.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="Device.h">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -121,6 +130,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="src\features\process_protect\process_protect_internal.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="src\features\clipboard_policy\clipboard_policy_internal.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="src\features\callback\callback_internal.h">
@@ -465,6 +477,9 @@
     <ClInclude Include="include\ark\ark_process_protect.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="include\ark\ark_clipboard_policy.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="src\platform\process_resolver.h">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -643,6 +658,12 @@
     </ClCompile>
     <ClCompile Include="src\features\process_protect\process_protect_ioctl.c">
       <Filter>Source Files\Features\ProcessProtect</Filter>
+    </ClCompile>
+    <ClCompile Include="src\features\clipboard_policy\clipboard_policy_runtime.c">
+      <Filter>Source Files\Features\ClipboardPolicy</Filter>
+    </ClCompile>
+    <ClCompile Include="src\features\clipboard_policy\clipboard_policy_ioctl.c">
+      <Filter>Source Files\Features\ClipboardPolicy</Filter>
     </ClCompile>
     <ClCompile Include="src\features\callback\callback_runtime.c">
       <Filter>Source Files\Features\Callback</Filter>
@@ -1191,6 +1212,12 @@
       <Filter>Source Files\Features\Callback</Filter>
     </ClCompile>
     <ClCompile Include="src\features\memory\memory_physical.c">
+      <Filter>Source Files\Features\Memory</Filter>
+    </ClCompile>
+    <ClCompile Include="src\features\memory\memory_pfn_ioctl.c">
+      <Filter>Source Files\Features\Memory</Filter>
+    </ClCompile>
+    <ClCompile Include="src\features\memory\memory_pfn_mappings_ioctl.c">
       <Filter>Source Files\Features\Memory</Filter>
     </ClCompile>
     <ClCompile Include="src\features\memory\memory_physical_layout.c">

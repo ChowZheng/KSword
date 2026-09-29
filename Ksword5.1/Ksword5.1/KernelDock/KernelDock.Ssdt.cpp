@@ -283,7 +283,38 @@ void KernelDock::initializeSsdtTab()
             "kernel.ssdt.menu.hvm_watch.tip",
             QStringLiteral("装一条首次访问监视，等下一次有人写这一槽位时记下访问者的 RIP、模块与地址空间。命中不阻止写入，也不会让常驻退出。")));
 
+        /*
+         * 再给一条：谁改了这张表所在页的**映射**。
+         *
+         * 与上一条问的不是一件事。上一条盯槽位内容，回答"谁改了这一项"；
+         * 这一条盯指向 SSDT 那一页的 PTE，回答"谁把整张表重映射到别处了"——
+         * 后者发生时表里一个字节都不用动，上一条永远不会响。
+         */
+        QAction* watchPteAction = contextMenu.addAction(
+            kernelText("kernel.ssdt.menu.hvm_watch_pte",
+                       QStringLiteral("HVM 监视：下一次写入这张表所在页的页表项")));
+        watchPteAction->setEnabled(
+            watchEntry != nullptr && watchEntry->tableEntryAddress != 0U);
+        watchPteAction->setToolTip(kernelText(
+            "kernel.ssdt.menu.hvm_watch_pte.tip",
+            QStringLiteral("盯的不是表内容，而是指向这一页的那一项页表项。整张表被重映射走时表内容不变，只有这一项会被改。")));
+        // 地址在弹菜单之前取好：exec 是嵌套事件循环，表可以在这期间被刷新掉。
+        const unsigned long long ssdtEntryAddress = watchEntry != nullptr
+            ? watchEntry->tableEntryAddress
+            : 0ULL;
+        const QString ssdtPteLabel = watchEntry != nullptr
+            ? kernelText("kernel.ssdt.menu.hvm_watch_pte.label",
+                         QStringLiteral("SSDT 槽位 #%1 %2 所在的表页"))
+                  .arg(watchEntry->serviceIndex)
+                  .arg(watchEntry->serviceNameText)
+            : QString();
+
         QAction* selectedAction = contextMenu.exec(m_ssdtTable->viewport()->mapToGlobal(localPosition));
+        if (selectedAction == watchPteAction && ssdtEntryAddress != 0ULL)
+        {
+            ks::ui::openHvmWatchOnPte(this, ssdtEntryAddress, ssdtPteLabel);
+            return;
+        }
         if (selectedAction == watchAction && watchEntry != nullptr)
         {
             ks::ui::HvmWatchRequest request;

@@ -620,9 +620,14 @@ jobs:
             throw "MSBuild failed for KswordARKLightTests with exit code $LASTEXITCODE."
           }
 
-          & 'KswordARKLightTests/x64/Release/KswordARKLightTests.exe'
+          # 退出码抓不到「整个套件没被链接进来」：那种情况下测试进程照样
+          # 退出 0、照样打印「全部通过」，而那些断言一条都没跑过。所以这里
+          # 同时按 scripts/ksword-expected-suites.json 核对套件是否齐全、
+          # 断言数有没有缩水；脚本自己会执行测试并把两条判据合起来判。
+          & 'scripts/Test-KswordSuiteManifest.ps1' `
+            -TestExePath 'KswordARKLightTests/x64/Release/KswordARKLightTests.exe'
           if ($LASTEXITCODE -ne 0) {
-            throw "KswordARKLightTests failed with exit code $LASTEXITCODE."
+            throw "KswordARKLightTests failed or a listed suite was absent (exit code $LASTEXITCODE)."
           }
 
       - name: Verify KswordARKLight artifacts

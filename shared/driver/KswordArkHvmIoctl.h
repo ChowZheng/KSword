@@ -679,7 +679,18 @@
  * 显示成前者，等于报告一次不存在的观测结果。
  */
 #define KSWORD_ARK_HVM_EPT_WATCH_STATE_INVALIDATED 4UL
-/* 安装期就失败，没有进入过拦截。 */
+/*
+ * 这条 watch 没有走完它该走的路。
+ *
+ * 两种情况：安装期就失败、从没进入过拦截；以及**命中之后修不回来**——赢下
+ * 原子转换的处理器在恢复页权限时失败了（叶项找不到、私有层次翻译不出来、
+ * INVEPT 被拒），此时整机会 fail-closed 退虚拟化。
+ *
+ * 后一种为什么不能留在 TRIGGERED：那是个瞬时态，停机路径只把 ARMED 转成
+ * INVALIDATED，于是这条记录会**永久**停在"正在处理命中 / 命中 0"，而它既不是
+ * 一次观测（没记下现场），也不是"没人在看"。为什么也不能写成 INVALIDATED：
+ * 那句话的意思是"我什么都没看到"，而这里确实发生过一次访问，只是证据没留住。
+ */
 #define KSWORD_ARK_HVM_EPT_WATCH_STATE_FAULTED     5UL
 
 /* 命中时事件成功发布。 */
@@ -1205,16 +1216,37 @@ typedef struct _KSWORD_ARK_HVM_EPT_WATCH_ROW
     /* 见 KSWORD_ARK_HVM_EPT_WATCH_HIT_*。 */
     unsigned long lastHitStatus;
     /*
-     * 武装这一轮时的 HVM 代次。
+     * 武装这一轮时的 HVM 控制代次。
      *
-     * 常驻停过、释放过、故障过都会推进代次；代次对不上就说明这条 watch 跨过了
-     * 一次"没有人在看"的空档，此时它报的任何"未命中"都不成立。
+     * 它就是"武装的那一刻，这个驱动一共处理过多少次 HVM 控制命令"，**不是**
+     * residency 的代次。`Generation` 在每一次 HVM 控制 IOCTL 结束时无条件加一，
+     * PREPARE / SELF_TEST / START / VALIDATE_NESTED / RESET_FAULT 都算。
+     *
+     * 所以**不要**拿它当"这条 watch 是不是跨过了一次没人在看的空档"的判据。
+     * 两个方向都会错：
+     *
+     *   假阳性 —— 规则表在常驻期间是冻结的，武装必然发生在常驻停着的时候，
+     *              紧接着的 START_RESIDENT 本身又推进一代。于是一条**正在正常
+     *              观察**的 watch，它的 armedGeneration 恒定不等于当前代次。
+     *   假阴性 —— fail-closed 退虚拟化不走控制路径，根本不推进代次。真正
+     *              "中途没人在看"的那一次，代次反而是一致的。
+     *
+     * 真正权威的判据是状态本身：停机路径把每条 ARMED 转成 INVALIDATED
+     * （见 KSWORD_ARK_HVM_EPT_WATCH_STATE_INVALIDATED）。这个字段只用来给人
+     * 看"它是哪一轮装上去的"，以及区分同一个 watchId 前后两次武装。
      */
     unsigned long armedGeneration;
     /* 用户请求的地址与长度，原样回显。 */
     unsigned long long requestedAddress;
     unsigned long long requestedLength;
-    /* 实际监视的物理页与页内偏移。 */
+    /*
+     * 实际监视的物理页，以及这条规则覆盖的页数（watch 恒为 1）。
+     *
+     * 这里**没有**页内偏移：协议只回显请求地址，偏移由 R3 用
+     * `requestedAddress & 0xFFF` 算出来（界面详情里有这一行）。早先这条注释写
+     * 的是"物理页与页内偏移"，而紧跟的第二个字段其实是 pageCount —— 照注释去
+     * 读这个字段，得到的是一个恒等于 1 的"偏移"。
+     */
     unsigned long long physicalPage;
     unsigned long long pageCount;
     /* 最近一次命中的现场，够界面直接列出来而不必再去翻事件环。 */

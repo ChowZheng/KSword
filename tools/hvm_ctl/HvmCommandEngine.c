@@ -8039,6 +8039,18 @@ int KswordHvmCommandMain(int argc, char** argv)
         rc = DoWatch(h, KSWORD_ARK_HVM_EPT_RULE_REMOVE, (unsigned long)v[0],
                      0ULL, 0ULL, 0ULL, 0UL, 0UL, asJson);
         break;
+    /*
+     * 清空整张表。
+     *
+     * 用的是 EPT 规则的 CLEAR，因为协议里根本不存在"只清监视"这个操作——监视
+     * 就是一条带 WATCH_ONCE 处置的规则，两者住在同一张表里。命令名叫
+     * watch-clear 是为了与其余 watch-* 对齐，但它清掉的东西比名字多，这一点
+     * 写在命令说明里，而不是留给调用者自己发现。
+     */
+    case HvmWatchClear:
+        rc = DoWatch(h, KSWORD_ARK_HVM_EPT_RULE_CLEAR, 0UL,
+                     0ULL, 0ULL, 0ULL, 0UL, 0UL, asJson);
+        break;
     case HvmWatchSelfTest:
         rc = DoWatchSelfTestAccess(h, asJson, KSWORD_ARK_HVM_EPT_ACCESS_WRITE);
         break;

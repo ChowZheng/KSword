@@ -92,6 +92,15 @@
     <ClCompile Include="MiscDock\ApplicationControlPage.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="MiscDock\ClipboardGuard\ClipboardGuardPage.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="MiscDock\ClipboardGuard\ClipboardGuardPage.Session.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="MiscDock\ClipboardGuard\ClipboardGuardPage.RuleEditor.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="MiscDock\SoundSource\SoundSourceDetector.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -453,6 +462,30 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="MemoryDock\MemoryDock.SearchFlow.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="MemoryDock\PhysicalPageScan.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="MemoryDock\PhysicalPageMappings.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="MemoryDock\PhysicalPageAttributionPage.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="MemoryDock\MemoryAttributionChart.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="MemoryDock\HyperVMemoryEvidence.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="MemoryDock\HyperVMemoryProviders.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="MemoryDock\HyperVMemoryPage.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="ArkDriverClient\ArkDriverPfn.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="MemoryDock\SystemMemoryAuditPage.cpp">
@@ -947,10 +980,22 @@
     <ClCompile Include="UI\KvmWatch.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="UI\KvmWatchEvidence.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="UI\KvmWatchPanel.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="UI\KvmWatchPanel.Evidence.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="UI\KvmWatchDialog.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\KvmWatchEventDialog.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="ProcessDock\ProcessDetailWindow.HvmWatch.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="UI\KvmEventDialog.cpp">
@@ -1205,6 +1250,9 @@
     <ClCompile Include="ArkDriverClient\ArkDriverProcessProtect.cpp">
       <Filter>Source Files\ArkDriverClient</Filter>
     </ClCompile>
+    <ClCompile Include="ArkDriverClient\ArkDriverClipboardPolicy.cpp">
+      <Filter>Source Files\ArkDriverClient</Filter>
+    </ClCompile>
     <ClCompile Include="ArkDriverClient\ArkDriverWorkQueue.cpp">
       <Filter>Source Files\ArkDriverClient</Filter>
     </ClCompile>
@@ -1408,6 +1456,36 @@
     <ClInclude Include="MemoryDock\MemoryDock.Internal.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="MemoryDock\PhysicalPageScan.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="MemoryDock\PhysicalPageMappings.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="MemoryDock\PhysicalPageAttributionPage.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="MemoryDock\MemoryAttributionChart.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="MemoryDock\HyperVMemoryEvidence.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="MemoryDock\HyperVMemoryPage.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="ArkDriverClient\ArkDriverPfn.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\shared\evidence\PfnAccounting.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\shared\driver\KswordArkPfnIoctl.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\third_party\systeminformer_dyn\PfnNative.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="MemoryDock\SystemMemoryAuditPage.h">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -1423,6 +1501,9 @@
     <ClInclude Include="MiscDock\ApplicationControlPage.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <QtMoc Include="MiscDock\ClipboardGuard\ClipboardGuardPage.h">
+      <Filter>Header Files</Filter>
+    </QtMoc>
     <ClInclude Include="MiscDock\SoundSource\SoundSourceDetector.h">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -1706,6 +1787,12 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="UI\KvmControl.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="UI\KvmWatchPanel.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="UI\KvmWatchEventDialog.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <QtMoc Include="UI\CodeEditorWidget.h">

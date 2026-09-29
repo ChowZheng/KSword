@@ -32,6 +32,9 @@ class QTableWidget;
 class QTabWidget;
 class QTimer;
 class QTreeWidget;
+class PhysicalPageAttributionPage;
+class HyperVMemoryPage;
+class MemoryAttributionChart;
 
 class SystemMemoryAuditPage final : public QWidget
 {
@@ -240,6 +243,10 @@ private:
 private:
     QPushButton* m_refreshButton = nullptr;
     QPushButton* m_userResidencyScanButton = nullptr;
+    QPushButton* m_pfnScanButton = nullptr;
+    PhysicalPageAttributionPage* m_pfnPage = nullptr;
+    HyperVMemoryPage* m_hyperVPage = nullptr;
+    MemoryAttributionChart* m_snapshotChart = nullptr;
     QCheckBox* m_autoRefreshCheck = nullptr;
     QSpinBox* m_intervalSpin = nullptr;
     QLineEdit* m_filterEdit = nullptr;

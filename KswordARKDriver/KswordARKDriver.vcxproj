@@ -291,6 +291,8 @@
     <ClCompile Include="src\features\process_protect\process_protect_runtime.c" />
     <ClCompile Include="src\features\process_protect\process_protect_kernel.c" />
     <ClCompile Include="src\features\process_protect\process_protect_ioctl.c" />
+    <ClCompile Include="src\features\clipboard_policy\clipboard_policy_runtime.c" />
+    <ClCompile Include="src\features\clipboard_policy\clipboard_policy_ioctl.c" />
     <ClCompile Include="src\features\redirect\redirect_runtime.c" />
     <ClCompile Include="src\features\redirect\redirect_registry.c" />
     <ClCompile Include="src\features\redirect\redirect_file.c" />
@@ -348,6 +350,14 @@
     <ClCompile Include="src\features\callback\callback_external_minifilter.c" />
     <ClCompile Include="src\features\callback\callback_external_safe.c" />
     <ClCompile Include="src\features\memory\memory_physical.c" />
+    <ClCompile Include="src\features\memory\memory_pfn_ioctl.c">
+      <WarningLevel>Level4</WarningLevel>
+      <TreatWarningAsError>true</TreatWarningAsError>
+    </ClCompile>
+    <ClCompile Include="src\features\memory\memory_pfn_mappings_ioctl.c">
+      <WarningLevel>Level4</WarningLevel>
+      <TreatWarningAsError>true</TreatWarningAsError>
+    </ClCompile>
     <ClCompile Include="src\features\memory\memory_physical_layout.c" />
     <ClCompile Include="src\features\memory\memory_pagetable.c" />
     <ClCompile Include="src\features\memory\memory_kernel_exec_scan.c" />
@@ -367,6 +377,8 @@
     </MASM>
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="..\shared\driver\KswordArkPfnIoctl.h" />
+    <ClInclude Include="..\third_party\systeminformer_dyn\PfnNative.h" />
     <ClInclude Include="Device.h" />
     <ClInclude Include="Driver.h" />
     <ClInclude Include="include\ark\ark_device.h" />
@@ -404,6 +416,8 @@
     <ClInclude Include="src\features\process\process_crossview.h" />
     <ClInclude Include="include\ark\ark_process_protect.h" />
     <ClInclude Include="src\features\process_protect\process_protect_internal.h" />
+    <ClInclude Include="include\ark\ark_clipboard_policy.h" />
+    <ClInclude Include="src\features\clipboard_policy\clipboard_policy_internal.h" />
     <ClInclude Include="src\features\callback\callback_internal.h" />
     <ClInclude Include="src\features\callback\callback_extended_internal.h" />
     <ClInclude Include="src\features\callback\callback_extended_kernel.h" />

@@ -918,6 +918,11 @@ void DriverDock::initializeObjectInfoTab()
                 (row >= 0 && table->item(row, 0) != nullptr)
                     ? table->item(row, 0)->data(Qt::UserRole).toULongLong()
                     : 0ULL;
+            // 槽位地址：&DriverObject->MajorFunction[i]，由驱动逐项回报。
+            const quint64 slotAddress =
+                (row >= 0 && table->item(row, 0) != nullptr)
+                    ? table->item(row, 0)->data(Qt::UserRole + 1).toULongLong()
+                    : 0ULL;
             const QString majorName =
                 (row >= 0 && table->item(row, 0) != nullptr)
                     ? table->item(row, 0)->text()
@@ -925,10 +930,32 @@ void DriverDock::initializeObjectInfoTab()
 
             QMenu menu(table);
             menu.setStyleSheet(KswordTheme::ContextMenuStyle());
+            /*
+             * 槽位监视排在最前面。
+             *
+             * 它才是 issue #195 第二十四节那条工作流的正中心：用户选中
+             * MajorFunction[IRP_MJ_DEVICE_CONTROL] 这一项，问"下一次是谁改了
+             * 它"。监视整个对象是它的退路而不是等价物——对象跨页时高位的几项
+             * 根本不在被监视的那一页上。
+             */
+            QAction* const watchSlot = menu.addAction(driverText(
+                "driver.object.major_function.menu.hvm_watch_slot",
+                QStringLiteral("HVM 监视：下一次写入这一项槽位")));
+            watchSlot->setEnabled(slotAddress != 0ULL);
+            watchSlot->setToolTip(slotAddress != 0ULL
+                ? driverText(
+                    "driver.object.major_function.menu.hvm_watch_slot.tip",
+                    QStringLiteral("只盯这一项（8 字节）的下一次写入，记下访问者的 RIP、模块与地址空间。硬件实际监视的是这一项所在的整个 4 KiB 页，安装对话框会把两套数字并排显示。"))
+                : driverText(
+                    "driver.object.major_function.menu.hvm_watch_slot.unavailable",
+                    QStringLiteral("当前驱动没有回报槽位地址，无法只监视这一项；请更新驱动，或改用下面的整对象监视。")));
             QAction* const watchObject = menu.addAction(driverText(
                 "driver.object.major_function.menu.hvm_watch_object",
                 QStringLiteral("HVM 监视：下一次写入这个 DriverObject（含 MajorFunction 表）")));
             watchObject->setEnabled(objectAddress != 0ULL);
+            watchObject->setToolTip(driverText(
+                "driver.object.major_function.menu.hvm_watch_object.tip",
+                QStringLiteral("监视 DriverObject 基址所在的那一页。注意它**不等于**监视了每一项：DRIVER_OBJECT 是池分配的，基址靠近页尾时 MajorFunction 表的后几项会落到下一页，而一条监视只覆盖一页。要确保盯住某一项，用上面那条。")));
             QAction* const watchDispatch = menu.addAction(driverText(
                 "driver.object.major_function.menu.hvm_watch_dispatch",
                 QStringLiteral("HVM 监视：下一次执行这条 dispatch 例程")));
@@ -936,7 +963,24 @@ void DriverDock::initializeObjectInfoTab()
 
             QAction* const chosen =
                 menu.exec(table->viewport()->mapToGlobal(localPosition));
-            if (chosen == watchObject && objectAddress != 0ULL)
+            if (chosen == watchSlot && slotAddress != 0ULL)
+            {
+                ks::ui::HvmWatchRequest request;
+                request.virtualAddress = true;
+                request.address = slotAddress;
+                // 一项就是一个 dispatch 函数指针，x64 上恒为 8 字节。
+                request.length = sizeof(void*);
+                request.access = KSWORD_ARK_HVM_EPT_ACCESS_WRITE;
+                request.label = driverText(
+                    "driver.object.major_function.menu.hvm_watch_slot.label",
+                    QStringLiteral("%1 的 MajorFunction[%2]"))
+                    .arg(driverName.isEmpty()
+                        ? QStringLiteral("DriverObject 0x%1").arg(objectAddress, 0, 16)
+                        : driverName)
+                    .arg(majorName);
+                ks::ui::openHvmWatch(this, request);
+            }
+            else if (chosen == watchObject && objectAddress != 0ULL)
             {
                 ks::ui::HvmWatchRequest request;
                 request.virtualAddress = true;
@@ -995,6 +1039,103 @@ void DriverDock::initializeObjectInfoTab()
     configureReadOnlyTable(m_fastIoEvidenceTable);
     m_fastIoEvidenceTable->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
     m_fastIoEvidenceTable->horizontalHeader()->setSectionResizeMode(5, QHeaderView::Stretch);
+    /*
+     * FastIo 槽位的 HVM 监视入口。
+     *
+     * 两项对应两个不同的问题：写槽位问的是"谁改了这张表"，执行例程问的是
+     * "下一次它真的被调用"。地址不从表格文本回解，而是取填表时随行存下的
+     * 原始值（DriverDock.Operation.cpp 里 setData(Qt::UserRole, ...)）——从
+     * 压缩过的地址文本反推，会在格式变一次之后悄悄监视错一页，而那种错误
+     * 的表现是一句读起来完全正确的错误结论。
+     */
+    m_fastIoEvidenceTable->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(
+        m_fastIoEvidenceTable,
+        &QTableWidget::customContextMenuRequested,
+        m_fastIoEvidenceTable,
+        [this](const QPoint& localPosition) {
+            QTableWidget* const table = m_fastIoEvidenceTable;
+            if (table == nullptr)
+            {
+                return;
+            }
+            const QModelIndex clicked = table->indexAt(localPosition);
+            if (clicked.isValid())
+            {
+                table->setCurrentCell(clicked.row(), clicked.column());
+            }
+            const int row = table->currentRow();
+            // 这张表混装五类证据，只有 FAST_IO 行谈得上"FastIo 槽位"。
+            const unsigned long evidenceClass =
+                (row >= 0 && table->item(row, 0) != nullptr)
+                    ? table->item(row, 0)->data(Qt::UserRole).toUInt()
+                    : 0UL;
+            const quint64 slotAddress =
+                (row >= 0 && table->item(row, 1) != nullptr)
+                    ? table->item(row, 1)->data(Qt::UserRole).toULongLong()
+                    : 0ULL;
+            const quint64 routineAddress =
+                (row >= 0 && table->item(row, 2) != nullptr)
+                    ? table->item(row, 2)->data(Qt::UserRole).toULongLong()
+                    : 0ULL;
+            const QString rowDescription =
+                (row >= 0 && table->item(row, 5) != nullptr)
+                    ? table->item(row, 5)->text()
+                    : QString();
+            const bool isFastIo =
+                evidenceClass == KSWORD_ARK_DRIVER_INTEGRITY_CLASS_FAST_IO;
+
+            QMenu menu(table);
+            menu.setStyleSheet(KswordTheme::ContextMenuStyle());
+            QAction* const watchSlot = menu.addAction(driverText(
+                "driver.object.fast_io.menu.hvm_watch_slot",
+                QStringLiteral("HVM 监视：下一次写入这个 FastIo 槽位")));
+            watchSlot->setEnabled(isFastIo && slotAddress != 0ULL);
+            watchSlot->setToolTip(driverText(
+                "driver.object.fast_io.menu.hvm_watch_slot.tip",
+                QStringLiteral("等下一次有人写这一项时记下访问者的 RIP、模块与地址空间。命中不阻止写入，也不会让常驻退出；硬件实际监视的是这一项所在的整个 4 KiB 页。")));
+            QAction* const watchRoutine = menu.addAction(driverText(
+                "driver.object.fast_io.menu.hvm_watch_routine",
+                QStringLiteral("HVM 监视：下一次执行这条 FastIo 例程")));
+            watchRoutine->setEnabled(isFastIo && routineAddress != 0ULL);
+            watchRoutine->setToolTip(driverText(
+                "driver.object.fast_io.menu.hvm_watch_routine.tip",
+                QStringLiteral("等这条例程下一次真的被调用时记下现场。它回答的是“这个槽位现在指向的代码有没有在跑”，与“谁改了这个槽位”是两个不同的问题。")));
+
+            QAction* const chosen =
+                menu.exec(table->viewport()->mapToGlobal(localPosition));
+            if (chosen == watchSlot && slotAddress != 0ULL)
+            {
+                ks::ui::HvmWatchRequest request;
+                request.virtualAddress = true;
+                request.address = slotAddress;
+                // FastIo 表的每一项都是一个函数指针，x64 上恒为 8 字节。
+                request.length = sizeof(void*);
+                request.access = KSWORD_ARK_HVM_EPT_ACCESS_WRITE;
+                request.label = driverText(
+                    "driver.object.fast_io.menu.hvm_watch_slot.label",
+                    QStringLiteral("FastIo 槽位 %1"))
+                    .arg(rowDescription.isEmpty()
+                        ? QStringLiteral("0x%1").arg(slotAddress, 0, 16)
+                        : rowDescription);
+                ks::ui::openHvmWatch(this, request);
+            }
+            else if (chosen == watchRoutine && routineAddress != 0ULL)
+            {
+                ks::ui::HvmWatchRequest request;
+                request.virtualAddress = true;
+                request.address = routineAddress;
+                request.length = 1ULL;
+                request.access = KSWORD_ARK_HVM_EPT_ACCESS_EXECUTE;
+                request.label = driverText(
+                    "driver.object.fast_io.menu.hvm_watch_routine.label",
+                    QStringLiteral("FastIo 例程 %1"))
+                    .arg(rowDescription.isEmpty()
+                        ? QStringLiteral("0x%1").arg(routineAddress, 0, 16)
+                        : rowDescription);
+                ks::ui::openHvmWatch(this, request);
+            }
+        });
     fastIoLayout->addWidget(m_fastIoEvidenceTable, 1);
     m_objectDetailTabWidget->addTab(m_fastIoPage, QIcon(":/Icon/process_pause.svg"), QStringLiteral("FastIo"));
 

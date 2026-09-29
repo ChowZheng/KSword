@@ -156,6 +156,10 @@
     <ClInclude Include="framework.h" />
     <ClInclude Include="hook\HookEngine.h" />
     <ClInclude Include="hook\HookTargets.h" />
+    <ClInclude Include="hook\ClipboardGuardCommon.h" />
+    <ClInclude Include="hook\ClipboardGuardHook.h" />
+    <ClInclude Include="hook\ClipboardGuardVTableHook.h" />
+    <ClInclude Include="hook\ClipboardGuardWin32u.h" />
     <ClInclude Include="MonitorAgent.h" />
     <ClInclude Include="core\MonitorConfig.h" />
     <ClInclude Include="core\MonitorPipe.h" />
@@ -166,6 +170,10 @@
     <ClCompile Include="dllmain.cpp" />
     <ClCompile Include="hook\HookEngine.cpp" />
     <ClCompile Include="hook\HookTargets.cpp" />
+    <ClCompile Include="hook\ClipboardGuardCommon.cpp" />
+    <ClCompile Include="hook\ClipboardGuardHook.cpp" />
+    <ClCompile Include="hook\ClipboardGuardVTableHook.cpp" />
+    <ClCompile Include="hook\ClipboardGuardWin32u.cpp" />
     <ClCompile Include="MonitorAgent.cpp" />
     <ClCompile Include="core\MonitorConfig.cpp" />
     <ClCompile Include="core\MonitorPipe.cpp" />
