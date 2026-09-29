@@ -408,6 +408,9 @@
     <ClCompile Include="Features\Driver\DriverUnloadedView.cpp">
       <Filter>Features\Driver</Filter>
     </ClCompile>
+    <ClCompile Include="Features\Driver\DriverThreadView.cpp">
+      <Filter>Features\Driver</Filter>
+    </ClCompile>
     <ClCompile Include="Features\HardwareStats\BusDeviceView.cpp">
       <Filter>Features\HardwareStats</Filter>
     </ClCompile>
@@ -1029,6 +1032,9 @@
       <Filter>Features\ProcessDetail</Filter>
     </ClInclude>
     <ClInclude Include="Features\Driver\DriverUnloadedView.h">
+      <Filter>Features\Driver</Filter>
+    </ClInclude>
+    <ClInclude Include="Features\Driver\DriverThreadView.h">
       <Filter>Features\Driver</Filter>
     </ClInclude>
     <ClInclude Include="Features\HardwareStats\BusDeviceView.h">

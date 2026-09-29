@@ -6,6 +6,7 @@
 #include "DriverModel.h"
 #include "DriverObjectView.h"
 #include "DriverOverviewView.h"
+#include "DriverThreadView.h"
 #include "DriverUnloadedView.h"
 #include "../Kernel/KernelFeature.h"
 #include "../../Ui/Controls.h"
@@ -42,6 +43,7 @@ constexpr int kDynDataCapabilitiesTabIndex = 4;
 constexpr int kDriverStatusTabIndex = 5;
 constexpr int kDynDataTabIndex = 6;
 constexpr int kDebugOutputTabIndex = 7;
+constexpr int kSystemThreadsTabIndex = 8;
 constexpr int kLoadingOverlayId = 65009;
 constexpr UINT kMsgRefreshCompleted = WM_APP + 590;
 
@@ -63,6 +65,7 @@ struct DriverFeaturePageState {
     HWND driverStatusView = nullptr;
     HWND dynDataView = nullptr;
     HWND debugOutputView = nullptr;
+    HWND systemThreadsView = nullptr;
     HWND loadingOverlay = nullptr;
     DriverModel model;
     std::unique_ptr<Ksword::Ui::AsyncSnapshotTask<DriverEnumerationResult>> refreshTask;
@@ -195,6 +198,10 @@ void ExportCurrentTabTsv(DriverFeaturePageState& state) {
         dialogTitle = L"导出已卸载驱动 TSV";
     } else if (currentTab == kOverviewTabIndex) {
         tsv = ExportDriverOverviewViewTsv(activePage);
+    } else if (currentTab == kSystemThreadsTabIndex) {
+        tsv = ExportDriverThreadViewTsv(activePage);
+        suggestedFileName = L"ksword-arklight-system-threads.tsv";
+        dialogTitle = L"导出系统线程 TSV";
     } else {
         SetStatus(state, L"当前页不支持顶栏 TSV 导出。");
         return;
@@ -279,6 +286,11 @@ bool CreateChildControls(DriverFeaturePageState& state) {
         [&state](HWND host, const RECT& bounds) {
             state.debugOutputView = CreateDriverDebugOutputView(host, bounds);
             return state.debugOutputView;
+        } });
+    tabs.push_back({ kSystemThreadsTabIndex, L"系统线程", L"按需读取 System(PID 4) 线程及驱动归属。",
+        [&state](HWND host, const RECT& bounds) {
+            state.systemThreadsView = CreateDriverThreadView(host, bounds);
+            return state.systemThreadsView;
         } });
 
     Ksword::Ui::WorkspaceOptions options{};

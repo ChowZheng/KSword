@@ -194,6 +194,7 @@
     <ClCompile Include="Features\ProcessDetail\ProcessDetailPage.Thread.cpp" />
     <ClCompile Include="Features\ProcessDetail\ProcessDetailPage.Token.cpp" />
     <ClCompile Include="Features\Driver\DriverUnloadedView.cpp" />
+    <ClCompile Include="Features\Driver\DriverThreadView.cpp" />
     <ClCompile Include="Features\NetTools\NetToolsActions.cpp" />
     <ClCompile Include="Features\NetTools\NetToolsConnectionView.cpp" />
     <ClCompile Include="Features\NetTools\NetToolsDiagnostics.cpp" />
@@ -404,6 +405,7 @@
     <ClInclude Include="Features\ProcessDetail\ProcessDetailPage.h" />
     <ClInclude Include="Features\ProcessDetail\ProcessDetailTypes.h" />
     <ClInclude Include="Features\Driver\DriverUnloadedView.h" />
+    <ClInclude Include="Features\Driver\DriverThreadView.h" />
     <ClInclude Include="Features\NetTools\NetToolsActions.h" />
     <ClInclude Include="Features\NetTools\NetToolsConnectionView.h" />
     <ClInclude Include="Features\NetTools\NetToolsDiagnostics.h" />
