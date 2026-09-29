@@ -1,6 +1,7 @@
 #include "FileSystemEnumerator.h"
 
 #include "PathNavigator.h"
+#include "../../../Ksword5.1/Ksword5.1/ArkDriverClient/ArkDriverClient.h"
 
 #include <algorithm>
 #include <cwchar>
@@ -34,11 +35,74 @@ bool EntryLess(const FileEntry& left, const FileEntry& right) {
 
 } // namespace
 
-DirectoryEnumerationResult FileSystemEnumerator::enumerate(const std::wstring& directory) const {
+DirectoryEnumerationResult FileSystemEnumerator::enumerate(const std::wstring& directory, bool useDriver) const {
     if (directory.empty()) {
         return enumerateDrives();
     }
-    return enumerateDirectory(directory);
+    return useDriver ? enumerateDirectoryByDriver(directory) : enumerateDirectory(directory);
+}
+
+DirectoryEnumerationResult FileSystemEnumerator::enumerateDirectoryByDriver(const std::wstring& directory) const {
+    DirectoryEnumerationResult result;
+    result.directory = directory;
+    std::wstring ntPath = directory;
+    for (wchar_t& ch : ntPath) {
+        if (ch == L'/') { ch = L'\\'; }
+    }
+    if (ntPath.rfind(L"\\??\\", 0) != 0 && ntPath.rfind(L"\\Device\\", 0) != 0) {
+        if (ntPath.rfind(L"\\\\?\\UNC\\", 0) == 0) {
+            ntPath = L"\\??\\UNC\\" + ntPath.substr(8);
+        } else if (ntPath.rfind(L"\\\\?\\", 0) == 0) {
+            ntPath = L"\\??\\" + ntPath.substr(4);
+        } else if (ntPath.rfind(L"\\\\", 0) == 0) {
+            ntPath = L"\\??\\UNC\\" + ntPath.substr(2);
+        } else {
+            ntPath = L"\\??\\" + ntPath;
+        }
+    }
+    const ksword::ark::DirectoryEnumerationResult driver =
+        ksword::ark::DriverClient().enumerateDirectory(ntPath);
+    if (!driver.io.ok) {
+        result.errorCode = driver.io.win32Error ? driver.io.win32Error : ERROR_GEN_FAILURE;
+        result.statusText = driver.unsupported ? L"R0 目录枚举不可用：请更新驱动。"
+            : L"R0 目录枚举通信失败：Win32=" + std::to_wstring(result.errorCode);
+        return result;
+    }
+    if (driver.queryStatus != KSWORD_ARK_DIRECTORY_ENUM_STATUS_OK &&
+        driver.queryStatus != KSWORD_ARK_DIRECTORY_ENUM_STATUS_PARTIAL) {
+        result.errorCode = ERROR_GEN_FAILURE;
+        result.statusText = L"R0 目录枚举失败：状态=" + std::to_wstring(driver.queryStatus) +
+            L"，NTSTATUS=" + std::to_wstring(static_cast<unsigned long>(driver.lastStatus));
+        return result;
+    }
+    result.entries.reserve(driver.entries.size());
+    bool incomplete = driver.capped || driver.queryStatus == KSWORD_ARK_DIRECTORY_ENUM_STATUS_PARTIAL;
+    for (const ksword::ark::DirectoryEntryRecord& source : driver.entries) {
+        if (source.name.empty()) { incomplete = true; continue; }
+        if ((source.flags & KSWORD_ARK_DIRECTORY_ENTRY_FLAG_NAME_TRUNCATED) != 0U) {
+            incomplete = true;
+        }
+        FileEntry entry;
+        entry.name = source.name;
+        entry.fullPath = PathNavigator::joinChildPath(directory, source.name);
+        entry.attributes = source.fileAttributes;
+        entry.kind = (source.flags & KSWORD_ARK_DIRECTORY_ENTRY_FLAG_DIRECTORY)
+            ? FileEntryKind::Directory : FileEntryKind::File;
+        entry.reparsePoint = (source.fileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0;
+        entry.size = source.endOfFile > 0 ? static_cast<ULONGLONG>(source.endOfFile) : 0;
+        if (source.lastWriteTime > 0) {
+            const ULONGLONG time = static_cast<ULONGLONG>(source.lastWriteTime);
+            entry.lastWriteTime.dwLowDateTime = static_cast<DWORD>(time);
+            entry.lastWriteTime.dwHighDateTime = static_cast<DWORD>(time >> 32U);
+        }
+        result.entries.push_back(std::move(entry));
+    }
+    std::sort(result.entries.begin(), result.entries.end(), EntryLess);
+    result.statusText = L"R0 目录枚举完成 " + std::to_wstring(result.entries.size()) + L" 项";
+    if (incomplete) {
+        result.statusText += L"（结果不完整）";
+    }
+    return result;
 }
 
 std::wstring FileSystemEnumerator::formatAttributes(DWORD attributes) {

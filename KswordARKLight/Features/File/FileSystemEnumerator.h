@@ -48,7 +48,7 @@ public:
     // enumerate returns drives when directory is empty, otherwise it lists the
     // requested directory. It never blocks on recursive traversal and never
     // throws; failures are reported in errorCode/statusText.
-    DirectoryEnumerationResult enumerate(const std::wstring& directory) const;
+    DirectoryEnumerationResult enumerate(const std::wstring& directory, bool useDriver = false) const;
 
     // formatAttributes converts WIN32_FIND_DATAW attributes into compact text.
     // Input is a DWORD attribute bitset; output is suitable for a list column.
@@ -65,6 +65,7 @@ public:
 private:
     DirectoryEnumerationResult enumerateDrives() const;
     DirectoryEnumerationResult enumerateDirectory(const std::wstring& directory) const;
+    DirectoryEnumerationResult enumerateDirectoryByDriver(const std::wstring& directory) const;
 };
 
 } // namespace Ksword::Features::File
