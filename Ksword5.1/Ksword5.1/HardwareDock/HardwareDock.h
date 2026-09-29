@@ -224,7 +224,7 @@ private:
 
     // NetworkRateSample：
     // - 作用：保存一次单网卡收发速率采样；
-    // - 调用方式：sampleNetworkRates 读取 GetIfTable2 并按接口 LUID 计算增量；
+    // - 调用方式：sampleNetworkRates 用 IP 接口 LUID 筛选 GetIfTable2 行并计算增量；
     // - 返回行为：字段直接供 UI 卡片和详情页刷新。
     struct NetworkRateSample
     {

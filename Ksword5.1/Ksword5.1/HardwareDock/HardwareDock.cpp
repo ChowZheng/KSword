@@ -95,6 +95,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <unordered_set>
 #include <vector>
 
 #ifndef NOMINMAX
@@ -1626,6 +1627,40 @@ namespace
     std::uint64_t interfaceLuidToKey(const std::uint64_t luidValue)
     {
         return luidValue;
+    }
+
+    // GetIfTable2 also contains one row for each bound filter module. IP
+    // interfaces identify the adapter rows that can appear in the performance
+    // view without depending on localized adapter or filter driver names.
+    bool collectNetworkIpInterfaceKeys(std::unordered_set<std::uint64_t>* keys)
+    {
+        if (keys == nullptr) return false;
+        MIB_IPINTERFACE_TABLE* table = nullptr;
+        if (::GetIpInterfaceTable(AF_UNSPEC, &table) != NO_ERROR || table == nullptr)
+        {
+            if (table != nullptr) ::FreeMibTable(table);
+            return false;
+        }
+        keys->clear();
+        for (ULONG index = 0; index < table->NumEntries; ++index)
+            keys->insert(interfaceLuidToKey(
+                static_cast<std::uint64_t>(table->Table[index].InterfaceLuid.Value)));
+        ::FreeMibTable(table);
+        return !keys->empty();
+    }
+
+    bool isMonitoredNetworkInterface(const MIB_IF_ROW2& row,
+        const std::unordered_set<std::uint64_t>& ipKeys, const bool hasIpTable)
+    {
+        if (row.OperStatus != IfOperStatusUp || row.Type == IF_TYPE_SOFTWARE_LOOPBACK
+            || row.InterfaceAndOperStatusFlags.FilterInterface)
+            return false;
+        if (hasIpTable)
+            return ipKeys.contains(interfaceLuidToKey(
+                static_cast<std::uint64_t>(row.InterfaceLuid.Value)));
+        // If the IP table is unavailable, retain usable broadcast adapters
+        // while excluding the always-up WAN miniport point-to-point rows.
+        return row.AccessType == NET_IF_ACCESS_BROADCAST;
     }
 
     // simplifyDiskInstanceName 作用：
@@ -8791,14 +8826,12 @@ bool HardwareDock::sampleNetworkRate(double* rxBytesPerSecOut, double* txBytesPe
     std::uint64_t primaryTrafficBytes = 0;
     QString primaryAdapterName;
     std::uint64_t primaryLinkBitsPerSecond = 0;
+    std::unordered_set<std::uint64_t> ipInterfaceKeys;
+    const bool hasIpTable = collectNetworkIpInterfaceKeys(&ipInterfaceKeys);
     for (ULONG rowIndex = 0; rowIndex < tablePointer->NumEntries; ++rowIndex)
     {
         const MIB_IF_ROW2& rowValue = tablePointer->Table[rowIndex];
-        if (rowValue.OperStatus != IfOperStatusUp)
-        {
-            continue;
-        }
-        if (rowValue.Type == IF_TYPE_SOFTWARE_LOOPBACK)
+        if (!isMonitoredNetworkInterface(rowValue, ipInterfaceKeys, hasIpTable))
         {
             continue;
         }
@@ -8876,14 +8909,12 @@ bool HardwareDock::sampleNetworkRates(std::vector<NetworkRateSample>* sampleList
     std::uint64_t primaryTrafficBytes = 0;
     QString primaryAdapterName;
     std::uint64_t primaryLinkBitsPerSecond = 0;
+    std::unordered_set<std::uint64_t> ipInterfaceKeys;
+    const bool hasIpTable = collectNetworkIpInterfaceKeys(&ipInterfaceKeys);
     for (ULONG rowIndex = 0; rowIndex < tablePointer->NumEntries; ++rowIndex)
     {
         const MIB_IF_ROW2& rowValue = tablePointer->Table[rowIndex];
-        if (rowValue.OperStatus != IfOperStatusUp)
-        {
-            continue;
-        }
-        if (rowValue.Type == IF_TYPE_SOFTWARE_LOOPBACK)
+        if (!isMonitoredNetworkInterface(rowValue, ipInterfaceKeys, hasIpTable))
         {
             continue;
         }
