@@ -127,7 +127,7 @@
 
 namespace
 {
-    void applyUtilizationScrollBarStyle(QListWidget* list, const double scale)
+    void applyUtilizationScrollBarStyle(QAbstractScrollArea* list, const double scale)
     {
         if (list == nullptr || list->verticalScrollBar() == nullptr) return;
         const int width = std::clamp(qRound(10.0 * scale), 6, 24);
@@ -1652,7 +1652,9 @@ namespace
     bool isMonitoredNetworkInterface(const MIB_IF_ROW2& row,
         const std::unordered_set<std::uint64_t>& ipKeys, const bool hasIpTable)
     {
-        if (row.OperStatus != IfOperStatusUp || row.Type == IF_TYPE_SOFTWARE_LOOPBACK
+        if ((row.OperStatus != IfOperStatusUp
+                && !row.InterfaceAndOperStatusFlags.HardwareInterface)
+            || row.Type == IF_TYPE_SOFTWARE_LOOPBACK
             || row.InterfaceAndOperStatusFlags.FilterInterface)
             return false;
         if (hasIpTable)
@@ -4422,6 +4424,14 @@ bool HardwareDock::eventFilter(QObject* watchedObject, QEvent* eventObject)
     }
 
     if (eventObject != nullptr
+        && eventObject->type() == QEvent::Resize
+        && eventWidget != nullptr && m_virtualNetworkScrollArea != nullptr
+        && eventWidget == m_virtualNetworkScrollArea->viewport())
+    {
+        QTimer::singleShot(0, this, [this]() { relayoutVirtualNetworkTiles(); });
+    }
+
+    if (eventObject != nullptr
         && eventObject->type() == QEvent::MouseButtonRelease
         && m_utilizationBodySplitter != nullptr
         && watchedObject == m_utilizationBodySplitter->handle(1))
@@ -4761,9 +4771,7 @@ void HardwareDock::initializeUtilizationSidebarCards()
         KswordTheme::PerformanceColor(KswordTheme::PerformanceRole::Memory),
         UtilizationDeviceKind::Memory,
         -1);
-    // 磁盘、网卡、GPU 不再注册固定聚合卡片：
-    // - 设备发现后由 ensure*UtilizationDevice 动态追加；
-    // - 这样多硬盘/多显卡/多网卡会像任务管理器一样各占一个入口。
+    // 磁盘和 GPU 按设备动态追加；实体网卡独立显示，虚拟网卡共用首次发现时创建的入口。
     m_diskNavCard = nullptr;
     m_networkNavCard = nullptr;
     m_gpuNavCard = nullptr;
@@ -4855,6 +4863,10 @@ void HardwareDock::syncUtilizationSidebarSelection(const int selectedRowIndex)
         }
     }
     m_utilizationDetailStack->setCurrentIndex(targetPageIndex);
+    if (m_utilizationDetailStack->currentWidget() == m_virtualNetworkPage)
+    {
+        QTimer::singleShot(0, this, [this]() { relayoutVirtualNetworkTiles(); });
+    }
 
     for (int entryIndex = 0; entryIndex < entryCount; ++entryIndex)
     {
@@ -4883,6 +4895,8 @@ QWidget* HardwareDock::utilizationChartBottomWidget(const UtilizationNavEntry& e
     case UtilizationDeviceKind::Network:
         return entry.deviceIndex >= 0 && entry.deviceIndex < static_cast<int>(m_networkUtilDevices.size())
             ? m_networkUtilDevices[static_cast<std::size_t>(entry.deviceIndex)].chartView : m_networkUtilChartView;
+    case UtilizationDeviceKind::VirtualNetwork:
+        return m_virtualNetworkScrollArea;
     case UtilizationDeviceKind::Gpu:
         return entry.deviceIndex >= 0 && entry.deviceIndex < static_cast<int>(m_gpuUtilDevices.size())
             ? m_gpuUtilDevices[static_cast<std::size_t>(entry.deviceIndex)].sharedMemoryChartView
@@ -4905,6 +4919,8 @@ std::vector<QWidget*> HardwareDock::utilizationDetailWidgets(const UtilizationNa
     case UtilizationDeviceKind::Network:
         return { entry.deviceIndex >= 0 && entry.deviceIndex < static_cast<int>(m_networkUtilDevices.size())
             ? m_networkUtilDevices[static_cast<std::size_t>(entry.deviceIndex)].detailLabel : m_networkUtilDetailLabel };
+    case UtilizationDeviceKind::VirtualNetwork:
+        return {};
     case UtilizationDeviceKind::Gpu:
         return { entry.deviceIndex >= 0 && entry.deviceIndex < static_cast<int>(m_gpuUtilDevices.size())
             ? m_gpuUtilDevices[static_cast<std::size_t>(entry.deviceIndex)].detailLabel : m_gpuUtilDetailLabel };
@@ -5680,9 +5696,13 @@ void HardwareDock::applyUtilizationFloatingContentScale(const bool forceRestyle)
         {
             widget->setStyleSheet(style);
         }
-        if (qobject_cast<QLabel*>(widget) != nullptr
+        if ((qobject_cast<QLabel*>(widget) != nullptr
+                || widget->property("ksword_virtual_network_tile").toBool()
+                || (m_virtualNetworkPage != nullptr
+                    && m_virtualNetworkPage->isAncestorOf(widget)
+                    && dynamic_cast<QChartView*>(widget) != nullptr))
             && existing->minimumHeight == existing->maximumHeight
-            && existing->maximumHeight > 0 && existing->maximumHeight < 200)
+            && existing->maximumHeight > 0 && existing->maximumHeight < 1000)
         {
             const int height = std::max(1, scaledPx(existing->maximumHeight));
             widget->setFixedHeight(height);
@@ -5762,6 +5782,11 @@ void HardwareDock::applyUtilizationFloatingContentScale(const bool forceRestyle)
     }
     else
     {
+        if (page == m_virtualNetworkPage)
+        {
+            applyUtilizationScrollBarStyle(m_virtualNetworkScrollArea, scale);
+            relayoutVirtualNetworkTiles();
+        }
         adjustUtilizationChartHeights();
     }
 }
@@ -5786,9 +5811,13 @@ void HardwareDock::restoreUtilizationFloatingContentScale()
             {
                 widget->setAttribute(Qt::WA_SetPalette, false);
             }
-            if (qobject_cast<QLabel*>(widget) != nullptr
+            if ((qobject_cast<QLabel*>(widget) != nullptr
+                    || widget->property("ksword_virtual_network_tile").toBool()
+                    || (m_virtualNetworkPage != nullptr
+                        && m_virtualNetworkPage->isAncestorOf(widget)
+                        && dynamic_cast<QChartView*>(widget) != nullptr))
                 && state.minimumHeight == state.maximumHeight
-                && state.maximumHeight > 0 && state.maximumHeight < 200)
+                && state.maximumHeight > 0 && state.maximumHeight < 1000)
             {
                 widget->setMinimumHeight(state.minimumHeight);
                 widget->setMaximumHeight(state.maximumHeight);
@@ -5827,6 +5856,10 @@ void HardwareDock::restoreUtilizationFloatingContentScale()
     {
         m_utilizationSidebarList->setMinimumWidth(140);
         applyUtilizationScrollBarStyle(m_utilizationSidebarList, 1.0);
+    }
+    if (page == m_virtualNetworkPage)
+    {
+        applyUtilizationScrollBarStyle(m_virtualNetworkScrollArea, 1.0);
     }
     m_utilizationFloatingWidgetStyles.clear();
     m_utilizationFloatingLayoutStyles.clear();
@@ -6293,8 +6326,11 @@ void HardwareDock::adjustUtilizationChartHeights()
     }
     for (NetworkUtilizationDevice& device : m_networkUtilDevices)
     {
-        adjustMainChartHeight(device.pageWidget, device.chartView, 0.40, 24, 120,
-            m_utilizationFloatingMode == UtilizationFloatingMode::Detail && m_utilizationFloatingPage == device.pageWidget);
+        if (device.physical)
+        {
+            adjustMainChartHeight(device.pageWidget, device.chartView, 0.40, 24, 120,
+                m_utilizationFloatingMode == UtilizationFloatingMode::Detail && m_utilizationFloatingPage == device.pageWidget);
+        }
         if (device.detailLabel != nullptr)
         {
             applyMaxHeightIfChanged(device.detailLabel, std::max(1, device.detailLabel->sizeHint().height()));
@@ -7628,28 +7664,140 @@ int HardwareDock::ensureNetworkUtilizationDevice(
             QStringLiteral("以太网")) + device.displayNameText.mid(QStringLiteral("以太网").size());
     }
     device.linkBitsPerSecond = sample.linkBitsPerSecond;
+    device.physical = sample.physical;
+    device.lastOperational = sample.operational;
     device.lastRxBytes = sample.totalRxBytes;
     device.lastTxBytes = sample.totalTxBytes;
     device.lastSampleMs = QDateTime::currentMSecsSinceEpoch();
     device.hasPreviousSample = true;
+    if (!sample.physical)
+    {
+        ensureVirtualNetworkPage();
+    }
     createNetworkUtilizationDevicePage(&device);
     m_networkUtilDevices.push_back(device);
 
     const int deviceIndex = static_cast<int>(m_networkUtilDevices.size()) - 1;
-    m_networkUtilDevices[static_cast<std::size_t>(deviceIndex)].navCard = addUtilizationSidebarCard(
-        m_networkUtilDevices[static_cast<std::size_t>(deviceIndex)].pageWidget,
-        m_networkUtilDevices[static_cast<std::size_t>(deviceIndex)].displayNameText,
-        KswordTheme::PerformanceColor(KswordTheme::PerformanceRole::Network),
-        UtilizationDeviceKind::Network,
-        deviceIndex);
-    if (m_networkUtilDevices[static_cast<std::size_t>(deviceIndex)].navCard != nullptr)
+    NetworkUtilizationDevice& createdDevice = m_networkUtilDevices[static_cast<std::size_t>(deviceIndex)];
+    if (sample.physical)
     {
-        m_networkUtilDevices[static_cast<std::size_t>(deviceIndex)].navCard->setSeriesColors(
+        createdDevice.navCard = addUtilizationSidebarCard(
+            createdDevice.pageWidget,
+            createdDevice.displayNameText,
+            KswordTheme::PerformanceColor(KswordTheme::PerformanceRole::Network),
+            UtilizationDeviceKind::Network,
+            deviceIndex);
+        if (createdDevice.navCard != nullptr)
+        {
+            createdDevice.navCard->setSeriesColors(
+                KswordTheme::PerformanceColor(KswordTheme::PerformanceRole::Read),
+                KswordTheme::PerformanceColor(KswordTheme::PerformanceRole::Write));
+        }
+    }
+    else
+    {
+        if (m_virtualNetworkGrid != nullptr && createdDevice.pageWidget != nullptr)
+        {
+            relayoutVirtualNetworkTiles();
+        }
+    }
+    scheduleUtilizationLayoutRefresh();
+    if (!sample.physical && m_utilizationFloatingPage == m_virtualNetworkPage)
+    {
+        QTimer::singleShot(0, this, [this]() { applyUtilizationFloatingContentScale(); });
+    }
+    return deviceIndex;
+}
+
+void HardwareDock::ensureVirtualNetworkPage()
+{
+    if (m_virtualNetworkPage != nullptr || m_utilizationDetailStack == nullptr)
+    {
+        return;
+    }
+    m_virtualNetworkPage = new QWidget(m_utilizationDetailStack);
+    configureCompressibleWidget(m_virtualNetworkPage, QSizePolicy::Ignored, QSizePolicy::Expanding);
+    appendTransparentBackgroundStyle(m_virtualNetworkPage);
+    QVBoxLayout* const pageLayout = new QVBoxLayout(m_virtualNetworkPage);
+    pageLayout->setContentsMargins(4, 4, 4, 4);
+    pageLayout->setSpacing(6);
+    QLabel* const titleLabel = new QLabel(ks::i18n::contextText(
+        QStringLiteral("hardware.utilization.card.virtual_network"),
+        QStringLiteral("虚拟网络")), m_virtualNetworkPage);
+    configurePersistentHeaderLabel(titleLabel);
+    titleLabel->setStyleSheet(QStringLiteral("font-size:28px;font-weight:700;color:%1;")
+        .arg(KswordTheme::TextPrimaryHex()));
+    lockLabelHeightToFont(titleLabel, 8);
+    pageLayout->addWidget(titleLabel);
+
+    m_virtualNetworkScrollArea = new QScrollArea(m_virtualNetworkPage);
+    m_virtualNetworkScrollArea->setFrameShape(QFrame::NoFrame);
+    m_virtualNetworkScrollArea->setWidgetResizable(true);
+    m_virtualNetworkScrollArea->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    m_virtualNetworkScrollArea->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    applyUtilizationScrollBarStyle(m_virtualNetworkScrollArea, 1.0);
+    configureCompressibleWidget(m_virtualNetworkScrollArea, QSizePolicy::Ignored, QSizePolicy::Expanding);
+    appendTransparentBackgroundStyle(m_virtualNetworkScrollArea);
+    pageLayout->addWidget(m_virtualNetworkScrollArea, 1);
+
+    m_virtualNetworkGridHost = new QWidget(m_virtualNetworkScrollArea);
+    configureCompressibleWidget(m_virtualNetworkGridHost, QSizePolicy::Ignored, QSizePolicy::Preferred);
+    appendTransparentBackgroundStyle(m_virtualNetworkGridHost);
+    m_virtualNetworkGrid = new QGridLayout(m_virtualNetworkGridHost);
+    m_virtualNetworkGrid->setContentsMargins(2, 2, 2, 2);
+    m_virtualNetworkGrid->setHorizontalSpacing(10);
+    m_virtualNetworkGrid->setVerticalSpacing(10);
+    m_virtualNetworkGrid->setAlignment(Qt::AlignTop);
+    m_virtualNetworkScrollArea->setWidget(m_virtualNetworkGridHost);
+    m_utilizationDetailStack->addWidget(m_virtualNetworkPage);
+    m_networkNavCard = addUtilizationSidebarCard(m_virtualNetworkPage,
+        titleLabel->text(), KswordTheme::PerformanceColor(KswordTheme::PerformanceRole::Network),
+        UtilizationDeviceKind::VirtualNetwork, -1);
+    if (m_networkNavCard != nullptr)
+    {
+        m_networkNavCard->setSeriesColors(
             KswordTheme::PerformanceColor(KswordTheme::PerformanceRole::Read),
             KswordTheme::PerformanceColor(KswordTheme::PerformanceRole::Write));
     }
-    scheduleUtilizationLayoutRefresh();
-    return deviceIndex;
+}
+
+void HardwareDock::relayoutVirtualNetworkTiles()
+{
+    if (m_virtualNetworkGrid == nullptr || m_virtualNetworkScrollArea == nullptr
+        || m_virtualNetworkScrollArea->viewport() == nullptr)
+    {
+        return;
+    }
+    const int viewportWidth = std::max(360, m_virtualNetworkScrollArea->viewport()->width());
+    const int columns = viewportWidth >= 700 ? 2 : 1;
+    std::vector<QWidget*> tiles;
+    tiles.reserve(m_networkUtilDevices.size());
+    for (NetworkUtilizationDevice& device : m_networkUtilDevices)
+    {
+        if (!device.physical && device.pageWidget != nullptr)
+        {
+            tiles.push_back(device.pageWidget);
+        }
+    }
+    if (m_virtualNetworkColumnCount == columns
+        && m_virtualNetworkTileCount == static_cast<int>(tiles.size()))
+    {
+        return;
+    }
+    for (QWidget* const tile : tiles)
+    {
+        m_virtualNetworkGrid->removeWidget(tile);
+    }
+    for (int index = 0; index < static_cast<int>(tiles.size()); ++index)
+    {
+        m_virtualNetworkGrid->addWidget(tiles[static_cast<std::size_t>(index)],
+            index / columns, index % columns);
+    }
+    m_virtualNetworkColumnCount = columns;
+    m_virtualNetworkTileCount = static_cast<int>(tiles.size());
+    m_virtualNetworkGrid->setColumnStretch(0, 1);
+    m_virtualNetworkGrid->setColumnStretch(1, columns == 2 ? 1 : 0);
+    m_virtualNetworkGridHost->updateGeometry();
 }
 
 int HardwareDock::findGpuUtilizationDeviceIndexByKey(const std::uint64_t adapterKey) const
@@ -7807,9 +7955,22 @@ void HardwareDock::createNetworkUtilizationDevicePage(NetworkUtilizationDevice* 
         return;
     }
 
-    devicePointer->pageWidget = new QWidget(m_utilizationDetailStack);
-    configureCompressibleWidget(devicePointer->pageWidget, QSizePolicy::Expanding, QSizePolicy::Expanding);
+    devicePointer->pageWidget = new QWidget(devicePointer->physical
+        ? static_cast<QWidget*>(m_utilizationDetailStack) : m_virtualNetworkGridHost);
+    configureCompressibleWidget(devicePointer->pageWidget,
+        devicePointer->physical ? QSizePolicy::Expanding : QSizePolicy::Ignored,
+        devicePointer->physical ? QSizePolicy::Expanding : QSizePolicy::Fixed);
     appendTransparentBackgroundStyle(devicePointer->pageWidget);
+    if (!devicePointer->physical)
+    {
+        devicePointer->pageWidget->setProperty("ksword_virtual_network_tile", true);
+        devicePointer->pageWidget->setStyleSheet(QStringLiteral(
+            "QWidget[ksword_virtual_network_tile=\"true\"]{background:transparent;"
+            "border:1px solid %1;border-radius:6px;}"
+            "QWidget[ksword_virtual_network_tile=\"true\"] QLabel{border:none;}")
+            .arg(KswordTheme::BorderHex()));
+        devicePointer->pageWidget->setFixedHeight(350);
+    }
     QVBoxLayout* pageLayout = new QVBoxLayout(devicePointer->pageWidget);
     pageLayout->setContentsMargins(4, 4, 4, 4);
     pageLayout->setSpacing(6);
@@ -7817,9 +7978,15 @@ void HardwareDock::createNetworkUtilizationDevicePage(NetworkUtilizationDevice* 
     QLabel* titleLabel = new QLabel(devicePointer->displayNameText, devicePointer->pageWidget);
     configurePersistentHeaderLabel(titleLabel);
     titleLabel->setStyleSheet(
-        QStringLiteral("font-size:46px;font-weight:700;color:%1;")
+        QStringLiteral("font-size:%1px;font-weight:700;color:%2;")
+        .arg(devicePointer->physical ? 46 : 18)
         .arg(KswordTheme::TextPrimaryHex()));
+    titleLabel->setWordWrap(!devicePointer->physical);
     lockLabelHeightToFont(titleLabel, 14);
+    if (!devicePointer->physical)
+    {
+        titleLabel->setFixedHeight(titleLabel->fontMetrics().height() * 2 + 8);
+    }
     pageLayout->addWidget(titleLabel, 0);
 
     devicePointer->summaryLabel = new QLabel(
@@ -7886,16 +8053,23 @@ void HardwareDock::createNetworkUtilizationDevicePage(NetworkUtilizationDevice* 
         devicePointer->txAreaSeries->attachAxis(devicePointer->axisY);
     }
     devicePointer->chartView = createPlotBackgroundChartView(chart, devicePointer->pageWidget);
+    if (!devicePointer->physical)
+    {
+        devicePointer->chartView->setFixedHeight(135);
+    }
     pageLayout->addWidget(devicePointer->chartView, 1);
 
     devicePointer->detailLabel = new QLabel(QStringLiteral("网络参数采样中..."), devicePointer->pageWidget);
     configureCompressibleLabel(devicePointer->detailLabel);
-    devicePointer->detailLabel->setWordWrap(false);
+    devicePointer->detailLabel->setWordWrap(!devicePointer->physical);
     devicePointer->detailLabel->setStyleSheet(
         QStringLiteral("font-size:14px;color:%1;").arg(KswordTheme::TextPrimaryHex()));
     pageLayout->addWidget(devicePointer->detailLabel, 0);
 
-    m_utilizationDetailStack->addWidget(devicePointer->pageWidget);
+    if (devicePointer->physical)
+    {
+        m_utilizationDetailStack->addWidget(devicePointer->pageWidget);
+    }
 }
 
 void HardwareDock::createGpuUtilizationDevicePage(GpuUtilizationDevice* devicePointer)
@@ -8929,6 +9103,8 @@ bool HardwareDock::sampleNetworkRates(std::vector<NetworkRateSample>* sampleList
         sample.linkBitsPerSecond = std::max<std::uint64_t>(
             static_cast<std::uint64_t>(rowValue.ReceiveLinkSpeed),
             static_cast<std::uint64_t>(rowValue.TransmitLinkSpeed));
+        sample.physical = rowValue.InterfaceAndOperStatusFlags.HardwareInterface != 0;
+        sample.operational = rowValue.OperStatus == IfOperStatusUp;
         sample.totalRxBytes = static_cast<std::uint64_t>(rowValue.InOctets);
         sample.totalTxBytes = static_cast<std::uint64_t>(rowValue.OutOctets);
 
@@ -8939,7 +9115,8 @@ bool HardwareDock::sampleNetworkRates(std::vector<NetworkRateSample>* sampleList
         {
             NetworkUtilizationDevice& device = m_networkUtilDevices[static_cast<std::size_t>(deviceIndex)];
             const qint64 elapsedMs = nowMs - device.lastSampleMs;
-            if (device.hasPreviousSample && elapsedMs > 0)
+            if (sample.operational && device.lastOperational
+                && device.hasPreviousSample && elapsedMs > 0)
             {
                 const std::uint64_t deltaRx = sample.totalRxBytes >= device.lastRxBytes
                     ? (sample.totalRxBytes - device.lastRxBytes)
@@ -8954,10 +9131,11 @@ bool HardwareDock::sampleNetworkRates(std::vector<NetworkRateSample>* sampleList
             device.lastTxBytes = sample.totalTxBytes;
             device.lastSampleMs = nowMs;
             device.linkBitsPerSecond = sample.linkBitsPerSecond;
+            device.lastOperational = sample.operational;
             device.hasPreviousSample = true;
         }
         const std::uint64_t trafficBytes = sample.totalRxBytes + sample.totalTxBytes;
-        if (trafficBytes >= primaryTrafficBytes)
+        if (sample.operational && trafficBytes >= primaryTrafficBytes)
         {
             primaryTrafficBytes = trafficBytes;
             primaryAdapterName = sample.displayNameText;
@@ -9968,8 +10146,6 @@ void HardwareDock::updateUtilizationView(
         memoryUsagePercent,
         diskReadBytesPerSec,
         diskWriteBytesPerSec,
-        networkRxBytesPerSec,
-        networkTxBytesPerSec,
         gpuUsagePercent);
 }
 
@@ -9978,8 +10154,6 @@ void HardwareDock::updateUtilizationSidebarCards(
     const double memoryUsagePercent,
     const double diskReadBytesPerSec,
     const double diskWriteBytesPerSec,
-    const double networkRxBytesPerSec,
-    const double networkTxBytesPerSec,
     const double gpuUsagePercent)
 {
     if (m_cpuNavCard != nullptr)
@@ -10055,22 +10229,6 @@ void HardwareDock::updateUtilizationSidebarCards(
             .arg(formatRateText(diskWriteBytesPerSec)));
     }
 
-    if (m_networkNavCard != nullptr)
-    {
-        rebuildDualRateNavCard(
-            m_networkNavCard,
-            &m_networkNavRxHistoryBytesPerSec,
-            &m_networkNavTxHistoryBytesPerSec,
-            networkRxBytesPerSec,
-            networkTxBytesPerSec,
-            &m_networkNavAutoScaleBytesPerSec,
-            ks::i18n::contextText(
-                QStringLiteral("hardware.utilization.card.network.summary"),
-                QStringLiteral("下 %1 / 上 %2"))
-            .arg(formatRateText(networkRxBytesPerSec))
-            .arg(formatRateText(networkTxBytesPerSec)));
-    }
-
     if (m_gpuNavCard != nullptr)
     {
         m_gpuNavCard->setSubtitleText(
@@ -10103,15 +10261,33 @@ void HardwareDock::updateAdditionalDiskUtilizationDevices(const std::vector<Disk
 
 void HardwareDock::updateAdditionalNetworkUtilizationDevices(const std::vector<NetworkRateSample>& sampleList)
 {
+    double virtualRxBytesPerSec = 0.0;
+    double virtualTxBytesPerSec = 0.0;
     for (int sampleIndex = 0; sampleIndex < static_cast<int>(sampleList.size()); ++sampleIndex)
     {
         const NetworkRateSample& sample = sampleList[static_cast<std::size_t>(sampleIndex)];
+        if (!sample.physical)
+        {
+            virtualRxBytesPerSec += sample.rxBytesPerSec;
+            virtualTxBytesPerSec += sample.txBytesPerSec;
+        }
         const int deviceIndex = ensureNetworkUtilizationDevice(sample, sampleIndex);
         if (deviceIndex < 0 || deviceIndex >= static_cast<int>(m_networkUtilDevices.size()))
         {
             continue;
         }
         updateNetworkUtilizationDevice(m_networkUtilDevices[static_cast<std::size_t>(deviceIndex)], sample);
+    }
+    if (m_networkNavCard != nullptr)
+    {
+        rebuildDualRateNavCard(m_networkNavCard,
+            &m_networkNavRxHistoryBytesPerSec, &m_networkNavTxHistoryBytesPerSec,
+            virtualRxBytesPerSec, virtualTxBytesPerSec, &m_networkNavAutoScaleBytesPerSec,
+            ks::i18n::contextText(
+                QStringLiteral("hardware.utilization.card.network.summary"),
+                QStringLiteral("下 %1 / 上 %2"))
+                .arg(formatRateText(virtualRxBytesPerSec))
+                .arg(formatRateText(virtualTxBytesPerSec)));
     }
 }
 

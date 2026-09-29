@@ -30,6 +30,7 @@ KSword 主程序位于 `Ksword5.1/Ksword5.1`（Qt 6.9.3 Widgets + Qt Advanced Do
 - 利用率浮窗跟随外部窗口时，原采样与绘图控件仍留在浮窗，主界面原插槽用独立的原生标签、设备卡和图表控件呈现同一采样结果。不要用 `QWidget::render()` 后按主窗口尺寸缩放位图，字体和图表会一起变形。用 `WindowFromPoint` 选顶层窗口，按完整标题与进程路径重找；跟随事件使用 `SetWinEventHook` 的异步回调加定时兜底。目标与浮窗矩形用 DWM 扩展边框的物理坐标读取，持久化相对位移时按目标屏幕 DPI 转成逻辑单位；只在用户结束拖动/缩放时改写偏移，不能把程序主动 `SetWindowPos` 产生的 Qt `Move` 事件当成用户拖动，否则跨 DPI 屏幕会累积漂移。目标置顶时拒绝跟随；跟随时浮窗自身强制非置顶，普通模式保留用户原置顶配置。点击穿透仅对跟随态设置 `WS_EX_TRANSPARENT`，主界面性能区双击负责退出穿透。
 - 利用率左侧窄窗和详情浮窗共用 `utilization_floating_scale_percent`；键盘/滚轮修改立即保存，原生边缘缩放必须在 `WM_EXITSIZEMOVE` 后按最终窗口尺寸保存，Qt 鼠标释放事件不会可靠地收到非客户区缩放结束。左侧列表的滚动条宽度、圆角和最小滑块高度跟着浮窗内容比例变化，颜色使用 palette 角色以适应独立深浅主题。跟随目标从遮挡中唤到前台时，在 WinEvent 回调中先用原生 `SetWindowPos` 调整浮窗 Z 序，再排队同步 Qt 视图，避免图表刷新延迟层级调整。
 - 硬件利用率页的网络来源是 `GetIfTable2`，该表还含每个网卡上挂载的 WFP、杀软、QoS 等过滤模块行；仅检查 `OperStatus == Up` 会把一个网卡绘成多张卡并重复累计流量。网络性能卡应跳过 `MIB_IF_ROW2.InterfaceAndOperStatusFlags.FilterInterface`，再按接口 LUID 与 `GetIpInterfaceTable(AF_UNSPEC)` 返回的 IP 接口交叉验证；不要用驱动名称字符串筛选，因为名称受产品和语言影响。IP 表查询失败时仅回退到非过滤、广播型接口。
+- 网络利用率页用 `MIB_IF_ROW2.InterfaceAndOperStatusFlags.HardwareInterface` 区分实体和虚拟 IP 接口：实体网卡保留独立导航项，虚拟网卡合入一个滚动详情页。虚拟页复用每接口采样和 `QChartView`，按 viewport 宽度排成一列或两列；新增接口时重排网格，并在详情浮窗中重新捕获缩放样式。实体接口断开后保留卡片，重新连接首帧重置计数器增量基线。
 
 **全局基线样式只允许颜色/边框，禁止 min-height/padding 等几何属性**——app 级几何会穿透局部样式破坏紧凑布局（曾导致主窗口标题栏按钮被撑高、最大化后标题文字上偏）。
 
