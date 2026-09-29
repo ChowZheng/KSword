@@ -217,6 +217,7 @@ bool IsR0EvidenceFeature(const KernelFeatureId featureId) {
     case KernelFeatureId::MinifilterBypassPids:
     case KernelFeatureId::KernelTimerDpc:
     case KernelFeatureId::IoctlRegistry:
+    case KernelFeatureId::ObjectTypeProcedures:
         return true;
     default:
         return false;
@@ -9559,6 +9560,12 @@ void KernelPage::ConfigureToolbarForDescriptor(const KernelFeatureDescriptor& de
         ::SetWindowTextW(refreshButton_, L"刷新");
         SetEditCueBanner(filterEdit_, L"按类型名、编号、策略筛选");
         ::SetWindowTextW(statusText_, L"状态：等待刷新");
+        break;
+    case KernelFeatureId::ObjectTypeProcedures:
+        ::SetWindowTextW(filterLabel_, L"过滤");
+        ::SetWindowTextW(refreshButton_, L"刷新方法指针");
+        SetEditCueBanner(filterEdit_, L"筛选类型、方法、模块、地址或风险");
+        ::SetWindowTextW(statusText_, L"状态：等待读取 R0 对象类型方法指针。");
         break;
     case KernelFeatureId::CommunicationEndpoint:
         ::SetWindowTextW(filterLabel_, L"过滤");

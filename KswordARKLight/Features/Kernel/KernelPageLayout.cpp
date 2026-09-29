@@ -34,6 +34,7 @@ const std::vector<ObjectNamespaceTabSpec> kObjectNamespaceTabs = {
     { L"符号链接", KernelFeatureId::SymbolicLink },
     { L"设备与驱动", KernelFeatureId::DeviceDriverObjects },
     { L"对象类型", KernelFeatureId::ObjectTypeMatrix },
+    { L"对象类型方法", KernelFeatureId::ObjectTypeProcedures },
     { L"通信端点", KernelFeatureId::CommunicationEndpoint },
 };
 
@@ -125,6 +126,7 @@ KernelPageLayoutKind LayoutKindForFeature(const KernelFeatureId featureId) {
     case KernelFeatureId::ShadowSsdt:
     case KernelFeatureId::InlineHook:
     case KernelFeatureId::IatEatHook:
+    case KernelFeatureId::ObjectTypeProcedures:
     case KernelFeatureId::CallbackEnumeration:
     case KernelFeatureId::KernelExecutableMemory:
     case KernelFeatureId::KernelMemoryEvidence:
@@ -188,6 +190,9 @@ std::vector<std::wstring> CanonicalColumnNames(const KernelFeatureId featureId) 
     case KernelFeatureId::ObjectTypeMatrix:
         return { L"类型编号", L"类型名", L"R0 对象地址", L"R0 交叉验证",
             L"对象数", L"句柄数", L"访问掩码", L"枚举策略" };
+    case KernelFeatureId::ObjectTypeProcedures:
+        return { L"类型索引", L"类型名", L"方法", L"槽位地址", L"目标地址",
+            L"归属模块", L"所在节", L"风险", L"状态" };
     case KernelFeatureId::CommunicationEndpoint:
         return { L"来源目录", L"名称", L"类型", L"完整路径", L"状态" };
     case KernelFeatureId::AtomTable:

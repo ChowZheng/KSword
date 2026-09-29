@@ -34,6 +34,11 @@ std::vector<KernelFeatureDescriptor> CreateR0ExtendedDescriptors() {
             L"内核信息",
             L"通过 ArkDriverClient 扫描 R0 可执行内核页、页权限和模块归属。"),
         Descriptor(
+            KernelFeatureId::ObjectTypeProcedures,
+            L"对象类型方法指针",
+            L"对象命名空间",
+            L"只读检查 OBJECT_TYPE 方法槽、目标归属、入口跳板与运行时布局验证。"),
+        Descriptor(
             KernelFeatureId::KernelMemoryEvidence,
             L"内核内存证据",
             L"内核信息",
