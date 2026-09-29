@@ -1,6 +1,7 @@
 #include "ProcessDetailPage.h"
 
 #include "../Process/ProcessActions.h"
+#include "../../../shared/ProcessTerminateMethods.h"
 
 #include <commdlg.h>
 #include <tlhelp32.h>
@@ -14,10 +15,6 @@ namespace Ksword::Features::ProcessDetail {
 namespace {
 
 using Ksword::Features::Process::ProcessActionId;
-
-constexpr LPARAM kTerminateModeMultiMethod = 1;
-constexpr LPARAM kTerminateModeWin32 = 2;
-constexpr LPARAM kTerminateModeAllThreads = 3;
 
 void AddComboItem(HWND combo, const wchar_t* text, LPARAM data) {
     const LRESULT index = ::SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(text));
@@ -41,69 +38,6 @@ bool ConfirmR0Injection(HWND owner, const wchar_t* action, DWORD processId, cons
 
 } // namespace
 
-bool ProcessDetailPage::TerminateAllThreadsIfProcessIdentityMatches(
-    DWORD targetProcessId,
-    ULONGLONG expectedProcessCreationTime100ns,
-    std::wstring& detail) {
-    detail.clear();
-    Ksword::Core::UniqueHandle verifiedProcess;
-    std::wstring identityError;
-    if (!OpenVerifiedProcessActionTarget(
-            targetProcessId,
-            expectedProcessCreationTime100ns,
-            PROCESS_QUERY_LIMITED_INFORMATION,
-            verifiedProcess,
-            identityError)) {
-        detail = L"目标进程身份验证失败：" + identityError;
-        return false;
-    }
-
-    Ksword::Core::UniqueHandle snapshot(::CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0));
-    if (!snapshot.valid()) {
-        detail = L"无法创建线程快照。";
-        return false;
-    }
-
-    THREADENTRY32 entry{};
-    entry.dwSize = sizeof(entry);
-    if (!::Thread32First(snapshot.get(), &entry)) {
-        detail = L"无法枚举目标进程线程。";
-        return false;
-    }
-
-    int succeeded = 0;
-    int failed = 0;
-    int skipped = 0;
-    do {
-        if (entry.th32OwnerProcessID != targetProcessId) {
-            continue;
-        }
-        Ksword::Core::UniqueHandle thread(::OpenThread(
-            THREAD_QUERY_LIMITED_INFORMATION | THREAD_TERMINATE,
-            FALSE,
-            entry.th32ThreadID));
-        if (!thread.valid()) {
-            ++failed;
-            continue;
-        }
-        if (::GetProcessIdOfThread(thread.get()) != targetProcessId) {
-            // The Toolhelp entry became stale before the action handle opened.
-            ++skipped;
-            continue;
-        }
-        if (::TerminateThread(thread.get(), 1)) {
-            ++succeeded;
-        } else {
-            ++failed;
-        }
-    } while (::Thread32Next(snapshot.get(), &entry));
-
-    detail = L"TerminateThread 完成：成功 " + std::to_wstring(succeeded) +
-        L"，失败 " + std::to_wstring(failed) +
-        L"，身份变更跳过 " + std::to_wstring(skipped) + L"。";
-    return succeeded > 0 && failed == 0 && skipped == 0;
-}
-
 bool ProcessDetailPage::CreateActionTab() {
     const TabIndex tab = TabIndex::Actions;
 
@@ -111,9 +45,13 @@ bool ProcessDetailPage::CreateActionTab() {
     AddLabel(tab, 0, L"结束方案", 18, 32, 88, 28);
     HWND terminateMode = AddCombo(tab, ActionTerminateMode, 110, 30, -104, 220);
     AddButton(tab, ActionTerminate, L"执行", -86, 30, 74, 32);
-    AddComboItem(terminateMode, L"结束进程(组合方法链)", kTerminateModeMultiMethod);
-    AddComboItem(terminateMode, L"TerminateProcess", kTerminateModeWin32);
-    AddComboItem(terminateMode, L"TerminateThread(全部线程)", kTerminateModeAllThreads);
+    const auto& terminateMethods = ks::process::TerminateMethodTable();
+    for (std::size_t index = 0; index < terminateMethods.size(); ++index) {
+        AddComboItem(terminateMode, terminateMethods[index].wideName, static_cast<LPARAM>(index));
+    }
+    AddComboItem(terminateMode,
+        L"R0 驱动结束（四步：清保护 → ZwTerminate → 逐线程 → 清零内存）",
+        static_cast<LPARAM>(terminateMethods.size()));
     ::SendMessageW(terminateMode, CB_SETCURSEL, 0, 0);
 
     AddLabel(tab, 0, L"运行控制", 18, 70, 88, 28);
@@ -178,43 +116,56 @@ bool ProcessDetailPage::HandleActionCommand(int controlId) {
         const LPARAM mode = selected >= 0
             ? ::SendMessageW(combo, CB_GETITEMDATA, static_cast<WPARAM>(selected), 0)
             : -1;
-        if (mode == kTerminateModeAllThreads) {
-            if (!ConfirmDanger(hwnd_, L"将逐个终止目标进程的全部线程。该操作不可撤销，是否继续？")) {
-                return true;
+        const auto& methods = ks::process::TerminateMethodTable();
+        if (mode == static_cast<LPARAM>(methods.size())) {
+            if (ConfirmDanger(hwnd_, L"将通过 R0 驱动结束目标进程。未保存的数据会丢失，是否继续？")) {
+                ExecuteProcessAction(static_cast<int>(ProcessActionId::R0TerminateProcess));
             }
-            const DWORD processId = processId_;
-            const ULONGLONG expectedProcessCreationTime100ns = expectedCreationTime100ns_;
-            ExecuteBackgroundAction(
-                TabIndex::Actions,
-                ActionStatus,
-                L"● 正在后台终止目标进程的全部线程…",
-                [processId, expectedProcessCreationTime100ns] {
-                    ProcessDetailActionResult action{};
-                    const bool success = ProcessDetailPage::TerminateAllThreadsIfProcessIdentityMatches(
-                        processId,
-                        expectedProcessCreationTime100ns,
-                        action.dialogText);
-                    action.dialogTitle = L"结束进程";
-                    action.dialogIcon = success ? MB_ICONINFORMATION : MB_ICONWARNING;
-                    action.statusText = success
-                        ? L"● 已在后台完成全部线程终止。"
-                        : L"● 全部线程终止未完全成功。";
-                    action.refreshRequired = success;
+            return true;
+        }
+        if (mode < 0 || mode >= static_cast<LPARAM>(methods.size())) {
+            return true;
+        }
+        if (!ConfirmDanger(hwnd_, L"将只执行选中的一种结束方法。未保存的数据会丢失，是否继续？")) {
+            return true;
+        }
+        const DWORD processId = processId_;
+        const ULONGLONG expectedCreationTime = expectedCreationTime100ns_;
+        const std::size_t methodIndex = static_cast<std::size_t>(mode);
+        ExecuteBackgroundAction(
+            TabIndex::Actions,
+            ActionStatus,
+            L"● 正在后台执行选中的结束方法…",
+            [processId, expectedCreationTime, methodIndex] {
+                ProcessDetailActionResult action{};
+                const auto& method = ks::process::TerminateMethodTable()[methodIndex];
+                action.dialogTitle = method.wideName;
+                Ksword::Core::UniqueHandle identityHold;
+                std::wstring identityError;
+                if (processId <= 4 || !ProcessDetailPage::OpenVerifiedProcessActionTarget(
+                        processId, expectedCreationTime, PROCESS_QUERY_LIMITED_INFORMATION,
+                        identityHold, identityError)) {
+                    action.dialogText = processId <= 4 ? L"受保护的系统 PID 不允许执行此操作。" : identityError;
+                    action.dialogIcon = MB_ICONWARNING;
+                    action.statusText = L"● 进程身份验证失败，未执行结束方法。";
                     return action;
-                });
-            return true;
-        }
-        if (mode == kTerminateModeMultiMethod) {
-            if (!ConfirmDanger(hwnd_, L"将按多种结束方法依次处理目标进程。未保存的数据会丢失，是否继续？")) {
-                return true;
-            }
-            ExecuteProcessAction(static_cast<int>(ProcessActionId::TerminateProcessMultiMethod));
-            return true;
-        }
-        if (!ConfirmDanger(hwnd_, L"即将结束目标进程。未保存的数据会丢失，是否继续？")) {
-            return true;
-        }
-        ExecuteProcessAction(static_cast<int>(ProcessActionId::TerminateProcess));
+                }
+                std::string detail;
+                const bool success = method.invokeMethod(processId, &detail);
+                const int required = ::MultiByteToWideChar(CP_UTF8, 0, detail.c_str(), -1, nullptr, 0);
+                std::wstring wideDetail(static_cast<std::size_t>(required > 0 ? required : 0), L'\0');
+                if (required > 0) {
+                    ::MultiByteToWideChar(CP_UTF8, 0, detail.c_str(), -1, wideDetail.data(), required);
+                    wideDetail.pop_back();
+                }
+                action.dialogText = L"PID " + std::to_wstring(processId) + L" | " +
+                    method.wideName + L" | " + (success ? L"调用成功" : L"调用失败") +
+                    L" | " + wideDetail;
+                action.dialogIcon = success ? MB_ICONINFORMATION : MB_ICONWARNING;
+                action.statusText = success ? L"● 选中的结束方法调用成功。" : L"● 选中的结束方法调用失败。";
+                action.refreshRequired = success;
+                return action;
+            });
         return true;
     }
     case ActionSuspend: ExecuteProcessAction(static_cast<int>(ProcessActionId::SuspendProcess)); return true;

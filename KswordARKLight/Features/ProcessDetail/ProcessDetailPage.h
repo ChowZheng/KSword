@@ -333,11 +333,6 @@ private:
         Ksword::Core::UniqueHandle& processOut,
         Ksword::Core::UniqueHandle& threadOut,
         std::wstring& errorText);
-    static bool TerminateAllThreadsIfProcessIdentityMatches(
-        DWORD targetProcessId,
-        ULONGLONG expectedProcessCreationTime100ns,
-        std::wstring& detail);
-
     bool CreateDetailTab();
     bool CreateThreadTab();
     bool CreateActionTab();

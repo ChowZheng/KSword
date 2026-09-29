@@ -31,3 +31,11 @@ metadata:
 - 不要把 kernel-only 行的合成 identity 时间传给驱动。合成值只用于 UI 缓存键。
 - 不要全局关闭 `ProcessDock::dispatchProcessActionTargetsInParallel` 的 R3 identity hold。
   只对明确标记为 `isKernelOnly` 的目标跳过。
+
+## 进程详情的逐方法结束
+
+- 主程序进程列表的“高级结束进程（逐方法）”、主程序详情页和 Light 详情页的 R3 条目共用
+  `shared/ProcessTerminateMethods.h`，目前为 14 项。组合链也从该表执行，新增方法时只改这一处。
+- 两个详情页执行单项 R3 方法前，都用捕获的创建时间验证目标并持有查询句柄，避免 PID 复用；
+  R0 驱动结束单列在表外，仍走各自已有的驱动调用与身份保护。
+- 详情页下拉框不包含 HVM 与 DMA：HVM 需要地址和常驻状态编排，DMA 需要另行指定写入地址。

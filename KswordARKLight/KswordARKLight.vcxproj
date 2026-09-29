@@ -493,6 +493,7 @@
     <ClInclude Include="..\Ksword5.1\Ksword5.1\ksword\process\process.h" />
     <ClInclude Include="..\Ksword5.1\Ksword5.1\ksword\string\string.h" />
     <ClInclude Include="..\shared\KswordArkLogProtocol.h" />
+    <ClInclude Include="..\shared\ProcessTerminateMethods.h" />
     <ClInclude Include="..\shared\driver\KswordArkAlpcIoctl.h" />
     <ClInclude Include="..\shared\driver\KswordArkCallbackIoctl.h" />
     <ClInclude Include="..\shared\driver\KswordArkCapabilityIoctl.h" />
