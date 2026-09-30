@@ -634,6 +634,7 @@
     <QtMoc Include="Framework\CustomTitleBar.h" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="include\ads\ads_version.h" />
     <ClInclude Include="Framework.h" />
     <ClInclude Include="Ksword.h" />
     <ClInclude Include="PluginHost.h" />

@@ -1432,6 +1432,9 @@
     <QtMoc Include="DriverDock\DriverDock.h">
       <Filter>Header Files</Filter>
     </QtMoc>
+    <ClInclude Include="include\ads\ads_version.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="DriverDock\DriverDock.Internal.h">
       <Filter>Header Files</Filter>
     </ClInclude>
