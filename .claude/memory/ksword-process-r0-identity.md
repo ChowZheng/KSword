@@ -30,7 +30,10 @@ metadata:
   并在驱动解析出的对象上校验。
 - 不要把 kernel-only 行的合成 identity 时间传给驱动。合成值只用于 UI 缓存键。
 - 不要全局关闭 `ProcessDock::dispatchProcessActionTargetsInParallel` 的 R3 identity hold。
-  只对明确标记为 `isKernelOnly` 的目标跳过。
+  普通 R3 变更动作只对明确标记为 `isKernelOnly` 的目标跳过。
+- 独立的“R0 结束进程”列表动作不依赖 R3 `OpenProcess`：R3 可见目标须携带真实
+  `creationTime100ns`，由驱动在已引用的 `EPROCESS` 上校验；缺失时拒绝下发。
+  R3 动作及其组合链仍保留原有 identity hold，不能为解决受保护进程问题全局跳过。
 
 ## 进程详情的逐方法结束
 

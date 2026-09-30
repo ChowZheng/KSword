@@ -13121,9 +13121,8 @@ void ProcessDock::dispatchProcessActionTargetsInParallel(
         return;
     }
 
-    // 对任何按 PID 定位目标的变更动作，先在同一进程对象上验证 PID + 创建时间，并将
-    // 查询句柄保持至 actionInvoker 返回。这样 R3 或 R0 动作实现即使仍以 PID 为入口，
-    // 也不会在目标退出后误落到被 Windows 复用的 PID。
+    // 需要 R3 身份校验的动作先验证 PID + 创建时间，并将查询句柄保持至
+    // actionInvoker 返回。R0 结束进程改由驱动在已引用的 EPROCESS 上校验创建时间。
     const auto invokeAction = [actionInvoker, requireVerifiedProcessIdentity](
         const ProcessActionTarget& actionTarget,
         std::string* const detailTextOut) -> bool
@@ -16341,15 +16340,27 @@ void ProcessDock::executeR0TerminateProcessActions(
         actionTargets,
         [](const ProcessActionTarget& actionTarget, std::string* detailTextOut)
         {
+            // R3 可见目标必须有真实创建时间，交给驱动在 EPROCESS 上校验；
+            // 仅 R0 可见的旧记录沿用原有兼容行为。
+            const std::uint64_t expectedCreateTime100ns =
+                r0ActionExpectedCreationTime(actionTarget.record);
+            if (!actionTarget.isKernelOnly && expectedCreateTime100ns == 0ULL)
+            {
+                if (detailTextOut != nullptr)
+                {
+                    *detailTextOut = "process identity is unavailable; action skipped";
+                }
+                return false;
+            }
             // 每个动作目标都会单独调用 ArkDriverClient，形成独立的结束进程 IOCTL。
             return terminateProcessByR0Driver(
                 actionTarget.record.pid,
-                r0ActionExpectedCreationTime(actionTarget.record),
+                expectedCreateTime100ns,
                 detailTextOut);
         },
         true,
         false,
-        true);
+        false);
 }
 
 void ProcessDock::executeTerminateProcessActions(
