@@ -16,10 +16,10 @@ KswordARKDriverDeletePath(
  * KswordARKDriverDeletePathWithFlags
  * Inputs:
  * - deleteFlags 只接收 KSWORD_ARK_DELETE_PATH_FLAG_BACKEND_MASK；未设置表示
- *   原有底层 Zw* 方案，BACKEND_IRP/POSIX 显式选择对应实现。
+ *   原有底层 Zw* 方案，其余三个 BACKEND_* 位显式选择对应实现。
  * Processing:
- * - 三个后端共用路径校验与递归调度边界；底层/POSIX 共用只读属性归一化，
- *   IRP 后端保留目标文件系统对传统 FileDispositionInformation 的原生判定。
+ * - 四个后端共用路径校验；POSIX 仅在只读文件阻碍删除时申请属性写权限，
+ *   忽略共享检查的模式只接受单文件并受独立安全策略约束。
  * Return behavior:
  * - 返回所选后端的 NTSTATUS；不支持的文件系统/系统能力原样失败，不跨后端降级。
  */
@@ -29,6 +29,15 @@ KswordARKDriverDeletePathWithFlags(
     _In_ USHORT pathLengthChars,
     _In_ BOOLEAN isDirectory,
     _In_ ULONG deleteFlags
+    );
+
+NTSTATUS
+KswordARKDriverDeletePathWithDetails(
+    _In_reads_(pathLengthChars) PCWSTR pathText,
+    _In_ USHORT pathLengthChars,
+    _In_ BOOLEAN isDirectory,
+    _In_ ULONG deleteFlags,
+    _Inout_opt_ KSWORD_ARK_DELETE_PATH_RESPONSE* Details
     );
 
 /*

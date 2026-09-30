@@ -3334,7 +3334,7 @@ namespace
             errorLines.push_back(
                 QStringLiteral("occupyPidCount=%1, autoTerminate=disabled").arg(occupyPids.size()));
             errorLines.push_back(
-                QStringLiteral("请先使用“文件解锁器”选择并确认要结束的占用进程，再重新执行驱动删除。"));
+                QStringLiteral("可使用“文件解锁器”检查占用，或另行选择“重启后删除”；不会自动结束进程或关闭句柄。"));
             errorLines.append(scanDetails);
         }
 
@@ -3411,7 +3411,14 @@ namespace
             .arg(static_cast<unsigned long>(static_cast<std::uint32_t>(response.lastStatus)), 0, 16)
             .arg(failedPathText.isEmpty()
                 ? QStringLiteral("-")
-                : QDir::toNativeSeparators(failedPathText));
+                : QDir::toNativeSeparators(failedPathText)) +
+            (driverResult.responseV2
+                ? QStringLiteral("（open=0x%1, disposition=0x%2, verify=0x%3, outcome=%4）")
+                    .arg(static_cast<unsigned long>(static_cast<std::uint32_t>(response.openStatus)), 0, 16)
+                    .arg(static_cast<unsigned long>(static_cast<std::uint32_t>(response.dispositionStatus)), 0, 16)
+                    .arg(static_cast<unsigned long>(static_cast<std::uint32_t>(response.verifyStatus)), 0, 16)
+                    .arg(response.outcome)
+                : QString());
     }
 
     // runDriverDeleteBatch：R0 档执行体。
@@ -3446,6 +3453,13 @@ namespace
             const bool isDirectory = pathInfo.isDir();
             const bool isReparsePointPath = isPathReparsePoint(path);
             const bool wantRecursive = isDirectory && !isReparsePointPath;
+            if (backend == ksword::ark::FileDeleteBackend::IgnoreSharePosix && isDirectory)
+            {
+                stats.failedCount += 1U;
+                stats.errors.push_back(QStringLiteral("共享检查增强模式只支持单文件：%1")
+                    .arg(QDir::toNativeSeparators(path)));
+                continue;
+            }
 
             const QString driverNtPath = buildDriverNtPath(path);
             if (driverNtPath.isEmpty())
@@ -3477,7 +3491,9 @@ namespace
                         const QString backendText =
                             backend == ksword::ark::FileDeleteBackend::Irp
                                 ? QStringLiteral("IRP")
-                                : QStringLiteral("POSIX");
+                                : (backend == ksword::ark::FileDeleteBackend::IgnoreSharePosix
+                                    ? QStringLiteral("POSIX·忽略共享检查")
+                                    : QStringLiteral("POSIX"));
                         stats.errors.push_back(QStringLiteral(
                             "当前 KswordARK 驱动不支持 R0 %1 删除后端，请重新部署本次构建的驱动：%2")
                             .arg(backendText)
@@ -3487,6 +3503,14 @@ namespace
                 else if (!driverResult.io.ok)
                 {
                     stats.failedCount += 1U;
+                    if (backend == ksword::ark::FileDeleteBackend::IgnoreSharePosix &&
+                        driverResult.io.win32Error == ERROR_ACCESS_DENIED)
+                    {
+                        stats.errors.push_back(QStringLiteral(
+                            "R0 安全策略未启用高风险共享检查删除；默认关闭。目标：%1")
+                            .arg(QDir::toNativeSeparators(path)));
+                        continue;
+                    }
                     appendDriverDeleteFailureDetail(
                         path,
                         isDirectory,
@@ -3498,6 +3522,13 @@ namespace
                 else
                 {
                     const KSWORD_ARK_DELETE_PATH_RESPONSE& response = driverResult.response;
+                    if (!driverResult.responseV2)
+                    {
+                        stats.failedCount += 1U;
+                        stats.errors.push_back(QStringLiteral("旧版驱动未提供路径移除复核结果，请部署新版驱动后确认：%1")
+                            .arg(QDir::toNativeSeparators(path)));
+                        continue;
+                    }
                     stats.deletedFileCount += response.deletedFileCount;
                     stats.deletedDirectoryCount += response.deletedDirectoryCount;
                     stats.failedCount += response.failedCount;
@@ -3563,6 +3594,13 @@ namespace
             return runDriverDeleteBatch(
                 paths,
                 ksword::ark::FileDeleteBackend::Posix,
+                progressCallback);
+        }
+        if (mode == FileDeleteMode::DriverR0IgnoreSharePosix)
+        {
+            return runDriverDeleteBatch(
+                paths,
+                ksword::ark::FileDeleteBackend::IgnoreSharePosix,
                 progressCallback);
         }
 
@@ -15528,6 +15566,10 @@ void FileDock::showPanelContextMenu(FilePanelWidgets& panel, const QPoint& local
         QIcon(":/Icon/process_terminate.svg"), QStringLiteral("驱动(POSIX)"));
     driverPosixDeleteAction->setToolTip(QStringLiteral(
         "由 R0 使用 FileDispositionInformationEx 的 POSIX unlink 语义；是否可用取决于系统与文件系统，不回退到其它后端。"));
+    QAction* driverIgnoreShareDeleteAction = r0DeleteMenu->addAction(
+        QIcon(":/Icon/process_terminate.svg"), QStringLiteral("驱动(POSIX·忽略共享检查，高风险)"));
+    driverIgnoreShareDeleteAction->setToolTip(QStringLiteral(
+        "仅单文件；需单独启用默认关闭的 R0 安全策略。尝试跳过 I/O 管理器共享检查，文件系统仍可能拒绝。"));
     QAction* unlockByDriverAction = menu.addAction(
         QIcon(":/Icon/handle_close.svg"),
         ks::i18n::displayText(QStringLiteral("文件解锁器")));
@@ -15619,6 +15661,7 @@ void FileDock::showPanelContextMenu(FilePanelWidgets& panel, const QPoint& local
     driverNativeDeleteAction->setEnabled(hasSelection);
     driverIrpDeleteAction->setEnabled(hasSelection);
     driverPosixDeleteAction->setEnabled(hasSelection);
+    driverIgnoreShareDeleteAction->setEnabled(singleFileOnly);
     unlockByDriverAction->setEnabled(isSingleSelection);
     const bool canAddOplock = singleFileOnly && !firstPathHasOplock;
     addOplockMenu->setEnabled(canAddOplock);
@@ -15787,6 +15830,11 @@ void FileDock::showPanelContextMenu(FilePanelWidgets& panel, const QPoint& local
     if (selectedAction == driverPosixDeleteAction)
     {
         deleteSelectedItemsWithMode(panel, FileDeleteMode::DriverR0Posix);
+        return;
+    }
+    if (selectedAction == driverIgnoreShareDeleteAction)
+    {
+        deleteSelectedItemsWithMode(panel, FileDeleteMode::DriverR0IgnoreSharePosix);
         return;
     }
     if (selectedAction == unlockByDriverAction)
@@ -16772,6 +16820,12 @@ void FileDock::deleteSelectedItemsWithMode(FilePanelWidgets& panel, const FileDe
         return;
     }
 
+    if (mode == FileDeleteMode::DriverR0IgnoreSharePosix &&
+        (paths.size() != 1U || QFileInfo(paths.front()).isDir()))
+    {
+        return;
+    }
+
     // 档位文案必须把“可逆性 + 权限手段”说清楚：
     // 用户对“删除”的预期来自资源管理器（进回收站、可还原），而下面四档都不可撤销，
     // 不提前说明就等于让不可逆操作伪装成可撤销操作。
@@ -16836,6 +16890,12 @@ void FileDock::deleteSelectedItemsWithMode(FilePanelWidgets& panel, const FileDe
         confirmBodyText = QStringLiteral(
             "将由 KswordARK 驱动使用 FileDispositionInformationEx 的 POSIX unlink 语义，硬删除选中的 %1 项，不进入回收站、无法还原。\n\n目录树仍由 R0 后序递归展开；支持情况取决于 Windows 版本与文件系统，失败时不会回退到 IRP 或底层方案。是否继续？")
             .arg(paths.size());
+        break;
+    case FileDeleteMode::DriverR0IgnoreSharePosix:
+        modeNameText = QStringLiteral("R0 驱动(POSIX·忽略共享检查)");
+        confirmTitleText = QStringLiteral("高风险文件删除确认");
+        confirmBodyText = QStringLiteral(
+            "将对选中的单个文件尝试跳过 I/O 管理器共享检查，再请求 POSIX 删除。该模式默认被 R0 安全策略禁用；文件系统和过滤驱动仍可能拒绝，且不会自动结束进程或关闭句柄。删除不可撤销。是否继续？");
         break;
     default:
         return;

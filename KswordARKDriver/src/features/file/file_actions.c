@@ -102,6 +102,13 @@ typedef struct _KSWORD_FILE_DISPOSITION_INFORMATION_EX
     ULONG Flags;
 } KSWORD_FILE_DISPOSITION_INFORMATION_EX, *PKSWORD_FILE_DISPOSITION_INFORMATION_EX;
 
+// Resolve the optional create entry point at runtime so old Windows 10 builds
+// never gain a new loader-time import dependency.
+typedef NTSTATUS (NTAPI* KSWORD_ARK_IO_CREATE_FILE_EX_FN)(
+    PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES, PIO_STATUS_BLOCK,
+    PLARGE_INTEGER, ULONG, ULONG, ULONG, ULONG, PVOID, ULONG,
+    CREATE_FILE_TYPE, PVOID, ULONG, PIO_DRIVER_CREATE_CONTEXT);
+
 typedef enum _KSWORD_ARK_MMFLUSH_TYPE
 {
     KswordArkMmFlushForDelete = 0,
@@ -1205,18 +1212,17 @@ Return Value:
 
 static NTSTATUS
 KswordARKDriverDeleteFileWithDispositionEx(
-    _In_ HANDLE fileHandle
+    _In_ HANDLE fileHandle,
+    _In_ BOOLEAN IgnoreReadOnly,
+    _In_ BOOLEAN AllowLegacyFallback
     )
 /*++
 
 Routine Description:
 
-    使用 FileDispositionInformationEx 重试文件删除。中文说明：优先使用
-    POSIX_SEMANTICS + IGNORE_READONLY_ATTRIBUTE，不设置
-    FORCE_IMAGE_SECTION_CHECK。这样针对“文件仍被进程映像/模块 section 映射”
-    的场景，内核可以按 POSIX unlink 语义移除目录项，而不是被我们主动要求
-    检查 image section 后失败。只有当首选 Ex 组合表现为不支持/参数不兼容时，
-    才尝试保留旧版本行为的 force-image-check 组合，兼容历史系统差异。
+    使用 FileDispositionInformationEx 请求 POSIX 删除。普通 POSIX 后端先不请求
+    IGNORE_READONLY_ATTRIBUTE；只读文件的针对性重试才启用它。高风险后端不回退
+    到 FORCE_IMAGE_SECTION_CHECK；其它后端仅在 Ex 参数不受支持时兼容旧组合。
 
 Arguments:
 
@@ -1230,9 +1236,8 @@ Return Value:
 --*/
 {
     const ULONG preferredDispositionFlags =
-        FILE_DISPOSITION_DELETE
-        | FILE_DISPOSITION_POSIX_SEMANTICS
-        | FILE_DISPOSITION_IGNORE_READONLY_ATTRIBUTE;
+        FILE_DISPOSITION_DELETE | FILE_DISPOSITION_POSIX_SEMANTICS |
+        (IgnoreReadOnly ? FILE_DISPOSITION_IGNORE_READONLY_ATTRIBUTE : 0UL);
     const ULONG legacyDispositionFlags =
         preferredDispositionFlags
         | FILE_DISPOSITION_FORCE_IMAGE_SECTION_CHECK;
@@ -1244,7 +1249,8 @@ Return Value:
         return status;
     }
 
-    if (!KswordARKDriverIsDispositionExUnsupportedStatus(status)) {
+    if (!AllowLegacyFallback ||
+        !KswordARKDriverIsDispositionExUnsupportedStatus(status)) {
         return status;
     }
 
@@ -1443,6 +1449,182 @@ Exit:
     return resultStatus;
 }
 
+static BOOLEAN
+KswordARKDriverQueryFileIndex(
+    _In_ HANDLE FileHandle,
+    _Out_ PLARGE_INTEGER Index
+    )
+{
+    FILE_INTERNAL_INFORMATION information;
+    IO_STATUS_BLOCK ioStatusBlock;
+    RtlZeroMemory(&information, sizeof(information));
+    RtlZeroMemory(&ioStatusBlock, sizeof(ioStatusBlock));
+    if (!NT_SUCCESS(ZwQueryInformationFile(
+            FileHandle, &ioStatusBlock, &information,
+            sizeof(information), FileInternalInformation))) {
+        return FALSE;
+    }
+    *Index = information.IndexNumber;
+    return TRUE;
+}
+
+static NTSTATUS
+KswordARKDriverVerifyDeleteAfterClose(
+    _In_ PUNICODE_STRING Path,
+    _Inout_opt_ KSWORD_ARK_DELETE_PATH_RESPONSE* Details
+    )
+{
+    OBJECT_ATTRIBUTES attributes;
+    FILE_BASIC_INFORMATION basicInformation;
+    NTSTATUS status;
+
+    InitializeObjectAttributes(&attributes, Path,
+        OBJ_KERNEL_HANDLE | OBJ_CASE_INSENSITIVE, NULL, NULL);
+    RtlZeroMemory(&basicInformation, sizeof(basicInformation));
+    status = ZwQueryAttributesFile(&attributes, &basicInformation);
+    if (Details != NULL) {
+        Details->verifyStatus = status;
+    }
+    if (status == STATUS_OBJECT_NAME_NOT_FOUND ||
+        status == STATUS_OBJECT_PATH_NOT_FOUND) {
+        if (Details != NULL) {
+            Details->outcome = KSWORD_ARK_DELETE_PATH_OUTCOME_REMOVED;
+        }
+        return STATUS_SUCCESS;
+    }
+    if (!NT_SUCCESS(status)) {
+        if (Details != NULL) {
+            Details->outcome = KSWORD_ARK_DELETE_PATH_OUTCOME_NOT_VERIFIED;
+        }
+        return STATUS_UNSUCCESSFUL;
+    }
+
+    // The selected path must be absent. A new file at the same path is still
+    // visible and therefore cannot be reported as a successful path removal.
+    if (Details != NULL) {
+        Details->outcome = KSWORD_ARK_DELETE_PATH_OUTCOME_STILL_VISIBLE;
+    }
+    return STATUS_CANNOT_DELETE;
+}
+
+static NTSTATUS
+KswordARKDriverOpenPosixDeleteHandle(
+    _In_ POBJECT_ATTRIBUTES Attributes,
+    _In_ BOOLEAN IgnoreShare,
+    _In_ BOOLEAN WriteAttributes,
+    _In_ BOOLEAN IsDirectory,
+    _Out_ PHANDLE FileHandle
+    )
+{
+    IO_STATUS_BLOCK ioStatusBlock;
+    const ACCESS_MASK access = DELETE | SYNCHRONIZE |
+        (WriteAttributes ? FILE_WRITE_ATTRIBUTES : 0UL);
+    const ULONG options = FILE_SYNCHRONOUS_IO_NONALERT |
+        FILE_OPEN_FOR_BACKUP_INTENT | FILE_OPEN_REPARSE_POINT |
+        (IsDirectory ? FILE_DIRECTORY_FILE : FILE_NON_DIRECTORY_FILE);
+    RtlZeroMemory(&ioStatusBlock, sizeof(ioStatusBlock));
+    if (IgnoreShare) {
+        UNICODE_STRING routineName;
+        KSWORD_ARK_IO_CREATE_FILE_EX_FN createFileEx;
+        RtlInitUnicodeString(&routineName, L"IoCreateFileEx");
+        createFileEx = (KSWORD_ARK_IO_CREATE_FILE_EX_FN)
+            MmGetSystemRoutineAddress(&routineName);
+        if (createFileEx == NULL) {
+            return STATUS_NOT_SUPPORTED;
+        }
+        return createFileEx(FileHandle, access, Attributes, &ioStatusBlock,
+            NULL, FILE_ATTRIBUTE_NORMAL,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            FILE_OPEN, options, NULL, 0U, CreateFileTypeNone, NULL,
+            IO_IGNORE_SHARE_ACCESS_CHECK, NULL);
+    }
+    return ZwCreateFile(FileHandle, access, Attributes, &ioStatusBlock,
+        NULL, FILE_ATTRIBUTE_NORMAL,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        FILE_OPEN, options, NULL, 0U);
+}
+
+static NTSTATUS
+KswordARKDriverDeletePathPosix(
+    _In_ PUNICODE_STRING Path,
+    _In_ BOOLEAN IsDirectory,
+    _In_ BOOLEAN IgnoreShare,
+    _Inout_opt_ KSWORD_ARK_DELETE_PATH_RESPONSE* Details
+    )
+{
+    OBJECT_ATTRIBUTES attributes;
+    FILE_BASIC_INFORMATION basicInformation;
+    HANDLE fileHandle = NULL;
+    HANDLE retryHandle = NULL;
+    LARGE_INTEGER originalIndex = { 0 };
+    LARGE_INTEGER retryIndex;
+    BOOLEAN indexValid;
+    NTSTATUS status;
+
+    InitializeObjectAttributes(&attributes, Path,
+        OBJ_KERNEL_HANDLE | OBJ_CASE_INSENSITIVE, NULL, NULL);
+    status = KswordARKDriverOpenPosixDeleteHandle(
+        &attributes, IgnoreShare, FALSE, IsDirectory, &fileHandle);
+    if (Details != NULL) {
+        Details->openStatus = status;
+    }
+    if (!NT_SUCCESS(status)) {
+        if (Details != NULL) {
+            Details->outcome = KSWORD_ARK_DELETE_PATH_OUTCOME_FAILED;
+        }
+        return status;
+    }
+    indexValid = KswordARKDriverQueryFileIndex(fileHandle, &originalIndex);
+    status = KswordARKDriverDeleteFileWithDispositionEx(
+        fileHandle, FALSE, !IgnoreShare);
+    if (Details != NULL) {
+        Details->dispositionStatus = status;
+    }
+
+    if (status == STATUS_CANNOT_DELETE || status == STATUS_ACCESS_DENIED) {
+        RtlZeroMemory(&basicInformation, sizeof(basicInformation));
+        if (NT_SUCCESS(ZwQueryAttributesFile(&attributes, &basicInformation)) &&
+            (basicInformation.FileAttributes & FILE_ATTRIBUTE_READONLY) != 0UL &&
+            indexValid) {
+            NTSTATUS retryStatus = KswordARKDriverOpenPosixDeleteHandle(
+                &attributes, IgnoreShare, TRUE, IsDirectory, &retryHandle);
+            if (Details != NULL) {
+                Details->openStatus = retryStatus;
+            }
+            if (NT_SUCCESS(retryStatus)) {
+                if (KswordARKDriverQueryFileIndex(retryHandle, &retryIndex) &&
+                    retryIndex.QuadPart == originalIndex.QuadPart) {
+                    status = KswordARKDriverDeleteFileWithDispositionEx(
+                        retryHandle, TRUE, !IgnoreShare);
+                    if (KswordARKDriverIsDispositionExUnsupportedStatus(status) &&
+                        NT_SUCCESS(KswordARKDriverNormalizeReadOnlyAttribute(retryHandle))) {
+                        status = KswordARKDriverDeleteFileWithDispositionEx(
+                            retryHandle, FALSE, !IgnoreShare);
+                    }
+                    if (Details != NULL) {
+                        Details->dispositionStatus = status;
+                    }
+                }
+                else {
+                    status = STATUS_FILE_INVALID;
+                }
+                ZwClose(retryHandle);
+            }
+            else {
+                status = retryStatus;
+            }
+        }
+    }
+    ZwClose(fileHandle);
+    if (!NT_SUCCESS(status)) {
+        if (Details != NULL) {
+            Details->outcome = KSWORD_ARK_DELETE_PATH_OUTCOME_FAILED;
+        }
+        return status;
+    }
+    return KswordARKDriverVerifyDeleteAfterClose(Path, Details);
+}
+
 NTSTATUS
 KswordARKDriverDeletePath(
     _In_reads_(pathLengthChars) PCWSTR pathText,
@@ -1463,6 +1645,19 @@ KswordARKDriverDeletePathWithFlags(
     _In_ USHORT pathLengthChars,
     _In_ BOOLEAN isDirectory,
     _In_ ULONG deleteFlags
+    )
+{
+    return KswordARKDriverDeletePathWithDetails(
+        pathText, pathLengthChars, isDirectory, deleteFlags, NULL);
+}
+
+NTSTATUS
+KswordARKDriverDeletePathWithDetails(
+    _In_reads_(pathLengthChars) PCWSTR pathText,
+    _In_ USHORT pathLengthChars,
+    _In_ BOOLEAN isDirectory,
+    _In_ ULONG deleteFlags,
+    _Inout_opt_ KSWORD_ARK_DELETE_PATH_RESPONSE* Details
     )
 /*++
 
@@ -1494,17 +1689,34 @@ Return Value:
     NTSTATUS status;
     NTSTATUS firstDeleteStatus = STATUS_SUCCESS;
 
+    if (Details != NULL) {
+        Details->openStatus = STATUS_NOT_SUPPORTED;
+        Details->dispositionStatus = STATUS_NOT_SUPPORTED;
+        Details->verifyStatus = STATUS_NOT_SUPPORTED;
+        Details->outcome = KSWORD_ARK_DELETE_PATH_OUTCOME_UNKNOWN;
+    }
+
     if (pathText == NULL || pathLengthChars == 0U) {
         return STATUS_INVALID_PARAMETER;
     }
     if ((deleteFlags & (~KSWORD_ARK_DELETE_PATH_FLAG_BACKEND_MASK)) != 0UL ||
-        (deleteFlags & KSWORD_ARK_DELETE_PATH_FLAG_BACKEND_MASK) ==
-            KSWORD_ARK_DELETE_PATH_FLAG_BACKEND_MASK) {
+        (deleteFlags != 0UL && (deleteFlags & (deleteFlags - 1UL)) != 0UL)) {
         return STATUS_INVALID_PARAMETER;
     }
 
     if ((deleteFlags & KSWORD_ARK_DELETE_PATH_FLAG_BACKEND_IRP) != 0UL) {
-        return KswordARKDriverDeletePathByIrp(pathText, pathLengthChars, isDirectory);
+        status = KswordARKDriverDeletePathByIrp(pathText, pathLengthChars, isDirectory);
+        if (Details != NULL) {
+            Details->dispositionStatus = status;
+            if (!NT_SUCCESS(status)) {
+                Details->outcome = KSWORD_ARK_DELETE_PATH_OUTCOME_FAILED;
+            }
+        }
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+        RtlInitUnicodeString(&targetPath, pathText);
+        return KswordARKDriverVerifyDeleteAfterClose(&targetPath, Details);
     }
 
     RtlInitUnicodeString(&targetPath, pathText);
@@ -1513,6 +1725,14 @@ Return Value:
     }
     if (targetPath.Length != (USHORT)(pathLengthChars * sizeof(WCHAR))) {
         return STATUS_INVALID_PARAMETER;
+    }
+
+    if ((deleteFlags & (KSWORD_ARK_DELETE_PATH_FLAG_BACKEND_POSIX |
+            KSWORD_ARK_DELETE_PATH_FLAG_BACKEND_IGNORE_SHARE_POSIX)) != 0UL) {
+        return KswordARKDriverDeletePathPosix(
+            &targetPath, isDirectory,
+            (deleteFlags & KSWORD_ARK_DELETE_PATH_FLAG_BACKEND_IGNORE_SHARE_POSIX) != 0UL,
+            Details);
     }
 
     InitializeObjectAttributes(
@@ -1544,27 +1764,21 @@ Return Value:
         createOptions,
         NULL,
         0U);
+    if (Details != NULL) {
+        Details->openStatus = status;
+        if (!NT_SUCCESS(status)) {
+            Details->outcome = KSWORD_ARK_DELETE_PATH_OUTCOME_FAILED;
+        }
+    }
     if (!NT_SUCCESS(status)) {
         return status;
     }
 
     status = KswordARKDriverNormalizeReadOnlyAttribute(fileHandle);
     if (!NT_SUCCESS(status) && status != STATUS_INVALID_PARAMETER) {
-        ZwClose(fileHandle);
-        return status;
-    }
-
-    if ((deleteFlags & KSWORD_ARK_DELETE_PATH_FLAG_BACKEND_POSIX) != 0UL) {
-        status = KswordARKDriverDeleteFileWithDispositionEx(fileHandle);
-        if (!NT_SUCCESS(status) &&
-            (status == STATUS_CANNOT_DELETE || status == STATUS_USER_MAPPED_FILE)) {
-            const NTSTATUS flushStatus = KswordARKDriverFlushImageSectionForDelete(fileHandle);
-            if (NT_SUCCESS(flushStatus)) {
-                status = KswordARKDriverDeleteFileWithDispositionEx(fileHandle);
-            }
-            else if (status == STATUS_CANNOT_DELETE) {
-                status = flushStatus;
-            }
+        if (Details != NULL) {
+            Details->dispositionStatus = status;
+            Details->outcome = KSWORD_ARK_DELETE_PATH_OUTCOME_FAILED;
         }
         ZwClose(fileHandle);
         return status;
@@ -1582,12 +1796,14 @@ Return Value:
 
     if (!NT_SUCCESS(status) &&
         KswordARKDriverShouldRetryDeleteWithDispositionEx(status, isDirectory)) {
-        NTSTATUS fallbackStatus = KswordARKDriverDeleteFileWithDispositionEx(fileHandle);
+        NTSTATUS fallbackStatus = KswordARKDriverDeleteFileWithDispositionEx(
+            fileHandle, TRUE, TRUE);
         if (!NT_SUCCESS(fallbackStatus) &&
             (fallbackStatus == STATUS_CANNOT_DELETE || fallbackStatus == STATUS_USER_MAPPED_FILE)) {
             const NTSTATUS flushStatus = KswordARKDriverFlushImageSectionForDelete(fileHandle);
             if (NT_SUCCESS(flushStatus)) {
-                fallbackStatus = KswordARKDriverDeleteFileWithDispositionEx(fileHandle);
+                fallbackStatus = KswordARKDriverDeleteFileWithDispositionEx(
+                    fileHandle, TRUE, TRUE);
             }
             else if (fallbackStatus == STATUS_CANNOT_DELETE) {
                 fallbackStatus = flushStatus;
@@ -1607,6 +1823,15 @@ Return Value:
         }
     }
 
+    if (Details != NULL) {
+        Details->dispositionStatus = status;
+        if (!NT_SUCCESS(status)) {
+            Details->outcome = KSWORD_ARK_DELETE_PATH_OUTCOME_FAILED;
+        }
+    }
     ZwClose(fileHandle);
-    return status;
+    if (!NT_SUCCESS(status)) {
+        return status;
+    }
+    return KswordARKDriverVerifyDeleteAfterClose(&targetPath, Details);
 }

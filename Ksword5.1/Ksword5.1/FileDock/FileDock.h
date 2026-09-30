@@ -57,7 +57,8 @@ enum class FileDeleteMode
     PendingReboot,  // R3 提权：登记 PendingFileRenameOperations，下次重启时删除。
     DriverR0Native, // R0 驱动：底层 Zw* 方案，保留现有兼容回退。
     DriverR0Irp,    // R0 驱动：IRP_MJ_SET_INFORMATION 穿过完整文件系统栈。
-    DriverR0Posix   // R0 驱动：FileDispositionInformationEx POSIX unlink 语义。
+    DriverR0Posix,  // R0 驱动：FileDispositionInformationEx POSIX unlink 语义。
+    DriverR0IgnoreSharePosix // R0 驱动：显式高风险共享检查选项。
 };
 
 // ============================================================

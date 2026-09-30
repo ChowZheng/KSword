@@ -778,6 +778,17 @@ namespace ksword::ark
             backendFlag = KSWORD_ARK_DELETE_PATH_FLAG_BACKEND_POSIX;
             backendName = "posix";
             break;
+        case FileDeleteBackend::IgnoreSharePosix:
+            backendFlag = KSWORD_ARK_DELETE_PATH_FLAG_BACKEND_IGNORE_SHARE_POSIX;
+            backendName = "ignore-share-posix";
+            if (isDirectory || recursive)
+            {
+                deleteResult.io.ok = false;
+                deleteResult.io.win32Error = ERROR_INVALID_PARAMETER;
+                deleteResult.io.message = "ignore-share POSIX only accepts single files";
+                return deleteResult;
+            }
+            break;
         default:
             deleteResult.io.ok = false;
             deleteResult.io.win32Error = ERROR_INVALID_PARAMETER;
@@ -791,6 +802,10 @@ namespace ksword::ark
             (continueOnError ? KSWORD_ARK_DELETE_PATH_FLAG_CONTINUE_ON_ERROR : 0UL) |
             backendFlag;
         request.pathLengthChars = static_cast<unsigned short>(ntPath.size());
+        if (backend == FileDeleteBackend::IgnoreSharePosix)
+        {
+            request.reserved = KSWORD_ARK_DELETE_PATH_IGNORE_SHARE_CONFIRMATION;
+        }
         std::copy(ntPath.begin(), ntPath.end(), request.path);
         request.path[request.pathLengthChars] = L'\0';
 
@@ -823,10 +838,14 @@ namespace ksword::ark
             return deleteResult;
         }
 
-        deleteResult.responseValid =
+        deleteResult.responseV2 =
             deleteResult.io.bytesReturned >= sizeof(deleteResult.response) &&
             deleteResult.response.size == sizeof(deleteResult.response) &&
             deleteResult.response.version == KSWORD_ARK_DELETE_PATH_RESPONSE_VERSION;
+        deleteResult.responseValid = deleteResult.responseV2 ||
+            (deleteResult.io.bytesReturned >= KSWORD_ARK_DELETE_PATH_RESPONSE_V1_SIZE &&
+             deleteResult.response.size == KSWORD_ARK_DELETE_PATH_RESPONSE_V1_SIZE &&
+             deleteResult.response.version == KSWORD_ARK_DELETE_PATH_RESPONSE_VERSION_LEGACY);
         if (!deleteResult.responseValid)
         {
             // 老驱动即使删除成功也不会回填响应包，此时只能按“已完成单项删除”解释。
@@ -862,6 +881,13 @@ namespace ksword::ark
             << static_cast<unsigned long>(static_cast<std::uint32_t>(deleteResult.response.lastStatus))
             << std::dec << ", bytesReturned=" << deleteResult.io.bytesReturned
             << ", responsePacket=" << (deleteResult.responseValid ? 1 : 0);
+        if (deleteResult.responseV2)
+        {
+            stream << ", openStatus=0x" << std::hex << static_cast<unsigned long>(deleteResult.response.openStatus)
+                << ", dispositionStatus=0x" << static_cast<unsigned long>(deleteResult.response.dispositionStatus)
+                << ", verifyStatus=0x" << static_cast<unsigned long>(deleteResult.response.verifyStatus)
+                << std::dec << ", outcome=" << deleteResult.response.outcome;
+        }
         deleteResult.io.message = stream.str();
         return deleteResult;
     }
