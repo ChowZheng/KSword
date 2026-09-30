@@ -298,7 +298,11 @@ if [[ -z "$usermode_main" ]]; then
   exit 1
 fi
 usermode_root="$(dirname "$usermode_main")"
+# The manual template may contain an older QADS. Require the selected module
+# to supply this commit's DLL before overlaying anything from the template.
+qads_provenance="$(python3 tools/verify_qads_runtime.py "$usermode_root")"
 cp -a "$usermode_root/." "$release_root/"
+python3 tools/verify_qads_runtime.py "$release_root"
 
 arklight_exe="$(find "${artifact_directories[KswordARKLight-unsigned-Release]}" -type f -name 'KswordARKLight.exe' -print -quit)"
 if [[ -z "$arklight_exe" ]]; then
@@ -357,6 +361,7 @@ provenance_file="$release_root/CI_ARTIFACT_PROVENANCE.md"
   echo
   echo "Release commit: \`$GITHUB_SHA\`"
   echo "Manual template: \`$manual_tag\` / \`$manual_asset_name\` / $manual_published_at"
+  echo "QADS runtime: $qads_provenance"
   echo
   echo '| Artifact | Source commit | Actions run | Created at |'
   echo '| --- | --- | ---: | --- |'
@@ -376,6 +381,7 @@ readonly -a required_release_paths=(
   'KswordHUD.exe'
   'KswordCLI.exe'
   'APIMonitor_x64.dll'
+  'qtadvanceddocking.dll'
   'KswordARKLight.exe'
   'KswordARK.sys'
   'KswordARKDriver.inf'

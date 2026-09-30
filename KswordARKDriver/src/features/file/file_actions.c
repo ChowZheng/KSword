@@ -1475,13 +1475,13 @@ KswordARKDriverVerifyDeleteAfterClose(
     )
 {
     OBJECT_ATTRIBUTES attributes;
-    FILE_BASIC_INFORMATION basicInformation;
+    FILE_NETWORK_OPEN_INFORMATION pathInformation; // 使用 WDK 声明的路径属性查询输出。
     NTSTATUS status;
 
     InitializeObjectAttributes(&attributes, Path,
         OBJ_KERNEL_HANDLE | OBJ_CASE_INSENSITIVE, NULL, NULL);
-    RtlZeroMemory(&basicInformation, sizeof(basicInformation));
-    status = ZwQueryAttributesFile(&attributes, &basicInformation);
+    RtlZeroMemory(&pathInformation, sizeof(pathInformation)); // 清空完整路径属性结构。
+    status = ZwQueryFullAttributesFile(&attributes, &pathInformation); // 用通用 DDI 复核路径是否仍存在。
     if (Details != NULL) {
         Details->verifyStatus = status;
     }
@@ -1553,7 +1553,7 @@ KswordARKDriverDeletePathPosix(
     )
 {
     OBJECT_ATTRIBUTES attributes;
-    FILE_BASIC_INFORMATION basicInformation;
+    FILE_NETWORK_OPEN_INFORMATION pathInformation; // 只读重试沿用 WDK 支持的路径属性查询。
     HANDLE fileHandle = NULL;
     HANDLE retryHandle = NULL;
     LARGE_INTEGER originalIndex = { 0 };
@@ -1582,9 +1582,9 @@ KswordARKDriverDeletePathPosix(
     }
 
     if (status == STATUS_CANNOT_DELETE || status == STATUS_ACCESS_DENIED) {
-        RtlZeroMemory(&basicInformation, sizeof(basicInformation));
-        if (NT_SUCCESS(ZwQueryAttributesFile(&attributes, &basicInformation)) &&
-            (basicInformation.FileAttributes & FILE_ATTRIBUTE_READONLY) != 0UL &&
+        RtlZeroMemory(&pathInformation, sizeof(pathInformation)); // 清空按路径查询的属性输出。
+        if (NT_SUCCESS(ZwQueryFullAttributesFile(&attributes, &pathInformation)) && // 使用通用 DDI 查询只读位。
+            (pathInformation.FileAttributes & FILE_ATTRIBUTE_READONLY) != 0UL && // 仅在仍为只读时重开属性写入句柄。
             indexValid) {
             NTSTATUS retryStatus = KswordARKDriverOpenPosixDeleteHandle(
                 &attributes, IgnoreShare, TRUE, IsDirectory, &retryHandle);
