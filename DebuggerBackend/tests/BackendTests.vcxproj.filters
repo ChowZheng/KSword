@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <ClCompile Include="BackendTests.cpp" />
+    <ClCompile Include="..\KswordDebuggerBackend.cpp" />
+    <ClCompile Include="..\KswordDebuggerDebug.cpp" />
+    <ClCompile Include="..\KswordDebuggerNative.cpp" />
+    <ClCompile Include="..\KswordDebuggerMemory.cpp" />
+  </ItemGroup>
+  <ItemGroup><None Include="LuaTests.lua" /><None Include="validate_lua.py" /></ItemGroup>
+</Project>

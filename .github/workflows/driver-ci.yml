@@ -127,15 +127,18 @@ jobs:
         shell: pwsh
         run: |
           $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
-          $msbuild = & $vswhere -latest -products * -requires Microsoft.Component.MSBuild -find 'MSBuild\**\Bin\MSBuild.exe' |
+          $msbuild = & $vswhere -latest -products * -requires Microsoft.Component.MSBuild -find 'MSBuild\**\Bin\amd64\MSBuild.exe' |
             Select-Object -First 1
           if (-not $msbuild -or -not (Test-Path $msbuild)) {
-            throw 'Could not locate MSBuild through vswhere.'
+            throw 'Could not locate 64-bit MSBuild through vswhere.'
           }
           & $msbuild 'KswordARKDriver/KswordARKDriver.vcxproj' `
             /t:Build `
             /p:Configuration=Release `
             /p:Platform=x64 `
+            /p:PreferredToolArchitecture=x64 `
+            /p:PROCESSOR_ARCHITECTURE=AMD64 `
+            /p:PROCESSOR_ARCHITEW6432=AMD64 `
             /p:KswordArkSkipAutoVariantSign=true `
             /p:KswordArkSkipAutoTestSign=true `
             /m:1 `

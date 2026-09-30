@@ -18,6 +18,8 @@ Environment:
 #pragma once
 
 #include "hvm_runtime.h"
+/* Own the independent debugger protocol in the sole shared wire directory. */
+#include "driver/KswordArkHvmDebugIoctl.h"
 /* KSW_HVM_ACTIVE_CONTROLS is embedded in the runtime below. */
 #include "hvm_vmcs.h"
 /* Immutable translation identity shared by page admission and root readers. */
@@ -396,6 +398,35 @@ typedef struct _KSW_HVM_EPT_DOMAIN
 } KSW_HVM_EPT_DOMAIN;
 
 /* Describe one active protocol-visible EPT rule. */
+/* A pinned, thread-specific debug stop, published only while residency is stopped. */
+typedef struct _KSW_HVM_DEBUG_SLOT
+{
+    /* Lifetime callbacks only revoke this atomic publication bit. */
+    volatile LONG Enabled;
+    /* Preserve identity until passive cleanup releases the backing page. */
+    ULONG Id;
+    /* Bind the stop to the requesting debugger process. */
+    ULONG OwnerProcessId;
+    /* Bind scope to one validated target thread. */
+    ULONG ThreadId;
+    /* Name the shared allow-once EPT rule. */
+    ULONG RuleId;
+    /* Name the architectural DR6 bit to deliver to the debugger. */
+    ULONG DebugRegister;
+    /* Preserve the debugger's selected R/W/X access mask. */
+    ULONG Access;
+    /* Preserve the user-mode TEB read at PASSIVE_LEVEL. */
+    ULONGLONG Teb;
+    /* Match the pinned physical backing page. */
+    ULONGLONG PhysicalPage;
+    /* Match execution RIP exactly and retain the requested data address. */
+    ULONGLONG Address;
+    /* Keep the target thread referenced until stopped cleanup. */
+    PETHREAD Thread;
+    /* Keep the target page resident without trusting a mutable user PTE. */
+    PMDL Mdl;
+} KSW_HVM_DEBUG_SLOT;
+
 typedef struct _KSW_HVM_EPT_RULE_SLOT
 {
     /* Record whether the slot contains an active rule. */
@@ -1015,6 +1046,10 @@ typedef struct _KSW_HVM_RUNTIME
     KSW_HVM_MTRR_STATE Mtrr;
     /* Retain every protocol-visible EPT rule. */
     KSW_HVM_EPT_RULE_SLOT EptRules[KSWORD_ARK_HVM_MAX_EPT_RULES];
+    /* Own bounded debug metadata beside the one authoritative EPT rule table. */
+    KSW_HVM_DEBUG_SLOT DebugSlots[KSWORD_ARK_HVM_DEBUG_MAX_SLOTS];
+    /* Allocate debugger identities monotonically across one resource lifetime. */
+    ULONG NextDebugId;
     /* Retain every split two-MiB EPT leaf. */
     KSW_HVM_EPT_SPLIT EptSplits[KSW_HVM_MAX_EPT_SPLITS];
     /* Retain every installed EPT split view. */

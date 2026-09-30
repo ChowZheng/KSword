@@ -25681,6 +25681,7 @@
     "自动更新 %1（%2 / %3）": "自动更新 %1（%2 / %3）",
     "自动更新完成": "自动更新完成",
     "自动更新完成：%1 个成功，%2 个失败；详情已写入日志。": "自动更新完成：%1 个成功，%2 个失败；详情已写入日志。",
+    "[PluginHost:": "[PluginHost:",
     "[PluginHost] automatic update completed with failures, completed=": "[PluginHost] 自动更新完成但存在失败，已完成=",
     "[PluginHost] ignored marketplace entries, count=": "[PluginHost] 已忽略商城无效条目，数量=",
     "[PluginHost] ignored plugin manifests, count=": "[PluginHost] 已忽略插件清单，数量=",

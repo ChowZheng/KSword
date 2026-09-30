@@ -18,7 +18,6 @@ readonly -a expected_artifacts=(
   'KswordSetup-unsigned-Release'
   'KswordARKLight-unsigned-Release'
   'KswordCheatEnginePlugin-x64-Release'
-  'KswordCheatEnginePlugin-Win32-Release'
   'KswordCheatEngineLauncher-Release'
   'KswordARKDriver-unsigned-Release'
 )
@@ -152,7 +151,7 @@ for artifact_name in "${expected_artifacts[@]}"; do
     'KswordARKLight-unsigned-Release')
       require_preferred_artifact="${CURRENT_ARKLIGHT_REQUIRED:-false}"
       ;;
-    'KswordCheatEnginePlugin-x64-Release'|'KswordCheatEnginePlugin-Win32-Release')
+    'KswordCheatEnginePlugin-x64-Release')
       require_preferred_artifact="${CURRENT_CE_PLUGIN_REQUIRED:-false}"
       ;;
     'KswordCheatEngineLauncher-Release')

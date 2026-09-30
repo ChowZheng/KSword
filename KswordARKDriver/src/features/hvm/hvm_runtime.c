@@ -34,6 +34,7 @@ Environment:
 #include "hvm_ept_switch.h"
 #include "hvm_guest.h"
 #include "hvm_memory.h"
+#include "hvm_debug.h"
 #include "hvm_phys_window.h"
 #include "hvm_msr_policy.h"
 #include "hvm_ept.h"
@@ -1060,6 +1061,8 @@ KswordARKHvmFreeResourcesLocked(
         KswordHvmBackend(Runtime->BackendId)->ReleaseResources(Runtime);
         return;
     }
+    /* Retire debugger pins only after every resident CPU returned ownership. */
+    KswordARKHvmDebugResetLocked(Runtime);
     /* Drop the control-register policy along with the VMCS it fed. */
     KswordARKHvmCrPolicyResetLocked(Runtime);
     /* Close every MSR bitmap hole before the bitmap page is released. */
@@ -2299,6 +2302,8 @@ KswordARKHvmInitialize(
      */
     KswordARKHvmPhysWindowInitializeAll();
     g_KswordHvm.Initialized = TRUE;
+    /* A missing notification guard disables EPT debugging without failing driver load. */
+    (void)KswordARKHvmDebugInitialize();
     /*
      * The one place a plain store to StateFlags is correct: this runs before
      * ExRegisterCallback publishes the power callback, so the second writer
@@ -2588,6 +2593,8 @@ KswordARKHvmUninitialize(
     }
     KswordARKReleasePushLockExclusive(&g_KswordHvm.Lock);
     KeLeaveCriticalRegion();
+    /* Drain debugger lifetime callbacks after every resident reader stopped. */
+    KswordARKHvmDebugShutdown();
     if (powerCallbackObject != NULL) {
         ObDereferenceObject(powerCallbackObject);
     }
@@ -3809,7 +3816,8 @@ KswordARKHvmEptRuleControl(
         status = KswordARKHvmEptRuleControlLocked(
             &g_KswordHvm,
             Request,
-            Response);
+            Response,
+            FALSE);
     }
     /* Release exclusive lifecycle ownership. */
     ExReleasePushLockExclusive(&g_KswordHvm.Lock);

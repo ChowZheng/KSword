@@ -711,6 +711,14 @@
       "timeoutSeconds": 120
     },
     {
+      "id": "r0.debugger-status",
+      "tier": "probe",
+      "ioctls": ["DEBUGGER"],
+      "steps": [["r0", "debugger-status"]],
+      "expect": "graceful",
+      "timeoutSeconds": 120
+    },
+    {
       "id": "r0.workqueue",
       "tier": "probe",
       "ioctls": [
@@ -2964,6 +2972,11 @@
       "ioctl": "CONTROL_HVM",
       "reason": "virtualization-lifecycle",
       "detail": "VMXON/EPT 规则安装。CI 机器通常已在 Hyper-V/VBS 之下，嵌套虚拟化切换的崩溃不可归因。"
+    },
+    {
+      "ioctl": "HVM_DEBUG",
+      "reason": "virtualization-lifecycle",
+      "detail": "EPT debugger stops require a stopped private-EPT preparation and a harness-owned native debug session. VMX transition and guest debug exceptions need dedicated hardware acceptance."
     },
     {
       "ioctl": "CONTROL_IO_TIMER",

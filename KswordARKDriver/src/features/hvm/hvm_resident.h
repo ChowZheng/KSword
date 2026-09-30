@@ -113,6 +113,10 @@ typedef struct _KSW_HVM_RESIDENT_VCPU
     KSW_HVM_EPT_LOCAL* EptLocal;
     /* Preserve one allow-once EPT restoration. */
     KSW_HVM_EPT_TRANSIENT EptTransient;
+    /* Defer data #DB until the original instruction completes under MTF. */
+    ULONG DebugPendingMask;
+    /* Reject an interrupted step that resumed in another thread or ring. */
+    ULONGLONG DebugPendingTeb;
     /* Preserve one bounded L1 nested-VMX state machine. */
     KSW_HVM_NESTED_VCPU Nested;
     /*

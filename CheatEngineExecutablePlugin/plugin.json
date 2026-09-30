@@ -1,9 +1,9 @@
 {
   "ksword_plugin_api": "1",
   "id": "cheat-engine",
-  "name": "Cheat Engine（KSword R0）",
-  "version": "1.4.0",
-  "description": "Runs Cheat Engine as a themed process action or a minimal native KSword Tab, with memory interaction routed through one persistent KSword driver session.",
+  "name": "Cheat Engine（KSword 后端）",
+  "version": "2.0.0",
+  "description": "Runs 64-bit Cheat Engine in its own window with a reusable KSword memory/debugger backend, the complete current HVM protocol API, EPT breakpoint integration, and a themed KSword log Tab with an HVM switch.",
   "plugin_type": "hybrid",
   "runtime": "executable",
   "entrypoint": "KswordCheatEngineLauncher.exe",
@@ -13,7 +13,7 @@
     "tab"
   ],
   "tab": {
-    "title": "Cheat Engine",
+    "title": "Cheat Engine 日志",
     "command": "tab",
     "ready_event": "tab_ready",
     "startup_timeout_ms": 60000
@@ -21,12 +21,12 @@
   "commands": [
     {
       "name": "launch",
-      "description": "Verify KSword R0, initialize the CE bridge and open the selected process.",
+      "description": "Verify KSword R0, initialize the x64 debugger backend and open the selected process.",
       "syntax": "--target-kind process --pid PID [--path IMAGE_PATH] [--process-name NAME]"
     },
     {
       "name": "tab",
-      "description": "Attach the themed Cheat Engine main window to a minimal native child surface in the KSword Plugins Tab."
+      "description": "Open standalone 64-bit Cheat Engine and a KSword log Tab with an HVM backend switch."
     },
     {
       "name": "check",
@@ -34,7 +34,7 @@
     },
     {
       "name": "info",
-      "description": "Print plugin capabilities as JSON Lines."
+      "description": "Print plugin capabilities and payload readiness as JSON Lines."
     }
   ],
   "license": "LICENSE.txt",

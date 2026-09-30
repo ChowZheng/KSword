@@ -85,6 +85,7 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="LauncherMain.cpp" />
+    <ClCompile Include="LogSurface.cpp" />
     <ClCompile Include="..\Ksword5.1\Ksword5.1\ArkDriverClient\ArkDriverClient.cpp">
       <Link>ArkDriverClient\ArkDriverClient.cpp</Link>
     </ClCompile>
@@ -96,8 +97,11 @@
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
-    <None Include="integration\00_ksword_theme.lua" />
+    <ClInclude Include="LogSurface.h" />
+  </ItemGroup>
+  <ItemGroup>
     <None Include="integration\10_ksword_bridge.lua" />
+    <None Include="integration\ksword_hvm.lua" />
     <None Include="NOTICE.md" />
     <None Include="plugin.json" />
     <None Include="README.md" />

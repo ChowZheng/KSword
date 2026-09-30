@@ -16,6 +16,9 @@
     <ClCompile Include="LauncherMain.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="LogSurface.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="..\Ksword5.1\Ksword5.1\ArkDriverClient\ArkDriverClient.cpp">
       <Filter>ArkDriverClient</Filter>
     </ClCompile>
@@ -27,10 +30,15 @@
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
-    <None Include="integration\00_ksword_theme.lua">
+    <ClInclude Include="LogSurface.h">
+      <Filter>Source Files</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="integration\10_ksword_bridge.lua">
       <Filter>Plugin Files</Filter>
     </None>
-    <None Include="integration\10_ksword_bridge.lua">
+    <None Include="integration\ksword_hvm.lua">
       <Filter>Plugin Files</Filter>
     </None>
     <None Include="NOTICE.md">

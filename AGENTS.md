@@ -19,28 +19,32 @@
 
 ### 1. Release 构建
 
-当前开发机有两套已验证的构建路径：优先使用仓库随附依赖，即 `.deps\Qt\6.9.3\msvc2022_64` 与 `.deps\QtVsTools\msbuild`；MSBuild 使用 `C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\MSBuild\Current\Bin\MSBuild.exe`。若该套不可用，再回退到 `D:\Software\VS\MSBuild\Current\Bin\MSBuild.exe` 和 `D:\Software\Qt\6.9.3\msvc2022_64`。先设置 Qt 路径和 QtMsBuild 路径，再依次构建用户态项目。主程序必须重新构建；Taskbar、KswordHUD、APIMonitor_x64 也要构建后覆盖进包。
+构建宿主统一使用 64 位 MSBuild、编译器与链接器。优先使用仓库随附依赖 `.deps\Qt\6.9.3\msvc2022_64` 与 `.deps\QtVsTools\msbuild`，MSBuild 使用 `C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\MSBuild\Current\Bin\amd64\MSBuild.exe`。若该套不可用，再回退到 `D:\Software\VS\MSBuild\Current\Bin\amd64\MSBuild.exe` 和 `D:\Software\Qt\6.9.3\msvc2022_64`。没有 64 位 MSBuild 时停止，不得降级到 32 位入口。所有构建命令同时传入 `/p:PreferredToolArchitecture=x64`、`/p:PROCESSOR_ARCHITECTURE=AMD64` 和 `/p:PROCESSOR_ARCHITEW6432=AMD64`；MSVC 导入规则将工具偏好当作局部属性，只传工具偏好仍可能被覆盖为 x86。主程序构建检查使用仓库脚本 `tools/Invoke-KSwordBuildCheck.ps1`，它在构建前读回并检查 HostX64 路径。
+
+先设置 Qt 路径和 QtMsBuild 路径，再依次构建用户态项目。主程序必须重新构建；Taskbar、KswordHUD、APIMonitor_x64 也要构建后覆盖进包。
 
 ```powershell
-$msbuild='C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\MSBuild\Current\Bin\MSBuild.exe'
-if (!(Test-Path $msbuild)) { $msbuild='D:\Software\VS\MSBuild\Current\Bin\MSBuild.exe' }
+$msbuild='C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\MSBuild\Current\Bin\amd64\MSBuild.exe'
+if (!(Test-Path $msbuild)) { $msbuild='D:\Software\VS\MSBuild\Current\Bin\amd64\MSBuild.exe' }
+if (!(Test-Path $msbuild)) { throw '64-bit MSBuild is required.' }
 $env:KSWORD_QT_DIR=(Resolve-Path '.deps\Qt\6.9.3\msvc2022_64' -ErrorAction SilentlyContinue).Path
 if (!$env:KSWORD_QT_DIR) { $env:KSWORD_QT_DIR='D:\Software\Qt\6.9.3\msvc2022_64' }
 $qtMsBuild=(Resolve-Path '.deps\QtVsTools\msbuild').Path
 
-& $msbuild 'Ksword5.1\Ksword5.1\Ksword5.1.vcxproj' /t:Build /p:Configuration=Release /p:Platform=x64 /p:QtMsBuild=$qtMsBuild /m:1 /v:minimal
-& $msbuild 'Launcher\Launcher.vcxproj' /t:Build /p:Configuration=Release /p:Platform=x64 /m:1 /v:minimal
-& $msbuild 'Taskbar\Taskbar.vcxproj' /t:Build /p:Configuration=Release /p:Platform=x64 /p:QtMsBuild=$qtMsBuild /m:1 /v:minimal
-& $msbuild 'KswordHUD\KswordHUD.vcxproj' /t:Build /p:Configuration=Release /p:Platform=x64 /p:QtMsBuild=$qtMsBuild /m:1 /v:minimal
-& $msbuild 'APIMonitor_x64\APIMonitor_x64.vcxproj' /t:Build /p:Configuration=Release /p:Platform=x64 /m:1 /v:minimal
+$hostToolArgs=@('/p:PreferredToolArchitecture=x64', '/p:PROCESSOR_ARCHITECTURE=AMD64', '/p:PROCESSOR_ARCHITEW6432=AMD64')
+& $msbuild 'Ksword5.1\Ksword5.1\Ksword5.1.vcxproj' /t:Build /p:Configuration=Release /p:Platform=x64 @hostToolArgs /p:QtMsBuild=$qtMsBuild /m:1 /v:minimal
+& $msbuild 'Launcher\Launcher.vcxproj' /t:Build /p:Configuration=Release /p:Platform=x64 @hostToolArgs /m:1 /v:minimal
+& $msbuild 'Taskbar\Taskbar.vcxproj' /t:Build /p:Configuration=Release /p:Platform=x64 @hostToolArgs /p:QtMsBuild=$qtMsBuild /m:1 /v:minimal
+& $msbuild 'KswordHUD\KswordHUD.vcxproj' /t:Build /p:Configuration=Release /p:Platform=x64 @hostToolArgs /p:QtMsBuild=$qtMsBuild /m:1 /v:minimal
+& $msbuild 'APIMonitor_x64\APIMonitor_x64.vcxproj' /t:Build /p:Configuration=Release /p:Platform=x64 @hostToolArgs /m:1 /v:minimal
 ```
 
 #### 主程序 `LNK1000` / `IMAGE::BuildImage` 恢复
 
-如果主程序的 MSVC 链接日志包含 `LNK1000`、`IMAGE::BuildImage` 或 `.iobj`，不要改用 LLVM、`amd64\MSBuild.exe`、替代 TargetName，也不要自动升级或降级 MSVC。先且仅执行一次干净重建，并仅对这次构建禁用 Whole Program Optimization：
+如果主程序的 MSVC 链接日志包含 `LNK1000`、`IMAGE::BuildImage` 或 `.iobj`，保持上述 64 位 MSVC 工具链，不要改用 LLVM、替代 TargetName，也不要自动升级或降级 MSVC。先且仅执行一次干净重建，并仅对这次构建禁用 Whole Program Optimization：
 
 ```powershell
-& "$env:USERPROFILE\.codex\skills\ksword-build-check\scripts\Invoke-KSwordBuildCheck.ps1" `
+& tools\Invoke-KSwordBuildCheck.ps1 `
   -RepositoryRoot (Get-Location).Path `
   -Action Rebuild `
   -DisableWholeProgramOptimization
@@ -59,6 +63,7 @@ $solutionDir=(Resolve-Path 'Ksword5.1').Path + '\'
 $apiValidatorX64='C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64'
 & $msbuild 'KswordARKDriver\KswordARKDriver.vcxproj' /t:ApiValidator `
   /p:Configuration=Release /p:Platform=x64 /p:SolutionDir=$solutionDir `
+  /p:PreferredToolArchitecture=x64 /p:PROCESSOR_ARCHITECTURE=AMD64 /p:PROCESSOR_ARCHITEW6432=AMD64 `
   /p:ApiValidator_ApiExtractorExePath=$apiValidatorX64 /m:1 /v:minimal
 ```
 

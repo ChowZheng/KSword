@@ -60,6 +60,17 @@ namespace ksword::ce
         LPCVOID address,
         PMEMORY_BASIC_INFORMATION information,
         SIZE_T informationLength);
+    using GetThreadContextFunction = BOOL(WINAPI*)(HANDLE, LPCONTEXT);
+    using SetThreadContextFunction = BOOL(WINAPI*)(HANDLE, const CONTEXT*);
+    using ThreadCountFunction = DWORD(WINAPI*)(HANDLE);
+    using WaitForDebugEventFunction = BOOL(WINAPI*)(LPDEBUG_EVENT, DWORD);
+    using ContinueDebugEventFunction = BOOL(WINAPI*)(DWORD, DWORD, DWORD);
+    using DebugActiveProcessFunction = BOOL(WINAPI*)(DWORD);
+    using VirtualProtectExFunction = BOOL(WINAPI*)(HANDLE, LPVOID, SIZE_T, DWORD, PDWORD);
+    using VirtualAllocExFunction = LPVOID(WINAPI*)(HANDLE, LPVOID, SIZE_T, DWORD, DWORD);
+    using CreateRemoteThreadFunction = HANDLE(WINAPI*)(HANDLE, LPSECURITY_ATTRIBUTES,
+        SIZE_T, LPTHREAD_START_ROUTINE, LPVOID, DWORD, LPDWORD);
+    using OpenThreadFunction = HANDLE(WINAPI*)(DWORD, BOOL, DWORD);
 
     using FunctionPointerChangeCallback = void(__stdcall*)(int reserved);
 
@@ -68,7 +79,7 @@ namespace ksword::ce
         FunctionPointerChangeCallback callbackRoutine; // callbackRoutine：CE 重建函数表后的通知。
     };
 
-    // 中文说明：结构必须与官方 ExportedFunctions 从首字段到 VirtualQueryEx 保持同序。
+    // 中文说明：结构必须与官方 ExportedFunctions 从首字段到 OpenThread 保持同序。
     // sizeofExportedFunctions 仅用于验证 CE 至少提供了本插件要访问的字段。
     struct ExportedFunctions
     {
@@ -105,8 +116,11 @@ namespace ksword::ce
         void* virtualProtect;
         void* virtualProtectEx;
         void* virtualQueryEx;
+        void* virtualAllocEx;
+        void* createRemoteThread;
+        void* openThread;
     };
 
     constexpr std::size_t kRequiredExportedFunctionsSize =
-        offsetof(ExportedFunctions, virtualQueryEx) + sizeof(void*);
+        offsetof(ExportedFunctions, openThread) + sizeof(void*);
 }

@@ -1,36 +1,51 @@
-# Cheat Engine KSword 可执行插件
+# Cheat Engine KSword 插件
 
-该目录生成一个 `runtime: executable` 的 KSword Hybrid 插件。插件只做三件事：
+插件只启动 64 位 CE 7.6。CE 保留自己的主窗口、颜色、字体、菜单和布局，
+仅在标题末尾显示 `[KSword R0]` 或 `[KSword HVM]`，确认公共后端已经加载。
+关闭 KSword 日志 Tab 不会关闭 CE。
 
-1. 可从进程菜单启动独立的 Cheat Engine 7.6 窗口；
-2. 可在插件页创建最小原生子窗口，并把 CE 主窗口一次性平铺到该 TAB；
-3. 通过 CE `autorun` 读取 KSword 主题色，并加载 KSword 桥接 DLL，将进程打开、
-   虚拟内存查询、内存读取和内存写入转到 KSword 驱动。
+KSword 内嵌的是日志页，使用宿主主题 token 和 Consolas 等宽字体。页面包含
+“使用 HVM”开关，实际状态由 CE 后端确认；切换失败会显示错误码并保持原状态。
+启动、桥接、调试异常和生命周期日志从 CE 转发至该页面与 PluginHost。
+这不是 CE 全部内部输出的捕获器。单行、显示长度和后端日志文件均有上限。
 
-TAB 模式只创建协议要求的直接 `WS_CHILD` 容器，对 CE 主窗口执行一次
-`SetParent`，清除标题栏与窗口边框并同步尺寸；不复制菜单、不替换按钮、
-不改写 CE 事件，也不周期性重新挂接窗口。独立进程模式保持 CE 原生窗口层级。
+## 后端能力
 
-启动流程：
+- 进程打开、虚拟内存查询和读写由 KSword 管理；设备句柄在会话内复用。
+- 线程上下文、挂起/恢复、远程分配和保护修改使用 KSword R0 调试协议。
+- 选择 HVM 后，内存读写必须经过 HVM 私有窗口；窗口不可用时明确失败。
+- CE 的 Windows 调试接口设置 DR0–DR3 时，公共后端把断点转换为 HVM EPT
+  执行/写入/读写断点，再以 `EXCEPTION_SINGLE_STEP` 交给 CE。
+- CE Lua 的 `KSword.hvm` 暴露当前全部 HVM 协议，包括生命周期、EPT 规则、
+  事件、视图、CR/MSR 策略、域、进程、注入、平台、指标和嵌套探测/页面。
 
-1. 通过 `ArkDriverClient` 检查 KSword R0 设备；
-2. 设备不可用时要求用户回到 KSword 启用 R0 并加载驱动；
-3. 重试仍失败时明确显示“R0 模式未启用，请小心使用”的风险通知；
-4. 启动插件内置 Cheat Engine；
-5. `00_ksword_theme.lua` 只注入 KSword 主题颜色、字体和窗口标题；
-6. `10_ksword_bridge.lua` 加载对应架构的桥接 DLL，在 CE 消息循环空闲后打开
-   KSword 传入的 PID；
-7. 桥接 DLL 只给 CE 保留查询/同步进程句柄，内存查询、读写复用一个持久的
-   KSword 驱动设备句柄。
+执行断点按指令地址匹配；数据断点目前是 **4 KiB 页粒度**，同页其他访问也可能
+命中。自动 EPT 调试要求 Intel VMX、MTF 和匹配的新驱动；不是 CE 的 VEH/DBVM
+调试器适配。现有驱动未支持的平台或操作仍会返回其能力/错误状态。
+Windows 继续提供调试事件传递与远程线程创建。
 
-CE 调试器、线程控制、远程分配等 KSword 驱动协议尚未提供的能力不在此次重定向
-范围内。
+公共后端、协议、资源所有权和 API 示例见仓库 `DebuggerBackend/README.md`；
+插件包内对应 `DEBUGGER_BACKEND.md`。
 
-构建并从本机已安装 CE 生成插件目录：
+## 使用
 
-```powershell
-& tools\package_cheat_engine_plugin.ps1
-```
+1. 加载本次构建的 `KswordARK.sys`，新协议不兼容旧驱动。
+2. 从 KSword 插件 Tab 启动，或从进程菜单打开所选 PID。
+3. 标题出现 KSword 标识后可使用后端；默认选择 R0。
+4. 如需 HVM，在日志页勾选开关并等待确认。CE 调试器选择 Windows 调试接口。
+5. 设置硬件执行/数据断点时自动建立专属 HVM 会话。已有其他调用者的 HVM
+   准备/常驻会话不会被接管；冲突返回 `ERROR_BUSY`。
+6. 移除 EPT 断点后可关闭 HVM；此时释放本后端拥有的常驻/准备资源。
 
-输出目录为 `plugin\cheat-engine\`，其中包含启动器、x64/Win32 两个桥接 DLL
-和完整的用户态 CE 载荷。CE 自带 DBK/DBVM 内核载荷不会进入插件包。
+`KswordCheatEngineLauncher.exe --ksword-plugin info` 可只读检查载荷，输出
+`payload_ready` 和缺失文件路径。启动错误同时报告 Win32 错误码与说明。
+
+## 构建与打包
+
+启动器与桥接 DLL 均只构建 Release/x64，构建命令见 `CheatEnginePlugin/README.md`。
+然后运行 `tools/package_cheat_engine_plugin.ps1`，生成 `plugin/cheat-engine/`。
+脚本会替换其拥有的整个插件目录。包中保留 CE 原始用户态布局与许可证，
+移除 CE 32 位入口、DBK/DBVM 内核载荷及旧的 CE 调色脚本。
+
+本次验证包含 x64 构建、公共后端故障注入、Lua 定时器/协议模拟、载荷与导出
+检查；没有执行 GUI 自动化、加载新驱动或启动实机 HVM。

@@ -25673,6 +25673,7 @@
     "自动更新 %1（%2 / %3）": "Auto-updating %1 (%2 / %3)",
     "自动更新完成": "Automatic update complete",
     "自动更新完成：%1 个成功，%2 个失败；详情已写入日志。": "Automatic update complete: %1 succeeded, %2 failed. Details were written to the log.",
+    "[PluginHost:": "[PluginHost:",
     "[PluginHost] automatic update completed with failures, completed=": "[PluginHost] automatic update completed with failures, completed=",
     "[PluginHost] ignored marketplace entries, count=": "[PluginHost] ignored marketplace entries, count=",
     "[PluginHost] ignored plugin manifests, count=": "[PluginHost] ignored plugin manifests, count=",

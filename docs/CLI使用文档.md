@@ -427,6 +427,13 @@ WSL silo and Linux PID/TID diagnostics.
 | `r0 win32k-events` | `KswordCLI.exe r0 win32k-events [--flags 0xN] [--session-id N] [--pid PID] [--tid TID] [--max-entries N]` | 查询基于 PDB 的 WinEvent Hook 证据。 | 可选：--flags、--session-id、--pid、--tid、--max-entries。 | `IOCTL_KSWORD_ARK_QUERY_WIN32K_EVENT_HOOKS`。 |
 
 
+### 通用调试后端能力查询
+
+`KswordCLI.exe r0 debugger-status` 通过 `IOCTL_KSWORD_ARK_DEBUGGER` 的只读 QUERY 操作查询
+协议版本、NTSTATUS 与 capability 位图：`0x1` 为原生 x64 线程上下文，`0x2` 为保留原
+计数的线程挂起/恢复，`0x4` 为用户进程内存分配/释放。保护操作若缺少 Windows 导出会
+明确返回不支持。该命令不修改目标，不启动 HVM；驱动与调试器适配层需使用相同协议。
+
 ### HVM 后代页控制（探针工具 `hvm_ctl`）
 
 `hvm_ctl.exe` 是独立探针工具，不随主程序发布，也**不再**与主程序共用命令目录——

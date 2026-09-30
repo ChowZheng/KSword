@@ -1653,6 +1653,7 @@ namespace
             QProcessEnvironment environment = QProcessEnvironment::systemEnvironment();
             environment.insert(QStringLiteral("KSWORD_PLUGIN_ROOT"), findPluginRoot());
             environment.insert(QStringLiteral("KSWORD_PLUGIN_ID"), m_descriptor.id);
+            environment.insert(QStringLiteral("KSWORD_PLUGIN_LANGUAGE"), ks::i18n::LanguageManager::instance().currentLanguageId());
             // 基础样式注入协议：
             // - 外部进程不会继承 Qt palette/QSS，因此以环境变量提供稳定的主题角色；
             // - 插件可以逐步选择消费这些值，不会因为未实现样式协议而无法启动；
@@ -1784,6 +1785,17 @@ namespace
         {
             fail(QStringLiteral("Tab 插件报告错误：%1")
                 .arg(object.value(QStringLiteral("message")).toString(QStringLiteral("未知错误"))), true);
+            return;
+        }
+        if (event == QStringLiteral("log"))
+        {
+            const QString message = object.value(QStringLiteral("message")).toString();
+            if (!message.isEmpty())
+            {
+                m_diagnostics->appendPlainText(message);
+                info << "[PluginHost:" << m_descriptor.id.toStdString() << "] "
+                    << message.toStdString() << eol;
+            }
             return;
         }
         if (event != m_descriptor.tabPresentation.readyEvent)

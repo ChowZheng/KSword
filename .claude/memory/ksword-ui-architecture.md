@@ -41,6 +41,8 @@ KSword 主程序位于 `Ksword5.1/Ksword5.1`（Qt 6.9.3 Widgets + Qt Advanced Do
 ## Dock 懒加载机制
 
 - `ensureDockContentInitialized` 按 `ks_lazy_key` 创建真实 widget（成员指针 m_processWidget 等允许为 null，占位页 `createDockPlaceholderWidget`）。
+- 外部 Tab 插件需要提供属于插件进程、直接挂在 KSword 容器下的 `WS_CHILD` 窗口供 `PluginHost` 握手；这不要求第三方程序的主窗口也成为子窗口。Cheat Engine 的 Tab 只嵌入日志转发窗口，CE 主窗口保持自己的顶层窗口和原生主题，关闭 Tab 时只关闭转发器进程，不向 CE 发送 `WM_CLOSE`。
+- CE 日志页消费 `PluginHost` 的主题角色颜色与语言快照，使用 Consolas 等宽字体，HVM 开关通过独立会话控制/状态文件等待 CE 确认。CE Lua 只给主窗口 Caption 增加 `[KSword R0]` 或 `[KSword HVM]`，不改颜色、字体、控件、窗口父级或尺寸。
 - 跨 Dock 打开独立详情窗口时，只用 `ensureDockContentInitialized` 创建内部控制器和窗口管理状态；不要对其所属 Dock 调用 `raise()`、`setVisible(true)` 或 `setAsCurrentTab()`，否则会无条件改变用户当前标签。进程详情入口遵循此规则，`ProcessDock` 仍负责 identity 校验、窗口复用和详情页导航。
 - 主功能 Dock 一律 `DockWidgetClosable=false`（Tab 无关闭按钮）。曾实现过"Tab 关闭按钮=卸载内容"（CustomCloseHandling + unloadDockContent），最终整体撤销（23251d80）；若再有此需求注意：welcome 无懒加载工厂，kernel↔driver 有共享自驱动页 `attachKswordSelfDriverPage`，卸载会悬空。
 - 跨 Dock 的进程详情入口仍可调用 `ensureDockContentInitialized(m_dockProcess)` 来复用 `ProcessDock` 的详情窗口管理与 identity 校验，但不得随后 `raise()` 或 `setVisible(true)` 激活进程 Dock；`ProcessDetailWindow` 是独立顶层窗口，打开它时应保留用户当前页签。

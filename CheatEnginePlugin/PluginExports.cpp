@@ -4,7 +4,7 @@
 
 namespace
 {
-    char g_pluginName[] = "KSword Driver Bridge 1.0";
+    char g_pluginName[] = "KSword Debugger Backend 2.0";
 }
 
 // CEPlugin_GetVersion：
