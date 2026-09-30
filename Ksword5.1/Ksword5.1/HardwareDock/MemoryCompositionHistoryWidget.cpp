@@ -119,6 +119,26 @@ void MemoryCompositionHistoryWidget::clearSamples()
     update();
 }
 
+void MemoryCompositionHistoryWidget::copyDisplayFrom(const MemoryCompositionHistoryWidget& source)
+{
+    m_sampleAnimation->stop();
+    m_historyLength = source.m_historyLength;
+    m_sampleList = source.m_sampleList;
+    m_previousSampleCount = source.m_previousSampleCount;
+    m_historyWindowShifted = source.m_historyWindowShifted;
+    m_previousSample = source.m_previousSample;
+    m_animationProgress = source.m_animationProgress;
+    m_hasPreviousSample = source.m_hasPreviousSample;
+    m_floatingScaleFactor = 1.0;
+    update();
+}
+
+void MemoryCompositionHistoryWidget::setFloatingScaleFactor(const double factor)
+{
+    m_floatingScaleFactor = std::clamp(factor, 0.25, 3.0);
+    update();
+}
+
 void MemoryCompositionHistoryWidget::paintEvent(QPaintEvent* paintEventPointer)
 {
     Q_UNUSED(paintEventPointer);
@@ -126,8 +146,8 @@ void MemoryCompositionHistoryWidget::paintEvent(QPaintEvent* paintEventPointer)
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing, true);
 
-    const QColor textColor = KswordTheme::TextPrimaryColor();
-    const QColor borderColor = KswordTheme::WithAlpha(KswordTheme::BorderColor(), 138);
+    const QColor textColor = palette().color(QPalette::Text);
+    const QColor borderColor = KswordTheme::WithAlpha(palette().color(QPalette::Mid), 138);
     const QColor gridColor = KswordTheme::WithAlpha(
         KswordTheme::AccentColor(KswordTheme::AccentRole::Purple),
         42);
@@ -318,11 +338,12 @@ void MemoryCompositionHistoryWidget::drawUsageLine(QPainter& painter, const QRec
 void MemoryCompositionHistoryWidget::drawLegend(QPainter& painter, const QRectF& plotRect) const
 {
     const std::array<CompositionColor, 4> colorList = buildCompositionColorList();
-    const QColor textColor = KswordTheme::TextPrimaryColor();
+    const QColor textColor = palette().color(QPalette::Text);
 
     // 图例原本 8pt，小到辨不出色块对应哪一项；下限提到 9pt——
     // 再大会撑破下面 58px 的标签宽度和 68px 的条目间距。
-    painter.setFont(QFont(painter.font().family(), std::max(painter.font().pointSize() - 1, 9)));
+    painter.setFont(QFont(painter.font().family(), std::max(
+        painter.font().pointSize() - 1, qRound(9 * m_floatingScaleFactor))));
     painter.setPen(textColor);
 
     double xValue = plotRect.left();

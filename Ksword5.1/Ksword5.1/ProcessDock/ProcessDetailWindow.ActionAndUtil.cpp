@@ -102,60 +102,32 @@ namespace
 // - 聚焦“执行动作 + 结果反馈 + 辅助格式化/查找”逻辑。
 // ============================================================
 
-void ProcessDetailWindow::executeTerminateProcessAction()
+void ProcessDetailWindow::executeSingleTerminateMethodAction(const std::size_t methodIndex)
 {
-    // TerminateProcess 操作日志：同一动作只使用一个 kLogEvent，保证调用链可追踪。
-    kLogEvent actionEvent;
-    warn << actionEvent
-        << "[ProcessDetailWindow] executeTerminateProcessAction: pid="
-        << m_baseRecord.pid
-        << eol;
+    const auto& methods = ks::process::TerminateMethodTable();
+    if (methodIndex >= methods.size())
+    {
+        return;
+    }
 
-    std::string detailText;
+    const auto& method = methods[methodIndex];
     const std::uint32_t targetPid = m_baseRecord.pid;
+    kLogEvent actionEvent;
+    std::string detailText;
     const bool actionOk = invokeProcessActionForIdentity(
         targetPid,
         m_baseRecord.creationTime100ns,
-        [targetPid](std::string* detailTextOut)
+        [targetPid, methodIndex](std::string* detailOut)
         {
-            return ks::process::TerminateProcessByWin32(targetPid, detailTextOut);
+            return ks::process::TerminateMethodTable()[methodIndex].invokeMethod(targetPid, detailOut);
         },
         &detailText);
     (actionOk ? info : err) << actionEvent
-        << "[ProcessDetailWindow] executeTerminateProcessAction: actionOk="
-        << (actionOk ? "true" : "false")
-        << ", detail="
-        << detailText
-        << eol;
-    showActionResultMessage("TerminateProcess", actionOk, detailText, actionEvent);
-}
-
-void ProcessDetailWindow::executeTerminateThreadsAction()
-{
-    // 全线程结束日志：同一动作只使用一个 kLogEvent，保证调用链可追踪。
-    kLogEvent actionEvent;
-    warn << actionEvent
-        << "[ProcessDetailWindow] executeTerminateThreadsAction: pid="
-        << m_baseRecord.pid
-        << eol;
-
-    std::string detailText;
-    const std::uint32_t targetPid = m_baseRecord.pid;
-    const bool actionOk = invokeProcessActionForIdentity(
-        targetPid,
-        m_baseRecord.creationTime100ns,
-        [targetPid](std::string* detailTextOut)
-        {
-            return ks::process::TerminateAllThreadsByPid(targetPid, detailTextOut);
-        },
-        &detailText);
-    (actionOk ? info : err) << actionEvent
-        << "[ProcessDetailWindow] executeTerminateThreadsAction: actionOk="
-        << (actionOk ? "true" : "false")
-        << ", detail="
-        << detailText
-        << eol;
-    showActionResultMessage("TerminateThread(全部线程)", actionOk, detailText, actionEvent);
+        << "[ProcessDetailWindow] 逐方法结束进程, pid=" << targetPid
+        << ", method=" << method.methodName
+        << ", ok=" << (actionOk ? "true" : "false")
+        << ", detail=" << detailText << eol;
+    showActionResultMessage(QString::fromUtf8(method.methodName), actionOk, detailText, actionEvent);
 }
 
 void ProcessDetailWindow::executeR0SuspendSelectedThreadAction()
@@ -501,30 +473,21 @@ void ProcessDetailWindow::executeSelectedTerminateAction()
         return;
     }
 
-    // 结束方案调度：
-    // - 下拉框只负责选择策略；
-    // - 真正执行仍复用现有动作函数，确保日志链路和行为不变。
     const int actionId = m_terminateActionCombo->currentData().toInt();
-    switch (actionId)
+    if (actionId >= 0 && actionId < static_cast<int>(ks::process::TerminateMethodTable().size()))
     {
-    case 0:
-        executeTerminateProcessAction();
-        break;
-    case 1:
-        executeTerminateThreadsAction();
-        break;
-    case 2:
-        executeTerminateProcessComboAction();
-        break;
-    default:
+        executeSingleTerminateMethodAction(static_cast<std::size_t>(actionId));
+    }
+    else if (actionId == static_cast<int>(ks::process::TerminateMethodTable().size()))
+    {
+        executeR0TerminateProcessAction();
+    }
+    else
     {
         kLogEvent invalidTerminateActionEvent;
         warn << invalidTerminateActionEvent
             << "[ProcessDetailWindow] executeSelectedTerminateAction: 未知 actionId="
-            << actionId
-            << eol;
-        break;
-    }
+            << actionId << eol;
     }
 }
 

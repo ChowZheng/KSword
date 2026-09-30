@@ -1396,6 +1396,7 @@ namespace
         QString categoryText;
         QString providerNameText;
         ULONG legacyKernelEnableFlags = 0;
+        bool enabledByDefault = false;
     };
 
     constexpr GUID kKswordEtwKernelSessionGuid =
@@ -1409,6 +1410,31 @@ namespace
             { QStringLiteral("进程线程"), QStringLiteral("Microsoft-Windows-Kernel-Process") },
             { QStringLiteral("进程线程"), QStringLiteral("Microsoft-Windows-Kernel-Thread"), EVENT_TRACE_FLAG_THREAD },
             { QStringLiteral("进程线程"), QStringLiteral("Microsoft-Windows-Kernel-Image"), EVENT_TRACE_FLAG_IMAGE_LOAD },
+            { QStringLiteral("进程线程"), QStringLiteral("Kernel-Process"), EVENT_TRACE_FLAG_PROCESS, false },
+            { QStringLiteral("进程线程"), QStringLiteral("Kernel-ProcessCounters"), EVENT_TRACE_FLAG_PROCESS_COUNTERS, false },
+            { QStringLiteral("进程线程"), QStringLiteral("Kernel-CSwitch"), EVENT_TRACE_FLAG_CSWITCH, false },
+            { QStringLiteral("进程线程"), QStringLiteral("Kernel-Dispatcher"), EVENT_TRACE_FLAG_DISPATCHER, false },
+            { QStringLiteral("进程线程"), QStringLiteral("Kernel-Job"), EVENT_TRACE_FLAG_JOB, false },
+            { QStringLiteral("安全审计"), QStringLiteral("Kernel-DebugEvents"), EVENT_TRACE_FLAG_DEBUG_EVENTS, false },
+            { QStringLiteral("安全审计"), QStringLiteral("Kernel-DbgPrint"), EVENT_TRACE_FLAG_DBGPRINT, false },
+            { QStringLiteral("文件注册表"), QStringLiteral("Kernel-DiskIO"), EVENT_TRACE_FLAG_DISK_IO, false },
+            { QStringLiteral("文件注册表"), QStringLiteral("Kernel-DiskFileIO"), EVENT_TRACE_FLAG_DISK_FILE_IO, false },
+            { QStringLiteral("文件注册表"), QStringLiteral("Kernel-DiskIOInit"), EVENT_TRACE_FLAG_DISK_IO_INIT, false },
+            { QStringLiteral("文件注册表"), QStringLiteral("Kernel-FileIO"), EVENT_TRACE_FLAG_FILE_IO, false },
+            { QStringLiteral("文件注册表"), QStringLiteral("Kernel-FileIOInit"), EVENT_TRACE_FLAG_FILE_IO_INIT, false },
+            { QStringLiteral("文件注册表"), QStringLiteral("Kernel-Registry"), EVENT_TRACE_FLAG_REGISTRY, false },
+            { QStringLiteral("文件注册表"), QStringLiteral("Kernel-SplitIO"), EVENT_TRACE_FLAG_SPLIT_IO, false },
+            { QStringLiteral("文件注册表"), QStringLiteral("Kernel-Driver"), EVENT_TRACE_FLAG_DRIVER, false },
+            { QStringLiteral("网络通信"), QStringLiteral("Kernel-TCPIP"), EVENT_TRACE_FLAG_NETWORK_TCPIP, false },
+            { QStringLiteral("网络通信"), QStringLiteral("Kernel-ALPC"), EVENT_TRACE_FLAG_ALPC, false },
+            { QStringLiteral("内存"), QStringLiteral("Kernel-PageFault"), EVENT_TRACE_FLAG_MEMORY_PAGE_FAULTS, false },
+            { QStringLiteral("内存"), QStringLiteral("Kernel-HardFault"), EVENT_TRACE_FLAG_MEMORY_HARD_FAULTS, false },
+            { QStringLiteral("内存"), QStringLiteral("Kernel-VirtualAlloc"), EVENT_TRACE_FLAG_VIRTUAL_ALLOC, false },
+            { QStringLiteral("内存"), QStringLiteral("Kernel-VAMap"), EVENT_TRACE_FLAG_VAMAP, false },
+            { QStringLiteral("性能分析"), QStringLiteral("Kernel-Profile"), EVENT_TRACE_FLAG_PROFILE, false },
+            { QStringLiteral("性能分析"), QStringLiteral("Kernel-DPC"), EVENT_TRACE_FLAG_DPC, false },
+            { QStringLiteral("性能分析"), QStringLiteral("Kernel-Interrupt"), EVENT_TRACE_FLAG_INTERRUPT, false },
+            { QStringLiteral("性能分析"), QStringLiteral("Kernel-SystemCall"), EVENT_TRACE_FLAG_SYSTEMCALL, false },
             { QStringLiteral("文件注册表"), QStringLiteral("Microsoft-Windows-Kernel-File") },
             { QStringLiteral("文件注册表"), QStringLiteral("Microsoft-Windows-Kernel-Registry") },
             { QStringLiteral("网络通信"), QStringLiteral("Microsoft-Windows-TCPIP") },
@@ -1467,6 +1493,8 @@ namespace
             QStringLiteral("网络通信"),
             QStringLiteral("安全审计"),
             QStringLiteral("脚本管理"),
+            QStringLiteral("内存"),
+            QStringLiteral("性能分析"),
             QStringLiteral("自定义/其他")
         };
     }
@@ -1482,18 +1510,43 @@ namespace
             return QStringLiteral("进程线程");
         }
         if (lower.contains(QStringLiteral("kernel-file"))
-            || lower.contains(QStringLiteral("kernel-registry")))
+            || lower.contains(QStringLiteral("kernel-registry"))
+            || lower.contains(QStringLiteral("kernel-disk"))
+            || lower.contains(QStringLiteral("kernel-fileio"))
+            || lower.contains(QStringLiteral("kernel-splitio"))
+            || lower.contains(QStringLiteral("kernel-driver")))
         {
             return QStringLiteral("文件注册表");
         }
         if (lower.contains(QStringLiteral("tcpip"))
             || lower.contains(QStringLiteral("dns-client"))
-            || lower.contains(QStringLiteral("winsock-afd")))
+            || lower.contains(QStringLiteral("winsock-afd"))
+            || lower.contains(QStringLiteral("kernel-tcpip"))
+            || lower.contains(QStringLiteral("kernel-alpc")))
         {
             return QStringLiteral("网络通信");
         }
+        if (lower.contains(QStringLiteral("kernel-pagefault"))
+            || lower.contains(QStringLiteral("kernel-hardfault"))
+            || lower.contains(QStringLiteral("kernel-virtualalloc"))
+            || lower.contains(QStringLiteral("kernel-vamap")))
+        {
+            return QStringLiteral("内存");
+        }
+        if (lower.contains(QStringLiteral("kernel-cswitch"))
+            || lower.contains(QStringLiteral("kernel-dispatcher"))
+            || lower.contains(QStringLiteral("kernel-job"))
+            || lower.contains(QStringLiteral("kernel-dpc"))
+            || lower.contains(QStringLiteral("kernel-interrupt"))
+            || lower.contains(QStringLiteral("kernel-systemcall"))
+            || lower.contains(QStringLiteral("kernel-profile")))
+        {
+            return QStringLiteral("性能分析");
+        }
         if (lower.contains(QStringLiteral("security-auditing"))
-            || lower.contains(QStringLiteral("defender")))
+            || lower.contains(QStringLiteral("defender"))
+            || lower.contains(QStringLiteral("kernel-debugevents"))
+            || lower.contains(QStringLiteral("kernel-dbgprint")))
         {
             return QStringLiteral("安全审计");
         }
@@ -6070,9 +6123,21 @@ void MonitorDock::initializeEtwTab()
         QStringLiteral("文件注册表"),
         QStringLiteral("网络通信"),
         QStringLiteral("安全审计"),
-        QStringLiteral("脚本管理")
+        QStringLiteral("脚本管理"),
+        QStringLiteral("内存"),
+        QStringLiteral("性能分析")
     });
     etwPresetHeaderLayout->addWidget(m_etwPresetCategoryCombo, 1);
+    m_etwPresetSelectAllButton = new QPushButton(QStringLiteral("全选显示"), etwPresetWidget);
+    m_etwPresetSelectAllButton->setToolTip(QStringLiteral("勾选当前分类中显示的所有经典内核事件和 Provider"));
+    m_etwPresetSelectAllButton->setStyleSheet(blueButtonStyle());
+    m_etwPresetSelectAllButton->setFixedWidth(82);
+    m_etwPresetClearAllButton = new QPushButton(QStringLiteral("全取消"), etwPresetWidget);
+    m_etwPresetClearAllButton->setToolTip(QStringLiteral("取消当前分类中显示的所有经典内核事件和 Provider"));
+    m_etwPresetClearAllButton->setStyleSheet(blueButtonStyle());
+    m_etwPresetClearAllButton->setFixedWidth(82);
+    etwPresetHeaderLayout->addWidget(m_etwPresetSelectAllButton);
+    etwPresetHeaderLayout->addWidget(m_etwPresetClearAllButton);
     etwPresetLayout->addLayout(etwPresetHeaderLayout);
 
     m_etwPresetProviderList = new QListWidget(etwPresetWidget);
@@ -6089,14 +6154,33 @@ void MonitorDock::initializeEtwTab()
         item->setData(Qt::UserRole, preset.providerNameText);
         item->setData(Qt::UserRole + 1, preset.categoryText);
         item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
-        item->setCheckState(Qt::Checked);
+        item->setCheckState(preset.enabledByDefault ? Qt::Checked : Qt::Unchecked);
     }
 
     QWidget* etwAllProviderWidget = new QWidget(m_etwProviderPanel);
     QVBoxLayout* etwAllProviderLayout = new QVBoxLayout(etwAllProviderWidget);
     etwAllProviderLayout->setContentsMargins(0, 0, 0, 0);
     etwAllProviderLayout->setSpacing(4);
-    etwAllProviderLayout->addWidget(new QLabel(QStringLiteral("系统Providers"), etwAllProviderWidget));
+
+    QHBoxLayout* etwAllProviderHeaderLayout = new QHBoxLayout();
+    etwAllProviderHeaderLayout->setContentsMargins(0, 0, 0, 0);
+    etwAllProviderHeaderLayout->setSpacing(6);
+    etwAllProviderHeaderLayout->addWidget(new QLabel(QStringLiteral("系统Providers"), etwAllProviderWidget));
+    m_etwSystemProviderSearchEdit = new QLineEdit(etwAllProviderWidget);
+    m_etwSystemProviderSearchEdit->setPlaceholderText(QStringLiteral("搜索Provider名称或GUID"));
+    m_etwSystemProviderSearchEdit->setStyleSheet(blueInputStyle());
+    etwAllProviderHeaderLayout->addWidget(m_etwSystemProviderSearchEdit, 1);
+    m_etwSystemProviderSelectAllButton = new QPushButton(QStringLiteral("全选显示"), etwAllProviderWidget);
+    m_etwSystemProviderSelectAllButton->setToolTip(QStringLiteral("勾选搜索结果中显示的所有系统 Provider"));
+    m_etwSystemProviderSelectAllButton->setStyleSheet(blueButtonStyle());
+    m_etwSystemProviderSelectAllButton->setFixedWidth(82);
+    m_etwSystemProviderClearAllButton = new QPushButton(QStringLiteral("全取消"), etwAllProviderWidget);
+    m_etwSystemProviderClearAllButton->setToolTip(QStringLiteral("取消搜索结果中显示的所有系统 Provider"));
+    m_etwSystemProviderClearAllButton->setStyleSheet(blueButtonStyle());
+    m_etwSystemProviderClearAllButton->setFixedWidth(82);
+    etwAllProviderHeaderLayout->addWidget(m_etwSystemProviderSelectAllButton);
+    etwAllProviderHeaderLayout->addWidget(m_etwSystemProviderClearAllButton);
+    etwAllProviderLayout->addLayout(etwAllProviderHeaderLayout);
 
     m_etwProviderList = new QListWidget(etwAllProviderWidget);
     m_etwProviderList->setAlternatingRowColors(true);
@@ -6160,7 +6244,8 @@ void MonitorDock::initializeEtwTab()
     m_etwSessionTable->horizontalHeader()->setSectionResizeMode(3, QHeaderView::ResizeToContents);
     m_etwSessionTable->horizontalHeader()->setSectionResizeMode(4, QHeaderView::Stretch);
     m_etwSessionTable->setMinimumHeight(180);
-    installMonitorTableCopyMenu(m_etwSessionTable);
+    // ETW 会话表提供控制动作；通用“复制整行”菜单不适用于该表。
+    m_etwSessionTable->setContextMenuPolicy(Qt::CustomContextMenu);
     m_etwSessionPanelLayout->addWidget(m_etwSessionTable, 1);
 
     etwProviderSessionLayout->addWidget(m_etwProviderPanel, 3);
@@ -7048,6 +7133,68 @@ void MonitorDock::initializeConnections()
         applyPresetCategoryFilter(m_etwPresetCategoryCombo->currentText());
     }
 
+    // 预置项批量选择只作用于当前分类中可见的行，隐藏行保持原有勾选状态。
+    if (m_etwPresetSelectAllButton != nullptr && m_etwPresetProviderList != nullptr)
+    {
+        connect(m_etwPresetSelectAllButton, &QPushButton::clicked, this, [this]() {
+            for (int row = 0; row < m_etwPresetProviderList->count(); ++row)
+            {
+                QListWidgetItem* item = m_etwPresetProviderList->item(row);
+                if (item != nullptr && !item->isHidden())
+                {
+                    item->setCheckState(Qt::Checked);
+                }
+            }
+        });
+    }
+    if (m_etwPresetClearAllButton != nullptr && m_etwPresetProviderList != nullptr)
+    {
+        connect(m_etwPresetClearAllButton, &QPushButton::clicked, this, [this]() {
+            for (int row = 0; row < m_etwPresetProviderList->count(); ++row)
+            {
+                QListWidgetItem* item = m_etwPresetProviderList->item(row);
+                if (item != nullptr && !item->isHidden())
+                {
+                    item->setCheckState(Qt::Unchecked);
+                }
+            }
+        });
+    }
+    // 系统 Provider 搜索只改变行可见性，勾选状态继续保留在列表项自身。
+    if (m_etwSystemProviderSearchEdit != nullptr)
+    {
+        connect(m_etwSystemProviderSearchEdit, &QLineEdit::textChanged, this, [this]() {
+            applyEtwSystemProviderSearchFilter();
+        });
+        applyEtwSystemProviderSearchFilter();
+    }
+    if (m_etwSystemProviderSelectAllButton != nullptr && m_etwProviderList != nullptr)
+    {
+        connect(m_etwSystemProviderSelectAllButton, &QPushButton::clicked, this, [this]() {
+            for (int row = 0; row < m_etwProviderList->count(); ++row)
+            {
+                QListWidgetItem* item = m_etwProviderList->item(row);
+                if (item != nullptr && !item->isHidden())
+                {
+                    item->setCheckState(Qt::Checked);
+                }
+            }
+        });
+    }
+    if (m_etwSystemProviderClearAllButton != nullptr && m_etwProviderList != nullptr)
+    {
+        connect(m_etwSystemProviderClearAllButton, &QPushButton::clicked, this, [this]() {
+            for (int row = 0; row < m_etwProviderList->count(); ++row)
+            {
+                QListWidgetItem* item = m_etwProviderList->item(row);
+                if (item != nullptr && !item->isHidden())
+                {
+                    item->setCheckState(Qt::Unchecked);
+                }
+            }
+        });
+    }
+
     if (m_etwPreFilterAddGroupButton != nullptr)
     {
         connect(m_etwPreFilterAddGroupButton, &QPushButton::clicked, this, [this]() {
@@ -7168,6 +7315,8 @@ void MonitorDock::initializeConnections()
             m_etwSessionStopButton->setEnabled(!m_etwSessionTable->selectedItems().isEmpty());
         }
     });
+    connect(m_etwSessionTable, &QTableWidget::customContextMenuRequested,
+        this, &MonitorDock::showEtwSessionContextMenu);
 
     connect(m_etwStartButton, &QPushButton::clicked, this, [this]() {
         kLogEvent event;
@@ -10658,6 +10807,28 @@ void MonitorDock::showWmiEventContextMenu(const QPoint& position)
     }
 }
 
+void MonitorDock::applyEtwSystemProviderSearchFilter()
+{
+    if (m_etwSystemProviderSearchEdit == nullptr || m_etwProviderList == nullptr)
+    {
+        return;
+    }
+
+    const QString searchText = m_etwSystemProviderSearchEdit->text().trimmed();
+    for (int row = 0; row < m_etwProviderList->count(); ++row)
+    {
+        QListWidgetItem* item = m_etwProviderList->item(row);
+        if (item == nullptr)
+        {
+            continue;
+        }
+
+        const bool visible = searchText.isEmpty()
+            || item->text().contains(searchText, Qt::CaseInsensitive);
+        item->setHidden(!visible);
+    }
+}
+
 void MonitorDock::refreshEtwProvidersAsync()
 {
     kLogEvent startEvent;
@@ -10720,6 +10891,7 @@ void MonitorDock::refreshEtwProvidersAsync()
                 item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
                 item->setCheckState(Qt::Unchecked);
             }
+            guardThis->applyEtwSystemProviderSearchFilter();
 
             if (status == ERROR_SUCCESS)
             {
@@ -10857,6 +11029,8 @@ void MonitorDock::refreshEtwSessionsAsync()
                     .arg(properties->MinimumBuffers)
                     .arg(properties->MaximumBuffers);
                 entry.eventsLost = properties->EventsLost;
+                entry.logFileMode = properties->LogFileMode;
+                entry.sessionGuid = properties->Wnode.Guid;
                 entry.logFilePath = logFileNameText;
                 sessionList.push_back(std::move(entry));
             }
@@ -10887,6 +11061,7 @@ void MonitorDock::refreshEtwSessionsAsync()
                         const EtwSessionEntry& entry = guardThis->m_etwSessions[static_cast<std::size_t>(row)];
                         QTableWidgetItem* nameItem = new QTableWidgetItem(entry.sessionName);
                         nameItem->setToolTip(entry.sessionName);
+                        nameItem->setData(Qt::UserRole, entry.logFileMode);
                         guardThis->m_etwSessionTable->setItem(row, 0, nameItem);
 
                         QTableWidgetItem* modeItem = new QTableWidgetItem(entry.modeText);
@@ -10968,22 +11143,35 @@ void MonitorDock::stopSelectedEtwSessions()
     }
 
     QStringList sessionNameList;
+    QHash<QString, quint32> sessionModeByName;
     for (const int row : selectedRowSet)
     {
-        if (row < 0 || row >= static_cast<int>(m_etwSessions.size()))
+        // 排序后表格行号会变化，控制目标必须从当前可见行的名称单元格读取。
+        const QTableWidgetItem* nameItem = m_etwSessionTable->item(row, 0);
+        if (nameItem == nullptr)
         {
             continue;
         }
-        const QString sessionNameText = m_etwSessions[static_cast<std::size_t>(row)].sessionName.trimmed();
+        const QString sessionNameText = nameItem->text().trimmed();
         if (!sessionNameText.isEmpty())
         {
             sessionNameList << sessionNameText;
+            sessionModeByName.insert(sessionNameText, nameItem->data(Qt::UserRole).toUInt());
         }
     }
     sessionNameList.removeDuplicates();
     if (sessionNameList.isEmpty())
     {
         return;
+    }
+    // 会话名称在活动会话中唯一；按名称从本轮枚举快照补齐 ControlTrace 的 GUID。
+    QHash<QString, GUID> sessionGuidByName;
+    for (const EtwSessionEntry& entry : m_etwSessions)
+    {
+        if (sessionNameList.contains(entry.sessionName))
+        {
+            sessionGuidByName.insert(entry.sessionName, entry.sessionGuid);
+        }
     }
 
     if (m_etwSessionStatusLabel != nullptr)
@@ -11003,25 +11191,32 @@ void MonitorDock::stopSelectedEtwSessions()
     kPro.set(m_etwSessionRefreshProgressPid, "停止选中的 ETW 会话", 0, 10.0f);
 
     QPointer<MonitorDock> guardThis(this);
-    std::thread([guardThis, sessionNameList]() {
+    std::thread([guardThis, sessionNameList, sessionModeByName, sessionGuidByName]() {
         int successCount = 0;
         QStringList failureTextList;
 
         for (const QString& sessionNameText : sessionNameList)
         {
             const std::wstring sessionNameWide = sessionNameText.toStdWString();
+            constexpr std::size_t nameCapacity = 1024;
+            constexpr std::size_t fileCapacity = 1024;
+            // STOP 也需要足够的输出空间容纳会话名和日志路径。
             std::vector<unsigned char> propertyBuffer(
-                sizeof(EVENT_TRACE_PROPERTIES) + (sessionNameWide.size() + 1) * sizeof(wchar_t),
-                0);
+                sizeof(EVENT_TRACE_PROPERTIES)
+                + (nameCapacity + fileCapacity) * sizeof(wchar_t), 0);
             auto* properties = reinterpret_cast<EVENT_TRACE_PROPERTIES*>(propertyBuffer.data());
             properties->Wnode.BufferSize = static_cast<ULONG>(propertyBuffer.size());
+            properties->Wnode.Guid = sessionGuidByName.value(sessionNameText);
             properties->LoggerNameOffset = sizeof(EVENT_TRACE_PROPERTIES);
+            properties->LogFileNameOffset = static_cast<ULONG>(
+                sizeof(EVENT_TRACE_PROPERTIES) + nameCapacity * sizeof(wchar_t));
+            properties->LogFileMode = sessionModeByName.value(sessionNameText);
             wchar_t* loggerNamePointer = reinterpret_cast<wchar_t*>(
                 propertyBuffer.data() + properties->LoggerNameOffset);
-            ::wcscpy_s(loggerNamePointer, sessionNameWide.size() + 1, sessionNameWide.c_str());
+            ::wcscpy_s(loggerNamePointer, nameCapacity, sessionNameWide.c_str());
 
             const ULONG stopStatus = ::ControlTraceW(0, loggerNamePointer, properties, EVENT_TRACE_CONTROL_STOP);
-            if (stopStatus == ERROR_SUCCESS)
+            if (stopStatus == ERROR_SUCCESS || stopStatus == ERROR_MORE_DATA)
             {
                 ++successCount;
             }
@@ -11075,6 +11270,176 @@ void MonitorDock::stopSelectedEtwSessions()
                 << eol;
 
             guardThis->refreshEtwSessionsAsync();
+        }, Qt::QueuedConnection);
+    }).detach();
+}
+
+void MonitorDock::showEtwSessionContextMenu(const QPoint& position)
+{
+    // 右键未选中行时只选择该行；右键已选中行时保留多选，以便批量控制。
+    if (m_etwSessionTable == nullptr)
+    {
+        return;
+    }
+
+    const QModelIndex clickedIndex = m_etwSessionTable->indexAt(position);
+    if (clickedIndex.isValid() && !m_etwSessionTable->selectionModel()->isRowSelected(clickedIndex.row()))
+    {
+        m_etwSessionTable->clearSelection();
+        m_etwSessionTable->selectRow(clickedIndex.row());
+    }
+
+    QMenu menu(m_etwSessionTable);
+    // 显式使用不透明主题样式，确保浅色和深色主题的菜单均可读。
+    menu.setStyleSheet(KswordTheme::ContextMenuStyle());
+    QAction* stopAction = menu.addAction(
+        QIcon(QStringLiteral(":/Icon/process_terminate.svg")),
+        QStringLiteral("结束选中的 ETW 会话"));
+    QAction* flushAction = menu.addAction(
+        QIcon(QStringLiteral(":/Icon/process_refresh.svg")),
+        QStringLiteral("刷新选中会话的缓冲区"));
+    menu.addSeparator();
+    QAction* refreshAction = menu.addAction(
+        QIcon(QStringLiteral(":/Icon/process_refresh.svg")),
+        QStringLiteral("刷新列表"));
+    const bool hasSelection = !m_etwSessionTable->selectedItems().isEmpty();
+    stopAction->setEnabled(hasSelection);
+    flushAction->setEnabled(hasSelection);
+
+    const QAction* chosenAction = menu.exec(m_etwSessionTable->viewport()->mapToGlobal(position));
+    if (chosenAction == stopAction)
+    {
+        stopSelectedEtwSessions();
+    }
+    else if (chosenAction == flushAction)
+    {
+        flushSelectedEtwSessions();
+    }
+    else if (chosenAction == refreshAction)
+    {
+        refreshEtwSessionsAsync();
+    }
+}
+
+void MonitorDock::flushSelectedEtwSessions()
+{
+    // 使用当前表格单元格取会话名和模式，避免排序后用缓存行号控制错误会话。
+    if (m_etwSessionTable == nullptr)
+    {
+        return;
+    }
+
+    std::set<int> selectedRowSet;
+    for (QTableWidgetItem* selectedItem : m_etwSessionTable->selectedItems())
+    {
+        if (selectedItem != nullptr)
+        {
+            selectedRowSet.insert(selectedItem->row());
+        }
+    }
+
+    std::vector<std::pair<QString, quint32>> selectedSessions;
+    QStringList knownNames;
+    for (const int row : selectedRowSet)
+    {
+        const QTableWidgetItem* nameItem = m_etwSessionTable->item(row, 0);
+        if (nameItem == nullptr)
+        {
+            continue;
+        }
+        const QString sessionName = nameItem->text().trimmed();
+        if (!sessionName.isEmpty() && !knownNames.contains(sessionName))
+        {
+            knownNames << sessionName;
+            selectedSessions.emplace_back(sessionName, nameItem->data(Qt::UserRole).toUInt());
+        }
+    }
+    if (selectedSessions.empty())
+    {
+        return;
+    }
+    // 右键选择只保存名称与模式；GUID 从同一次枚举的快照按名称补齐。
+    QHash<QString, GUID> sessionGuidByName;
+    for (const EtwSessionEntry& entry : m_etwSessions)
+    {
+        if (knownNames.contains(entry.sessionName))
+        {
+            sessionGuidByName.insert(entry.sessionName, entry.sessionGuid);
+        }
+    }
+
+    if (m_etwSessionStatusLabel != nullptr)
+    {
+        m_etwSessionStatusLabel->setText(QStringLiteral("● 正在刷新会话缓冲区..."));
+        ks::ui::ApplyStatusRole(m_etwSessionStatusLabel, ks::ui::StatusRole::Info);
+    }
+
+    QPointer<MonitorDock> guardThis(this);
+    std::thread([guardThis, selectedSessions, sessionGuidByName]() {
+        int successCount = 0;
+        QStringList failureTextList;
+
+        // ControlTrace 的输出结构须预留会话名及日志路径，私有会话还需原始模式。
+        for (const auto& session : selectedSessions)
+        {
+            const std::wstring sessionNameWide = session.first.toStdWString();
+            constexpr std::size_t nameCapacity = 1024;
+            constexpr std::size_t fileCapacity = 1024;
+            std::vector<unsigned char> propertyBuffer(
+                sizeof(EVENT_TRACE_PROPERTIES)
+                + (nameCapacity + fileCapacity) * sizeof(wchar_t), 0);
+            auto* properties = reinterpret_cast<EVENT_TRACE_PROPERTIES*>(propertyBuffer.data());
+            properties->Wnode.BufferSize = static_cast<ULONG>(propertyBuffer.size());
+            properties->Wnode.Guid = sessionGuidByName.value(session.first);
+            properties->LoggerNameOffset = sizeof(EVENT_TRACE_PROPERTIES);
+            properties->LogFileNameOffset = static_cast<ULONG>(
+                sizeof(EVENT_TRACE_PROPERTIES) + nameCapacity * sizeof(wchar_t));
+            properties->LogFileMode = session.second;
+            wchar_t* loggerName = reinterpret_cast<wchar_t*>(
+                propertyBuffer.data() + properties->LoggerNameOffset);
+            ::wcscpy_s(loggerName, nameCapacity, sessionNameWide.c_str());
+
+            const ULONG flushStatus = ::ControlTraceW(
+                0, loggerName, properties, EVENT_TRACE_CONTROL_FLUSH);
+            if (flushStatus == ERROR_SUCCESS)
+            {
+                ++successCount;
+            }
+            else
+            {
+                failureTextList << QStringLiteral("%1(%2)").arg(session.first).arg(flushStatus);
+            }
+        }
+
+        QMetaObject::invokeMethod(qApp,
+            [guardThis, selectedSessions, successCount, failureTextList]() {
+            if (guardThis == nullptr)
+            {
+                return;
+            }
+
+            if (guardThis->m_etwSessionStatusLabel != nullptr)
+            {
+                guardThis->m_etwSessionStatusLabel->setText(
+                    QStringLiteral("● 缓冲区刷新：成功 %1 项，失败 %2 项")
+                        .arg(successCount)
+                        .arg(failureTextList.size()));
+                ks::ui::ApplyStatusRole(
+                    guardThis->m_etwSessionStatusLabel,
+                    failureTextList.isEmpty()
+                        ? ks::ui::StatusRole::Success
+                        : ks::ui::StatusRole::Warning);
+            }
+
+            kLogEvent event;
+            (failureTextList.isEmpty() ? info : warn) << event
+                << "[MonitorDock] ETW会话缓冲区刷新完成, requestedCount="
+                << selectedSessions.size()
+                << ", successCount="
+                << successCount
+                << ", failureDetails="
+                << failureTextList.join(QStringLiteral(" | ")).toStdString()
+                << eol;
         }, Qt::QueuedConnection);
     }).detach();
 }

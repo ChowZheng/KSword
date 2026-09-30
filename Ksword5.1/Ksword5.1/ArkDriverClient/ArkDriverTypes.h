@@ -870,7 +870,8 @@ namespace ksword::ark
     {
         Native = 0U,
         Irp = 1U,
-        Posix = 2U
+        Posix = 2U,
+        IgnoreSharePosix = 3U
     };
 
     // DeletePathResult 承载 R0 删除（单项或递归）的统计回执。
@@ -883,6 +884,7 @@ namespace ksword::ark
         IoResult io;                                // io：底层 DeviceIoControl 状态。
         bool unsupported = false;                   // unsupported：旧驱动拒绝新 flags。
         bool responseValid = false;                 // responseValid：是否解析到完整响应包。
+        bool responseV2 = false;                    // responseV2：阶段状态和复核结果可用。
         KSWORD_ARK_DELETE_PATH_RESPONSE response{}; // response：R0 固定统计响应。
     };
 

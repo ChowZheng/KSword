@@ -5199,6 +5199,9 @@ MainWindow::MainWindow(
     // Dock 全局配置：
     // - 仅允许声明了 DockWidgetClosable 的辅助 Dock 显示活动标签关闭按钮；
     // - 主功能 Dock 继续在各自 feature 中禁用关闭，区域菜单/浮动/关闭按钮仍保持隐藏。
+    // KSword owns the application QSS; prevent ADS 5.x from reloading its
+    // default stylesheet when the application palette changes.
+    ads::CDockManager::setConfigFlag(ads::CDockManager::DisableStylesheet, true);
     ads::CDockManager::setConfigFlag(ads::CDockManager::ActiveTabHasCloseButton, true);
     ads::CDockManager::setConfigFlag(ads::CDockManager::AllTabsHaveCloseButton, false);
     ads::CDockManager::setConfigFlag(ads::CDockManager::DockAreaHasCloseButton, false);

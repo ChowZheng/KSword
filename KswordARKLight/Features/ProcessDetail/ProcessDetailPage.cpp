@@ -792,7 +792,7 @@ void ProcessDetailPage::ExecuteBackgroundAction(
 // remain available, so the user can inspect prior data without starting a
 // competing process/R0 request.
 void ProcessDetailPage::SetBackgroundActionControlsEnabled(const bool enabled) {
-    constexpr std::array<int, 50> controls{
+    constexpr std::array<int, 51> controls{
         ActionTerminateMode,
         ActionTerminate,
         ActionSuspend,
@@ -807,6 +807,7 @@ void ProcessDetailPage::SetBackgroundActionControlsEnabled(const bool enabled) {
         ActionEfficiencyOff,
         ActionR0Terminate,
         ActionR0Suspend,
+        ActionR0Resume,
         ActionR0Ppl,
         ActionR0Hide,
         ActionR0Danger,

@@ -11,11 +11,18 @@
 #include "../Framework.h"
 
 #include <QStringList>
+#include <QPointer>
+#include <QPoint>
+#include <QPalette>
+#include <QFont>
+#include <QLayout>
+#include <QRect>
 #include <QVector>
 #include <QWidget>
 
 #include <atomic>   // std::atomic_bool：异步探测任务互斥。
 #include <cstdint>  // std::uint64_t：保存采样累计值与时间戳。
+#include <utility>
 #include <vector>   // std::vector：保存每核图表与采样数据。
 
 class CodeEditorWidget;
@@ -29,6 +36,7 @@ class HardwareHwidDispatchPage;
 class HardwareI8042AuditPage;
 class PerformanceNavCard;
 class QChartView;
+class QDialog;
 class QAreaSeries;
 class QEvent;
 class QGridLayout;
@@ -187,6 +195,7 @@ private:
         Memory,  // Memory：内存固定详情页。
         Disk,    // Disk：单个物理磁盘详情页。
         Network, // Network：单个网络接口详情页。
+        VirtualNetwork, // VirtualNetwork：虚拟网络汇总详情页。
         Gpu      // Gpu：单个DXGI显卡适配器详情页。
     };
 
@@ -216,13 +225,15 @@ private:
 
     // NetworkRateSample：
     // - 作用：保存一次单网卡收发速率采样；
-    // - 调用方式：sampleNetworkRates 读取 GetIfTable2 并按接口 LUID 计算增量；
+    // - 调用方式：sampleNetworkRates 用 IP 接口 LUID 筛选 GetIfTable2 行并计算增量；
     // - 返回行为：字段直接供 UI 卡片和详情页刷新。
     struct NetworkRateSample
     {
         std::uint64_t interfaceKey = 0;             // interfaceKey：网络接口 LUID 打包键。
         QString displayNameText;                   // displayNameText：网卡别名或描述。
         std::uint64_t linkBitsPerSecond = 0;        // linkBitsPerSecond：链路速率 bit/s。
+        bool physical = false;                     // physical：Windows 标记的实体硬件接口。
+        bool operational = false;                  // operational：接口当前是否处于连接状态。
         double rxBytesPerSec = 0.0;                 // rxBytesPerSec：接收字节每秒。
         double txBytesPerSec = 0.0;                 // txBytesPerSec：发送字节每秒。
         std::uint64_t totalRxBytes = 0;             // totalRxBytes：系统累计接收字节。
@@ -292,6 +303,8 @@ private:
         std::uint64_t interfaceKey = 0;           // interfaceKey：网络接口 LUID 打包键。
         QString displayNameText;                 // displayNameText：网卡展示名。
         std::uint64_t linkBitsPerSecond = 0;      // linkBitsPerSecond：链路速率 bit/s。
+        bool physical = false;                    // physical：实体接口独立展示，虚拟接口进入汇总页。
+        bool lastOperational = false;             // lastOperational：连接状态变化时重置速率基线。
         std::uint64_t lastRxBytes = 0;            // lastRxBytes：上次累计接收字节。
         std::uint64_t lastTxBytes = 0;            // lastTxBytes：上次累计发送字节。
         qint64 lastSampleMs = 0;                  // lastSampleMs：上次采样时间戳。
@@ -396,6 +409,24 @@ private:
     void syncUtilizationSidebarCardWidths();
     void syncUtilizationSidebarSelection(int selectedRowIndex);
     void adjustUtilizationChartHeights();
+    void openUtilizationFloatingWindow(bool sidebarMode);
+    void restoreUtilizationFloatingWindow();
+    void resizeUtilizationFloatingWindow();
+    void captureUtilizationFloatingScale();
+    void applyUtilizationFloatingContentScale(bool forceRestyle = false);
+    void restoreUtilizationFloatingContentScale();
+    void applyUtilizationFloatingTheme();
+    void saveUtilizationFloatingPreferences();
+    void beginUtilizationWindowPick();
+    void finishUtilizationWindowPick(void* pickedWindow);
+    void attachUtilizationWindow(void* targetWindow, bool restoreSavedOffset);
+    void synchronizeUtilizationFollow();
+    void captureUtilizationFollowOffset();
+    void stopUtilizationFollow(bool showNormalCard, bool clearSavedTarget);
+    void setUtilizationFollowClickThrough(bool enabled);
+    void clearUtilizationFollowHooks();
+    QWidget* utilizationChartBottomWidget(const UtilizationNavEntry& entry) const;
+    std::vector<QWidget*> utilizationDetailWidgets(const UtilizationNavEntry& entry) const;
     PerformanceNavCard* addUtilizationSidebarCard(
         QWidget* detailPage,
         const QString& titleText,
@@ -406,6 +437,8 @@ private:
     int ensureDiskUtilizationDevice(const DiskRateSample& sample, int ordinalIndex);
     int findNetworkUtilizationDeviceIndexByKey(std::uint64_t interfaceKey) const;
     int ensureNetworkUtilizationDevice(const NetworkRateSample& sample, int ordinalIndex);
+    void ensureVirtualNetworkPage();
+    void relayoutVirtualNetworkTiles();
     int findGpuUtilizationDeviceIndexByKey(std::uint64_t adapterKey) const;
     int ensureGpuUtilizationDevice(const GpuUsageSample& sample, int ordinalIndex);
     void createDiskUtilizationDevicePage(DiskUtilizationDevice* devicePointer);
@@ -443,8 +476,6 @@ private:
         double memoryUsagePercent,
         double diskReadBytesPerSec,
         double diskWriteBytesPerSec,
-        double networkRxBytesPerSec,
-        double networkTxBytesPerSec,
         double gpuUsagePercent);
     void updateAdditionalDiskUtilizationDevices(const std::vector<DiskRateSample>& sampleList);
     void updateAdditionalNetworkUtilizationDevices(const std::vector<NetworkRateSample>& sampleList);
@@ -576,13 +607,74 @@ private:
     bool m_utilizationSplitterInitialSizeApplied = false; // m_utilizationSplitterInitialSizeApplied：是否已应用 300px 默认左栏。
     QListWidget* m_utilizationSidebarList = nullptr; // m_utilizationSidebarList：左侧性能卡片列表。
     QStackedWidget* m_utilizationDetailStack = nullptr; // m_utilizationDetailStack：右侧详情页栈。
+    QWidget* m_virtualNetworkPage = nullptr; // m_virtualNetworkPage：虚拟网卡共用详情页。
+    QScrollArea* m_virtualNetworkScrollArea = nullptr; // m_virtualNetworkScrollArea：虚拟网卡纵向滚动区。
+    QWidget* m_virtualNetworkGridHost = nullptr; // m_virtualNetworkGridHost：一至两列网卡卡片宿主。
+    QGridLayout* m_virtualNetworkGrid = nullptr; // m_virtualNetworkGrid：按宽度重排虚拟网卡。
+    int m_virtualNetworkColumnCount = 0; // m_virtualNetworkColumnCount：上次使用的列数。
+    int m_virtualNetworkTileCount = 0; // m_virtualNetworkTileCount：上次布局的虚拟网卡数量。
     std::vector<UtilizationNavEntry> m_utilizationNavEntries; // m_utilizationNavEntries：左侧卡片到右侧页的映射。
+    enum class UtilizationFloatingMode { None, Sidebar, Detail };
+    UtilizationFloatingMode m_utilizationFloatingMode = UtilizationFloatingMode::None;
+    QPointer<QWidget> m_utilizationFloatingWindow;
+    QPointer<QWidget> m_utilizationFloatingPage;
+    QPointer<QWidget> m_utilizationOriginalMainWindow;
+    std::vector<std::pair<QPointer<QWidget>, bool>> m_utilizationHiddenDetailWidgets;
+    QList<int> m_utilizationSavedSplitterSizes;
+    int m_utilizationSavedDetailIndex = -1;
+    QPalette m_utilizationBorrowedPalette;
+    bool m_utilizationBorrowedHadPalette = false;
+    QFont m_utilizationBorrowedFont;
+    bool m_utilizationBorrowedHadFont = false;
+    struct FloatingWidgetStyleState
+    {
+        QPointer<QWidget> widget;
+        QString styleSheet;
+        QPalette palette;
+        bool hadPalette = false;
+        int minimumHeight = 0;
+        int maximumHeight = QWIDGETSIZE_MAX;
+    };
+    struct FloatingLayoutStyleState
+    {
+        QPointer<QLayout> layout;
+        QMargins margins;
+        int spacing = 0;
+        int horizontalSpacing = 0;
+        int verticalSpacing = 0;
+    };
+    std::vector<FloatingWidgetStyleState> m_utilizationFloatingWidgetStyles;
+    std::vector<FloatingLayoutStyleState> m_utilizationFloatingLayoutStyles;
+    double m_utilizationFloatingAppliedContentScale = 1.0;
+    QSize m_utilizationFloatingBaseSize;
+    int m_utilizationFloatingScalePercent = 100;
+    int m_utilizationFloatingBackgroundOpacityPercent = 100;
+    bool m_utilizationFloatingTopMost = true;
+    QString m_utilizationFloatingThemeMode = QStringLiteral("follow_main");
+    QString m_utilizationFollowTitle;
+    QString m_utilizationFollowExecutable;
+    QPoint m_utilizationFollowOffset;
+    bool m_utilizationFollowOffsetLogical = false;
+    bool m_utilizationFollowClickThrough = false;
+    void* m_utilizationFollowTarget = nullptr;
+    void* m_utilizationFollowEventHook = nullptr;
+    void* m_utilizationFollowForegroundHook = nullptr;
+    bool m_utilizationFollowSyncing = false;
+    QPointer<QWidget> m_utilizationFollowMirror;
+    QPointer<QDialog> m_utilizationPickDialog;
+    QTimer* m_utilizationFollowTimer = nullptr;
+    QTimer* m_utilizationPreferencesSaveTimer = nullptr;
+    QPoint m_utilizationDragStartGlobal;
+    QRect m_utilizationResizeStartGeometry;
+    Qt::Edges m_utilizationResizeEdges;
+    bool m_utilizationDragArmed = false;
+    bool m_utilizationDragging = false;
 
     // 左侧性能卡片。
     PerformanceNavCard* m_cpuNavCard = nullptr;      // m_cpuNavCard：CPU 导航卡片。
     PerformanceNavCard* m_memoryNavCard = nullptr;   // m_memoryNavCard：内存导航卡片。
     PerformanceNavCard* m_diskNavCard = nullptr;     // m_diskNavCard：兼容旧聚合磁盘卡片，当前动态设备模式下为空。
-    PerformanceNavCard* m_networkNavCard = nullptr;  // m_networkNavCard：兼容旧聚合网络卡片，当前动态设备模式下为空。
+    PerformanceNavCard* m_networkNavCard = nullptr;  // m_networkNavCard：虚拟网络汇总导航卡片。
     PerformanceNavCard* m_gpuNavCard = nullptr;      // m_gpuNavCard：兼容旧聚合GPU卡片，当前动态设备模式下为空。
 
     // 利用率详情页：CPU。
@@ -768,7 +860,7 @@ private:
     std::uint64_t m_systemVolumeFreeBytes = 0;  // m_systemVolumeFreeBytes：系统盘剩余容量字节。
 
     double m_diskNavAutoScaleBytesPerSec = 1024.0 * 1024.0; // m_diskNavAutoScaleBytesPerSec：兼容旧聚合磁盘页的动态缩放上限。
-    double m_networkNavAutoScaleBytesPerSec = 1024.0 * 1024.0; // m_networkNavAutoScaleBytesPerSec：兼容旧聚合网络页的动态缩放上限。
+    double m_networkNavAutoScaleBytesPerSec = 1024.0 * 1024.0; // m_networkNavAutoScaleBytesPerSec：虚拟网络汇总卡片的动态缩放上限。
     std::vector<double> m_cpuUsageHistoryPercent; // m_cpuUsageHistoryPercent：CPU总体利用率历史，用于窗口统计。
     std::vector<double> m_memoryUsageHistoryPercent; // m_memoryUsageHistoryPercent：内存利用率历史，用于窗口统计。
     std::vector<double> m_gpuUsageHistoryPercent; // m_gpuUsageHistoryPercent：GPU总体利用率历史，用于窗口统计。
@@ -778,8 +870,8 @@ private:
     std::vector<double> m_memoryNavCachedHistoryPercent; // m_memoryNavCachedHistoryPercent：内存缓存/池缩略图历史。
     std::vector<double> m_diskNavReadHistoryBytesPerSec; // m_diskNavReadHistoryBytesPerSec：兼容旧聚合磁盘卡片读取历史。
     std::vector<double> m_diskNavWriteHistoryBytesPerSec; // m_diskNavWriteHistoryBytesPerSec：兼容旧聚合磁盘卡片写入历史。
-    std::vector<double> m_networkNavRxHistoryBytesPerSec; // m_networkNavRxHistoryBytesPerSec：兼容旧聚合网络卡片下行历史。
-    std::vector<double> m_networkNavTxHistoryBytesPerSec; // m_networkNavTxHistoryBytesPerSec：兼容旧聚合网络卡片上行历史。
+    std::vector<double> m_networkNavRxHistoryBytesPerSec; // m_networkNavRxHistoryBytesPerSec：虚拟网络汇总下行历史。
+    std::vector<double> m_networkNavTxHistoryBytesPerSec; // m_networkNavTxHistoryBytesPerSec：虚拟网络汇总上行历史。
     std::vector<DiskUtilizationDevice> m_diskUtilDevices; // m_diskUtilDevices：磁盘利用率多设备页。
     std::vector<NetworkUtilizationDevice> m_networkUtilDevices; // m_networkUtilDevices：网卡利用率多设备页。
     std::vector<GpuUtilizationDevice> m_gpuUtilDevices; // m_gpuUtilDevices：GPU利用率多设备页。

@@ -168,6 +168,7 @@
     <ClCompile Include="Features\Monitor\EtwMonitorView.cpp" />
     <ClCompile Include="Features\Monitor\EtwSessionController.cpp" />
     <ClCompile Include="Features\Monitor\MonitorFeature.cpp" />
+    <ClCompile Include="Features\Monitor\CallbackMonitorView.cpp" />
     <ClCompile Include="Features\Network\NetworkFeature.cpp" />
     <ClCompile Include="Features\Network\NetworkModel.cpp" />
     <ClCompile Include="Features\Network\NetworkView.cpp" />
@@ -194,6 +195,7 @@
     <ClCompile Include="Features\ProcessDetail\ProcessDetailPage.Thread.cpp" />
     <ClCompile Include="Features\ProcessDetail\ProcessDetailPage.Token.cpp" />
     <ClCompile Include="Features\Driver\DriverUnloadedView.cpp" />
+    <ClCompile Include="Features\Driver\DriverThreadView.cpp" />
     <ClCompile Include="Features\NetTools\NetToolsActions.cpp" />
     <ClCompile Include="Features\NetTools\NetToolsConnectionView.cpp" />
     <ClCompile Include="Features\NetTools\NetToolsDiagnostics.cpp" />
@@ -278,6 +280,8 @@
     <ClCompile Include="..\Ksword5.1\Ksword5.1\ArkDriverClient\ArkDriverVirtualization.cpp" />
     <ClCompile Include="..\Ksword5.1\Ksword5.1\ArkDriverClient\ArkDriverWorkQueue.cpp" />
     <ClCompile Include="..\Ksword5.1\Ksword5.1\ArkDriverClient\ArkDriverCallback.cpp" />
+    <ClCompile Include="..\Ksword5.1\Ksword5.1\ArkDriverClient\ArkDriverCallbackMonitor.cpp" />
+    <ClCompile Include="..\Ksword5.1\Ksword5.1\ArkDriverClient\ArkDriverFileIrp.cpp" />
     <ClCompile Include="..\Ksword5.1\Ksword5.1\ArkDriverClient\ArkDriverBugcheck.cpp" />
     <ClCompile Include="..\Ksword5.1\Ksword5.1\ArkDriverClient\ArkDriverCapabilities.cpp" />
     <ClCompile Include="..\Ksword5.1\Ksword5.1\ArkDriverClient\ArkDriverCapability.cpp" />
@@ -384,6 +388,7 @@
     <ClInclude Include="Features\Monitor\EtwMonitorView.h" />
     <ClInclude Include="Features\Monitor\EtwSessionController.h" />
     <ClInclude Include="Features\Monitor\MonitorFeature.h" />
+    <ClInclude Include="Features\Monitor\CallbackMonitorView.h" />
     <ClInclude Include="Features\Network\NetworkFeature.h" />
     <ClInclude Include="Features\Network\NetworkModel.h" />
     <ClInclude Include="Features\Network\NetworkView.h" />
@@ -404,6 +409,7 @@
     <ClInclude Include="Features\ProcessDetail\ProcessDetailPage.h" />
     <ClInclude Include="Features\ProcessDetail\ProcessDetailTypes.h" />
     <ClInclude Include="Features\Driver\DriverUnloadedView.h" />
+    <ClInclude Include="Features\Driver\DriverThreadView.h" />
     <ClInclude Include="Features\NetTools\NetToolsActions.h" />
     <ClInclude Include="Features\NetTools\NetToolsConnectionView.h" />
     <ClInclude Include="Features\NetTools\NetToolsDiagnostics.h" />
@@ -487,6 +493,7 @@
     <ClInclude Include="..\Ksword5.1\Ksword5.1\ksword\process\process.h" />
     <ClInclude Include="..\Ksword5.1\Ksword5.1\ksword\string\string.h" />
     <ClInclude Include="..\shared\KswordArkLogProtocol.h" />
+    <ClInclude Include="..\shared\ProcessTerminateMethods.h" />
     <ClInclude Include="..\shared\driver\KswordArkAlpcIoctl.h" />
     <ClInclude Include="..\shared\driver\KswordArkCallbackIoctl.h" />
     <ClInclude Include="..\shared\driver\KswordArkCapabilityIoctl.h" />

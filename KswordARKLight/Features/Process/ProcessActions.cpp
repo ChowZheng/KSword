@@ -1,4 +1,5 @@
 #include "ProcessActions.h"
+#include "../../../shared/ProcessTerminateMethods.h"
 
 #include "../../../Ksword5.1/Ksword5.1/ArkDriverClient/ArkDriverClient.h"
 #include "../../../Ksword5.1/Ksword5.1/ksword/process/process.h"
@@ -375,27 +376,7 @@ ProcessActionResult ExecuteMultiMethodTerminate(const std::vector<ProcessSnapsho
     result.title = L"结束进程(组合方法链)";
     result.success = true;
 
-    struct TerminateMethodEntry {
-        const wchar_t* methodName = nullptr;
-        std::function<bool(std::uint32_t, std::string*)> invoke;
-    };
-
-    const std::vector<TerminateMethodEntry> methods{
-        { L"TerminateProcess(Kernel32)", [](std::uint32_t pid, std::string* detail) { return ks::process::TerminateProcessByWin32(pid, detail); } },
-        { L"NtTerminateProcess/ZwTerminateProcess", [](std::uint32_t pid, std::string* detail) { return ks::process::TerminateProcessByNtNative(pid, detail); } },
-        { L"WTSTerminateProcess(WTS API)", [](std::uint32_t pid, std::string* detail) { return ks::process::TerminateProcessByWtsApi(pid, detail); } },
-        { L"WinStationTerminateProcess(winsta)", [](std::uint32_t pid, std::string* detail) { return ks::process::TerminateProcessByWinStationApi(pid, detail); } },
-        { L"TerminateJobObject(Job)", [](std::uint32_t pid, std::string* detail) { return ks::process::TerminateProcessByJobObject(pid, detail); } },
-        { L"NtTerminateJobObject/ZwTerminateJobObject", [](std::uint32_t pid, std::string* detail) { return ks::process::TerminateProcessByNtJobObject(pid, detail); } },
-        { L"RmShutdown(Restart Manager)", [](std::uint32_t pid, std::string* detail) { return ks::process::TerminateProcessByRestartManager(pid, false, detail); } },
-        { L"RmShutdown(Restart Manager, force)", [](std::uint32_t pid, std::string* detail) { return ks::process::TerminateProcessByRestartManager(pid, true, detail); } },
-        { L"DuplicateHandle(-1)+TerminateProcess", [](std::uint32_t pid, std::string* detail) { return ks::process::TerminateProcessByDuplicateHandlePseudo(pid, detail); } },
-        { L"TerminateThread(全部线程)", [](std::uint32_t pid, std::string* detail) { return ks::process::TerminateAllThreadsByPid(pid, detail); } },
-        { L"NtTerminateThread/ZwTerminateThread(全部线程)", [](std::uint32_t pid, std::string* detail) { return ks::process::TerminateAllThreadsByPidNtNative(pid, detail); } },
-        { L"DebugActiveProcess 调试附加", [](std::uint32_t pid, std::string* detail) { return ks::process::TerminateProcessByDebugAttach(pid, detail); } },
-        { L"ntsd -c q -p <pid>", [](std::uint32_t pid, std::string* detail) { return ks::process::TerminateProcessByNtsdCommand(pid, detail); } },
-        { L"NtUnmapViewOfSection 卸载 ntdll.dll", [](std::uint32_t pid, std::string* detail) { return ks::process::TerminateProcessByNtUnmapNtdll(pid, detail); } }
-    };
+    const auto& methods = ks::process::TerminateMethodTable();
 
     for (const ProcessSnapshotRow& target : actionTargets) {
         const DWORD pid = target.processId;
@@ -433,12 +414,12 @@ ProcessActionResult ExecuteMultiMethodTerminate(const std::vector<ProcessSnapsho
         bool processExited = false;
         constexpr int kTerminateRoundLimit = 2;
         for (int round = 1; round <= kTerminateRoundLimit && !processExited; ++round) {
-            for (const TerminateMethodEntry& method : methods) {
+            for (const auto& method : methods) {
                 std::string methodDetail;
-                const bool invokeOk = method.invoke(pid, &methodDetail);
+                const bool invokeOk = method.invokeMethod(pid, &methodDetail);
                 bool postQueryOk = false;
                 const bool stillPresent = IsProcessPresentBySnapshot(pid, &postQueryOk);
-                detail << L"\r\n  Round " << round << L" | " << method.methodName
+                detail << L"\r\n  Round " << round << L" | " << method.wideName
                        << L" | " << (invokeOk ? L"调用成功" : L"调用失败")
                        << L" | " << Utf8ToWide(methodDetail.empty() ? "无附加信息" : methodDetail.c_str());
                 if (postQueryOk) {
@@ -1146,24 +1127,30 @@ ProcessActionResult ExecuteProcessAction(
         return result;
     }
 
-    if (actionId == ProcessActionId::R0SuspendProcess) {
+    if (actionId == ProcessActionId::R0SuspendProcess ||
+        actionId == ProcessActionId::R0ResumeProcess) {
+        const bool suspend = actionId == ProcessActionId::R0SuspendProcess;
         ProcessActionResult result;
-        result.title = L"R0挂起进程";
+        result.title = suspend ? L"R0挂起进程" : L"R0恢复进程";
         result.success = true;
         const ksword::ark::DriverClient driverClient;
         for (const ProcessSnapshotRow& target : buildActionTargets(selectedPids)) {
             const DWORD pid = target.processId;
             if (IsProtectedSystemPid(pid)) {
-                AppendIoLine(result.detail, pid, L"R0 suspend", false, L"protected system PID");
+                AppendIoLine(result.detail, pid, suspend ? L"R0 suspend" : L"R0 resume", false, L"protected system PID");
                 result.success = false;
                 continue;
             }
             Ksword::Core::UniqueHandle identityHold;
-            if (!HoldProcessIdentityForDriverAction(target, L"R0 suspend", true, result, identityHold)) {
+            if (!HoldProcessIdentityForDriverAction(target,
+                    suspend ? L"R0 suspend" : L"R0 resume", true, result, identityHold)) {
                 continue;
             }
-            const ksword::ark::IoResult io = driverClient.suspendProcess(static_cast<std::uint32_t>(pid));
-            AppendIoLine(result.detail, pid, L"R0 suspend", io.ok, Utf8ToWide(io.message));
+            const ksword::ark::IoResult io = suspend
+                ? driverClient.suspendProcess(static_cast<std::uint32_t>(pid))
+                : driverClient.resumeProcess(static_cast<std::uint32_t>(pid));
+            AppendIoLine(result.detail, pid, suspend ? L"R0 suspend" : L"R0 resume",
+                io.ok, Utf8ToWide(io.message));
             result.success = result.success && io.ok;
         }
         return result;

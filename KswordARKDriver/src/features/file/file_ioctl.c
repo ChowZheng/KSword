@@ -227,6 +227,7 @@ Return Value:
     size_t actualOutputLength = 0;
     BOOLEAN responsePresent = FALSE;
     BOOLEAN responseAllocated = FALSE;
+    size_t responseBytes = 0U;
     BOOLEAN isDirectory = FALSE;
     BOOLEAN isRecursive = FALSE;
     NTSTATUS status = STATUS_SUCCESS;
@@ -260,14 +261,21 @@ Return Value:
         return STATUS_INVALID_PARAMETER;
     }
 
-    if ((requestSnapshot.flags & KSWORD_ARK_DELETE_PATH_FLAG_BACKEND_MASK) ==
-        KSWORD_ARK_DELETE_PATH_FLAG_BACKEND_MASK) {
-        KswordARKFileIoctlLog(Device, "Warn", "R0 delete ioctl: backend flags are mutually exclusive, flags=0x%08X.", (unsigned int)requestSnapshot.flags);
-        return STATUS_INVALID_PARAMETER;
+    {
+        const ULONG backendFlags = requestSnapshot.flags & KSWORD_ARK_DELETE_PATH_FLAG_BACKEND_MASK;
+        if (backendFlags != 0UL && (backendFlags & (backendFlags - 1UL)) != 0UL) {
+            KswordARKFileIoctlLog(Device, "Warn", "R0 delete ioctl: backend flags are mutually exclusive, flags=0x%08X.", (unsigned int)requestSnapshot.flags);
+            return STATUS_INVALID_PARAMETER;
+        }
     }
 
     if (isRecursive && !isDirectory) {
         KswordARKFileIoctlLog(Device, "Warn", "R0 delete ioctl: recursive flag requires directory flag, flags=0x%08X.", (unsigned int)requestSnapshot.flags);
+        return STATUS_INVALID_PARAMETER;
+    }
+    if ((requestSnapshot.flags & KSWORD_ARK_DELETE_PATH_FLAG_BACKEND_IGNORE_SHARE_POSIX) != 0UL &&
+        (isDirectory || isRecursive ||
+         requestSnapshot.reserved != KSWORD_ARK_DELETE_PATH_IGNORE_SHARE_CONFIRMATION)) {
         return STATUS_INVALID_PARAMETER;
     }
 
@@ -293,22 +301,26 @@ Return Value:
             KswordARKFileIoctlLog(Device, "Warn", "R0 delete denied by safety policy: chars=%u, status=0x%08X.", (unsigned int)requestSnapshot.pathLengthChars, (unsigned int)status);
             return status;
         }
+        if ((requestSnapshot.flags & KSWORD_ARK_DELETE_PATH_FLAG_BACKEND_IGNORE_SHARE_POSIX) != 0UL) {
+            safetyContext.Operation = KSWORD_ARK_SAFETY_OPERATION_FILE_DELETE_IGNORE_SHARE;
+            status = KswordARKSafetyEvaluate(Device, &safetyContext);
+            if (!NT_SUCCESS(status)) {
+                return status;
+            }
+        }
     }
 
     // 响应包可选：旧版 R3 只发请求不收响应，此时保持“返回 NTSTATUS”的旧契约。
     status = KswordARKRetrieveRequiredOutputBuffer(
         Request,
-        sizeof(KSWORD_ARK_DELETE_PATH_RESPONSE),
+        KSWORD_ARK_DELETE_PATH_RESPONSE_V1_SIZE,
         &outputBuffer,
         &actualOutputLength);
     responsePresent = NT_SUCCESS(status) ? TRUE : FALSE;
     status = STATUS_SUCCESS;
 
-    if (responsePresent) {
-        deleteResponse = (KSWORD_ARK_DELETE_PATH_RESPONSE*)outputBuffer;
-    }
-    else if (isRecursive) {
-        // 递归统计是遍历过程的必需状态，没有输出缓冲时用临时池内存承载。
+    if (responsePresent || isRecursive) {
+        // Always use a private v2 buffer: METHOD_BUFFERED input and output alias.
 #pragma warning(push)
 #pragma warning(disable:4996)
         deleteResponse = (KSWORD_ARK_DELETE_PATH_RESPONSE*)ExAllocatePoolWithTag(
@@ -321,6 +333,9 @@ Return Value:
         }
         responseAllocated = TRUE;
     }
+    responseBytes = actualOutputLength >= sizeof(KSWORD_ARK_DELETE_PATH_RESPONSE)
+        ? sizeof(KSWORD_ARK_DELETE_PATH_RESPONSE)
+        : KSWORD_ARK_DELETE_PATH_RESPONSE_V1_SIZE;
 
     if (deleteResponse != NULL) {
         RtlZeroMemory(deleteResponse, sizeof(*deleteResponse));
@@ -340,11 +355,12 @@ Return Value:
         (unsigned int)responsePresent);
 
     if (!isRecursive) {
-        operationStatus = KswordARKDriverDeletePathWithFlags(
+        operationStatus = KswordARKDriverDeletePathWithDetails(
             requestSnapshot.path,
             requestSnapshot.pathLengthChars,
             isDirectory,
-            requestSnapshot.flags & KSWORD_ARK_DELETE_PATH_FLAG_BACKEND_MASK);
+            requestSnapshot.flags & KSWORD_ARK_DELETE_PATH_FLAG_BACKEND_MASK,
+            deleteResponse);
         if (NT_SUCCESS(operationStatus)) {
             KswordARKFileIoctlLog(Device, "Info", "R0 delete success: chars=%u, directory=%u.", (unsigned int)requestSnapshot.pathLengthChars, (unsigned int)isDirectory);
         }
@@ -378,7 +394,13 @@ Return Value:
                 (SIZE_T)requestSnapshot.pathLengthChars * sizeof(WCHAR));
             deleteResponse->failedPath[requestSnapshot.pathLengthChars] = L'\0';
         }
-        *BytesReturned = sizeof(*deleteResponse);
+        deleteResponse->size = (ULONG)responseBytes;
+        deleteResponse->version = responseBytes == sizeof(*deleteResponse)
+            ? KSWORD_ARK_DELETE_PATH_RESPONSE_VERSION
+            : KSWORD_ARK_DELETE_PATH_RESPONSE_VERSION_LEGACY;
+        RtlCopyMemory(outputBuffer, deleteResponse, responseBytes);
+        *BytesReturned = responseBytes;
+        ExFreePoolWithTag(deleteResponse, KSWORD_ARK_FILE_IOCTL_POOL_TAG);
         return STATUS_SUCCESS;
     }
 
@@ -411,7 +433,13 @@ Return Value:
         (unsigned int)deleteResponse->lastStatus);
 
     if (responsePresent) {
-        *BytesReturned = sizeof(*deleteResponse);
+        deleteResponse->size = (ULONG)responseBytes;
+        deleteResponse->version = responseBytes == sizeof(*deleteResponse)
+            ? KSWORD_ARK_DELETE_PATH_RESPONSE_VERSION
+            : KSWORD_ARK_DELETE_PATH_RESPONSE_VERSION_LEGACY;
+        RtlCopyMemory(outputBuffer, deleteResponse, responseBytes);
+        *BytesReturned = responseBytes;
+        ExFreePoolWithTag(deleteResponse, KSWORD_ARK_FILE_IOCTL_POOL_TAG);
         return STATUS_SUCCESS;
     }
 

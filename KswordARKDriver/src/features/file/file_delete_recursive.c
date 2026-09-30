@@ -322,11 +322,12 @@ Return Value:
     }
 
     Context->PathBuffer[PathLengthChars] = L'\0';
-    status = KswordARKDriverDeletePathWithFlags(
+    status = KswordARKDriverDeletePathWithDetails(
         Context->PathBuffer,
         (USHORT)PathLengthChars,
         IsDirectory,
-        Context->DeleteFlags);
+        Context->DeleteFlags,
+        Context->Response);
     if (!NT_SUCCESS(status)) {
         KswordARKDeleteTreeRecordFailure(Context, PathLengthChars, status);
         return FALSE;

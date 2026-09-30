@@ -20,6 +20,7 @@
 #include "../UI/CodeEditorWidget.h"
 #include "../UI/UI_All.h"
 #include "../../../shared/driver/KswordArkDynDataIoctl.h"
+#include "../../../shared/ProcessTerminateMethods.h"
 
 #include <QAbstractScrollArea>
 #include <QAbstractButton>

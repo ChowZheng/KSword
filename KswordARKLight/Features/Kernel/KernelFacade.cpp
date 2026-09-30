@@ -2925,6 +2925,7 @@ bool IsArkDriverBacked(const KernelFeatureId id) {
     case KernelFeatureId::PiDdbCache:
     case KernelFeatureId::RawDiskSectors:
     case KernelFeatureId::NetworkTrafficPackets:
+    case KernelFeatureId::ObjectTypeProcedures:
         return true;
     default:
         return false;
@@ -5336,6 +5337,84 @@ KernelOperationResult QueryPdbProfileStatus(const KernelRequest& request) {
 // may contain a PID/CID filter; processing never requests mutation and leaves
 // protocol parsing inside ArkDriverClient; output preserves the existing Light
 // table columns for source/dangling/type-mismatch evidence.
+const wchar_t* ObjectTypeProcedureName(const std::uint32_t kind) {
+    switch (kind) {
+    case KSWORD_ARK_OBJTYPE_PROC_DUMP: return L"Dump";
+    case KSWORD_ARK_OBJTYPE_PROC_OPEN: return L"Open";
+    case KSWORD_ARK_OBJTYPE_PROC_CLOSE: return L"Close";
+    case KSWORD_ARK_OBJTYPE_PROC_DELETE: return L"Delete";
+    case KSWORD_ARK_OBJTYPE_PROC_PARSE: return L"Parse";
+    case KSWORD_ARK_OBJTYPE_PROC_SECURITY: return L"Security";
+    case KSWORD_ARK_OBJTYPE_PROC_QUERY_NAME: return L"QueryName";
+    case KSWORD_ARK_OBJTYPE_PROC_OKAY_TO_CLOSE: return L"OkayToClose";
+    default: return L"Unknown";
+    }
+}
+
+KernelOperationResult QueryObjectTypeProcedures(const KernelRequest& request) {
+    const ksword::ark::ObjectTypeProceduresResult query =
+        ksword::ark::DriverClient().enumObjectTypeProcedures();
+    KernelOperationResult result;
+    ApplyIoSummary(request, L"Object Type Procedures", query.io, result);
+    if (!query.io.ok) return result;
+
+    const bool layoutVerified = query.layoutState == KSWORD_ARK_OBJTYPE_LAYOUT_VALIDATED;
+    result.message = std::wstring(layoutVerified ? L"运行时方法块布局已验证" : L"方法块布局未验证：行仅供参考") +
+        L"；类型锚点 " + std::to_wstring(query.layoutAnchorAgree) + L"/" +
+        std::to_wstring(query.layoutAnchorTypes) +
+        L"；偏移 " + HexText(query.procedureBlockOffset) +
+        L"；原因 " + std::to_wstring(query.layoutReason) +
+        L"；读取 " + std::to_wstring(query.entries.size()) + L" 行" +
+        (query.truncated ? L"；结果截断" : L"") +
+        (query.skippedTypes ? L"；跳过读取失败的类型" : L"");
+
+    for (const ksword::ark::ObjectTypeProcedureEntry& entry : query.entries) {
+        const bool readFailed = (entry.entryFlags & KSWORD_ARK_OBJTYPE_ENTRY_FLAG_READ_FAILED) != 0;
+        const bool nullPointer = (entry.entryFlags & KSWORD_ARK_OBJTYPE_ENTRY_FLAG_NULL_POINTER) != 0;
+        std::wstring status = readFailed ? L"读取失败" :
+            (nullPointer ? L"空指针" :
+                ((entry.entryFlags & KSWORD_ARK_OBJTYPE_ENTRY_FLAG_IN_CORE_KERNEL) != 0
+                    ? L"非空 · 核心内核"
+                    : ((entry.entryFlags & KSWORD_ARK_OBJTYPE_ENTRY_FLAG_IN_MODULE) != 0
+                        ? L"非空 · 外部模块" : L"非空 · 模块未解析")));
+        if (!layoutVerified) status += L" · 布局未验证，仅供参考";
+        else if (!readFailed && !nullPointer && entry.riskFlags == 0 &&
+            (entry.entryFlags & KSWORD_ARK_OBJTYPE_ENTRY_FLAG_TYPE_JUDGED) == 0)
+            status += L" · 本类型无硬判据";
+
+        const std::wstring risk = !layoutVerified ? L"布局未验证" :
+            (entry.riskFlags == 0 ? L"未发现风险" : L"风险位 " + HexText(entry.riskFlags));
+        const std::wstring detail =
+            result.message +
+            L"\r\nOBJECT_TYPE: " + HexText(entry.objectTypeAddress) +
+            L"\r\n原始风险位: " + HexText(entry.riskFlags) +
+            L"\r\n入口跳板标志: " +
+                ((entry.entryFlags & KSWORD_ARK_OBJTYPE_ENTRY_FLAG_DETOUR) != 0
+                    ? L"驱动报告" : L"未报告") +
+            L"\r\n入口跳板落点: " + HexText(entry.detourTargetAddress) +
+            L"\r\nNTSTATUS: " + HexText(static_cast<std::uint32_t>(entry.lastStatus)) +
+            L"\r\n类型内硬判据: " +
+                ((entry.entryFlags & KSWORD_ARK_OBJTYPE_ENTRY_FLAG_TYPE_JUDGED) != 0
+                    ? L"有" : L"无");
+        result.rows.push_back(Row({
+            { L"类型索引", std::to_wstring(entry.typeIndex) },
+            { L"类型名", entry.typeName },
+            { L"方法", ObjectTypeProcedureName(entry.procedureKind) },
+            { L"槽位地址", entry.slotAddress ? HexText(entry.slotAddress) : L"—" },
+            { L"目标地址", (readFailed || nullPointer) ? L"—" : HexText(entry.targetAddress) },
+            { L"归属模块", entry.ownerModule.empty() ? L"—" : entry.ownerModule },
+            { L"所在节", entry.sectionName.empty() ? L"—" : entry.sectionName },
+            { L"风险", risk },
+            { L"状态", status },
+            { L"EntryFlags", HexText(entry.entryFlags) },
+            { L"RawRiskFlags", HexText(entry.riskFlags) },
+            { L"DetourTarget", HexText(entry.detourTargetAddress) },
+            { L"LastStatus", HexText(static_cast<std::uint32_t>(entry.lastStatus)) },
+        }, detail));
+    }
+    return result;
+}
+
 KernelOperationResult QueryCidTableSummary(const KernelRequest& request) {
     const ksword::ark::DriverClient client;
     const std::uint32_t cidFilter = ParseFirstPidFromText(request.filterText);
@@ -6926,6 +7005,8 @@ KernelOperationResult KernelFacade::QueryArkDriverFeature(const KernelRequest& r
         return attachCapability(QueryPdbProfileStatus(request));
     case KernelFeatureId::CidTableSummary:
         return attachCapability(QueryCidTableSummary(request));
+    case KernelFeatureId::ObjectTypeProcedures:
+        return attachCapability(QueryObjectTypeProcedures(request));
     case KernelFeatureId::IpcSummary:
         return attachCapability(QueryIpcSummary(request));
     case KernelFeatureId::HookAuditSummary:

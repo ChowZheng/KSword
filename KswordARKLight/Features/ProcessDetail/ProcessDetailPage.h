@@ -107,6 +107,7 @@ private:
         ActionBrowseShellcode,
         ActionInjectShellcode,
         ActionStatus = 1330,
+        ActionR0Resume = 1360,
 
         ModuleRefresh = 1400,
         ModuleVerifySignature,
@@ -123,6 +124,9 @@ private:
         TokenWrap,
         TokenOutput,
         TokenEditorStatus,
+        TokenPrivilegeName,
+        TokenPrivilegeAction,
+        TokenPrivilegeApply,
 
         TokenSwitchRefresh = 1600,
         TokenSwitchApply,
@@ -173,6 +177,9 @@ private:
         HotkeyRefresh = 1800,
         HotkeyStatus,
         HotkeyList,
+        HotkeyInput,
+        HotkeyEdit,
+        HotkeyDelete,
 
         // 键盘页控件：通过内部分栏在热键表和 WH_KEYBOARD 钩子链之间切换。
         KeyboardRefresh = 1900,
@@ -326,11 +333,6 @@ private:
         Ksword::Core::UniqueHandle& processOut,
         Ksword::Core::UniqueHandle& threadOut,
         std::wstring& errorText);
-    static bool TerminateAllThreadsIfProcessIdentityMatches(
-        DWORD targetProcessId,
-        ULONGLONG expectedProcessCreationTime100ns,
-        std::wstring& detail);
-
     bool CreateDetailTab();
     bool CreateThreadTab();
     bool CreateActionTab();
@@ -434,6 +436,7 @@ private:
 
     void SuspendSelectedThread();
     void ResumeSelectedThread();
+    void SetSelectedThreadSuspendedByR0(bool suspended);
     void TerminateSelectedThread();
     void TerminateSelectedThreadByR0();
     void ShowSelectedThreadSummary();
@@ -447,12 +450,14 @@ private:
     void ApplyTokenSwitches();
     void ApplyRawTokenValue();
     void RefreshTokenReport();
+    void ApplyTokenPrivilege();
     void RefreshTokenSwitches();
     void RefreshSectionReport();
     void RenderSectionReport();
     void RefreshPebReport();
     void ApplyPebEdits();
     void RefreshHotkeys();
+    void MutateSelectedHotkey(bool remove);
     void RefreshKeyboard();
     void RebuildHotkeyList();
     void RebuildKeyboardList();

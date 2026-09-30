@@ -391,6 +391,10 @@ namespace
         defaultSettings.backgroundImagePath = QStringLiteral("Style/ksword_background.png");
         defaultSettings.backgroundOpacityPercent = 35;
         defaultSettings.backgroundTransparencyEnabled = false;
+        defaultSettings.utilizationFloatingScalePercent = 100;
+        defaultSettings.utilizationFloatingBackgroundOpacityPercent = 100;
+        defaultSettings.utilizationFloatingTopMost = true;
+        defaultSettings.utilizationFloatingThemeMode = QStringLiteral("follow_main");
         defaultSettings.backgroundTranslucencyMaterial = QStringLiteral("auto");
         defaultSettings.backgroundBlurRadiusPercent = 0;
         defaultSettings.acrylicTintOpacityPercent = 75;
@@ -647,6 +651,32 @@ ks::settings::AppearanceSettings ks::settings::loadAppearanceSettings()
     loadedSettings.backgroundTransparencyEnabled = rootObject
         .value(QStringLiteral("background_transparency_enabled"))
         .toBool(loadedSettings.backgroundTransparencyEnabled);
+    loadedSettings.utilizationFloatingScalePercent = std::clamp(rootObject
+        .value(QStringLiteral("utilization_floating_scale_percent"))
+        .toInt(loadedSettings.utilizationFloatingScalePercent), 25, 300);
+    loadedSettings.utilizationFloatingBackgroundOpacityPercent = std::clamp(rootObject
+        .value(QStringLiteral("utilization_floating_background_opacity_percent"))
+        .toInt(loadedSettings.utilizationFloatingBackgroundOpacityPercent), 0, 100);
+    loadedSettings.utilizationFloatingTopMost = rootObject
+        .value(QStringLiteral("utilization_floating_top_most"))
+        .toBool(loadedSettings.utilizationFloatingTopMost);
+    const QString floatingThemeMode = rootObject
+        .value(QStringLiteral("utilization_floating_theme_mode"))
+        .toString(loadedSettings.utilizationFloatingThemeMode).trimmed().toLower();
+    loadedSettings.utilizationFloatingThemeMode = floatingThemeMode == QStringLiteral("dark")
+        || floatingThemeMode == QStringLiteral("light") ? floatingThemeMode : QStringLiteral("follow_main");
+    loadedSettings.utilizationFloatingFollowTitle = rootObject
+        .value(QStringLiteral("utilization_floating_follow_title")).toString();
+    loadedSettings.utilizationFloatingFollowExecutable = rootObject
+        .value(QStringLiteral("utilization_floating_follow_executable")).toString();
+    loadedSettings.utilizationFloatingFollowOffsetX = rootObject
+        .value(QStringLiteral("utilization_floating_follow_offset_x")).toInt();
+    loadedSettings.utilizationFloatingFollowOffsetY = rootObject
+        .value(QStringLiteral("utilization_floating_follow_offset_y")).toInt();
+    loadedSettings.utilizationFloatingFollowOffsetLogical = rootObject
+        .value(QStringLiteral("utilization_floating_follow_offset_logical")).toBool(false);
+    loadedSettings.utilizationFloatingFollowClickThrough = rootObject
+        .value(QStringLiteral("utilization_floating_follow_click_through")).toBool(false);
 
     // 透明背景效果只接受既定枚举文本，未知值回退 auto，避免拼写残留破坏材质决策。
     const QString translucencyMaterialText = rootObject
@@ -889,6 +919,23 @@ bool ks::settings::saveAppearanceSettings(const AppearanceSettings& settings, QS
     rootObject.insert(QStringLiteral("background_image_path"), settings.backgroundImagePath);
     rootObject.insert(QStringLiteral("background_opacity_percent"), clampOpacityPercent(settings.backgroundOpacityPercent));
     rootObject.insert(QStringLiteral("background_transparency_enabled"), settings.backgroundTransparencyEnabled);
+    rootObject.insert(QStringLiteral("utilization_floating_scale_percent"),
+        std::clamp(settings.utilizationFloatingScalePercent, 25, 300));
+    rootObject.insert(QStringLiteral("utilization_floating_background_opacity_percent"),
+        std::clamp(settings.utilizationFloatingBackgroundOpacityPercent, 0, 100));
+    rootObject.insert(QStringLiteral("utilization_floating_top_most"), settings.utilizationFloatingTopMost);
+    rootObject.insert(QStringLiteral("utilization_floating_theme_mode"),
+        settings.utilizationFloatingThemeMode == QStringLiteral("dark")
+            || settings.utilizationFloatingThemeMode == QStringLiteral("light")
+            ? settings.utilizationFloatingThemeMode : QStringLiteral("follow_main"));
+    rootObject.insert(QStringLiteral("utilization_floating_follow_title"), settings.utilizationFloatingFollowTitle);
+    rootObject.insert(QStringLiteral("utilization_floating_follow_executable"), settings.utilizationFloatingFollowExecutable);
+    rootObject.insert(QStringLiteral("utilization_floating_follow_offset_x"), settings.utilizationFloatingFollowOffsetX);
+    rootObject.insert(QStringLiteral("utilization_floating_follow_offset_y"), settings.utilizationFloatingFollowOffsetY);
+    rootObject.insert(QStringLiteral("utilization_floating_follow_offset_logical"),
+        settings.utilizationFloatingFollowOffsetLogical);
+    rootObject.insert(QStringLiteral("utilization_floating_follow_click_through"),
+        settings.utilizationFloatingFollowClickThrough);
     rootObject.insert(
         QStringLiteral("background_translucency_material"),
         settings.backgroundTranslucencyMaterial.trimmed().isEmpty()

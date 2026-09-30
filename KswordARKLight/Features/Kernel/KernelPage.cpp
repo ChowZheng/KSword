@@ -217,6 +217,7 @@ bool IsR0EvidenceFeature(const KernelFeatureId featureId) {
     case KernelFeatureId::MinifilterBypassPids:
     case KernelFeatureId::KernelTimerDpc:
     case KernelFeatureId::IoctlRegistry:
+    case KernelFeatureId::ObjectTypeProcedures:
         return true;
     default:
         return false;
@@ -6196,6 +6197,8 @@ void KernelPage::RebuildObjectNamespaceListFromCache(const KernelFeatureId featu
                 rawValue(row, { L"Objects" }) + L" | " +
                 rawValue(row, { L"Handles" }) + L" | " +
                 rawValue(row, { L"ValidAccess" }) + L" | " +
+                rawValue(row, { L"R0Address" }) + L" | " +
+                rawValue(row, { L"R0Validation" }) + L" | " +
                 rawValue(row, { L"Detail", L"Status" });
             return primaryFilter.empty() || ContainsCaseInsensitive(merged, primaryFilter);
         }
@@ -8931,6 +8934,10 @@ std::wstring KernelPage::BuildOriginalStyleSelectedRowDetail(const KernelFeature
                << L"对象数: " << cell({ L"对象数", L"Objects" }) << L"\r\n"
                << L"句柄数: " << cell({ L"句柄数", L"Handles" }) << L"\r\n"
                << L"访问掩码: " << cell({ L"访问掩码", L"ValidAccess" }) << L"\r\n"
+               << L"R0 对象地址: " << cell({ L"R0Address" }) << L"\r\n"
+               << L"R0 交叉验证: " << cell({ L"R0Validation" }) << L"\r\n"
+               << L"R0 状态: " << cell({ L"R0Status" }) << L"\r\n"
+               << L"R0 身份哈希: " << cell({ L"R0IdentityHash" }) << L"\r\n"
                << L"枚举策略: " << cell({ L"枚举策略", L"Detail", L"Status" }) << L"\r\n";
         return detail.str();
     }
@@ -9553,6 +9560,12 @@ void KernelPage::ConfigureToolbarForDescriptor(const KernelFeatureDescriptor& de
         ::SetWindowTextW(refreshButton_, L"刷新");
         SetEditCueBanner(filterEdit_, L"按类型名、编号、策略筛选");
         ::SetWindowTextW(statusText_, L"状态：等待刷新");
+        break;
+    case KernelFeatureId::ObjectTypeProcedures:
+        ::SetWindowTextW(filterLabel_, L"过滤");
+        ::SetWindowTextW(refreshButton_, L"刷新方法指针");
+        SetEditCueBanner(filterEdit_, L"筛选类型、方法、模块、地址或风险");
+        ::SetWindowTextW(statusText_, L"状态：等待读取 R0 对象类型方法指针。");
         break;
     case KernelFeatureId::CommunicationEndpoint:
         ::SetWindowTextW(filterLabel_, L"过滤");

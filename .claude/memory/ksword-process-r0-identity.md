@@ -30,4 +30,15 @@ metadata:
   并在驱动解析出的对象上校验。
 - 不要把 kernel-only 行的合成 identity 时间传给驱动。合成值只用于 UI 缓存键。
 - 不要全局关闭 `ProcessDock::dispatchProcessActionTargetsInParallel` 的 R3 identity hold。
-  只对明确标记为 `isKernelOnly` 的目标跳过。
+  普通 R3 变更动作只对明确标记为 `isKernelOnly` 的目标跳过。
+- 独立的“R0 结束进程”列表动作不依赖 R3 `OpenProcess`：R3 可见目标须携带真实
+  `creationTime100ns`，由驱动在已引用的 `EPROCESS` 上校验；缺失时拒绝下发。
+  R3 动作及其组合链仍保留原有 identity hold，不能为解决受保护进程问题全局跳过。
+
+## 进程详情的逐方法结束
+
+- 主程序进程列表的“高级结束进程（逐方法）”、主程序详情页和 Light 详情页的 R3 条目共用
+  `shared/ProcessTerminateMethods.h`，目前为 14 项。组合链也从该表执行，新增方法时只改这一处。
+- 两个详情页执行单项 R3 方法前，都用捕获的创建时间验证目标并持有查询句柄，避免 PID 复用；
+  R0 驱动结束单列在表外，仍走各自已有的驱动调用与身份保护。
+- 详情页下拉框不包含 HVM 与 DMA：HVM 需要地址和常驻状态编排，DMA 需要另行指定写入地址。

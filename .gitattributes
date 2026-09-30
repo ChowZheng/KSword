@@ -58,6 +58,7 @@ docs/next/paper-data/20260916-followup/** -text -whitespace
 # Large icon collections and vendored sources retain their upstream bytes.
 *.svg -text
 third_party/** -text
+Ksword5.1/Ksword5.1/include/ads/** -text whitespace=cr-at-eol,-blank-at-eol
 KswordSetup/fltk/** -text
 
 # Binary artifacts and resources.

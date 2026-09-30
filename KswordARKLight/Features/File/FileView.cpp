@@ -36,6 +36,7 @@ constexpr int kButtonGoId = 52006;
 constexpr int kListId = 52007;
 constexpr int kStatusId = 52008;
 constexpr int kFilterBarId = 52009;
+constexpr int kSourceComboId = 52011;
 constexpr UINT kColumnMenuBaseId = 52500;
 constexpr UINT kMsgDirectoryRefreshCompleted = WM_APP + 540;
 constexpr UINT kMsgFilterCompleted = WM_APP + 541;
@@ -61,6 +62,7 @@ struct FilePresentationRow {
 
 struct DirectoryRefreshSnapshot {
     std::wstring directory;
+    DirectorySource source = DirectorySource::Win32;
     DirectoryEnumerationResult result;
 };
 
@@ -99,6 +101,7 @@ struct FileViewState {
     HWND forwardButton = nullptr;
     HWND upButton = nullptr;
     HWND refreshButton = nullptr;
+    HWND sourceCombo = nullptr;
     HWND pathEdit = nullptr;
     HWND goButton = nullptr;
     HWND filterBar = nullptr;
@@ -108,6 +111,7 @@ struct FileViewState {
     HIMAGELIST imageList = nullptr;
     PathNavigator navigator;
     FileSystemEnumerator enumerator;
+    DirectorySource source = DirectorySource::Win32;
     std::vector<FileEntry> entries;
     std::vector<FilePresentationRow> presentationRows;
     std::shared_ptr<const std::vector<Ksword::Ui::VirtualListRow>> filterRows;
@@ -257,6 +261,22 @@ bool CreateChildControls(FileViewState& state) {
     state.forwardButton = Ksword::Ui::CreateButton(state.hwnd, kButtonForwardId, L"前进", 0, 0, 64, 24);
     state.upButton = Ksword::Ui::CreateButton(state.hwnd, kButtonUpId, L"向上", 0, 0, 64, 24);
     state.refreshButton = Ksword::Ui::CreateButton(state.hwnd, kButtonRefreshId, L"刷新", 0, 0, 64, 24);
+    state.sourceCombo = ::CreateWindowExW(0, WC_COMBOBOXW, L"",
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST,
+        0, 0, 150, 200, state.hwnd,
+        reinterpret_cast<HMENU>(static_cast<INT_PTR>(kSourceComboId)),
+        ::GetModuleHandleW(nullptr), nullptr);
+    if (state.sourceCombo) {
+        ::SendMessageW(state.sourceCombo, WM_SETFONT,
+            reinterpret_cast<WPARAM>(Ksword::Ui::SystemUIFont()), TRUE);
+        ::SendMessageW(state.sourceCombo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Win32 目录"));
+        ::SendMessageW(state.sourceCombo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"R0 驱动目录"));
+        ::SendMessageW(state.sourceCombo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"IRP 当前层"));
+        ::SendMessageW(state.sourceCombo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"IRP 底层文件系统"));
+        ::SendMessageW(state.sourceCombo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"IRP VPB 文件系统"));
+        ::SendMessageW(state.sourceCombo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"IRP 设备层"));
+        ::SendMessageW(state.sourceCombo, CB_SETCURSEL, 0, 0);
+    }
     state.goButton = Ksword::Ui::CreateButton(state.hwnd, kButtonGoId, L"转到", 0, 0, 64, 24);
     state.pathEdit = ::CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
         0, 0, 200, 24, state.hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kPathEditId)), ::GetModuleHandleW(nullptr), nullptr);
@@ -269,7 +289,7 @@ bool CreateChildControls(FileViewState& state) {
     if (state.pathEdit) {
         ::SendMessageW(state.pathEdit, WM_SETFONT, reinterpret_cast<WPARAM>(Ksword::Ui::SystemUIFont()), TRUE);
     }
-    if (!state.pathEdit || !state.filterBar || !state.list) {
+    if (!state.pathEdit || !state.filterBar || !state.list || !state.sourceCombo) {
         return false;
     }
 
@@ -322,7 +342,9 @@ void LayoutFileView(FileViewState& state) {
     ::MoveWindow(state.goButton, x, y, goW, buttonH, TRUE);
 
     const int filterTop = y + buttonH + 5;
-    ::MoveWindow(state.filterBar, margin, filterTop, std::max(80, static_cast<int>(rc.right - margin * 2)), buttonH, TRUE);
+    ::MoveWindow(state.sourceCombo, margin, filterTop, 170, 220, TRUE);
+    ::MoveWindow(state.filterBar, margin + 176, filterTop,
+        std::max(80, static_cast<int>(rc.right - margin * 2 - 176)), buttonH, TRUE);
     const int listTop = filterTop + buttonH + 5;
     const int listH = std::max(80, static_cast<int>(rc.bottom - listTop - statusH - margin));
     ::MoveWindow(state.list, margin, listTop, std::max(80, static_cast<int>(rc.right - margin * 2)), listH, TRUE);
@@ -537,7 +559,7 @@ void RequestFileFilter(FileViewState& state,
 // a cached background filter pass. No FindFirstFile/FindNextFile work runs in
 // UI message handlers.
 void ApplyDirectoryRefresh(FileViewState& state, DirectoryRefreshSnapshot snapshot) {
-    if (snapshot.directory != state.navigator.currentPath()) {
+    if (snapshot.directory != state.navigator.currentPath() || snapshot.source != state.source) {
         return;
     }
     const std::wstring selectedPath = SelectedEntryPath(state);
@@ -563,14 +585,15 @@ void RefreshCurrentPath(FileViewState& state) {
         return;
     }
     const std::wstring current = state.navigator.currentPath();
+    const DirectorySource source = state.source;
     ::SetWindowTextW(state.pathEdit, current.empty() ? L"此电脑" : current.c_str());
     SetStatus(state, state.refreshTask->running() ? L"目录刷新已排队，等待当前枚举完成…" : L"正在后台枚举目录…");
     ::EnableWindow(state.refreshButton, FALSE);
     Ksword::Ui::SetLoadingOverlay(state.loadingOverlay, true, L"正在后台加载目录…");
     state.refreshTask->request(
-        [current]() {
+        [current, source]() {
             FileSystemEnumerator enumerator;
-            return DirectoryRefreshSnapshot{ current, enumerator.enumerate(current) };
+            return DirectoryRefreshSnapshot{ current, source, enumerator.enumerate(current, source) };
         },
         [&state](std::uint64_t, std::optional<DirectoryRefreshSnapshot>&& snapshot, std::exception_ptr error) {
             ::EnableWindow(state.refreshButton, TRUE);
@@ -855,6 +878,13 @@ LRESULT CALLBACK FileViewProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         }
         return 0;
     case WM_COMMAND:
+        if (state && LOWORD(wParam) == kSourceComboId && HIWORD(wParam) == CBN_SELCHANGE) {
+            const LRESULT selected = ::SendMessageW(state->sourceCombo, CB_GETCURSEL, 0, 0);
+            state->source = selected >= 0 && selected <= 5
+                ? static_cast<DirectorySource>(selected) : DirectorySource::Win32;
+            RefreshCurrentPath(*state);
+            return 0;
+        }
         if (state && LOWORD(wParam) == kFilterBarId && HIWORD(wParam) == EN_CHANGE) {
             RequestFileFilter(*state,
                 Ksword::Ui::GetFilterBarText(state->filterBar),

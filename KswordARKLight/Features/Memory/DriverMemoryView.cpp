@@ -5,6 +5,7 @@
 #include "MemoryInspection.h"
 #include "MemorySnapshot.h"
 #include "MemoryWritePlan.h"
+#include "../../../Ksword5.1/Ksword5.1/ArkDriverClient/ArkDriverClient.h"
 #include "../../Ui/AsyncTask.h"
 #include "../../Ui/Controls.h"
 #include "../../Ui/ExportUtil.h"
@@ -42,6 +43,7 @@ constexpr int kSnapshotPreviousButtonId = 51010;
 constexpr int kSnapshotNextButtonId = 51011;
 constexpr int kPreviewDiffButtonId = 51012;
 constexpr int kApplyDiffButtonId = 51013;
+constexpr int kQueryRegionButtonId = 51014;
 constexpr UINT kMemoryMenuRead = 51501;
 constexpr UINT kMemoryMenuWrite = 51502;
 constexpr UINT kMemoryMenuCopyHex = 51503;
@@ -63,6 +65,7 @@ constexpr UINT kMemoryMenuApplyDiff = 51518;
 constexpr UINT kMsgMemoryOperationCompleted = WM_APP + 598;
 constexpr UINT kMsgMemoryHistoryFilterCompleted = WM_APP + 599;
 constexpr UINT kMsgMemorySelectProcess = WM_APP + 600;
+constexpr UINT kMsgMemoryRegionQueryCompleted = WM_APP + 601;
 
 enum class SnapshotPresentation {
     EditableHex,
@@ -120,6 +123,7 @@ struct DriverMemoryViewState {
     HWND hexEdit = nullptr;
     HWND statusEdit = nullptr;
     HWND readButton = nullptr;
+    HWND queryRegionButton = nullptr;
     HWND writeButton = nullptr;
     HWND previewDiffButton = nullptr;
     HWND applyDiffButton = nullptr;
@@ -144,6 +148,7 @@ struct DriverMemoryViewState {
     Ksword::Ui::VirtualListView historyList;
     std::shared_ptr<const std::vector<Ksword::Ui::VirtualListRow>> historyFilterRows;
     std::unique_ptr<Ksword::Ui::AsyncSnapshotTask<MemoryOperationSnapshot>> operationTask;
+    std::unique_ptr<Ksword::Ui::AsyncSnapshotTask<ksword::ark::VirtualMemoryQueryResult>> regionQueryTask;
     std::unique_ptr<Ksword::Ui::AsyncSnapshotTask<MemoryHistoryFilterResult>> historyFilterTask;
 };
 
@@ -197,6 +202,9 @@ void UpdateSnapshotButtons(DriverMemoryViewState& state) {
     }
     if (state.writeButton) {
         ::EnableWindow(state.writeButton, enabled && editable);
+    }
+    if (state.queryRegionButton) {
+        ::EnableWindow(state.queryRegionButton, enabled);
     }
     if (state.previewDiffButton) {
         ::EnableWindow(state.previewDiffButton, canStageWriteback);
@@ -449,10 +457,11 @@ void LayoutChildren(DriverMemoryViewState& state, const RECT& rc) {
     ::MoveWindow(state.applyDiffButton, margin + (buttonWidth + gap) * 3, buttonTop, buttonWidth, editHeight + 2, TRUE);
     ::MoveWindow(state.snapshotPreviousButton, margin + (buttonWidth + gap) * 4, buttonTop, snapshotButtonWidth, editHeight + 2, TRUE);
     ::MoveWindow(state.snapshotNextButton, margin + (buttonWidth + gap) * 4 + snapshotButtonWidth + gap, buttonTop, snapshotButtonWidth, editHeight + 2, TRUE);
+    ::MoveWindow(state.queryRegionButton, margin + (buttonWidth + gap) * 4 + (snapshotButtonWidth + gap) * 2, buttonTop, buttonWidth, editHeight + 2, TRUE);
 
     const int filterTop = buttonTop + editHeight + gap;
     const int hexTop = filterTop + editHeight + gap;
-    const int statusHeight = 42;
+    const int statusHeight = 110;
     const int historyHeight = 112;
     const int hexHeight = std::max(64, height - hexTop - statusHeight - historyHeight - (margin * 2) - (gap * 3));
     const int contentWidth = std::max(100, width - margin * 2);
@@ -488,7 +497,7 @@ void PaintLabels(HWND hwnd, HDC dc) {
     const std::wstring snapshotText = state && state->snapshots.current()
         ? L"读取快照 " + std::to_wstring(state->snapshots.currentPosition()) + L"/" + std::to_wstring(state->snapshots.size()) + L"（右键检视/导出；差异写回已冻结目标）"
         : L"读取快照 0/0";
-    RECT snapshot{ 372, 70, rc.right - 12, 94 };
+    RECT snapshot{ 372, 8, rc.right - 12, 28 };
     Ksword::Ui::DrawTextLine(dc, snapshotText, snapshot, muted, Ksword::Ui::SystemUIFont(), DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 }
 
@@ -609,6 +618,64 @@ void HandleRead(DriverMemoryViewState& state) {
             }
             AppendMemoryHistory(state, *snapshot);
             UpdateSnapshotButtons(state);
+        });
+}
+
+// HandleQueryRegion 调用主程序使用的 R0 ZwQueryVirtualMemory 路径，并在状态框展示完整区域证据。
+void HandleQueryRegion(DriverMemoryViewState& state) {
+    DriverMemoryReadRequest request;
+    std::wstring error;
+    if (!ParseReadRequest(GetWindowTextString(state.pidEdit),
+            GetWindowTextString(state.addressEdit), L"1", request, error)) {
+        SetStatus(state, error);
+        return;
+    }
+    if (state.operationInProgress || !state.regionQueryTask) {
+        SetStatus(state, L"内存操作正在执行。");
+        return;
+    }
+    state.operationInProgress = true;
+    ::EnableWindow(state.readButton, FALSE);
+    ::EnableWindow(state.writeButton, FALSE);
+    UpdateSnapshotButtons(state);
+    SetStatus(state, L"正在后台查询 R0 虚拟内存区域…");
+    state.regionQueryTask->request(
+        [request] {
+            return ksword::ark::DriverClient().queryVirtualMemory(
+                request.processId, request.address,
+                KSWORD_ARK_MEMORY_QUERY_FLAG_INCLUDE_MAPPED_FILE_NAME);
+        },
+        [&state](std::uint64_t, std::optional<ksword::ark::VirtualMemoryQueryResult>&& result, std::exception_ptr failure) {
+            state.operationInProgress = false;
+            ::EnableWindow(state.readButton, TRUE);
+            ::EnableWindow(state.writeButton, TRUE);
+            UpdateSnapshotButtons(state);
+            if (failure || !result.has_value()) {
+                SetStatus(state, L"R0 虚拟内存区域查询异常结束。");
+                return;
+            }
+            if (!result->io.ok) {
+                SetStatus(state, L"R0 虚拟内存区域查询失败：" +
+                    std::wstring(result->io.message.begin(), result->io.message.end()));
+                return;
+            }
+            std::wostringstream report;
+            report << L"R0 虚拟内存区域 | PID=" << result->processId
+                << L" | 状态=" << result->queryStatus << L" | 来源=" << result->source << L"\r\n"
+                << L"请求地址=" << FormatHex64(result->requestedBaseAddress)
+                << L" | 区域起点=" << FormatHex64(result->baseAddress)
+                << L" | 分配起点=" << FormatHex64(result->allocationBase) << L"\r\n"
+                << L"区域长度=" << FormatHex64(result->regionSize)
+                << L" | State=" << FormatHex64(result->state)
+                << L" | Protect=" << FormatHex64(result->protect)
+                << L" | AllocationProtect=" << FormatHex64(result->allocationProtect)
+                << L" | Type=" << FormatHex64(result->type) << L"\r\n"
+                << L"字段标志=" << FormatHex64(result->fieldFlags)
+                << L" | OpenStatus=" << FormatHex64(static_cast<std::uint32_t>(result->openStatus))
+                << L" | BasicStatus=" << FormatHex64(static_cast<std::uint32_t>(result->basicStatus))
+                << L" | FileNameStatus=" << FormatHex64(static_cast<std::uint32_t>(result->mappedFileNameStatus))
+                << L"\r\n映射文件=" << (result->mappedFileName.empty() ? L"<未返回>" : result->mappedFileName);
+            SetStatus(state, report.str());
         });
 }
 
@@ -1288,6 +1355,7 @@ void CreateChildControls(DriverMemoryViewState& state) {
     state.addressEdit = CreateEdit(state.hwnd, kAddressEditId, L"0x0", 0, 0, 0, 0, 0);
     state.lengthEdit = CreateEdit(state.hwnd, kLengthEditId, L"16", 0, 0, 0, 0, 0);
     state.readButton = Ksword::Ui::CreateButton(state.hwnd, kReadButtonId, L"Read", 0, 0, 0, 0);
+    state.queryRegionButton = Ksword::Ui::CreateButton(state.hwnd, kQueryRegionButtonId, L"R0 区域", 0, 0, 0, 0);
     state.writeButton = Ksword::Ui::CreateButton(state.hwnd, kWriteButtonId, L"Write", 0, 0, 0, 0);
     state.previewDiffButton = Ksword::Ui::CreateButton(state.hwnd, kPreviewDiffButtonId, L"预览差异", 0, 0, 0, 0);
     state.applyDiffButton = Ksword::Ui::CreateButton(state.hwnd, kApplyDiffButtonId, L"应用差异", 0, 0, 0, 0);
@@ -1336,6 +1404,7 @@ LRESULT CALLBACK DriverMemoryViewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPA
         if (state) {
             CreateChildControls(*state);
             state->operationTask = std::make_unique<Ksword::Ui::AsyncSnapshotTask<MemoryOperationSnapshot>>(hwnd, kMsgMemoryOperationCompleted);
+            state->regionQueryTask = std::make_unique<Ksword::Ui::AsyncSnapshotTask<ksword::ark::VirtualMemoryQueryResult>>(hwnd, kMsgMemoryRegionQueryCompleted);
             state->historyFilterTask = std::make_unique<Ksword::Ui::AsyncSnapshotTask<MemoryHistoryFilterResult>>(hwnd, kMsgMemoryHistoryFilterCompleted);
             RebuildMemoryHistory(*state);
             UpdateSnapshotButtons(*state);
@@ -1367,6 +1436,10 @@ LRESULT CALLBACK DriverMemoryViewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPA
                 HandleRead(*state);
                 return 0;
             }
+            if (id == kQueryRegionButtonId) {
+                HandleQueryRegion(*state);
+                return 0;
+            }
             if (id == kWriteButtonId) {
                 HandleWrite(*state);
                 return 0;
@@ -1391,6 +1464,11 @@ LRESULT CALLBACK DriverMemoryViewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPA
         break;
     case kMsgMemoryOperationCompleted:
         if (state && state->operationTask && state->operationTask->consume(hwnd, wParam, lParam)) {
+            return 0;
+        }
+        break;
+    case kMsgMemoryRegionQueryCompleted:
+        if (state && state->regionQueryTask && state->regionQueryTask->consume(hwnd, wParam, lParam)) {
             return 0;
         }
         break;

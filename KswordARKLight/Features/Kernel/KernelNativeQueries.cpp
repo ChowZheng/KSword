@@ -1,6 +1,7 @@
 #include "KernelNativeQueries.h"
 
 #include "../../Core/Win32Lean.h"
+#include "../../../Ksword5.1/Ksword5.1/ArkDriverClient/ArkDriverClient.h"
 
 #include <winternl.h>
 
@@ -19,6 +20,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <unordered_map>
 #include <vector>
 
 #ifndef DIRECTORY_QUERY
@@ -1385,12 +1387,99 @@ std::uintptr_t AlignPointer(const std::uintptr_t value) {
 // QueryObjectTypeMatrix calls NtQueryObject(ObjectTypesInformation). Input is
 // the request; processing parses the variable-length type array; return contains
 // object counts, handle counts and access masks.
+void AppendObjectTypeR0Evidence(QueryPacket& packet) {
+    const auto result = ksword::ark::DriverClient().enumObjectTypeTable(
+        KSWORD_ARK_OBJECT_TYPE_TABLE_FLAG_INCLUDE_ALL,
+        KSWORD_ARK_OBJECT_TYPE_TABLE_MAX_SLOTS);
+    if (!result.io.ok) {
+        packet.warnings.push_back(result.unsupported
+            ? L"当前驱动不支持 R0 对象类型表；保留 R3 统计。"
+            : L"R0 对象类型表读取失败，Win32=" + std::to_wstring(result.io.win32Error));
+    }
+
+    std::unordered_map<std::uint32_t, std::size_t> rowByIndex;
+    for (std::size_t rowIndex = 0; rowIndex < packet.rows.size(); ++rowIndex) {
+        KernelResultRow& row = packet.rows[rowIndex];
+        for (const auto& column : row.columns) {
+            if (column.first == L"TypeIndex") {
+                try {
+                    rowByIndex[static_cast<std::uint32_t>(std::stoul(column.second))] = rowIndex;
+                } catch (...) {
+                    // Preserve the R3 row even if this build returned an invalid index.
+                }
+                break;
+            }
+        }
+        row.columns.emplace_back(L"R0Address", L"—");
+        row.columns.emplace_back(L"R0Validation", result.io.ok ? L"R0 未返回该槽" : L"R0 不可用");
+        row.columns.emplace_back(L"R0Status", L"—");
+        row.columns.emplace_back(L"R0IdentityHash", L"—");
+    }
+
+    for (const auto& entry : result.entries) {
+        std::size_t nameLength = 0;
+        while (nameLength < KSWORD_ARK_KERNEL_OBJECT_TYPE_NAME_CHARS &&
+            entry.typeName[nameLength] != L'\0') ++nameLength;
+        const std::wstring r0Name(entry.typeName, nameLength);
+        const auto found = rowByIndex.find(entry.typeIndex);
+        const bool r3Present = found != rowByIndex.end();
+        if (!r3Present) {
+            KernelResultRow row = Row({
+                { L"Index", std::to_wstring(entry.typeIndex) },
+                { L"TypeIndex", std::to_wstring(entry.typeIndex) },
+                { L"Type", r0Name.empty() ? L"<R0 名称不可用>" : r0Name },
+                { L"Objects", L"—" },
+                { L"Handles", L"—" },
+                { L"ValidAccess", L"—" },
+                { L"R0Address", L"—" },
+                { L"R0Validation", L"—" },
+                { L"R0Status", L"—" },
+                { L"R0IdentityHash", L"—" }
+            });
+            packet.rows.push_back(std::move(row));
+            rowByIndex[entry.typeIndex] = packet.rows.size() - 1;
+        }
+        KernelResultRow& target = packet.rows[rowByIndex[entry.typeIndex]];
+        std::wstring r3Name;
+        for (const auto& column : target.columns) {
+            if (column.first == L"Type") {
+                r3Name = column.second;
+                break;
+            }
+        }
+        const bool indexMatched =
+            (entry.fieldFlags & KSWORD_ARK_OBJECT_TYPE_ENTRY_FIELD_INDEX_MATCH) != 0;
+        const bool nameMatched = !r3Present || r0Name.empty() || r3Name.empty() ||
+            _wcsicmp(r0Name.c_str(), r3Name.c_str()) == 0;
+        const std::wstring validation =
+            entry.status == KSWORD_ARK_OBJECT_TYPE_ENTRY_STATUS_INDEX_MISMATCH
+                ? L"索引不一致"
+                : (entry.status == KSWORD_ARK_OBJECT_TYPE_ENTRY_STATUS_READ_FAILED
+                    ? L"结构读取失败"
+                    : (entry.objectTypeAddress == 0
+                        ? L"R0 槽为空"
+                        : (!r3Present
+                            ? L"仅 R0 可见"
+                            : (indexMatched && nameMatched ? L"槽/索引/名称一致" : L"索引或名称不一致"))));
+        for (auto& column : target.columns) {
+            if (column.first == L"R0Address") column.second = HexText(entry.objectTypeAddress);
+            else if (column.first == L"R0Validation") column.second = validation;
+            else if (column.first == L"R0Status") column.second = std::to_wstring(entry.status);
+            else if (column.first == L"R0IdentityHash") column.second = HexText(entry.identityHash);
+        }
+    }
+    if (result.io.ok && result.status != KSWORD_ARK_OBJECT_TYPE_TABLE_STATUS_OK) {
+        packet.warnings.push_back(L"R0 对象类型表为降级结果，状态=" + std::to_wstring(result.status));
+    }
+}
+
 KernelOperationResult QueryObjectTypeMatrix(const KernelRequest& request) {
     const NtRuntime& runtime = Runtime();
     QueryPacket packet;
     if (!runtime.queryObject) {
         packet.warnings.push_back(L"NtQueryObject 不可用。");
-        return MakeResult(request.featureId, false, L"对象类型矩阵", std::move(packet));
+        AppendObjectTypeR0Evidence(packet);
+        return MakeResult(request.featureId, !packet.rows.empty(), L"对象类型矩阵", std::move(packet));
     }
 
     ULONG bufferSize = 256 * 1024;
@@ -1411,7 +1500,8 @@ KernelOperationResult QueryObjectTypeMatrix(const KernelRequest& request) {
 
     if (!IsSuccessStatus(status) || buffer.size() < sizeof(ULONG)) {
         packet.warnings.push_back(std::wstring(L"NtQueryObject(ObjectTypesInformation) 失败，NTSTATUS=") + StatusText(status));
-        return MakeResult(request.featureId, false, L"对象类型矩阵", std::move(packet));
+        AppendObjectTypeR0Evidence(packet);
+        return MakeResult(request.featureId, !packet.rows.empty(), L"对象类型矩阵", std::move(packet));
     }
 
     const ULONG count = *reinterpret_cast<const ULONG*>(buffer.data());
@@ -1459,6 +1549,7 @@ KernelOperationResult QueryObjectTypeMatrix(const KernelRequest& request) {
     if (count > limit) {
         packet.warnings.push_back(std::wstring(L"对象类型数量 ") + std::to_wstring(count) + L"，本次显示前 " + std::to_wstring(limit) + L" 项。");
     }
+    AppendObjectTypeR0Evidence(packet);
     return MakeResult(request.featureId, !packet.rows.empty(), L"对象类型矩阵", std::move(packet));
 }
 

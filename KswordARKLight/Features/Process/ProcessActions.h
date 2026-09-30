@@ -24,6 +24,7 @@ enum class ProcessActionId {
     R0TerminateProcess,
     R0TerminateProcessTree,
     R0SuspendProcess,
+    R0ResumeProcess,
     R0HideUnlinkOnly,
     R0HidePatchPidOnly,
     R0HideLegacyBoth,

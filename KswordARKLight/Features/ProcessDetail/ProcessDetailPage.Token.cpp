@@ -1,4 +1,5 @@
 #include "ProcessDetailPage.h"
+#include "../../../Ksword5.1/Ksword5.1/ArkDriverClient/ArkDriverClient.h"
 
 #include <sddl.h>
 #include <winternl.h>
@@ -197,9 +198,41 @@ ProcessTokenReportSnapshot CollectTokenReportSnapshot(
     HANDLE rawToken = nullptr;
     if (!::OpenProcessToken(process.get(), TOKEN_QUERY, &rawToken)) {
         const DWORD error = ::GetLastError();
-        snapshot.statusText = L"● 刷新失败：无法打开目标令牌";
-        snapshot.reportText = L"OpenProcessToken failed: " + std::to_wstring(error);
-        snapshot.editorStatusText = L"行:1 列:1 字符:0 文件:<未命名> 模式:只读 编码:UTF-16";
+        const ksword::ark::ProcessTokenPrivilegeResult r0 =
+            ksword::ark::DriverClient().queryProcessTokenPrivileges(
+                processId, expectedProcessCreationTime100ns);
+        if (r0.io.ok &&
+            (r0.status == KSWORD_ARK_PROCESS_TOKEN_PRIVILEGE_STATUS_OK ||
+                r0.status == KSWORD_ARK_PROCESS_TOKEN_PRIVILEGE_STATUS_PARTIAL)) {
+            std::wostringstream report;
+            report << L"[Token Privileges / R0 Fallback]\r\nPID: " << processId
+                   << L"\r\nOpenProcessToken failed: " << error
+                   << L"\r\nR0 PrivilegeCount: " << r0.entries.size() << L"\r\n";
+            for (const ksword::ark::ProcessTokenPrivilegeEntry& entry : r0.entries) {
+                LUID luid{};
+                luid.LowPart = entry.luidLowPart;
+                luid.HighPart = entry.luidHighPart;
+                wchar_t name[256]{};
+                DWORD length = static_cast<DWORD>(std::size(name));
+                ::LookupPrivilegeNameW(nullptr, &luid, name, &length);
+                report << L"  - " << (*name ? name : L"<unknown>") << L" ["
+                       << ((entry.attributes & SE_PRIVILEGE_ENABLED) ? L"Enabled" : L"Disabled")
+                       << L"]\r\n";
+            }
+            if (r0.status == KSWORD_ARK_PROCESS_TOKEN_PRIVILEGE_STATUS_PARTIAL) {
+                report << L"R0 返回了部分特权结果。\r\n";
+            }
+            snapshot.reportText = report.str();
+            snapshot.statusText = L"● R3 令牌不可访问，已通过 R0 读取特权列表。";
+            snapshot.succeeded = true;
+        } else {
+            snapshot.statusText = L"● 刷新失败：R3 与 R0 均无法读取目标令牌特权";
+            snapshot.reportText = L"OpenProcessToken failed: " + std::to_wstring(error) +
+                L"\r\nR0 status: " + std::to_wstring(r0.status);
+        }
+        snapshot.editorStatusText = L"行:1 列:1 字符:" +
+            std::to_wstring(snapshot.reportText.size()) +
+            L" 文件:<未命名> 模式:只读 编码:UTF-16";
         return snapshot;
     }
 
@@ -327,7 +360,15 @@ bool ProcessDetailPage::CreateTokenTab() {
     AddButton(tab, TokenGoto, L"跳转行", 250, 6, 76, 30);
     AddButton(tab, TokenWrap, L"自动换行", 334, 6, 86, 30);
     AddLabel(tab, TokenStatus, L"● 尚未刷新", 430, 8, -6, 24);
-    AddEdit(tab, TokenOutput, L"令牌详细信息将在此处显示。", true, true, 6, 44, -6, -30);
+    HWND privilegeName = AddEdit(tab, TokenPrivilegeName, L"", false, false, 6, 44, 196, 28);
+    ::SendMessageW(privilegeName, EM_SETCUEBANNER, FALSE, reinterpret_cast<LPARAM>(L"SeDebugPrivilege"));
+    HWND privilegeAction = AddCombo(tab, TokenPrivilegeAction, 210, 44, 116, 120);
+    AddComboText(privilegeAction, L"启用", KSWORD_ARK_PROCESS_TOKEN_PRIVILEGE_ACTION_ENABLE);
+    AddComboText(privilegeAction, L"禁用", KSWORD_ARK_PROCESS_TOKEN_PRIVILEGE_ACTION_DISABLE);
+    ::SendMessageW(privilegeAction, CB_SETCURSEL, 0, 0);
+    AddButton(tab, TokenPrivilegeApply, L"调整特权", 334, 44, 86, 28);
+    AddLabel(tab, 0, L"优先使用 R3；令牌访问受限时按进程身份由 R0 兜底", 430, 48, -6, 24);
+    AddEdit(tab, TokenOutput, L"令牌详细信息将在此处显示。", true, true, 6, 80, -6, -30);
     AddLabel(tab, TokenEditorStatus, L"行:1 列:1 字符:0 文件:<未命名> 模式:只读 编码:未知", 6, -24, -6, 20);
     return Control(tab, TokenRefresh) && Control(tab, TokenOutput);
 }
@@ -396,6 +437,9 @@ void ProcessDetailPage::PopulateTokenSwitchTab() {
 
 bool ProcessDetailPage::HandleTokenCommand(int controlId) {
     switch (controlId) {
+    case TokenPrivilegeApply:
+        ApplyTokenPrivilege();
+        return true;
     case TokenRefresh:
         RefreshTokenReport();
         return true;
@@ -429,6 +473,89 @@ bool ProcessDetailPage::HandleTokenCommand(int controlId) {
     default:
         return false;
     }
+}
+
+void ProcessDetailPage::ApplyTokenPrivilege() {
+    const std::wstring name = ControlText(TabIndex::Token, TokenPrivilegeName);
+    LUID luid{};
+    if (name.empty() || !::LookupPrivilegeValueW(nullptr, name.c_str(), &luid)) {
+        SetPageStatus(TabIndex::Token, TokenStatus, L"● 特权名称无效；请输入 SeDebugPrivilege 等完整名称。");
+        return;
+    }
+    const int selected = static_cast<int>(::SendMessageW(
+        Control(TabIndex::Token, TokenPrivilegeAction), CB_GETCURSEL, 0, 0));
+    if (selected < 0 || expectedCreationTime100ns_ == 0) {
+        SetPageStatus(TabIndex::Token, TokenStatus, L"● 缺少动作或进程创建时间，不能安全调整。");
+        return;
+    }
+    const auto action = static_cast<std::uint32_t>(::SendMessageW(
+        Control(TabIndex::Token, TokenPrivilegeAction), CB_GETITEMDATA, selected, 0));
+    const std::wstring prompt = L"目标 PID " + std::to_wstring(processId_) + L" 的 " + name +
+        (action == KSWORD_ARK_PROCESS_TOKEN_PRIVILEGE_ACTION_ENABLE ? L" 将被启用。" : L" 将被禁用。") +
+        L"\nR3 调整失败时会按进程创建时间由 R0 兜底。确认继续？";
+    if (::MessageBoxW(hwnd_, prompt.c_str(), L"调整目标进程特权",
+            MB_YESNO | MB_DEFBUTTON2 | MB_ICONWARNING) != IDYES) {
+        return;
+    }
+    const DWORD processId = processId_;
+    const ULONGLONG expectedCreationTime = expectedCreationTime100ns_;
+    ExecuteBackgroundAction(TabIndex::Token, TokenStatus, L"● 正在后台调整目标令牌特权…",
+        [processId, expectedCreationTime, name, luid, action] {
+            ProcessDetailActionResult result{};
+            const auto observed = ksword::ark::DriverClient().queryProcessTokenPrivileges(
+                processId, expectedCreationTime);
+            if (!observed.io.ok ||
+                observed.status != KSWORD_ARK_PROCESS_TOKEN_PRIVILEGE_STATUS_OK ||
+                observed.processCreateTime100ns != expectedCreationTime) {
+                result.statusText = L"● R0 进程身份或令牌特权预检失败，请刷新进程列表。";
+                return result;
+            }
+            Ksword::Core::UniqueHandle process;
+            std::wstring identityError;
+            const bool r3ProcessAvailable = ProcessDetailPage::OpenVerifiedProcessActionTarget(
+                processId, expectedCreationTime, PROCESS_QUERY_LIMITED_INFORMATION,
+                process, identityError);
+            HANDLE rawToken = nullptr;
+            DWORD r3Error = ERROR_ACCESS_DENIED;
+            if (r3ProcessAvailable &&
+                ::OpenProcessToken(process.get(), TOKEN_QUERY | TOKEN_ADJUST_PRIVILEGES, &rawToken)) {
+                ScopedHandle token(rawToken);
+                TOKEN_PRIVILEGES privileges{};
+                privileges.PrivilegeCount = 1;
+                privileges.Privileges[0].Luid = luid;
+                privileges.Privileges[0].Attributes =
+                    action == KSWORD_ARK_PROCESS_TOKEN_PRIVILEGE_ACTION_ENABLE ? SE_PRIVILEGE_ENABLED : 0;
+                ::SetLastError(ERROR_SUCCESS);
+                const BOOL adjusted = ::AdjustTokenPrivileges(token.get(), FALSE, &privileges, 0, nullptr, nullptr);
+                r3Error = ::GetLastError();
+                if (adjusted && r3Error == ERROR_SUCCESS) {
+                    result.statusText = L"● R3 已调整 " + name;
+                    result.refreshTokenReport = true;
+                    return result;
+                }
+            } else if (r3ProcessAvailable) {
+                r3Error = ::GetLastError();
+            }
+            ksword::ark::ProcessTokenPrivilegeEntry edit{};
+            edit.luidLowPart = luid.LowPart;
+            edit.luidHighPart = luid.HighPart;
+            edit.action = action;
+            const auto r0 = ksword::ark::DriverClient().adjustProcessTokenPrivileges(
+                processId, expectedCreationTime, { edit }, false);
+            if (!r0.io.ok || r0.status != KSWORD_ARK_PROCESS_TOKEN_PRIVILEGE_STATUS_OK ||
+                r0.appliedCount != 1U) {
+                result.statusText = L"● R3 调整失败（Win32 " + std::to_wstring(r3Error) +
+                    L"）；R0 兜底失败（状态 " + std::to_wstring(r0.status) + L"）。";
+                result.dialogTitle = L"调整令牌特权失败";
+                result.dialogText = result.statusText + L"\n" +
+                    std::wstring(r0.io.message.begin(), r0.io.message.end());
+                result.dialogIcon = MB_ICONERROR;
+                return result;
+            }
+            result.statusText = L"● R0 已调整 " + name + L"；R3 Win32=" + std::to_wstring(r3Error);
+            result.refreshTokenReport = true;
+            return result;
+        });
 }
 
 bool ProcessDetailPage::HandleTokenSwitchCommand(int controlId) {

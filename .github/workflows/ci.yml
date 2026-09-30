@@ -247,6 +247,9 @@ jobs:
       - name: Validate kernel knowledge research chain
         run: python tools/validate_kernel_knowledge.py
 
+      - name: Test QADS artifact validation
+        run: python tools/test_verify_qads_runtime.py
+
       # 这道门禁原先挂在主程序 vcxproj 的 BeforeTargets="ClCompile" 上，靠"每次
       # 编译 GUI 都会顺带跑一遍"来生效。2026-09-19 主程序对 hvm_ctl 的依赖整条
       # 摘掉，那个目标也一起删了——于是它变成一个谁都不跑的脚本。接到这里来：
@@ -429,12 +432,16 @@ jobs:
             'Ksword5.1/x64/Release/KswordHUD.exe',
             'Ksword5.1/x64/Release/APIMonitor_x64.dll',
             'Ksword5.1/x64/Release/KswordDwmZOrder.dll',
+            'Ksword5.1/x64/Release/qtadvanceddocking.dll',
             'Ksword5.1/x64/Release/KswordCLI.exe'
           )
           $missing = $artifacts | Where-Object { -not (Test-Path $_) }
           if ($missing) {
             throw "Expected Release artifact(s) missing: $($missing -join ', ')"
           }
+
+      - name: Verify QADS runtime matches the checked-out library
+        run: python tools/verify_qads_runtime.py Ksword5.1/x64/Release
 
       - name: Upload user-mode artifacts
         uses: actions/upload-artifact@v6
@@ -525,6 +532,12 @@ jobs:
           & $msbuild 'Ksword5.1/Ksword5.1/Ksword5.1.vcxproj' @properties
           if ($LASTEXITCODE -ne 0) {
             throw "MSBuild failed for Ksword5.1 payload prerequisite with exit code $LASTEXITCODE."
+          }
+
+          # Verify before embedding so Setup cannot ship an older QADS runtime.
+          python tools/verify_qads_runtime.py Ksword5.1/x64/Release
+          if ($LASTEXITCODE -ne 0) {
+            throw 'QADS runtime validation failed for the installer payload.'
           }
 
           # Never embed compile-only empty DynData fixtures in an artifact that

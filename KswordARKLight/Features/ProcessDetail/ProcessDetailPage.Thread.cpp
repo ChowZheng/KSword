@@ -28,6 +28,8 @@ constexpr UINT kThreadSuspendCommand = 64105;
 constexpr UINT kThreadResumeCommand = 64106;
 constexpr UINT kThreadTerminateCommand = 64107;
 constexpr UINT kThreadR0TerminateCommand = 64108;
+constexpr UINT kThreadR0SuspendCommand = 64109;
+constexpr UINT kThreadR0ResumeCommand = 64110;
 constexpr UINT kThreadAffinityFollowProcessCommand = 50000;
 constexpr UINT kThreadAffinityProcessorBaseCommand = 50001;
 constexpr std::size_t kThreadAffinityMaxProcessorCommands = 15000U;
@@ -757,6 +759,8 @@ bool ProcessDetailPage::HandleThreadContextMenu(POINT screenPoint) {
     ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     ::AppendMenuW(menu, MF_STRING, kThreadSuspendCommand, L"挂起线程");
     ::AppendMenuW(menu, MF_STRING, kThreadResumeCommand, L"恢复线程");
+    ::AppendMenuW(menu, MF_STRING, kThreadR0SuspendCommand, L"R0挂起线程");
+    ::AppendMenuW(menu, MF_STRING, kThreadR0ResumeCommand, L"R0恢复线程");
     ::AppendMenuW(menu, MF_STRING, kThreadTerminateCommand, L"终止线程");
     ::AppendMenuW(menu, MF_STRING, kThreadR0TerminateCommand, L"R0结束线程");
 
@@ -847,6 +851,8 @@ bool ProcessDetailPage::HandleThreadContextMenu(POINT screenPoint) {
     case kThreadShowDetailCommand: ShowSelectedThreadSummary(); break;
     case kThreadSuspendCommand: SuspendSelectedThread(); break;
     case kThreadResumeCommand: ResumeSelectedThread(); break;
+    case kThreadR0SuspendCommand: SetSelectedThreadSuspendedByR0(true); break;
+    case kThreadR0ResumeCommand: SetSelectedThreadSuspendedByR0(false); break;
     case kThreadTerminateCommand: TerminateSelectedThread(); break;
     case kThreadR0TerminateCommand: TerminateSelectedThreadByR0(); break;
     default: break;
@@ -960,6 +966,71 @@ void ProcessDetailPage::ResumeSelectedThread() {
             result.statusText = L"● 已恢复线程 " + DecimalText(threadId) +
                 L"（原挂起计数 " + DecimalText(previousCount) + L"）";
             return result;
+        });
+}
+
+void ProcessDetailPage::SetSelectedThreadSuspendedByR0(bool suspended) {
+    HWND list = Control(TabIndex::Threads, ThreadList);
+    std::size_t index = 0;
+    const auto& threads = ThreadEntries();
+    if (!SelectedItemData(list, index) || index >= threads.size()) {
+        SetPageStatus(TabIndex::Threads, ThreadStatus, L"● 没有选中线程。");
+        return;
+    }
+    const ProcessThreadInfo& selectedThread = threads[index];
+    const DWORD threadId = selectedThread.threadId;
+    const DWORD targetProcessId = processId_;
+    const ULONGLONG expectedThreadCreationTime100ns = selectedThread.creationTime100ns;
+    const ULONGLONG expectedProcessCreationTime100ns = expectedCreationTime100ns_;
+    if (targetProcessId <= 4U || threadId == 0U ||
+        expectedThreadCreationTime100ns == 0U || expectedProcessCreationTime100ns == 0U ||
+        selectedThread.ownerProcessId != targetProcessId || threadId == ::GetCurrentThreadId()) {
+        SetPageStatus(TabIndex::Threads, ThreadStatus, L"● 拒绝操作系统、当前 UI 或未验证身份的线程。");
+        return;
+    }
+    if (suspended) {
+        const std::wstring prompt = L"将通过 R0 挂起 PID " + DecimalText(targetProcessId) +
+            L" 的线程 " + DecimalText(threadId) + L"。目标程序可能失去响应，是否继续？";
+        if (::MessageBoxW(hwnd_, prompt.c_str(), L"R0挂起线程",
+                MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) != IDYES) {
+            SetPageStatus(TabIndex::Threads, ThreadStatus, L"● 已取消 R0 挂起线程。");
+            return;
+        }
+    }
+
+    ExecuteBackgroundAction(
+        TabIndex::Threads,
+        ThreadStatus,
+        L"● 正在后台通过 R0 " + std::wstring(suspended ? L"挂起" : L"恢复") +
+            L"线程 " + DecimalText(threadId) + L"…",
+        [threadId, expectedThreadCreationTime100ns, targetProcessId,
+            expectedProcessCreationTime100ns, suspended] {
+            ProcessDetailActionResult action{};
+            Ksword::Core::UniqueHandle verifiedProcess;
+            Ksword::Core::UniqueHandle verifiedThread;
+            std::wstring identityError;
+            if (!ProcessDetailPage::OpenVerifiedThreadActionTarget(
+                    targetProcessId,
+                    expectedProcessCreationTime100ns,
+                    threadId,
+                    expectedThreadCreationTime100ns,
+                    0,
+                    verifiedProcess,
+                    verifiedThread,
+                    identityError)) {
+                action.statusText = L"● R0线程操作失败 | " + identityError;
+                return action;
+            }
+            const ksword::ark::IoResult result = ksword::ark::DriverClient().setThreadSuspended(
+                threadId, targetProcessId, suspended);
+            if (!result.ok) {
+                action.statusText = L"● R0线程操作失败 | " + Utf8ToWide(result.message);
+                return action;
+            }
+            action.refreshRequired = true;
+            action.statusText = L"● R0 已请求" + std::wstring(suspended ? L"挂起" : L"恢复") +
+                L"线程 " + DecimalText(threadId) + L"。";
+            return action;
         });
 }
 

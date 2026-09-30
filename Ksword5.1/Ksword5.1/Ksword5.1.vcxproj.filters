@@ -1432,6 +1432,9 @@
     <QtMoc Include="DriverDock\DriverDock.h">
       <Filter>Header Files</Filter>
     </QtMoc>
+    <ClInclude Include="include\ads\ads_version.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="DriverDock\DriverDock.Internal.h">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -1601,6 +1604,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="..\..\shared\window\DwmProcessIdentity.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\shared\ProcessTerminateMethods.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="..\..\shared\window\DwmRemoteLoader.h">

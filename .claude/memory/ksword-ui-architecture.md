@@ -7,6 +7,9 @@ metadata:
 
 KSword 主程序位于 `Ksword5.1/Ksword5.1`（Qt 6.9.3 Widgets + Qt Advanced Docking System，MSVC vcxproj 构建）。
 
+- QADS 已升级到 **5.1.1**（`v5.1.1`，commit `023ce95934fecfd4cf5c672c9c404fabe0f54923`）。版本、许可证与复现步骤见 `third_party/qt_advanced_docking_system/NOTICE.md`；CMake 包装保留 `qtadvanceddocking[d].dll/.lib` 文件名，避免改名 DLL 后 import library 仍指向上游新文件名。`include/ads/ads_version.h` 是构建生成的必要头文件，升级时须与其余头文件、Release/Debug import library 和 DLL 一起更新。
+- ADS 5.x 默认跟随 palette 自动加载内部 QSS。KSword 必须在创建 `CDockManager` 前设置 `DisableStylesheet=true`；仅在外观应用末尾 `setStyleSheet("")` 不够，后续 palette 事件仍会重新加载默认样式。`include/ads/` 属于上游头文件，Git 用 `-text` 保留混合 LF/CRLF，避免升级产生整文件换行 diff。
+
 ## UI 主题架构
 
 - `theme.h`（KswordTheme 命名空间）：design-token 中心。中性表面色（Window/Surface/SurfaceAlt/SurfaceMuted/Border）由 RGB 偏移从种子色派生；强调色 PrimaryBlueColor 可由用户自定义；提供 EnsureTextContrast 等 WCAG 对比度工具。
@@ -24,6 +27,13 @@ KSword 主程序位于 `Ksword5.1/Ksword5.1`（Qt 6.9.3 Widgets + Qt Advanced Do
 - 大型独立窗口的初始尺寸和最低尺寸统一调用 `ks::ui::applyResponsiveWindowGeometry`，以父窗口所在屏幕的 `availableGeometry` 为边界；不要再直接写 1000px 以上的硬 `setMinimumSize`，否则高 DPI、小屏或远程桌面会把窗口撑出工作区。
 - 独立窗口中的懒加载 `QTabWidget` 必须隔离页面动态 `minimumSizeHint`：页面栈使用零最小尺寸和 `QSizePolicy::Ignored`，顶层窗口只保留响应式最低尺寸，禁止用 `maximumWidth` 对抗内容传播。纵向表单页应放入 `QScrollArea`，使切页和异步控件挂载不改变用户当前窗口尺寸，同时保留自由拖大和最大化能力。
 - 主窗口是 FramelessWindowHint + 自绘 `Framework/CustomTitleBar`；其余子窗口全是原生标题栏。
+- 硬件利用率浮窗跨不同缩放显示器时，不要用 `QMouseEvent::globalPosition()` 的增量反复调用 `QWidget::move()`：窗口位置与鼠标坐标在 DPI 切换后可能落在不同逻辑坐标系，使尺寸累积漂移。达到拖动阈值后调用 `QWindow::startSystemMove()`，Windows 兜底走原生 `WM_NCLBUTTONDOWN/HTCAPTION`；边缘缩放仍由原生 `WM_NCHITTEST` 处理。
+- 利用率浮窗的缩放、背景不透明度、置顶、独立主题保存在 `AppearanceSettings` 的浮窗专用字段。只在浮窗上设置 `WA_TranslucentBackground` 并自绘带 alpha 的表面色，不能使用 `setWindowOpacity`，否则文字和图表一起变淡。Windows 分层窗口的背景在配置为 0% 时仍需绘制 1/255 alpha，以保留空白区域的鼠标命中和整窗拖动；配置值继续记为 0%。
+- 利用率浮窗缩放内容时，以借用页面原本的字体、QSS 字号、布局边距/间距为基线重算，回主窗口前恢复原值；左侧卡片还需同步缩放列表行高与自绘坐标。浮窗独立切深浅色时，只改根 palette 不足以覆盖子控件已有的 `palette(text)` QSS；对子控件用浮窗 palette 的实色替换文字 token，并保存原 QSS/palette 供返回时恢复。Shift+滚轮在 Windows 可能作为水平滚轮到达，处理 `angleDelta().y()` 为零时的 `x()`。
+- 利用率浮窗跟随外部窗口时，原采样与绘图控件仍留在浮窗，主界面原插槽用独立的原生标签、设备卡和图表控件呈现同一采样结果。不要用 `QWidget::render()` 后按主窗口尺寸缩放位图，字体和图表会一起变形。用 `WindowFromPoint` 选顶层窗口，按完整标题与进程路径重找；跟随事件使用 `SetWinEventHook` 的异步回调加定时兜底。目标与浮窗矩形用 DWM 扩展边框的物理坐标读取，持久化相对位移时按目标屏幕 DPI 转成逻辑单位；只在用户结束拖动/缩放时改写偏移，不能把程序主动 `SetWindowPos` 产生的 Qt `Move` 事件当成用户拖动，否则跨 DPI 屏幕会累积漂移。目标置顶时拒绝跟随；跟随时浮窗自身强制非置顶，普通模式保留用户原置顶配置。点击穿透仅对跟随态设置 `WS_EX_TRANSPARENT`，主界面性能区双击负责退出穿透。
+- 利用率左侧窄窗和详情浮窗共用 `utilization_floating_scale_percent`；键盘/滚轮修改立即保存，原生边缘缩放必须在 `WM_EXITSIZEMOVE` 后按最终窗口尺寸保存，Qt 鼠标释放事件不会可靠地收到非客户区缩放结束。左侧列表的滚动条宽度、圆角和最小滑块高度跟着浮窗内容比例变化，颜色使用 palette 角色以适应独立深浅主题。跟随目标从遮挡中唤到前台时，在 WinEvent 回调中先用原生 `SetWindowPos` 调整浮窗 Z 序，再排队同步 Qt 视图，避免图表刷新延迟层级调整。
+- 硬件利用率页的网络来源是 `GetIfTable2`，该表还含每个网卡上挂载的 WFP、杀软、QoS 等过滤模块行；仅检查 `OperStatus == Up` 会把一个网卡绘成多张卡并重复累计流量。网络性能卡应跳过 `MIB_IF_ROW2.InterfaceAndOperStatusFlags.FilterInterface`，再按接口 LUID 与 `GetIpInterfaceTable(AF_UNSPEC)` 返回的 IP 接口交叉验证；不要用驱动名称字符串筛选，因为名称受产品和语言影响。IP 表查询失败时仅回退到非过滤、广播型接口。
+- 网络利用率页用 `MIB_IF_ROW2.InterfaceAndOperStatusFlags.HardwareInterface` 区分实体和虚拟 IP 接口：实体网卡保留独立导航项，虚拟网卡合入一个滚动详情页。虚拟页复用每接口采样和 `QChartView`，按 viewport 宽度排成一列或两列；新增接口时重排网格，并在详情浮窗中重新捕获缩放样式。实体接口断开后保留卡片，重新连接首帧重置计数器增量基线。
 
 **全局基线样式只允许颜色/边框，禁止 min-height/padding 等几何属性**——app 级几何会穿透局部样式破坏紧凑布局（曾导致主窗口标题栏按钮被撑高、最大化后标题文字上偏）。
 
