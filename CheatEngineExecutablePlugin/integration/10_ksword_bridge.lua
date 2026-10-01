@@ -116,7 +116,9 @@ local function pollBackend()
     local mainForm = getMainForm()
     if mainForm ~= nil then
         local caption = mainForm.Caption:gsub("%s*%[KSword [^%]]*%]$", "")
-        mainForm.Caption = caption .. (status.useHvm and " [KSword HVM]" or " [KSword R0]")
+        local label = not status.driverReady and "KSword Connected" or
+            (status.useHvm and "KSword HVM" or "KSword R0")
+        mainForm.Caption = caption .. " [" .. label .. "]"
     end
     publishState(status)
 end

@@ -25,9 +25,19 @@ namespace ksword::ce
         HANDLE WINAPI openProcess(DWORD access, BOOL inherit, DWORD pid)
         { return boundary([&] { return debugger::backend().openProcess(access, inherit, pid); }, static_cast<HANDLE>(nullptr)); }
         BOOL WINAPI readMemory(HANDLE process, LPCVOID address, LPVOID data, SIZE_T bytes, SIZE_T* transferred)
-        { return boundary([&] { return debugger::backend().readMemory(process, address, data, bytes, transferred); }, FALSE); }
+        { return boundary([&] {
+            // CE's Local Lua functions build our ABI packets in its own memory.
+            // Driver process protections must not intercept these local buffers.
+            if (GetProcessId(process) == GetCurrentProcessId())
+                return ::ReadProcessMemory(process, address, data, bytes, transferred);
+            return debugger::backend().readMemory(process, address, data, bytes, transferred);
+        }, FALSE); }
         BOOL WINAPI writeMemory(HANDLE process, LPVOID address, LPCVOID data, SIZE_T bytes, SIZE_T* transferred)
-        { return boundary([&] { return debugger::backend().writeMemory(process, address, data, bytes, transferred); }, FALSE); }
+        { return boundary([&] {
+            if (GetProcessId(process) == GetCurrentProcessId())
+                return ::WriteProcessMemory(process, address, data, bytes, transferred);
+            return debugger::backend().writeMemory(process, address, data, bytes, transferred);
+        }, FALSE); }
         SIZE_T WINAPI queryMemory(HANDLE process, LPCVOID address, PMEMORY_BASIC_INFORMATION info, SIZE_T bytes)
         { return boundary([&] { return debugger::backend().queryMemory(process, address, info, bytes); }, static_cast<SIZE_T>(0)); }
         BOOL WINAPI getContext(HANDLE thread, LPCONTEXT context)
@@ -102,20 +112,12 @@ namespace ksword::ce
         HMODULE pinned = nullptr;
         if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN,
             reinterpret_cast<LPCWSTR>(&initializeBridge), &pinned)) return FALSE;
-        if (!debugger::backend().initialize())
-        {
-            if (functions->showMessage != nullptr)
-            {
-                char message[] = "KSword debugger backend: load the KSword driver first.";
-                functions->showMessage(message);
-            }
-            return FALSE;
-        }
+        const bool driverReady = debugger::backend().initialize();
         {
             std::lock_guard<std::mutex> lock(g_mutex);
             if (g_functions != nullptr) return g_functions == functions ? TRUE : FALSE;
             g_functions = functions; g_pluginId = pluginId;
-            if (!installHooks()) { g_functions = nullptr; g_pluginId = -1; return FALSE; }
+            if (driverReady && !installHooks()) { g_functions = nullptr; g_pluginId = -1; return FALSE; }
         }
         if (functions->registerFunction != nullptr)
         {
@@ -124,7 +126,8 @@ namespace ksword::ce
             std::lock_guard<std::mutex> lock(g_mutex);
             g_registrationId = id;
         }
-        debugger::backend().log("CE adapter installed 15 memory/thread/debugger function hooks");
+        debugger::backend().log(driverReady ? "CE adapter installed 15 memory/thread/debugger function hooks" :
+            "CE bridge connected; R0 unavailable, CE retains its native function table");
         return TRUE;
     }
 
@@ -151,6 +154,6 @@ namespace ksword::ce
     {
         UNREFERENCED_PARAMETER(reserved);
         std::lock_guard<std::mutex> lock(g_mutex);
-        if (g_functions != nullptr) (void)installHooks();
+        if (g_functions != nullptr && debugger::backend().initialize()) (void)installHooks();
     }
 }

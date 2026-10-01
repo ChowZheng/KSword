@@ -9,7 +9,8 @@
 - `KswordDebuggerApi.h`：固定宽度、带版本的进程内 C ABI。
 - `KswordDebuggerBackend.cpp`：会话、状态、能力布局、HVM 协议转发和日志。
 - `KswordDebuggerMemory.cpp`：进程身份、R0/HVM 内存、分配与保护。
-- `KswordDebuggerNative.cpp`：原生 R0 线程上下文及挂起/恢复。
+- `KswordDebuggerNative.cpp`：R0 线程上下文、挂起/恢复及公共 ShadowPage 执行断点回退。
+- `KswordDebuggerFileProtocol.h`：共享控制文件读取；允许原子替换，读取后立即关闭句柄。
 - `KswordDebuggerDebug.cpp`：Windows 调试事件适配、EPT 断点事务与资源退休。
 - `CheatEnginePlugin/`：CE SDK hook，不能在这里实现新的驱动业务或 HVM 策略。
 - `shared/driver/`：唯一 R0/R3 协议定义；内核业务在对应 feature 模块，注册表
@@ -20,6 +21,57 @@
 每个调试器进程拥有一个后端实例及持久设备会话。
 公共后端的日志路径由 `KSWORD_DEBUGGER_LOG_FILE` 提供，适配器自行设置；
 CE 启动器使它与 autorun 启动日志写入同一文件。公共代码不依赖 CE 环境变量。
+
+## 保留原生调试循环的适配器
+
+TitanEngine 等前端可以保留自己的 Windows 调试循环，使用下列 C++ 方法借用
+公共后端。它们不调用 `DebugActiveProcess`、`DebugActiveProcessStop`、
+`WaitForDebugEvent` 或 `ContinueDebugEvent`：
+
+- `observeNativeSession(pid, &generation)`：保留真实进程对象句柄，建立原生会话。
+  同一活动进程重复调用返回原代次；已有 CE 附加或不同进程返回 `ERROR_BUSY`。
+- `observeNativeEvent(event, generation)`：记录前端已取得的事件，检查 PID 和代次。
+- `validateNativeContinue(pid, tid, generation)`：继续前验证已记录事件及自动 EPT
+  所需的全部 CPU 常驻状态。通过后由前端调用原有 Windows 继续接口。
+- `retireNativeThread(tid, generation)`：停止自有常驻、只删除该线程的自动 EPT
+  规则，再恢复常驻。其它线程和原始 API 规则不由该方法删除。
+- `releaseNativeSession(generation)`：退出原生循环后退休本后端的规则和准备。
+  没有自有准备时不触碰其它调用者的 HVM 常驻。
+
+前端须把返回的非零代次保存在会话中，并传给异步事件、上下文及退休回调。
+旧代次返回 `ERROR_INVALID_STATE`，不能结束新会话。进程句柄及每份自动断点
+持有的线程对象句柄避免 PID/TID 重用；上下文叠加还复核线程创建时间。
+`generation=0` 仅用于同步调用当前会话。原生 `EXIT_PROCESS` 事件仍由前端持有
+时，状态轮询保留会话，待事件继续及原生循环收尾后显式释放。
+
+原生上下文由 Windows 获取并保留完整 `CONTEXT` / XSTATE 分配。
+`overlayNativeDebugContext` 仅叠加 DR0–DR3 与 DR7，保留 Windows 的 DR6 命中位、
+GPR、SIMD 和扩展状态。`applyNativeDebugContext` 的 writer 回调只接收
+`CONTEXT_DEBUG_REGISTERS` 切片；前端把这些 DR 字段放入完整 Windows 上下文副本，
+再交给自己的原始 `SetThreadContext`。固定 1232 字节 R0 协议不承载 XSTATE。
+
+writer 返回失败或常驻恢复失败时，后端恢复原 EPT 规则，并以 `rollback=TRUE`
+回调恢复之前的物理调试寄存器；回调必须只写调试寄存器，不能重放 GPR/SIMD
+写入。全部步骤在同一后端锁内进行。前端继续持有真实 Windows 停止事件，
+不得在上下文事务结束之前继续目标。
+
+## 执行断点自动回退
+
+常规 HVM EPT 调试不可用时，公共后端尝试 EPTP 切换的 ShadowPage 隐藏 INT3。
+该路径要求执行专用 EPT 与 INVEPT 支持，不要求 MTF。匹配的新驱动通过
+`KswordArkDebuggerIoctl.h` 的原生操作 8/9 管理影子页：MDL 固定目标用户页，
+保留 owner/target 进程身份，同页多个偏移合并，原始读取保留原字节。
+
+CE 的执行 DR 请求转成私有隐藏 INT3，并仅在真实、匹配的持有停止事件中
+叠加 DR6 槽位命中与准确 RIP。数据 DR 在此回退模式仍交给 Windows。
+TitanEngine 保留原生软件断点表及调试循环；内部断点读看到逻辑 INT3，前端
+Safe/Unsafe 读看到原字节。TF 单步时临时撤销命中偏移，下一真实单步事件后重装。
+普通原生 StepInto/StepOver 不经过硬件停止事件的延迟回调路径。
+
+自动准备不能接管其他调用者的准备/常驻。活动断点阻止关闭 HVM；移除最后一项
+后可释放自己的资源。驱动进程退出回调处理 owner/target 崩溃，停止该影子会话
+的常驻并释放视图、MDL 和进程引用。目标映射替换/自修改代码仍要求重新安装逻辑断点。
+实时验收及能力限制见 `docs/ksword-debugger-vm-validation.md`。
 
 ## C ABI v1
 
@@ -97,15 +149,16 @@ CE Windows 调试接口的事件等待、继续和附加由公共后端管理，
 选择 HVM 后，读写必须返回 `usedDirectWindow`，私有窗口未就绪或失效时
 直接失败。它不会自动变回普通 R0 读写。
 
-HVM 模式下，CE 通过调试寄存器设置的执行/写入/读写断点转为线程作用域的
+常规 HVM 调试可用时，CE 通过调试寄存器设置的执行/写入/读写断点转为线程作用域的
 EPT 规则。仅匹配用户态、目标线程 TEB 和启用的 DR7 槽；读回上下文保留
 前端期待的 DR0–DR3。VM-exit 产生 DR6 命中位与 #DB，CE 收到单步异常。
 
 - 执行断点精确匹配 RIP，停止于指令执行前；继续时 RF 跳过该次重试。
 - 数据断点是 **4 KiB 页粒度**，MTF 在访问指令完成后交付 #DB。不是字节
   精确的硬件数据断点，同页其他访问也可能命中。
-- 本版自动 EPT 断点要求 Intel VMX、MTF 和新的 HVM_DEBUG 协议，AMD 返回
+- 常规自动 EPT 断点要求 Intel VMX、MTF 和新的 HVM_DEBUG 协议，AMD 返回
   不支持；普通 HVM 协议仍按自身平台能力运行。
+- 常规执行断点不可用时走前述 ShadowPage 回退；数据 DR 保留 Windows 行为。
 - 一个线程最多映射四个 CE 调试寄存器槽；驱动总计 128 个调试槽。
 - 页面以 MDL 固定，线程对象保持引用。目标映射被重建时应重新安装断点。
   线程/调试器退出通知立即撤销命中资格；固定页面资源在停止常驻后的规则
@@ -125,7 +178,7 @@ API 建立的规则由原始调用者负责退休。
 
 HVM 开关关闭前必须移除 EPT 断点；关闭时释放本后端拥有的资源。状态轮询
 也观察 CE 直接调用的 Windows 分离操作，退休遗留断点与自有常驻资源。
-写入与调试修改走驱动安全策略，内存写入不设置 FORCE；HVM 自检/常驻启动
+写入与调试修改走驱动安全策略，R0 写入按现有协议设置 UI_CONFIRMED/FORCE；HVM 自检/常驻启动
 按控制协议携带所需确认标记。停用 CE 插件恢复仍由它拥有的
 函数指针，清理失败时拒绝停用；代码映射保留至 CE 退出，以保护尚在 hook
 中等待事件的线程。
@@ -137,6 +190,11 @@ HVM 开关关闭前必须移除 EPT 断点；关闭时释放本后端拥有的�
 匹配、断点替换失败回滚、常驻启动拒绝、所有权、无效 ABI 指针与后续调用。
 它不加载驱动或运行 VMX。
 
+同一模型测试还验证原生会话重复采用/冲突、事件所有权、旧代次拒绝、逐线程
+EPT 退休、待继续退出事件的租约、外部常驻保护，以及完整 Windows 上下文
+writer 的失败回滚与 GPR/SIMD/扩展状态保留。扩展状态由模型 writer 模拟；
+这不代替原生适配器的 Windows `CopyContext` 实测或驱动加载验收。
+
 ```powershell
 python DebuggerBackend/tests/validate_lua.py --lua-dll 'plugin/cheat-engine/payload/Cheat Engine/lua53-64.dll'
 ```
@@ -144,4 +202,6 @@ python DebuggerBackend/tests/validate_lua.py --lua-dll 'plugin/cheat-engine/payl
 Lua 检查使用 x64 运行库和模拟 CE API，执行真实 autorun 工厂、所有协议
 入口、HVM 开关确认、卸载检测与重新连接，并确认 CE 颜色和字体未被修改。
 CLI 的 `r0 debugger-status` 是只读的原生 R0 能力探针。
-本轮验证没有包含 GUI、驱动加载或实机 HVM/EPT 命中。
+上述模型/Lua 检查不证明实机行为；另在 `KSword-HVM-Target` 完成了实际 GUI、
+驱动加载、HVM 内存及 ShadowPage 隐藏执行断点验收，见
+`docs/ksword-debugger-vm-validation.md`。

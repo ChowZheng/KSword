@@ -1,0 +1,10 @@
+{
+  "x64dbg": "f107330b6563da3c38d60a3ad6e629057b7cf5d0",
+  "nativeTitanEngine": "21ef77f31fd42d17f785802c36b2ca4ca44c43d7",
+  "canonicalExports": 64,
+  "architecture": "AMD64",
+  "engineSetting": 4,
+  "enginePath": "KSword/TitanEngine.dll",
+  "qt5Url": "https://github.com/x64dbg/deps/releases/download/2025.07.02/qt5.12.12-msvc2017_64.7z",
+  "qt5Sha256": "770490bf09514982c8192ebde9a1fac8821108ba42b021f167bac54e85ada48a"
+}

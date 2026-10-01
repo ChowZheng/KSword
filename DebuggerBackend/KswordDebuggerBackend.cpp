@@ -87,7 +87,7 @@ namespace ksword::debugger
                 return lastError_;
             }
         }
-        else if (!breakpoints_.empty())
+        else if (!breakpoints_.empty() || !shadowInt3_.empty())
         {
             lastError_ = ERROR_BUSY;
             log("Remove the active EPT breakpoints before switching off HVM");
@@ -111,7 +111,6 @@ namespace ksword::debugger
         call.bytesReturned = 0;
         if (call.version != KSWORD_DEBUGGER_API_VERSION || call.size != sizeof(call) || call.reserved != 0)
             return ERROR_REVISION_MISMATCH;
-        if (!driver_.isValid()) return ERROR_DEVICE_NOT_CONNECTED;
         auto* output = reinterpret_cast<void*>(static_cast<std::uintptr_t>(call.output));
         const auto* input = reinterpret_cast<const void*>(static_cast<std::uintptr_t>(call.input));
         if (call.command == KSWORD_DEBUGGER_QUERY_BACKEND || call.command == KSWORD_DEBUGGER_USE_HVM)
@@ -136,6 +135,7 @@ namespace ksword::debugger
             call.bytesReturned = sizeof(state);
             return ERROR_SUCCESS;
         }
+        if (!driver_.isValid()) return ERROR_DEVICE_NOT_CONNECTED;
         struct Operation { DWORD command, ioctl, inputBytes, outputBytes; };
 #define KSW_OPERATION(command, ioctl, request, response) \
         {command, ioctl, static_cast<DWORD>(sizeof(request)), static_cast<DWORD>(sizeof(response))}

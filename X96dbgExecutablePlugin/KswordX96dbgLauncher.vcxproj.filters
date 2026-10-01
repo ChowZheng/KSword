@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="Source Files"><UniqueIdentifier>{EE22E28F-1554-46D7-B507-45C01A6B788E}</UniqueIdentifier></Filter>
+    <Filter Include="Plugin Files"><UniqueIdentifier>{5DBD4393-F001-493D-8A9C-55D97BF2C94F}</UniqueIdentifier></Filter>
+  </ItemGroup>
+  <ItemGroup><ClCompile Include="LauncherMain.cpp"><Filter>Source Files</Filter></ClCompile><ClCompile Include="LogSurface.cpp"><Filter>Source Files</Filter></ClCompile></ItemGroup>
+  <ItemGroup><ClInclude Include="LogSurface.h"><Filter>Source Files</Filter></ClInclude><ClInclude Include="..\DebuggerBackend\KswordDebuggerFileProtocol.h" /></ItemGroup>
+  <ItemGroup>
+    <None Include="plugin.json"><Filter>Plugin Files</Filter></None><None Include="README.md"><Filter>Plugin Files</Filter></None>
+    <None Include="NOTICE.md"><Filter>Plugin Files</Filter></None><None Include="SOURCE.md"><Filter>Plugin Files</Filter></None>
+    <None Include="tests\LauncherTests.ps1"><Filter>Plugin Files</Filter></None>
+  </ItemGroup>
+</Project>

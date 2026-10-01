@@ -58,6 +58,12 @@ namespace ksword::debugger
             bytes > (std::numeric_limits<std::uint64_t>::max)() - address)
         { SetLastError(ERROR_INVALID_PARAMETER); return false; }
         if (!driver_.isValid()) { SetLastError(ERROR_DEVICE_NOT_CONNECTED); return false; }
+        if (write && useHvm_)
+        {
+            bool handled = false;
+            const bool completed = shadowWrite(pid, address, data, bytes, transferred, handled);
+            if (handled) return completed;
+        }
         while (transferred < bytes)
         {
             const auto count = static_cast<DWORD>((std::min)(bytes - transferred,
@@ -80,7 +86,7 @@ namespace ksword::debugger
             {
                 const std::vector<std::uint8_t> payload(part, part + count);
                 const auto result = client_.writeVirtualMemory(pid, address + transferred, payload,
-                    KSWORD_ARK_MEMORY_WRITE_FLAG_UI_CONFIRMED, &driver_);
+                    KSWORD_ARK_MEMORY_WRITE_FLAG_UI_CONFIRMED | KSWORD_ARK_MEMORY_WRITE_FLAG_FORCE, &driver_);
                 if (!result.io.ok) { SetLastError(result.io.win32Error); return false; }
                 if (result.bytesWritten > count) { SetLastError(ERROR_INVALID_DATA); return false; }
                 transferred += result.bytesWritten;

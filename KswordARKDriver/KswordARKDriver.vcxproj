@@ -118,6 +118,7 @@
     <ClCompile Include="src\features\hvm\hvm_debug_ioctl.c"><EnableEnhancedInstructionSet>StreamingSIMDExtensions2</EnableEnhancedInstructionSet></ClCompile>
     <ClCompile Include="src\features\debugger\debugger.c" />
     <ClCompile Include="src\features\debugger\debugger_ioctl.c" />
+    <ClCompile Include="src\features\debugger\debugger_shadow.c" />
     <ClCompile Include="src\features\hvm\hvm_ept_view.c">
       <EnableEnhancedInstructionSet>StreamingSIMDExtensions2</EnableEnhancedInstructionSet>
     </ClCompile>

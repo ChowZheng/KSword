@@ -1,0 +1,251 @@
+{
+  "collected": "2026-09-30",
+  "qtVersion": "5.12.12",
+  "files": [
+    {
+      "path": "LLVMDemangle-LICENSE.TXT",
+      "url": "https://raw.githubusercontent.com/llvm/llvm-project/llvmorg-7.0.1/llvm/LICENSE.TXT",
+      "sha256": "0303dfeaac87b80d2d1e543aa38d5be77b0eac93c3d04fe7e3c8eaa71a778667"
+    },
+    {
+      "path": "Qt5/LICENSE.FDL",
+      "url": "https://raw.githubusercontent.com/qt/qtbase/v5.12.12/LICENSE.FDL",
+      "sha256": "ed8742a95cb9db653a09b050e27ccff5e67ba69c14aa2c3137f2a4e1892f6c0d"
+    },
+    {
+      "path": "Qt5/LICENSE.GPL3",
+      "url": "https://raw.githubusercontent.com/qt/qtbase/v5.12.12/LICENSE.GPL3",
+      "sha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903"
+    },
+    {
+      "path": "Qt5/LICENSE.LGPL3",
+      "url": "https://raw.githubusercontent.com/qt/qtbase/v5.12.12/LICENSE.LGPL3",
+      "sha256": "da7eabb7bafdf7d3ae5e9f223aa5bdc1eece45ac569dc21b3b037520b4464768"
+    },
+    {
+      "path": "Qt5/original-third-party/android/LICENSE",
+      "url": "https://raw.githubusercontent.com/qt/qtbase/v5.12.12/src/3rdparty/android/LICENSE",
+      "sha256": "4a51cf7f724f51bedb5fa4f9583a2762f1db8d05e43a577e2487c7aab2fdce18"
+    },
+    {
+      "path": "Qt5/original-third-party/angle/LICENSE",
+      "url": "https://raw.githubusercontent.com/qt/qtbase/v5.12.12/src/3rdparty/angle/LICENSE",
+      "sha256": "77af9c9fc2710ee66b8282291a9392a9a61f1d5b3ad6e478d0b6c544de5f9aca"
+    },
+    {
+      "path": "Qt5/original-third-party/angle/src/common/third_party/smhasher/LICENSE",
+      "url": "https://raw.githubusercontent.com/qt/qtbase/v5.12.12/src/3rdparty/angle/src/common/third_party/smhasher/LICENSE",
+      "sha256": "3f6f1b520bc53e878ccbb698ad0bacef3752a5f4e4b50a26552bd70f60b40748"
+    },
+    {
+      "path": "Qt5/original-third-party/angle/src/third_party/compiler/LICENSE",
+      "url": "https://raw.githubusercontent.com/qt/qtbase/v5.12.12/src/3rdparty/angle/src/third_party/compiler/LICENSE",
+      "sha256": "a08ba10adec47027ef8078848729837b1c5a42f140718d7afd65c23f1eeec392"
+    },
+    {
+      "path": "Qt5/original-third-party/angle/src/third_party/libXNVCtrl/LICENSE",
+      "url": "https://raw.githubusercontent.com/qt/qtbase/v5.12.12/src/3rdparty/angle/src/third_party/libXNVCtrl/LICENSE",
+      "sha256": "31346421254a3e6e12687cf17f19f6357ee73a617fa7b3d3ccefdcbabe49bdd3"
+    },
+    {
+      "path": "Qt5/original-third-party/double-conversion/LICENSE",
+      "url": "https://raw.githubusercontent.com/qt/qtbase/v5.12.12/src/3rdparty/double-conversion/LICENSE",
+      "sha256": "4af93c12062c58058378de2397dc1c92bbff9ddfb1d583a01c84127557ce97ca"
+    },
+    {
+      "path": "Qt5/original-third-party/easing/LICENSE",
+      "url": "https://raw.githubusercontent.com/qt/qtbase/v5.12.12/src/3rdparty/easing/LICENSE",
+      "sha256": "92fac99458f1754b73edf50f9c9983e0efaa06ad96e2afd5e538c79f45b4b191"
+    },
+    {
+      "path": "Qt5/original-third-party/forkfd/LICENSE",
+      "url": "https://raw.githubusercontent.com/qt/qtbase/v5.12.12/src/3rdparty/forkfd/LICENSE",
+      "sha256": "d0d683ae18e78fbef90eb41168fb781920da2d12bf80704490f0882915c18ae0"
+    },
+    {
+      "path": "Qt5/original-third-party/freebsd/LICENSE",
+      "url": "https://raw.githubusercontent.com/qt/qtbase/v5.12.12/src/3rdparty/freebsd/LICENSE",
+      "sha256": "dc2caba29eb862f6c1720aecb18e16f4e19d61227ee408be37fb0e9c3d00994f"
+    },
+    {
+      "path": "Qt5/original-third-party/freetype/LICENSE.txt",
+      "url": "https://raw.githubusercontent.com/qt/qtbase/v5.12.12/src/3rdparty/freetype/LICENSE.txt",
+      "sha256": "4f71138144d60a66129064e348532a923e7a45d1f1c863af4c1c13ad74b0b229"
+    },
+    {
+      "path": "Qt5/original-third-party/freetype/docs/LICENSE.TXT",
+      "url": "https://raw.githubusercontent.com/qt/qtbase/v5.12.12/src/3rdparty/freetype/docs/LICENSE.TXT",
+      "sha256": "fd056de4196903a676208ef58cfddafc7d583d1f28fa2e44c309cf84a59e62fb"
+    },
+    {
+      "path": "Qt5/original-third-party/gradle/LICENSE-GRADLEW.txt",
+      "url": "https://raw.githubusercontent.com/qt/qtbase/v5.12.12/src/3rdparty/gradle/LICENSE-GRADLEW.txt",
+      "sha256": "034f6dc665180948cc53319d6e477a5043b529df992c89d1dcb44f010593fbef"
+    },
+    {
+      "path": "Qt5/original-third-party/harfbuzz-ng/COPYING",
+      "url": "https://raw.githubusercontent.com/qt/qtbase/v5.12.12/src/3rdparty/harfbuzz-ng/COPYING",
+      "sha256": "2a886915de4f296cdae5ed67064f86dba01d0c55286d86e8487f2a5caaf40216"
+    },
+    {
+      "path": "Qt5/original-third-party/harfbuzz/COPYING",
+      "url": "https://raw.githubusercontent.com/qt/qtbase/v5.12.12/src/3rdparty/harfbuzz/COPYING",
+      "sha256": "ed7c20569a8f7daa06d2032b21bf240c5b6d8a0acb572d775bc6e78e61811191"
+    },
+    {
+      "path": "Qt5/original-third-party/iaccessible2/LICENSE",
+      "url": "https://raw.githubusercontent.com/qt/qtbase/v5.12.12/src/3rdparty/iaccessible2/LICENSE",
+      "sha256": "603fb8e9a443c95cb56c0e458a0ad17fdcadfc5bbb7e580d2199ee0145882746"
+    },
+    {
+      "path": "Qt5/original-third-party/icc/LICENSE.txt",
+      "url": "https://raw.githubusercontent.com/qt/qtbase/v5.12.12/src/3rdparty/icc/LICENSE.txt",
+      "sha256": "9e34ff47b3a44814e183342e7e198d127a6740e29d20e8381fba7688dafc79dd"
+    },
+    {
+      "path": "Qt5/original-third-party/libjpeg/COPYRIGHT.txt",
+      "url": "https://raw.githubusercontent.com/qt/qtbase/v5.12.12/src/3rdparty/libjpeg/COPYRIGHT.txt",
+      "sha256": "a01b28b0e6563d80289dbd8a98cc472eb84d1c22eb154591565cdf10a9d652b7"
+    },
+    {
+      "path": "Qt5/original-third-party/libjpeg/LICENSE",
+      "url": "https://raw.githubusercontent.com/qt/qtbase/v5.12.12/src/3rdparty/libjpeg/LICENSE",
+      "sha256": "7d8683a7f048e715e08b4cada8b7f0d9a6ab8afad88ed09c1143ef764ecbc0f2"
+    },
+    {
+      "path": "Qt5/original-third-party/libpng/LICENSE",
+      "url": "https://raw.githubusercontent.com/qt/qtbase/v5.12.12/src/3rdparty/libpng/LICENSE",
+      "sha256": "bf5e22b9dce8464064ae17a48ea1133c3369ac9e1d80ef9e320e5219aa14ea9b"
+    },
+    {
+      "path": "Qt5/original-third-party/pcre2/LICENCE",
+      "url": "https://raw.githubusercontent.com/qt/qtbase/v5.12.12/src/3rdparty/pcre2/LICENCE",
+      "sha256": "982293becea3f18eb4e3ce2145f66638e46d105a27b88418766caf321a684d03"
+    },
+    {
+      "path": "Qt5/original-third-party/pcre2/LICENCE-SLJIT",
+      "url": "https://raw.githubusercontent.com/qt/qtbase/v5.12.12/src/3rdparty/pcre2/LICENCE-SLJIT",
+      "sha256": "48b7773d240da636ed7be0ec470df49de0665f660bba7cb913403bf90e007fb1"
+    },
+    {
+      "path": "Qt5/original-third-party/pixman/LICENSE",
+      "url": "https://raw.githubusercontent.com/qt/qtbase/v5.12.12/src/3rdparty/pixman/LICENSE",
+      "sha256": "942c4f2a80394d3f53599b8382e9f27349b95c45d92b69b84f26d404f4dd74a5"
+    },
+    {
+      "path": "Qt5/original-third-party/rfc6234/LICENSE",
+      "url": "https://raw.githubusercontent.com/qt/qtbase/v5.12.12/src/3rdparty/rfc6234/LICENSE",
+      "sha256": "7ccebd514aaabc86192f957d773cebf06577c12fe9f25ecd419c6cac5da7a14c"
+    },
+    {
+      "path": "Qt5/original-third-party/tinycbor/LICENSE",
+      "url": "https://raw.githubusercontent.com/qt/qtbase/v5.12.12/src/3rdparty/tinycbor/LICENSE",
+      "sha256": "3c6ba0b5bfa7830505301ffb336a17b0748e0d61c4d34216e9dc98f10e40395e"
+    },
+    {
+      "path": "Qt5/original-third-party/wintab/LICENSE.txt",
+      "url": "https://raw.githubusercontent.com/qt/qtbase/v5.12.12/src/3rdparty/wintab/LICENSE.txt",
+      "sha256": "c10225ebbd5191bfdd761b0d7752c785f2453ab665d6c454473fb12d254668aa"
+    },
+    {
+      "path": "Qt5/original-third-party/xcb/LICENSE",
+      "url": "https://raw.githubusercontent.com/qt/qtbase/v5.12.12/src/3rdparty/xcb/LICENSE",
+      "sha256": "82775191bc05f85b40404d77bb69b1edeaeb4033f48387e9e5eab4dd67f5d6f1"
+    },
+    {
+      "path": "Qt5/original-third-party/zlib/LICENSE",
+      "url": "https://raw.githubusercontent.com/qt/qtbase/v5.12.12/src/3rdparty/zlib/LICENSE",
+      "sha256": "d7e3139972874dc8abdbbfce27ec1e6f942b28279dd7d27453630a8b4610e080"
+    },
+    {
+      "path": "Qt5/third_party/angle-LICENSE",
+      "url": "https://raw.githubusercontent.com/qt/qtbase/v5.12.12/src/3rdparty/angle/LICENSE",
+      "sha256": "77af9c9fc2710ee66b8282291a9392a9a61f1d5b3ad6e478d0b6c544de5f9aca"
+    },
+    {
+      "path": "Qt5/third_party/double-conversion-LICENSE",
+      "url": "https://raw.githubusercontent.com/qt/qtbase/v5.12.12/src/3rdparty/double-conversion/LICENSE",
+      "sha256": "4af93c12062c58058378de2397dc1c92bbff9ddfb1d583a01c84127557ce97ca"
+    },
+    {
+      "path": "Qt5/third_party/freetype-FTL.TXT",
+      "url": "https://raw.githubusercontent.com/qt/qtbase/v5.12.12/src/3rdparty/freetype/docs/FTL.TXT",
+      "sha256": "08c135755dd589039470f1fdbb400daaabaaa50d0b366d19cebff4d22986baa1"
+    },
+    {
+      "path": "Qt5/third_party/harfbuzz-COPYING",
+      "url": "https://raw.githubusercontent.com/qt/qtbase/v5.12.12/src/3rdparty/harfbuzz-ng/COPYING",
+      "sha256": "2a886915de4f296cdae5ed67064f86dba01d0c55286d86e8487f2a5caaf40216"
+    },
+    {
+      "path": "Qt5/third_party/libpng-LICENSE",
+      "url": "https://raw.githubusercontent.com/qt/qtbase/v5.12.12/src/3rdparty/libpng/LICENSE",
+      "sha256": "bf5e22b9dce8464064ae17a48ea1133c3369ac9e1d80ef9e320e5219aa14ea9b"
+    },
+    {
+      "path": "Qt5/third_party/libtiff-COPYRIGHT",
+      "url": "https://raw.githubusercontent.com/qt/qtimageformats/v5.12.12/src/3rdparty/libtiff/COPYRIGHT",
+      "sha256": "fbd6fed7938541d2c809c0826225fc85e551fdbfa8732b10f0c87e0847acafd7"
+    },
+    {
+      "path": "Qt5/third_party/libwebp-COPYING",
+      "url": "https://raw.githubusercontent.com/qt/qtimageformats/v5.12.12/src/3rdparty/libwebp/COPYING",
+      "sha256": "5aec868f669e384a22372a4e8a1a6cd7d44c64cd451f960ca69cc170d1e13acf"
+    },
+    {
+      "path": "Qt5/third_party/libwebp-PATENTS",
+      "url": "https://raw.githubusercontent.com/qt/qtimageformats/v5.12.12/src/3rdparty/libwebp/PATENTS",
+      "sha256": "cc3273e0694ea5896145e0677699b53471b03ea43021ddc50e7923fbb9f5023c"
+    },
+    {
+      "path": "Qt5/third_party/pcre2-LICENCE",
+      "url": "https://raw.githubusercontent.com/qt/qtbase/v5.12.12/src/3rdparty/pcre2/LICENCE",
+      "sha256": "982293becea3f18eb4e3ce2145f66638e46d105a27b88418766caf321a684d03"
+    },
+    {
+      "path": "Qt5/third_party/tinycbor-LICENSE",
+      "url": "https://raw.githubusercontent.com/qt/qtbase/v5.12.12/src/3rdparty/tinycbor/LICENSE",
+      "sha256": "3c6ba0b5bfa7830505301ffb336a17b0748e0d61c4d34216e9dc98f10e40395e"
+    },
+    {
+      "path": "Scylla-LICENSE",
+      "url": "https://raw.githubusercontent.com/NtQuery/Scylla/master/LICENSE",
+      "sha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903"
+    },
+    {
+      "path": "XEDParse-LICENSE",
+      "url": "https://raw.githubusercontent.com/x64dbg/XEDParse/master/LICENSE",
+      "sha256": "da7eabb7bafdf7d3ae5e9f223aa5bdc1eece45ac569dc21b3b037520b4464768"
+    },
+    {
+      "path": "Zydis-LICENSE",
+      "url": "https://raw.githubusercontent.com/zyantific/zydis/master/LICENSE",
+      "sha256": "e5e99718209e94baaf3e9cbf6f64aa3329c9e73c63b1ab47e10f29d81974e6f3"
+    },
+    {
+      "path": "asmjit-LICENSE.md",
+      "url": "https://raw.githubusercontent.com/asmjit/asmjit/master/LICENSE.md",
+      "sha256": "13870bd53bce53fb9a9bd72e72dcceeffc547c84d9a00d3d4833737a79651828"
+    },
+    {
+      "path": "asmtk-LICENSE.md",
+      "url": "https://raw.githubusercontent.com/asmjit/asmtk/master/LICENSE.md",
+      "sha256": "d79e47f50caf8dc61c7ea920e364b09a34d303862b4d4752f06789623ef7c1b7"
+    },
+    {
+      "path": "jansson-LICENSE",
+      "url": "https://raw.githubusercontent.com/x64dbg/jansson/master/LICENSE",
+      "sha256": "edb36167a722baa54bc2e67e0751f27a71c8d36f76882483731e59a03991ec3b"
+    },
+    {
+      "path": "ldconvert-LICENSE",
+      "url": "https://raw.githubusercontent.com/x64dbg/ldconvert/master/LICENSE",
+      "sha256": "a522e0ea2c069d71165b041d0362560daede00d90e4607298cd27d27649a5737"
+    },
+    {
+      "path": "lz4-LICENSE",
+      "url": "https://raw.githubusercontent.com/x64dbg/lz4/master/LICENSE",
+      "sha256": "cd680953c2d0933069840846381b904ef2c02e4cfe6e40e89c4417876f10b2d2"
+    }
+  ]
+}

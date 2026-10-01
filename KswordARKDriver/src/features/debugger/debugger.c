@@ -171,7 +171,7 @@ Complete:
     return status;
 }
 
-NTSTATUS KswordARKDebuggerControl(WDFDEVICE Device, const KSWORD_ARK_DEBUGGER_REQUEST* Request,
+NTSTATUS KswordARKDebuggerControl(WDFDEVICE Device, ULONG OwnerProcessId, const KSWORD_ARK_DEBUGGER_REQUEST* Request,
     KSWORD_ARK_DEBUGGER_RESPONSE* Response)
 {
     /* Initialize the complete typed packet before returning any operation result. */
@@ -188,10 +188,10 @@ NTSTATUS KswordARKDebuggerControl(WDFDEVICE Device, const KSWORD_ARK_DEBUGGER_RE
     if (KeGetCurrentIrql() != PASSIVE_LEVEL) { Response->status = STATUS_INVALID_DEVICE_STATE; return STATUS_SUCCESS; }
     /* Reject foreign revisions, invalid operations, and undefined flags. */
     if (Request->version != KSWORD_ARK_DEBUGGER_VERSION || Request->size != sizeof(*Request) ||
-        Request->operation > KSWORD_ARK_DEBUGGER_FREE || Request->reserved != 0UL || Request->reservedArgument != 0ULL ||
+        Request->operation > KSWORD_ARK_DEBUGGER_SHADOW_REMOVE || Request->reserved != 0UL || Request->reservedArgument != 0ULL ||
         (Request->flags & ~KSWORD_ARK_DEBUGGER_FLAG_CONFIRMED) != 0UL) { Response->status = STATUS_INVALID_PARAMETER; return STATUS_SUCCESS; }
     /* Advertise only native routines present on the running Windows build. */
-    Response->capabilities = KSWORD_ARK_DEBUGGER_CAP_MEMORY;
+    Response->capabilities = KSWORD_ARK_DEBUGGER_CAP_MEMORY | KSWORD_ARK_DEBUGGER_CAP_SHADOW_INT3;
     /* Publish native context support only with both operations available. */
     if (KswordARKDebuggerResolve(L"PsGetContextThread") != NULL && KswordARKDebuggerResolve(L"PsSetContextThread") != NULL) { Response->capabilities |= KSWORD_ARK_DEBUGGER_CAP_CONTEXT; }
     /* Publish previous-count control only with both kernel-handle operations. */
@@ -201,7 +201,8 @@ NTSTATUS KswordARKDebuggerControl(WDFDEVICE Device, const KSWORD_ARK_DEBUGGER_RE
     /* Kernel/system processes and null thread IDs are outside this user-debugger contract. */
     if (Request->processId <= 4UL || (Request->operation <= KSWORD_ARK_DEBUGGER_RESUME && Request->threadId == 0UL)) { Response->status = STATUS_INVALID_PARAMETER; return STATUS_SUCCESS; }
     /* Preserve central policy for each mutating user operation. */
-    if (Request->operation != KSWORD_ARK_DEBUGGER_GET_CONTEXT && Request->operation != KSWORD_ARK_DEBUGGER_RESUME) {
+    if (Request->operation != KSWORD_ARK_DEBUGGER_GET_CONTEXT && Request->operation != KSWORD_ARK_DEBUGGER_RESUME &&
+        Request->operation != KSWORD_ARK_DEBUGGER_SHADOW_REMOVE) {
         /* Initialize policy evidence before mutating the target. */
         KSWORD_ARK_SAFETY_CONTEXT safety = { 0 };
         /* Classify thread suspension separately from memory/register edits. */
@@ -216,8 +217,10 @@ NTSTATUS KswordARKDebuggerControl(WDFDEVICE Device, const KSWORD_ARK_DEBUGGER_RE
         if (!NT_SUCCESS(Response->status)) { return STATUS_SUCCESS; }
     }
     /* Dispatch target work into the corresponding feature helper. */
-    Response->status = Request->operation <= KSWORD_ARK_DEBUGGER_RESUME
-        ? KswordARKDebuggerThread(Request, Response) : KswordARKDebuggerMemory(Request, Response);
+    Response->status = Request->operation >= KSWORD_ARK_DEBUGGER_SHADOW_ADD
+        ? KswordARKDebuggerShadow(OwnerProcessId, Request, Response)
+        : Request->operation <= KSWORD_ARK_DEBUGGER_RESUME
+            ? KswordARKDebuggerThread(Request, Response) : KswordARKDebuggerMemory(Request, Response);
     /* Keep operation NTSTATUS inside the typed packet. */
     return STATUS_SUCCESS;
 }

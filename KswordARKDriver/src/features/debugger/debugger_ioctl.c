@@ -1,5 +1,6 @@
 #include "debugger.h"
 #include "../../platform/pool_compat.h"
+NTKERNELAPI ULONG IoGetRequestorProcessId(PIRP Irp);
 
 /* Keep WDF transport validation separate from the debugger's process/thread work. */
 NTSTATUS KswordARKDebuggerIoctlControl(WDFDEVICE Device, WDFREQUEST Request,
@@ -36,7 +37,7 @@ NTSTATUS KswordARKDebuggerIoctlControl(WDFDEVICE Device, WDFREQUEST Request,
     /* Preserve the exact validated input. */
     RtlCopyMemory(snapshot, input, sizeof(*snapshot));
     /* Execute the feature's authoritative user-process operation. */
-    status = KswordARKDebuggerControl(Device, snapshot, (KSWORD_ARK_DEBUGGER_RESPONSE*)output);
+    status = KswordARKDebuggerControl(Device, IoGetRequestorProcessId(WdfRequestWdmGetIrp(Request)), snapshot, (KSWORD_ARK_DEBUGGER_RESPONSE*)output);
     /* Release the request snapshot on every operation outcome. */
     ExFreePoolWithTag(snapshot, 'gdDK');
     /* Return a typed packet only when transport completion succeeded. */

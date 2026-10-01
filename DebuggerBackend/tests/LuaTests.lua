@@ -37,7 +37,7 @@ function readIntegerLocal(address) return readNumber(address, 4) end
 function readQwordLocal(address) return readNumber(address, 8) end
 function cheatEngineIs64Bit() return true end
 function getAddressSafe(name) return name:find("GetModuleHandleW", 1, true) and 1 or 2 end
-local loaded, selected, selectionError = true, false, 0
+local loaded, selected, selectionError, driverReady = true, false, 0, true
 local versions = {[16] = 6, [17] = 6, [18] = 2, [19] = 6, [20] = 6,
     [21] = 1, [22] = 1, [23] = 1, [24] = 1, [25] = 2, [26] = 1,
     [27] = 1, [28] = 9, [29] = 1, [30] = 4, [31] = 1, [32] = 1}
@@ -55,7 +55,7 @@ function executeCodeLocalEx(address, parameter)
             if errorCode == 0 then selected = readIntegerLocal(input) == 1 end
         end
         writeIntegerLocal(output, 1); writeIntegerLocal(output + 4, 40)
-        writeIntegerLocal(output + 8, 1); writeIntegerLocal(output + 12, selected and 1 or 0)
+        writeIntegerLocal(output + 8, driverReady and 1 or 0); writeIntegerLocal(output + 12, selected and 1 or 0)
         writeIntegerLocal(output + 16, 1); writeIntegerLocal(output + 32, 1)
         returned = 40
     elseif command == 3 then
@@ -129,6 +129,10 @@ assert(form.Caption == "Cheat Engine [KSword HVM]" and files.state:match("^1 0 1
 selectionError = 170; files.control = "2 0\n"; timer.OnTimer()
 assert(files.state:match("^2 170 1 1 0 1") and form.Caption == "Cheat Engine [KSword HVM]")
 assert(form.Color == 42 and form.Font.Name == "Tahoma")
+driverReady = false; timer.OnTimer()
+assert(form.Caption == "Cheat Engine [KSword Connected]")
+driverReady = true; timer.OnTimer()
+assert(form.Caption == "Cheat Engine [KSword HVM]")
 loaded = false; timer.OnTimer()
 assert(timer.Enabled == true and form.Caption == "Cheat Engine" and files.state:match("^2 126 0 0 0 0"))
 loaded = true; timer.OnTimer()

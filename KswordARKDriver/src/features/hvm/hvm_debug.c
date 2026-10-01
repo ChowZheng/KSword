@@ -1,5 +1,6 @@
 #include "hvm_debug.h"
 #include "hvm_runtime.h"
+#include "../debugger/debugger.h"
 #include "hvm_vmcs.h"
 #include "../../platform/pool_compat.h"
 
@@ -68,6 +69,7 @@ static VOID KswordARKHvmDebugProcessNotify(PEPROCESS Process, HANDLE ProcessId, 
             (void)InterlockedCompareExchange(&runtime->DebugSlots[index].Enabled, 0L, publication);
         }
     }
+    KswordARKDebuggerProcessExit(HandleToULong(ProcessId));
 }
 
 NTSTATUS KswordARKHvmDebugInitialize(VOID)

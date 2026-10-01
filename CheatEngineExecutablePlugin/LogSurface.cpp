@@ -1,8 +1,10 @@
 #include "LogSurface.h"
+#include "../DebuggerBackend/KswordDebuggerFileProtocol.h"
 
 #include <algorithm>
 #include <cwchar>
 #include <fstream>
+#include <sstream>
 
 namespace ksword::ce_log
 {
@@ -143,7 +145,9 @@ namespace ksword::ce_log
     void pollState()
     {
         if (gStatePath.empty()) return;
-        std::ifstream state(gStatePath, std::ios::binary);
+        std::string packet;
+        if (!ksword::debugger::readControlPacket(gStatePath, packet)) return;
+        std::istringstream state(packet);
         unsigned long revision = 0, error = 0, selected = 0, window = 0, resident = 0, protocol = 0;
         if (!(state >> revision >> error >> selected >> window >> resident >> protocol)) return;
         if (revision < gRevision) return;

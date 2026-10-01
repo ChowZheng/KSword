@@ -1,0 +1,26 @@
+{
+  "ksword_plugin_api": "1",
+  "id": "x96dbg",
+  "name": "x96dbg（KSword 后端）",
+  "version": "1.0.0",
+  "description": "Starts standalone 64-bit x64dbg with the canonical TitanEngine KSword adapter and a themed KSword control/log Tab. Native forwarding is usable without the KSword driver.",
+  "plugin_type": "hybrid",
+  "runtime": "executable",
+  "entrypoint": "KswordX96dbgLauncher.exe",
+  "default_command": "attach",
+  "targets": ["process", "tab"],
+  "tab": {
+    "title": "x96dbg 日志",
+    "command": "tab",
+    "ready_event": "tab_ready",
+    "startup_timeout_ms": 10000
+  },
+  "commands": [
+    {"name": "attach", "description": "Start standalone x64dbg and attach to the selected process through the KSword engine adapter.", "syntax": "--target-kind process --pid PID [--path IMAGE_PATH] [--process-name NAME]"},
+    {"name": "tab", "description": "Start standalone x64dbg with a KSword control/log Tab and acknowledged HVM selection."},
+    {"name": "check", "description": "Validate the required x64 payload files without launching a debugger."},
+    {"name": "info", "description": "Print capabilities and payload readiness as JSON Lines without launching a debugger."}
+  ],
+  "license": "LICENSE.txt",
+  "notice": "NOTICE"
+}

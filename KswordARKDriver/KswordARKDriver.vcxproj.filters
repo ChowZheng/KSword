@@ -839,6 +839,7 @@
     <ClCompile Include="src\features\hvm\hvm_debug_ioctl.c"><Filter>Source Files\Features\HVM</Filter></ClCompile>
     <ClCompile Include="src\features\debugger\debugger.c"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="src\features\debugger\debugger_ioctl.c"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="src\features\debugger\debugger_shadow.c"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="src\features\hvm\hvm_ept_view.c">
       <Filter>Source Files\Features\HVM</Filter>
     </ClCompile>

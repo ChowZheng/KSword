@@ -85,6 +85,7 @@ $excludedPayloads = @(
     'unins000.exe',
     'unins000.msg',
     'cheatengine-i386.exe',
+    'cheatengine-i386.exe.disabled',
     'cheatengine.exe'
 )
 foreach ($relativePath in $excludedPayloads) {
@@ -104,6 +105,7 @@ Copy-Item -LiteralPath (Join-Path $sourceRoot 'README.md') -Destination $pluginR
 Copy-Item -LiteralPath (Join-Path $sourceRoot 'SOURCE.md') -Destination $pluginRoot -Force
 Copy-Item -LiteralPath (Join-Path $repositoryRoot 'DebuggerBackend\README.md') -Destination (
     Join-Path $pluginRoot 'DEBUGGER_BACKEND.md') -Force
+Copy-Item -LiteralPath (Join-Path $repositoryRoot 'docs\ksword-debugger-vm-validation.md') -Destination $pluginRoot -Force
 Copy-Item -LiteralPath (Join-Path $repositoryRoot 'LICENSE') -Destination (
     Join-Path $pluginRoot 'LICENSE.txt') -Force
 Copy-Item -LiteralPath (Join-Path $sourceRoot 'NOTICE.md') -Destination (

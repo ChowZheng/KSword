@@ -24,6 +24,33 @@ namespace
     { if (!condition) throw std::runtime_error(message); }
     ksword::ark::IoResult success(DWORD bytes = 0)
     { ksword::ark::IoResult result{}; result.ok = true; result.bytesReturned = bytes; return result; }
+
+    struct NativeWriterState
+    {
+        CONTEXT source{};
+        std::array<unsigned char, 256> sourceXstate{}, actualXstate{};
+        bool failNext = false;
+        DWORD normalWrites = 0, rollbackWrites = 0;
+    };
+    BOOL WINAPI writeNativeDebug(HANDLE, const CONTEXT* debug, BOOL rollback, void* opaque)
+    {
+        auto& state = *static_cast<NativeWriterState*>(opaque);
+        require(debug->ContextFlags == CONTEXT_DEBUG_REGISTERS,
+            "Native writer received a full or XSTATE context through the fixed R0 seam");
+        if (!rollback)
+        {
+            ++state.normalWrites;
+            if (state.failNext) { state.failNext = false; SetLastError(ERROR_ACCESS_DENIED); return FALSE; }
+            // Model the adapter's Windows CopyContext/full-context write. The
+            // backend supplies only DR changes, never an abbreviated full state.
+            model.native = state.source; state.actualXstate = state.sourceXstate;
+        }
+        else ++state.rollbackWrites;
+        model.native.Dr0 = debug->Dr0; model.native.Dr1 = debug->Dr1;
+        model.native.Dr2 = debug->Dr2; model.native.Dr3 = debug->Dr3;
+        model.native.Dr6 = debug->Dr6; model.native.Dr7 = debug->Dr7;
+        return TRUE;
+    }
 }
 
 // The test links no ArkDriverClient implementation. Every driver operation uses
@@ -96,8 +123,9 @@ namespace ksword::ark
     VirtualMemoryWriteResult DriverClient::writeVirtualMemory(std::uint32_t, std::uint64_t,
         const std::vector<std::uint8_t>& bytes, unsigned long flags, DriverHandle*) const
     {
-        require(bytes.size() <= KSWORD_ARK_MEMORY_WRITE_MAX_BYTES && flags == KSWORD_ARK_MEMORY_WRITE_FLAG_UI_CONFIRMED,
-            "R0 write exceeded its limit, lost confirmation, or added FORCE");
+        require(bytes.size() <= KSWORD_ARK_MEMORY_WRITE_MAX_BYTES &&
+            flags == (KSWORD_ARK_MEMORY_WRITE_FLAG_UI_CONFIRMED | KSWORD_ARK_MEMORY_WRITE_FLAG_FORCE),
+            "R0 write exceeded its limit or lost the driver's required confirmation/FORCE flags");
         model.writeSizes.push_back(bytes.size());
         VirtualMemoryWriteResult result{}; result.io = success(); result.writeStatus = KSWORD_ARK_MEMORY_WRITE_STATUS_OK;
         result.bytesWritten = static_cast<DWORD>(bytes.size());
@@ -133,6 +161,8 @@ namespace ksword::ark
             const auto& request = *static_cast<const KSWORD_ARK_DEBUGGER_REQUEST*>(input);
             auto& response = *static_cast<KSWORD_ARK_DEBUGGER_RESPONSE*>(output);
             response = {}; response.version = KSWORD_ARK_DEBUGGER_VERSION; response.size = sizeof(response);
+            require((request.contextFlags & CONTEXT_XSTATE) != CONTEXT_XSTATE,
+                "Extended state was routed through the fixed 1232-byte R0 protocol");
             if (request.operation == KSWORD_ARK_DEBUGGER_GET_CONTEXT)
             {
                 CONTEXT native = model.native; native.ContextFlags = request.contextFlags;
@@ -149,8 +179,16 @@ namespace ksword::debugger
 {
     struct BackendTestPeer
     {
-        static void attach(Backend& value) { value.attachedPid_ = GetCurrentProcessId(); }
+        static void attach(Backend& value)
+        {
+            value.attachedPid_ = GetCurrentProcessId();
+            value.attachedIdentity_.reset(OpenProcess(PROCESS_QUERY_INFORMATION | SYNCHRONIZE,
+                FALSE, GetCurrentProcessId()));
+            value.attachmentOwner_ = Backend::AttachmentOwner::backend;
+            ++value.sessionGeneration_;
+        }
         static void observeDetach(Backend& value) { value.monitorAttachment_ = true; }
+        static void retainModelNativeSession(Backend& value) { value.monitorAttachment_ = false; }
         static bool hasStops(Backend& value) { return !value.breakpoints_.empty(); }
     };
 }
@@ -235,6 +273,104 @@ int main()
             model.stops.empty() && !model.prepared && !model.resident,
             "Frontend detach left EPT stops or owned residency behind");
 
+        std::uint64_t nativeGeneration = 0;
+        require(backend.observeNativeSession(0, &nativeGeneration) == ERROR_INVALID_PARAMETER && nativeGeneration == 0,
+            "Native adoption accepted an invalid target");
+        require(backend.observeNativeSession(GetCurrentProcessId(), &nativeGeneration) == ERROR_SUCCESS && nativeGeneration != 0,
+            "Native adoption failed to retain the real target identity");
+        // This test process deliberately has no debug port. Suppress only the
+        // real Windows detach observer while exercising the borrowed model.
+        ksword::debugger::BackendTestPeer::retainModelNativeSession(backend);
+        CONTEXT initialNative{}; initialNative.ContextFlags = CONTEXT_DEBUG_REGISTERS;
+        initialNative.Dr6 = 0x4000;
+        require(backend.overlayNativeDebugContext(GetCurrentThread(), &initialNative, nativeGeneration) &&
+            initialNative.Dr0 == 0 && initialNative.Dr6 == 0x4000,
+            "Native first context read failed before any EPT shadow existed");
+        std::uint64_t repeatGeneration = 0;
+        require(backend.observeNativeSession(GetCurrentProcessId(), &repeatGeneration) == ERROR_SUCCESS &&
+            repeatGeneration == nativeGeneration, "Repeated adoption replaced a live native session");
+        require(backend.observeNativeSession(GetCurrentProcessId() + 1) == ERROR_BUSY &&
+            !backend.attach(GetCurrentProcessId()) && GetLastError() == ERROR_BUSY,
+            "Native adoption allowed a competing target or backend attach");
+        DEBUG_EVENT nativeEvent{}; nativeEvent.dwDebugEventCode = EXCEPTION_DEBUG_EVENT;
+        nativeEvent.dwProcessId = GetCurrentProcessId(); nativeEvent.dwThreadId = GetCurrentThreadId();
+        nativeEvent.u.Exception.ExceptionRecord.ExceptionCode = EXCEPTION_SINGLE_STEP;
+        require(backend.observeNativeEvent(nativeEvent, nativeGeneration) == ERROR_SUCCESS &&
+            backend.validateNativeContinue(nativeEvent.dwProcessId, nativeEvent.dwThreadId, nativeGeneration) == ERROR_SUCCESS,
+            "Native event observation changed or rejected the frontend-owned transport");
+        DEBUG_EVENT ignored{};
+        require(!backend.waitEvent(&ignored, 0) && GetLastError() == ERROR_BUSY &&
+            !backend.continueEvent(nativeEvent.dwProcessId, nativeEvent.dwThreadId, DBG_CONTINUE) && GetLastError() == ERROR_BUSY,
+            "Backend attempted to take over the borrowed Windows debug transport");
+
+        NativeWriterState nativeWriter{};
+        nativeWriter.source.ContextFlags = CONTEXT_ALL | CONTEXT_XSTATE;
+        nativeWriter.source.Rip = 0x1234567890ULL;
+        nativeWriter.source.Rax = 0xabcdef;
+        nativeWriter.source.FltSave.XmmRegisters[0].Low = 0xfeedfaceULL;
+        nativeWriter.source.Dr0 = 0x9000; nativeWriter.source.Dr6 = 0x4001; nativeWriter.source.Dr7 = 1;
+        nativeWriter.sourceXstate.fill(0xa7);
+        require(backend.applyNativeDebugContext(GetCurrentThread(), &nativeWriter.source, writeNativeDebug, &nativeWriter),
+            "Native EPT context application failed");
+        require(model.native.Rip == nativeWriter.source.Rip && model.native.Rax == nativeWriter.source.Rax &&
+            model.native.FltSave.XmmRegisters[0].Low == 0xfeedfaceULL &&
+            nativeWriter.actualXstate == nativeWriter.sourceXstate && model.native.Dr0 == 0 && model.native.Dr7 == 1,
+            "EPT context seam discarded native GPR, SIMD, or extended state");
+        CONTEXT nativeRead = model.native;
+        require(backend.overlayNativeDebugContext(GetCurrentThread(), &nativeRead) &&
+            nativeRead.Dr0 == 0x9000 && nativeRead.Dr6 == 0x4001 && nativeRead.Rip == nativeWriter.source.Rip &&
+            nativeRead.FltSave.XmmRegisters[0].Low == 0xfeedfaceULL,
+            "Native overlay changed Windows-owned hit bits, GPR, or SIMD state");
+        model.resident = false;
+        require(backend.validateNativeContinue(nativeEvent.dwProcessId, nativeEvent.dwThreadId, nativeGeneration) == ERROR_INVALID_STATE,
+            "Native continue accepted incomplete owned EPT residency");
+        model.resident = true;
+        nativeWriter.source.Dr0 = 0xa000; nativeWriter.source.Rip = 0x2222222222ULL; nativeWriter.failNext = true;
+        require(!backend.applyNativeDebugContext(GetCurrentThread(), &nativeWriter.source, writeNativeDebug, &nativeWriter) &&
+            GetLastError() == ERROR_ACCESS_DENIED && nativeWriter.rollbackWrites == 1 && model.resident &&
+            model.stops.size() == 1 && model.stops.begin()->second.address == 0x9000 &&
+            model.native.Rip == 0x1234567890ULL && nativeWriter.actualXstate == nativeWriter.sourceXstate,
+            "Failed Windows full-context write did not roll back EPT without replaying GPR writes");
+        std::promise<DWORD> workerTidPromise; auto workerTid = workerTidPromise.get_future();
+        std::promise<void> releaseWorker; auto workerReleased = releaseWorker.get_future();
+        std::thread worker([&] { workerTidPromise.set_value(GetCurrentThreadId()); workerReleased.wait(); });
+        const DWORD secondTid = workerTid.get();
+        ksword::ark::DriverHandle secondThread(OpenThread(THREAD_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, secondTid));
+        NativeWriterState secondWriter = nativeWriter; secondWriter.source.Dr0 = 0xb000;
+        require(secondThread.isValid() && backend.applyNativeDebugContext(secondThread.native(), &secondWriter.source,
+            writeNativeDebug, &secondWriter) && model.stops.size() == 2,
+            "Second native thread stop could not be installed");
+        require(backend.retireNativeThread(secondTid, nativeGeneration) == ERROR_SUCCESS && model.stops.size() == 1 &&
+            model.stops.begin()->second.threadId == GetCurrentThreadId() && model.resident,
+            "Native thread retirement removed another thread's stop or lost residency");
+        releaseWorker.set_value(); worker.join();
+        nativeEvent.dwDebugEventCode = EXIT_PROCESS_DEBUG_EVENT;
+        require(backend.observeNativeEvent(nativeEvent, nativeGeneration) == ERROR_SUCCESS,
+            "Native exit event observation failed");
+        ksword::debugger::BackendTestPeer::observeDetach(backend);
+        require(backend.status().attachedProcessId == GetCurrentProcessId() && !model.stops.empty() &&
+            backend.validateNativeContinue(nativeEvent.dwProcessId, nativeEvent.dwThreadId, nativeGeneration) == ERROR_SUCCESS,
+            "A status poll retired the lease while the native frontend still held its exit event");
+        require(backend.releaseNativeSession(nativeGeneration) == ERROR_SUCCESS && model.stops.empty() &&
+            !model.prepared && !model.resident, "Native session release left owned EPT resources");
+        require(backend.observeNativeSession(GetCurrentProcessId(), &repeatGeneration) == ERROR_SUCCESS &&
+            repeatGeneration != nativeGeneration, "Native session replacement reused its generation");
+        ksword::debugger::BackendTestPeer::retainModelNativeSession(backend);
+        require(backend.releaseNativeSession(nativeGeneration) == ERROR_INVALID_STATE &&
+            backend.retireNativeThread(GetCurrentThreadId(), nativeGeneration) == ERROR_INVALID_STATE &&
+            backend.observeNativeEvent(nativeEvent, nativeGeneration) == ERROR_INVALID_STATE &&
+            backend.status().attachedProcessId == GetCurrentProcessId(),
+            "A delayed callback retired or rewrote a newer native session");
+        require(!backend.applyNativeDebugContext(GetCurrentThread(), &nativeWriter.source, writeNativeDebug,
+            &nativeWriter, nativeGeneration) && GetLastError() == ERROR_INVALID_STATE &&
+            !backend.overlayNativeDebugContext(GetCurrentThread(), &nativeRead, nativeGeneration) &&
+            GetLastError() == ERROR_INVALID_STATE,
+            "A delayed context callback changed a newer native session");
+        model.prepared = true; model.resident = true;
+        require(backend.releaseNativeSession(repeatGeneration) == ERROR_SUCCESS && model.prepared && model.resident,
+            "Native release seized external HVM residency without owned stops");
+        model.prepared = false; model.resident = false;
+
         KSWORD_DEBUGGER_BACKEND_STATUS status{};
         KSWORD_DEBUGGER_CALL call{}; call.version = 1; call.size = sizeof(call); call.command = 1;
         call.outputBytes = sizeof(status); call.output = 1;
@@ -245,7 +381,7 @@ int main()
         require(future.wait_for(std::chrono::seconds(1)) == std::future_status::ready, "Invalid pointer stranded the backend mutex");
         check.join(); require(future.get() == ERROR_SUCCESS, "Backend did not recover after invalid pointer");
         require(backend.shutdown(), "Model shutdown failed");
-        std::cout << "PASS: R0/HVM memory contracts, EPT scope/RF, rollback, ownership/detach, ABI pointer isolation\n";
+        std::cout << "PASS: R0/HVM memory, EPT rollback, native ownership/generation, context preservation, ABI pointer isolation\n";
         return 0;
     }
     catch (const std::exception& error) { std::cerr << "FAIL: " << error.what() << '\n'; return 1; }

@@ -1,0 +1,36 @@
+<?xml version='1.0' encoding='utf-8'?>
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003" ToolsVersion="4.0">
+  <ItemGroup>
+    <ClCompile Include="NativeLoader.cpp" />
+    <ClCompile Include="NativeSeam.cpp" />
+    <ClCompile Include="Proxy.cpp" />
+    <ClCompile Include="Control.cpp" />
+    <ClCompile Include="Forwarders.cpp" />
+    <ClCompile Include="..\DebuggerBackend\KswordDebuggerBackend.cpp" />
+    <ClCompile Include="..\DebuggerBackend\KswordDebuggerMemory.cpp" />
+    <ClCompile Include="..\DebuggerBackend\KswordDebuggerDebug.cpp" />
+    <ClCompile Include="..\DebuggerBackend\KswordDebuggerNative.cpp" />
+    <ClCompile Include="..\Ksword5.1\Ksword5.1\ArkDriverClient\ArkDriverClient.cpp" />
+    <ClCompile Include="..\Ksword5.1\Ksword5.1\ArkDriverClient\ArkDriverError.cpp" />
+    <ClCompile Include="..\Ksword5.1\Ksword5.1\ArkDriverClient\ArkDriverMemory.cpp" />
+    <ClCompile Include="..\Ksword5.1\Ksword5.1\ArkDriverClient\ArkDriverHvm.cpp" />
+    <ClCompile Include="..\Ksword5.1\Ksword5.1\ksword\string\string.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="Proxy.h" />
+    <ClInclude Include="..\DebuggerBackend\KswordDebuggerFileProtocol.h" />
+    <ClInclude Include="NativeApi.h" />
+    <ClInclude Include="..\third_party\x64dbg_abi\TitanEngine.h" />
+    <ClInclude Include="..\DebuggerBackend\KswordDebuggerApi.h" />
+    <ClInclude Include="..\DebuggerBackend\KswordDebuggerBackend.h" />
+    <ClInclude Include="MemoryLifetime.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="TitanEngine.def" />
+    <None Include="ResolveExports.inc" />
+    <None Include="generate_forwarders.py" />
+    <None Include="README.md" />
+    <None Include="implementation_manifest.json" />
+    <None Include="tests\validate_proxy.py" />
+  </ItemGroup>
+</Project>

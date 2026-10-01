@@ -49,6 +49,7 @@ CMakeLists.txt text eol=lf
 .gitignore   text eol=lf
 .gitattributes text eol=lf
 .editorconfig text eol=lf
+X96dbgIntegration/patches/*.patch text eol=lf
 
 # Preserve captured CRLF and terminal whitespace for serial offsets and SHA256 manifests.
 # These raw captures are not source code; keep source whitespace checks elsewhere.
@@ -58,6 +59,7 @@ docs/next/paper-data/20260916-followup/** -text -whitespace
 # Large icon collections and vendored sources retain their upstream bytes.
 *.svg -text
 third_party/** -text
+third_party/x64dbg_abi/** whitespace=cr-at-eol
 Ksword5.1/Ksword5.1/include/ads/** -text whitespace=cr-at-eol,-blank-at-eol
 KswordSetup/fltk/** -text
 

@@ -1,0 +1,1036 @@
+{
+  "scope": "static source review and proposed hybrid adapter checklist; not a runtime certification",
+  "base_commit": "b189da406fb48ad64283eb60ba25c25e99f3e311",
+  "pr": 3974,
+  "pr_head": "f107330b6563da3c38d60a3ad6e629057b7cf5d0",
+  "native_titan_commit": "21ef77f31fd42d17f785802c36b2ca4ca44c43d7",
+  "ksword_reference_commit": "699d1a93e3b0a0c97a0022d5ab81a188e8f16e21",
+  "canonical_exports": 64,
+  "new_exports": 27,
+  "proposed_routing_counts": {
+    "F": 21,
+    "R": 37,
+    "U": 6
+  },
+  "routing_legend": {
+    "F": "first-version native forward; precondition: real handles and valid native stop ownership",
+    "R": "adapter owns routing/lifecycle/consistency; may forward ordinary path internally",
+    "U": "export retained; unsupported replay or forward native unsupported stub"
+  },
+  "exports": [
+    {
+      "id": 1,
+      "name": "MemoryReadSafe",
+      "new": false,
+      "route": "R",
+      "signature": "bool MemoryReadSafe(HANDLE hProcess, LPVOID lpBaseAddress, LPVOID lpBuffer, SIZE_T nSize, SIZE_T* lpNumberOfBytesRead);",
+      "caller": "memory.cpp: MemoryReadSafePage / MemRead",
+      "contract": "保留软件断点原字节过滤；同时存在 Titan BP 与 EPT 视图时不能把其中一种覆盖掉。",
+      "tests": [
+        "跨页及部分读取",
+        "输出字节数",
+        "断点覆盖区域",
+        "读失败不伪造成功。"
+      ],
+      "status": "unchecked"
+    },
+    {
+      "id": 2,
+      "name": "MemoryReadUnsafe",
+      "new": true,
+      "route": "R",
+      "signature": "bool MemoryReadUnsafe(HANDLE hProcess, LPCVOID lpBaseAddress, LPVOID lpBuffer, SIZE_T nSize, SIZE_T* lpNumberOfBytesRead);",
+      "caller": "memory.cpp: MemReadUnsafePage",
+      "contract": "原生实现是 ReadProcessMemory 原始通路；不得把 Unsafe 随意定义成某个 HVM execution view。",
+      "tests": [
+        "null transferred 参数",
+        "无效地址",
+        "原始视图与 Safe 视图差异",
+        "LastError 保留。"
+      ],
+      "status": "unchecked"
+    },
+    {
+      "id": 3,
+      "name": "MemoryWriteSafe",
+      "new": false,
+      "route": "R",
+      "signature": "bool MemoryWriteSafe(HANDLE hProcess, LPVOID lpBaseAddress, LPCVOID lpBuffer, SIZE_T nSize, SIZE_T* lpNumberOfBytesWritten);",
+      "caller": "memory.cpp: MemWrite",
+      "contract": "需要协调 Titan 断点原字节缓存、HVM 原页/影子页和部分写入。",
+      "tests": [
+        "跨页部分写",
+        "覆盖断点",
+        "自修改代码",
+        "写后读取和执行一致。"
+      ],
+      "status": "unchecked"
+    },
+    {
+      "id": 4,
+      "name": "MemoryQuerySafe",
+      "new": true,
+      "route": "F",
+      "signature": "SIZE_T MemoryQuerySafe(HANDLE hProcess, LPCVOID lpAddress, PMEMORY_BASIC_INFORMATION lpBuffer, SIZE_T dwLength);",
+      "caller": "memory.cpp: QueryMemPages / MemIsCodePage / MemGetProtect; module.cpp",
+      "contract": "保持 Windows 虚拟内存区域语义，返回写入结构字节数，不是 bool。",
+      "tests": [
+        "MEM_FREE/RESERVE/COMMIT",
+        "RegionSize 非零并向前推进",
+        "地址溢出",
+        "Protect 不是 EPT 权限。"
+      ],
+      "status": "unchecked"
+    },
+    {
+      "id": 5,
+      "name": "MemoryAllocSafe",
+      "new": true,
+      "route": "F",
+      "signature": "LPVOID MemoryAllocSafe(HANDLE hProcess, LPVOID lpAddress, SIZE_T dwSize, DWORD flAllocationType, DWORD flProtect);",
+      "caller": "memory.cpp: MemAllocRemote",
+      "contract": "第一版使用 native Titan；成功结果必须是真正目标进程的 VA 分配。",
+      "tests": [
+        "MEM_RESERVE/COMMIT",
+        "指定地址冲突",
+        "零大小",
+        "分配失败返回 null。"
+      ],
+      "status": "unchecked"
+    },
+    {
+      "id": 6,
+      "name": "MemoryFreeSafe",
+      "new": true,
+      "route": "R",
+      "signature": "bool MemoryFreeSafe(HANDLE hProcess, LPVOID lpAddress, SIZE_T dwSize, DWORD dwFreeType);",
+      "caller": "memory.cpp: MemFreeRemote; commands/cmd-memory-operations.cpp",
+      "contract": "释放可能使 Watch 的 VA/backing 无效；适配层协调规则失效，但不改变 VirtualFree 的结果语义。",
+      "tests": [
+        "MEM_RELEASE 大小为零",
+        "失败时不可误删仍有效规则",
+        "成功后旧代际不得再次命中。"
+      ],
+      "status": "unchecked"
+    },
+    {
+      "id": 7,
+      "name": "MemoryProtectSafe",
+      "new": true,
+      "route": "R",
+      "signature": "bool MemoryProtectSafe(HANDLE hProcess, LPVOID lpAddress, SIZE_T dwSize, DWORD flNewProtect, PDWORD lpflOldProtect);",
+      "caller": "memory.cpp: MemSetProtect",
+      "contract": "保留 guest 页保护语义；EPT 权限限制和 Windows PAGE_* 是两套状态。",
+      "tests": [
+        "oldProtect 输出",
+        "跨区间",
+        "PAGE_GUARD 与 Watch 同时存在",
+        "失败回滚。"
+      ],
+      "status": "unchecked"
+    },
+    {
+      "id": 8,
+      "name": "GetPEBLocation",
+      "new": false,
+      "route": "F",
+      "signature": "ULONG_PTR GetPEBLocation(HANDLE hProcess);",
+      "caller": "debugger / memory / process-related consumers",
+      "contract": "保持真实目标及 WOW64 对应 PEB 语义。",
+      "tests": [
+        "无效句柄",
+        "x86/x64",
+        "不能返回 CR3 或 EPROCESS 地址。"
+      ],
+      "status": "unchecked"
+    },
+    {
+      "id": 9,
+      "name": "GetTEBLocation",
+      "new": false,
+      "route": "F",
+      "signature": "ULONG_PTR GetTEBLocation(HANDLE hThread);",
+      "caller": "thread.cpp / TEB consumers",
+      "contract": "真实线程 TEB，不是 ETHREAD。",
+      "tests": [
+        "非当前线程",
+        "退出线程",
+        "WOW64",
+        "返回值位宽。"
+      ],
+      "status": "unchecked"
+    },
+    {
+      "id": 10,
+      "name": "InitDebugW",
+      "new": false,
+      "route": "R",
+      "signature": "PROCESS_INFORMATION* InitDebugW(const wchar_t* szFileName, const wchar_t* szCommandLine, const wchar_t* szCurrentFolder);",
+      "caller": "debugger.cpp: debugLoopFunction",
+      "contract": "包装会话初始化并转发；返回稳定可写对象，前端会关闭并置空其中两个句柄。",
+      "tests": [
+        "启动失败清理",
+        "Unicode/空参数",
+        "重复启动",
+        "不要返回栈对象。"
+      ],
+      "status": "unchecked"
+    },
+    {
+      "id": 11,
+      "name": "InitReplayW",
+      "new": true,
+      "route": "U",
+      "signature": "PROCESS_INFORMATION* InitReplayW(const wchar_t* szArtifactPath, TitanSessionKind ExpectedKind);",
+      "caller": "debugger.cpp: debugLoopFunction replay path",
+      "contract": "保留导出；native-only KSword 后端返回 null 与明确不支持错误，不执行目标文件。",
+      "tests": [
+        ".dmp/.run 不能误当 EXE",
+        "无副作用",
+        "重复失败不污染 live session。"
+      ],
+      "status": "unchecked"
+    },
+    {
+      "id": 12,
+      "name": "GetSessionInfo",
+      "new": true,
+      "route": "R",
+      "signature": "bool GetSessionInfo(TITAN_SESSION_INFO* SessionInfo);",
+      "caller": "debugger.cpp: initialization / cbCreateProcess",
+      "contract": "structSize 是当前 ABI 的输出；无会话可成功返回 NONE；live 继承正确 capability。",
+      "tests": [
+        "输入 structSize=0 必须可用",
+        "null 返回错误",
+        "reserved 清零",
+        "不宣称不存在的回放或精确断点能力。"
+      ],
+      "status": "unchecked"
+    },
+    {
+      "id": 13,
+      "name": "ReplayGetPosition",
+      "new": true,
+      "route": "U",
+      "signature": "bool ReplayGetPosition(TITAN_REPLAY_POSITION* Position);",
+      "caller": "commands/cmd-debug-control.cpp: cbReplayGetPosition",
+      "contract": "转发 native 不支持桩；事件 Ring 序号不是 TTD 位置。",
+      "tests": [
+        "可用输出清零",
+        "ERROR_NOT_SUPPORTED",
+        "无会话状态改变。"
+      ],
+      "status": "unchecked"
+    },
+    {
+      "id": 14,
+      "name": "ReplayGetExtent",
+      "new": true,
+      "route": "U",
+      "signature": "bool ReplayGetExtent(TITAN_REPLAY_POSITION* First, TITAN_REPLAY_POSITION* Last);",
+      "caller": "commands/cmd-debug-control.cpp: cbReplayGetExtent",
+      "contract": "保留导出，native 不支持桩。",
+      "tests": [
+        "两个输出可空时不崩溃",
+        "可用输出清零",
+        "失败不显示虚构范围。"
+      ],
+      "status": "unchecked"
+    },
+    {
+      "id": 15,
+      "name": "ReplaySetPosition",
+      "new": true,
+      "route": "U",
+      "signature": "bool ReplaySetPosition(const TITAN_REPLAY_POSITION* Position);",
+      "caller": "commands/cmd-debug-control.cpp: cbReplaySetPosition",
+      "contract": "不支持时明确失败，不把 Watch 重武装伪装成时间跳转。",
+      "tests": [
+        "null 与 unsupported 错误一致",
+        "不修改寄存器或内存。"
+      ],
+      "status": "unchecked"
+    },
+    {
+      "id": 16,
+      "name": "ReplayRunBack",
+      "new": true,
+      "route": "U",
+      "signature": "bool ReplayRunBack();",
+      "caller": "commands/cmd-debug-control.cpp: cbReplayRunBack",
+      "contract": "不支持逆向执行，能力位关闭。",
+      "tests": [
+        "失败不解除当前暂停",
+        "无回调",
+        "无状态泄漏。"
+      ],
+      "status": "unchecked"
+    },
+    {
+      "id": 17,
+      "name": "ReplayStepBack",
+      "new": true,
+      "route": "U",
+      "signature": "bool ReplayStepBack(TITANCBSTEP StepCallBack);",
+      "caller": "commands/cmd-debug-control.cpp: cbReplayStepBack",
+      "contract": "保留导出；不支持时不能调用成功回调。",
+      "tests": [
+        "回调不触发",
+        "错误码",
+        "保持现场。"
+      ],
+      "status": "unchecked"
+    },
+    {
+      "id": 18,
+      "name": "StopDebug",
+      "new": false,
+      "route": "R",
+      "signature": "bool StopDebug();",
+      "caller": "commands/cmd-debug-control.cpp: cbDebugStop; initialization failures",
+      "contract": "终止前处理 HVM pending stop、规则、回调、资源生命周期。",
+      "tests": [
+        "running/paused/step-pending",
+        "进程已退出",
+        "重复 stop",
+        "不能等待一个已全局冻结且需服务线程的系统。"
+      ],
+      "status": "unchecked"
+    },
+    {
+      "id": 19,
+      "name": "SetBPXOptions",
+      "new": false,
+      "route": "R",
+      "signature": "void SetBPXOptions(TitanBreakpointType DefaultBreakPointType);",
+      "caller": "frontend engine settings / breakpoint command consumers",
+      "contract": "保存当前默认断点编码并转发；HVM logical BP 与 INT3/long-INT3/UD2 不能混淆。",
+      "tests": [
+        "默认类型切换",
+        "不支持类型明确拒绝下游设置",
+        "旧断点不被无声改类。"
+      ],
+      "status": "unchecked"
+    },
+    {
+      "id": 20,
+      "name": "IsBPXEnabled",
+      "new": false,
+      "route": "R",
+      "signature": "bool IsBPXEnabled(ULONG_PTR bpxAddress);",
+      "caller": "debugger.cpp: step wrappers / breakpoint consumers",
+      "contract": "查询所选路由实际拥有的断点；只问 native 会漏掉 HVM BP。",
+      "tests": [
+        "HVM-only/native-only",
+        "disabled",
+        "same-address 冲突",
+        "临时断点。"
+      ],
+      "status": "unchecked"
+    },
+    {
+      "id": 21,
+      "name": "SetBPX",
+      "new": false,
+      "route": "R",
+      "signature": "bool SetBPX(ULONG_PTR bpxAddress, DWORD bpxType, TITANCBSOFTBP bpxCallBack);",
+      "caller": "breakpoint commands; debugger.cpp: entry/TLS/exception stepping",
+      "contract": "需明确 native/EPT policy、回调、single-shot 和默认编码；成功前规则应已可用。",
+      "tests": [
+        "重设同地址",
+        "不同 type flag",
+        "NULL callback 策略",
+        "完整回滚",
+        "临时断点来源。"
+      ],
+      "status": "unchecked"
+    },
+    {
+      "id": 22,
+      "name": "DeleteBPX",
+      "new": false,
+      "route": "R",
+      "signature": "bool DeleteBPX(ULONG_PTR bpxAddress);",
+      "caller": "breakpoint commands; module/session cleanup",
+      "contract": "按安装时的 owner 删除，不按当前全局开关猜 owner。",
+      "tests": [
+        "停在本断点时删除",
+        "重复删除",
+        "native/EPT 混合",
+        "旧回调不得访问释放对象。"
+      ],
+      "status": "unchecked"
+    },
+    {
+      "id": 23,
+      "name": "SetMemoryBPXEx",
+      "new": false,
+      "route": "R",
+      "signature": "bool SetMemoryBPXEx(ULONG_PTR MemoryStart, SIZE_T SizeOfMemory, TitanMemoryBreakpointType BreakPointType, bool RestoreOnHit, TITANCBMEMBP bpxCallBack);",
+      "caller": "memory breakpoint commands; debugger.cpp module/run-to consumers",
+      "contract": "显式枚举翻译；RestoreOnHit/范围/访问类别/真实 stop 都是合同，不能以 WATCH_ONCE 全部冒充。",
+      "tests": [
+        "READ/WRITE/EXECUTE/ALL",
+        "一次性/持续",
+        "跨页",
+        "同页范围外访问",
+        "读监视扩展到写时的报告策略。"
+      ],
+      "status": "unchecked"
+    },
+    {
+      "id": 24,
+      "name": "RemoveMemoryBPX",
+      "new": false,
+      "route": "R",
+      "signature": "bool RemoveMemoryBPX(ULONG_PTR MemoryStart, SIZE_T SizeOfMemory);",
+      "caller": "memory breakpoint delete / cleanup consumers",
+      "contract": "记录确切区间和 rule IDs；native/EPT 各自删除。",
+      "tests": [
+        "区间规范化",
+        "部分重叠",
+        "同页多规则",
+        "删除失败无错误成功提示。"
+      ],
+      "status": "unchecked"
+    },
+    {
+      "id": 25,
+      "name": "GetFullContextDataEx",
+      "new": false,
+      "route": "R",
+      "signature": "bool GetFullContextDataEx(HANDLE hActiveThread, TITAN_ENGINE_CONTEXT_t* titcontext);",
+      "caller": "_exports.cpp; stackinfo.cpp; scripts/history",
+      "contract": "HVM 停点与 native 停点各有一致的完整 context 来源，不混合不同时间点。",
+      "tests": [
+        "非当前线程",
+        "切换线程",
+        "GPR/flags/segments/DR/FPU",
+        "不可用部分不得伪装有效。"
+      ],
+      "status": "unchecked"
+    },
+    {
+      "id": 26,
+      "name": "SetFullContextDataEx",
+      "new": false,
+      "route": "R",
+      "signature": "bool SetFullContextDataEx(HANDLE hActiveThread, TITAN_ENGINE_CONTEXT_t* titcontext);",
+      "caller": "register/history/script consumers",
+      "contract": "写入必须影响接下来实际恢复的 frame，而不是只改 UI 缓存。",
+      "tests": [
+        "写 RIP/RSP/flags",
+        "完整回写",
+        "拒绝非法状态",
+        "失败不部分提交但报告成功。"
+      ],
+      "status": "unchecked"
+    },
+    {
+      "id": 27,
+      "name": "GetContextDataEx",
+      "new": false,
+      "route": "R",
+      "signature": "ULONG_PTR GetContextDataEx(HANDLE hActiveThread, TitanRegister IndexOfRegister);",
+      "caller": "debugger.cpp; value.cpp; scripts; many frontend paths",
+      "contract": "必须与完整 context 的同一 stop epoch 一致。",
+      "tests": [
+        "CIP/CSP 架构别名",
+        "未知 enum",
+        "非当前线程",
+        "32/64 位截断。"
+      ],
+      "status": "unchecked"
+    },
+    {
+      "id": 28,
+      "name": "SetContextDataEx",
+      "new": false,
+      "route": "R",
+      "signature": "bool SetContextDataEx(HANDLE hActiveThread, TitanRegister IndexOfRegister, ULONG_PTR NewRegisterValue);",
+      "caller": "value.cpp; scripts; cmd-debug-control.cpp skip",
+      "contract": "保留每种 register 的参数合同；不能把 FPU/SIMD 的缓冲区型语义随意当标量。",
+      "tests": [
+        "GPR/flags/DR",
+        "写后各读取路径一致",
+        "unsupported enum 明确失败。"
+      ],
+      "status": "unchecked"
+    },
+    {
+      "id": 29,
+      "name": "GetAVXContext",
+      "new": false,
+      "route": "R",
+      "signature": "bool GetAVXContext(HANDLE hActiveThread, TITAN_ENGINE_CONTEXT_t* titcontext);",
+      "caller": "register context / value consumers",
+      "contract": "HVM context ownership成立才可选择来源；不能从跑过现场的 native 线程补齐 YMM。",
+      "tests": [
+        "AVX 支持/不支持",
+        "x86/x64 寄存器数量",
+        "部分有效状态。"
+      ],
+      "status": "unchecked"
+    },
+    {
+      "id": 30,
+      "name": "SetAVXContext",
+      "new": false,
+      "route": "R",
+      "signature": "bool SetAVXContext(HANDLE hActiveThread, TITAN_ENGINE_CONTEXT_t* titcontext);",
+      "caller": "register/value consumers",
+      "contract": "回写同一个目标上下文；保留 XMM/YMM 重叠规则。",
+      "tests": [
+        "写后执行观察",
+        "unsupported",
+        "其他寄存器不被污染。"
+      ],
+      "status": "unchecked"
+    },
+    {
+      "id": 31,
+      "name": "GetAVX512Context",
+      "new": false,
+      "route": "R",
+      "signature": "bool GetAVX512Context(HANDLE hActiveThread, TITAN_ENGINE_CONTEXT_AVX512_t* titcontext);",
+      "caller": "register/value consumers",
+      "contract": "该 ABI 单独提供 AVX512 结构，不能拿普通 context 指针代替。",
+      "tests": [
+        "ZMM 数量与位宽",
+        "Opmask",
+        "硬件/OS不支持时失败。"
+      ],
+      "status": "unchecked"
+    },
+    {
+      "id": 32,
+      "name": "SetAVX512Context",
+      "new": false,
+      "route": "R",
+      "signature": "bool SetAVX512Context(HANDLE hActiveThread, TITAN_ENGINE_CONTEXT_AVX512_t* titcontext);",
+      "caller": "register/value consumers",
+      "contract": "保留独立结构与回写语义。",
+      "tests": [
+        "K/ZMM 写回",
+        "长度/对齐",
+        "失败不损坏普通 context。"
+      ],
+      "status": "unchecked"
+    },
+    {
+      "id": 33,
+      "name": "GetDebugData",
+      "new": false,
+      "route": "R",
+      "signature": "const DEBUG_EVENT* GetDebugData();",
+      "caller": "debugger.cpp: cbPauseDebug / cbGenericBreakpoint / cbDebugEvent",
+      "contract": "公开事件镜像必须与 callback/context 同一 PID/TID/epoch；原生 DLL 内部的 DBGEvent 不会因本导出覆盖自动改变。",
+      "tests": [
+        "指针稳定",
+        "回调重入",
+        "线程切换",
+        "无会话",
+        "不能指向随后被覆盖的 ring slot。"
+      ],
+      "status": "unchecked"
+    },
+    {
+      "id": 34,
+      "name": "SetCustomHandler",
+      "new": false,
+      "route": "R",
+      "signature": "void SetCustomHandler(TitanCustomHandler ExceptionId, TITANCALLBACKARG CallBack);",
+      "caller": "debugger.cpp: debugLoopFunction",
+      "contract": "保存/转发前端注册的十种 handler；合并事件时保证顺序与 payload 类型。",
+      "tests": [
+        "全部十种",
+        "重新注册",
+        "null",
+        "停止后拒绝旧回调",
+        "不要把所有 const void* 当同一种结构。"
+      ],
+      "status": "unchecked"
+    },
+    {
+      "id": 35,
+      "name": "StepInto",
+      "new": false,
+      "route": "R",
+      "signature": "void StepInto(TITANCBSTEP traceCallBack);",
+      "caller": "debugger.cpp: StepIntoWrapper / tracing",
+      "contract": "native stop 可转发；HVM stop 需要已证明的 native handoff 或 KSword stepping。",
+      "tests": [
+        "真实执行一条",
+        "异常分发",
+        "其他线程事件",
+        "callback 恰一次",
+        "无效状态不得静默挂起。"
+      ],
+      "status": "unchecked"
+    },
+    {
+      "id": 36,
+      "name": "StepOver",
+      "new": false,
+      "route": "R",
+      "signature": "void StepOver(TITANCBSTEP traceCallBack);",
+      "caller": "debugger.cpp: StepOverWrapper / tracing",
+      "contract": "原生内部会设置临时 INT3，外层代理不能保证其自动变为 EPT。",
+      "tests": [
+        "CALL/REP/PUSHF",
+        "内部临时断点",
+        "异常",
+        "并发命中",
+        "callback 生命周期。"
+      ],
+      "status": "unchecked"
+    },
+    {
+      "id": 37,
+      "name": "GetUnusedHardwareBreakPointRegister",
+      "new": false,
+      "route": "F",
+      "signature": "bool GetUnusedHardwareBreakPointRegister(LPDWORD RegisterIndex);",
+      "caller": "hardware breakpoint command consumers",
+      "contract": "第一版让原生 DR0-DR3 机制负责，不把 EPT 数量塞进 DR slot。",
+      "tests": [
+        "满四槽失败",
+        "输出索引范围",
+        "与删除操作一致。"
+      ],
+      "status": "unchecked"
+    },
+    {
+      "id": 38,
+      "name": "SetHardwareBreakPoint",
+      "new": false,
+      "route": "F",
+      "signature": "bool SetHardwareBreakPoint(ULONG_PTR bpxAddress, DWORD IndexOfRegister, TitanHardwareBreakpointType bpxType, TitanHardwareBreakpointSize bpxSize, TITANCBHWBP bpxCallBack);",
+      "caller": "hardware breakpoint commands",
+      "contract": "原生硬件断点保持原生；HVM 暂停必须先满足 native context ownership 前置条件。",
+      "tests": [
+        "size enum 7/8/9/10 对应 1/2/4/8",
+        "对齐",
+        "新线程",
+        "故障地址与 RIP 区分。"
+      ],
+      "status": "unchecked"
+    },
+    {
+      "id": 39,
+      "name": "DeleteHardwareBreakPoint",
+      "new": false,
+      "route": "F",
+      "signature": "bool DeleteHardwareBreakPoint(DWORD IndexOfRegister);",
+      "caller": "hardware breakpoint cleanup / single-shot handling",
+      "contract": "删除真实 DR slot，不删除任意 EPT rule。",
+      "tests": [
+        "重复删除",
+        "四槽状态",
+        "新旧线程",
+        "用户已有 DR 状态。"
+      ],
+      "status": "unchecked"
+    },
+    {
+      "id": 40,
+      "name": "RemoveAllBreakPoints",
+      "new": false,
+      "route": "R",
+      "signature": "bool RemoveAllBreakPoints(TitanBreakpointRemoveOption RemoveOption);",
+      "caller": "debugger.cpp session teardown",
+      "contract": "清空所有由当前适配会话拥有的 native/EPT 断点；不能误清其他 KSword 客户端规则。",
+      "tests": [
+        "owner/session 隔离",
+        "callback pending",
+        "部分失败报告",
+        "幂等。"
+      ],
+      "status": "unchecked"
+    },
+    {
+      "id": 41,
+      "name": "DebugLoop",
+      "new": false,
+      "route": "R",
+      "signature": "void DebugLoop();",
+      "caller": "debugger.cpp: debugLoopFunction launch path",
+      "contract": "维持唯一事件分发所有者；HVM 事件不能在任意 worker 与 native 回调并发进入前端。",
+      "tests": [
+        "串行顺序",
+        "唤醒/取消",
+        "run/stop 竞态",
+        "回调期间锁",
+        "原生 wait 正阻塞时能否接入。"
+      ],
+      "status": "unchecked"
+    },
+    {
+      "id": 42,
+      "name": "SetNextDbgContinueStatus",
+      "new": false,
+      "route": "R",
+      "signature": "void SetNextDbgContinueStatus(DWORD SetDbgCode);",
+      "caller": "debugger.cpp continue status flow",
+      "contract": "这是下个异常的处理状态，不是 Run；HVM 合成事件不能无故消耗原生异常。",
+      "tests": [
+        "DBG_CONTINUE/NOT_HANDLED",
+        "真实 first/second-chance",
+        "连续两个来源事件。"
+      ],
+      "status": "unchecked"
+    },
+    {
+      "id": 43,
+      "name": "AttachDebugger",
+      "new": false,
+      "route": "R",
+      "signature": "bool AttachDebugger(DWORD ProcessId, bool KillOnExit, LPVOID DebugInfo, TITANCALLBACK CallBack);",
+      "caller": "debugger.cpp: debugLoopFunction attach path",
+      "contract": "原生 AttachDebugger 内部运行 DebugLoop；包装必须覆盖 attach 路径而非只包装外部 DebugLoop。",
+      "tests": [
+        "重复 attach",
+        "already-debugged",
+        "初始线程/模块事件",
+        "KillOnExit",
+        "失败完整清理。"
+      ],
+      "status": "unchecked"
+    },
+    {
+      "id": 44,
+      "name": "DetachDebuggerEx",
+      "new": false,
+      "route": "R",
+      "signature": "bool DetachDebuggerEx(DWORD ProcessId);",
+      "caller": "debug-control detach command",
+      "contract": "解除当前会话 HVM 规则/stop lease 与原生调试状态；detach 不等于 terminate。",
+      "tests": [
+        "保留目标存活",
+        "TF/RF/DR 处理",
+        "暂停中detach",
+        "旧 ring event 排空",
+        "断连恢复。"
+      ],
+      "status": "unchecked"
+    },
+    {
+      "id": 45,
+      "name": "IsFileBeingDebugged",
+      "new": false,
+      "route": "R",
+      "signature": "bool IsFileBeingDebugged();",
+      "caller": "frontend engine initialization/state queries",
+      "contract": "反映完整适配会话而非 HVM 是否 resident；resident 可以独立于 debug session。",
+      "tests": [
+        "尚未会话",
+        "启动中",
+        "已退出",
+        "detach 后",
+        "HVM 单独 resident。"
+      ],
+      "status": "unchecked"
+    },
+    {
+      "id": 46,
+      "name": "TitanOpenProcess",
+      "new": false,
+      "route": "F",
+      "signature": "HANDLE TitanOpenProcess(DWORD dwDesiredAccess, bool bInheritHandle, DWORD dwProcessId);",
+      "caller": "debugger.cpp process picker; attach command",
+      "contract": "保留真实句柄；此接口会在尚无 debug session 时用于枚举别的进程。",
+      "tests": [
+        "非目标PID",
+        "启动前调用",
+        "访问权限/继承位",
+        "错误码。"
+      ],
+      "status": "unchecked"
+    },
+    {
+      "id": 47,
+      "name": "TitanOpenThread",
+      "new": false,
+      "route": "F",
+      "signature": "HANDLE TitanOpenThread(DWORD dwDesiredAccess, bool bInheritHandle, DWORD dwThreadId);",
+      "caller": "thread/process consumers",
+      "contract": "保留真实线程句柄，不把 TID 或 ETHREAD 当 HANDLE。",
+      "tests": [
+        "非当前TID",
+        "权限",
+        "线程已退出",
+        "生命周期。"
+      ],
+      "status": "unchecked"
+    },
+    {
+      "id": 48,
+      "name": "TitanGetProcessImagePathW",
+      "new": true,
+      "route": "F",
+      "signature": "bool TitanGetProcessImagePathW(HANDLE hProcess, LPWSTR szPath, SIZE_T cchPath);",
+      "caller": "debugger.cpp: cbCreateProcess",
+      "contract": "cchPath 是 wchar_t 字符容量；可直接用新 native 导出。",
+      "tests": [
+        "Unicode",
+        "短缓冲",
+        "不可查路径",
+        "不使用字节数替代字符数。"
+      ],
+      "status": "unchecked"
+    },
+    {
+      "id": 49,
+      "name": "TitanGetModulePathW",
+      "new": true,
+      "route": "F",
+      "signature": "bool TitanGetModulePathW(HANDLE hProcess, ULONG_PTR ModuleBase, LPWSTR szPath, SIZE_T cchPath);",
+      "caller": "debugger.cpp: cbLoadDll",
+      "contract": "模块基址属于目标 VA；文件句柄不可用时也需要可靠来源。",
+      "tests": [
+        "模块卸载竞态",
+        "短缓冲/Unicode",
+        "未知模块",
+        "返回false时保留可诊断信息。"
+      ],
+      "status": "unchecked"
+    },
+    {
+      "id": 50,
+      "name": "TitanCloseHandle",
+      "new": true,
+      "route": "F",
+      "signature": "bool TitanCloseHandle(HANDLE hEngineHandle);",
+      "caller": "debugger.cpp; TitanHandle RAII",
+      "contract": "仅引擎获得的真实对象句柄走此通道；宿主 event/file 不改造成 HVM 句柄。",
+      "tests": [
+        "重复close规则",
+        "初始句柄和debug-event句柄不同生命周期",
+        "不误关借用对象。"
+      ],
+      "status": "unchecked"
+    },
+    {
+      "id": 51,
+      "name": "ProcessIsWow64",
+      "new": true,
+      "route": "F",
+      "signature": "bool ProcessIsWow64(HANDLE hProcess, PBOOL isWow64);",
+      "caller": "debugger.cpp initialization",
+      "contract": "输出是 BOOL*，不是 bool*；宿主与目标架构检查区分。",
+      "tests": [
+        "x32/x64",
+        "非目标句柄",
+        "null output",
+        "错误架构拒绝。"
+      ],
+      "status": "unchecked"
+    },
+    {
+      "id": 52,
+      "name": "TitanTerminateProcess",
+      "new": true,
+      "route": "R",
+      "signature": "bool TitanTerminateProcess(HANDLE hProcess, DWORD exitCode);",
+      "caller": "commands/cmd-debug-control.cpp stop fallback",
+      "contract": "原生终止前取消 HVM 会话持有状态；不能以 UI 已停止代替进程已退出。",
+      "tests": [
+        "指定 exitCode",
+        "目标已退出",
+        "持有HVM停点",
+        "超时路径。"
+      ],
+      "status": "unchecked"
+    },
+    {
+      "id": 53,
+      "name": "RequestPause",
+      "new": true,
+      "route": "R",
+      "signature": "bool RequestPause(TitanPausePolicy MaximumPolicy, TITANCBPAUSE PauseCallback);",
+      "caller": "commands/cmd-debug-control.cpp: cbDebugPause",
+      "contract": "异步暂停请求；没有 HVM 事件/context 输入；MaximumPolicy 是上限；成功接受不等于已停。",
+      "tests": [
+        "noninvasive/standard/aggressive",
+        "重复请求",
+        "失败/退出取消",
+        "callback 一次",
+        "真实停点和 GetDebugData 一致。"
+      ],
+      "status": "unchecked"
+    },
+    {
+      "id": 54,
+      "name": "TitanCreateRemoteThread",
+      "new": true,
+      "route": "F",
+      "signature": "HANDLE TitanCreateRemoteThread(HANDLE hProcess, LPTHREAD_START_ROUTINE start, LPVOID argument, DWORD creationFlags, LPDWORD threadId);",
+      "caller": "commands/cmd-thread-control.cpp",
+      "contract": "第一版复用 native；产生的线程必须进入正常事件及断点继承流程。",
+      "tests": [
+        "CREATE_SUSPENDED",
+        "输出TID",
+        "新线程事件",
+        "失败句柄",
+        "调用权限。"
+      ],
+      "status": "unchecked"
+    },
+    {
+      "id": 55,
+      "name": "TitanSuspendThread",
+      "new": true,
+      "route": "F",
+      "signature": "DWORD TitanSuspendThread(HANDLE hThread);",
+      "caller": "thread.cpp ThreadSuspendAll; thread commands",
+      "contract": "返回先前 suspend count，失败 DWORD(-1)，不是 bool 或 HVM 冻结计数。",
+      "tests": [
+        "原计数0/1/多次",
+        "失败",
+        "其他调试动作不擅自抹平计数。"
+      ],
+      "status": "unchecked"
+    },
+    {
+      "id": 56,
+      "name": "TitanResumeThread",
+      "new": true,
+      "route": "F",
+      "signature": "DWORD TitanResumeThread(HANDLE hThread);",
+      "caller": "thread.cpp ThreadResumeAll; thread commands",
+      "contract": "返回先前 suspend count；不是整个 debug session 的 Continue 接口。",
+      "tests": [
+        "0并不等于失败",
+        "多次suspend配对",
+        "不能释放不属于本操作的HVM stop。"
+      ],
+      "status": "unchecked"
+    },
+    {
+      "id": 57,
+      "name": "TitanTerminateThread",
+      "new": true,
+      "route": "R",
+      "signature": "bool TitanTerminateThread(HANDLE hThread, DWORD exitCode);",
+      "caller": "commands/cmd-thread-control.cpp",
+      "contract": "目标线程可能持有 pending HVM stop；先处理该线程的规则/租约/事件，业务调用仍可转发。",
+      "tests": [
+        "当前停点线程",
+        "其他线程",
+        "TID复用",
+        "已有exit事件",
+        "生命周期幂等。"
+      ],
+      "status": "unchecked"
+    },
+    {
+      "id": 58,
+      "name": "TitanGetThreadId",
+      "new": true,
+      "route": "F",
+      "signature": "DWORD TitanGetThreadId(HANDLE hThread);",
+      "caller": "thread.cpp: ThreadGetId fallback",
+      "contract": "返回真实系统 TID，不是逻辑 CPU 号或 HVM id。",
+      "tests": [
+        "无效句柄",
+        "退出线程",
+        "PID/TID复用的会话代际隔离。"
+      ],
+      "status": "unchecked"
+    },
+    {
+      "id": 59,
+      "name": "TitanGetThreadPriority",
+      "new": true,
+      "route": "F",
+      "signature": "int TitanGetThreadPriority(HANDLE hThread);",
+      "caller": "thread.cpp: ThreadGetPriority",
+      "contract": "完整保留 native 返回值和错误约定。",
+      "tests": [
+        "有效负优先级",
+        "THREAD_PRIORITY_ERROR_RETURN",
+        "不要用0当所有失败。"
+      ],
+      "status": "unchecked"
+    },
+    {
+      "id": 60,
+      "name": "TitanSetThreadPriority",
+      "new": true,
+      "route": "F",
+      "signature": "bool TitanSetThreadPriority(HANDLE hThread, int priority);",
+      "caller": "commands/cmd-thread-control.cpp",
+      "contract": "仍交给 native，保持参数和错误码。",
+      "tests": [
+        "正/负优先级",
+        "越界",
+        "权限",
+        "写后可查询。"
+      ],
+      "status": "unchecked"
+    },
+    {
+      "id": 61,
+      "name": "TitanGetThreadTimes",
+      "new": true,
+      "route": "F",
+      "signature": "bool TitanGetThreadTimes(HANDLE hThread, LPFILETIME creation, LPFILETIME exit, LPFILETIME kernel, LPFILETIME user);",
+      "caller": "thread.cpp: ThreadGetList",
+      "contract": "FILETIME 四个输出，不能用监视命中时间替代。",
+      "tests": [
+        "调用失败后上层不得显示未初始化内存",
+        "活动/退出线程",
+        "单位保持。"
+      ],
+      "status": "unchecked"
+    },
+    {
+      "id": 62,
+      "name": "TitanQueryThreadCycleTime",
+      "new": true,
+      "route": "F",
+      "signature": "bool TitanQueryThreadCycleTime(HANDLE hThread, PULONG64 cycleTime);",
+      "caller": "thread.cpp: ThreadQueryCycleTime",
+      "contract": "这是 native thread cycle count，不是 HVM TSC/event count。",
+      "tests": [
+        "输出64位",
+        "失败",
+        "溢出/截断",
+        "不得混用单位。"
+      ],
+      "status": "unchecked"
+    },
+    {
+      "id": 63,
+      "name": "SetEngineVariable",
+      "new": false,
+      "route": "R",
+      "signature": "void SetEngineVariable(TitanEngineVariable VariableId, bool VariableSet);",
+      "caller": "_exports.cpp / engine settings",
+      "contract": "转发并记录与路由相关选项；新增 WOW64_SINGLE_STEP_WORKAROUND=14 位于 engine 侧。",
+      "tests": [
+        "七种canonical变量",
+        "未知ID",
+        "会话开始前",
+        "跨重启配置一致。"
+      ],
+      "status": "unchecked"
+    },
+    {
+      "id": 64,
+      "name": "EngineCheckStructAlignment",
+      "new": false,
+      "route": "R",
+      "signature": "bool EngineCheckStructAlignment(TitanStructureType StructureType, ULONG_PTR StructureSize);",
+      "caller": "x64dbg.cpp: _dbg_dbginit",
+      "contract": "检查适配层所编译的 ABI；只转发 true 不能证明 wrapper 自己的 packing 正确。",
+      "tests": [
+        "context sizeof/offsetof/alignment",
+        "x86 cdecl",
+        "错误size必失败",
+        "native与wrapper头文件一致。"
+      ],
+      "status": "unchecked"
+    }
+  ]
+}
