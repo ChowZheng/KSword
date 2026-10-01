@@ -833,6 +833,12 @@ namespace
         {
             return kernelText("kernel.callback.enum.trust.trusted", QStringLiteral("trusted（可信/自有或预留 PDB）"));
         }
+        if (entry.callbackClass == KSWORD_ARK_CALLBACK_ENUM_CLASS_MINIFILTER
+            && callbackEnumTrustFlagsIndicateFallbackPattern(entry))
+        {
+            // The unload API does not upgrade the provenance of privately located callbacks.
+            return kernelText("kernel.callback.enum.trust.fallback_pattern", QStringLiteral("fallback/pattern（私有结构诊断）"));
+        }
         if (callbackEnumIsPublicApiSource(entry.source)
             || callbackEnumTrustFlagsIndicatePublicApi(entry)
             || callbackEnumRemoveBehaviorIndicatesPublicApi(entry))
@@ -989,6 +995,18 @@ namespace
                     (KSWORD_ARK_CALLBACK_REMOVE_BEHAVIOR_PUBLIC_API |
                      KSWORD_ARK_CALLBACK_REMOVE_BEHAVIOR_REQUIRE_REVALIDATION);
             return heuristicObjectCandidate
+                ? CallbackEnumRemovePolicyKind::RemovableCandidate
+                : CallbackEnumRemovePolicyKind::NotRemovable;
+        }
+
+        if (entry.callbackClass == KSWORD_ARK_CALLBACK_ENUM_CLASS_MINIFILTER
+            && entry.callbackAddress != 0U)
+        {
+            // Private callback discovery does not restrict the public unload of its enumerated owner.
+            return entry.contextAddress != 0U && entry.registrationAddress != 0U
+                && entry.identityHash != 0U && entry.generation != 0U
+                && callbackEnumHasField(entry, KSWORD_ARK_CALLBACK_ENUM_FIELD_REMOVABLE_CANDIDATE)
+                && callbackEnumRemoveBehaviorIndicatesPublicApi(entry)
                 ? CallbackEnumRemovePolicyKind::RemovableCandidate
                 : CallbackEnumRemovePolicyKind::NotRemovable;
         }
@@ -1268,6 +1286,12 @@ namespace
         requestPacket.callbackAddress = callbackEnumRemoveRequestValue(entry);
         requestPacket.registrationAddress = entry.registrationAddress;
         requestPacket.rawStorageValue = entry.rawStorageValue;
+        if (entry.callbackClass == KSWORD_ARK_CALLBACK_ENUM_CLASS_MINIFILTER && entry.callbackAddress != 0U)
+        {
+            // Keep the display/monitor storage address intact; EX carries owner and operation separately.
+            requestPacket.registrationAddress = entry.contextAddress;
+            requestPacket.rawStorageValue = entry.registrationAddress;
+        }
         requestPacket.enumerationGeneration = entry.generation;
         requestPacket.identityHash = entry.identityHash;
         requestPacket.source = entry.source;
@@ -1386,7 +1410,7 @@ namespace
         // Input: parent widget and selected row.
         // Processing: shows a second confirmation before any EX public-API remove IOCTL is sent.
         // Return: true when the user explicitly confirms the safe public/API remove action.
-        const QString warningText = kernelText("kernel.callback.enum.remove.safe.confirm", QStringLiteral(
+        QString warningText = kernelText("kernel.callback.enum.remove.safe.confirm", QStringLiteral(
             "即将执行安全移除。\n\n"
             "类别：%1\n"
             "名称：%2\n"
@@ -1403,9 +1427,17 @@ namespace
             .arg(entry.removePolicyText)
             .arg(callbackEnumFormatAddress(callbackEnumRemoveRequestValue(entry)))
             .arg(callbackEnumYesNoText(callbackEnumIsTrustedSource(entry)));
+        const bool unloadFilter = entry.callbackClass == KSWORD_ARK_CALLBACK_ENUM_CLASS_MINIFILTER;
+        if (unloadFilter)
+        {
+            warningText += QStringLiteral("\n\n") + kernelText("kernel.callback.enum.remove.minifilter.scope",
+                QStringLiteral("此操作将卸载所属过滤器及其全部回调和实例，并非仅移除选中的回调。过滤器可能拒绝卸载。"));
+        }
         return QMessageBox::question(
             parentWidget,
-            kernelText("kernel.callback.enum.remove.safe.title", QStringLiteral("安全移除")),
+            unloadFilter
+                ? kernelText("kernel.callback.enum.remove.minifilter.title", QStringLiteral("卸载所属过滤器"))
+                : kernelText("kernel.callback.enum.remove.safe.title", QStringLiteral("安全移除")),
             warningText,
             QMessageBox::Yes | QMessageBox::No,
             QMessageBox::No) == QMessageBox::Yes;
@@ -2924,8 +2956,13 @@ void KernelDock::showCallbackEnumContextMenu(const QPoint& localPosition)
     }
     contextMenu.addSeparator();
 
-    QAction* safeRemoveAction = contextMenu.addAction(kernelText("kernel.callback.enum.remove.safe.title", QStringLiteral("安全移除")));
-    safeRemoveAction->setToolTip(kernelText("kernel.callback.enum.remove.safe.tooltip", QStringLiteral("使用受支持的安全方式移除回调。")));
+    const bool unloadFilter = hasSingleActionEntry && actionEntry->callbackClass == KSWORD_ARK_CALLBACK_ENUM_CLASS_MINIFILTER;
+    QAction* safeRemoveAction = contextMenu.addAction(unloadFilter
+        ? kernelText("kernel.callback.enum.remove.minifilter.title", QStringLiteral("卸载所属过滤器"))
+        : kernelText("kernel.callback.enum.remove.safe.title", QStringLiteral("安全移除")));
+    safeRemoveAction->setToolTip(unloadFilter
+        ? kernelText("kernel.callback.enum.remove.minifilter.scope", QStringLiteral("此操作将卸载所属过滤器及其全部回调和实例，并非仅移除选中的回调。过滤器可能拒绝卸载。"))
+        : kernelText("kernel.callback.enum.remove.safe.tooltip", QStringLiteral("使用受支持的安全方式移除回调。")));
     safeRemoveAction->setEnabled(canUseLegacySafeRemove);
     if (hasSingleActionEntry && !canUseLegacySafeRemove)
     {

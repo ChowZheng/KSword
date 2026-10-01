@@ -1,9 +1,47 @@
 /* 扩展回调公开 API 注销。注册参数来自唯一匹配的当前枚举行，不解引用 R3 裸地址。 */
 #include "callback_internal.h" // 引入共享协议与枚举验证接口。
 #include "callback_extended_internal.h" // 使用有界导出解析封装。
+#include "callback_external_minifilter.h" // 复用 Filter Manager 整体卸载后端。
 
 typedef VOID (NTAPI* KSW_COALESCING_UNREGISTER)(PVOID); // 未在 WDK 声明的导出 ABI：参数为注册句柄。
 typedef VOID (NTAPI* KSW_PRIORITY_UNREGISTER)(PDRIVER_OBJECT); // 未在 WDK 声明的导出 ABI：参数为驱动对象。
+typedef NTSTATUS (NTAPI* KSW_PROCESS_NOTIFY_EX2)(PSCREATEPROCESSNOTIFYTYPE, PVOID, BOOLEAN); // 正规 Ex2 API 的动态导出签名。
+
+NTSTATUS KswordArkCallbackRemoveProcessNotify( // 按当前注册子类型选择配对 API，旧地址入口允许有限回退。
+    _In_ ULONG64 CallbackAddress, // 已验证的回调函数地址。
+    _In_ ULONG RegistrationType, // 当前枚举子类型；UNKNOWN 用于旧地址入口。
+    _Out_ PCWSTR* ApiOut // 返回实际尝试的 API 名称。
+    ) // 结束参数声明。
+{ // 开始进程注销分发。
+    NTSTATUS status = STATUS_NOT_SUPPORTED; // 未知能力默认不支持。
+    KSW_PROCESS_NOTIFY_EX2 routine = NULL; // Ex2 在旧系统可能不存在。
+    if (RegistrationType == KSWORD_ARK_CALLBACK_REGISTRATION_TYPE_PROCESS_LEGACY) { // 传统注册只走配对 API。
+        *ApiOut = L"PsSetCreateProcessNotifyRoutine"; // 保留实际 API 名称。
+        return PsSetCreateProcessNotifyRoutine((PCREATE_PROCESS_NOTIFY_ROUTINE)(ULONG_PTR)CallbackAddress, TRUE); // 返回原始状态。
+    } // 结束传统分支。
+    if (RegistrationType == KSWORD_ARK_CALLBACK_REGISTRATION_TYPE_PROCESS_EX ||
+        RegistrationType == KSWORD_ARK_CALLBACK_REGISTRATION_TYPE_UNKNOWN) { // Ex 或旧地址入口先尝试 Ex。
+        *ApiOut = L"PsSetCreateProcessNotifyRoutineEx"; // 记录当前 API。
+        status = PsSetCreateProcessNotifyRoutineEx((PCREATE_PROCESS_NOTIFY_ROUTINE_EX)(ULONG_PTR)CallbackAddress, TRUE); // 注销指定函数。
+        if (RegistrationType != KSWORD_ARK_CALLBACK_REGISTRATION_TYPE_UNKNOWN ||
+            (status != STATUS_INVALID_PARAMETER && status != STATUS_PROCEDURE_NOT_FOUND)) { // 明确子类型或实际 API 错误不继续猜测。
+            return status; // 保留配对 API 原始结果。
+        } // 结束回退条件。
+        *ApiOut = L"PsSetCreateProcessNotifyRoutine"; // 旧地址入口尝试传统注册。
+        status = PsSetCreateProcessNotifyRoutine((PCREATE_PROCESS_NOTIFY_ROUTINE)(ULONG_PTR)CallbackAddress, TRUE); // 沿用旧兼容顺序。
+        if (status != STATUS_INVALID_PARAMETER && status != STATUS_PROCEDURE_NOT_FOUND) { // 仅未匹配允许继续 Ex2。
+            return status; // 成功或其它错误立即返回。
+        } // 结束传统回退结果。
+    } // 结束 Ex/未知分支。
+    if (RegistrationType != KSWORD_ARK_CALLBACK_REGISTRATION_TYPE_PROCESS_EX2 &&
+        RegistrationType != KSWORD_ARK_CALLBACK_REGISTRATION_TYPE_UNKNOWN) { // 不猜测未识别的新子类型。
+        return STATUS_NOT_SUPPORTED; // 拒绝错误签名。
+    } // 结束子类型检查。
+    *ApiOut = L"PsSetCreateProcessNotifyRoutineEx2"; // 记录明确缺失或实际调用的 API。
+    routine = (KSW_PROCESS_NOTIFY_EX2)KswordArkCallbackExtendedGetSystemRoutine(*ApiOut); // 兼容不导出 Ex2 的旧内核。
+    return routine == NULL ? STATUS_PROCEDURE_NOT_FOUND :
+        routine(PsCreateProcessNotifySubsystems, (PVOID)(ULONG_PTR)CallbackAddress, TRUE); // 正确 NotifyType 与 Remove=TRUE。
+} // 结束进程注销分发。
 
 static VOID KswordArkExtendedRemoveMessage( // 写入 API 名称、阶段和状态码，保留具体失败原因。
     _Inout_ KSWORD_ARK_REMOVE_EXTERNAL_CALLBACK_EX_RESPONSE* Response, // 输出语义回执。
@@ -65,6 +103,29 @@ NTSTATUS KswordArkCallbackRemoveExtendedPublic( // 注销已重新验证的扩�
 
     ResponsePacket->mappingFlags |= KSWORD_ARK_EXTERNAL_CALLBACK_MAPPING_FLAG_ENUMERATED; // 标记目标重枚举成功。
     switch (RequestPacket->callbackClass) { // 按共享扩展类别调用匹配的公开 API。
+    case KSWORD_ARK_EXTERNAL_CALLBACK_REMOVE_TYPE_PROCESS: // 子类型来自当前唯一匹配行，不能信任 R3 猜测。
+        if (subtype == KSWORD_ARK_CALLBACK_REGISTRATION_TYPE_UNKNOWN) { // 完整行入口必须恢复准确子类型。
+            status = STATUS_NOT_SUPPORTED; // 未识别注册不盲试 API。
+            break; // 不调用注销。
+        } // 结束子类型检查。
+        status = KswordArkCallbackRemoveProcessNotify(RequestPacket->callbackAddress, subtype, &api); // 配对 Ex2/Ex/传统 API。
+        break; // 后置确认函数注册消失。
+    case KSWORD_ARK_EXTERNAL_CALLBACK_REMOVE_TYPE_MINIFILTER: { // Pre/Post 行只允许整体卸载所属过滤器。
+        KSWORD_ARK_REMOVE_EXTERNAL_CALLBACK_REQUEST filterRequest = { 0 }; // 转换到既有公开过滤器对象卸载入口。
+        KSWORD_ARK_REMOVE_EXTERNAL_CALLBACK_RESPONSE filterResponse = { 0 }; // 保存过滤器名称等公开映射。
+        ULONG64 filterObject = context != 0ULL ? context : registration; // 子行用所属对象，父行用注册对象。
+        api = L"FltEnumerateFilters / FltUnloadFilter"; // 明确整体卸载 API。
+        if (filterObject == 0ULL || filterObject != RequestPacket->registrationAddress) { // 必须匹配 EX 请求中的所属对象身份。
+            status = STATUS_INVALID_PARAMETER; // 不把函数或操作表当成 FilterObject。
+            break; // 拒绝错误对象映射。
+        } // 结束对象检查。
+        filterRequest.callbackClass = KSWORD_ARK_EXTERNAL_CALLBACK_REMOVE_TYPE_MINIFILTER; // 指定公开过滤器卸载类别。
+        filterRequest.callbackAddress = filterObject; // 后端再次从 FltEnumerateFilters 查找当前对象。
+        status = KswordArkCallbackExternalMinifilterRemove(&filterRequest, &filterResponse); // 使用 FltUnloadFilter，保留卸载拒绝状态。
+        KswordArkCallbackEnumCopyWide(ResponsePacket->serviceName, RTL_NUMBER_OF(ResponsePacket->serviceName), filterResponse.serviceName); // 返回真实过滤器名称。
+        ResponsePacket->mappingFlags |= filterResponse.mappingFlags; // 保留公开对象映射结果。
+        break; // 后置通过公开父行检查整个 FilterObject 消失。
+    } // 结束 Minifilter 分支。
     case KSWORD_ARK_EXTERNAL_CALLBACK_REMOVE_TYPE_REGISTRY: { // Cookie 是值，不是地址。
         LARGE_INTEGER cookie; // 与链节点分开的 API 参数。
         api = L"CmUnRegisterCallback"; // 保存实际调用名称。

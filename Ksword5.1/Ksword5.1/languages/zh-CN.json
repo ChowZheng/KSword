@@ -4742,6 +4742,8 @@
     "kernel.callback.enum.remove.safe.driver_failed_message": "驱动返回失败，NTSTATUS=%1。",
     "kernel.callback.enum.remove.safe.io_failed": "状态：安全移除失败，Win32=%1",
     "kernel.callback.enum.remove.safe.missing_value": "当前记录缺少可用的类型或地址/标识值。",
+    "kernel.callback.enum.remove.minifilter.title": "卸载所属过滤器",
+    "kernel.callback.enum.remove.minifilter.scope": "此操作将卸载所属过滤器及其全部回调和实例，并非仅移除选中的回调。过滤器可能拒绝卸载。",
     "kernel.callback.enum.remove.safe.title": "安全移除",
     "kernel.callback.enum.remove.safe.tooltip": "使用受支持的安全方式移除回调。",
     "kernel.callback.enum.remove.safe.unavailable": "当前记录不支持安全移除。",
@@ -5919,6 +5921,8 @@
     "notification.copy.log_template": "%1\n%2\n%3\n文件：%4\n函数：%5\nGUID：%6"
   },
   "source_translations": {
+    "卸载所属过滤器": "卸载所属过滤器",
+    "此操作将卸载所属过滤器及其全部回调和实例，并非仅移除选中的回调。过滤器可能拒绝卸载。": "此操作将卸载所属过滤器及其全部回调和实例，并非仅移除选中的回调。过滤器可能拒绝卸载。",
     "不可移除：未能验证 PoRegisterCoalescingCallback 返回的真实句柄。": "不可移除：未能验证 PoRegisterCoalescingCallback 返回的真实句柄。",
     "不可移除：未能验证 IoUnregisterPriorityCallback 所需的 DriverObject。": "不可移除：未能验证 IoUnregisterPriorityCallback 所需的 DriverObject。",
     "不可移除：未能从 Debug Print 注册记录验证真实回调函数。": "不可移除：未能从 Debug Print 注册记录验证真实回调函数。",

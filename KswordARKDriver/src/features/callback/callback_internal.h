@@ -437,6 +437,12 @@ KswordArkCallbackEnumRevalidateRemoveRequest(
     );
 
 // 注销扩展类别；只使用刚重新枚举得到的 API 参数。
+NTSTATUS KswordArkCallbackRemoveProcessNotify( // 进程注销共用配对 API 分发。
+    _In_ ULONG64 CallbackAddress, // 输入回调函数。
+    _In_ ULONG RegistrationType, // 输入当前子类型或旧入口 UNKNOWN。
+    _Out_ PCWSTR* ApiOut // 输出实际 API 名称。
+    ); // 结束声明。
+
 NTSTATUS KswordArkCallbackRemoveExtendedPublic(
     _In_ const KSWORD_ARK_REMOVE_EXTERNAL_CALLBACK_EX_REQUEST* RequestPacket,
     _Inout_ KSWORD_ARK_REMOVE_EXTERNAL_CALLBACK_EX_RESPONSE* ResponsePacket

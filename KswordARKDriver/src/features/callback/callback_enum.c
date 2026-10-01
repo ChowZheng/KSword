@@ -2340,6 +2340,10 @@ Return Value:
 {
     ULONG slotIndex = 0UL;
     ULONG addedCount = 0UL;
+    BOOLEAN removeTarget = Builder->RemoveMatchRequest != NULL &&
+        Builder->RemoveMatchRequest->callbackClass == KSWORD_ARK_EXTERNAL_CALLBACK_REMOVE_TYPE_PROCESS &&
+        CallbackClass == KSWORD_ARK_CALLBACK_ENUM_CLASS_PROCESS; // 仅对新增进程注销复核记录读取失败。
+    BOOLEAN emptyContainer = TRUE; // 只有完整读取且所有槽为零才能证明空数组。
 
     if (ArrayAddress == 0ULL) {
         return 0UL;
@@ -2353,26 +2357,37 @@ Return Value:
         ULONG64 contextAddress = 0ULL;
 
         if (!KswordArkCallbackEnumReadPointer(slotAddress, &fastRefValue)) {
+            emptyContainer = FALSE; // 未读到不能证明空槽。
+            if (removeTarget) { Builder->RemoveQueryStatus = STATUS_PARTIAL_COPY; } // 后置不能把读失败当注销成功。
             continue;
         }
         if (fastRefValue == 0ULL) {
             continue;
         }
+        emptyContainer = FALSE; // 数组包含注册，即使后续显示字段无法解析也不是空数组。
 
         routineBlock = fastRefValue & (ULONG64)KSWORD_ARK_CALLBACK_ENUM_FAST_REF_MASK;
         if (!KswordArkCallbackEnumLooksLikeKernelPointer(routineBlock)) {
+            if (removeTarget) { Builder->RemoveQueryStatus = STATUS_DATA_ERROR; } // 非法存储不能作为缺失证据。
             continue;
         }
         if (!KswordArkCallbackEnumReadPointer(routineBlock + sizeof(ULONG_PTR), &functionAddress)) {
+            if (removeTarget) { Builder->RemoveQueryStatus = STATUS_PARTIAL_COPY; } // 保留目标数组读取失败。
             continue;
         }
         if (!KswordArkCallbackEnumReadPointer(routineBlock + (2ULL * sizeof(ULONG_PTR)), &contextAddress)) {
+            if (removeTarget) { // 注册标记读取失败时不能把零值误判为 Legacy。
+                Builder->RemoveQueryStatus = STATUS_PARTIAL_COPY; // 明确无法识别当前子类型。
+                continue; // 不发布伪造的传统注册行。
+            } // 结束注销复核保护。
             contextAddress = 0ULL;
         }
         if (!KswordArkCallbackEnumLooksLikeKernelPointer(functionAddress)) {
+            if (removeTarget) { Builder->RemoveQueryStatus = STATUS_DATA_ERROR; } // 非法函数不能证明目标已消失。
             continue;
         }
         if (!KswordArkCallbackEnumIsKernelModuleAddress(ModuleCache, functionAddress)) {
+            if (removeTarget) { Builder->RemoveQueryStatus = STATUS_NOT_FOUND; } // 模块查询缺失不等于注销成功。
             continue;
         }
 
@@ -2392,6 +2407,8 @@ Return Value:
             SourceRva);
         addedCount += 1UL;
     }
+
+    if (removeTarget && emptyContainer) { Builder->RemoveTargetContainerEmpty = TRUE; } // 最后一项注销后可确认完整空数组。
 
     return addedCount;
 }
@@ -3989,13 +4006,19 @@ Routine Description:
     builder.RemoveMatchRequest = RequestPacket;
     builder.RemoveMatchIdentity = MatchIdentity; // 保存本次匹配契约。
     KswordArkCallbackEnumSnapshotBegin(&builder);
-    KswordArkCallbackEnumAddSelfCallbacks(&builder);
-    KswordArkCallbackEnumAddPrivateCallbacks(&builder);
-    KswordArkCallbackExtendedAddSpecialCallbacks(&builder);
-    KswordArkCallbackExtendedAddBugcheckCallbacks(&builder); // 只重建注销需要的内核注册行。
-    KswordArkCallbackExtendedAddObjectCallbacks(&builder); // 排除无关 WFP 和 Minifilter 查询失败。
-    KswordArkCallbackExtendedAddSystemCallbacks(&builder); // 保持各来源内部顺序和行身份一致。
-    KswordArkCallbackExtendedAddNmiCallbacks(&builder); // NMI 仍使用自身定位和结构验证。
+    if (RequestPacket->callbackClass == KSWORD_ARK_EXTERNAL_CALLBACK_REMOVE_TYPE_MINIFILTER) { // 单独重建 Filter Manager 对象与对应回调，隔离无关内核枚举失败。
+        KswordArkCallbackEnumAddMinifilters(&builder); // 前置恢复所属对象，后置只读公开对象集合。
+    } else if (RequestPacket->callbackClass == KSWORD_ARK_EXTERNAL_CALLBACK_REMOVE_TYPE_PROCESS) { // 进程注册由实际 notify 数组证明，不能用自身缓存行确认存在。
+        KswordArkCallbackEnumAddPrivateCallbacks(&builder); // 不引入 BugCheck/NMI 等无关扩展读取错误。
+    } else { // 保持其它回调原有来源与顺序。
+        KswordArkCallbackEnumAddSelfCallbacks(&builder); // 重建原有自身记录。
+        KswordArkCallbackEnumAddPrivateCallbacks(&builder); // 重建原有内核私有注册。
+        KswordArkCallbackExtendedAddSpecialCallbacks(&builder); // 重建特殊注册。
+        KswordArkCallbackExtendedAddBugcheckCallbacks(&builder); // 只重建注销需要的内核注册行。
+        KswordArkCallbackExtendedAddObjectCallbacks(&builder); // 排除无关 WFP 和 Minifilter 查询失败。
+        KswordArkCallbackExtendedAddSystemCallbacks(&builder); // 保持各来源内部顺序和行身份一致。
+        KswordArkCallbackExtendedAddNmiCallbacks(&builder); // NMI 仍使用自身定位和结构验证。
+    } // 结束类别隔离。
     KswordArkCallbackEnumSnapshotFinalize(&builder);
 
     if (builder.SnapshotRowCount != builder.TotalCount || !NT_SUCCESS(builder.LastStatus)) {

@@ -1,5 +1,17 @@
 # KSword MSVC / WDK 构建恢复
 
+## Qt 运行库部署需要 VS 开发环境
+
+- 直接从普通 PowerShell 调用 MSBuild 可以完成主程序链接，但构建后
+  `windeployqt --compiler-runtime` 可能因 `VCINSTALLDIR` 未设置而返回 1，最终报 MSB3073。
+  先通过当前 VS 的 `Common7/Tools/VsDevCmd.bat -arch=x64 -host_arch=x64` 初始化环境，
+  再运行原有 `/t:Build`；确认 Qt/VC 运行库部署与整个 Build 都成功。不要仅凭 exe 已更新
+  宣称完整构建通过，也不要跳过部署来掩盖环境错误。
+- 主程序 `DeployQtRuntime` 使用增量 windeployqt，不再默认 `--force`。已经相同的 Qt DLL
+  可能被辅助程序占用；强制删除会报 Cannot remove existing file。增量部署仍复制缺失或更新
+  的依赖，不关闭部署目标。2026-10-01 现场已确认 Release/Qt6Core.dll 与 Qt 6.9.3 源 DLL
+  SHA256 相同，无 `--force` 部署正常通过。
+
 适用范围：`C:\Users\Felix\CLionProjects\KSword` 的主程序 Release/x64 构建与 `KswordARKDriver` WDK 后置验证。
 
 ## 主程序 `LNK1000 IMAGE::BuildImage`

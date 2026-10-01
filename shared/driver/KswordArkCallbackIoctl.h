@@ -617,9 +617,11 @@ typedef struct _KSWORD_ARK_REMOVE_EXTERNAL_CALLBACK_EX_REQUEST
     unsigned long long callbackAddress;
     // For a verified Object Callback row this is the actual RegistrationHandle
     // returned by ObRegisterCallbacks; nodes/callback pointers are forbidden substitutes.
+    // Minifilter removal carries the owning FilterObject here, including child callback requests.
     unsigned long long registrationAddress;
     // Exact diagnostic storage identity (for Object Callback, the list node),
     // carried separately so it can never be mistaken for RegistrationHandle.
+    // For a Minifilter child this is its FLT_OPERATION_REGISTRATION address; unloading targets the owner.
     unsigned long long rawStorageValue;
     unsigned long long enumerationGeneration;
     unsigned long long identityHash;

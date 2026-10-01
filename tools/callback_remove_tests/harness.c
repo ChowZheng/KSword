@@ -55,7 +55,11 @@ typedef PVOID PDRIVER_FS_NOTIFICATION;
 typedef PVOID PSE_LOGON_SESSION_TERMINATED_ROUTINE;
 typedef PVOID PSE_LOGON_SESSION_TERMINATED_ROUTINE_EX;
 typedef PVOID PDEBUG_PRINT_CALLBACK;
+typedef PVOID PCREATE_PROCESS_NOTIFY_ROUTINE;
+typedef PVOID PCREATE_PROCESS_NOTIFY_ROUTINE_EX;
+typedef enum { PsCreateProcessNotifySubsystems } PSCREATEPROCESSNOTIFYTYPE;
 #define RtlZeroMemory(p,n) memset(p,0,n)
+#define RTL_NUMBER_OF(a) (sizeof(a)/sizeof((a)[0]))
 #include <string.h>
 static KSWORD_ARK_CALLBACK_RUNTIME fixture_runtime;
 static KSWORD_ARK_CALLBACK_RUNTIME* KswordArkCallbackGetRuntime(void) { return &fixture_runtime; }
@@ -76,6 +80,8 @@ static ULONG fixture_fields, fixture_subtype;
 static ULONG64 current_registration, current_context;
 static PVOID seen_registration, seen_context, seen_callback;
 static NTSTATUS api_result, enum_before_result, enum_after_result;
+static NTSTATUS process_ex_result, process_legacy_result;
+static int process_ex_calls, process_legacy_calls, process_ex2_calls;
 static int KeGetCurrentIrql(void) { return irql; }
 static NTSTATUS RtlStringCbPrintfW(wchar_t *out, size_t size, PCWSTR format, ...) {
     (void)format;
@@ -119,9 +125,30 @@ static NTSTATUS CmUnRegisterCallback(LARGE_INTEGER cookie) { return record_call(
 static NTSTATUS DbgSetDebugPrintCallback(PVOID callback, BOOLEAN enable) { assert(!enable); seen_callback=callback; return record_call(NULL); }
 static VOID coalescing_unregister(PVOID p) { (void)record_call(p); }
 static VOID priority_unregister(PDRIVER_OBJECT object) { seen_context=object; (void)record_call(NULL); }
+static NTSTATUS PsSetCreateProcessNotifyRoutine(PVOID callback, BOOLEAN remove) {
+    assert(remove); ++process_legacy_calls; seen_callback=callback; ++calls; return process_legacy_result;
+}
+static NTSTATUS PsSetCreateProcessNotifyRoutineEx(PVOID callback, BOOLEAN remove) {
+    assert(remove); ++process_ex_calls; seen_callback=callback; ++calls; return process_ex_result;
+}
+static NTSTATUS process_ex2(PSCREATEPROCESSNOTIFYTYPE type, PVOID callback, BOOLEAN remove) {
+    assert(type==PsCreateProcessNotifySubsystems && remove); ++process_ex2_calls; seen_callback=callback; return record_call(NULL);
+}
+static NTSTATUS KswordArkCallbackExternalMinifilterRemove(
+    const KSWORD_ARK_REMOVE_EXTERNAL_CALLBACK_REQUEST *input,
+    KSWORD_ARK_REMOVE_EXTERNAL_CALLBACK_RESPONSE *output) {
+    assert(input->callbackClass==KSWORD_ARK_EXTERNAL_CALLBACK_REMOVE_TYPE_MINIFILTER);
+    memcpy(output->serviceName,L"TestFilter",sizeof(L"TestFilter"));
+    return record_call((PVOID)(ULONG_PTR)input->callbackAddress);
+}
+static VOID KswordArkCallbackEnumCopyWide(wchar_t *out, size_t chars, PCWSTR value) {
+    size_t count=wcslen(value); if (count>=chars) count=chars-1;
+    memcpy(out,value,count*sizeof(wchar_t)); out[count]=0;
+}
 static int export_available=1;
 static PVOID KswordArkCallbackExtendedGetSystemRoutine(PCWSTR name) {
     if (!export_available) return NULL;
+    if (wcscmp(name,L"PsSetCreateProcessNotifyRoutineEx2")==0) return (PVOID)process_ex2;
     return wcscmp(name,L"PoUnregisterCoalescingCallback")==0 ? (PVOID)coalescing_unregister : (PVOID)priority_unregister;
 }
 static NTSTATUS PoUnregisterPowerSettingCallback(PVOID p) { return record_call(p); }
@@ -144,9 +171,51 @@ static void reset(ULONG callback_class) {
     current_registration = request.registrationAddress;
     current_context = 0xFFFF800078900000ULL;
     api_result = enum_before_result = enum_after_result = STATUS_SUCCESS;
+    process_ex_result=process_legacy_result=STATUS_SUCCESS;
+    process_ex_calls=process_legacy_calls=process_ex2_calls=0;
     seen_registration = seen_context = seen_callback = NULL;
 }
 int main(void) {
+    /* Pair each enumerated process subtype with its exact API, including Ex2's NotifyType. */
+    const ULONG process_types[]={KSWORD_ARK_CALLBACK_REGISTRATION_TYPE_PROCESS_LEGACY,
+        KSWORD_ARK_CALLBACK_REGISTRATION_TYPE_PROCESS_EX,KSWORD_ARK_CALLBACK_REGISTRATION_TYPE_PROCESS_EX2};
+    for (size_t i=0;i<sizeof(process_types)/sizeof(process_types[0]);++i) {
+        reset(KSWORD_ARK_EXTERNAL_CALLBACK_REMOVE_TYPE_PROCESS); fixture_subtype=process_types[i];
+        assert(KswordArkCallbackRemoveExtendedPublic(&request,&response)==STATUS_SUCCESS);
+        assert(calls==1 && enum_calls==2 && (ULONG64)(uintptr_t)seen_callback==request.callbackAddress);
+        assert(process_legacy_calls==(i==0) && process_ex_calls==(i==1) && process_ex2_calls==(i==2));
+    }
+    reset(KSWORD_ARK_EXTERNAL_CALLBACK_REMOVE_TYPE_PROCESS); fixture_subtype=KSWORD_ARK_CALLBACK_REGISTRATION_TYPE_PROCESS_EX2; export_available=0;
+    assert(KswordArkCallbackRemoveExtendedPublic(&request,&response)==STATUS_PROCEDURE_NOT_FOUND && !calls);
+    export_available=1;
+    reset(KSWORD_ARK_EXTERNAL_CALLBACK_REMOVE_TYPE_PROCESS); fixture_subtype=KSWORD_ARK_CALLBACK_REGISTRATION_TYPE_PROCESS_EX2; api_result=STATUS_ACCESS_DENIED;
+    assert(KswordArkCallbackRemoveExtendedPublic(&request,&response)==STATUS_ACCESS_DENIED && calls==1 && enum_calls==1);
+    reset(KSWORD_ARK_EXTERNAL_CALLBACK_REMOVE_TYPE_PROCESS); fixture_subtype=KSWORD_ARK_CALLBACK_REGISTRATION_TYPE_PROCESS_EX2; present_after=1;
+    assert(KswordArkCallbackRemoveExtendedPublic(&request,&response)==STATUS_UNSUCCESSFUL);
+    reset(KSWORD_ARK_EXTERNAL_CALLBACK_REMOVE_TYPE_PROCESS); fixture_subtype=KSWORD_ARK_CALLBACK_REGISTRATION_TYPE_UNKNOWN;
+    assert(KswordArkCallbackRemoveExtendedPublic(&request,&response)==STATUS_NOT_SUPPORTED && !calls);
+    PCWSTR process_api=L"";
+    reset(KSWORD_ARK_EXTERNAL_CALLBACK_REMOVE_TYPE_PROCESS); process_ex_result=process_legacy_result=STATUS_INVALID_PARAMETER;
+    assert(KswordArkCallbackRemoveProcessNotify(request.callbackAddress,0,&process_api)==STATUS_SUCCESS);
+    assert(calls==3 && process_ex2_calls==1 && wcscmp(process_api,L"PsSetCreateProcessNotifyRoutineEx2")==0);
+    reset(KSWORD_ARK_EXTERNAL_CALLBACK_REMOVE_TYPE_PROCESS); process_ex_result=STATUS_ACCESS_DENIED;
+    assert(KswordArkCallbackRemoveProcessNotify(request.callbackAddress,0,&process_api)==STATUS_ACCESS_DENIED && calls==1);
+    /* A private callback row must unload its public owner, preserving refusal and confirmation errors. */
+    reset(6); request.registrationAddress=current_context;
+    assert(KswordArkCallbackRemoveExtendedPublic(&request,&response)==STATUS_SUCCESS);
+    assert((ULONG64)(uintptr_t)seen_registration==current_context && wcscmp(response.serviceName,L"TestFilter")==0);
+    reset(6); current_context=0;
+    assert(KswordArkCallbackRemoveExtendedPublic(&request,&response)==STATUS_SUCCESS); // Public parent row.
+    reset(6); request.registrationAddress=current_context; api_result=STATUS_ACCESS_DENIED;
+    assert(KswordArkCallbackRemoveExtendedPublic(&request,&response)==STATUS_ACCESS_DENIED && enum_calls==1);
+    reset(6); request.registrationAddress=current_context; present_after=1;
+    assert(KswordArkCallbackRemoveExtendedPublic(&request,&response)==STATUS_UNSUCCESSFUL);
+    reset(6); request.registrationAddress=current_context; enum_after_result=STATUS_ACCESS_DENIED;
+    assert(KswordArkCallbackRemoveExtendedPublic(&request,&response)==STATUS_ACCESS_DENIED);
+    reset(6); request.registrationAddress=current_context+8;
+    assert(KswordArkCallbackRemoveExtendedPublic(&request,&response)==STATUS_INVALID_PARAMETER && !calls);
+    reset(6); present_before=0;
+    assert(KswordArkCallbackRemoveExtendedPublic(&request,&response)==STATUS_NOT_FOUND && !calls);
     const ULONG classes[] = {5, 10, 11, 12, 13, 14, 9, 15, 16, 18, 19, 20, 21, 23};
     for (size_t i = 0; i < sizeof(classes)/sizeof(classes[0]); ++i) {
         reset(classes[i]);
@@ -211,6 +280,32 @@ int main(void) {
     assert(!KswordArkCallbackEnumRemoveRequestMatchesEntry(&request, &row, FALSE));
     row.status = KSWORD_ARK_CALLBACK_ENUM_STATUS_OK; row.registrationAddress += 8;
     assert(!KswordArkCallbackEnumRemoveRequestMatchesEntry(&request, &row, FALSE));
+
+    reset(6); request.source=KSWORD_ARK_CALLBACK_ENUM_SOURCE_PRIVATE_PATTERN_SCAN;
+    request.registrationAddress=current_context; request.rawStorageValue=current_registration;
+    row=(KSWORD_ARK_CALLBACK_ENUM_ENTRY){0}; row.callbackClass=6; row.status=KSWORD_ARK_CALLBACK_ENUM_STATUS_OK;
+    row.source=request.source; row.callbackAddress=request.callbackAddress; row.contextAddress=current_context;
+    row.registrationAddress=current_registration;
+    assert(KswordArkCallbackEnumRemoveRequestMatchesEntry(&request,&row,TRUE));
+    row.contextAddress+=8; assert(!KswordArkCallbackEnumRemoveRequestMatchesEntry(&request,&row,TRUE)); row.contextAddress-=8;
+    row.registrationAddress+=8; assert(!KswordArkCallbackEnumRemoveRequestMatchesEntry(&request,&row,TRUE));
+    row.callbackAddress=0; row.registrationAddress=current_context; // Callback disappeared but owner is still live.
+    assert(KswordArkCallbackEnumRemoveRequestMatchesEntry(&request,&row,FALSE));
+    row.registrationAddress+=8; assert(!KswordArkCallbackEnumRemoveRequestMatchesEntry(&request,&row,FALSE));
+    request.callbackAddress=request.registrationAddress; request.source=KSWORD_ARK_CALLBACK_ENUM_SOURCE_FLTMGR_ENUMERATION;
+    request.rawStorageValue=0; row.registrationAddress=request.registrationAddress; row.source=request.source;
+    assert(KswordArkCallbackEnumRemoveRequestMatchesEntry(&request,&row,TRUE)); // Existing parent unload still matches.
+
+    reset(KSWORD_ARK_EXTERNAL_CALLBACK_REMOVE_TYPE_PROCESS);
+    row=(KSWORD_ARK_CALLBACK_ENUM_ENTRY){0}; row.status=KSWORD_ARK_CALLBACK_ENUM_STATUS_OK;
+    row.callbackClass=KSWORD_ARK_CALLBACK_ENUM_CLASS_PROCESS; row.callbackAddress=request.callbackAddress;
+    row.registrationAddress=request.registrationAddress;
+    assert(KswordArkCallbackEnumRemoveRequestMatchesEntry(&request,&row,TRUE)); // Legacy remove id 1 maps to enum process id 2.
+    row.callbackClass=KSWORD_ARK_CALLBACK_ENUM_CLASS_REGISTRY;
+    assert(!KswordArkCallbackEnumRemoveRequestMatchesEntry(&request,&row,TRUE));
+    row.callbackClass=KSWORD_ARK_CALLBACK_ENUM_CLASS_PROCESS; row.registrationAddress+=8;
+    assert(!KswordArkCallbackEnumRemoveRequestMatchesEntry(&request,&row,TRUE));
+    assert(KswordArkCallbackEnumRemoveRequestMatchesEntry(&request,&row,FALSE)); // Re-registration in a new slot is still present.
 
     /* Exercise actual prefix decoding; wrong tags, self handles and objects must remain read-only. */
     ULONG64 storage[14]={0}, callback=0, context=0, registration=0; ULONG fields=0;

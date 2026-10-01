@@ -250,14 +250,9 @@ Return Value:
     switch (RequestPacket->callbackClass) {
     case KSWORD_ARK_EXTERNAL_CALLBACK_REMOVE_TYPE_PROCESS:
     {
-        NTSTATUS status = PsSetCreateProcessNotifyRoutineEx(
-            (KSWORD_ARK_PROCESS_NOTIFY_EX)(ULONG_PTR)RequestPacket->callbackAddress,
-            TRUE);
-        if (status == STATUS_PROCEDURE_NOT_FOUND || status == STATUS_INVALID_PARAMETER) {
-            status = PsSetCreateProcessNotifyRoutine(
-                (PCREATE_PROCESS_NOTIFY_ROUTINE)(ULONG_PTR)RequestPacket->callbackAddress,
-                TRUE);
-        }
+        PCWSTR api = L"Process notify unregister"; // 旧地址入口没有子类型，允许共用有限回退。
+        NTSTATUS status = KswordArkCallbackRemoveProcessNotify(RequestPacket->callbackAddress,
+            KSWORD_ARK_CALLBACK_REGISTRATION_TYPE_UNKNOWN, &api); // 回退链包含正规 Ex2 注销 API。
         ResponsePacket->mappingFlags |= KSWORD_ARK_EXTERNAL_CALLBACK_MAPPING_FLAG_PUBLIC_API;
         return status;
     }
@@ -393,14 +388,7 @@ KswordARKCallbackIoctlRemoveExternalCallback( // 实现外部回调移除 IOCTL 
 
     switch (requestCallbackClass) { // 根据缓存后的回调类型分发移除逻辑。
     case KSWORD_ARK_EXTERNAL_CALLBACK_REMOVE_TYPE_PROCESS: // 处理进程创建回调移除。
-        operationStatus = PsSetCreateProcessNotifyRoutineEx( // 优先调用 Ex 版本卸载回调。
-            (KSWORD_ARK_PROCESS_NOTIFY_EX)(ULONG_PTR)requestCallbackAddress, // 传入缓存后的回调函数地址。
-            TRUE); // 指定执行移除操作。
-        if (operationStatus == STATUS_PROCEDURE_NOT_FOUND || operationStatus == STATUS_INVALID_PARAMETER) { // Ex 版本不可用或参数不匹配时执行回退。
-            operationStatus = PsSetCreateProcessNotifyRoutine( // 回退到传统 API 卸载进程回调。
-                (PCREATE_PROCESS_NOTIFY_ROUTINE)(ULONG_PTR)requestCallbackAddress, // 以传统签名传入缓存后的回调地址。
-                TRUE); // 指定执行移除操作。
-        } // 结束进程回调回退逻辑分支。
+        operationStatus = KswordArkCallbackRemovePublicApiByPacket(&requestCopy, responsePacket); // 旧地址入口与 EX 兼容入口共用包含 Ex2 的分发。
         break; // 结束进程回调类型处理。
 
     case KSWORD_ARK_EXTERNAL_CALLBACK_REMOVE_TYPE_THREAD: // 处理线程创建回调移除。
@@ -777,7 +765,10 @@ Return Value:
         goto CompleteRemoveExternalCallbackEx; // 完成拒绝回执。
     } // 结束地址检查。
 
-    if (requestCopy.callbackClass == KSWORD_ARK_EXTERNAL_CALLBACK_REMOVE_TYPE_REGISTRY ||
+    if ((requestCopy.callbackClass == KSWORD_ARK_EXTERNAL_CALLBACK_REMOVE_TYPE_PROCESS &&
+         requestCopy.source != KSWORD_ARK_CALLBACK_ENUM_SOURCE_KSWORD_SELF) || // 外部进程行恢复子类型并确认注销。
+        requestCopy.callbackClass == KSWORD_ARK_EXTERNAL_CALLBACK_REMOVE_TYPE_MINIFILTER || // 父子行均核对所属过滤器。
+        requestCopy.callbackClass == KSWORD_ARK_EXTERNAL_CALLBACK_REMOVE_TYPE_REGISTRY ||
         requestCopy.callbackClass >= KSWORD_ARK_EXTERNAL_CALLBACK_REMOVE_TYPE_GENERIC_KERNEL) {
         operationStatus = KswordArkCallbackRemoveExtendedPublic(&requestCopy, responsePacket); // 扩展类别只使用完整 EX 行身份。
         goto CompleteRemoveExternalCallbackEx; // 保留后端具体诊断。
@@ -824,7 +815,7 @@ Return Value:
     (VOID)RtlStringCbPrintfW(responsePacket->message, sizeof(responsePacket->message),
         L"%ws: %ws (NTSTATUS=0x%08lX). %ws", // 同时保留具体 API、原始状态和常见拒绝原因。
         requestCopy.callbackClass == KSWORD_ARK_EXTERNAL_CALLBACK_REMOVE_TYPE_PROCESS
-            ? L"PsSetCreateProcessNotifyRoutineEx / PsSetCreateProcessNotifyRoutine"
+            ? L"PsSetCreateProcessNotifyRoutineEx / PsSetCreateProcessNotifyRoutine / PsSetCreateProcessNotifyRoutineEx2"
             : requestCopy.callbackClass == KSWORD_ARK_EXTERNAL_CALLBACK_REMOVE_TYPE_THREAD
                 ? L"PsRemoveCreateThreadNotifyRoutine"
                 : requestCopy.callbackClass == KSWORD_ARK_EXTERNAL_CALLBACK_REMOVE_TYPE_IMAGE

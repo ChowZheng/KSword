@@ -16,6 +16,7 @@ with tempfile.TemporaryDirectory(prefix='ksword-callback-remove-') as directory:
     backend = (source_dir / 'callback_remove_extended.c').read_text(encoding='utf-8')
     backend = backend.replace('#include "callback_internal.h"', '/* Mock declarations supplied by harness. */')
     backend = backend.replace('#include "callback_extended_internal.h"', '/* Mock export resolver. */')
+    backend = backend.replace('#include "callback_external_minifilter.h"', '/* Mock public filter unload backend. */')
     registry = (source_dir / 'callback_registry_identity.c').read_text(encoding='utf-8').replace('#include "callback_internal.h"', '/* Mock runtime and reader. */')
     identity = (source_dir / 'callback_special_identity.h').read_text(encoding='utf-8').replace('#pragma once', '')
     snapshot = (source_dir / 'callback_snapshot.c').read_text(encoding='utf-8')

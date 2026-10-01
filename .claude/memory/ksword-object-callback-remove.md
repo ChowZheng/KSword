@@ -65,3 +65,28 @@ metadata:
 - 本次主程序/驱动 Release 构建及语言/主题审计通过；驱动编译零警告、x64 ApiValidator
   和 Inf2Cat 通过。最终驱动为未签名产物；主程序测试签名信任验证返回 0x80096019。
   没有进行实机加载或外部回调注销验收，不能把构建/模拟 API 回归等同于实机支持矩阵。
+
+## 进程 Ex2 与 Minifilter 回调行卸载（2026-10-01）
+
+- 进程 Ex2 原来只有枚举分类，注销后端漏接。`callback_remove_extended.c` 现在按重枚举的
+  Legacy/Ex/Ex2 子类型调用配对 API；Ex2 动态解析 `PsSetCreateProcessNotifyRoutineEx2`，传
+  `PsCreateProcessNotifySubsystems`、函数地址、`TRUE`。旧手工地址入口复用同一分发，只有
+  Ex/Legacy 返回 INVALID_PARAMETER 或 PROCEDURE_NOT_FOUND 时才继续尝试 Ex2。
+  EX 请求通过真实 notify 数组核对行身份，后置按函数确认存在性；读取失败不能当成目标消失，
+  活跃 Context/注册标记读取失败不能默认为 Legacy，完整空数组可以确认最后一项已注销。
+  旧移除类别 PROCESS=1 与枚举 PROCESS=2 的映射必须同时用于 matcher 和查询错误归属。
+- Minifilter Pre/Post 行允许“卸载所属过滤器”，包括 PRIVATE_PATTERN_SCAN；公开父行仍可整体
+  卸载。子行继续保留枚举 `registrationAddress` 的操作记录含义，避免破坏写注册记录监视。
+  R3 构造 EX 请求时将所属 FilterObject（子行 contextAddress）放入 request.registrationAddress，
+  将操作记录地址放入 request.rawStorageValue，callbackAddress 仍为真实回调函数。
+  R0 前置按函数、所属对象、操作记录、来源、掩码重枚举唯一匹配，然后复用
+  FltEnumerateFilters/FltUnloadFilter；父行卸载不依赖私有 Operations 定位。
+  后置仅枚举公开 FilterObject 父行，即使私有回调已消失但过滤器还在，也不能报告整体卸载成功。
+  不增加 IOCTL、不改协议结构布局；主程序与驱动应一起更新。
+- 私有定位子行仍显示 fallback/pattern 与候选 `!`，公开卸载能力不提升定位可信等级。
+  菜单、提示和确认框明确卸载全部回调与实例；保留过滤器拒绝卸载的原始 NTSTATUS。
+- `tools/callback_remove_tests` 已增加实际生产注销函数的模拟回归：配对 API、Ex2 参数、
+  缺失导出、旧入口回退、所属对象传参、拒绝卸载、后置失败、对象仍存与父子行身份核对。
+  模拟测试与构建验证不替代实机加载/注销验收。
+- 本次主程序与驱动最终 Release/x64 Build 均为零警告、零错误，Qt/VC 部署完成；驱动
+  x64 ApiValidator 与 Inf2Cat 通过。构建跳过自动签名，未执行实机加载或外部注销/卸载。

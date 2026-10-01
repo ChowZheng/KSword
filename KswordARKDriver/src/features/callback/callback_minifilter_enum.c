@@ -577,6 +577,10 @@ Routine Description:
             : KSWORD_ARK_CALLBACK_TRUST_FALLBACK_PATTERN);
     entry->lastStatus = STATUS_SUCCESS;
 
+    entry->fieldFlags |= KSWORD_ARK_CALLBACK_ENUM_FIELD_REMOVABLE_CANDIDATE; // 回调行可发起所属过滤器整体卸载，仍保留定位来源等级。
+    entry->removeBehavior = KSWORD_ARK_CALLBACK_REMOVE_BEHAVIOR_PUBLIC_API |
+        KSWORD_ARK_CALLBACK_REMOVE_BEHAVIOR_REQUIRE_REVALIDATION; // 仅走公开 FilterObject 卸载，不改操作表。
+
     if (Operation->MajorFunction < 32U) {
         entry->operationMask = 1UL << Operation->MajorFunction;
         entry->fieldFlags |= KSWORD_ARK_CALLBACK_ENUM_FIELD_OPERATION_MASK;
@@ -680,6 +684,11 @@ Routine Description:
     RtlZeroMemory(filterName, sizeof(filterName));
     RtlZeroMemory(altitude, sizeof(altitude));
 
+    if (Builder->RemoveMatchRequest != NULL && !Builder->RemoveMatchIdentity) { // 整体卸载后只需确认公开过滤器对象仍存在。
+        (VOID)KswordArkMinifilterAddParentRow(Builder, FilterObject, NULL, STATUS_SUCCESS, NULL, L"", L""); // 不查询私有操作布局或显示信息。
+        return; // 不能用私有回调读取失败冒充对象消失。
+    } // 结束公开对象后置确认。
+
     filterInfoStatus = KswordArkMinifilterQueryFilterInfo(FilterObject, &filterInfo);
     if (NT_SUCCESS(filterInfoStatus) && filterInfo != NULL) {
         KswordArkMinifilterCopyPublicText(
@@ -695,6 +704,13 @@ Routine Description:
             RTL_NUMBER_OF(filterName),
             L"<unnamed minifilter>");
     }
+
+    if (Builder->RemoveMatchRequest != NULL &&
+        Builder->RemoveMatchRequest->source == KSWORD_ARK_CALLBACK_ENUM_SOURCE_FLTMGR_ENUMERATION) { // 父行卸载只验证公开对象，不依赖私有 Operations。
+        (VOID)KswordArkMinifilterAddParentRow(Builder, FilterObject, filterInfo, filterInfoStatus, NULL, filterName, altitude); // 重建公开父行。
+        if (filterInfo != NULL) { ExFreePool(filterInfo); } // 释放公开查询缓冲。
+        return; // 私有回调定位失败不影响公开整体卸载。
+    } // 结束父行前置验证。
 
     layoutFound = KswordArkMinifilterLocateOperations(ModuleCache, FilterObject, &layout);
     (VOID)KswordArkMinifilterAddParentRow(
@@ -866,6 +882,7 @@ Routine Description:
         return;
     }
     if (filterCount == 0UL) {
+        Builder->RemoveTargetContainerEmpty = TRUE; // 公开 API 确认空过滤器集合，可作为卸载后缺失证据。
         KswordArkCallbackEnumAddUnsupportedRow(
             Builder,
             KSWORD_ARK_CALLBACK_ENUM_CLASS_MINIFILTER,
@@ -899,7 +916,10 @@ Routine Description:
     (VOID)KswordArkCallbackEnumEnsureModuleCache(&moduleCache);
     for (filterIndex = 0UL; filterIndex < filterCount; ++filterIndex) {
         if (filterList[filterIndex] != NULL) {
-            KswordArkMinifilterAddFilter(Builder, &moduleCache, filterList[filterIndex]);
+            if (Builder->RemoveMatchRequest == NULL || !Builder->RemoveMatchIdentity ||
+                (ULONG64)(ULONG_PTR)filterList[filterIndex] == Builder->RemoveMatchRequest->registrationAddress) { // 前置只定位选中对象的回调，隔离其它过滤器私有读取失败。
+                KswordArkMinifilterAddFilter(Builder, &moduleCache, filterList[filterIndex]); // 后置仍遍历完整公开对象集合。
+            } // 结束目标对象筛选。
             FltObjectDereference(filterList[filterIndex]);
         }
     }

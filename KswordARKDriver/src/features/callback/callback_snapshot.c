@@ -167,13 +167,39 @@ Routine Description:
         return FALSE;
     }
 
+    if (RequestPacket->callbackClass == KSWORD_ARK_EXTERNAL_CALLBACK_REMOVE_TYPE_MINIFILTER) { // Minifilter 请求把所属 FilterObject 与操作记录分别携带。
+        if (Entry->callbackClass != KSWORD_ARK_CALLBACK_ENUM_CLASS_MINIFILTER ||
+            Entry->status != KSWORD_ARK_CALLBACK_ENUM_STATUS_OK) { // 诊断行不是活跃过滤器。
+            return FALSE; // 拒绝类别或状态不符。
+        } // 结束类别检查。
+        if (!MatchIdentity) { // 卸载整个过滤器后只检查公开父行对象是否仍存在。
+            return Entry->callbackAddress == 0ULL &&
+                Entry->registrationAddress == RequestPacket->registrationAddress; // 与私有操作布局和函数地址无关。
+        } // 结束后置匹配。
+        return RequestPacket->identityHash != 0ULL && Entry->source == RequestPacket->source &&
+            Entry->operationMask == RequestPacket->operationMask && Entry->objectTypeMask == RequestPacket->objectTypeMask &&
+            (Entry->callbackAddress == 0ULL // 父行 callbackAddress=0；旧 API 请求值仍为 FilterObject。
+                ? Entry->registrationAddress == RequestPacket->callbackAddress &&
+                    Entry->registrationAddress == RequestPacket->registrationAddress // 父行的 Operations 指针只是诊断信息，不能阻断公开卸载。
+                : Entry->callbackAddress == RequestPacket->callbackAddress &&
+                    Entry->contextAddress == RequestPacket->registrationAddress && Entry->registrationAddress == RequestPacket->rawStorageValue); // 子行精确核对函数、所属对象和操作记录。
+    } // 结束 Minifilter 身份契约。
+
+    if (!MatchIdentity && RequestPacket->callbackClass == KSWORD_ARK_EXTERNAL_CALLBACK_REMOVE_TYPE_PROCESS) { // 公开 API 按函数注销，后置不能仅检查原槽。
+        return Entry->status == KSWORD_ARK_CALLBACK_ENUM_STATUS_OK &&
+            Entry->callbackClass == KSWORD_ARK_CALLBACK_ENUM_CLASS_PROCESS &&
+            Entry->callbackAddress == RequestPacket->callbackAddress; // 若相同函数重新注册到另一槽仍应报告存在。
+    } // 结束进程后置存在性匹配。
+
     // Object 的历史移除编号为 4；新扩展类别的编号与枚举类别一致。
     return Entry->status == KSWORD_ARK_CALLBACK_ENUM_STATUS_OK && // 未注册诊断行不能算作仍注册。
         Entry->callbackClass ==
         (RequestPacket->callbackClass == KSWORD_ARK_EXTERNAL_CALLBACK_REMOVE_TYPE_OBJECT
             ? KSWORD_ARK_CALLBACK_ENUM_CLASS_OBJECT
             : RequestPacket->callbackClass == KSWORD_ARK_EXTERNAL_CALLBACK_REMOVE_TYPE_REGISTRY
-                ? KSWORD_ARK_CALLBACK_ENUM_CLASS_REGISTRY : RequestPacket->callbackClass) &&
+                ? KSWORD_ARK_CALLBACK_ENUM_CLASS_REGISTRY
+                : RequestPacket->callbackClass == KSWORD_ARK_EXTERNAL_CALLBACK_REMOVE_TYPE_PROCESS
+                    ? KSWORD_ARK_CALLBACK_ENUM_CLASS_PROCESS : RequestPacket->callbackClass) && // 旧进程移除编号与枚举编号不同。
         Entry->callbackAddress == RequestPacket->callbackAddress &&
         ((!MatchIdentity && RequestPacket->callbackClass == KSWORD_ARK_EXTERNAL_CALLBACK_REMOVE_TYPE_REGISTRY)
             ? Entry->rawStorageValue == RequestPacket->rawStorageValue // 校准随自身注册变化时仍按原始节点确认。
@@ -263,7 +289,9 @@ Return Value:
         entry->callbackClass == (Builder->RemoveMatchRequest->callbackClass == KSWORD_ARK_EXTERNAL_CALLBACK_REMOVE_TYPE_OBJECT
             ? KSWORD_ARK_CALLBACK_ENUM_CLASS_OBJECT
             : Builder->RemoveMatchRequest->callbackClass == KSWORD_ARK_EXTERNAL_CALLBACK_REMOVE_TYPE_REGISTRY
-                ? KSWORD_ARK_CALLBACK_ENUM_CLASS_REGISTRY : Builder->RemoveMatchRequest->callbackClass) &&
+                ? KSWORD_ARK_CALLBACK_ENUM_CLASS_REGISTRY
+                : Builder->RemoveMatchRequest->callbackClass == KSWORD_ARK_EXTERNAL_CALLBACK_REMOVE_TYPE_PROCESS
+                    ? KSWORD_ARK_CALLBACK_ENUM_CLASS_PROCESS : Builder->RemoveMatchRequest->callbackClass) && // 同步进程错误归属编号。
         NT_SUCCESS(Builder->RemoveQueryStatus) && // 保留更早的具体读取错误。
         (entry->status == KSWORD_ARK_CALLBACK_ENUM_STATUS_QUERY_FAILED ||
          (entry->status == KSWORD_ARK_CALLBACK_ENUM_STATUS_UNSUPPORTED &&
