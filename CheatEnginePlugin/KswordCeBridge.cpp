@@ -2,6 +2,7 @@
 #include "../DebuggerBackend/KswordDebuggerBackend.h"
 
 #include <mutex>
+#include <string>
 #include <vector>
 
 namespace ksword::ce
@@ -113,6 +114,7 @@ namespace ksword::ce
         if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN,
             reinterpret_cast<LPCWSTR>(&initializeBridge), &pinned)) return FALSE;
         const bool driverReady = debugger::backend().initialize();
+        const DWORD driverError = driverReady ? ERROR_SUCCESS : GetLastError();
         {
             std::lock_guard<std::mutex> lock(g_mutex);
             if (g_functions != nullptr) return g_functions == functions ? TRUE : FALSE;
@@ -126,8 +128,9 @@ namespace ksword::ce
             std::lock_guard<std::mutex> lock(g_mutex);
             g_registrationId = id;
         }
-        debugger::backend().log(driverReady ? "CE adapter installed 15 memory/thread/debugger function hooks" :
-            "CE bridge connected; R0 unavailable, CE retains its native function table");
+        debugger::backend().log(driverReady ? "CE adapter installed 15 memory/thread/debugger function hooks; edits and freeze share write policy" :
+            "CE bridge connected; explicit native route: R0 unavailable (error " + std::to_string(driverError) +
+            "), CE retains its native function table; Shadow/HVM memory policy is not active");
         return TRUE;
     }
 

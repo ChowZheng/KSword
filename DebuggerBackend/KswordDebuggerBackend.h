@@ -7,6 +7,7 @@
 
 #include <Windows.h>
 #include <array>
+#include <bitset>
 #include <atomic>
 #include <mutex>
 #include <memory>
@@ -24,6 +25,13 @@ namespace ksword::debugger
         DWORD dispatch(KSWORD_DEBUGGER_CALL& call);
         DWORD setUseHvm(bool enabled);
         KSWORD_DEBUGGER_BACKEND_STATUS status();
+        KSWORD_DEBUGGER_OPTIONS options();
+        DWORD setOptions(const KSWORD_DEBUGGER_OPTIONS& options);
+        KSWORD_DEBUGGER_POLICY_STATUS policyStatus();
+        bool preferShadowExecution();
+        void recordFallback(const std::string& source, const std::string& destination,
+            DWORD error, const std::string& reason);
+        DWORD restoreShadowWrites(std::uint64_t address = 0, std::uint64_t bytes = 0);
         HANDLE openProcess(DWORD access, BOOL inherit, DWORD pid);
         DWORD processId(HANDLE process);
         BOOL readMemory(HANDLE process, LPCVOID address, LPVOID data, SIZE_T bytes, SIZE_T* transferred);
@@ -56,6 +64,9 @@ namespace ksword::debugger
         BOOL applyNativeDebugContext(HANDLE thread, const CONTEXT* context,
             NativeDebugWriter writer, void* opaque, std::uint64_t generation = 0);
         void log(const std::string& message);
+        // Coalesce exact warning keys across interleaved calls. Emit the first
+        // and cumulative 10/100/1000/... occurrences; preserve caller LastError.
+        void logRepeated(const std::string& message);
         void overlayShadowBytes(DWORD pid, std::uint64_t address, void* data, SIZE_T bytes);
     private:
 #ifdef KSWORD_DEBUGGER_TESTING
@@ -69,6 +80,8 @@ namespace ksword::debugger
             std::uint64_t generation = 0;
             bool shadow = false;
         };
+        static bool nativeDataOnlyRecord(const ThreadBreakpoints& record);
+        bool hasHvmBreakpointRules() const;
         // One lock serializes policy changes with high-frequency memory access.
         std::recursive_mutex mutex_;
         ark::DriverClient client_;
@@ -80,8 +93,34 @@ namespace ksword::debugger
         bool ownsResident_ = false;
         bool monitorAttachment_ = false;
         bool nativeContextFallback_ = false;
+        DWORD nativeContextFallbackError_ = ERROR_SUCCESS;
+        KSWORD_DEBUGGER_OPTIONS options_{KSWORD_DEBUGGER_OPTIONS_VERSION, sizeof(KSWORD_DEBUGGER_OPTIONS),
+            KSWORD_DEBUGGER_MODE_NORMAL, 0, 1, 1, 1, 1, 32, {0, 0, 0}};
+        DWORD fallbackCount_ = 0;
+        DWORD lastFallbackError_ = ERROR_SUCCESS;
+        struct RepeatedLog { std::uint64_t occurrences = 0, stamp = 0; };
+        std::unordered_map<std::string, RepeatedLog> repeatedLogs_;
+        std::uint64_t repeatedLogClock_ = 0;
+        struct ShadowWritePage
+        {
+            std::bitset<4096> mask;
+            std::array<unsigned char, 4096> bytes{};
+        };
+        struct ShadowWriteTarget
+        {
+            ark::DriverHandle identity;
+            std::unordered_map<std::uint64_t, ShadowWritePage> pages;
+        };
+        std::unordered_map<DWORD, ShadowWriteTarget> shadowWrites_;
+        DWORD shadowWritePageCount() const;
+        bool hasShadowViews() const;
+        bool shadowMemoryWrite(DWORD pid, std::uint64_t address, const void* data,
+            SIZE_T bytes, SIZE_T& transferred, bool& handled);
         std::unordered_set<std::uint64_t> shadowInt3_;
         bool shadowPrepared_ = false;
+        bool shadowRecoveryRequired_ = false;
+        std::unordered_set<DWORD> shadowQuarantinedTargets_;
+        bool ordinaryDataFallback_ = false;
         std::unordered_map<std::uint64_t, DWORD> shadowReferences_;
         struct ShadowStop { std::uint64_t address; DWORD mask; bool userStep; bool stepping; };
         std::unordered_map<DWORD, ShadowStop> shadowStops_;

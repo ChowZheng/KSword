@@ -188,21 +188,25 @@ NTSTATUS KswordARKDebuggerControl(WDFDEVICE Device, ULONG OwnerProcessId, const 
     if (KeGetCurrentIrql() != PASSIVE_LEVEL) { Response->status = STATUS_INVALID_DEVICE_STATE; return STATUS_SUCCESS; }
     /* Reject foreign revisions, invalid operations, and undefined flags. */
     if (Request->version != KSWORD_ARK_DEBUGGER_VERSION || Request->size != sizeof(*Request) ||
-        Request->operation > KSWORD_ARK_DEBUGGER_SHADOW_REMOVE || Request->reserved != 0UL || Request->reservedArgument != 0ULL ||
+        Request->operation > KSWORD_ARK_DEBUGGER_SHADOW_QUARANTINE || Request->reserved != 0UL || Request->reservedArgument != 0ULL ||
         (Request->flags & ~KSWORD_ARK_DEBUGGER_FLAG_CONFIRMED) != 0UL) { Response->status = STATUS_INVALID_PARAMETER; return STATUS_SUCCESS; }
     /* Advertise only native routines present on the running Windows build. */
-    Response->capabilities = KSWORD_ARK_DEBUGGER_CAP_MEMORY | KSWORD_ARK_DEBUGGER_CAP_SHADOW_INT3;
+    Response->capabilities = KSWORD_ARK_DEBUGGER_CAP_MEMORY | KSWORD_ARK_DEBUGGER_CAP_SHADOW_INT3 | KSWORD_ARK_DEBUGGER_CAP_SHADOW_WRITES;
     /* Publish native context support only with both operations available. */
     if (KswordARKDebuggerResolve(L"PsGetContextThread") != NULL && KswordARKDebuggerResolve(L"PsSetContextThread") != NULL) { Response->capabilities |= KSWORD_ARK_DEBUGGER_CAP_CONTEXT; }
     /* Publish previous-count control only with both kernel-handle operations. */
     if (KswordARKDebuggerResolve(L"ZwSuspendThread") != NULL && KswordARKDebuggerResolve(L"ZwResumeThread") != NULL) { Response->capabilities |= KSWORD_ARK_DEBUGGER_CAP_SUSPEND; }
     /* A capability query performs no target operation. */
-    if (Request->operation == KSWORD_ARK_DEBUGGER_QUERY) { return STATUS_SUCCESS; }
+    if (Request->operation == KSWORD_ARK_DEBUGGER_QUERY) {
+        Response->reserved1 = NT_SUCCESS(KswordARKDebuggerShadowValidateViews(OwnerProcessId)) ? 0ULL : 1ULL;
+        return STATUS_SUCCESS;
+    }
     /* Kernel/system processes and null thread IDs are outside this user-debugger contract. */
     if (Request->processId <= 4UL || (Request->operation <= KSWORD_ARK_DEBUGGER_RESUME && Request->threadId == 0UL)) { Response->status = STATUS_INVALID_PARAMETER; return STATUS_SUCCESS; }
     /* Preserve central policy for each mutating user operation. */
     if (Request->operation != KSWORD_ARK_DEBUGGER_GET_CONTEXT && Request->operation != KSWORD_ARK_DEBUGGER_RESUME &&
-        Request->operation != KSWORD_ARK_DEBUGGER_SHADOW_REMOVE) {
+        Request->operation != KSWORD_ARK_DEBUGGER_SHADOW_REMOVE && Request->operation != KSWORD_ARK_DEBUGGER_SHADOW_RESTORE &&
+        Request->operation != KSWORD_ARK_DEBUGGER_SHADOW_QUARANTINE) {
         /* Initialize policy evidence before mutating the target. */
         KSWORD_ARK_SAFETY_CONTEXT safety = { 0 };
         /* Classify thread suspension separately from memory/register edits. */

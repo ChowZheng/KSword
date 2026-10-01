@@ -12,3 +12,7 @@
 The generated runtime manifest records hashes of the actual supplied binaries
 and the selected canonical engine ABI. A source commit alone is not proof that
 an arbitrary downloaded binary implements the current engine ABI.
+
+`KSword-x96dbg-source.zip` also retains the current shared protocols and
+debugger/HVM driver sources, including local changes, with original licenses
+and per-file SHA256 hashes.

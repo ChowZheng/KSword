@@ -15,6 +15,10 @@ namespace ksword::titan
     DWORD getSeamError();
     bool hasPendingDebug();
     bool hasHardwareBindings();
+    DWORD adapterBreakpointCount();
+    DWORD adapterBreakpointPath();
+    bool hasPendingBindingChanges();
+    void clearSoftwareBindings();
     void clearHardwareBindings();
     void clearDeferredSteps();
     bool nativeEventHeld();

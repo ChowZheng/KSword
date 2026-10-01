@@ -655,8 +655,8 @@ namespace
         return true;
     }
 
-    bool loadPluginManifest(
-        const QString& pluginRoot,
+    bool loadPluginManifestDirectory(
+        const QString& pluginDirectory,
         const QString& pluginId,
         PluginDescriptor* descriptorOut,
         QString* errorOut)
@@ -670,7 +670,6 @@ namespace
             return false;
         }
 
-        const QString pluginDirectory = QDir(pluginRoot).filePath(pluginId);
         const QFileInfo manifestInfo(QDir(pluginDirectory).filePath(QStringLiteral("plugin.json")));
         if (!manifestInfo.isFile() || manifestInfo.size() > kMaxManifestBytes)
         {
@@ -809,6 +808,16 @@ namespace
         }
         *descriptorOut = descriptor;
         return true;
+    }
+
+    bool loadPluginManifest(
+        const QString& pluginRoot,
+        const QString& pluginId,
+        PluginDescriptor* descriptorOut,
+        QString* errorOut)
+    {
+        return loadPluginManifestDirectory(
+            QDir(pluginRoot).filePath(pluginId), pluginId, descriptorOut, errorOut);
     }
 
     bool discoverPlugins(PluginListResult* resultOut, QString* errorOut)
@@ -1899,8 +1908,17 @@ namespace
             return false;
         }
 
+        // Both marketplace layouts are accepted: plugin.json at the ZIP root,
+        // or a single install-directory wrapper. Validate the actual extracted
+        // directory before changing the installed plugin.
+        const bool manifestAtRoot = QFileInfo(
+            QDir(stagingDirectory).filePath(QStringLiteral("plugin.json"))).isFile();
+        const QString extractedDirectory = manifestAtRoot
+            ? stagingDirectory
+            : QDir(stagingDirectory).filePath(plugin.installDirectory);
         PluginDescriptor extractedDescriptor;
-        if (!loadPluginManifest(stagingDirectory, plugin.installDirectory, &extractedDescriptor, errorOut))
+        if (!loadPluginManifestDirectory(
+                extractedDirectory, plugin.installDirectory, &extractedDescriptor, errorOut))
         {
             return false;
         }
@@ -1912,7 +1930,9 @@ namespace
 
         QDir rootDirectory(pluginRoot);
         const QString stagingName = QFileInfo(stagingDirectory).fileName();
-        const QString stagedPluginPath = stagingName + QChar('/') + plugin.installDirectory;
+        const QString stagedPluginPath = manifestAtRoot
+            ? stagingName
+            : stagingName + QChar('/') + plugin.installDirectory;
         const QString backupName = QStringLiteral(".ksword-plugin-backup-%1-%2")
             .arg(plugin.installDirectory, QUuid::createUuid().toString(QUuid::WithoutBraces));
         const QString targetPath = rootDirectory.filePath(plugin.installDirectory);

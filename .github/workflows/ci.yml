@@ -435,6 +435,13 @@ jobs:
             throw "DWM order model/agent protocol tests failed with exit code $LASTEXITCODE."
           }
 
+          # Exercise the actual marketplace parser/promotion functions for both
+          # ZIP layouts; invalid manifests must preserve the installed plugin.
+          python 'tools/test_plugin_install_layout.py' --msbuild $msbuild --qt-dir $env:KSWORD_QT_DIR
+          if ($LASTEXITCODE -ne 0) {
+            throw "Plugin installation layout regression failed with exit code $LASTEXITCODE."
+          }
+
       - name: Verify primary build artifacts
         shell: pwsh
         run: |

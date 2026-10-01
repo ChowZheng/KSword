@@ -2,6 +2,8 @@
 
 #include <cstring>
 #include <future>
+#include <fstream>
+#include <filesystem>
 #include <iostream>
 #include <map>
 #include <stdexcept>
@@ -18,6 +20,20 @@ namespace
         std::vector<SIZE_T> writeSizes;
         DWORD readCalls = 0, windowTransfers = 0;
         bool missingWindow = false;
+        bool executableMemory = true, failShadowWrite = false, invalidShadowView = false, quarantined = false;
+        bool workingSetValid = true, workingSetShared = false, currentPfnMatches = true;
+        DWORD memoryType = MEM_PRIVATE;
+        int failShadowWriteAfter = -1;
+        int failShadowAddAfter = -1;
+        DWORD controlCalls = 0, contextReads = 0, contextWrites = 0, shadowMutations = 0;
+        bool failContextRead = false;
+        bool eptSupported = true;
+        struct ShadowPage
+        {
+            std::bitset<4096> patches, stops;
+            std::array<unsigned char, 4096> bytes{};
+        };
+        std::map<std::uint64_t, ShadowPage> shadowPages;
         std::map<DWORD, KSWORD_ARK_HVM_DEBUG_REQUEST> stops;
     } model;
     void require(bool condition, const char* message)
@@ -78,10 +94,13 @@ namespace ksword::ark
     HvmControlResult DriverClient::controlHvm(unsigned long command, unsigned long, bool, bool, bool,
         bool, bool, bool, bool, bool, bool, bool, unsigned long, bool) const
     {
+        ++model.controlCalls;
         HvmControlResult result{}; result.io = success(sizeof(result.response));
         if (command == KSWORD_ARK_HVM_CONTROL_PREPARE) model.prepared = true;
         if (command == KSWORD_ARK_HVM_CONTROL_START_RESIDENT)
         {
+            if (model.quarantined)
+            { result.response.status = KSWORD_ARK_HVM_CONTROL_STATUS_LIFECYCLE_GUARD_FAILED; result.response.lastStatus = static_cast<LONG>(0xC0000184UL); return result; }
             if (model.failStart)
             {
                 model.failStart = false;
@@ -109,8 +128,15 @@ namespace ksword::ark
         }
         return result;
     }
-    VirtualMemoryQueryResult DriverClient::queryVirtualMemory(std::uint32_t, std::uint64_t, unsigned long, DriverHandle*) const
-    { VirtualMemoryQueryResult result{}; result.io.win32Error = ERROR_NOT_SUPPORTED; return result; }
+    VirtualMemoryQueryResult DriverClient::queryVirtualMemory(std::uint32_t, std::uint64_t address, unsigned long, DriverHandle*) const
+    {
+        VirtualMemoryQueryResult result{}; result.io = success();
+        result.queryStatus = KSWORD_ARK_MEMORY_QUERY_STATUS_OK; result.fieldFlags = KSWORD_ARK_MEMORY_FIELD_BASIC_PRESENT;
+        result.baseAddress = address & ~0xfffULL; result.regionSize = 4096; result.state = MEM_COMMIT;
+        result.protect = model.executableMemory ? PAGE_EXECUTE_READ : PAGE_READWRITE;
+        result.type = model.memoryType;
+        return result;
+    }
     VirtualMemoryReadResult DriverClient::readVirtualMemory(std::uint32_t, std::uint64_t, std::uint32_t bytes,
         unsigned long, DriverHandle*) const
     {
@@ -138,7 +164,7 @@ namespace ksword::ark
         {
             const auto& request = *static_cast<const KSWORD_ARK_HVM_DEBUG_REQUEST*>(input);
             auto& response = *static_cast<KSWORD_ARK_HVM_DEBUG_RESPONSE*>(output);
-            response = {}; response.version = KSWORD_ARK_HVM_DEBUG_VERSION; response.size = sizeof(response); response.supported = 1;
+            response = {}; response.version = KSWORD_ARK_HVM_DEBUG_VERSION; response.size = sizeof(response); response.supported = model.eptSupported ? 1U : 0U;
             if (request.operation == KSWORD_ARK_HVM_DEBUG_ADD)
             {
                 require(!model.resident, "Rule mutation occurred during residency");
@@ -161,14 +187,77 @@ namespace ksword::ark
             const auto& request = *static_cast<const KSWORD_ARK_DEBUGGER_REQUEST*>(input);
             auto& response = *static_cast<KSWORD_ARK_DEBUGGER_RESPONSE*>(output);
             response = {}; response.version = KSWORD_ARK_DEBUGGER_VERSION; response.size = sizeof(response);
+            response.capabilities = KSWORD_ARK_DEBUGGER_CAP_SHADOW_INT3 | KSWORD_ARK_DEBUGGER_CAP_SHADOW_WRITES;
+            response.reserved1 = model.invalidShadowView || model.quarantined ? KSWORD_ARK_DEBUGGER_SHADOW_INVALID_VIEW : 0;
             require((request.contextFlags & CONTEXT_XSTATE) != CONTEXT_XSTATE,
                 "Extended state was routed through the fixed 1232-byte R0 protocol");
             if (request.operation == KSWORD_ARK_DEBUGGER_GET_CONTEXT)
             {
+                ++model.contextReads;
+                if (model.failContextRead) { response.status = static_cast<LONG>(0xC0000001UL); return success(outputBytes); }
                 CONTEXT native = model.native; native.ContextFlags = request.contextFlags;
                 std::memcpy(response.context, &native, sizeof(native));
             }
-            if (request.operation == KSWORD_ARK_DEBUGGER_SET_CONTEXT) std::memcpy(&model.native, request.context, sizeof(model.native));
+            if (request.operation == KSWORD_ARK_DEBUGGER_SET_CONTEXT) { ++model.contextWrites; std::memcpy(&model.native, request.context, sizeof(model.native)); }
+            if (request.operation >= KSWORD_ARK_DEBUGGER_SHADOW_ADD)
+            {
+                ++model.shadowMutations;
+                require(!model.resident, "Shadow mutation occurred while HVM was resident");
+                if (request.operation == KSWORD_ARK_DEBUGGER_SHADOW_QUARANTINE)
+                { model.quarantined = true; return success(outputBytes); }
+                if (request.operation == KSWORD_ARK_DEBUGGER_SHADOW_RESTORE && request.address == 0 && request.bytes == 0)
+                {
+                    for (auto page = model.shadowPages.begin(); page != model.shadowPages.end();)
+                    {
+                        page->second.patches.reset();
+                        if (page->second.stops.none()) page = model.shadowPages.erase(page); else ++page;
+                    }
+                    model.quarantined = false; return success(outputBytes);
+                }
+                if (request.operation == KSWORD_ARK_DEBUGGER_SHADOW_ADD || request.operation == KSWORD_ARK_DEBUGGER_SHADOW_WRITE)
+                {
+                    // Model the driver's post-pin eligibility proof. Allocation
+                    // type stays IMAGE/MAPPED after COW; Shared, not type, is decisive.
+                    if ((model.memoryType != MEM_PRIVATE && model.memoryType != MEM_IMAGE && model.memoryType != MEM_MAPPED) ||
+                        !model.workingSetValid || model.workingSetShared)
+                    {
+                        response.reserved1 = model.workingSetShared ? KSWORD_ARK_DEBUGGER_SHADOW_BACKING_SHARED :
+                            KSWORD_ARK_DEBUGGER_SHADOW_BACKING_UNVERIFIABLE;
+                        response.status = static_cast<LONG>(0xC00000BBUL); return success(outputBytes);
+                    }
+                    if (!model.currentPfnMatches)
+                    {
+                        response.reserved1 = KSWORD_ARK_DEBUGGER_SHADOW_MAPPING_CHANGED;
+                        response.status = static_cast<LONG>(0xC0000141UL); return success(outputBytes);
+                    }
+                }
+                if (request.operation == KSWORD_ARK_DEBUGGER_SHADOW_WRITE && model.failShadowWrite)
+                { response.status = static_cast<LONG>(0xC00000BBUL); return success(outputBytes); }
+                if (request.operation == KSWORD_ARK_DEBUGGER_SHADOW_ADD && model.failShadowAddAfter >= 0 && model.failShadowAddAfter-- == 0)
+                { model.failShadowAddAfter = -1; response.status = static_cast<LONG>(0xC0000017UL); return success(outputBytes); }
+                if (request.operation == KSWORD_ARK_DEBUGGER_SHADOW_WRITE && model.failShadowWriteAfter >= 0)
+                {
+                    if (model.failShadowWriteAfter-- == 0)
+                    { model.failShadowWriteAfter = -1; response.status = static_cast<LONG>(0xC00000BBUL); return success(outputBytes); }
+                }
+                const auto base = request.address & ~0xfffULL;
+                const auto offset = static_cast<SIZE_T>(request.address & 0xfffULL);
+                require(request.bytes != 0 && request.bytes <= 4096 - offset,
+                    "Shadow mutation exceeded a single page");
+                if (request.operation == KSWORD_ARK_DEBUGGER_SHADOW_WRITE)
+                    require(request.bytes <= KSWORD_ARK_DEBUGGER_CONTEXT_BYTES, "Shadow write exceeded payload capacity");
+                auto& page = model.shadowPages[base];
+                for (SIZE_T index = 0; index < request.bytes; ++index)
+                {
+                    if (request.operation == KSWORD_ARK_DEBUGGER_SHADOW_WRITE)
+                    { page.patches.set(offset + index); page.bytes[offset + index] = request.context[index]; }
+                    if (request.operation == KSWORD_ARK_DEBUGGER_SHADOW_RESTORE) page.patches.reset(offset + index);
+                    if (request.operation == KSWORD_ARK_DEBUGGER_SHADOW_ADD) page.stops.set(offset + index);
+                    if (request.operation == KSWORD_ARK_DEBUGGER_SHADOW_REMOVE) page.stops.reset(offset + index);
+                }
+                if (page.patches.none() && page.stops.none()) model.shadowPages.erase(base);
+                response.bytes = request.bytes;
+            }
             return success(outputBytes);
         }
         IoResult result{}; result.win32Error = ERROR_NOT_SUPPORTED; return result;
@@ -190,7 +279,171 @@ namespace ksword::debugger
         static void observeDetach(Backend& value) { value.monitorAttachment_ = true; }
         static void retainModelNativeSession(Backend& value) { value.monitorAttachment_ = false; }
         static bool hasStops(Backend& value) { return !value.breakpoints_.empty(); }
+        static BOOL nativeContext(Backend& value, HANDLE thread, CONTEXT& context)
+        { return value.nativeContext(thread, &context, false); }
+        static void ownNormalPreparation(Backend& value, bool owned) { value.ownsResident_ = owned; value.shadowPrepared_ = false; }
+        static void nativeOwner(Backend& value) { value.attachmentOwner_ = Backend::AttachmentOwner::native; }
     };
+}
+
+namespace
+{
+    void contextPreflightTests()
+    {
+        using ksword::debugger::Backend;
+        using ksword::debugger::BackendTestPeer;
+        struct Capture
+        {
+            wchar_t previous[4096]{};
+            std::filesystem::path path;
+            Capture()
+            {
+                (void)GetEnvironmentVariableW(L"KSWORD_DEBUGGER_LOG_FILE", previous, _countof(previous));
+                wchar_t executable[32768]{};
+                require(GetModuleFileNameW(nullptr, executable, _countof(executable)) != 0, "Cannot locate in-repository test artifact directory");
+                path = std::filesystem::path(executable).parent_path() / L"BackendContextPreflight.log";
+                std::ofstream(path, std::ios::trunc).close();
+                require(SetEnvironmentVariableW(L"KSWORD_DEBUGGER_LOG_FILE", path.c_str()) != FALSE, "Cannot configure context diagnostic capture");
+            }
+            ~Capture() { (void)SetEnvironmentVariableW(L"KSWORD_DEBUGGER_LOG_FILE", previous[0] == 0 ? nullptr : previous); }
+            std::string read() const { std::ifstream stream(path); return {std::istreambuf_iterator<char>(stream), std::istreambuf_iterator<char>()}; }
+        } capture;
+        const auto occurrences = [](const std::string& text, const std::string& needle) {
+            SIZE_T count = 0, offset = 0;
+            while ((offset = text.find(needle, offset)) != std::string::npos) { ++count; offset += needle.size(); }
+            return count;
+        };
+        const auto configure = [](Backend& value) {
+            require(value.initialize(), "Context preflight backend initialization failed");
+            auto options = value.options(); options.mode = KSWORD_DEBUGGER_MODE_STEALTH;
+            options.shadowMemoryWrites = 1; options.allowFallback = 0;
+            require(value.setOptions(options) == ERROR_SUCCESS && value.setUseHvm(true) == ERROR_SUCCESS, "Context preflight policy setup failed");
+            BackendTestPeer::attach(value);
+        };
+        CONTEXT arm{}; arm.ContextFlags = CONTEXT_DEBUG_REGISTERS; arm.Dr0 = 0x6100; arm.Dr7 = 1;
+        for (const bool resident : {false, true})
+        {
+            model = Model{}; model.prepared = true; model.resident = resident;
+            Backend value; configure(value);
+            for (int attempt = 0; attempt < 12; ++attempt)
+                require(!value.setContext(GetCurrentThread(), &arm) && GetLastError() == ERROR_BUSY,
+                    "Foreign prepared/resident ownership was seized or lost its actual busy error");
+            require(model.controlCalls == 0 && model.contextReads == 0 && model.contextWrites == 0 && model.shadowMutations == 0 &&
+                model.prepared && model.resident == resident && !BackendTestPeer::hasStops(value),
+                "Preparation rejection mutated foreign HVM, native context, or breakpoint state");
+            CONTEXT clear{}; clear.ContextFlags = CONTEXT_DEBUG_REGISTERS;
+            require(value.setContext(GetCurrentThread(), &clear) && model.contextWrites == 1 && model.controlCalls == 0,
+                "Unbound DR clear incorrectly entered Shadow preparation or paused foreign residency");
+            require(value.shutdown() && model.controlCalls == 0, "Foreign preparation was stopped during empty adapter shutdown");
+        }
+        require(capture.read().find("rollback") == std::string::npos && capture.read().find("owning UI") != std::string::npos,
+            "Pre-mutation busy rejection reported rollback or omitted the actionable foreign-owner reason");
+        model = Model{}; model.prepared = true; model.resident = true;
+        {
+            Backend value; configure(value); BackendTestPeer::ownNormalPreparation(value, true);
+            require(!value.setContext(GetCurrentThread(), &arm) && GetLastError() == ERROR_BUSY && model.controlCalls == 0 && model.contextWrites == 0,
+                "Adapter normal-EPT preparation was silently changed into Shadow residency");
+            BackendTestPeer::ownNormalPreparation(value, false);
+            require(value.shutdown(), "Normal-preparation model cleanup failed");
+        }
+        require(capture.read().find("normal EPT preparation") != std::string::npos, "Own normal-EPT preparation was misreported as foreign residency");
+
+        // Normal data-only fallback uses visible DRs while another caller's
+        // resident remains untouched, including replacement, clear and detach.
+        model = Model{}; model.prepared = true; model.resident = true; model.eptSupported = false;
+        {
+            Backend value; require(value.initialize() && value.setUseHvm(true) == ERROR_SUCCESS, "Native data watchpoint setup failed");
+            BackendTestPeer::attach(value);
+            CONTEXT data = arm; data.Dr7 = 1 | (1ULL << 16);
+            require(value.setContext(GetCurrentThread(), &data) && model.native.Dr0 == data.Dr0 && model.native.Dr7 == data.Dr7,
+                "Data-only fallback did not preserve its explicitly allowed visible native DR");
+            auto actual = value.policyStatus(); auto stealth = value.options(); stealth.mode = KSWORD_DEBUGGER_MODE_STEALTH;
+            require(actual.activePath == KSWORD_DEBUGGER_PATH_NATIVE && actual.activeBreakpoints == 1 && actual.canChangeOptions == 0 &&
+                value.setOptions(stealth) == ERROR_BUSY && model.controlCalls == 0 && model.shadowMutations == 0,
+                "Native data binding lost its actual path/count/policy guard or changed foreign HVM");
+            data.Dr0 = 0x7200;
+            require(value.setContext(GetCurrentThread(), &data) && model.native.Dr0 == data.Dr0 && model.controlCalls == 0,
+                "Native data replacement incorrectly paused foreign residency");
+            CONTEXT clear{}; clear.ContextFlags = CONTEXT_DEBUG_REGISTERS;
+            require(value.setContext(GetCurrentThread(), &clear) && model.native.Dr7 == 0 && value.policyStatus().canChangeOptions == 1 &&
+                model.controlCalls == 0 && model.shadowMutations == 0 && model.prepared && model.resident,
+                "Native data clear stranded the policy guard or changed foreign HVM");
+            require(value.setContext(GetCurrentThread(), &data), "Native data continuation setup failed");
+            BackendTestPeer::nativeOwner(value);
+            DEBUG_EVENT event{}; event.dwDebugEventCode = EXCEPTION_DEBUG_EVENT;
+            event.dwProcessId = GetCurrentProcessId(); event.dwThreadId = GetCurrentThreadId();
+            event.u.Exception.ExceptionRecord.ExceptionCode = EXCEPTION_SINGLE_STEP;
+            require(value.observeNativeEvent(event) == ERROR_SUCCESS && value.validateNativeContinue(event.dwProcessId, event.dwThreadId) == ERROR_SUCCESS,
+                "Visible data-only metadata incorrectly required owned HVM for native continuation");
+            require(value.retireNativeThread(GetCurrentThreadId()) == ERROR_SUCCESS && value.policyStatus().canChangeOptions == 1 &&
+                model.controlCalls == 0 && model.shadowMutations == 0 && model.prepared && model.resident,
+                "Native data thread retirement changed foreign HVM or stranded the options guard");
+            require(value.setContext(GetCurrentThread(), &data) && value.releaseNativeSession() == ERROR_SUCCESS &&
+                value.policyStatus().canChangeOptions == 1 && value.shutdown() && model.controlCalls == 0 && model.shadowMutations == 0 && model.prepared && model.resident,
+                "Native data detach/session retirement seized or stopped foreign HVM");
+        }
+        for (const bool stealthMode : {false, true})
+        {
+            model = Model{}; model.prepared = true; model.resident = true; model.eptSupported = false;
+            Backend value; require(value.initialize() && value.setUseHvm(true) == ERROR_SUCCESS, "Data rejection setup failed");
+            BackendTestPeer::attach(value); auto options = value.options(); options.mode = stealthMode ? KSWORD_DEBUGGER_MODE_STEALTH : KSWORD_DEBUGGER_MODE_NORMAL;
+            options.allowFallback = stealthMode ? 1U : 0U;
+            require(value.setOptions(options) == ERROR_SUCCESS, "Data rejection policy setup failed");
+            CONTEXT data = arm; data.Dr7 = 1 | (1ULL << 16);
+            require(!value.setContext(GetCurrentThread(), &data) && GetLastError() == ERROR_NOT_SUPPORTED && model.contextWrites == 0 && model.controlCalls == 0 && model.shadowMutations == 0,
+                "Stealth or fallback-disabled policy silently armed a visible native data DR");
+            require(value.shutdown() && model.prepared && model.resident, "Data rejection retirement changed foreign HVM");
+        }
+        require(capture.read().find("visible native hardware debug register") != std::string::npos,
+            "Native data fallback did not log its visible register destination/result");
+
+        // A failure after the first new hidden INT3 is a real mutation and must
+        // still compensate to the previous binding, unlike preparation failure.
+        model = Model{};
+        {
+            Backend value; configure(value);
+            require(value.setContext(GetCurrentThread(), &arm), "Shadow rollback baseline install failed");
+            CONTEXT replacement = arm; replacement.Dr0 = 0x7100; replacement.Dr1 = 0x8200; replacement.Dr7 = 5;
+            model.failShadowAddAfter = 1;
+            require(!value.setContext(GetCurrentThread(), &replacement) && GetLastError() == ERROR_NOT_ENOUGH_MEMORY,
+                "Injected partial Shadow binding failure was accepted or lost its native error");
+            CONTEXT actual{}; actual.ContextFlags = CONTEXT_DEBUG_REGISTERS;
+            require(value.getContext(GetCurrentThread(), &actual) && actual.Dr0 == arm.Dr0 && actual.Dr7 == arm.Dr7 &&
+                model.shadowPages.size() == 1 && model.shadowPages.count(0x6000) == 1 && model.shadowPages.at(0x6000).stops.test(0x100),
+                "Partial Shadow mutation did not restore the previous logical/physical hidden breakpoint");
+            require(value.shutdown(), "Shadow rollback model cleanup failed");
+        }
+        require(capture.read().find("ShadowPage context transaction failed: 8; rollback 0") != std::string::npos,
+            "Real partial mutation did not report its completed compensating rollback");
+
+        model = Model{}; model.failContextRead = true;
+        {
+            Backend value; require(value.initialize(), "Fallback count test initialization failed");
+            ksword::ark::DriverHandle thread(CreateThread(nullptr, 0, [](LPVOID) -> DWORD { return 0; }, nullptr, CREATE_SUSPENDED, nullptr));
+            require(thread.isValid(), "Cannot create the test-owned suspended context thread");
+            for (int attempt = 0; attempt < 12; ++attempt)
+            {
+                CONTEXT context{}; context.ContextFlags = CONTEXT_DEBUG_REGISTERS;
+                require(BackendTestPeer::nativeContext(value, thread.native(), context), "R0 error31 did not fall back to the real Windows context API");
+                SetLastError(ERROR_ACCESS_DENIED); value.logRepeated("interleaved context preflight diagnostic");
+                require(GetLastError() == ERROR_ACCESS_DENIED, "Repeated-warning logging changed caller LastError");
+            }
+            const auto policy = value.policyStatus();
+            require(model.contextReads == 1 && policy.fallbackCount == 12 && policy.lastFallbackError == ERROR_GEN_FAILURE,
+                "Cached fallback logging lost occurrence counts or the real R0 source error31");
+            SetLastError(ERROR_INVALID_HANDLE); value.recordFallback("R0 thread context", "Windows thread context", ERROR_NOT_SUPPORTED, "changed native failure reason");
+            require(GetLastError() == ERROR_INVALID_HANDLE && value.policyStatus().fallbackCount == 13 && value.policyStatus().lastFallbackError == ERROR_NOT_SUPPORTED,
+                "Changed fallback diagnostic lost actual errors/counts or caller LastError");
+            require(ResumeThread(thread.native()) != MAXDWORD && WaitForSingleObject(thread.native(), 1000) == WAIT_OBJECT_0,
+                "Test-owned context thread did not finish cleanly");
+            require(value.shutdown(), "Fallback count model shutdown failed");
+        }
+        const auto logs = capture.read();
+        require(occurrences(logs, "Fallback R0 thread context") == 4 && occurrences(logs, "interleaved context preflight diagnostic") == 2 &&
+            logs.find("occurrences=10") != std::string::npos && logs.find("changed native failure reason") != std::string::npos,
+            "Identical transient logs were not aggregated independently or changed reasons were suppressed");
+        std::cout << "PASS: context pre-mutation ownership rejection/no rollback, harmless clear, real Shadow rollback, error31 fallback counts and aggregated diagnostics\n";
+    }
 }
 
 int main()
@@ -371,6 +624,137 @@ int main()
             "Native release seized external HVM residency without owned stops");
         model.prepared = false; model.resident = false;
 
+        const auto legacyOptions = backend.options();
+        require(legacyOptions.mode == KSWORD_DEBUGGER_MODE_NORMAL && legacyOptions.shadowMemoryWrites == 0 &&
+            legacyOptions.allowFallback == 1 && legacyOptions.logFallback == 1 && legacyOptions.maxShadowPages == 32,
+            "Legacy adapters changed their default memory behavior");
+        auto shadowOptions = legacyOptions; shadowOptions.shadowMemoryWrites = 1; shadowOptions.maxShadowPages = 1;
+        require(backend.setOptions(shadowOptions) == ERROR_SUCCESS, "Shadow options were rejected");
+        auto invalidOptions = shadowOptions; invalidOptions.logFallback = 0;
+        require(backend.setOptions(invalidOptions) == ERROR_INVALID_PARAMETER && backend.options().logFallback == 1,
+            "Critical fallback logging could be disabled");
+        invalidOptions = shadowOptions; invalidOptions.reserved[0] = 1;
+        require(backend.setOptions(invalidOptions) == ERROR_INVALID_PARAMETER, "Unknown options fields were accepted");
+        require(backend.setUseHvm(false) == ERROR_SUCCESS, "Shadow policy HVM-off setup failed");
+        unsigned char codePatch[3] = {0x90, 0x91, 0x92};
+        const auto ordinaryWritesBefore = model.writeSizes.size();
+        require(!backend.writeMemory(process.native(), reinterpret_cast<void*>(0x10040), codePatch, 3, &done) &&
+            GetLastError() == ERROR_INVALID_STATE && model.writeSizes.size() == ordinaryWritesBefore,
+            "HVM-off Shadow code write silently modified original code");
+        require(backend.setUseHvm(true) == ERROR_SUCCESS &&
+            backend.writeMemory(process.native(), reinterpret_cast<void*>(0x10040), codePatch, 3, &done) && done == 3 &&
+            backend.policyStatus().shadowWritePages == 1 && model.shadowPages[0x10000].bytes[0x41] == 0x91 &&
+            model.writeSizes.size() == ordinaryWritesBefore && model.resident,
+            "Execution-only Shadow code patch changed ordinary memory or failed to start");
+        unsigned char changedPatch[3] = {0x20, 0x21, 0x22};
+        model.failStart = true;
+        require(!backend.writeMemory(process.native(), reinterpret_cast<void*>(0x10040), changedPatch, 3, &done) &&
+            done == 0 && model.shadowPages[0x10000].bytes[0x41] == 0x91 && model.resident &&
+            backend.policyStatus().shadowWritePages == 1,
+            "Failed residency start did not restore previous Shadow patch bytes and mask");
+        require(backend.restoreShadowWrites(0x10041, 1) == ERROR_SUCCESS,
+            "Disjoint prior Shadow mask setup failed");
+        model.failStart = true; model.failShadowWriteAfter = 2;
+        require(!backend.writeMemory(process.native(), reinterpret_cast<void*>(0x10040), changedPatch, 3, &done) && !model.resident &&
+            !backend.writeMemory(process.native(), reinterpret_cast<void*>(0x10040), codePatch, 3, &done) &&
+            GetLastError() == ERROR_INVALID_STATE &&
+            !backend.continueEvent(GetCurrentProcessId(), GetCurrentThreadId(), DBG_CONTINUE) && GetLastError() == ERROR_INVALID_STATE,
+            "Failed second saved-mask replay allowed a later write/continue to resume incomplete code");
+        const auto directStart = ksword::ark::DriverClient{}.controlHvm(KSWORD_ARK_HVM_CONTROL_START_RESIDENT,
+            0, false, false, true);
+        require(model.quarantined && directStart.response.status == KSWORD_ARK_HVM_CONTROL_STATUS_LIFECYCLE_GUARD_FAILED && !model.resident,
+            "A direct driver start bypassed content-rollback quarantine");
+        require(backend.restoreShadowWrites() == ERROR_SUCCESS &&
+            backend.writeMemory(process.native(), reinterpret_cast<void*>(0x10040), codePatch, 3, &done),
+            "Full Shadow restore did not clear incomplete-content rollback quarantine");
+        std::vector<unsigned char> oversizedPatch(KSWORD_ARK_DEBUGGER_CONTEXT_BYTES + 1, 0x90);
+        require(!backend.writeMemory(process.native(), reinterpret_cast<void*>(0x10080), oversizedPatch.data(), oversizedPatch.size(), &done) &&
+            done == 0 && model.shadowPages[0x10000].patches.count() == 3,
+            "Oversized Shadow edit left a partially applied first chunk");
+        require(!backend.writeMemory(process.native(), reinterpret_cast<void*>(0x10fff), codePatch, 3, &done) &&
+            done == 0 && model.shadowPages.size() == 1,
+            "Cross-page Shadow edit applied half of the code patch");
+        model.memoryType = MEM_IMAGE; model.workingSetShared = true;
+        require(!backend.writeMemory(process.native(), reinterpret_cast<void*>(0x10040), changedPatch, 3, &done) &&
+            GetLastError() == ERROR_NOT_SUPPORTED && done == 0 && model.shadowPages.size() == 1 &&
+            model.shadowPages[0x10000].bytes[0x41] == 0x91,
+            "Physical execution patch was applied to shared image backing");
+        model.workingSetShared = false;
+        require(backend.writeMemory(process.native(), reinterpret_cast<void*>(0x10040), changedPatch, 3, &done) &&
+            done == 3 && model.memoryType == MEM_IMAGE && model.shadowPages[0x10000].bytes[0x41] == 0x21 &&
+            model.writeSizes.size() == ordinaryWritesBefore,
+            "Private COW image backing was rejected by allocation type or visibly written");
+        model.memoryType = MEM_MAPPED;
+        require(backend.writeMemory(process.native(), reinterpret_cast<void*>(0x10040), codePatch, 3, &done) &&
+            done == 3 && model.shadowPages[0x10000].bytes[0x41] == 0x91 && model.writeSizes.size() == ordinaryWritesBefore,
+            "Private COW mapped backing was rejected by allocation type or visibly written");
+        model.workingSetValid = false;
+        require(!backend.writeMemory(process.native(), reinterpret_cast<void*>(0x10040), changedPatch, 3, &done) &&
+            GetLastError() == ERROR_NOT_SUPPORTED && done == 0 && model.shadowPages[0x10000].bytes[0x41] == 0x91,
+            "Unverifiable image/mapped working-set backing was accepted");
+        model.workingSetValid = true; model.currentPfnMatches = false;
+        require(!backend.writeMemory(process.native(), reinterpret_cast<void*>(0x10040), changedPatch, 3, &done) &&
+            done == 0 && model.shadowPages[0x10000].bytes[0x41] == 0x91,
+            "A remapped private COW page reused a stale physical execution view");
+        model.currentPfnMatches = true; model.workingSetShared = true; model.memoryType = MEM_PRIVATE;
+        require(!backend.writeMemory(process.native(), reinterpret_cast<void*>(0x10040), changedPatch, 3, &done) &&
+            GetLastError() == ERROR_NOT_SUPPORTED && done == 0 && model.shadowPages[0x10000].bytes[0x41] == 0x91,
+            "A physically shared private allocation bypassed the working-set proof");
+        model.workingSetShared = false;
+        model.memoryType = MEM_PRIVATE;
+        unsigned char original = 0;
+        require(backend.readMemory(process.native(), reinterpret_cast<void*>(0x10041), &original, 1, &done) && original == 0x3a,
+            "Public memory reads exposed execution-view patch bytes");
+        require(backend.setOptions(legacyOptions) == ERROR_BUSY && backend.setOptions(shadowOptions) == ERROR_SUCCESS &&
+            backend.policyStatus().canChangeOptions == 0 && backend.setUseHvm(false) == ERROR_BUSY,
+            "Active Shadow patch did not protect policy/resident ownership");
+        model.invalidShadowView = true;
+        require(!backend.writeMemory(process.native(), reinterpret_cast<void*>(0x10040), changedPatch, 3, &done) &&
+            GetLastError() == ERROR_INVALID_STATE && !model.resident,
+            "A later successful Shadow mutation resumed residency with a missing owned view");
+        model.invalidShadowView = false;
+        require(backend.restoreShadowWrites() == ERROR_SUCCESS &&
+            backend.writeMemory(process.native(), reinterpret_cast<void*>(0x10040), codePatch, 3, &done) && model.resident,
+            "Repaired Shadow views could not resume");
+        require(!backend.writeMemory(process.native(), reinterpret_cast<void*>(0x11040), codePatch, 3, &done) &&
+            GetLastError() == ERROR_NOT_ENOUGH_MEMORY && backend.policyStatus().shadowWritePages == 1,
+            "Configured Shadow page budget was not enforced");
+        ksword::debugger::BackendTestPeer::attach(backend);
+        CONTEXT merged{}; merged.ContextFlags = CONTEXT_DEBUG_REGISTERS; merged.Dr0 = 0x10041; merged.Dr7 = 1;
+        require(backend.setContext(GetCurrentThread(), &merged) && model.shadowPages.size() == 1 &&
+            model.shadowPages[0x10000].patches.test(0x41) && model.shadowPages[0x10000].stops.test(0x41),
+            "Same-page breakpoint did not merge with the execution patch within the page budget");
+        require(backend.restoreShadowWrites() == ERROR_SUCCESS && backend.policyStatus().shadowWritePages == 0 &&
+            model.shadowPages[0x10000].patches.none() && model.shadowPages[0x10000].stops.test(0x41) && model.resident,
+            "Restoring Shadow memory patches removed a hidden breakpoint");
+        require(backend.setContext(GetCurrentThread(), &cleared) && model.shadowPages.empty(), "Merged hidden breakpoint cleanup failed");
+        shadowOptions.mode = KSWORD_DEBUGGER_MODE_STEALTH;
+        require(backend.setOptions(shadowOptions) == ERROR_SUCCESS, "Stealth options failed");
+        require(backend.setContext(GetCurrentThread(), &merged) &&
+            backend.writeMemory(process.native(), reinterpret_cast<void*>(0x10040), codePatch, 3, &done) &&
+            model.shadowPages[0x10000].patches.test(0x41) && model.shadowPages[0x10000].stops.test(0x41),
+            "Code patch after an existing hidden breakpoint did not merge on the same page");
+        require(backend.restoreShadowWrites() == ERROR_SUCCESS && backend.setContext(GetCurrentThread(), &cleared) &&
+            model.shadowPages.empty(), "Reverse-order merged patch cleanup failed");
+        model.executableMemory = false;
+        const auto fallbackBefore = backend.policyStatus().fallbackCount;
+        require(backend.writeMemory(process.native(), reinterpret_cast<void*>(0x10040), codePatch, 3, &done) && done == 3 &&
+            backend.policyStatus().fallbackCount == fallbackBefore + 1 && backend.policyStatus().lastFallbackError == ERROR_NOT_SUPPORTED &&
+            model.shadowPages.empty(), "Stealth data freeze did not perform and record its explicit ordinary fallback");
+        shadowOptions.allowFallback = 0;
+        require(backend.setOptions(shadowOptions) == ERROR_SUCCESS &&
+            !backend.writeMemory(process.native(), reinterpret_cast<void*>(0x10040), codePatch, 3, &done) &&
+            GetLastError() == ERROR_NOT_SUPPORTED && backend.policyStatus().fallbackCount == fallbackBefore + 1,
+            "Strict data write silently fell back");
+        model.executableMemory = true; model.failShadowWrite = true;
+        shadowOptions.allowFallback = 1;
+        require(backend.setOptions(shadowOptions) == ERROR_SUCCESS &&
+            !backend.writeMemory(process.native(), reinterpret_cast<void*>(0x10040), codePatch, 3, &done) &&
+            GetLastError() == ERROR_NOT_SUPPORTED && model.writeSizes.size() == ordinaryWritesBefore,
+            "Unsupported Shadow code write became an original code write");
+        model.failShadowWrite = false;
+        require(backend.setOptions(legacyOptions) == ERROR_SUCCESS, "Policy cleanup failed");
+
         KSWORD_DEBUGGER_BACKEND_STATUS status{};
         KSWORD_DEBUGGER_CALL call{}; call.version = 1; call.size = sizeof(call); call.command = 1;
         call.outputBytes = sizeof(status); call.output = 1;
@@ -381,7 +765,13 @@ int main()
         require(future.wait_for(std::chrono::seconds(1)) == std::future_status::ready, "Invalid pointer stranded the backend mutex");
         check.join(); require(future.get() == ERROR_SUCCESS, "Backend did not recover after invalid pointer");
         require(backend.shutdown(), "Model shutdown failed");
-        std::cout << "PASS: R0/HVM memory, EPT rollback, native ownership/generation, context preservation, ABI pointer isolation\n";
+        KSWORD_DEBUGGER_OPTIONS offlineOptions{};
+        call.command = KSWORD_DEBUGGER_GET_OPTIONS; call.output = reinterpret_cast<std::uintptr_t>(&offlineOptions);
+        call.outputBytes = sizeof(offlineOptions); call.inputBytes = 0;
+        require(KSwordDebuggerCall(&call) == ERROR_SUCCESS && call.bytesReturned == sizeof(offlineOptions) &&
+            offlineOptions.size == sizeof(offlineOptions), "Offline options persistence requires a connected driver");
+        contextPreflightTests();
+        std::cout << "PASS: R0/HVM memory, EPT rollback, native ownership/generation, context preservation, Shadow code/data policy, patch/INT3 restore, ABI pointer isolation\n";
         return 0;
     }
     catch (const std::exception& error) { std::cerr << "FAIL: " << error.what() << '\n'; return 1; }

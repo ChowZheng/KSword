@@ -28,6 +28,27 @@ class MemoryInfo(C.Structure):
                 ('protect', W.DWORD), ('type', W.DWORD)]
 
 
+class Options(C.Structure):
+    _fields_ = [(name, W.DWORD) for name in
+                ['version', 'size', 'mode', 'shadowMemoryWrites', 'allowFallback', 'logFallback',
+                 'nativeContextFallback', 'nativeSuspendFallback', 'maxShadowPages']] + [('reserved', W.DWORD * 3)]
+
+
+class Policy(C.Structure):
+    _fields_ = [('options', Options)] + [(name, W.DWORD) for name in
+                ['activePath', 'shadowWritePages', 'activeBreakpoints', 'canChangeOptions', 'fallbackCount', 'lastFallbackError']]
+
+
+class Call(C.Structure):
+    _fields_ = [('version', W.DWORD), ('size', W.DWORD), ('command', W.DWORD), ('reserved', W.DWORD),
+                ('input', C.c_uint64), ('output', C.c_uint64), ('inputBytes', W.DWORD), ('outputBytes', W.DWORD),
+                ('error', W.DWORD), ('bytesReturned', W.DWORD)]
+
+
+class ProcessInfo(C.Structure):
+    _fields_ = [('process', W.HANDLE), ('thread', W.HANDLE), ('pid', W.DWORD), ('tid', W.DWORD)]
+
+
 def function(dll, name, restype, arguments):
     fn = getattr(dll, name); fn.restype = restype; fn.argtypes = arguments
     return fn
@@ -75,17 +96,43 @@ def exercise(stage: Path, missing: bool) -> None:
         until = time.monotonic() + 3
         while time.monotonic() < until:
             fields = read_ack()
-            if len(fields) == 7 and fields[0] == session_id and int(fields[1]) == revision: return fields
+            if len(fields) >= 7 and fields[0] == session_id and int(fields[1]) == revision: return fields
             time.sleep(0.01)
         raise AssertionError(f'log control acknowledgment timeout for {revision}')
-    assert ack(0)[2:] == ['0', '0', '0', '0', '0']
+    assert ack(0)[2:7] == ['0', '0', '0', '0', '0']
     request('stale-session 1 0\n')
     time.sleep(0.15)
     assert ack(0)[1] == '0'
     request(f'{session_id} 2 2\n')
-    assert ack(2)[2:] == ['87', '0', '0', '0', '0']
+    assert ack(2)[2:7] == ['87', '0', '0', '0', '0']
     request(f'{session_id} 3 0\n')
-    assert ack(3)[2:] == ['0', '0', '0', '0', '0']
+    assert ack(3)[2:7] == ['0', '0', '0', '0', '0']
+    assert ack(3)[7:] == ['v2', '0', '0', '1', '1', '1', '32', '0', '0', '0', '1', '0', '0']
+    call_api = function(proxy, 'KSwordDebuggerCall', W.DWORD, [C.POINTER(Call)])
+    def dispatch(command, output, source=None):
+        packet = Call(1, C.sizeof(Call), command, 0, C.addressof(source) if source is not None else 0,
+                      C.addressof(output), C.sizeof(source) if source is not None else 0, C.sizeof(output), 0, 0)
+        result = call_api(C.byref(packet))
+        assert result == packet.error and packet.bytesReturned == C.sizeof(output)
+        return result
+    original = Options(); assert C.sizeof(original) == 48 and C.sizeof(Policy) == 72 and dispatch(4, original) == 0
+    expected = [1, 48, 0, 0, 1, 1, 1, 1, 32, 0, 0, 0]
+    assert list(C.cast(C.byref(original), C.POINTER(W.DWORD * 12)).contents) == expected
+    for field, value, error in [('mode', 2, 87), ('shadowMemoryWrites', 2, 87), ('allowFallback', 2, 87),
+                                ('logFallback', 0, 87), ('maxShadowPages', 0, 87), ('maxShadowPages', 33, 87),
+                                ('version', 2, 1306), ('size', 44, 1306)]:
+        invalid = Options.from_buffer_copy(original); setattr(invalid, field, value); actual = Options()
+        assert dispatch(5, actual, invalid) == error and bytes(actual) == bytes(original), field
+    invalid = Options.from_buffer_copy(original); invalid.reserved[2] = 1; actual = Options()
+    assert dispatch(5, actual, invalid) == 87 and bytes(actual) == bytes(original)
+    request(f'{session_id} 4 0 v2 1 1 0 0 0 8\n')
+    confirmed = ack(4)
+    assert confirmed[2:7] == ['0', '0', '0', '0', '0'] and confirmed[7:14] == ['v2', '1', '1', '0', '0', '0', '8']
+    request(f'{session_id} 5 0 v2 1 1 0 0 0 33\n')
+    assert ack(5)[2] == '87' and ack(5)[7:14] == confirmed[7:14], 'failed packet keeps actual options'
+    request(f'{session_id} 6 0\n')
+    assert ack(6)[7:14] == confirmed[7:14], 'legacy HVM request preserves actual configured options'
+    assert dispatch(5, actual, original) == 0 and bytes(actual) == bytes(original)
     native = C.CDLL(str(stage / 'TitanEngine.dll'), use_last_error=True)
     debug_data = function(proxy, 'GetDebugData', C.c_void_p, [])
     native_debug_data = function(native, 'GetDebugData', C.c_void_p, [])
@@ -139,6 +186,42 @@ def exercise(stage: Path, missing: bool) -> None:
             assert not fn(process, 1, destination, 8, C.byref(transferred))
             errors.append((C.get_last_error(), transferred.value))
         assert errors[0] == errors[1] and errors[0][0] != 0
+        # A real native breakpoint table and a private, never-executed self page
+        # exercise adapter binding protection without attaching a debugger.
+        # This setup helper belongs to the original native engine's historical
+        # exports. The production proxy intentionally exposes only canonical64.
+        get_process_info = function(native, 'TitanGetProcessInformation', C.POINTER(ProcessInfo), [])
+        engine_info = get_process_info(); saved_info = bytes(engine_info.contents)
+        callback = C.CFUNCTYPE(None)(lambda: None)
+        set_bp = function(proxy, 'SetBPX', C.c_bool, [C.c_size_t, W.DWORD, C.c_void_p])
+        delete_bp = function(proxy, 'DeleteBPX', C.c_bool, [C.c_size_t])
+        set_hw = function(proxy, 'SetHardwareBreakPoint', C.c_bool, [C.c_size_t, W.DWORD, C.c_int, C.c_int, C.c_void_p])
+        set_mem = function(proxy, 'SetMemoryBPXEx', C.c_bool, [C.c_size_t, C.c_size_t, C.c_int, C.c_bool, C.c_void_p])
+        memory_callback = C.CFUNCTYPE(None, C.c_void_p)(lambda _: None)
+        stealth = Options.from_buffer_copy(original); stealth.mode = 1; stealth.shadowMemoryWrites = 1; stealth.allowFallback = 0
+        installed = False
+        try:
+            engine_info.contents.process = process; engine_info.contents.pid = kernel.GetCurrentProcessId()
+            stub = C.create_string_buffer(b'\x90\xc3' + b'\x90' * 30)
+            assert write(process, address, stub, len(stub), C.byref(transferred))
+            assert protect(process, address, 4096, 0x40, C.byref(old))
+            assert set_bp(address, 0x10000000, callback); installed = True
+            policy = Policy(); assert dispatch(6, policy) == 0 and policy.activeBreakpoints >= 1 and policy.canChangeOptions == 0
+            assert dispatch(5, actual, stealth) == 170 and bytes(actual) == bytes(original), 'live native binding protects policy'
+            assert dispatch(5, actual, original) == 0, 'identical options remain idempotent'
+            assert delete_bp(address); installed = False
+            assert dispatch(5, actual, stealth) == 0 and bytes(actual) == bytes(stealth)
+            assert not set_bp(address, 0x10000000, callback) and C.get_last_error() == 21
+            assert not set_hw(address, 0, 4, 7, callback) and C.get_last_error() == 21
+            assert not set_mem(address, 4096, 3, True, memory_callback) and C.get_last_error() == 50
+            assert dispatch(6, policy) == 0 and policy.activeBreakpoints == 0 and policy.fallbackCount >= 3
+            assert dispatch(5, actual, original) == 0
+            check_bytes = C.create_string_buffer(2)
+            assert read(process, address, check_bytes, 2, C.byref(transferred)) and check_bytes.raw == b'\x90\xc3', 'stealth refusal cannot change original code'
+        finally:
+            if installed: assert delete_bp(address)
+            assert dispatch(5, actual, original) == 0
+            C.memmove(engine_info, saved_info, len(saved_info))
         wow64 = function(proxy, 'ProcessIsWow64', C.c_bool, [C.c_void_p, C.POINTER(W.BOOL)])
         result = W.BOOL(1); assert wow64(process, C.byref(result)) and result.value == 0
         replay = function(proxy, 'ReplayGetPosition', C.c_bool, [C.POINTER(C.c_uint64 * 2)])
@@ -147,7 +230,7 @@ def exercise(stage: Path, missing: bool) -> None:
     finally:
         if address: assert free(process, address, 0, 0x8000)
         assert close(process)
-    print(f'PASS: real native64 ABI/session/context-size({accepted[0]})/memory/protect/handles/LastError/replay/idle-control acknowledgments; HVM disabled, no driver opened')
+    print(f'PASS: real native64 ABI/session/context-size({accepted[0]})/memory/protect/handles/LastError/replay/control v1-v2/options rollback/native binding guard/stealth visible-breakpoint rejection; HVM disabled, no driver opened')
 
 
 def main() -> None:

@@ -20,6 +20,7 @@ def main() -> None:
     roots = [
         "TitanEnginePlugin", "X96dbgExecutablePlugin", "X96dbgIntegration",
         "DebuggerBackend", "third_party/x64dbg_abi", "third_party/x64dbg_runtime_licenses",
+        "KswordARKDriver", "third_party/systeminformer_dyn",
         "shared", "Ksword5.1/Ksword5.1/ArkDriverClient", "Ksword5.1/Ksword5.1/ksword/string",
         "tools/debugger_vm_test",
     ]
@@ -78,6 +79,9 @@ def main() -> None:
 The top-level paths retain their KSword repository layout. The proxy and launcher
 projects build directly with Visual Studio 2022 MSBuild, Release/x64. All three
 HostX64 properties documented in docs/ksword-x64dbg-backend.md are required.
+The shared protocol and current debugger/HVM driver sources are included under
+shared/ and KswordARKDriver/, with the original System Informer license retained.
+Building the driver additionally requires the matching Windows WDK.
 
 upstream/ contains unmodified pinned x64dbg and native TitanEngine source ZIPs.
 Apply X96dbgIntegration/patches/x64dbg-ksword-engine.patch to the x64dbg source.

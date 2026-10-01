@@ -86,8 +86,11 @@
   <ImportGroup Label="ExtensionTargets" />
   <ItemGroup>
     <ClCompile Include="LifetimeTests.cpp" />
+    <ClCompile Include="ControlProtocolTests.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\MemoryLifetime.h" />
+    <ClInclude Include="..\ControlProtocol.h" />
+    <ClInclude Include="..\..\DebuggerBackend\KswordDebuggerApi.h" />
   </ItemGroup>
 </Project>

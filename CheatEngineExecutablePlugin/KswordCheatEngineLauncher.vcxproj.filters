@@ -42,6 +42,12 @@
     <None Include="integration\ksword_hvm.lua">
       <Filter>Plugin Files</Filter>
     </None>
+    <None Include="tests\LuaPolicyTests.lua">
+      <Filter>Plugin Files</Filter>
+    </None>
+    <None Include="tests\validate_lua_policy.py">
+      <Filter>Plugin Files</Filter>
+    </None>
     <None Include="NOTICE.md">
       <Filter>Plugin Files</Filter>
     </None>

@@ -2,10 +2,6 @@
 #include "Proxy.h"
 using namespace ksword::titan;
 extern "C" {
-bool MemoryWriteSafe(HANDLE hProcess, LPVOID lpBaseAddress, LPCVOID lpBuffer, SIZE_T nSize, SIZE_T* lpNumberOfBytesWritten) {
-    if (ensureNative() != ERROR_SUCCESS) { return {}; }
-    return nativeApi.MemoryWriteSafe(hProcess, lpBaseAddress, lpBuffer, nSize, lpNumberOfBytesWritten);
-}
 SIZE_T MemoryQuerySafe(HANDLE hProcess, LPCVOID lpAddress, PMEMORY_BASIC_INFORMATION lpBuffer, SIZE_T dwLength) {
     if (ensureNative() != ERROR_SUCCESS) { return {}; }
     return nativeApi.MemoryQuerySafe(hProcess, lpAddress, lpBuffer, dwLength);
@@ -53,18 +49,6 @@ bool ReplayRunBack() {
 bool ReplayStepBack(TITANCBSTEP StepCallBack) {
     if (ensureNative() != ERROR_SUCCESS) { return {}; }
     return nativeApi.ReplayStepBack(StepCallBack);
-}
-void SetBPXOptions(TitanBreakpointType DefaultBreakPointType) {
-    if (ensureNative() != ERROR_SUCCESS) { return; }
-    nativeApi.SetBPXOptions(DefaultBreakPointType);
-}
-bool SetMemoryBPXEx(ULONG_PTR MemoryStart, SIZE_T SizeOfMemory, TitanMemoryBreakpointType BreakPointType, bool RestoreOnHit, TITANCBMEMBP bpxCallBack) {
-    if (ensureNative() != ERROR_SUCCESS) { return {}; }
-    return nativeApi.SetMemoryBPXEx(MemoryStart, SizeOfMemory, BreakPointType, RestoreOnHit, bpxCallBack);
-}
-bool RemoveMemoryBPX(ULONG_PTR MemoryStart, SIZE_T SizeOfMemory) {
-    if (ensureNative() != ERROR_SUCCESS) { return {}; }
-    return nativeApi.RemoveMemoryBPX(MemoryStart, SizeOfMemory);
 }
 bool GetFullContextDataEx(HANDLE hActiveThread, TITAN_ENGINE_CONTEXT_t* titcontext) {
     if (ensureNative() != ERROR_SUCCESS) { return {}; }

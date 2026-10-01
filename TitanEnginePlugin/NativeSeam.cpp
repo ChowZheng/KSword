@@ -41,6 +41,9 @@ namespace ksword::titan
 
         BOOL WINAPI writeMemory(HANDLE process, LPVOID address, LPCVOID data, SIZE_T bytes, SIZE_T* transferred)
         {
+            const auto options = debugger::backend().options();
+            if (options.shadowMemoryWrites != 0 || options.mode == KSWORD_DEBUGGER_MODE_STEALTH)
+                return debugger::backend().writeMemory(process, address, data, bytes, transferred);
             if (!hvmSelected.load() || GetProcessId(process) != observedPid.load() || observedGeneration.load() == 0)
                 return ::WriteProcessMemory(process, address, data, bytes, transferred);
             return debugger::backend().writeMemory(process, address, data, bytes, transferred);
@@ -237,6 +240,7 @@ namespace ksword::titan
             eventHeld = false; heldEvent = {};
             { std::lock_guard<std::mutex> lock(pendingMutex); pendingDebug.clear(); }
             clearHardwareBindings();
+            clearSoftwareBindings();
             clearDeferredSteps();
         }
         return error;

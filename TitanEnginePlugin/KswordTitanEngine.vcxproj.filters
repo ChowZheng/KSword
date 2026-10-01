@@ -18,6 +18,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Proxy.h" />
+    <ClInclude Include="ControlProtocol.h" />
     <ClInclude Include="..\DebuggerBackend\KswordDebuggerFileProtocol.h" />
     <ClInclude Include="NativeApi.h" />
     <ClInclude Include="..\third_party\x64dbg_abi\TitanEngine.h" />

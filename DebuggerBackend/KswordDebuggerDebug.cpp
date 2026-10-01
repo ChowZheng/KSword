@@ -41,6 +41,13 @@ namespace ksword::debugger
 
     DWORD Backend::startOwnedHvm()
     {
+        if (shadowRecoveryRequired_)
+        { log("HVM start refused: Shadow rollback was incomplete; restore all owned memory patches before resuming"); return ERROR_INVALID_STATE; }
+        KSWORD_ARK_DEBUGGER_REQUEST query{}; KSWORD_ARK_DEBUGGER_RESPONSE shadow{};
+        const DWORD validity = nativeRequest(query, shadow);
+        if (validity != ERROR_SUCCESS) return validity;
+        if (shadow.reserved1 != 0)
+        { log("HVM start refused: an owned Shadow view is missing; restore/reinstall the affected patches or breakpoints"); return ERROR_INVALID_STATE; }
         const auto state = client_.queryHvmStatus();
         if (!state.io.ok) return state.io.win32Error;
         const auto result = client_.controlHvm(KSWORD_ARK_HVM_CONTROL_START_RESIDENT,
@@ -62,7 +69,15 @@ namespace ksword::debugger
         const auto state = client_.queryHvmStatus();
         if (!state.io.ok) return state.io.win32Error;
         if (state.response.residentProcessorCount == 0) return ERROR_SUCCESS;
-        if (!ownsResident_) return ERROR_BUSY;
+        if (!ownsResident_)
+        {
+            // Data-only fallback records contain no EPT/Shadow rule to pause.
+            // Their context updates/retirement must leave another caller's
+            // resident lifecycle untouched and must not claim its ownership.
+            bool nativeOnly = !hasShadowViews();
+            for (const auto& entry : breakpoints_) nativeOnly &= nativeDataOnlyRecord(entry.second);
+            return nativeOnly ? ERROR_SUCCESS : ERROR_BUSY;
+        }
         const auto result = client_.controlHvm(KSWORD_ARK_HVM_CONTROL_STOP_RESIDENT,
             state.response.generation, false, false, true);
         if (!result.io.ok) return result.io.win32Error;
@@ -73,6 +88,7 @@ namespace ksword::debugger
 
     DWORD Backend::releaseOwnedHvm()
     {
+        if (hasShadowViews()) return ERROR_BUSY;
         if (!ownsResident_) return ERROR_SUCCESS;
         bool restart = false;
         DWORD error = pauseOwnedHvm(restart);
@@ -116,7 +132,7 @@ namespace ksword::debugger
     DWORD Backend::retireAttachment()
     {
         DWORD error = ERROR_SUCCESS;
-        if (!breakpoints_.empty() || !shadowInt3_.empty() || ownsResident_)
+        if (!breakpoints_.empty() || hasShadowViews() || ownsResident_)
         {
             bool restart = false;
             error = pauseOwnedHvm(restart);
@@ -124,6 +140,7 @@ namespace ksword::debugger
                 error = removeBreakpoints(breakpoints_.begin()->first);
             while (!shadowInt3_.empty() && error == ERROR_SUCCESS)
                 error = removeShadowInt3(*shadowInt3_.begin());
+            if (error == ERROR_SUCCESS) error = restoreShadowWrites();
             if (error == ERROR_SUCCESS) error = releaseOwnedHvm();
         }
         if (error == ERROR_SUCCESS) clearAttachment();
@@ -187,13 +204,17 @@ namespace ksword::debugger
     DWORD Backend::validateNativeContinue(DWORD pid, DWORD tid, std::uint64_t generation)
     {
         std::lock_guard<std::recursive_mutex> lock(mutex_);
+        if (shadowRecoveryRequired_) return ERROR_INVALID_STATE;
         if ((generation != 0 && generation != sessionGeneration_) ||
             attachmentOwner_ != AttachmentOwner::native || !attachedIdentity_.isValid())
             return ERROR_INVALID_STATE;
         if (pid != attachedPid_ || lastEvent_.dwProcessId != pid || lastEvent_.dwThreadId != tid)
             return ERROR_INVALID_PARAMETER;
-        if (!breakpoints_.empty() || !shadowInt3_.empty())
+        if (hasHvmBreakpointRules() || hasShadowViews())
         {
+            KSWORD_ARK_DEBUGGER_REQUEST query{}; KSWORD_ARK_DEBUGGER_RESPONSE shadow{};
+            const DWORD validity = nativeRequest(query, shadow);
+            if (validity != ERROR_SUCCESS || shadow.reserved1 != 0) return validity == ERROR_SUCCESS ? ERROR_INVALID_STATE : validity;
             const auto state = client_.queryHvmStatus();
             if (!state.io.ok) return state.io.win32Error;
             if (!ownsResident_ || (state.response.stateFlags & KSWORD_ARK_HVM_STATE_RESIDENT_ACTIVE) == 0 ||
@@ -255,11 +276,19 @@ namespace ksword::debugger
         const auto state = client_.queryHvmStatus();
         if (!state.io.ok) return state.io.win32Error;
         if ((state.response.stateFlags & KSWORD_ARK_HVM_STATE_RESIDENT_ACTIVE) != 0)
-            return ownsResident_ ? ERROR_SUCCESS : ERROR_BUSY;
+        {
+            if (ownsResident_) return ERROR_SUCCESS;
+            logRepeated("EPT preparation refused: error=170; pre-existing HVM residency belongs to another caller (for example Main KVM or another debugger); stop and release it in the owning UI before retrying; no foreign HVM takeover");
+            return ERROR_BUSY;
+        }
         if (!ownsResident_)
         {
             // Existing KSword preparations belong to their caller; never rebuild them implicitly.
-            if ((state.response.stateFlags & KSWORD_ARK_HVM_STATE_RESOURCES_READY) != 0) return ERROR_BUSY;
+            if ((state.response.stateFlags & KSWORD_ARK_HVM_STATE_RESOURCES_READY) != 0)
+            {
+                logRepeated("EPT preparation refused: error=170; pre-existing HVM preparation belongs to another caller; release it in the owning UI before retrying; no foreign HVM takeover");
+                return ERROR_BUSY;
+            }
             const auto prepared = client_.controlHvm(KSWORD_ARK_HVM_CONTROL_PREPARE, state.response.generation,
                 false, true, true, false, false, false, false, false, true);
             if (!prepared.io.ok) return prepared.io.win32Error;
@@ -409,16 +438,59 @@ namespace ksword::debugger
         if (context == nullptr) { SetLastError(ERROR_INVALID_PARAMETER); return FALSE; }
         if (!useHvm_ || (context->ContextFlags & CONTEXT_DEBUG_REGISTERS) != CONTEXT_DEBUG_REGISTERS)
         {
+            if (options_.mode == KSWORD_DEBUGGER_MODE_STEALTH &&
+                (context->ContextFlags & CONTEXT_DEBUG_REGISTERS) == CONTEXT_DEBUG_REGISTERS && (context->Dr7 & 0xffU) != 0)
+            { logRepeated("Stealth breakpoint refused: select HVM before arming debug registers"); SetLastError(ERROR_INVALID_STATE); return FALSE; }
+            CONTEXT native = *context;
+            if (writer != nullptr) native.ContextFlags = CONTEXT_DEBUG_REGISTERS;
+            return writer != nullptr ? writer(thread, &native, FALSE, opaque) : nativeContext(thread, &native, true);
+        }
+        // A context update with no armed slots and no owned breakpoint record
+        // does not mutate HVM. Route it before Shadow preparation so a harmless
+        // DR clear cannot try to pause a pre-existing Main/other-client resident.
+        if ((context->Dr7 & 0xffU) == 0 && breakpoints_.find(GetThreadId(thread)) == breakpoints_.end() && validTargetThread(thread))
+        {
             CONTEXT native = *context;
             if (writer != nullptr) native.ContextFlags = CONTEXT_DEBUG_REGISTERS;
             return writer != nullptr ? writer(thread, &native, FALSE, opaque) : nativeContext(thread, &native, true);
         }
         if (writer == nullptr)
         {
+            bool executionRequested = false;
+            for (DWORD slot = 0; slot < 4; ++slot)
+                executionRequested |= (context->Dr7 & (3ULL << (2 * slot))) != 0 &&
+                    ((context->Dr7 >> (16 + 4 * slot)) & 3) == 0;
+            if (preferShadowExecution())
+            {
+                if (options_.mode == KSWORD_DEBUGGER_MODE_NORMAL && !shadowPrepared_)
+                {
+                    if (options_.allowFallback == 0)
+                    { logRepeated("EPT breakpoint fallback refused: fallback is disabled"); SetLastError(ERROR_NOT_SUPPORTED); return FALSE; }
+                }
+                const bool reportFallback = options_.mode == KSWORD_DEBUGGER_MODE_NORMAL && !shadowPrepared_;
+                const BOOL completed = applyShadowContext(thread, context);
+                const DWORD actualError = GetLastError();
+                if (reportFallback && executionRequested) recordFallback("EPT #DB execution breakpoint", completed ? "Shadow Page hidden INT3" : "Shadow route rejected", ERROR_NOT_SUPPORTED,
+                    "EPT breakpoint protocol unavailable; Shadow result error=" + std::to_string(completed ? ERROR_SUCCESS : actualError) + "; no visible native DR fallback");
+                SetLastError(actualError); return completed;
+            }
             KSWORD_ARK_HVM_DEBUG_REQUEST query{}; KSWORD_ARK_HVM_DEBUG_RESPONSE response{};
             query.version = KSWORD_ARK_HVM_DEBUG_VERSION; query.size = sizeof(query);
             if (breakpointRequest(query, response) == ERROR_SUCCESS && response.supported == 0)
-                return applyShadowContext(thread, context);
+            {
+                if (options_.allowFallback == 0)
+                { logRepeated("EPT breakpoint fallback refused: fallback is disabled"); SetLastError(ERROR_NOT_SUPPORTED); return FALSE; }
+                const BOOL completed = applyShadowContext(thread, context);
+                const DWORD actualError = GetLastError();
+                if (executionRequested) recordFallback("EPT #DB execution breakpoint", completed ? "Shadow Page hidden INT3" : "Shadow route rejected", ERROR_NOT_SUPPORTED,
+                    "EPT breakpoint protocol unavailable; Shadow result error=" + std::to_string(completed ? ERROR_SUCCESS : actualError) + "; no visible native DR fallback");
+                SetLastError(actualError); return completed;
+            }
+        }
+        else if (preferShadowExecution() && (context->Dr7 & 0xffU) != 0)
+        {
+            logRepeated("Native EPT context seam refused: this policy requires the adapter's Shadow execution breakpoint path");
+            SetLastError(ERROR_NOT_SUPPORTED); return FALSE;
         }
         const DWORD tid = GetThreadId(thread);
         if (!validTargetThread(thread))
@@ -451,7 +523,7 @@ namespace ksword::debugger
         DWORD error = enabled ? ensureDebugHvm() : ERROR_SUCCESS;
         bool restart = false;
         if (error == ERROR_SUCCESS) error = pauseOwnedHvm(restart);
-        if (error != ERROR_SUCCESS) { log("EPT breakpoint preparation failed: " + std::to_string(error)); SetLastError(error); return FALSE; }
+        if (error != ERROR_SUCCESS) { logRepeated("EPT breakpoint preparation failed before context/binding writes: " + std::to_string(error)); SetLastError(error); return FALSE; }
         error = removeBreakpoints(tid);
         if (error == ERROR_SUCCESS && enabled)
         {
@@ -560,8 +632,8 @@ NextEvent:
                 else while (!breakpoints_.empty() && error == ERROR_SUCCESS) error = removeBreakpoints(breakpoints_.begin()->first);
             }
             if (error == ERROR_SUCCESS && event->dwDebugEventCode == EXIT_PROCESS_DEBUG_EVENT)
-            { error = releaseOwnedHvm(); if (error == ERROR_SUCCESS) clearAttachment(); }
-            else if (error == ERROR_SUCCESS && shadowInt3_.empty() && shadowPrepared_) error = releaseOwnedHvm();
+            { error = restoreShadowWrites(); if (error == ERROR_SUCCESS) error = releaseOwnedHvm(); if (error == ERROR_SUCCESS) clearAttachment(); }
+            else if (error == ERROR_SUCCESS && !hasShadowViews() && shadowPrepared_) error = releaseOwnedHvm();
             else if (error == ERROR_SUCCESS && restart) error = startOwnedHvm();
             if (error != ERROR_SUCCESS) { lastError_ = error; log("Debug target retirement failed: " + std::to_string(error)); }
         }
@@ -571,8 +643,17 @@ NextEvent:
     BOOL Backend::continueEvent(DWORD pid, DWORD tid, DWORD continueStatus)
     {
         std::lock_guard<std::recursive_mutex> lock(mutex_);
+        if (shadowRecoveryRequired_)
+        { log("Continue refused: Shadow rollback requires a full restore"); SetLastError(ERROR_INVALID_STATE); return FALSE; }
         if (attachmentOwner_ == AttachmentOwner::native)
         { SetLastError(ERROR_BUSY); return FALSE; }
+        if (hasShadowViews() || !shadowStops_.empty())
+        {
+            KSWORD_ARK_DEBUGGER_REQUEST query{}; KSWORD_ARK_DEBUGGER_RESPONSE shadow{};
+            const DWORD validity = nativeRequest(query, shadow);
+            if (validity != ERROR_SUCCESS || shadow.reserved1 != 0)
+            { log("Shadow continue refused: a required view is missing; restore/reinstall before resuming"); SetLastError(validity == ERROR_SUCCESS ? ERROR_INVALID_STATE : validity); return FALSE; }
+        }
         if (shadowStops_.find(tid) != shadowStops_.end())
         {
             log("ShadowPage continue: TID " + std::to_string(tid) + ", status " + std::to_string(continueStatus));
@@ -581,8 +662,12 @@ NextEvent:
             return ContinueDebugEvent(pid, tid, continueStatus);
         }
         const auto found = breakpoints_.find(tid);
-        if (useHvm_ && (!breakpoints_.empty() || !shadowInt3_.empty()))
+        if (useHvm_ && (hasHvmBreakpointRules() || hasShadowViews()))
         {
+            KSWORD_ARK_DEBUGGER_REQUEST query{}; KSWORD_ARK_DEBUGGER_RESPONSE shadow{};
+            const DWORD validity = nativeRequest(query, shadow);
+            if (validity != ERROR_SUCCESS || shadow.reserved1 != 0)
+            { log("Continue refused: a Shadow view failed validation; restore/reinstall before resuming"); SetLastError(validity == ERROR_SUCCESS ? ERROR_INVALID_STATE : validity); return FALSE; }
             const auto state = client_.queryHvmStatus();
             if (!state.io.ok || (state.response.stateFlags & KSWORD_ARK_HVM_STATE_RESIDENT_ACTIVE) == 0 ||
                 state.response.residentProcessorCount != state.response.processorCount)
@@ -618,7 +703,7 @@ NextEvent:
     {
         std::lock_guard<std::recursive_mutex> lock(mutex_);
         bool restart = false;
-        if ((!breakpoints_.empty() || !shadowInt3_.empty()) && pauseOwnedHvm(restart) != ERROR_SUCCESS) return false;
+        if ((hasHvmBreakpointRules() || hasShadowViews()) && pauseOwnedHvm(restart) != ERROR_SUCCESS) return false;
         while (!breakpoints_.empty())
         {
             const DWORD tid = breakpoints_.begin()->first;
@@ -635,6 +720,7 @@ NextEvent:
             if (removeBreakpoints(tid) != ERROR_SUCCESS) return false;
         }
         while (!shadowInt3_.empty()) if (removeShadowInt3(*shadowInt3_.begin()) != ERROR_SUCCESS) return false;
+        if (restoreShadowWrites() != ERROR_SUCCESS) return false;
         if (releaseOwnedHvm() != ERROR_SUCCESS) return false;
         ownsResident_ = false; useHvm_ = false; clearAttachment();
         processIds_.clear(); driver_.reset();

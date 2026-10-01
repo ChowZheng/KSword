@@ -176,6 +176,9 @@ foreach ($file in $runtimeFiles) {
 Copy-Item -LiteralPath $ProxyDll -Destination (Join-Path $payloadRoot 'KSword\TitanEngine.dll') -Force
 Copy-Item -LiteralPath $launcher -Destination $pluginRoot -Force
 foreach ($file in @('plugin.json', 'README.md', 'SOURCE.md')) { Copy-Item -LiteralPath (Join-Path $sourceRoot $file) -Destination $pluginRoot -Force }
+Copy-Item -LiteralPath (Join-Path $repositoryRoot 'DebuggerBackend\README.md') -Destination (Join-Path $pluginRoot 'DEBUGGER_BACKEND.md') -Force
+Copy-Item -LiteralPath (Join-Path $repositoryRoot 'TitanEnginePlugin\README.md') -Destination (Join-Path $pluginRoot 'TITAN_ENGINE.md') -Force
+Copy-Item -LiteralPath (Join-Path $repositoryRoot 'tools\debugger_vm_test\POLICY_TEST.md') -Destination $pluginRoot -Force
 Copy-Item -LiteralPath (Join-Path $sourceRoot 'NOTICE.md') -Destination (Join-Path $pluginRoot 'NOTICE') -Force
 Copy-Item -LiteralPath (Join-Path $repositoryRoot 'LICENSE') -Destination (Join-Path $pluginRoot 'LICENSE.txt') -Force
 $licenseRoot = Join-Path $pluginRoot 'licenses'

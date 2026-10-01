@@ -63,7 +63,8 @@ writer 返回失败或常驻恢复失败时，后端恢复原 EPT 规则，并�
 保留 owner/target 进程身份，同页多个偏移合并，原始读取保留原字节。
 
 CE 的执行 DR 请求转成私有隐藏 INT3，并仅在真实、匹配的持有停止事件中
-叠加 DR6 槽位命中与准确 RIP。数据 DR 在此回退模式仍交给 Windows。
+叠加 DR6 槽位命中与准确 RIP。常规模式的数据 DR 在允许回退时交给 Windows，
+并明确记录真实 DR 可见的回退；隐蔽模式拒绝该数据断点路径。
 TitanEngine 保留原生软件断点表及调试循环；内部断点读看到逻辑 INT3，前端
 Safe/Unsafe 读看到原字节。TF 单步时临时撤销命中偏移，下一真实单步事件后重装。
 普通原生 StepInto/StepOver 不经过硬件停止事件的延迟回调路径。
@@ -72,6 +73,46 @@ Safe/Unsafe 读看到原字节。TF 单步时临时撤销命中偏移，下一�
 后可释放自己的资源。驱动进程退出回调处理 owner/target 崩溃，停止该影子会话
 的常驻并释放视图、MDL 和进程引用。目标映射替换/自修改代码仍要求重新安装逻辑断点。
 实时验收及能力限制见 `docs/ksword-debugger-vm-validation.md`。
+
+## 调试策略与 Shadow 代码写入
+
+`KSWORD_DEBUGGER_OPTIONS` v1 为 48 字节。常规模式保留原有 EPT 调试优先、能力
+不足时自动隐藏 INT3 的行为；隐蔽模式优先 Shadow 执行视图，拒绝原页 INT3、
+可见 DR 数据断点及 PAGE_GUARD 断点回退。适配器应在设置断点前查询
+`preferShadowExecution()`，并在修改选项时核实自己的原生停止事件与断点表。
+
+旧客户端默认 `shadowMemoryWrites=0`，CE 控制页可选择代码 Shadow 写入。
+隐蔽模式也要求代码使用 Shadow。代码写入要求已选择 HVM；原生操作 10/11
+使用既有 1232 字节负载写入/恢复，合并同页补丁与隐藏 INT3。单次修改必须
+落在一页内且不超过 1232 字节；超限或跨页在修改前拒绝，避免半条补丁。
+只有执行视图改变，普通读取仍返回原字节。代码 Shadow 失败明确拒绝，不能
+改成原页代码写入。恢复仅清除内存补丁，不删除隐藏断点；退出时清理全部
+自有补丁、MDL 与对象引用。映射替换或代码自修改后需要恢复并重新安装补丁。
+视图或原补丁内容回滚失败时进入恢复隔离；原生操作 12 保留真实 owner 的
+驱动隔离记录，适配器及直接 HVM 常驻启动都会拒绝，完整成功恢复全部内存
+补丁后才解除。启动检查持有 Shadow 共享租约直到 HVM 操作完成，防止其它
+调用者在检查后删除视图。owner/target 退出也清理隔离记录。
+
+这是可执行页的执行视图补丁选项，只适用于明确的代码修改；RX/RWX 页也
+可能存放数据，页面保护不能证明调用者的冻结意图。该选项不会改变这些页
+的普通数据读取，不能把 RWX 数据冻结显示成功理解为实际值已被冻结。
+CE 默认关闭，由用户明确选择。视图按物理页选择，没有 PID/CR3 隔离：
+代码补丁和隐藏 INT3 均接受 MEM_PRIVATE 或已经 COW 私有化的 MEM_IMAGE /
+MEM_MAPPED 页；VirtualQuery 在 COW 后仍报告原映射类型，不能只按类型拒绝。
+每次添加/更新都在固定页后核实当前 VA/PFN 与有效 working-set Shared=0
+证据，拒绝共享或无法证明的页面。未自动向运行中的共享模块页写回原字节
+来触发 COW，以免覆盖并发修改；显式准备 COW 后才可建立执行视图。
+
+执行视图不能冻结普通数据。非可执行页写入在 `allowFallback=1` 时记录明确
+回退后执行有效的普通 HVM/R0 数据写入，隐蔽模式也遵循该数据策略；关闭
+回退时拒绝。单次写入跨可执行和非可执行页时拒绝。活动补丁/自动断点阻止变更
+选项与关闭 HVM，相同选项可重复提交。`maxShadowPages` 范围 1–32。
+原生上下文与挂起/恢复回退另由 `nativeContextFallback`、
+`nativeSuspendFallback` 控制，同时受 `allowFallback` 限制。
+
+关键回退日志不可关闭，`logFallback` 必须为 1。`recordFallback()` 同时更新
+策略查询中的累计次数与最近错误；适配器的原生回退也应通过该方法记录。
+`activePath` 为 0 原生/空闲、1 EPT、2 Shadow。
 
 ## C ABI v1
 
@@ -86,6 +127,10 @@ Safe/Unsafe 读看到原字节。TF 单步时临时撤销命中偏移，下一�
 | 1 QUERY_BACKEND | 空 | 40 字节 KSWORD_DEBUGGER_BACKEND_STATUS |
 | 2 USE_HVM | DWORD 0 或 1 | 相同状态；失败时保持实际选择 |
 | 3 OPERATION_LAYOUT | DWORD 命令编号 | 24 字节 KSWORD_DEBUGGER_OPERATION_INFO，含输入/输出长度和协议版本 |
+| 4 GET_OPTIONS | 空 | 48 字节 KSWORD_DEBUGGER_OPTIONS；未连接驱动时仍可查询 |
+| 5 SET_OPTIONS | 48 字节选项 | 48 字节实际选项；失败时返回保留的选项 |
+| 6 QUERY_POLICY | 空 | 72 字节 KSWORD_DEBUGGER_POLICY_STATUS |
+| 7 RESTORE_SHADOW_WRITES | 24 字节 KSWORD_DEBUGGER_SHADOW_RESTORE | 40 字节后端状态；地址/长度全零恢复所有自有内存补丁 |
 | 16–32 | 对应 shared/driver 请求 | 对应 shared/driver 响应 |
 
 布局查询保证适配器不会硬编码数千字节响应长度。请求必须是协议要求的精确

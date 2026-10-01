@@ -43,6 +43,7 @@ Environment:
 #include "hvm_mtrr.h"
 #include "hvm_nested.h"
 #include "hvm_resident.h"
+#include "../debugger/debugger.h"
 
 #if defined(_M_AMD64)
 #include <intrin.h>
@@ -2932,6 +2933,7 @@ KswordARKHvmControl(
     ULONG overwrittenEventCount = 0UL;
     ULONGLONG publishedEventCount = 0ULL;
     ULONG allowedFlags = 0UL;
+    BOOLEAN debuggerStartLease = FALSE;
 
     /* Validate the complete versioned request before acquiring the state lock. */
     if (Request == NULL || Response == NULL) {
@@ -3212,6 +3214,18 @@ KswordARKHvmControl(
         return STATUS_SUCCESS;
     }
 
+    /* Check debugger recovery before taking the HVM lock: shadow updates take
+     * the shadow lock first and call HVM control while retaining it. */
+    if (Request->command == KSWORD_ARK_HVM_CONTROL_START_RESIDENT) {
+        status = KswordARKDebuggerShadowAcquireStartLease();
+        if (!NT_SUCCESS(status)) {
+            Response->status = KSWORD_ARK_HVM_CONTROL_STATUS_LIFECYCLE_GUARD_FAILED;
+            Response->lastStatus = status;
+            return STATUS_SUCCESS;
+        }
+        debuggerStartLease = TRUE;
+    }
+
     /* Serialize all lifecycle changes and honor generation-bound requests. */
     KeEnterCriticalRegion();
     KswordARKAcquirePushLockExclusive(&g_KswordHvm.Lock);
@@ -3480,6 +3494,7 @@ Complete:
     Response->lastStatus = status;
     KswordARKReleasePushLockExclusive(&g_KswordHvm.Lock);
     KeLeaveCriticalRegion();
+    if (debuggerStartLease) { KswordARKDebuggerShadowReleaseStartLease(); }
     return STATUS_SUCCESS;
 }
 

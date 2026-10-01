@@ -1,6 +1,9 @@
 #include "Proxy.h"
+#include "ControlProtocol.h"
 #include "../DebuggerBackend/KswordDebuggerFileProtocol.h"
 #include <filesystem>
+#include <algorithm>
+#include <cstring>
 #include <fstream>
 #include <mutex>
 #include <sstream>
@@ -19,166 +22,180 @@ namespace ksword::titan
             const DWORD count = GetEnvironmentVariableW(name, buffer, _countof(buffer));
             return count == 0 || count >= _countof(buffer) ? std::wstring{} : std::wstring(buffer, count);
         }
-
-        DWORD selectHvm(DWORD enabled, KSWORD_DEBUGGER_BACKEND_STATUS& state)
+        KSWORD_DEBUGGER_POLICY_STATUS adapterPolicyStatus()
+        {
+            std::lock_guard<std::recursive_mutex> policy(policyMutex);
+            auto actual = debugger::backend().policyStatus();
+            const auto installedPath = adapterBreakpointPath();
+            if (installedPath == KSWORD_DEBUGGER_PATH_SHADOW ||
+                (installedPath == KSWORD_DEBUGGER_PATH_EPT && actual.activePath == KSWORD_DEBUGGER_PATH_NATIVE))
+                actual.activePath = installedPath;
+            actual.activeBreakpoints = (std::max)(actual.activeBreakpoints, static_cast<std::uint32_t>(adapterBreakpointCount()));
+            if (actual.activeBreakpoints != 0 || hasPendingBindingChanges() || hasPendingDebug() || (nativeProcessId() != 0 && !nativeEventHeld())) actual.canChangeOptions = 0;
+            return actual;
+        }
+        DWORD selectConfiguration(DWORD enabled, const KSWORD_DEBUGGER_OPTIONS* requested,
+            KSWORD_DEBUGGER_BACKEND_STATUS& state)
         {
             std::lock_guard<std::mutex> lock(controlMutex);
             std::lock_guard<std::recursive_mutex> policy(policyMutex);
-            if (enabled > 1) { state = debugger::backend().status(); return ERROR_INVALID_PARAMETER; }
-            if ((enabled != 0) != hvmSelected.load() && nativeProcessId() != 0 && !nativeEventHeld())
-            { state = debugger::backend().status(); log("HVM selection refused: pause the native debugger first"); return ERROR_BUSY; }
-            if (enabled == 0 && hvmSelected.load() && (hasHardwareBindings() || hasPendingDebug()))
-            { state = debugger::backend().status(); log("HVM selection refused: remove EPT hardware breakpoints first"); return ERROR_BUSY; }
-            if (enabled != 0 && !hvmSelected.load() && hasHardwareBindings())
+            auto& backend = debugger::backend();
+            const auto original = backend.options();
+            const auto options = requested == nullptr ? original : *requested;
+            state = backend.status();
+            if (options.version != KSWORD_DEBUGGER_OPTIONS_VERSION || options.size != sizeof(options)) return ERROR_REVISION_MISMATCH;
+            if (enabled > 1 || !control::valid(options)) return ERROR_INVALID_PARAMETER;
+            const auto status = adapterPolicyStatus();
+            if (!control::changeAllowed(enabled != 0, options, state.useHvm != 0, original,
+                nativeProcessId() != 0 && !nativeEventHeld(), status.canChangeOptions == 0))
             {
-                state = debugger::backend().status();
-                log("HVM selection refused: remove the existing native hardware breakpoints first");
+                log("Policy change refused: source=Tab/C-ABI error=170 -> actual=" +
+                    std::to_string(status.activePath) + "; pause the debugger and remove active breakpoint/Shadow write bindings");
                 return ERROR_BUSY;
             }
-            if (enabled != 0 && !debugger::backend().initialize())
-            { const DWORD error = GetLastError(); state = debugger::backend().status(); return error; }
-            DWORD error = debugger::backend().setUseHvm(enabled != 0);
-            state = debugger::backend().status();
-            hvmSelected = state.useHvm != 0;
-            if (error == ERROR_SUCCESS && hvmSelected.load() && nativeEventHeld())
+            const bool selectionChanged = (enabled != 0) != (state.useHvm != 0);
+            if (!selectionChanged && control::same(options, original)) return ERROR_SUCCESS;
+            DWORD error = backend.setOptions(options);
+            if (error != ERROR_SUCCESS) { state = backend.status(); return error; }
+            if (selectionChanged)
             {
-                error = adoptCurrentNativeSession();
-                if (error != ERROR_SUCCESS)
+                if (enabled != 0 && !backend.initialize()) error = GetLastError();
+                else error = backend.setUseHvm(enabled != 0);
+                hvmSelected = backend.status().useHvm != 0;
+                if (error == ERROR_SUCCESS && hvmSelected.load() && nativeEventHeld())
                 {
-                    (void)debugger::backend().setUseHvm(false);
-                    (void)releaseSession();
-                    state = debugger::backend().status(); hvmSelected = state.useHvm != 0;
+                    error = adoptCurrentNativeSession();
+                    if (error != ERROR_SUCCESS) { (void)backend.setUseHvm(false); (void)releaseSession(); }
                 }
+                if (error != ERROR_SUCCESS) (void)backend.setOptions(original);
             }
-            // Adoption changes the attached PID; publish the state after it.
-            state = debugger::backend().status();
+            state = backend.status(); hvmSelected = state.useHvm != 0;
+            const auto actual = adapterPolicyStatus();
+            log("Policy request: source=Tab/C-ABI error=" + std::to_string(error) + " -> actual=" +
+                std::to_string(actual.activePath) + " mode=" + std::to_string(actual.options.mode) +
+                " useHvm=" + std::to_string(state.useHvm) + " allowFallback=" + std::to_string(actual.options.allowFallback));
+            if (actual.options.mode == KSWORD_DEBUGGER_MODE_STEALTH)
+                log("Stealth execution policy selected; Windows debug-event transport remains active; debug-port hiding is not provided");
             return error;
         }
         void writeAck(const std::filesystem::path& path, const std::string& session,
-            std::uint64_t revision, DWORD error, const KSWORD_DEBUGGER_BACKEND_STATUS& state)
+            std::uint64_t revision, DWORD error)
         {
             const auto temporary = std::filesystem::path(path.wstring() + L".tmp");
+            std::string packet;
+            {
+                std::lock_guard<std::recursive_mutex> policy(policyMutex);
+                packet = control::ack(session, revision, error, debugger::backend().status(), adapterPolicyStatus());
+            }
             {
                 std::ofstream stream(temporary, std::ios::binary | std::ios::trunc);
                 if (!stream) return;
-                stream << session << ' ' << revision << ' ' << error << ' ' << state.useHvm << ' '
-                    << state.driverReady << ' ' << state.residentActive << ' ' << state.eptBreakpointProtocol << '\n';
-                stream.flush(); if (!stream) return;
+                stream << packet; stream.flush(); if (!stream) return;
             }
             (void)MoveFileExW(temporary.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH);
         }
     }
-
     void startControlWorker()
     {
-        const auto control = environment(L"KSWORD_DEBUGGER_CONTROL_FILE");
+        const auto controlPath = environment(L"KSWORD_DEBUGGER_CONTROL_FILE");
         const auto state = environment(L"KSWORD_DEBUGGER_STATE_FILE");
         const auto wideSession = environment(L"KSWORD_DEBUGGER_SESSION_ID");
-        if (control.empty() || state.empty() || wideSession.empty()) return;
+        if (controlPath.empty() || state.empty() || wideSession.empty()) return;
         std::string session;
-        for (const wchar_t c : wideSession)
-        {
-            if (c < 0x21 || c > 0x7E) return;
-            session.push_back(static_cast<char>(c));
-        }
-        if (session.find_first_of(" \r\n\t") != std::string::npos || session.size() > 128) return;
+        for (const wchar_t c : wideSession) { if (c < 0x21 || c > 0x7E) return; session.push_back(static_cast<char>(c)); }
+        if (!control::sessionValid(session)) return;
         // Both proxy and native module were pinned before this worker starts.
-        std::thread([control, state, session] {
-            std::uint64_t previous = 0;
-            writeAck(state, session, previous, ERROR_SUCCESS, debugger::backend().status());
+        std::thread([controlPath, state, session] {
+            std::uint64_t previous = 0; DWORD lastError = ERROR_SUCCESS; unsigned int ticks = 0;
+            writeAck(state, session, previous, lastError);
             for (;;)
             {
-                std::string packet;
-                (void)debugger::readControlPacket(control, packet);
-                std::istringstream stream(packet);
-                std::string candidate; std::uint64_t revision = 0; DWORD requested = 0;
-                if (stream >> candidate >> revision >> requested && candidate == session && revision > previous)
+                std::string packet; control::Request request;
+                (void)debugger::readControlPacket(controlPath, packet);
+                if (control::parseRequest(packet, request) && request.session == session && request.revision > previous)
                 {
                     KSWORD_DEBUGGER_BACKEND_STATUS actual{};
-                    const DWORD error = selectHvm(requested, actual);
-                    previous = revision; writeAck(state, session, revision, error, actual);
-                    log("Log Tab HVM request " + std::to_string(revision) + ": " + std::to_string(error));
+                    lastError = selectConfiguration(request.selected, request.extended ? &request.options : nullptr, actual);
+                    previous = request.revision; writeAck(state, session, previous, lastError);
                 }
+                else
+                {
+                    // An identified malformed request receives a failure ACK,
+                    // without adopting any partial options or a stale session.
+                    std::istringstream stream(packet); std::string candidate; std::uint64_t revision = 0;
+                    if (stream >> candidate && candidate == session && control::number(stream, revision) && revision > previous)
+                    { previous = revision; lastError = ERROR_INVALID_PARAMETER; writeAck(state, session, previous, lastError); log("Invalid policy packet: source=control file error=87 -> actual policy retained"); }
+                }
+                // Publish changing pause/binding/actual-path state while idle.
+                if (++ticks >= 5) { ticks = 0; writeAck(state, session, previous, lastError); }
                 Sleep(100);
             }
         }).detach();
     }
 }
 
-static bool safeStatusCopy(KSWORD_DEBUGGER_BACKEND_STATUS* destination,
-    const KSWORD_DEBUGGER_BACKEND_STATUS* source) noexcept
+// SEH copying stays outside C++ lock scopes, including failed actual-state ACKs.
+static bool safeCopy(void* destination, const void* source, SIZE_T bytes) noexcept
 {
-    __try { if (destination != nullptr) *destination = *source; return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
-}
-
-static bool safeCallCopy(KSWORD_DEBUGGER_CALL* destination, const KSWORD_DEBUGGER_CALL* source) noexcept
-{
-    __try { *destination = *source; return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
-}
-
-static bool safeDwordCopy(DWORD* destination, const DWORD* source) noexcept
-{
-    __try { *destination = *source; return true; }
+    __try { if (destination == nullptr || source == nullptr) return false; memcpy(destination, source, bytes); return true; }
     __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
 }
 
 extern "C" DWORD __stdcall KSwordTitanControl(DWORD enabled, KSWORD_DEBUGGER_BACKEND_STATUS* status)
 {
     using namespace ksword::titan;
-    DWORD error = ensureNative();
-    if (error != ERROR_SUCCESS) return error;
+    DWORD error = ensureNative(); if (error != ERROR_SUCCESS) return error;
     KSWORD_DEBUGGER_BACKEND_STATUS actual{};
-    error = selectHvm(enabled, actual);
-    if (!safeStatusCopy(status, &actual)) return ERROR_NOACCESS;
+    error = selectConfiguration(enabled, nullptr, actual);
+    if (status != nullptr && !safeCopy(status, &actual, sizeof(actual))) return ERROR_NOACCESS;
     return error;
 }
 
 extern "C" unsigned long __stdcall KSwordDebuggerCall(KSWORD_DEBUGGER_CALL* call)
 {
-    const DWORD error = ksword::titan::ensureNative();
-    if (error != ERROR_SUCCESS) return error;
+    using namespace ksword::titan;
+    const DWORD error = ensureNative(); if (error != ERROR_SUCCESS) return error;
     KSWORD_DEBUGGER_CALL snapshot{};
-    if (call == nullptr || !safeCallCopy(&snapshot, call)) return ERROR_NOACCESS;
-    if (snapshot.command == KSWORD_DEBUGGER_USE_HVM)
+    if (!safeCopy(&snapshot, call, sizeof(snapshot))) return ERROR_NOACCESS;
+    if (snapshot.command == KSWORD_DEBUGGER_USE_HVM || snapshot.command == KSWORD_DEBUGGER_SET_OPTIONS || snapshot.command == KSWORD_DEBUGGER_QUERY_POLICY)
     {
         snapshot.bytesReturned = 0;
-        if (snapshot.version != KSWORD_DEBUGGER_API_VERSION || snapshot.size != sizeof(snapshot) || snapshot.reserved != 0)
-            snapshot.error = ERROR_REVISION_MISMATCH;
-        else if (snapshot.inputBytes != sizeof(DWORD)) snapshot.error = ERROR_INVALID_PARAMETER;
-        else if (snapshot.outputBytes < sizeof(KSWORD_DEBUGGER_BACKEND_STATUS)) snapshot.error = ERROR_INSUFFICIENT_BUFFER;
+        const SIZE_T outputBytes = snapshot.command == KSWORD_DEBUGGER_USE_HVM ? sizeof(KSWORD_DEBUGGER_BACKEND_STATUS) :
+            snapshot.command == KSWORD_DEBUGGER_SET_OPTIONS ? sizeof(KSWORD_DEBUGGER_OPTIONS) : sizeof(KSWORD_DEBUGGER_POLICY_STATUS);
+        const SIZE_T inputBytes = snapshot.command == KSWORD_DEBUGGER_USE_HVM ? sizeof(DWORD) :
+            snapshot.command == KSWORD_DEBUGGER_SET_OPTIONS ? sizeof(KSWORD_DEBUGGER_OPTIONS) : 0;
+        if (snapshot.version != KSWORD_DEBUGGER_API_VERSION || snapshot.size != sizeof(snapshot) || snapshot.reserved != 0) snapshot.error = ERROR_REVISION_MISMATCH;
+        else if (snapshot.inputBytes != inputBytes) snapshot.error = ERROR_INVALID_PARAMETER;
+        else if (snapshot.outputBytes < outputBytes) snapshot.error = ERROR_INSUFFICIENT_BUFFER;
+        else if (snapshot.output == 0) snapshot.error = ERROR_NOACCESS;
         else
         {
-            DWORD enabled = 0;
-            KSWORD_DEBUGGER_BACKEND_STATUS actual{};
-            if (!safeDwordCopy(&enabled, reinterpret_cast<const DWORD*>(static_cast<std::uintptr_t>(snapshot.input))))
-                snapshot.error = ERROR_NOACCESS;
-            else
+            DWORD enabled = 0; KSWORD_DEBUGGER_OPTIONS options{}; KSWORD_DEBUGGER_BACKEND_STATUS state{};
+            const auto input = reinterpret_cast<const void*>(static_cast<std::uintptr_t>(snapshot.input));
+            if (snapshot.command == KSWORD_DEBUGGER_USE_HVM)
             {
-                snapshot.error = ksword::titan::selectHvm(enabled, actual);
-                if (snapshot.output == 0 || !safeStatusCopy(
-                    reinterpret_cast<KSWORD_DEBUGGER_BACKEND_STATUS*>(static_cast<std::uintptr_t>(snapshot.output)), &actual))
-                    snapshot.error = ERROR_NOACCESS;
-                else snapshot.bytesReturned = sizeof(actual);
+                if (!safeCopy(&enabled, input, sizeof(enabled))) snapshot.error = ERROR_NOACCESS;
+                else snapshot.error = selectConfiguration(enabled, nullptr, state);
             }
+            else if (snapshot.command == KSWORD_DEBUGGER_SET_OPTIONS)
+            {
+                if (!safeCopy(&options, input, sizeof(options))) snapshot.error = ERROR_NOACCESS;
+                else snapshot.error = selectConfiguration(ksword::debugger::backend().status().useHvm, &options, state);
+            }
+            else snapshot.error = ERROR_SUCCESS;
+            const auto actual = adapterPolicyStatus();
+            const auto destination = reinterpret_cast<void*>(static_cast<std::uintptr_t>(snapshot.output));
+            if (snapshot.command == KSWORD_DEBUGGER_USE_HVM) state = ksword::debugger::backend().status();
+            const void* actualOutput = snapshot.command == KSWORD_DEBUGGER_USE_HVM ? static_cast<const void*>(&state) :
+                snapshot.command == KSWORD_DEBUGGER_SET_OPTIONS ? static_cast<const void*>(&actual.options) : static_cast<const void*>(&actual);
+            if (!safeCopy(destination, actualOutput, outputBytes)) snapshot.error = ERROR_NOACCESS;
+            else snapshot.bytesReturned = static_cast<DWORD>(outputBytes);
         }
-        return safeCallCopy(call, &snapshot) ? snapshot.error : ERROR_NOACCESS;
+        return safeCopy(call, &snapshot, sizeof(snapshot)) ? snapshot.error : ERROR_NOACCESS;
     }
-    if (!ksword::debugger::backend().initialize()) return GetLastError();
-    DWORD result = KSwordBackendCall(call);
-    ksword::titan::hvmSelected = ksword::debugger::backend().status().useHvm != 0;
-    if (result == ERROR_SUCCESS && snapshot.command == KSWORD_DEBUGGER_USE_HVM && ksword::titan::hvmSelected.load())
-    {
-        result = ksword::titan::adoptCurrentNativeSession();
-        if (result != ERROR_SUCCESS)
-        {
-            (void)ksword::debugger::backend().setUseHvm(false);
-            ksword::titan::hvmSelected = ksword::debugger::backend().status().useHvm != 0;
-            if (!safeCallCopy(&snapshot, call)) return ERROR_NOACCESS;
-            snapshot.error = result;
-            if (!safeCallCopy(call, &snapshot)) return ERROR_NOACCESS;
-        }
-    }
+    // Options and layout/status queries are valid with no loaded driver.
+    if (snapshot.command >= KSWORD_DEBUGGER_HVM_STATUS && !ksword::debugger::backend().initialize()) return GetLastError();
+    const DWORD result = KSwordBackendCall(call);
+    hvmSelected = ksword::debugger::backend().status().useHvm != 0;
     return result;
 }

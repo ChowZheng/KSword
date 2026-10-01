@@ -103,6 +103,8 @@
   <ItemGroup>
     <None Include="integration\10_ksword_bridge.lua" />
     <None Include="integration\ksword_hvm.lua" />
+    <None Include="tests\LuaPolicyTests.lua" />
+    <None Include="tests\validate_lua_policy.py" />
     <None Include="NOTICE.md" />
     <None Include="plugin.json" />
     <None Include="README.md" />

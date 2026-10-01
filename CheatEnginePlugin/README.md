@@ -9,7 +9,7 @@
 | --- | --- |
 | OpenProcess | 保留请求权限；失败时查询/同步句柄或带对象身份校验的 PID 代理 |
 | VirtualQueryEx | KSword 虚拟内存查询 |
-| ReadProcessMemory / WriteProcessMemory | R0 分片读写；HVM 模式为严格私有窗口读写 |
+| ReadProcessMemory / WriteProcessMemory | R0 分片读写；HVM 私有窗口；可配置的代码执行视图 Shadow 修改与明确数据回退 |
 | GetThreadContext / SetThreadContext | KSword R0 上下文；HVM 调试寄存器映射为 EPT 断点 |
 | SuspendThread / ResumeThread | KSword R0，保留原挂起计数语义 |
 | VirtualAllocEx / VirtualProtectEx | KSword R0 调试协议 |
@@ -20,6 +20,12 @@
 共有 15 个 SDK hook。写入和调试变更仍受驱动安全策略约束；R0 写入按现有
 协议携带 UI_CONFIRMED/FORCE。HVM 自检/常驻启动携带所需确认标记。
 适配器自身的进程内缓冲区使用 Windows 本地读写，不发往目标驱动内存接口。
+CE 内存修改和冻结复用写入 hook：autorun 默认关闭 Shadow，保留普通写入/冻结，
+显式回退开启。用户可开启影子执行页代码修改；需 HVM，RX/RWX 页上的数字冻结
+不能靠影子执行视图改变普通数据读取。不能把普通数据修改描述为隐形修改。Shadow 代码失败
+不写原代码页，代码/数据混合范围失败。具体日志页选项、持久化、Lua API 与
+恢复语义见 `CheatEngineExecutablePlugin/README.md`。模式/选项为公共后端的
+版本化命令 4–7，CE 适配器不复制驱动策略；驱动不可用时记录 CE 原生路由。
 64 位线程上下文是本版原生调试协议的范围；WOW64 上下文不做隐式转换。
 CE VEH/DBVM 不经过此 Windows 调试接口，不能宣称也被这些 hook 接管。
 

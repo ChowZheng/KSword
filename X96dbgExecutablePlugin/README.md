@@ -14,7 +14,28 @@ the debugger or its target.
 The process context action uses `--ksword-plugin attach -- --pid PID`.
 `info` and `check` perform no GUI launch. Native TitanEngine forwarding is
 allowed when the KSword driver is absent. An HVM selection is a request to the
-engine adapter, and the checkbox changes only after a matching acknowledgement.
+engine adapter, and all controls change only after a matching actual-state acknowledgement.
+
+## HVM policy controls
+
+The Tab offers normal/stealth HVM, ShadowPage memory writes, allowed fallback,
+native context/suspend fallback, and a 1–32 Shadow page limit. The normal defaults
+preserve the existing automatic fallback behavior. Selecting stealth requests
+Shadow writes on and fallback off; enabling fallback explicitly still cannot
+permit visible original-code INT3 or hardware debug registers for stealth
+breakpoints. Ordinary data-write fallback is permitted when selected and is
+always logged. Unsupported native PAGE_GUARD memory breakpoints are refused in
+stealth. Stealth prefers a hidden execution view; the Windows debug-event channel
+remains active, and the mode does not guarantee complete invisibility.
+
+The status reports the actual native/EPT/ShadowPage route, active binding and
+Shadow page counts, fallback count and last error. Controls are disabled while
+awaiting an ACK, while the target is running, or while active breakpoints/Shadow
+writes prevent changing policy. Pause and remove or restore those bindings
+before changing options. Rejection retains the actual selection and options.
+Only successfully confirmed options are saved in `x96dbg-options.ini` beside the
+launcher. HVM activation is never saved: each new session starts off and applies
+the saved policy through the common backend, even when no driver is present.
 
 ## Engine selection
 
@@ -34,12 +55,21 @@ The child debugger receives:
 - `KSWORD_DEBUGGER_STATE_FILE`: log path followed by `.state`.
 - `KSWORD_DEBUGGER_SESSION_ID`: UUID without braces.
 
-Atomic control files contain `SESSION REVISION HVM_SELECTED` followed by a
-newline. State files contain `SESSION REVISION ERROR HVM_SELECTED DRIVER_READY
-RESIDENT_ACTIVE EPT_AVAILABLE` followed by a newline. Flags are `0` or `1`.
+Atomic control files retain `SESSION REVISION HVM_SELECTED`, followed by
+`v2 MODE SHADOW_WRITES ALLOW_FALLBACK CONTEXT_FALLBACK SUSPEND_FALLBACK MAX_PAGES`
+and a newline. Legacy three-field requests remain supported and preserve the
+currently configured options. State files retain `SESSION REVISION ERROR
+HVM_SELECTED DRIVER_READY RESIDENT_ACTIVE EPT_AVAILABLE`, then append `v2`,
+the six confirmed options, and `ACTUAL_PATH ACTIVE_BREAKPOINTS SHADOW_WRITE_PAGES
+CAN_CHANGE FALLBACK_COUNT LAST_FALLBACK_ERROR`. Flags are `0` or `1`; mode is
+`0=normal, 1=stealth`, path is `0=native, 1=EPT, 2=ShadowPage`.
 The page ignores another session or an older revision. It displays failures
 without changing the selected backend; a five-second missing acknowledgement
-leaves the previous selection visible and permits a new request. Runtime
+leaves the last actual values visible and permits a new request only if the
+last actual state allowed changes. A matching failure ACK includes the actual
+options after rollback, and a 500 ms heartbeat refreshes pause/binding eligibility.
+Unknown versions, out-of-range values, stale sessions and trailing fields never
+partially apply options. A legacy backend ACK does not enable unsupported controls. Runtime
 engine support and actual live HVM validation are described in the backend
 documentation shipped with the package.
 

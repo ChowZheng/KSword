@@ -34,7 +34,7 @@
     <Link><SubSystem>Console</SubSystem><GenerateDebugInformation>true</GenerateDebugInformation><AdditionalDependencies>ole32.lib;user32.lib;gdi32.lib;%(AdditionalDependencies)</AdditionalDependencies></Link>
   </ItemDefinitionGroup>
   <ItemGroup><ClCompile Include="LauncherMain.cpp" /><ClCompile Include="LogSurface.cpp" /></ItemGroup>
-  <ItemGroup><ClInclude Include="LogSurface.h" /><ClInclude Include="..\DebuggerBackend\KswordDebuggerFileProtocol.h" /></ItemGroup>
+  <ItemGroup><ClInclude Include="LogSurface.h" /><ClInclude Include="..\DebuggerBackend\KswordDebuggerFileProtocol.h" /><ClInclude Include="..\TitanEnginePlugin\ControlProtocol.h" /><ClInclude Include="..\DebuggerBackend\KswordDebuggerApi.h" /></ItemGroup>
   <ItemGroup><None Include="plugin.json" /><None Include="README.md" /><None Include="NOTICE.md" /><None Include="SOURCE.md" /><None Include="tests\LauncherTests.ps1" /></ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 </Project>

@@ -365,6 +365,16 @@ namespace
             L".status";
     }
 
+    std::wstring makeSettingsPath()
+    {
+        wchar_t localAppData[32768]{};
+        const DWORD length = ::GetEnvironmentVariableW(L"LOCALAPPDATA", localAppData, _countof(localAppData));
+        if (length == 0U || length >= _countof(localAppData)) return {};
+        const std::wstring directory = joinPath(localAppData, L"KSword");
+        if (!::CreateDirectoryW(directory.c_str(), nullptr) && ::GetLastError() != ERROR_ALREADY_EXISTS) return {};
+        return joinPath(directory, L"ce-backend-options.txt");
+    }
+
     std::string readStatusFile(const std::wstring& path)
     {
         std::ifstream input(path, std::ios::binary);
@@ -447,8 +457,14 @@ namespace
         const bool controlEnvironmentReady =
             ::SetEnvironmentVariableW(L"KSWORD_CE_CONTROL_FILE", (logPath + L".control").c_str()) != FALSE &&
             ::SetEnvironmentVariableW(L"KSWORD_CE_BACKEND_STATE_FILE", (logPath + L".state").c_str()) != FALSE;
+        const std::wstring settingsPath = makeSettingsPath();
+        const bool settingsEnvironmentReady = !settingsPath.empty() &&
+            ::SetEnvironmentVariableW(L"KSWORD_CE_SETTINGS_FILE", settingsPath.c_str()) != FALSE &&
+            ::SetEnvironmentVariableW(L"KSWORD_CE_SETTINGS_TEMP_FILE",
+                (settingsPath + L"." + std::to_wstring(::GetCurrentProcessId()) + L".new").c_str()) != FALSE;
         if (!logEnvironmentReady ||
             !controlEnvironmentReady ||
+            !settingsEnvironmentReady ||
             ::SetEnvironmentVariableW(
                 L"KSWORD_CE_BRIDGE_DLL",
                 bridgeDll.c_str()) == FALSE ||

@@ -21,7 +21,69 @@ namespace ksword::titan
             bool shadow = false;
         };
         std::recursive_mutex bindingMutex;
+        std::recursive_mutex softwareOperationMutex;
+        DWORD pendingBindingChanges = 0;
+        struct BindingTransition
+        {
+            BindingTransition()
+            {
+                std::lock_guard<std::recursive_mutex> policy(policyMutex);
+                std::lock_guard<std::recursive_mutex> lock(bindingMutex);
+                ++pendingBindingChanges;
+            }
+            ~BindingTransition()
+            {
+                std::lock_guard<std::recursive_mutex> policy(policyMutex);
+                std::lock_guard<std::recursive_mutex> lock(bindingMutex);
+                --pendingBindingChanges;
+            }
+            BindingTransition(const BindingTransition&) = delete;
+            BindingTransition& operator=(const BindingTransition&) = delete;
+        };
         std::unordered_map<DWORD, HardwareBinding> hardwareBindings;
+        DWORD defaultSoftwareType = UE_BREAKPOINT_TYPE_INT3;
+        struct SoftwareBinding { bool singleShot; DWORD type; TITANCBSOFTBP callback; DWORD installedPath; };
+        std::unordered_map<ULONG_PTR, SoftwareBinding> softwareBindings;
+        void softwareHit()
+        {
+            TITANCBSOFTBP callback = nullptr;
+            {
+                std::lock_guard<std::recursive_mutex> policy(policyMutex);
+                std::lock_guard<std::recursive_mutex> lock(bindingMutex);
+                const auto* event = nativeApi.GetDebugData();
+                if (event == nullptr || event->dwDebugEventCode != EXCEPTION_DEBUG_EVENT) return;
+                const auto address = reinterpret_cast<ULONG_PTR>(event->u.Exception.ExceptionRecord.ExceptionAddress);
+                auto found = softwareBindings.end();
+                for (auto it = softwareBindings.begin(); it != softwareBindings.end(); ++it)
+                    if (address >= it->first && address - it->first == (it->second.type == UE_BREAKPOINT_TYPE_LONG_INT3 ? 1U : 0U))
+                    { found = it; break; }
+                if (found == softwareBindings.end()) return;
+                callback = found->second.callback;
+                if (found->second.singleShot) softwareBindings.erase(found);
+            }
+            LogicalReadScope frontend(false);
+            if (callback != nullptr) callback();
+        }
+        struct MemoryBinding { SIZE_T bytes; bool restore; TITANCBMEMBP callback; };
+        std::unordered_map<ULONG_PTR, MemoryBinding> memoryBindings;
+        void memoryHit(const void* accessed)
+        {
+            TITANCBMEMBP callback = nullptr;
+            {
+                std::lock_guard<std::recursive_mutex> policy(policyMutex);
+                std::lock_guard<std::recursive_mutex> lock(bindingMutex);
+                const auto address = reinterpret_cast<ULONG_PTR>(accessed);
+                for (auto it = memoryBindings.begin(); it != memoryBindings.end(); ++it)
+                    if (address >= it->first && address - it->first < it->second.bytes)
+                    {
+                        callback = it->second.callback;
+                        if (!it->second.restore) memoryBindings.erase(it);
+                        break;
+                    }
+            }
+            LogicalReadScope frontend(false);
+            if (callback != nullptr) callback(accessed);
+        }
         struct DeferredStep { TITANCBSTEP callback; DWORD pid; std::uint64_t event; bool over; };
         std::unordered_map<DWORD, DeferredStep> deferredSteps;
         void shadowHit(DWORD index)
@@ -101,6 +163,32 @@ namespace ksword::titan
     }
 
     bool hasHardwareBindings() { std::lock_guard<std::recursive_mutex> lock(bindingMutex); return !hardwareBindings.empty(); }
+    bool hasPendingBindingChanges() { std::lock_guard<std::recursive_mutex> lock(bindingMutex); return pendingBindingChanges != 0; }
+    DWORD adapterBreakpointCount()
+    {
+        std::lock_guard<std::recursive_mutex> policy(policyMutex);
+        std::lock_guard<std::recursive_mutex> lock(bindingMutex);
+        // No native breakpoint-table query here: Titan can hold its table lock
+        // while entering the write seam. The callbacks retire one-shot records.
+        return static_cast<DWORD>(softwareBindings.size() + memoryBindings.size() + hardwareBindings.size());
+    }
+    DWORD adapterBreakpointPath()
+    {
+        std::lock_guard<std::recursive_mutex> lock(bindingMutex);
+        DWORD path = KSWORD_DEBUGGER_PATH_NATIVE;
+        // The native event loop temporarily removes physical INT3 before a
+        // frontend pause callback. Its retained logical binding still owns the
+        // installed route until explicit deletion/session retirement.
+        for (const auto& pair : hardwareBindings)
+        {
+            if (pair.second.shadow) return KSWORD_DEBUGGER_PATH_SHADOW;
+            if (pair.second.hvm) path = KSWORD_DEBUGGER_PATH_EPT;
+        }
+        for (const auto& pair : softwareBindings)
+            if (pair.second.installedPath == KSWORD_DEBUGGER_PATH_SHADOW) return KSWORD_DEBUGGER_PATH_SHADOW;
+        return path;
+    }
+    void clearSoftwareBindings() { std::lock_guard<std::recursive_mutex> lock(bindingMutex); softwareBindings.clear(); memoryBindings.clear(); }
     void clearHardwareBindings() { std::lock_guard<std::recursive_mutex> lock(bindingMutex); hardwareBindings.clear(); }
     void clearDeferredSteps() { deferredSteps.clear(); }
 
@@ -109,9 +197,17 @@ namespace ksword::titan
     {
         if (ensureNative() != ERROR_SUCCESS) return false;
         std::lock_guard<std::recursive_mutex> policy(policyMutex);
+        const auto options = debugger::backend().options();
+        if (options.mode == KSWORD_DEBUGGER_MODE_STEALTH && !hvmSelected.load())
+        {
+            debugger::backend().recordFallback("Titan hardware breakpoint", "rejected", ERROR_NOT_READY,
+                "stealth requires HVM; visible hardware debug registers are forbidden; Windows debug-event transport remains active");
+            SetLastError(ERROR_NOT_READY); return false;
+        }
         if (hvmSelected.load() && type != UE_HARDWARE_EXECUTE)
         {
-            log("HVM hardware data breakpoints rejected: EPT data coverage is 4 KiB; use native mode or the explicit Watch API");
+            debugger::backend().recordFallback("Titan hardware data breakpoint", "rejected", ERROR_NOT_SUPPORTED,
+                "EPT data coverage is 4 KiB; byte-range native DR fallback is not selected automatically");
             SetLastError(ERROR_NOT_SUPPORTED); return false;
         }
         std::lock_guard<std::recursive_mutex> lock(bindingMutex);
@@ -130,7 +226,13 @@ namespace ksword::titan
             allocationBase = reinterpret_cast<ULONG_PTR>(info.AllocationBase);
         }
         DWORD selected = index;
-        const bool shadow = hvmSelected.load() && debugger::backend().status().eptBreakpointProtocol == 0;
+        const bool shadow = hvmSelected.load() && debugger::backend().preferShadowExecution();
+        if (shadow && options.mode == KSWORD_DEBUGGER_MODE_NORMAL && !options.allowFallback)
+        {
+            debugger::backend().recordFallback("EPT execute breakpoint", "rejected", ERROR_NOT_SUPPORTED,
+                "ShadowPage fallback is disabled by policy");
+            SetLastError(ERROR_NOT_SUPPORTED); return false;
+        }
         if (selected == 0)
         {
             if (shadow)
@@ -168,7 +270,10 @@ namespace ksword::titan
             {
                 hardwareBindings[selected] = {address, selected, type, size, callback,
                     nativeProcessId(), true, allocationBase, true};
-                log("Execute breakpoint uses ShadowPage hidden INT3 fallback");
+                if (options.mode == KSWORD_DEBUGGER_MODE_NORMAL)
+                    debugger::backend().recordFallback("EPT execute breakpoint", "ShadowPage hidden INT3", ERROR_NOT_SUPPORTED,
+                        "native-event EPT breakpoint protocol is unavailable; hidden execution view installed successfully");
+                else log("Execute breakpoint: source=stealth policy error=0 -> actual=ShadowPage hidden INT3; Windows debug-event transport remains active");
             }
             else if (hadPrevious && !nativeApi.SetBPX(previous.address, UE_BREAKPOINT | UE_BREAKPOINT_TYPE_INT3,
                 shadowCallbacks[selected - UE_DR0]))
@@ -176,6 +281,8 @@ namespace ksword::titan
                 log("ShadowPage hardware replacement rollback failed");
                 hardwareBindings.erase(selected);
             }
+            if (!result) debugger::backend().recordFallback("ShadowPage execute breakpoint", "rejected", installError,
+                "hidden breakpoint installation failed; no original-page INT3 or hardware DR fallback performed");
             SetLastError(installError);
             return result;
         }
@@ -197,7 +304,8 @@ namespace ksword::titan
                     previous.type, previous.size, previous.callback) && getSeamError() == ERROR_SUCCESS && !hasPendingDebug();
             }
             if (restored) clearSeamError();
-            log("EPT hardware installation failed; native callback rollback " + std::string(restored ? "completed" : "failed"));
+            debugger::backend().recordFallback("EPT execute breakpoint", "rejected", hookError == ERROR_SUCCESS ? ERROR_INVALID_STATE : hookError,
+                "installation failed; native callback rollback " + std::string(restored ? "completed" : "failed"));
             SetLastError(hookError == ERROR_SUCCESS ? ERROR_INVALID_STATE : hookError); return false;
         }
         if (result) hardwareBindings[selected] = {address, selected, type, size, callback,
@@ -337,12 +445,13 @@ extern "C"
     {
         using namespace ksword::titan;
         if (ensureNative() != ERROR_SUCCESS) return false;
-        std::lock_guard<std::recursive_mutex> policy(policyMutex);
+        BindingTransition transition;
+        std::lock_guard<std::recursive_mutex> operation(softwareOperationMutex);
         LogicalReadScope native;
         const bool result = nativeApi.RemoveAllBreakPoints(option);
         if (hvmSelected.load() && (getSeamError() != ERROR_SUCCESS || hasPendingDebug()))
         { SetLastError(getSeamError() == ERROR_SUCCESS ? ERROR_INVALID_STATE : getSeamError()); return false; }
-        if (result && option == UE_OPTION_REMOVEALL) clearHardwareBindings();
+        if (result && option == UE_OPTION_REMOVEALL) { clearHardwareBindings(); clearSoftwareBindings(); }
         return result;
     }
 
@@ -388,13 +497,53 @@ extern "C"
     {
         using namespace ksword::titan;
         if (ensureNative() != ERROR_SUCCESS) return false;
-        LogicalReadScope native; return nativeApi.SetBPX(address, type, callback);
+        BindingTransition transition;
+        std::lock_guard<std::recursive_mutex> operation(softwareOperationMutex);
+        if (ksword::debugger::backend().options().mode == KSWORD_DEBUGGER_MODE_STEALTH && !hvmSelected.load())
+        {
+            ksword::debugger::backend().recordFallback("Titan software breakpoint", "rejected", ERROR_NOT_READY,
+                "stealth requires HVM; visible original-page INT3 is forbidden; Windows debug-event transport remains active");
+            SetLastError(ERROR_NOT_READY); return false;
+        }
+        LogicalReadScope native; const bool result = nativeApi.SetBPX(address, type, callback == nullptr ? nullptr : &softwareHit);
+        const DWORD error = GetLastError();
+        if (result)
+        {
+            unsigned char hidden = 0;
+            const auto options = ksword::debugger::backend().options();
+            if (hvmSelected.load()) ksword::debugger::backend().overlayShadowBytes(nativeProcessId(), address, &hidden, 1);
+            const DWORD installedPath = hvmSelected.load() && (hidden == 0xcc || options.shadowMemoryWrites != 0 ||
+                options.mode == KSWORD_DEBUGGER_MODE_STEALTH) ? KSWORD_DEBUGGER_PATH_SHADOW : KSWORD_DEBUGGER_PATH_NATIVE;
+            std::lock_guard<std::recursive_mutex> lock(bindingMutex);
+            // Re-enabling an inactive native entry retains its original
+            // callback/type. Preserve the matching adapter record as well.
+            softwareBindings.try_emplace(address, SoftwareBinding{(type & 0xff) == UE_SINGLESHOOT,
+                (type & 0xf0000000) == 0 ? defaultSoftwareType : (type & 0xf0000000), callback, installedPath});
+        }
+        SetLastError(error); return result;
     }
     bool DeleteBPX(ULONG_PTR address)
     {
         using namespace ksword::titan;
         if (ensureNative() != ERROR_SUCCESS) return false;
-        LogicalReadScope native; return nativeApi.DeleteBPX(address);
+        BindingTransition transition;
+        std::lock_guard<std::recursive_mutex> operation(softwareOperationMutex);
+        LogicalReadScope native; const bool result = nativeApi.DeleteBPX(address); const DWORD error = GetLastError();
+        if (result) { std::lock_guard<std::recursive_mutex> lock(bindingMutex); softwareBindings.erase(address); }
+        SetLastError(error); return result;
+    }
+    void SetBPXOptions(TitanBreakpointType type)
+    {
+        using namespace ksword::titan;
+        if (ensureNative() != ERROR_SUCCESS) return;
+        std::lock_guard<std::recursive_mutex> operation(softwareOperationMutex);
+        std::lock_guard<std::recursive_mutex> policy(policyMutex);
+        nativeApi.SetBPXOptions(type);
+        const DWORD error = GetLastError();
+        if (type == UE_BREAKPOINT_INT3 || static_cast<DWORD>(type) == UE_BREAKPOINT_TYPE_INT3) defaultSoftwareType = UE_BREAKPOINT_TYPE_INT3;
+        else if (type == UE_BREAKPOINT_LONG_INT3 || static_cast<DWORD>(type) == UE_BREAKPOINT_TYPE_LONG_INT3) defaultSoftwareType = UE_BREAKPOINT_TYPE_LONG_INT3;
+        else if (type == UE_BREAKPOINT_UD2 || static_cast<DWORD>(type) == UE_BREAKPOINT_TYPE_UD2) defaultSoftwareType = UE_BREAKPOINT_TYPE_UD2;
+        SetLastError(error);
     }
     bool IsBPXEnabled(ULONG_PTR address)
     {
@@ -406,12 +555,58 @@ extern "C"
     {
         using namespace ksword::titan;
         if (ensureNative() != ERROR_SUCCESS || index == nullptr) return false;
-        if (!hvmSelected.load() || ksword::debugger::backend().status().eptBreakpointProtocol != 0)
+        std::lock_guard<std::recursive_mutex> policy(policyMutex);
+        if (!hvmSelected.load() || !ksword::debugger::backend().preferShadowExecution())
             return nativeApi.GetUnusedHardwareBreakPointRegister(index);
         std::lock_guard<std::recursive_mutex> lock(bindingMutex);
         for (DWORD slot = UE_DR0; slot <= UE_DR3; ++slot)
             if (hardwareBindings.find(slot) == hardwareBindings.end()) { *index = slot; return true; }
         SetLastError(ERROR_NO_SYSTEM_RESOURCES); return false;
+    }
+
+    bool SetMemoryBPXEx(ULONG_PTR address, SIZE_T bytes, TitanMemoryBreakpointType type, bool restore, TITANCBMEMBP callback)
+    {
+        using namespace ksword::titan;
+        if (ensureNative() != ERROR_SUCCESS) return false;
+        BindingTransition transition;
+        std::lock_guard<std::recursive_mutex> operation(softwareOperationMutex);
+        const auto options = ksword::debugger::backend().options();
+        if (options.mode == KSWORD_DEBUGGER_MODE_STEALTH || (hvmSelected.load() && !options.allowFallback))
+        {
+            ksword::debugger::backend().recordFallback("Titan memory guard breakpoint", "rejected", ERROR_NOT_SUPPORTED,
+                "visible PAGE_GUARD is forbidden by the selected policy; Windows debug-event transport remains active");
+            SetLastError(ERROR_NOT_SUPPORTED); return false;
+        }
+        const bool result = nativeApi.SetMemoryBPXEx(address, bytes, type, restore, callback == nullptr ? nullptr : &memoryHit); const DWORD error = GetLastError();
+        if (result)
+        {
+            { std::lock_guard<std::recursive_mutex> lock(bindingMutex); memoryBindings[address] = {bytes, restore, callback}; }
+            if (hvmSelected.load()) ksword::debugger::backend().recordFallback("HVM byte-range memory breakpoint", "native PAGE_GUARD", ERROR_NOT_SUPPORTED,
+                "native guard breakpoint installed successfully; explicit data Watch uses separate 4 KiB EPT coverage");
+        }
+        SetLastError(error); return result;
+    }
+    bool RemoveMemoryBPX(ULONG_PTR address, SIZE_T bytes)
+    {
+        using namespace ksword::titan;
+        if (ensureNative() != ERROR_SUCCESS) return false;
+        BindingTransition transition;
+        std::lock_guard<std::recursive_mutex> operation(softwareOperationMutex);
+        const bool result = nativeApi.RemoveMemoryBPX(address, bytes); const DWORD error = GetLastError();
+        if (result) { std::lock_guard<std::recursive_mutex> lock(bindingMutex); memoryBindings.erase(address); }
+        SetLastError(error); return result;
+    }
+    bool MemoryWriteSafe(HANDLE process, LPVOID address, LPCVOID data, SIZE_T bytes, SIZE_T* done)
+    {
+        using namespace ksword::titan;
+        if (ensureNative() != ERROR_SUCCESS) return false;
+        std::lock_guard<std::recursive_mutex> policy(policyMutex);
+        const auto options = ksword::debugger::backend().options();
+        if (options.shadowMemoryWrites == 0 && options.mode != KSWORD_DEBUGGER_MODE_STEALTH)
+            return nativeApi.MemoryWriteSafe(process, address, data, bytes, done);
+        // Classify the original protection before native Titan temporarily
+        // promotes the allocation to RWX. No visible write precedes policy.
+        return ksword::debugger::backend().writeMemory(process, address, data, bytes, done) != FALSE;
     }
 
     bool EngineCheckStructAlignment(TitanStructureType type, ULONG_PTR bytes)

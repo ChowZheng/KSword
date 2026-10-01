@@ -1,5 +1,6 @@
 #include "../MemoryLifetime.h"
 #include <cstdio>
+bool controlProtocolTests();
 
 int main()
 {
@@ -21,5 +22,5 @@ int main()
         !moduleOwnsBinding(true, 10, 0x6000, 10, 0x5000) &&
         !moduleOwnsBinding(true, 10, 0, 10, 0);
     std::puts(okay ? "PASS: decommit page rounding/overflow and module owner isolation" : "FAIL: lifetime coverage");
-    return okay ? 0 : 1;
+    return okay && controlProtocolTests() ? 0 : 1;
 }

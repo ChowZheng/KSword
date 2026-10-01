@@ -9,8 +9,8 @@
     "KSwordTitanControl"
   ],
   "actual_counts": {
-    "F": 30,
-    "R": 28,
+    "F": 26,
+    "R": 32,
     "U": 6
   },
   "notes": "R includes native DLL import adaptation and owned execution-breakpoint/lifecycle handling. Live native and ShadowPage fallback validation passed in KSword-HVM-Target; the original MTF-dependent EPT debug lane is unavailable in that VM. See docs/ksword-debugger-vm-validation.md.",
@@ -32,9 +32,9 @@
     {
       "name": "MemoryWriteSafe",
       "signature": "bool MemoryWriteSafe(HANDLE hProcess, LPVOID lpBaseAddress, LPCVOID lpBuffer, SIZE_T nSize, SIZE_T* lpNumberOfBytesWritten);",
-      "classification": "F",
-      "native_mode": "native forwarding",
-      "hvm_mode": "native forwarding"
+      "classification": "R",
+      "native_mode": "native forwarding with original-protection policy classification when configured",
+      "hvm_mode": "common memory policy; hidden code patches and explicitly logged data fallback"
     },
     {
       "name": "MemoryQuerySafe",
@@ -144,9 +144,9 @@
     {
       "name": "SetBPXOptions",
       "signature": "void SetBPXOptions(TitanBreakpointType DefaultBreakPointType);",
-      "classification": "F",
-      "native_mode": "native forwarding",
-      "hvm_mode": "native forwarding"
+      "classification": "R",
+      "native_mode": "native options forwarding with exact callback exception-offset tracking",
+      "hvm_mode": "native options forwarding with exact callback exception-offset tracking"
     },
     {
       "name": "IsBPXEnabled",
@@ -172,16 +172,16 @@
     {
       "name": "SetMemoryBPXEx",
       "signature": "bool SetMemoryBPXEx(ULONG_PTR MemoryStart, SIZE_T SizeOfMemory, TitanMemoryBreakpointType BreakPointType, bool RestoreOnHit, TITANCBMEMBP bpxCallBack);",
-      "classification": "F",
-      "native_mode": "native forwarding",
-      "hvm_mode": "native forwarding"
+      "classification": "R",
+      "native_mode": "native callback forwarding with owned policy guard",
+      "hvm_mode": "normal explicit logged native guard fallback; stealth rejected"
     },
     {
       "name": "RemoveMemoryBPX",
       "signature": "bool RemoveMemoryBPX(ULONG_PTR MemoryStart, SIZE_T SizeOfMemory);",
-      "classification": "F",
-      "native_mode": "native forwarding",
-      "hvm_mode": "native forwarding"
+      "classification": "R",
+      "native_mode": "native forwarding and binding retirement",
+      "hvm_mode": "native forwarding and binding retirement"
     },
     {
       "name": "GetFullContextDataEx",

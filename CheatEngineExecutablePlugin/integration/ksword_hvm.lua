@@ -76,6 +76,97 @@ return function(appendLog, bridgePath)
         return errorCode == 0, errorCode
     end
 
+    local optionFields = {"mode", "shadowMemoryWrites", "allowFallback", "logFallback",
+        "nativeContextFallback", "nativeSuspendFallback", "maxShadowPages"}
+    local booleanFields = {shadowMemoryWrites = true, allowFallback = true, logFallback = true,
+        nativeContextFallback = true, nativeSuspendFallback = true}
+    local function decodeOptions(output, returned, expectedSize)
+        if returned ~= expectedSize or readIntegerLocal(output.Memory) ~= 1 or
+            readIntegerLocal(output.Memory + 4) ~= 48 then return nil end
+        local options = {version = 1, size = 48}
+        for index, name in ipairs(optionFields) do
+            local value = readIntegerLocal(output.Memory + 4 + index * 4)
+            if booleanFields[name] then
+                if value > 1 then return nil end
+                options[name] = value ~= 0
+            else options[name] = value end
+        end
+        if options.mode > 1 or options.maxShadowPages < 1 or options.maxShadowPages > 32 or not options.logFallback or
+            readIntegerLocal(output.Memory + 36) ~= 0 or readIntegerLocal(output.Memory + 40) ~= 0 or
+            readIntegerLocal(output.Memory + 44) ~= 0 then return nil end
+        return options
+    end
+    function api.options()
+        local output, errorCode, returned = invoke(4, nil, 48)
+        local options = decodeOptions(output, returned, 48)
+        output.destroy()
+        if options == nil and errorCode == 0 then errorCode = 13 end
+        return options, errorCode
+    end
+    api.getOptions = api.options
+    function api.setOptions(changes)
+        assert(type(changes) == "table", "Options must be a table")
+        local current, errorCode = api.options()
+        if current == nil or errorCode ~= 0 then return nil, errorCode end
+        for name, value in pairs(changes) do
+            assert(booleanFields[name] or name == "mode" or name == "maxShadowPages", "Unknown backend option: " .. name)
+            if booleanFields[name] then assert(type(value) == "boolean", name .. " must be boolean") end
+            if name == "mode" then assert(value == 0 or value == 1, "mode must be 0 (normal) or 1 (stealth)") end
+            if name == "maxShadowPages" then
+                assert(type(value) == "number" and value == math.floor(value) and value >= 1 and value <= 32,
+                    "maxShadowPages must be an integer from 1 to 32")
+            end
+            current[name] = value
+        end
+        -- Every fallback must remain observable, including calls made from user Lua.
+        assert(current.logFallback, "Fallback logging cannot be disabled")
+        local input = buffer(48)
+        writeIntegerLocal(input.Memory, 1); writeIntegerLocal(input.Memory + 4, 48)
+        for index, name in ipairs(optionFields) do
+            local value = current[name]
+            if booleanFields[name] then value = value and 1 or 0 end
+            writeIntegerLocal(input.Memory + 4 + index * 4, value)
+        end
+        local output, result, returned = invoke(5, input, 48)
+        input.destroy()
+        local actual = decodeOptions(output, returned, 48)
+        output.destroy()
+        if actual == nil and result == 0 then result = 13 end
+        if result ~= 0 then appendLog("Backend options rejected, error " .. result) end
+        return actual, result
+    end
+    function api.policy()
+        local output, errorCode, returned = invoke(6, nil, 72)
+        local policy = decodeOptions(output, returned, 72)
+        if policy ~= nil then
+            local fields = {"activePath", "shadowWritePages", "activeBreakpoints", "canChangeOptions",
+                "fallbackCount", "lastFallbackError"}
+            for index, name in ipairs(fields) do policy[name] = readIntegerLocal(output.Memory + 44 + index * 4) end
+            if policy.activePath > 2 or policy.canChangeOptions > 1 then policy = nil
+            else policy.canChangeOptions = policy.canChangeOptions ~= 0 end
+        elseif errorCode == 0 then errorCode = 13 end
+        if policy == nil and errorCode == 0 then errorCode = 13 end
+        output.destroy()
+        return policy, errorCode
+    end
+    function api.restoreShadowWrites(address, bytes)
+        address, bytes = address or 0, bytes or 0
+        assert(type(address) == "number" and type(bytes) == "number" and address >= 0 and bytes >= 0 and
+            address == math.floor(address) and bytes == math.floor(bytes) and
+            ((address == 0 and bytes == 0) or (address > 0 and bytes > 0)),
+            "Use 0/0 for all Shadow writes, or a nonzero address and byte count")
+        local input = buffer(24)
+        writeIntegerLocal(input.Memory, 1); writeIntegerLocal(input.Memory + 4, 24)
+        writeQwordLocal(input.Memory + 8, address); writeQwordLocal(input.Memory + 16, bytes)
+        local output, errorCode, returned = invoke(7, input, 40)
+        if errorCode == 0 and (returned ~= 40 or readIntegerLocal(output.Memory) ~= 1 or
+            readIntegerLocal(output.Memory + 4) ~= 40) then errorCode = 13 end
+        input.destroy(); output.destroy()
+        appendLog(errorCode == 0 and "Shadow execution-view writes restored" or
+            ("Shadow write restore rejected, error " .. errorCode))
+        return errorCode == 0, errorCode
+    end
+
     -- packet.write32/write64 use byte offsets from the shared protocol headers.
     -- send returns the raw response and transport error; inspect protocol status too.
     function api.hvm.packet(name)

@@ -2,8 +2,11 @@
 <Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003" ToolsVersion="4.0">
   <ItemGroup>
     <ClCompile Include="LifetimeTests.cpp" />
+    <ClCompile Include="ControlProtocolTests.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\MemoryLifetime.h" />
+    <ClInclude Include="..\ControlProtocol.h" />
+    <ClInclude Include="..\..\DebuggerBackend\KswordDebuggerApi.h" />
   </ItemGroup>
 </Project>

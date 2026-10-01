@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
     [string]$CheatEngineDirectory = '',
+    [string]$SourceArchive = '',
     [ValidateSet('Debug', 'Release')]
     [string]$Configuration = 'Release'
 )
@@ -9,6 +10,23 @@ $ErrorActionPreference = 'Stop'
 $repositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $sourceRoot = Join-Path $repositoryRoot 'CheatEngineExecutablePlugin'
 $pluginRoot = Join-Path $repositoryRoot 'plugin\cheat-engine'
+if ([string]::IsNullOrWhiteSpace($SourceArchive)) {
+    $SourceArchive = Join-Path $repositoryRoot 'dist\KSword-cheat-engine-source.zip'
+}
+$sourceArchivePath = [IO.Path]::GetFullPath($SourceArchive)
+if ($sourceArchivePath.StartsWith([IO.Path]::GetFullPath($pluginRoot) + '\', [StringComparison]::OrdinalIgnoreCase)) {
+    throw 'The corresponding source archive must not be inside the package output.'
+}
+if (!(Test-Path -LiteralPath $sourceArchivePath -PathType Leaf)) {
+    throw 'Corresponding source is required. Run tools/export_cheat_engine_source.py before packaging.'
+}
+$sourceStream = [IO.File]::OpenRead($sourceArchivePath)
+try {
+    $signature = [byte[]]::new(4)
+    if ($sourceStream.Read($signature, 0, 4) -ne 4 -or [BitConverter]::ToUInt32($signature, 0) -ne 0x04034B50) {
+        throw 'Corresponding source must be a ZIP archive.'
+    }
+} finally { $sourceStream.Dispose() }
 
 # 未显式指定时，从系统安装信息解析 CE 目录，避免写个人机器路径。
 if ([string]::IsNullOrWhiteSpace($CheatEngineDirectory)) {
@@ -86,7 +104,8 @@ $excludedPayloads = @(
     'unins000.msg',
     'cheatengine-i386.exe',
     'cheatengine-i386.exe.disabled',
-    'cheatengine.exe'
+    'cheatengine.exe',
+    'Cheat Engine.exe'
 )
 foreach ($relativePath in $excludedPayloads) {
     $candidate = Join-Path $payloadRoot $relativePath
@@ -103,9 +122,11 @@ Copy-Item -LiteralPath $bridgeX64 -Destination (
 Copy-Item -LiteralPath (Join-Path $sourceRoot 'plugin.json') -Destination $pluginRoot -Force
 Copy-Item -LiteralPath (Join-Path $sourceRoot 'README.md') -Destination $pluginRoot -Force
 Copy-Item -LiteralPath (Join-Path $sourceRoot 'SOURCE.md') -Destination $pluginRoot -Force
+Copy-Item -LiteralPath $sourceArchivePath -Destination (Join-Path $pluginRoot 'KSword-cheat-engine-source.zip') -Force
 Copy-Item -LiteralPath (Join-Path $repositoryRoot 'DebuggerBackend\README.md') -Destination (
     Join-Path $pluginRoot 'DEBUGGER_BACKEND.md') -Force
 Copy-Item -LiteralPath (Join-Path $repositoryRoot 'docs\ksword-debugger-vm-validation.md') -Destination $pluginRoot -Force
+Copy-Item -LiteralPath (Join-Path $repositoryRoot 'tools\debugger_vm_test\POLICY_TEST.md') -Destination $pluginRoot -Force
 Copy-Item -LiteralPath (Join-Path $repositoryRoot 'LICENSE') -Destination (
     Join-Path $pluginRoot 'LICENSE.txt') -Force
 Copy-Item -LiteralPath (Join-Path $sourceRoot 'NOTICE.md') -Destination (

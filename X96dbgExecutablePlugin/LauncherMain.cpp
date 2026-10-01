@@ -1,4 +1,5 @@
 #include "LogSurface.h"
+#include "../TitanEnginePlugin/ControlProtocol.h"
 #include <Windows.h>
 #include <objbase.h>
 #include <algorithm>
@@ -159,6 +160,17 @@ namespace
         gLogPath = gSessionDirectory + L"\\backend.log";
         std::ofstream empty(gLogPath, std::ios::binary | std::ios::trunc);
         if (!empty) { error = "Cannot create debugger session log: " + utf8(gLogPath); return false; }
+        auto options = ksword::titan::control::defaults();
+        std::ifstream preferences(directory() + L"\\x96dbg-options.ini", std::ios::binary);
+        std::string packet;
+        if (preferences && (!std::getline(preferences, packet) || !ksword::titan::control::preferences(packet, options)))
+            empty << "Invalid saved x96dbg policy; using documented normal defaults.\n";
+        empty.close();
+        // Persist options, never HVM activation. The proxy applies this packet
+        // outside DllMain and publishes an actual-state ACK before UI changes.
+        std::ofstream control(gLogPath + L".control", std::ios::binary | std::ios::trunc);
+        control << ksword::titan::control::request(gSessionId, 1, 0, options); control.close();
+        if (!control) { error = "Cannot write initial debugger policy request."; return false; }
         return true;
     }
     std::vector<wchar_t> environment()
@@ -243,7 +255,7 @@ namespace
             DWORD pid = 0; std::string error;
             if (!launch(0, pid, error))
             { log(error); ksword::x96_log::setStatus(wide(error)); emit("warning", "\"code\":\"launch_failed\",\"message\":\"" + json(error) + "\""); }
-            else { ksword::x96_log::setSession(gLogPath, gSessionId); log("Standalone x64dbg PID " + std::to_string(pid) + " started using the KSword engine."); emit("debugger_started", "\"debugger_pid\":" + std::to_string(pid)); }
+            else { ksword::x96_log::setSession(gLogPath, gSessionId, directory() + L"\\x96dbg-options.ini"); log("Standalone x64dbg PID " + std::to_string(pid) + " started using the KSword engine."); emit("debugger_started", "\"debugger_pid\":" + std::to_string(pid)); }
             SetTimer(window, kPollTimer, 200, nullptr); return 0;
         }
         case WM_TIMER:

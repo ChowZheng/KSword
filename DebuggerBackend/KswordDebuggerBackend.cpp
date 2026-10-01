@@ -7,6 +7,15 @@
 
 namespace ksword::debugger
 {
+    namespace
+    {
+        struct PreserveLastError
+        {
+            DWORD error = GetLastError();
+            ~PreserveLastError() { SetLastError(error); }
+        };
+    }
+
     Backend& backend()
     {
         static Backend instance;
@@ -15,6 +24,7 @@ namespace ksword::debugger
 
     void Backend::log(const std::string& message)
     {
+        const PreserveLastError preserve;
         std::lock_guard<std::recursive_mutex> lock(mutex_);
         wchar_t path[4096]{};
         const DWORD count = GetEnvironmentVariableW(L"KSWORD_DEBUGGER_LOG_FILE", path, _countof(path));
@@ -34,6 +44,39 @@ namespace ksword::debugger
         stream << timestamp << line << '\n';
     }
 
+    void Backend::logRepeated(const std::string& message)
+    {
+        const PreserveLastError preserve;
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
+        auto found = repeatedLogs_.find(message);
+        if (found == repeatedLogs_.end())
+        {
+            constexpr SIZE_T maximumKeys = 64;
+            if (repeatedLogs_.size() >= maximumKeys)
+            {
+                auto oldest = repeatedLogs_.begin();
+                for (auto entry = repeatedLogs_.begin(); entry != repeatedLogs_.end(); ++entry)
+                    if (entry->second.stamp < oldest->second.stamp) oldest = entry;
+                repeatedLogs_.erase(oldest);
+            }
+            found = repeatedLogs_.emplace(message, RepeatedLog{}).first;
+        }
+        if (repeatedLogClock_ == (std::numeric_limits<std::uint64_t>::max)())
+        {
+            repeatedLogClock_ = 0;
+            for (auto& entry : repeatedLogs_) entry.second.stamp = 0;
+        }
+        found->second.stamp = ++repeatedLogClock_;
+        auto& occurrences = found->second.occurrences;
+        if (occurrences == (std::numeric_limits<std::uint64_t>::max)()) return;
+        ++occurrences;
+        if (occurrences == 1) { log(message); return; }
+        auto milestone = occurrences;
+        while (milestone >= 10 && milestone % 10 == 0) milestone /= 10;
+        if (milestone == 1)
+            log(message + " [repeated diagnostic; occurrences=" + std::to_string(occurrences) + "]");
+    }
+
     bool Backend::initialize()
     {
         std::lock_guard<std::recursive_mutex> lock(mutex_);
@@ -42,6 +85,89 @@ namespace ksword::debugger
         if (!driver_.isValid()) return false;
         log("KSword debugger backend API v1 loaded; memory and debugger adapters ready");
         return true;
+    }
+
+    KSWORD_DEBUGGER_OPTIONS Backend::options()
+    {
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
+        return options_;
+    }
+
+    bool Backend::preferShadowExecution()
+    {
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
+        if (options_.mode == KSWORD_DEBUGGER_MODE_STEALTH || shadowPrepared_) return true;
+        if (!useHvm_ || !driver_.isValid()) return false;
+        KSWORD_ARK_HVM_DEBUG_REQUEST query{}; KSWORD_ARK_HVM_DEBUG_RESPONSE response{};
+        query.version = KSWORD_ARK_HVM_DEBUG_VERSION; query.size = sizeof(query);
+        return breakpointRequest(query, response) == ERROR_SUCCESS && response.supported == 0;
+    }
+
+    DWORD Backend::shadowWritePageCount() const
+    {
+        DWORD pages = 0;
+        for (const auto& target : shadowWrites_) pages += static_cast<DWORD>(target.second.pages.size());
+        return pages;
+    }
+
+    bool Backend::hasShadowViews() const { return !shadowInt3_.empty() || !shadowWrites_.empty(); }
+
+    DWORD Backend::setOptions(const KSWORD_DEBUGGER_OPTIONS& requested)
+    {
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
+        if (requested.version != KSWORD_DEBUGGER_OPTIONS_VERSION || requested.size != sizeof(requested))
+            return ERROR_REVISION_MISMATCH;
+        if (requested.mode > KSWORD_DEBUGGER_MODE_STEALTH || requested.shadowMemoryWrites > 1 ||
+            requested.allowFallback > 1 || requested.logFallback != 1 || requested.nativeContextFallback > 1 ||
+            requested.nativeSuspendFallback > 1 || requested.maxShadowPages == 0 || requested.maxShadowPages > 32 ||
+            requested.reserved[0] != 0 || requested.reserved[1] != 0 || requested.reserved[2] != 0)
+            return ERROR_INVALID_PARAMETER;
+        if (std::memcmp(&requested, &options_, sizeof(requested)) == 0) return ERROR_SUCCESS;
+        if (!breakpoints_.empty() || hasShadowViews()) return ERROR_BUSY;
+        options_ = requested;
+        nativeContextFallback_ = false;
+        log("Debugger options accepted: mode " + std::to_string(options_.mode) +
+            ", Shadow writes " + std::to_string(options_.shadowMemoryWrites) +
+            ", explicit fallback " + std::to_string(options_.allowFallback));
+        return ERROR_SUCCESS;
+    }
+
+    KSWORD_DEBUGGER_POLICY_STATUS Backend::policyStatus()
+    {
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
+        KSWORD_DEBUGGER_POLICY_STATUS result{};
+        result.options = options_;
+        bool hasInterceptedBindings = false;
+        for (const auto& entry : breakpoints_) hasInterceptedBindings |= !nativeDataOnlyRecord(entry.second);
+        result.activePath = hasShadowViews() ? KSWORD_DEBUGGER_PATH_SHADOW :
+            hasInterceptedBindings ? KSWORD_DEBUGGER_PATH_EPT : KSWORD_DEBUGGER_PATH_NATIVE;
+        result.shadowWritePages = shadowWritePageCount();
+        result.activeBreakpoints = static_cast<DWORD>(shadowInt3_.size());
+        for (const auto& entry : breakpoints_)
+        {
+            if (!entry.second.shadow)
+            { for (const auto id : entry.second.ids) if (id != 0) ++result.activeBreakpoints; }
+            else
+            {
+                for (DWORD slot = 0; slot < 4; ++slot)
+                    if ((entry.second.requested.Dr7 & (3ULL << (2 * slot))) != 0 &&
+                        ((entry.second.requested.Dr7 >> (16 + 4 * slot)) & 3) != 0) ++result.activeBreakpoints;
+            }
+        }
+        result.canChangeOptions = breakpoints_.empty() && !hasShadowViews() ? 1U : 0U;
+        result.fallbackCount = fallbackCount_;
+        result.lastFallbackError = lastFallbackError_;
+        return result;
+    }
+
+    void Backend::recordFallback(const std::string& source, const std::string& destination,
+        DWORD error, const std::string& reason)
+    {
+        const PreserveLastError preserve;
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
+        if (fallbackCount_ != MAXDWORD) ++fallbackCount_;
+        lastFallbackError_ = error;
+        logRepeated("Fallback " + source + " -> " + destination + ", error " + std::to_string(error) + ": " + reason);
     }
 
     KSWORD_DEBUGGER_BACKEND_STATUS Backend::status()
@@ -87,7 +213,7 @@ namespace ksword::debugger
                 return lastError_;
             }
         }
-        else if (!breakpoints_.empty() || !shadowInt3_.empty())
+        else if (!breakpoints_.empty() || hasShadowViews())
         {
             lastError_ = ERROR_BUSY;
             log("Remove the active EPT breakpoints before switching off HVM");
@@ -113,6 +239,37 @@ namespace ksword::debugger
             return ERROR_REVISION_MISMATCH;
         auto* output = reinterpret_cast<void*>(static_cast<std::uintptr_t>(call.output));
         const auto* input = reinterpret_cast<const void*>(static_cast<std::uintptr_t>(call.input));
+        if (call.command == KSWORD_DEBUGGER_GET_OPTIONS || call.command == KSWORD_DEBUGGER_SET_OPTIONS)
+        {
+            if (output == nullptr || call.outputBytes < sizeof(KSWORD_DEBUGGER_OPTIONS)) return ERROR_INSUFFICIENT_BUFFER;
+            DWORD error = ERROR_SUCCESS;
+            if (call.command == KSWORD_DEBUGGER_SET_OPTIONS)
+            {
+                if (input == nullptr || call.inputBytes != sizeof(KSWORD_DEBUGGER_OPTIONS)) return ERROR_INVALID_PARAMETER;
+                KSWORD_DEBUGGER_OPTIONS requested{}; std::memcpy(&requested, input, sizeof(requested));
+                error = setOptions(requested);
+            }
+            else if (call.inputBytes != 0) return ERROR_INVALID_PARAMETER;
+            const auto actual = options(); std::memcpy(output, &actual, sizeof(actual));
+            call.bytesReturned = sizeof(actual); return error;
+        }
+        if (call.command == KSWORD_DEBUGGER_QUERY_POLICY)
+        {
+            if (call.inputBytes != 0) return ERROR_INVALID_PARAMETER;
+            if (output == nullptr || call.outputBytes < sizeof(KSWORD_DEBUGGER_POLICY_STATUS)) return ERROR_INSUFFICIENT_BUFFER;
+            const auto actual = policyStatus(); std::memcpy(output, &actual, sizeof(actual));
+            call.bytesReturned = sizeof(actual); return ERROR_SUCCESS;
+        }
+        if (call.command == KSWORD_DEBUGGER_RESTORE_SHADOW_WRITES)
+        {
+            if (input == nullptr || call.inputBytes != sizeof(KSWORD_DEBUGGER_SHADOW_RESTORE)) return ERROR_INVALID_PARAMETER;
+            if (output == nullptr || call.outputBytes < sizeof(KSWORD_DEBUGGER_BACKEND_STATUS)) return ERROR_INSUFFICIENT_BUFFER;
+            KSWORD_DEBUGGER_SHADOW_RESTORE request{}; std::memcpy(&request, input, sizeof(request));
+            if (request.version != KSWORD_DEBUGGER_OPTIONS_VERSION || request.size != sizeof(request)) return ERROR_REVISION_MISMATCH;
+            const DWORD error = restoreShadowWrites(request.address, request.bytes);
+            const auto actual = status(); std::memcpy(output, &actual, sizeof(actual));
+            call.bytesReturned = sizeof(actual); return error;
+        }
         if (call.command == KSWORD_DEBUGGER_QUERY_BACKEND || call.command == KSWORD_DEBUGGER_USE_HVM)
         {
             if (output == nullptr || call.outputBytes < sizeof(KSWORD_DEBUGGER_BACKEND_STATUS))
@@ -200,7 +357,7 @@ namespace ksword::debugger
             // Preserve input even when the caller reuses one buffer for request/response.
             std::vector<unsigned char> snapshot(call.inputBytes);
             std::memcpy(snapshot.data(), input, snapshot.size());
-            if (!breakpoints_.empty())
+            if (!breakpoints_.empty() || hasShadowViews())
             {
                 DWORD action = 0;
                 if (snapshot.size() >= 12) std::memcpy(&action, snapshot.data() + 8, sizeof(action));

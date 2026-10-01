@@ -4,6 +4,11 @@ This package is built from the local KSword working tree. Local changes may
 not yet be published in the upstream repository; do not treat an older
 upstream commit as the corresponding source for these binaries.
 
+`KSword-cheat-engine-source.zip` contains these current KSword sources, the
+shared protocols and debugger/HVM driver sources, with per-file SHA256 hashes.
+The complete unmodified Cheat Engine source remains available from its project
+URL below; it is separate from KSword's corresponding source archive.
+
 Repository:
 
 https://github.com/KSwordDEV/KSword
