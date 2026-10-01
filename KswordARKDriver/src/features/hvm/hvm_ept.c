@@ -820,7 +820,8 @@ NTSTATUS
 KswordARKHvmEptRuleControlLocked(
     _Inout_ KSW_HVM_RUNTIME* Runtime,
     _In_ const KSWORD_ARK_HVM_EPT_RULE_REQUEST* Request,
-    _Out_ KSWORD_ARK_HVM_EPT_RULE_RESPONSE* Response
+    _Out_ KSWORD_ARK_HVM_EPT_RULE_RESPONSE* Response,
+    _In_ BOOLEAN DebuggerOwned
     )
 {
     NTSTATUS status = STATUS_SUCCESS;
@@ -954,6 +955,21 @@ KswordARKHvmEptRuleControlLocked(
         Response->generation = Runtime->Generation;
         /* Return the protocol-level result successfully. */
         return STATUS_SUCCESS;
+    }
+    /* External rule edits cannot invalidate a debugger's pinned rule ownership. */
+    if (!DebuggerOwned) {
+        /* Scan the bounded debugger lease table while holding the runtime lock. */
+        for (slotIndex = 0UL; slotIndex < KSWORD_ARK_HVM_DEBUG_MAX_SLOTS; ++slotIndex) {
+            /* An ID retains ownership even after lifetime revocation disabled injection. */
+            if (Runtime->DebugSlots[slotIndex].Id != 0UL) {
+                /* Preserve the existing protocol's frozen-mutation outcome. */
+                Response->status = KSWORD_ARK_HVM_EPT_RULE_STATUS_RESIDENT_FROZEN;
+                /* Identify the active debugger ownership conflict. */
+                Response->lastStatus = STATUS_DEVICE_BUSY;
+                /* Complete the typed refusal without changing EPT. */
+                return STATUS_SUCCESS;
+            }
+        }
     }
     /* Require typed UI confirmation for every EPT mutation. */
     if ((Request->flags &

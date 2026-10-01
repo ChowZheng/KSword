@@ -8,7 +8,7 @@ namespace ksword::ce
 {
     // initializeBridge：
     // - 输入：CE 导出函数表和本插件 ID。
-    // - 处理：验证驱动、保存原函数并安装四个 R0 桥接 hook。
+    // - 处理：验证公共调试后端、保存原函数并安装 CE SDK 访问/调试 hook。
     // - 返回：成功时 TRUE；失败时不留下半安装函数表。
     BOOL initializeBridge(ExportedFunctions* exportedFunctions, int pluginId);
 

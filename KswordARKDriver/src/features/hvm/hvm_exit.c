@@ -29,6 +29,7 @@ Environment:
 #include "hvm_inject.h"
 #include "hvm_process.h"
 #include "hvm_vmcs.h"
+#include "hvm_debug.h"
 
 #if defined(_M_AMD64)
 #include <intrin.h>
@@ -2935,6 +2936,11 @@ KswordARKHvmResidentVmExitDispatchBody(
             handled = KswordARKHvmExitSetMonitorTrap(
                 FALSE);
         }
+        /* Data breakpoints stop only after the original instruction and EPT restoration. */
+        if (handled) {
+            /* Deliver a real architectural guest debug exception for this completed step. */
+            handled = KswordARKHvmDebugMonitorTrap(Context);
+        }
     /* Apply one bounded EPT violation rule. */
     } else if (basicReason ==
         KSW_VMX_EXIT_EPT_VIOLATION) {
@@ -3166,6 +3172,29 @@ KswordARKHvmResidentVmExitDispatchBody(
                 ? KSW_HVM_EXIT_ACTION_DEVIRTUALIZE
                 : KSW_HVM_EXIT_ACTION_FATAL;
         }
+        /* Bind debugger scope before changing any EPT permissions. */
+        {
+            /* Preserve the architectural debug-register hit mask. */
+            ULONG debugMask = 0UL;
+            /* Preserve the actual user TEB for a deferred data stop. */
+            ULONGLONG debugTeb = 0ULL;
+            /* Debugger execution stops must leave the original instruction unexecuted. */
+            if (ruleId == 0UL && !Context->EptTransient.Armed) {
+                /* Inspect only immutable metadata and architectural guest fields. */
+                debugMask = KswordARKHvmDebugMatchExit(Context, guestPhysicalAddress, access, &debugTeb);
+            }
+            /* An execution match injects before granting any page permission. */
+            if (debugMask != 0UL && (access & KSWORD_ARK_HVM_EPT_ACCESS_EXECUTE) != 0UL) {
+                /* Preserve an existing guest event instead of overwriting its delivery slot. */
+                if (KswordARKHvmDebugInject(debugMask)) {
+                    /* Resume into the guest's real #DB delivery path. */
+                    return KSW_HVM_EXIT_ACTION_RESUME;
+                }
+                /* Return hardware ownership when architectural event delivery cannot be guaranteed. */
+                handled = KswordARKHvmResidentDeactivateCurrent(Context, 0UL, TRUE);
+                /* Continue only through a verified devirtualization return. */
+                return handled ? KSW_HVM_EXIT_ACTION_DEVIRTUALIZE : KSW_HVM_EXIT_ACTION_FATAL;
+            }
         /* Resolve the violation against every rule covering this page. */
         handled = ruleId != 0UL
             ? FALSE
@@ -3222,7 +3251,15 @@ KswordARKHvmResidentVmExitDispatchBody(
                 /* Arm one-instruction permission restoration. */
                 handled = KswordARKHvmExitSetMonitorTrap(
                     TRUE);
+                /* Carry data-hit state only after the one-instruction grant was armed. */
+                if (handled && debugMask != 0UL) {
+                    /* Select the DR6 bits to deliver after the original instruction. */
+                    Context->DebugPendingMask = debugMask;
+                    /* Bind that completion to the same user-mode thread. */
+                    Context->DebugPendingTeb = debugTeb;
+                }
             }
+        }
         }
     /* Dispatch bounded VMX instruction semantics without claiming L2 active. */
     } else if (KswordARKHvmExitIsNestedInstruction(

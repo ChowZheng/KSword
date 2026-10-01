@@ -16,18 +16,11 @@
     <!--
       显式要求 64 位宿主的编译器与链接器。
 
-      为什么不能靠默认：Microsoft.Cpp.ToolsetLocation.props 只在
-      PROCESSOR_ARCHITECTURE 为 AMD64 时才把 PreferredToolArchitecture 定成
-      x64，而仓库约定使用的是 "Program Files (x86)" 下那个**32 位** MSBuild，
-      它自己就是 32 位进程，看到的 PROCESSOR_ARCHITECTURE 是 x86。于是默认
-      条件恒不成立，整条工具链退回 HostX86 —— 那个链接器有 2 GiB 地址空间上
-      限，这个工程的 LTCG 代码生成阶段已经撞上去了（qbasicatomic.h 上报
-      "编译器的堆空间不足" C1002，随后链接器自己重启成 64 位再来一遍）。
-
-      这不是 AGENTS.md 里禁止的那几种绕法：那一条禁止的是改用
-      amd64\MSBuild.exe、换 LLVM、换 TargetName —— 那些是换一个构建入口来
-      躲开问题。这里换的是**工程声明自己要用哪套工具**，与调用方用哪个
-      MSBuild 无关，32 位和 64 位 MSBuild 下结果一致。
+      仓库构建入口使用 amd64\MSBuild.exe，并在命令行以全局属性传入
+      /p:PreferredToolArchitecture=x64，并补齐 AMD64 宿主架构属性。
+      ToolsetLocation.props 将 PreferredToolArchitecture 声明为局部属性，
+      因此仅传全局工具偏好仍会在宿主架构缺失时退回 HostX86。
+      工程中的声明供 IDE 使用；终端统一使用 tools/Invoke-KSwordBuildCheck.ps1。
     -->
     <PreferredToolArchitecture>x64</PreferredToolArchitecture>
     <WindowsTargetPlatformVersion Condition="'$(Configuration)|$(Platform)' == 'Debug|x64'">10.0</WindowsTargetPlatformVersion>
@@ -1135,7 +1128,7 @@
     </PropertyGroup>
     <Message Importance="High" Text="Deploying Qt runtime and plugins to $(TargetDir)" Condition="Exists('$(KswordQtDeployExe)')" />
     <!-- 增量部署会复制缺失或更新的依赖，避免强制删除已经相同且可能被辅助程序占用的 Qt DLL。 -->
-    <Exec Command="&quot;$(KswordQtDeployExe)&quot; --release --compiler-runtime --no-opengl-sw --dir &quot;$(TargetDir).&quot; &quot;$(TargetPath)&quot;" Condition="Exists('$(KswordQtDeployExe)')" />
+    <Exec Command="&quot;$(KswordQtDeployExe)&quot; --release --compiler-runtime --no-opengl-sw --dir &quot;$(TargetDir).&quot; &quot;$(TargetPath)&quot;" EnvironmentVariables="VCINSTALLDIR=$(VCInstallDir)" Condition="Exists('$(KswordQtDeployExe)')" />
     <Warning Condition="!Exists('$(KswordQtDeployExe)')" Text="windeployqt.exe was not found; the Release output may be missing Qt runtime DLLs and plugins." />
   </Target>
   <!-- Qt 官方动态库由 MSVC /MD 构建，即使 Ksword5.1.exe 自身使用 /MT，也仍需把 VC 运行库 DLL 随 Release 输出部署。 -->

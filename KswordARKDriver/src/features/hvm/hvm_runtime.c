@@ -34,6 +34,7 @@ Environment:
 #include "hvm_ept_switch.h"
 #include "hvm_guest.h"
 #include "hvm_memory.h"
+#include "hvm_debug.h"
 #include "hvm_phys_window.h"
 #include "hvm_msr_policy.h"
 #include "hvm_ept.h"
@@ -42,6 +43,7 @@ Environment:
 #include "hvm_mtrr.h"
 #include "hvm_nested.h"
 #include "hvm_resident.h"
+#include "../debugger/debugger.h"
 
 #if defined(_M_AMD64)
 #include <intrin.h>
@@ -1060,6 +1062,8 @@ KswordARKHvmFreeResourcesLocked(
         KswordHvmBackend(Runtime->BackendId)->ReleaseResources(Runtime);
         return;
     }
+    /* Retire debugger pins only after every resident CPU returned ownership. */
+    KswordARKHvmDebugResetLocked(Runtime);
     /* Drop the control-register policy along with the VMCS it fed. */
     KswordARKHvmCrPolicyResetLocked(Runtime);
     /* Close every MSR bitmap hole before the bitmap page is released. */
@@ -2299,6 +2303,8 @@ KswordARKHvmInitialize(
      */
     KswordARKHvmPhysWindowInitializeAll();
     g_KswordHvm.Initialized = TRUE;
+    /* A missing notification guard disables EPT debugging without failing driver load. */
+    (void)KswordARKHvmDebugInitialize();
     /*
      * The one place a plain store to StateFlags is correct: this runs before
      * ExRegisterCallback publishes the power callback, so the second writer
@@ -2588,6 +2594,8 @@ KswordARKHvmUninitialize(
     }
     KswordARKReleasePushLockExclusive(&g_KswordHvm.Lock);
     KeLeaveCriticalRegion();
+    /* Drain debugger lifetime callbacks after every resident reader stopped. */
+    KswordARKHvmDebugShutdown();
     if (powerCallbackObject != NULL) {
         ObDereferenceObject(powerCallbackObject);
     }
@@ -2925,6 +2933,7 @@ KswordARKHvmControl(
     ULONG overwrittenEventCount = 0UL;
     ULONGLONG publishedEventCount = 0ULL;
     ULONG allowedFlags = 0UL;
+    BOOLEAN debuggerStartLease = FALSE;
 
     /* Validate the complete versioned request before acquiring the state lock. */
     if (Request == NULL || Response == NULL) {
@@ -3205,6 +3214,18 @@ KswordARKHvmControl(
         return STATUS_SUCCESS;
     }
 
+    /* Check debugger recovery before taking the HVM lock: shadow updates take
+     * the shadow lock first and call HVM control while retaining it. */
+    if (Request->command == KSWORD_ARK_HVM_CONTROL_START_RESIDENT) {
+        status = KswordARKDebuggerShadowAcquireStartLease();
+        if (!NT_SUCCESS(status)) {
+            Response->status = KSWORD_ARK_HVM_CONTROL_STATUS_LIFECYCLE_GUARD_FAILED;
+            Response->lastStatus = status;
+            return STATUS_SUCCESS;
+        }
+        debuggerStartLease = TRUE;
+    }
+
     /* Serialize all lifecycle changes and honor generation-bound requests. */
     KeEnterCriticalRegion();
     KswordARKAcquirePushLockExclusive(&g_KswordHvm.Lock);
@@ -3473,6 +3494,7 @@ Complete:
     Response->lastStatus = status;
     KswordARKReleasePushLockExclusive(&g_KswordHvm.Lock);
     KeLeaveCriticalRegion();
+    if (debuggerStartLease) { KswordARKDebuggerShadowReleaseStartLease(); }
     return STATUS_SUCCESS;
 }
 
@@ -3809,7 +3831,8 @@ KswordARKHvmEptRuleControl(
         status = KswordARKHvmEptRuleControlLocked(
             &g_KswordHvm,
             Request,
-            Response);
+            Response,
+            FALSE);
     }
     /* Release exclusive lifecycle ownership. */
     ExReleasePushLockExclusive(&g_KswordHvm.Lock);

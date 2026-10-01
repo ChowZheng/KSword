@@ -18,6 +18,7 @@ Environment:
 #include "ark/ark_mutation.h"
 #include "src/features/kernel/kernel_idt_baseline.h"
 #include "src/features/hvm/hvm_runtime.h"
+#include "src/features/debugger/debugger.h"
 #include "src/features/rxpf/rxpf_runtime.h"
 #include "driver_entry.tmh"
 
@@ -316,6 +317,7 @@ Return Value:
     // Release all VMX/VMCS/EPT pages before the driver image can leave memory.
     KswordARKHvmUninitialize();
     // IOCTL 已停止后释放只读 IDT 基线，避免卸载后保留本驱动分配。
+    KswordARKDebuggerShutdown();
     KswordARKIdtBaselineUninitialize();
     // 释放危险写事务为防 PID 复用而持有的请求进程对象引用。
     KswordARKMutationUninitialize();

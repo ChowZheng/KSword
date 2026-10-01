@@ -134,7 +134,8 @@ NTSTATUS
 KswordARKHvmEptRuleControlLocked(
     _Inout_ KSW_HVM_RUNTIME* Runtime,
     _In_ const KSWORD_ARK_HVM_EPT_RULE_REQUEST* Request,
-    _Out_ KSWORD_ARK_HVM_EPT_RULE_RESPONSE* Response
+    _Out_ KSWORD_ARK_HVM_EPT_RULE_RESPONSE* Response,
+    _In_ BOOLEAN DebuggerOwned
     );
 
 /*

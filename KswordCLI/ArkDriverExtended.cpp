@@ -1,6 +1,7 @@
 #include "ArkDriverExtended.h"
 
 #include "../Ksword5.1/Ksword5.1/ArkDriverClient/ArkDriverClient.h"
+#include "../shared/driver/KswordArkDebuggerIoctl.h"
 
 #include <algorithm>
 #include <cerrno>
@@ -449,6 +450,20 @@ int commandArkDriverExtended(const int argc, wchar_t* argv[])
             }
         }
         return rc;
+    }
+    if (subcommand == L"debugger-status")
+    {
+        KSWORD_ARK_DEBUGGER_REQUEST request{};
+        KSWORD_ARK_DEBUGGER_RESPONSE response{};
+        request.version = KSWORD_ARK_DEBUGGER_VERSION; request.size = sizeof(request);
+        request.operation = KSWORD_ARK_DEBUGGER_QUERY;
+        const auto result = client.deviceIoControl(IOCTL_KSWORD_ARK_DEBUGGER,
+            &request, sizeof(request), &response, sizeof(response));
+        std::wcout << L"debugger-status transport=" << result.ok << L" win32_error=" << result.win32Error
+                   << L" version=" << response.version << L" status=0x" << std::hex << static_cast<unsigned long>(response.status)
+                   << L" capabilities=0x" << response.capabilities << std::dec << L"\n";
+        return result.ok && result.bytesReturned == sizeof(response) && response.version == KSWORD_ARK_DEBUGGER_VERSION &&
+            response.size == sizeof(response) && response.status >= 0 ? 0 : 1;
     }
     if (subcommand == L"hvm-status") return finishResult(L"hvm-status", client.queryHvmStatus());
     if (subcommand == L"hvm-metrics") return finishResult(L"hvm-metrics", client.queryHvmMetrics());

@@ -29,6 +29,7 @@ jobs:
       arklight: ${{ steps.detect.outputs.arklight }}
       ce_plugin: ${{ steps.detect.outputs.ce_plugin }}
       ce_launcher: ${{ steps.detect.outputs.ce_launcher }}
+      x96dbg: ${{ steps.detect.outputs.x96dbg }}
     steps:
       - name: Check out source
         uses: actions/checkout@v5
@@ -100,8 +101,9 @@ jobs:
           usermode_re="^(TaskmgrHijack\.ps1$|Ksword5\.1/|Launcher/|Taskbar/|KswordHUD/|APIMonitor_x64/|KswordCLI/|KswordFsDecodeTests/|DwmZOrderAgent/)|$common"
           setup_re="^(TaskmgrHijack\.ps1$|KswordSetup/|Ksword5\.1/|Launcher/|Taskbar/|KswordHUD/|APIMonitor_x64/|KswordCLI/|KswordARKDriver/|KswordARKLight/|DwmZOrderAgent/)|$common"
           arklight_re="^(KswordARKLight/|KswordARKLightTests/|KswordARKDriver/|Ksword5\.1/Ksword5\.1/(ArkDriverClient/|Resource/)|shared/driver/|scripts/Sign-KswordArkDriverVariant\.ps1)|$common"
-          ce_plugin_re="^(CheatEnginePlugin/|Ksword5\.1/Ksword5\.1/(ArkDriverClient/|ksword/string/)|shared/driver/)|$common"
+          ce_plugin_re="^(CheatEnginePlugin/|DebuggerBackend/|Ksword5\.1/Ksword5\.1/(ArkDriverClient/|ksword/string/)|shared/driver/)|$common"
           ce_launcher_re="^(CheatEngineExecutablePlugin/|Ksword5\.1/Ksword5\.1/(ArkDriverClient/|ksword/string/))|$common"
+          x96dbg_re="^(TitanEnginePlugin/|X96dbgExecutablePlugin/|X96dbgIntegration/|DebuggerBackend/|Ksword5\.1/Ksword5\.1/(ArkDriverClient/|ksword/string/))|$common"
 
           # 回归保护：主程序构建后直接复制根目录脚本，路径规则必须始终命中。
           for project_rule in "$usermode_re" "$setup_re"; do
@@ -116,14 +118,16 @@ jobs:
           arklight=false
           ce_plugin=false
           ce_launcher=false
+          x96dbg=false
           matches "$usermode_re" && usermode=true || true
           matches "$setup_re" && setup=true || true
           matches "$arklight_re" && arklight=true || true
           matches "$ce_plugin_re" && ce_plugin=true || true
           matches "$ce_launcher_re" && ce_launcher=true || true
+          matches "$x96dbg_re" && x96dbg=true || true
 
           any=false
-          [[ "$usermode" == true || "$setup" == true || "$arklight" == true || "$ce_plugin" == true || "$ce_launcher" == true ]] && any=true
+          [[ "$usermode" == true || "$setup" == true || "$arklight" == true || "$ce_plugin" == true || "$ce_launcher" == true || "$x96dbg" == true ]] && any=true
 
           {
             echo "any=$any"
@@ -132,11 +136,12 @@ jobs:
             echo "arklight=$arklight"
             echo "ce_plugin=$ce_plugin"
             echo "ce_launcher=$ce_launcher"
+            echo "x96dbg=$x96dbg"
           } >> "$GITHUB_OUTPUT"
 
           echo 'Changed paths:'
           printf '%s\n' "$changed"
-          echo "Affected projects: usermode=$usermode setup=$setup arklight=$arklight ce_plugin=$ce_plugin ce_launcher=$ce_launcher"
+          echo "Affected projects: usermode=$usermode setup=$setup arklight=$arklight ce_plugin=$ce_plugin ce_launcher=$ce_launcher x96dbg=$x96dbg"
 
   source-integrity:
     name: Source integrity
@@ -162,7 +167,15 @@ jobs:
           # docs/next/logs/ 里是 kd !analyze、验收套件、飞行记录仪逐字写下来的
           # 转录。kd 的输出本身就带行尾空格，而这些文件的价值恰恰在于"与工具当时
           # 打出来的一模一样"——为过检查去改它，等于把证据改成了别的东西。
-          $skipLogs = @(':(exclude)docs/next/logs/**')
+          # Original third-party license texts are retained byte-for-byte, and
+          # unified patches require their leading context-space on blank lines.
+          # Exclude only these imported texts; C/C++ source stays checked.
+          $skipLogs = @(
+            ':(exclude)docs/next/logs/**',
+            ':(exclude)third_party/x64dbg_abi/LICENSE',
+            ':(exclude)third_party/x64dbg_runtime_licenses/**',
+            ':(exclude)X96dbgIntegration/patches/*.patch'
+          )
           if ($env:GITHUB_EVENT_NAME -eq 'pull_request') {
             git diff --check "origin/$env:GITHUB_BASE_REF...HEAD" -- . @skipLogs
           }
@@ -348,10 +361,10 @@ jobs:
           }
 
           $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
-          $msbuild = & $vswhere -latest -products * -requires Microsoft.Component.MSBuild -find 'MSBuild\**\Bin\MSBuild.exe' |
+          $msbuild = & $vswhere -latest -products * -requires Microsoft.Component.MSBuild -find 'MSBuild\**\Bin\amd64\MSBuild.exe' |
             Select-Object -First 1
           if (-not $msbuild -or -not (Test-Path $msbuild)) {
-            throw 'Could not locate MSBuild through vswhere.'
+            throw 'Could not locate 64-bit MSBuild through vswhere.'
           }
 
           # The release DynData pack is intentionally generated from the private,
@@ -379,6 +392,9 @@ jobs:
             '/t:Build',
             '/p:Configuration=Release',
             '/p:Platform=x64',
+            '/p:PreferredToolArchitecture=x64',
+            '/p:PROCESSOR_ARCHITECTURE=AMD64',
+            '/p:PROCESSOR_ARCHITEW6432=AMD64',
             "/p:QtMsBuild=$env:KSWORD_QT_MSBUILD",
             '/p:KswordArkSkipAutoTestSign=true',
             '/m:1',
@@ -417,6 +433,13 @@ jobs:
             (Join-Path $PWD 'Ksword5.1/x64/Release/KswordDwmZOrder.dll')
           if ($LASTEXITCODE -ne 0) {
             throw "DWM order model/agent protocol tests failed with exit code $LASTEXITCODE."
+          }
+
+          # Exercise the actual marketplace parser/promotion functions for both
+          # ZIP layouts; invalid manifests must preserve the installed plugin.
+          python 'tools/test_plugin_install_layout.py' --msbuild $msbuild --qt-dir $env:KSWORD_QT_DIR
+          if ($LASTEXITCODE -ne 0) {
+            throw "Plugin installation layout regression failed with exit code $LASTEXITCODE."
           }
 
       - name: Verify primary build artifacts
@@ -489,10 +512,10 @@ jobs:
           $env:KSWORD_QT_DIR = $env:QT_ROOT_DIR
           $env:QTDIR = $env:QT_ROOT_DIR
           $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
-          $msbuild = & $vswhere -latest -products * -requires Microsoft.Component.MSBuild -find 'MSBuild\**\Bin\MSBuild.exe' |
+          $msbuild = & $vswhere -latest -products * -requires Microsoft.Component.MSBuild -find 'MSBuild\**\Bin\amd64\MSBuild.exe' |
             Select-Object -First 1
           if (-not $msbuild -or -not (Test-Path $msbuild)) {
-            throw 'Could not locate MSBuild through vswhere.'
+            throw 'Could not locate 64-bit MSBuild through vswhere.'
           }
 
           # KswordSetup embeds the Release payload generated by the main project.
@@ -517,6 +540,9 @@ jobs:
             '/t:Build',
             '/p:Configuration=Release',
             '/p:Platform=x64',
+            '/p:PreferredToolArchitecture=x64',
+            '/p:PROCESSOR_ARCHITECTURE=AMD64',
+            '/p:PROCESSOR_ARCHITEW6432=AMD64',
             "/p:SolutionDir=$((Resolve-Path 'Ksword5.1').Path)\",
             "/p:QtMsBuild=$env:KSWORD_QT_MSBUILD",
             '/p:KswordArkSkipAutoTestSign=true',
@@ -550,6 +576,9 @@ jobs:
             /t:Build `
             /p:Configuration=Release `
             /p:Platform=x64 `
+            /p:PreferredToolArchitecture=x64 `
+            /p:PROCESSOR_ARCHITECTURE=AMD64 `
+            /p:PROCESSOR_ARCHITEW6432=AMD64 `
             /m:1 `
             /v:minimal
           if ($LASTEXITCODE -ne 0) {
@@ -590,10 +619,10 @@ jobs:
         shell: pwsh
         run: |
           $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
-          $msbuild = & $vswhere -latest -products * -requires Microsoft.Component.MSBuild -find 'MSBuild\**\Bin\MSBuild.exe' |
+          $msbuild = & $vswhere -latest -products * -requires Microsoft.Component.MSBuild -find 'MSBuild\**\Bin\amd64\MSBuild.exe' |
             Select-Object -First 1
           if (-not $msbuild -or -not (Test-Path $msbuild)) {
-            throw 'Could not locate MSBuild through vswhere.'
+            throw 'Could not locate 64-bit MSBuild through vswhere.'
           }
 
           $solutionDir = (Resolve-Path 'Ksword5.1').Path + '\'
@@ -601,6 +630,9 @@ jobs:
             /t:Build `
             /p:Configuration=Release `
             /p:Platform=x64 `
+            /p:PreferredToolArchitecture=x64 `
+            /p:PROCESSOR_ARCHITECTURE=AMD64 `
+            /p:PROCESSOR_ARCHITEW6432=AMD64 `
             "/p:SolutionDir=$solutionDir" `
             /p:KswordArkSkipAutoVariantSign=true `
             /p:KswordArkSkipAutoTestSign=true `
@@ -614,6 +646,9 @@ jobs:
             /t:Build `
             /p:Configuration=Release `
             /p:Platform=x64 `
+            /p:PreferredToolArchitecture=x64 `
+            /p:PROCESSOR_ARCHITECTURE=AMD64 `
+            /p:PROCESSOR_ARCHITEW6432=AMD64 `
             /p:KswordArkLightEnsureDriverBuilt=false `
             /p:KswordArkLightSkipDriverSign=true `
             /p:KswordArkLightReuseSignedDriver=true `
@@ -627,6 +662,9 @@ jobs:
             /t:Build `
             /p:Configuration=Release `
             /p:Platform=x64 `
+            /p:PreferredToolArchitecture=x64 `
+            /p:PROCESSOR_ARCHITECTURE=AMD64 `
+            /p:PROCESSOR_ARCHITEW6432=AMD64 `
             /m:1 `
             /v:minimal
           if ($LASTEXITCODE -ne 0) {
@@ -672,7 +710,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        platform: [x64, Win32]
+        platform: [x64]
     steps:
       - name: Check out source
         uses: actions/checkout@v5
@@ -681,15 +719,18 @@ jobs:
         shell: pwsh
         run: |
           $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
-          $msbuild = & $vswhere -latest -products * -requires Microsoft.Component.MSBuild -find 'MSBuild\**\Bin\MSBuild.exe' |
+          $msbuild = & $vswhere -latest -products * -requires Microsoft.Component.MSBuild -find 'MSBuild\**\Bin\amd64\MSBuild.exe' |
             Select-Object -First 1
           if (-not $msbuild -or -not (Test-Path $msbuild)) {
-            throw 'Could not locate MSBuild through vswhere.'
+            throw 'Could not locate 64-bit MSBuild through vswhere.'
           }
           & $msbuild 'CheatEnginePlugin/KswordCheatEnginePlugin.vcxproj' `
             /t:Build `
             /p:Configuration=Release `
             /p:Platform='${{ matrix.platform }}' `
+            /p:PreferredToolArchitecture=x64 `
+            /p:PROCESSOR_ARCHITECTURE=AMD64 `
+            /p:PROCESSOR_ARCHITEW6432=AMD64 `
             /m:1 `
             /v:minimal
           if ($LASTEXITCODE -ne 0) {
@@ -730,15 +771,18 @@ jobs:
         shell: pwsh
         run: |
           $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
-          $msbuild = & $vswhere -latest -products * -requires Microsoft.Component.MSBuild -find 'MSBuild\**\Bin\MSBuild.exe' |
+          $msbuild = & $vswhere -latest -products * -requires Microsoft.Component.MSBuild -find 'MSBuild\**\Bin\amd64\MSBuild.exe' |
             Select-Object -First 1
           if (-not $msbuild -or -not (Test-Path $msbuild)) {
-            throw 'Could not locate MSBuild through vswhere.'
+            throw 'Could not locate 64-bit MSBuild through vswhere.'
           }
           & $msbuild 'CheatEngineExecutablePlugin/KswordCheatEngineLauncher.vcxproj' `
             /t:Build `
             /p:Configuration=Release `
             /p:Platform=x64 `
+            /p:PreferredToolArchitecture=x64 `
+            /p:PROCESSOR_ARCHITECTURE=AMD64 `
+            /p:PROCESSOR_ARCHITEW6432=AMD64 `
             /m:1 `
             /v:minimal
           if ($LASTEXITCODE -ne 0) {
@@ -766,6 +810,150 @@ jobs:
             CheatEngineExecutablePlugin/x64/Release/KswordCheatEngineLauncher.pdb
           if-no-files-found: error
 
+  ksword-x96dbg:
+    name: TitanEngine and x96dbg Release build (x64)
+    needs:
+      - changes
+      - source-integrity
+    if: needs.changes.outputs.x96dbg == 'true' && needs.source-integrity.result == 'success'
+    runs-on: windows-2022
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      # Only native Titan is needed for the forwarding regression. No Qt or
+      # debugger GUI payload is built or launched in this job.
+      - name: Check out pinned native TitanEngine
+        uses: actions/checkout@v5
+        with:
+          repository: x64dbg/TitanEngine
+          ref: 21ef77f31fd42d17f785802c36b2ca4ca44c43d7
+          path: .deps/ci-titanengine
+          persist-credentials: false
+
+      - name: Build the x64 proxy, launcher and backend contract tests
+        shell: pwsh
+        run: |
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+          $msbuild = & $vswhere -latest -products * -requires Microsoft.Component.MSBuild -find 'MSBuild\**\Bin\amd64\MSBuild.exe' |
+            Select-Object -First 1
+          if (-not $msbuild -or -not (Test-Path -LiteralPath $msbuild)) {
+            throw 'Could not locate 64-bit MSBuild through vswhere.'
+          }
+          $properties = @(
+            '/t:Build', '/p:Configuration=Release', '/p:Platform=x64',
+            '/p:PreferredToolArchitecture=x64',
+            '/p:PROCESSOR_ARCHITECTURE=AMD64',
+            '/p:PROCESSOR_ARCHITEW6432=AMD64', '/m:1', '/v:minimal'
+          )
+          foreach ($project in @(
+            'TitanEnginePlugin/KswordTitanEngine.vcxproj',
+            'TitanEnginePlugin/tests/LifetimeTests.vcxproj',
+            'X96dbgExecutablePlugin/KswordX96dbgLauncher.vcxproj',
+            'DebuggerBackend/tests/BackendTests.vcxproj'
+          )) {
+            $toolPropertiesJson = & $msbuild $project /p:Configuration=Release /p:Platform=x64 `
+              /p:PreferredToolArchitecture=x64 /p:PROCESSOR_ARCHITECTURE=AMD64 /p:PROCESSOR_ARCHITEW6432=AMD64 `
+              '-getProperty:PreferredToolArchitecture,VC_ExecutablePath_x64' /nologo
+            if ($LASTEXITCODE -ne 0) { throw "Could not inspect MSVC host tools for $project." }
+            $toolProperties = ($toolPropertiesJson -join "`n" | ConvertFrom-Json).Properties
+            if ($toolProperties.PreferredToolArchitecture -ne 'x64' -or $toolProperties.VC_ExecutablePath_x64 -notmatch 'HostX64[\\/]x64' -or
+                $toolProperties.VC_ExecutablePath_x64 -match 'HostX86') { throw "Refusing non-HostX64 tools for $project." }
+            Write-Output "BUILD_HOST_TOOLS $project=$($toolProperties.VC_ExecutablePath_x64)"
+            & $msbuild $project @properties
+            if ($LASTEXITCODE -ne 0) { throw "MSBuild failed for $project with exit code $LASTEXITCODE." }
+          }
+
+      - name: Build pinned native TitanEngine with HostX64
+        shell: pwsh
+        run: |
+          $baseline = Get-Content -Raw -LiteralPath 'X96dbgIntegration/PINNED_BASELINES.json' | ConvertFrom-Json
+          $actual = (& git -C '.deps/ci-titanengine' rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0 -or $actual -ne $baseline.nativeTitanEngine) { throw 'Native TitanEngine source revision does not match the audited baseline.' }
+          # CMake compiler probes run before the generated project is built.
+          # MSVC's local-property rules can otherwise select HostX86 even when
+          # -T host=x64 was requested, so constrain the probe process as well.
+          $env:PROCESSOR_ARCHITECTURE = 'AMD64'
+          $env:PROCESSOR_ARCHITEW6432 = 'AMD64'
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+          $msbuild = & $vswhere -latest -products * -requires Microsoft.Component.MSBuild -find 'MSBuild\**\Bin\amd64\MSBuild.exe' |
+            Select-Object -First 1
+          if (-not $msbuild -or -not (Test-Path -LiteralPath $msbuild)) { throw 'Could not locate 64-bit MSBuild for CMake probes.' }
+          cmake -S '.deps/ci-titanengine' -B '.deps/ci-titanengine/build-x64' `
+            -G 'Visual Studio 17 2022' -A x64 -T host=x64 `
+            "-DCMAKE_MAKE_PROGRAM=$msbuild" -DCMKR_SKIP_GENERATION=ON -DTITANENGINE_RESOURCES=OFF
+          if ($LASTEXITCODE -ne 0) { throw 'Native TitanEngine x64 configuration failed.' }
+          $nativeProject = '.deps/ci-titanengine/build-x64/TitanEngine.vcxproj'
+          $toolPropertiesJson = & $msbuild $nativeProject /p:Configuration=Release /p:Platform=x64 `
+            /p:PreferredToolArchitecture=x64 /p:PROCESSOR_ARCHITECTURE=AMD64 /p:PROCESSOR_ARCHITEW6432=AMD64 `
+            '-getProperty:PreferredToolArchitecture,VC_ExecutablePath_x64' /nologo
+          if ($LASTEXITCODE -ne 0) { throw 'Could not inspect native TitanEngine MSVC host tools.' }
+          $toolProperties = ($toolPropertiesJson -join "`n" | ConvertFrom-Json).Properties
+          if ($toolProperties.PreferredToolArchitecture -ne 'x64' -or $toolProperties.VC_ExecutablePath_x64 -notmatch 'HostX64[\\/]x64' -or
+              $toolProperties.VC_ExecutablePath_x64 -match 'HostX86') { throw 'Refusing native TitanEngine non-HostX64 tools.' }
+          Write-Output "BUILD_HOST_TOOLS $nativeProject=$($toolProperties.VC_ExecutablePath_x64)"
+          cmake --build '.deps/ci-titanengine/build-x64' --config Release --target TitanEngine -- `
+            /p:PreferredToolArchitecture=x64 /p:PROCESSOR_ARCHITECTURE=AMD64 /p:PROCESSOR_ARCHITEW6432=AMD64 /m:1
+          if ($LASTEXITCODE -ne 0) { throw 'Native TitanEngine x64 build failed.' }
+
+      - name: Validate all 64 canonical signatures and exports
+        shell: pwsh
+        run: |
+          python 'third_party/x64dbg_abi/check_titanengine_exports.py' `
+            'TitanEnginePlugin/x64/Release/TitanEngine.dll' `
+            '.deps/ci-titanengine/build-x64/Release/TitanEngine.dll' `
+            --definition 'third_party/x64dbg_abi/TitanEngine.def' `
+            --canonical-header 'third_party/x64dbg_abi/TitanEngine.h' `
+            --adapter-header '.deps/ci-titanengine/TitanEngine/definitions.h'
+          if ($LASTEXITCODE -ne 0) { throw 'Canonical TitanEngine ABI validation failed.' }
+
+      - name: Run production native forwarding and backend contract tests
+        shell: pwsh
+        run: |
+          # These tests use self-process memory and modeled driver calls. They
+          # do not create a debugger GUI, load a driver or start resident HVM.
+          python 'TitanEnginePlugin/tests/validate_proxy.py' `
+            --proxy 'TitanEnginePlugin/x64/Release/TitanEngine.dll' `
+            --native '.deps/ci-titanengine/build-x64/Release/TitanEngine.dll' `
+            --fixture-root '.codex-build-logs/x96dbg-native-fixtures'
+          if ($LASTEXITCODE -ne 0) { throw 'Production native forwarding tests failed.' }
+          & '.codex-build-logs/debugger-tests/BackendTests.exe'
+          if ($LASTEXITCODE -ne 0) { throw 'Debugger backend contract tests failed.' }
+          & 'TitanEnginePlugin/tests/x64/Release/LifetimeTests.exe'
+          if ($LASTEXITCODE -ne 0) { throw 'EPT memory/module lifetime contract tests failed.' }
+          & 'X96dbgExecutablePlugin/tests/LauncherTests.ps1'
+          if ($LASTEXITCODE -ne 0) { throw 'x96dbg launcher protocol/PE tests failed.' }
+
+      - name: Verify x96dbg build artifacts
+        shell: pwsh
+        run: |
+          foreach ($artifact in @(
+            'TitanEnginePlugin/x64/Release/TitanEngine.dll',
+            'TitanEnginePlugin/x64/Release/TitanEngine.pdb',
+            'X96dbgExecutablePlugin/x64/Release/KswordX96dbgLauncher.exe',
+            'X96dbgExecutablePlugin/x64/Release/KswordX96dbgLauncher.pdb'
+          )) {
+            if (-not (Test-Path -LiteralPath $artifact) -or (Get-Item -LiteralPath $artifact).Length -eq 0) { throw "Expected nonempty x96dbg artifact is missing: $artifact" }
+          }
+
+      # Add a separate component artifact. The existing automatic prerelease
+      # asset selection and aggregate Release layout remain compatible.
+      - name: Upload TitanEngine and x96dbg artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          name: KswordX96dbg-x64-Release
+          path: |
+            TitanEnginePlugin/x64/Release/TitanEngine.dll
+            TitanEnginePlugin/x64/Release/TitanEngine.pdb
+            X96dbgExecutablePlugin/x64/Release/KswordX96dbgLauncher.exe
+            X96dbgExecutablePlugin/x64/Release/KswordX96dbgLauncher.pdb
+          if-no-files-found: error
+
   auto-prerelease:
     name: Publish automatic prerelease
     needs:
@@ -776,6 +964,7 @@ jobs:
       - ksword-arklight
       - ksword-ce-plugin
       - ksword-ce-launcher
+      - ksword-x96dbg
     if: >-
       always() &&
       github.event_name == 'push' &&
@@ -786,7 +975,8 @@ jobs:
       (needs.ksword-setup.result == 'success' || needs.ksword-setup.result == 'skipped') &&
       (needs.ksword-arklight.result == 'success' || needs.ksword-arklight.result == 'skipped') &&
       (needs.ksword-ce-plugin.result == 'success' || needs.ksword-ce-plugin.result == 'skipped') &&
-      (needs.ksword-ce-launcher.result == 'success' || needs.ksword-ce-launcher.result == 'skipped')
+      (needs.ksword-ce-launcher.result == 'success' || needs.ksword-ce-launcher.result == 'skipped') &&
+      (needs.ksword-x96dbg.result == 'success' || needs.ksword-x96dbg.result == 'skipped')
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:

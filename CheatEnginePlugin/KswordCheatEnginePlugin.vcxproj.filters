@@ -23,6 +23,8 @@
     <ClInclude Include="KswordCeBridge.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="..\DebuggerBackend\KswordDebuggerApi.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="..\DebuggerBackend\KswordDebuggerBackend.h"><Filter>Header Files</Filter></ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="KswordCeBridge.cpp">
@@ -31,6 +33,11 @@
     <ClCompile Include="PluginExports.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="..\DebuggerBackend\KswordDebuggerBackend.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="..\DebuggerBackend\KswordDebuggerMemory.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="..\DebuggerBackend\KswordDebuggerDebug.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="..\DebuggerBackend\KswordDebuggerNative.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="..\Ksword5.1\Ksword5.1\ArkDriverClient\ArkDriverHvm.cpp"><Filter>ArkDriverClient</Filter></ClCompile>
     <ClCompile Include="..\Ksword5.1\Ksword5.1\ArkDriverClient\ArkDriverClient.cpp">
       <Filter>ArkDriverClient</Filter>
     </ClCompile>

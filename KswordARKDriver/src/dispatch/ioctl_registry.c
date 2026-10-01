@@ -25,6 +25,8 @@ Environment:
 #include "driver/KswordArkProcessProtectIoctl.h"
 #include "driver/KswordArkCallbackMonitorIoctl.h"
 #include "driver/KswordArkHvmMetricsIoctl.h"
+#include "driver/KswordArkHvmDebugIoctl.h"
+#include "driver/KswordArkDebuggerIoctl.h"
 #include "driver/KswordArkDdmaIoctl.h"
 
 // Feature handler declarations live here instead of in the central dispatch file.
@@ -82,6 +84,10 @@ NTSTATUS KswordARKKernelIoctlQuerySlatIommuAudit(_In_ WDFDEVICE Device, _In_ WDF
 NTSTATUS KswordARKSystemTimeIoctlQuery(_In_ WDFDEVICE Device, _In_ WDFREQUEST Request, _In_ size_t InputBufferLength, _In_ size_t OutputBufferLength, _Out_ size_t* BytesReturned);
 NTSTATUS KswordARKSystemTimeIoctlControl(_In_ WDFDEVICE Device, _In_ WDFREQUEST Request, _In_ size_t InputBufferLength, _In_ size_t OutputBufferLength, _Out_ size_t* BytesReturned);
 NTSTATUS KswordARKHvmIoctlEptRule(_In_ WDFDEVICE Device, _In_ WDFREQUEST Request, _In_ size_t InputBufferLength, _In_ size_t OutputBufferLength, _Out_ size_t* BytesReturned);
+/* The feature module validates and executes owner-scoped EPT debugger stops. */
+NTSTATUS KswordARKHvmIoctlDebug(_In_ WDFDEVICE Device, _In_ WDFREQUEST Request, _In_ size_t InputBufferLength, _In_ size_t OutputBufferLength, _Out_ size_t* BytesReturned);
+/* General debugger operations stay in their feature module. */
+NTSTATUS KswordARKDebuggerIoctlControl(_In_ WDFDEVICE Device, _In_ WDFREQUEST Request, _In_ size_t InputBufferLength, _In_ size_t OutputBufferLength, _Out_ size_t* BytesReturned);
 NTSTATUS KswordARKHvmIoctlMemory(_In_ WDFDEVICE Device, _In_ WDFREQUEST Request, _In_ size_t InputBufferLength, _In_ size_t OutputBufferLength, _Out_ size_t* BytesReturned);
 NTSTATUS KswordARKHvmIoctlView(_In_ WDFDEVICE Device, _In_ WDFREQUEST Request, _In_ size_t InputBufferLength, _In_ size_t OutputBufferLength, _Out_ size_t* BytesReturned);
 NTSTATUS KswordARKHvmIoctlMsrPolicy(_In_ WDFDEVICE Device, _In_ WDFREQUEST Request, _In_ size_t InputBufferLength, _In_ size_t OutputBufferLength, _Out_ size_t* BytesReturned);
@@ -288,6 +294,8 @@ static const KSWORD_ARK_IOCTL_ENTRY g_KswordArkIoctlTable[] = {
     { IOCTL_KSWORD_ARK_QUERY_SYSTEM_TIME, KswordARKSystemTimeIoctlQuery, "IOCTL_KSWORD_ARK_QUERY_SYSTEM_TIME", KSWORD_ARK_IOCTL_CAPABILITY_NONE, KSWORD_ARK_IOCTL_FLAG_QUIET_SUCCESS },
     { IOCTL_KSWORD_ARK_CONTROL_SYSTEM_TIME, KswordARKSystemTimeIoctlControl, "IOCTL_KSWORD_ARK_CONTROL_SYSTEM_TIME", KSWORD_ARK_IOCTL_CAPABILITY_NONE, KSWORD_ARK_IOCTL_FLAG_NONE },
     { IOCTL_KSWORD_ARK_HVM_EPT_RULE, KswordARKHvmIoctlEptRule, "IOCTL_KSWORD_ARK_HVM_EPT_RULE", KSWORD_ARK_IOCTL_CAPABILITY_NONE, KSWORD_ARK_IOCTL_FLAG_NONE },
+    { IOCTL_KSWORD_ARK_HVM_DEBUG, KswordARKHvmIoctlDebug, "IOCTL_KSWORD_ARK_HVM_DEBUG", KSWORD_ARK_IOCTL_CAPABILITY_NONE, KSWORD_ARK_IOCTL_FLAG_NONE },
+    { IOCTL_KSWORD_ARK_DEBUGGER, KswordARKDebuggerIoctlControl, "IOCTL_KSWORD_ARK_DEBUGGER", KSWORD_ARK_IOCTL_CAPABILITY_NONE, KSWORD_ARK_IOCTL_FLAG_NONE },
     { IOCTL_KSWORD_ARK_HVM_MEMORY, KswordARKHvmIoctlMemory, "IOCTL_KSWORD_ARK_HVM_MEMORY", KSWORD_ARK_IOCTL_CAPABILITY_NONE, KSWORD_ARK_IOCTL_FLAG_NONE },
     { IOCTL_KSWORD_ARK_HVM_VIEW, KswordARKHvmIoctlView, "IOCTL_KSWORD_ARK_HVM_VIEW", KSWORD_ARK_IOCTL_CAPABILITY_NONE, KSWORD_ARK_IOCTL_FLAG_NONE },
     { IOCTL_KSWORD_ARK_HVM_MSR_POLICY, KswordARKHvmIoctlMsrPolicy, "IOCTL_KSWORD_ARK_HVM_MSR_POLICY", KSWORD_ARK_IOCTL_CAPABILITY_NONE, KSWORD_ARK_IOCTL_FLAG_NONE },

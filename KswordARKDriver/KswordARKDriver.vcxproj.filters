@@ -309,6 +309,8 @@
     <ClInclude Include="src\features\hvm\hvm_memory.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="src\features\hvm\hvm_debug.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\features\debugger\debugger.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="src\features\hvm\hvm_ept_view.h">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -842,6 +844,11 @@
     <ClCompile Include="src\features\hvm\hvm_memory.c">
       <Filter>Source Files\Features\HVM</Filter>
     </ClCompile>
+    <ClCompile Include="src\features\hvm\hvm_debug.c"><Filter>Source Files\Features\HVM</Filter></ClCompile>
+    <ClCompile Include="src\features\hvm\hvm_debug_ioctl.c"><Filter>Source Files\Features\HVM</Filter></ClCompile>
+    <ClCompile Include="src\features\debugger\debugger.c"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="src\features\debugger\debugger_ioctl.c"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="src\features\debugger\debugger_shadow.c"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="src\features\hvm\hvm_ept_view.c">
       <Filter>Source Files\Features\HVM</Filter>
     </ClCompile>
