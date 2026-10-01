@@ -71,12 +71,14 @@ namespace
             lowerText.contains(QStringLiteral("not supported")) ||
             lowerText.contains(QStringLiteral("status=0xc00000bb")))
         {
-            return kernelText("kernel.callback.remove.message.unsupported", QStringLiteral("当前驱动暂不支持该回调移除入口。"));
+            return kernelText("kernel.callback.remove.message.unsupported", QStringLiteral("当前驱动暂不支持该回调移除入口。"))
+                + QStringLiteral("\n") + trimmedText;
         }
         if (lowerText.contains(QStringLiteral("capability")) ||
             lowerText.contains(QStringLiteral("dyndata")))
         {
-            return kernelText("kernel.callback.remove.message.capability", QStringLiteral("动态偏移能力未满足，回调对象或模块归属暂不可解析。"));
+            return kernelText("kernel.callback.remove.message.capability", QStringLiteral("动态偏移能力未满足，回调对象或模块归属暂不可解析。"))
+                + QStringLiteral("\n") + trimmedText;
         }
         return trimmedText;
     }
@@ -445,7 +447,6 @@ void KernelDock::initializeCallbackRemovePanel()
         requestPacket.callbackAddress = callbackAddress;
 
         const ksword::ark::DriverClient driverClient;
-        const bool experimentalUnlinkEnabled = driverClient.supportsExternalCallbackExperimentalUnlink();
         const ksword::ark::CallbackRemoveResult removeResult = driverClient.removeExternalCallback(requestPacket);
         const KSWORD_ARK_REMOVE_EXTERNAL_CALLBACK_RESPONSE& responsePacket = removeResult.response;
         const DWORD bytesReturned = removeResult.io.bytesReturned;
@@ -478,8 +479,7 @@ void KernelDock::initializeCallbackRemovePanel()
              modulePath,
              moduleBase = static_cast<quint64>(responsePacket.moduleBase),
              moduleSize = static_cast<quint64>(responsePacket.moduleSize),
-             responseServiceName,
-             experimentalUnlinkEnabled](const QString& localServiceNameText)
+             responseServiceName](const QString& localServiceNameText)
         {
             return kernelText("kernel.callback.remove.detail.full", QStringLiteral(
                 "安全移除请求已执行。\n"
@@ -492,8 +492,7 @@ void KernelDock::initializeCallbackRemovePanel()
                 "- 模块基址：0x%7\n"
                 "- 模块大小：0x%8\n"
                 "- 驱动返回服务名：%9\n"
-                "- 本地服务映射：%10\n"
-                "- 操作模式：%11"))
+                "- 本地服务映射：%10"))
                 .arg(typeText)
                 .arg(QString::number(callbackAddress, 16).toUpper())
                 .arg(bytesReturned)
@@ -503,10 +502,7 @@ void KernelDock::initializeCallbackRemovePanel()
                 .arg(QString::number(moduleBase, 16).toUpper())
                 .arg(QString::number(moduleSize, 16).toUpper())
                 .arg(responseServiceName.isEmpty() ? kernelText("kernel.callback.remove.placeholder.not_returned", QStringLiteral("未返回")) : responseServiceName)
-                .arg(localServiceNameText)
-                .arg(experimentalUnlinkEnabled
-                    ? kernelText("kernel.callback.remove.unlink.compiled_but_unused", QStringLiteral("已编译扩展宏，但本页不执行 unlink"))
-                    : kernelText("kernel.callback.remove.unlink.protocol_disabled", QStringLiteral("当前 shared 协议未启用 REMOVE_EXTERNAL_CALLBACK_EX")));
+                .arg(localServiceNameText);
         };
 
         // 本地服务名反查要枚举全量 SCM 驱动服务并逐条 QueryServiceConfigW，最坏在秒级。

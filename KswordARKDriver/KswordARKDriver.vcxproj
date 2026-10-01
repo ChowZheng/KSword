@@ -28,6 +28,8 @@
     <ClCompile Include="src\features\callback\callback_rules.c" />
     <ClCompile Include="src\features\callback\callback_waiter.c" />
     <ClCompile Include="src\features\callback\callback_remove_external.c" />
+    <ClCompile Include="src\features\callback\callback_remove_extended.c" />
+    <ClCompile Include="src\features\callback\callback_registry_identity.c" />
     <ClCompile Include="src\features\callback\callback_enum.c" />
     <ClCompile Include="src\features\callback\callback_snapshot.c" />
     <ClCompile Include="src\features\callback\callback_extended_support.c" />
@@ -420,6 +422,7 @@
     <ClInclude Include="src\features\clipboard_policy\clipboard_policy_internal.h" />
     <ClInclude Include="src\features\callback\callback_internal.h" />
     <ClInclude Include="src\features\callback\callback_extended_internal.h" />
+    <ClInclude Include="src\features\callback\callback_special_identity.h" />
     <ClInclude Include="src\features\callback\callback_extended_kernel.h" />
     <ClInclude Include="Public.h" />
     <ClInclude Include="Queue.h" />

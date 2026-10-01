@@ -305,4 +305,31 @@ Return Value:
     if (ModuleCache != NULL && CallbackAddress != 0ULL) {
         KswordArkCallbackEnumFinalizeModuleCached(ModuleCache, entry);
     }
+
+    // 只给具备明确 API 参数语义的已注册行发布候选能力，启发式来源不升级为 verified。
+    if (Status == KSWORD_ARK_CALLBACK_ENUM_STATUS_OK && CallbackAddress != 0ULL &&
+        ((CallbackClass == KSWORD_ARK_CALLBACK_ENUM_CLASS_BUGCHECK && RegistrationAddress != 0ULL) ||
+         (CallbackClass == KSWORD_ARK_CALLBACK_ENUM_CLASS_BUGCHECK_REASON && RegistrationAddress != 0ULL) ||
+         (CallbackClass == KSWORD_ARK_CALLBACK_ENUM_CLASS_SHUTDOWN && RegistrationAddress != 0ULL) ||
+         (CallbackClass == KSWORD_ARK_CALLBACK_ENUM_CLASS_FILE_SYSTEM && ContextAddress != 0ULL) ||
+         (CallbackClass == KSWORD_ARK_CALLBACK_ENUM_CLASS_LOGON_SESSION &&
+          (RegistrationType == KSWORD_ARK_CALLBACK_REGISTRATION_TYPE_LOGON_LEGACY ||
+           RegistrationType == KSWORD_ARK_CALLBACK_REGISTRATION_TYPE_LOGON_EX)) ||
+         (CallbackClass == KSWORD_ARK_CALLBACK_ENUM_CLASS_NMI && RegistrationAddress != 0ULL) ||
+         ((CallbackClass == KSWORD_ARK_CALLBACK_ENUM_CLASS_POWER_SETTING ||
+           CallbackClass == KSWORD_ARK_CALLBACK_ENUM_CLASS_PLUG_PLAY ||
+           CallbackClass == KSWORD_ARK_CALLBACK_ENUM_CLASS_COALESCING) && RegistrationAddress != 0ULL &&
+          (ExtraFieldFlags & KSWORD_ARK_CALLBACK_ENUM_FIELD_HANDLE) != 0UL) || // 仅真实 API 句柄可发布候选。
+         (CallbackClass == KSWORD_ARK_CALLBACK_ENUM_CLASS_PRIORITY && ContextAddress != 0ULL &&
+          (ExtraFieldFlags & KSWORD_ARK_CALLBACK_ENUM_FIELD_CONTEXT_ADDRESS) != 0UL) || // 已验证的 DriverObject。
+         (CallbackClass == KSWORD_ARK_CALLBACK_ENUM_CLASS_DEBUG_PRINT &&
+          (ExtraFieldFlags & KSWORD_ARK_CALLBACK_ENUM_FIELD_CALLBACK_ADDRESS) != 0UL) || // 精确前缀恢复的函数。
+         ((CallbackClass == KSWORD_ARK_CALLBACK_ENUM_CLASS_GENERIC_KERNEL ||
+           CallbackClass == KSWORD_ARK_CALLBACK_ENUM_CLASS_IMAGE_VERIFICATION) &&
+          (Source == KSWORD_ARK_CALLBACK_ENUM_SOURCE_OBJECT_DIRECTORY ||
+           Source == KSWORD_ARK_CALLBACK_ENUM_SOURCE_CALLBACK_OBJECT) && RegistrationAddress != 0ULL))) {
+        entry->fieldFlags |= KSWORD_ARK_CALLBACK_ENUM_FIELD_REMOVABLE_CANDIDATE; // 公开 API 可尝试注销。
+        entry->removeBehavior = KSWORD_ARK_CALLBACK_REMOVE_BEHAVIOR_PUBLIC_API |
+            KSWORD_ARK_CALLBACK_REMOVE_BEHAVIOR_REQUIRE_REVALIDATION; // 重新枚举目标后再使用参数。
+    } // 结束扩展注销能力发布。
 }

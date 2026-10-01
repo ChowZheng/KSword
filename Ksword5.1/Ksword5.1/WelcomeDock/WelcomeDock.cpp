@@ -567,8 +567,8 @@ void WelcomeDock::setHardwareDock(HardwareDock* hardwareDock)
         this, &WelcomeDock::updatePerformanceSnapshot);
     connect(m_hardwareDock, &HardwareDock::staticOverviewChanged,
         this, &WelcomeDock::updateSystemInfoFromHardwareText);
-    // 欢迎页只需要用户态性能卡片；禁止它在首屏触发需要 KswordARK 驱动的 R0 健康查询。
-    m_hardwareDock->startPerformanceSampling(false);
+    // 首页性能卡片不需要 GPU 节点时钟、CPU 传感器或 R0 健康探测。
+    m_hardwareDock->startPerformanceSampling(HardwareDock::SamplingScope::WelcomeOverview);
 }
 
 void WelcomeDock::updatePerformanceSnapshot(

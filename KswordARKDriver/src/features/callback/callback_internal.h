@@ -183,7 +183,12 @@ typedef struct _KSWORD_ARK_CALLBACK_ENUM_BUILDER
     const KSWORD_ARK_REMOVE_EXTERNAL_CALLBACK_EX_REQUEST* RemoveMatchRequest;
     ULONG RemoveMatchedFieldFlags;
     ULONG64 RemoveMatchedRegistrationAddress;
+    ULONG64 RemoveMatchedContextAddress; // 保存重枚举的 API 上下文参数。
+    ULONG RemoveMatchedRegistrationType; // 保存重枚举的注册子类型。
+    NTSTATUS RemoveQueryStatus; // 保存目标类别的查询失败，避免后置复核把未读取当作已消失。
+    BOOLEAN RemoveTargetContainerEmpty; // 已确认目标容器空，旧版 empty/unsupported 展示行不应否定这个证据。
     ULONG RemoveMatchCount;
+    BOOLEAN RemoveMatchIdentity; // 前置复核完整身份；后置只检查注册仍存在。
 } KSWORD_ARK_CALLBACK_ENUM_BUILDER;
 
 typedef struct _KSWORD_ARK_CALLBACK_MODULE_ENTRY
@@ -213,6 +218,23 @@ typedef struct _KSWORD_ARK_CALLBACK_MODULE_CACHE
 } KSWORD_ARK_CALLBACK_MODULE_CACHE;
 
 EXTERN_C_START
+
+static __inline VOID KswordArkCallbackRecordRemoveQueryFailure( // 只记录目标类别读取失败，供后置确认使用。
+    _Inout_ KSWORD_ARK_CALLBACK_ENUM_BUILDER* Builder, _In_ ULONG EnumClass, _In_ NTSTATUS Status
+    ) // 结束参数。
+{ // 开始目标错误记录。
+    if (Builder != NULL && Builder->RemoveMatchRequest != NULL &&
+        EnumClass == (Builder->RemoveMatchRequest->callbackClass == KSWORD_ARK_EXTERNAL_CALLBACK_REMOVE_TYPE_OBJECT
+            ? KSWORD_ARK_CALLBACK_ENUM_CLASS_OBJECT
+            : Builder->RemoveMatchRequest->callbackClass == KSWORD_ARK_EXTERNAL_CALLBACK_REMOVE_TYPE_REGISTRY
+                ? KSWORD_ARK_CALLBACK_ENUM_CLASS_REGISTRY : Builder->RemoveMatchRequest->callbackClass)) { // 不受无关类别查询失败影响。
+        if (NT_SUCCESS(Builder->RemoveQueryStatus)) { Builder->RemoveQueryStatus = Status; } // 保留第一个具体失败，不把读取失败当成目标不存在。
+    } // 结束目标类别检查。
+} // 结束错误记录。
+
+BOOLEAN KswordArkCallbackRegistryLayoutValidated(_In_ ULONG64 Head); // 校准 Registry Cookie 前缀。
+BOOLEAN KswordArkCallbackRegistryReadIdentity(_In_ ULONG64 Node, _Out_ ULONG64* Cookie, _Out_ ULONG64* Context, _Out_ ULONG64* Callback); // 有界读取校准前缀。
+VOID KswordArkCallbackRegistryRemoved(_In_ ULONG64 Cookie); // 同步本驱动注册状态。
 
 KSWORD_ARK_CALLBACK_RUNTIME*
 KswordArkCallbackGetRuntime(
@@ -402,13 +424,22 @@ KswordArkCallbackEnumAddPrivateCallbacks(
 
 _Must_inspect_result_
 NTSTATUS
-KswordArkCallbackEnumRevalidateObjectRemoveRequest(
+KswordArkCallbackEnumRevalidateRemoveRequest(
     _In_ const KSWORD_ARK_REMOVE_EXTERNAL_CALLBACK_EX_REQUEST* RequestPacket,
     _In_ BOOLEAN RequireGenerationMatch,
+    _In_ BOOLEAN MatchIdentity,
     _Out_ BOOLEAN* MatchPresentOut,
     _Out_opt_ ULONG* MatchedFieldFlagsOut,
     _Out_opt_ ULONG64* MatchedRegistrationAddressOut,
-    _Out_opt_ ULONG64* CurrentGenerationOut
+    _Out_opt_ ULONG64* CurrentGenerationOut,
+    _Out_opt_ ULONG64* MatchedContextAddressOut,
+    _Out_opt_ ULONG* MatchedRegistrationTypeOut
+    );
+
+// 注销扩展类别；只使用刚重新枚举得到的 API 参数。
+NTSTATUS KswordArkCallbackRemoveExtendedPublic(
+    _In_ const KSWORD_ARK_REMOVE_EXTERNAL_CALLBACK_EX_REQUEST* RequestPacket,
+    _Inout_ KSWORD_ARK_REMOVE_EXTERNAL_CALLBACK_EX_RESPONSE* ResponsePacket
     );
 
 VOID

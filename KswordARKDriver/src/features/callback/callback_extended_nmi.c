@@ -32,7 +32,7 @@ typedef struct _KSWORD_ARK_CALLBACK_NMI_REGISTRATION
     ULONG64 Handle;
 } KSWORD_ARK_CALLBACK_NMI_REGISTRATION;
 
-// 锁内只保存 NMI 节点标量，模块解析、字符串和响应构建全部延迟到锁外。
+// 快照读取阶段只保存 NMI 节点标量，模块解析、字符串和响应构建全部延迟到快照读取后。
 typedef struct _KSWORD_ARK_CALLBACK_NMI_SNAPSHOT
 {
     ULONG TraversalIndex;
@@ -198,8 +198,8 @@ KswordArkCallbackExtendedWalkNmiList(
 
 Routine Description:
 
-    获取 NMI 私有链表的 KSPIN_LOCK，在锁内读取链头并复制有界标量快照；
-    释放锁后再验证模块归属、格式化文本并生成统一回调枚举行。
+    在 PASSIVE_LEVEL 安全读取链头并复制有界标量快照，再次读取验证一致性；
+    完成读取后再验证模块归属、格式化文本并生成统一回调枚举行。
 
 Arguments:
 
@@ -216,19 +216,18 @@ Return Value:
 {
     // index 同时用于安全上限和用户可见的稳定序号。
     ULONG index = 0UL;
-    // snapshotCount 记录锁内成功复制的稳定节点数量。
+    // snapshotCount 记录快照读取阶段成功复制的稳定节点数量。
     ULONG snapshotCount = 0UL;
-    // snapshotIndex 用于锁外逐条生成响应。
+    // snapshotIndex 用于快照读取后逐条生成响应。
     ULONG snapshotIndex = 0UL;
-    // currentAddress 始终指向锁保护下的下一待验证节点。
+    // currentAddress 始终指向安全读取时的下一待验证节点。
     ULONG64 currentAddress = 0ULL;
-    // failureAddress 记录损坏或超限发生处，供锁外诊断行使用。
+    // failureAddress 记录损坏或超限发生处，供快照读取后诊断行使用。
     ULONG64 failureAddress = 0ULL;
     // snapshotStatus 汇总链头读取、节点验证和安全上限状态。
     NTSTATUS snapshotStatus = STATUS_SUCCESS;
-    // oldIrql 保存获取 NMI 私有自旋锁前的调用方 IRQL。
-    KIRQL oldIrql = PASSIVE_LEVEL;
-    // snapshots 指向锁前分配的非分页标量数组。
+    ULONG64 originalHead = 0ULL; // 保存首次安全读取的链头用于一致性检查。
+    // snapshots 指向读取前分配的非分页标量数组。
     KSWORD_ARK_CALLBACK_NMI_SNAPSHOT* snapshots = NULL;
 
     // 参数地址必须来自严格定位器，并再次满足非零和指针对齐。
@@ -240,7 +239,7 @@ Return Value:
         return;
     }
 
-    // 在获取私有自旋锁前分配非分页快照，锁内禁止内存分配和字符串处理。
+    // 在获取私有自旋读取前分配非分页快照，快照读取阶段禁止内存分配和字符串处理。
     snapshots = (KSWORD_ARK_CALLBACK_NMI_SNAPSHOT*)KswordArkAllocateNonPaged(
         sizeof(*snapshots) * KSWORD_ARK_CALLBACK_NMI_WALK_LIMIT,
         KSWORD_ARK_CALLBACK_NMI_SNAPSHOT_TAG);
@@ -261,7 +260,7 @@ Return Value:
             HeadStorageAddress,
             0UL,
             L"KeRegisterNmiCallback snapshot allocation failed",
-            L"无法分配 NMI 注册链非分页快照，未进入私有自旋锁。");
+            L"无法分配 NMI 注册链非分页快照，未进行节点读取。");
         return;
     }
     // 清零固定容量数组，确保异常读取后不会暴露未初始化字段。
@@ -269,17 +268,15 @@ Return Value:
         snapshots,
         sizeof(*snapshots) * KSWORD_ARK_CALLBACK_NMI_WALK_LIMIT);
 
-    // 使用定位器解析出的真实 KSPIN_LOCK 阻止并发注销释放节点。
-    KeAcquireSpinLock(
-        (PKSPIN_LOCK)(ULONG_PTR)LockAddress,
-        &oldIrql);
-    // 链头必须在同一锁保护窗口内读取，不能沿用定位阶段的易失值。
+    // 安全读取器只能在 APC_LEVEL 以下运行；不获取会升至 DISPATCH_LEVEL 的私有自旋锁。
+    // 链头必须保持 PASSIVE_LEVEL 读取，不能沿用定位阶段的易失值。
     if (!KswordArkCallbackExtendedReadPointer(
             HeadStorageAddress,
             &currentAddress)) {
         snapshotStatus = STATUS_ACCESS_VIOLATION;
         failureAddress = HeadStorageAddress;
     }
+    originalHead = currentAddress; // 保存首次读取值，后续变化返回 RETRY。
 
     // 双重条件同时防止空终止链和损坏循环导致无限遍历。
     while (NT_SUCCESS(snapshotStatus) &&
@@ -290,7 +287,7 @@ Return Value:
 
         // 节点读取前清零，异常路径不会使用栈残留。
         RtlZeroMemory(&registration, sizeof(registration));
-        // 锁内验证读取、回调地址、自句柄、非自环和 next 指针对齐。
+        // 快照读取阶段验证读取、回调地址、自句柄、非自环和 next 指针对齐。
         if (!KswordArkCallbackEnumReadMemory(
                 (const VOID*)(ULONG_PTR)currentAddress,
                 &registration,
@@ -305,17 +302,17 @@ Return Value:
             break;
         }
 
-        // 保存原始遍历序号，锁外名称仍能对应链表顺序。
+        // 保存原始遍历序号，快照读取后名称仍能对应链表顺序。
         snapshots[snapshotCount].TraversalIndex = index;
-        // 保存节点地址用于诊断，不在锁外再次解引用该地址。
+        // 保存节点地址用于诊断，不在快照读取后再次解引用该地址。
         snapshots[snapshotCount].NodeAddress = currentAddress;
-        // 保存回调函数标量，锁外再验证所属内核模块。
+        // 保存回调函数标量，快照读取后再验证所属内核模块。
         snapshots[snapshotCount].CallbackRoutine = registration.CallbackRoutine;
-        // 保存回调上下文标量，锁外只作为响应元数据使用。
+        // 保存回调上下文标量，快照读取后只作为响应元数据使用。
         snapshots[snapshotCount].CallbackContext = registration.CallbackContext;
-        // 保存公开句柄标量，锁外详情不需要访问原节点。
+        // 保存公开句柄标量，快照读取后详情不需要访问原节点。
         snapshots[snapshotCount].Handle = registration.Handle;
-        // 保存下一节点标量，锁外详情可以显示一致性窗口内的链路。
+        // 保存下一节点标量，快照读取后详情可以显示一致性窗口内的链路。
         snapshots[snapshotCount].Next = registration.Next;
         // 增加已完成快照数量，容量与遍历上限严格一致。
         ++snapshotCount;
@@ -329,12 +326,20 @@ Return Value:
         snapshotStatus = STATUS_BUFFER_OVERFLOW;
         failureAddress = currentAddress;
     }
-    // 完成所有节点复制后立即释放私有自旋锁并恢复原 IRQL。
-    KeReleaseSpinLock(
-        (PKSPIN_LOCK)(ULONG_PTR)LockAddress,
-        oldIrql);
+    if (NT_SUCCESS(snapshotStatus)) { // 在 PASSIVE_LEVEL 二次读取链头与节点，变化时拒绝不一致快照。
+        ULONG64 verifiedHead = 0ULL; // 保存第二次链头读取。
+        if (!KswordArkCallbackExtendedReadPointer(HeadStorageAddress, &verifiedHead) || verifiedHead != originalHead) { snapshotStatus = STATUS_RETRY; } // 并发链头变化不能报告空链。
+        for (snapshotIndex = 0UL; NT_SUCCESS(snapshotStatus) && snapshotIndex < snapshotCount; ++snapshotIndex) { // 有界校验所有快照标量。
+            KSWORD_ARK_CALLBACK_NMI_REGISTRATION verified; // 读取当前节点前缀。
+            const KSWORD_ARK_CALLBACK_NMI_SNAPSHOT* saved = &snapshots[snapshotIndex]; // 受控快照。
+            if (!KswordArkCallbackEnumReadMemory((PVOID)(ULONG_PTR)saved->NodeAddress, &verified, sizeof(verified)) ||
+                verified.Next != saved->Next || verified.Handle != saved->Handle ||
+                verified.CallbackRoutine != saved->CallbackRoutine || verified.CallbackContext != saved->CallbackContext) { snapshotStatus = STATUS_RETRY; } // 已释放或变化节点只输出查询失败。
+        } // 结束第二遍验证。
+        if (!NT_SUCCESS(snapshotStatus)) { snapshotCount = 0UL; } // 不发布不一致部分快照。
+    } // 结束一致性验证。
 
-    // 空链表不是错误，锁外返回一行明确的未注册状态。
+    // 空链表不是错误，快照读取后返回一行明确的未注册状态。
     if (snapshotCount == 0UL && NT_SUCCESS(snapshotStatus)) {
         KswordArkCallbackExtendedAddRow(
             Builder,
@@ -351,10 +356,10 @@ Return Value:
             HeadStorageAddress,
             0UL,
             L"KeRegisterNmiCallback list (empty)",
-            L"NMI 注册链已在自旋锁保护下确认为空。");
+            L"NMI 注册链已在两次安全读取验证后确认为空。");
     }
 
-    // 锁外逐条验证模块归属并生成用户可见行。
+    // 快照读取后逐条验证模块归属并生成用户可见行。
     for (snapshotIndex = 0UL;
          snapshotIndex < snapshotCount;
          ++snapshotIndex) {
@@ -365,7 +370,7 @@ Return Value:
         WCHAR nameText[KSWORD_ARK_CALLBACK_ENUM_NAME_CHARS];
         WCHAR detailText[KSWORD_ARK_CALLBACK_ENUM_DETAIL_CHARS];
 
-        // 模块缓存可能执行复杂查询，必须位于释放 NMI 自旋锁之后。
+        // 模块缓存可能执行复杂查询，必须位于完成安全读取之后。
         if (!KswordArkCallbackEnumIsKernelModuleAddress(
                 ModuleCache,
                 snapshot->CallbackRoutine)) {
@@ -376,7 +381,7 @@ Return Value:
         // 所有输出缓冲在格式化前清零。
         RtlZeroMemory(nameText, sizeof(nameText));
         RtlZeroMemory(detailText, sizeof(detailText));
-        // 使用锁内记录的序号生成稳定、可读的注册项名称。
+        // 使用快照读取阶段记录的序号生成稳定、可读的注册项名称。
         (VOID)RtlStringCbPrintfW(
             nameText,
             sizeof(nameText),
@@ -411,7 +416,7 @@ Return Value:
             detailText);
     }
 
-    // 任何链头、节点、模块或上限失败都在锁外输出一条统一诊断。
+    // 任何链头、节点、模块或上限失败都在快照读取后输出一条统一诊断。
     if (!NT_SUCCESS(snapshotStatus)) {
         KswordArkCallbackExtendedAddRow(
             Builder,
@@ -431,11 +436,11 @@ Return Value:
                 ? L"KeRegisterNmiCallback walk limit reached"
                 : L"KeRegisterNmiCallback node validation failed",
             snapshotStatus == STATUS_BUFFER_OVERFLOW
-                ? L"NMI 私有链超过安全遍历上限，已在释放自旋锁后停止输出。"
+                ? L"NMI 私有链超过安全遍历上限，已在完成安全读取后停止输出。"
                 : L"NMI 私有链未通过链头、布局、句柄、模块归属或 next 指针验证。");
     }
 
-    // 释放锁前分配的非分页快照数组。
+    // 释放读取前分配的非分页快照数组。
     ExFreePoolWithTag(
         snapshots,
         KSWORD_ARK_CALLBACK_NMI_SNAPSHOT_TAG);

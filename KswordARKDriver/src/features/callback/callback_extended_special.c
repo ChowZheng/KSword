@@ -22,6 +22,7 @@ Environment:
 #include "ark/ark_dyndata.h"
 #include "../../platform/pool_compat.h"
 #include "../../platform/runtime_signature_scan.h"
+#include "callback_special_identity.h" // 已验证节点恢复真实注销参数。
 
 #define KSW_SPECIAL_MAX_REFERENCES 96UL
 #define KSW_SPECIAL_MAX_RECORDS 128UL
@@ -39,6 +40,7 @@ typedef struct _KSW_SPECIAL_RECORD
     ULONG64 CallbackAddress;
     ULONG64 ContextAddress;
     ULONG64 RegistrationAddress;
+    ULONG FieldFlags; // 标明已恢复真实 API 参数，零值保持只读。
 } KSW_SPECIAL_RECORD, *PKSW_SPECIAL_RECORD;
 
 typedef struct _KSW_SPECIAL_CAPTURE
@@ -66,6 +68,7 @@ typedef struct _KSW_SPECIAL_WORKSPACE
     KSW_SPECIAL_CAPTURE Candidate;
     KSW_SPECIAL_CAPTURE ListScratch;
     ULONG_PTR Visited[KSW_SPECIAL_MAX_RECORDS];
+    ULONG CallbackClass; // 告知捕获器当前需要验证的注册 ABI。
 } KSW_SPECIAL_WORKSPACE, *PKSW_SPECIAL_WORKSPACE;
 
 typedef enum _KSW_SPECIAL_CAPTURE_KIND
@@ -472,6 +475,8 @@ Return Value:
         LIST_ENTRY current;
         ULONG64 callbackAddress = 0ULL;
         ULONG64 contextAddress = 0ULL;
+        ULONG64 registrationAddress = (ULONG64)currentAddress; // 保存真实句柄，与原始 Link 可不同。
+        ULONG fields = 0UL; // 默认只读。
 
         if (visitCount >= KSW_SPECIAL_MAX_RECORDS ||
             !KswordArkSpecialIsKernelPointer(currentAddress) ||
@@ -482,7 +487,12 @@ Return Value:
             (ULONG_PTR)current.Blink != previousAddress) {
             return FALSE;
         }
-        if (AllowIndirect) {
+        if (KswordArkSpecialDecodeIdentity(Workspace->CallbackClass, currentAddress,
+                &callbackAddress, &contextAddress, &registrationAddress, &fields) &&
+            KswordArkSpecialAddressIsExecutable(ModuleCache, Workspace, callbackAddress)) { // 类型前缀和可执行归属同时验证。
+            /* 真实注册参数已恢复，不再扫描到内部 dispatcher。 */
+        } else if (AllowIndirect) {
+            fields = 0UL; registrationAddress = (ULONG64)currentAddress; // 结构不匹配时退回只读，禁止发布错误句柄。
             if (!KswordArkSpecialFindExecutableIndirect(
                     ModuleCache,
                     Workspace,
@@ -492,18 +502,18 @@ Return Value:
                 return FALSE;
             }
         }
-        else if (!KswordArkSpecialFindExecutableAround(
-                ModuleCache,
-                Workspace,
-                currentAddress,
-                FALSE,
-                &callbackAddress)) {
-            return FALSE;
-        }
+        else { // 结构不满足时仅做只读函数探测。
+            fields = 0UL; registrationAddress = (ULONG64)currentAddress; contextAddress = 0ULL; // 清除失败解码残留。
+            if (!KswordArkSpecialFindExecutableAround(ModuleCache, Workspace,
+                    currentAddress, FALSE, &callbackAddress)) { // 保留原有只读探测。
+                return FALSE; // 无法识别函数时不发布该容器。
+            } // 结束只读探测。
+        } // 结束类型解码与 fallback。
         Capture->Records[Capture->Count].CallbackAddress = callbackAddress;
         Capture->Records[Capture->Count].ContextAddress = contextAddress;
         Capture->Records[Capture->Count].RegistrationAddress =
-            (ULONG64)currentAddress;
+            registrationAddress; // Link 与句柄分离。
+        Capture->Records[Capture->Count].FieldFlags = fields; // 传递已验证参数语义。
         Capture->Count += 1UL;
         visitCount += 1UL;
         previousAddress = currentAddress;
@@ -618,6 +628,9 @@ Return Value:
     for (slot = 0UL; slot < KSW_SPECIAL_PRIORITY_SLOT_COUNT; ++slot) {
         ULONG_PTR recordAddress = 0U;
         ULONG64 callbackAddress = 0ULL;
+        ULONG64 contextAddress = 0ULL; // 保存真正的 DriverObject。
+        ULONG64 registrationAddress = 0ULL; // 保存 EX 回调块基址。
+        ULONG fields = 0UL; // 默认为不可注销。
 
         if (!KswordARKRuntimeReadMemory(
                 (const VOID*)(ArrayAddress + ((ULONG_PTR)slot * sizeof(PVOID))),
@@ -628,19 +641,21 @@ Return Value:
         if (recordAddress == 0U) {
             continue;
         }
+        recordAddress &= ~(ULONG_PTR)0xFUL; // EX_FAST_REF 低四位是引用计数，不能当作记录地址。
         if (!KswordArkSpecialIsKernelPointer(recordAddress) ||
-            !KswordArkSpecialFindExecutableAround(
+            !KswordArkSpecialDecodeIdentity(KSWORD_ARK_CALLBACK_ENUM_CLASS_PRIORITY, recordAddress,
+                &callbackAddress, &contextAddress, &registrationAddress, &fields) ||
+            !KswordArkSpecialAddressIsExecutable(
                 ModuleCache,
                 Workspace,
-                recordAddress,
-                TRUE,
-                &callbackAddress)) {
+                callbackAddress)) {
             return FALSE;
         }
         Capture->Records[Capture->Count].CallbackAddress = callbackAddress;
-        Capture->Records[Capture->Count].ContextAddress = slot;
+        Capture->Records[Capture->Count].ContextAddress = contextAddress; // 不是 slot，API 要求 DriverObject。
         Capture->Records[Capture->Count].RegistrationAddress =
-            (ULONG64)recordAddress;
+            registrationAddress;
+        Capture->Records[Capture->Count].FieldFlags = fields; // 发布已验证的 DriverObject 参数。
         Capture->Count += 1UL;
     }
     Capture->GlobalAddress = (ULONG64)ArrayAddress;
@@ -694,7 +709,7 @@ Return Value:
         }
         for (rowIndex = 0UL; rowIndex < ListScratch->Count; ++rowIndex) {
             Capture->Records[Capture->Count] = ListScratch->Records[rowIndex];
-            Capture->Records[Capture->Count].ContextAddress = listIndex;
+            // 保留真实 Context，不能用诊断 listIndex 覆盖 API 参数语义。
             Capture->Count += 1UL;
         }
     }
@@ -941,9 +956,11 @@ Return Value:
             record->ContextAddress,
             record->RegistrationAddress,
             KSWORD_ARK_CALLBACK_ENUM_FIELD_STORAGE_ADDRESS |
-                KSWORD_ARK_CALLBACK_ENUM_FIELD_OWNER_MODULE_RANGE,
+                KSWORD_ARK_CALLBACK_ENUM_FIELD_OWNER_MODULE_RANGE | record->FieldFlags, // 真实句柄能力来自结构验证。
             NameText,
-            L"稳定导出锚点、有界数据引用、实时拓扑和可执行模块归属均已验证；只读展示。");
+            record->FieldFlags != 0UL
+                ? L"导出锚点、拓扑、记录前缀及真实注销参数已验证；可尝试 API 注销，结果须重枚举确认。"
+                : L"导出锚点和拓扑已验证；缺少可靠注销参数，仅展示。");
     }
 }
 
@@ -974,6 +991,8 @@ Return Value:
 --*/
 {
     BOOLEAN ambiguous = FALSE;
+
+    Workspace->CallbackClass = CallbackClass; // 每一类采用独立的真实参数验证。
 
     if (!KswordArkSpecialFindBestCapture(
             NtosView,
@@ -1032,8 +1051,8 @@ Return Value:
         "DbgSetDebugPrintCallback"
     };
     static PCSTR const empAnchors[] = {
-        "EmpProviderRegister",
-        "EmpProviderDeregister"
+        "EmProviderRegister", // 修正实际导出名称，不把 provider handle 与 callback record 混为一谈。
+        "EmProviderDeregister"
     };
     static PCSTR const plugPlayAnchors[] = {
         "IoRegisterPlugPlayNotification",

@@ -74,7 +74,7 @@ Return Value:
         Builder,
         KSWORD_ARK_CALLBACK_ENUM_CLASS_OBJECT,
         L"Object callback external removal",
-        L"Object callback 可由现有私有只读枚举展示候选项；缺少公开按外部 registration handle 卸载 API，移除返回 STATUS_NOT_SUPPORTED。");
+        L"Object callback 注销走完整枚举行的 EX 请求：重枚举 RegistrationHandle 或已展示候选，调用 ObUnRegisterCallbacks 后复核；仅函数地址的旧请求不支持。");
     KswordArkCallbackEnumAddUnsupportedRow(
         Builder,
         KSWORD_ARK_CALLBACK_ENUM_CLASS_REGISTRY,

@@ -63,12 +63,46 @@ namespace
         return drives.isEmpty() ? QStringLiteral("卷") : QStringLiteral("卷 %1").arg(drives.join(QStringLiteral(", ")));
     }
 
-    // describeDeviceChange 将 Windows 设备广播参数转成紧凑单行文本，适合中间通知栏。
-    QString describeDeviceChange(LPARAM lParam)
+    // deviceArrivalType 根据广播类型和接口类 GUID 为接入通知提供可靠的设备类型前缀。
+    QString deviceArrivalType(LPARAM lParam)
     {
         if (lParam == 0)
         {
-            return QStringLiteral("设备拓扑变化");
+            return QStringLiteral("设备");
+        }
+
+        const DEV_BROADCAST_HDR* header = reinterpret_cast<const DEV_BROADCAST_HDR*>(lParam);
+        if (header->dbch_devicetype == DBT_DEVTYP_VOLUME)
+        {
+            return QStringLiteral("存储卷");
+        }
+        if (header->dbch_devicetype == DBT_DEVTYP_DEVICEINTERFACE)
+        {
+            const DEV_BROADCAST_DEVICEINTERFACE_W* device =
+                reinterpret_cast<const DEV_BROADCAST_DEVICEINTERFACE_W*>(lParam);
+            if (::IsEqualGUID(device->dbcc_classguid, kUsbDeviceInterfaceGuid))
+            {
+                return QStringLiteral("USB 设备");
+            }
+            if (::IsEqualGUID(device->dbcc_classguid, kDiskDeviceInterfaceGuid))
+            {
+                return QStringLiteral("磁盘");
+            }
+            if (::IsEqualGUID(device->dbcc_classguid, kVolumeDeviceInterfaceGuid))
+            {
+                return QStringLiteral("存储卷");
+            }
+        }
+
+        return QStringLiteral("设备");
+    }
+
+    // describeDeviceArrival 将接入广播中的盘符或接口路径转成紧凑单行正文。
+    QString describeDeviceArrival(LPARAM lParam)
+    {
+        if (lParam == 0)
+        {
+            return {};
         }
 
         const DEV_BROADCAST_HDR* header = reinterpret_cast<const DEV_BROADCAST_HDR*>(lParam);
@@ -77,22 +111,14 @@ namespace
             const DEV_BROADCAST_VOLUME* volume = reinterpret_cast<const DEV_BROADCAST_VOLUME*>(lParam);
             return deviceVolumeDescription(volume->dbcv_unitmask);
         }
-
         if (header->dbch_devicetype == DBT_DEVTYP_DEVICEINTERFACE)
         {
             const DEV_BROADCAST_DEVICEINTERFACE_W* device =
                 reinterpret_cast<const DEV_BROADCAST_DEVICEINTERFACE_W*>(lParam);
-            const QString path = QString::fromWCharArray(device->dbcc_name ? device->dbcc_name : L"");
-            const QString kind = path.contains(QStringLiteral("USB"), Qt::CaseInsensitive)
-                ? QStringLiteral("USB 设备") : QStringLiteral("设备接口");
-            if (path.isEmpty())
-            {
-                return kind;
-            }
-            return QStringLiteral("%1 %2").arg(kind, truncateText(path, 96));
+            return truncateText(QString::fromWCharArray(device->dbcc_name), 96);
         }
 
-        return QStringLiteral("设备拓扑变化");
+        return {};
     }
 }
 
@@ -343,15 +369,15 @@ void TaskbarNotificationService::enqueueClipboardText()
 
 void TaskbarNotificationService::handleDeviceChange(quintptr wParam, qintptr lParam)
 {
-    // 仅保留 WindowsMarker 关注的接入、移除和拓扑变化消息，避免其它设备广播淹没通知队列。
-    if (!m_deviceNotificationsEnabled || (wParam != DBT_DEVICEARRIVAL &&
-        wParam != DBT_DEVICEREMOVECOMPLETE && wParam != DBT_DEVNODES_CHANGED))
+    // 拓扑变化通常没有设备详情；仅接入广播生成一条通知。
+    if (!m_deviceNotificationsEnabled || wParam != DBT_DEVICEARRIVAL)
     {
         return;
     }
 
-    const QString body = describeDeviceChange(static_cast<LPARAM>(lParam));
-    const QString key = QStringLiteral("%1|%2").arg(wParam).arg(body);
+    const QString title = deviceArrivalType(static_cast<LPARAM>(lParam)) + QStringLiteral("接入");
+    const QString body = describeDeviceArrival(static_cast<LPARAM>(lParam));
+    const QString key = title + QStringLiteral("|") + body;
     const qint64 now = monotonicMilliseconds();
     if (key == m_lastDeviceNotificationKey && now >= m_lastDeviceNotificationMs &&
         now - m_lastDeviceNotificationMs < kDeviceDeduplicationMs)
@@ -363,9 +389,8 @@ void TaskbarNotificationService::handleDeviceChange(quintptr wParam, qintptr lPa
     m_lastDeviceNotificationMs = now;
     TaskbarNotificationView notification;
     notification.kind = TaskbarNotificationKind::Device;
-    notification.source = QStringLiteral("设备变化");
-    notification.title = wParam == DBT_DEVICEARRIVAL ? QStringLiteral("设备接入")
-        : (wParam == DBT_DEVICEREMOVECOMPLETE ? QStringLiteral("设备移除") : QStringLiteral("设备变化"));
+    notification.source = QStringLiteral("设备");
+    notification.title = title;
     notification.body = body;
     enqueueNotification(notification);
 }

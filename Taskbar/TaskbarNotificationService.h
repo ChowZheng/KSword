@@ -12,7 +12,7 @@ class QWidget;
 enum class TaskbarNotificationKind
 {
     Clipboard, // 系统剪贴板文字变化。
-    Device,    // USB、磁盘或卷的接入、移除与拓扑变化。
+    Device,    // USB、磁盘或卷的接入。
     Earthquake // 多源实时地震预警。
 };
 
@@ -51,7 +51,7 @@ public:
     // clipboardNotificationsEnabled：无输入；返回剪贴板文字通知开关。
     bool clipboardNotificationsEnabled() const;
 
-    // deviceNotificationsEnabled：无输入；返回设备变化通知开关。
+    // deviceNotificationsEnabled：无输入；返回设备接入通知开关。
     bool deviceNotificationsEnabled() const;
 
     // earthquakeNotificationsEnabled：无输入；返回地震预警开关。
@@ -63,7 +63,7 @@ public:
     // setClipboardNotificationsEnabled：设置剪贴板文字变化通知开关并持久化。
     void setClipboardNotificationsEnabled(bool enabled);
 
-    // setDeviceNotificationsEnabled：设置设备变化通知开关并持久化。
+    // setDeviceNotificationsEnabled：设置设备接入通知开关并持久化。
     void setDeviceNotificationsEnabled(bool enabled);
 
     // setEarthquakeNotificationsEnabled：设置地震预警开关并持久化。
@@ -132,7 +132,7 @@ private:
     TaskbarEarthquakeClient* m_earthquakeClient; // 进程唯一地震接收器，不由服务拥有生命周期。
     QTimer m_tickTimer;                           // 100ms 轮播和地震状态刷新时钟。
     TaskbarNotificationView m_currentNotification; // 所有屏幕共享的当前展示内容。
-    QList<TaskbarNotificationView> m_queue;       // 等待展示的剪贴板和设备变化消息。
+    QList<TaskbarNotificationView> m_queue;       // 等待展示的剪贴板和设备接入消息。
     qint64 m_currentNormalStartedMs = 0;          // 当前普通通知的单调时钟开始值。
     qint64 m_currentNormalDurationMs = 6000;      // 当前消息时长，包含 1 秒的中央区域过渡预算。
     int m_notificationDurationSeconds = 5;        // 普通消息正文完整滞留秒数，设置页可调整。

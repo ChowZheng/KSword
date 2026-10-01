@@ -2404,6 +2404,7 @@ KswordArkCallbackEnumAddRegistryEntry(
     _In_ ULONG64 EntryAddress,
     _In_ ULONG64 FunctionAddress,
     _In_ ULONG64 ContextAddress,
+    _In_ ULONG64 Cookie, // 零值表示布局未通过自身注册校准。
     _In_ const UNICODE_STRING* AltitudeString,
     _In_opt_ const KSWORD_ARK_CALLBACK_ENUM_SOURCE_CONTEXT* SourceContext,
     _In_ ULONG SourceRva
@@ -2453,7 +2454,16 @@ Return Value:
     entry->callbackAddress = FunctionAddress;
     entry->contextAddress = ContextAddress;
     entry->registrationAddress = EntryAddress;
-    KswordArkCallbackEnumApplySourceContext(entry, SourceContext);
+    entry->rawStorageValue = EntryAddress; // 始终保存真实存储节点，不误作注销 Cookie。
+    KswordArkCallbackEnumApplySourceContext(entry, SourceContext); // 先应用来源，随后发布该行的真实 Cookie 能力。
+    if (Cookie != 0ULL) { // 本次链布局已经校准，Cookie 是值而非指针。
+        entry->registrationAddress = Cookie; // CmUnRegisterCallback 的实际参数。
+        entry->fieldFlags |= KSWORD_ARK_CALLBACK_ENUM_FIELD_HANDLE |
+            KSWORD_ARK_CALLBACK_ENUM_FIELD_REMOVABLE_CANDIDATE; // 保持候选等级，不伪装 verified。
+        entry->trustFlags |= KSWORD_ARK_CALLBACK_TRUST_STRUCTURE_SIGNATURE; // 自注册三元组证明结构。
+        entry->removeBehavior = KSWORD_ARK_CALLBACK_REMOVE_BEHAVIOR_PUBLIC_API |
+            KSWORD_ARK_CALLBACK_REMOVE_BEHAVIOR_REQUIRE_REVALIDATION; // 仅使用正规注销 API。
+    } // 结束 Cookie 发布。
     if (SourceContext == NULL) {
         entry->trustFlags |= KSWORD_ARK_CALLBACK_TRUST_FALLBACK_PATTERN;
     }
@@ -2632,10 +2642,18 @@ Return Value:
     RtlZeroMemory(&listHead, sizeof(listHead));
     if (ListHeadAddress == 0ULL ||
         !KswordArkCallbackEnumReadListEntry(ListHeadAddress, &listHead)) {
+        KswordArkCallbackRecordRemoveQueryFailure(Builder, KSWORD_ARK_CALLBACK_ENUM_CLASS_REGISTRY, STATUS_DATA_ERROR); // 目标读取失败不能证明已消失。
         return 0UL;
     }
 
     currentAddress = (ULONG64)(ULONG_PTR)listHead.Flink;
+    const BOOLEAN cookieLayoutValidated = KswordArkCallbackRegistryLayoutValidated(ListHeadAddress); // 同一次链头通过自 Cookie 校准。
+    if (Builder->RemoveMatchRequest != NULL &&
+        Builder->RemoveMatchRequest->callbackClass == KSWORD_ARK_EXTERNAL_CALLBACK_REMOVE_TYPE_REGISTRY &&
+        (ULONG64)(ULONG_PTR)listHead.Flink == ListHeadAddress &&
+        (ULONG64)(ULONG_PTR)listHead.Blink == ListHeadAddress) { // 公共链已经安全读到正常空容器。
+        Builder->RemoveTargetContainerEmpty = TRUE; // 注销最后一项后允许确认真实空链。
+    } // 结束空容器证据。
     while (currentAddress != 0ULL &&
         currentAddress != ListHeadAddress &&
         index < KSWORD_ARK_CALLBACK_ENUM_LIST_WALK_LIMIT) {
@@ -2643,13 +2661,16 @@ Return Value:
         ULONG64 functionAddress = 0ULL;
         ULONG64 contextAddress = 0ULL;
         UNICODE_STRING altitudeString;
+        ULONG64 cookie = 0ULL; // 未通过校准时不得猜测 Cookie。
 
         RtlZeroMemory(&currentEntry, sizeof(currentEntry));
         RtlZeroMemory(&altitudeString, sizeof(altitudeString));
         if (!KswordArkCallbackEnumReadListEntry(currentAddress, &currentEntry)) {
+            KswordArkCallbackRecordRemoveQueryFailure(Builder, KSWORD_ARK_CALLBACK_ENUM_CLASS_REGISTRY, STATUS_DATA_ERROR); // 目标读取失败不能证明已消失。
             break;
         }
         if (currentEntry.Flink == NULL || currentEntry.Blink == NULL) {
+            KswordArkCallbackRecordRemoveQueryFailure(Builder, KSWORD_ARK_CALLBACK_ENUM_CLASS_REGISTRY, STATUS_DATA_ERROR); // 目标读取失败不能证明已消失。
             break;
         }
 
@@ -2659,6 +2680,12 @@ Return Value:
             &functionAddress,
             &contextAddress,
             &altitudeString)) {
+            if (cookieLayoutValidated) { // 覆盖启发式 Function/Context 为已校准前缀。
+                if (!KswordArkCallbackRegistryReadIdentity(currentAddress, &cookie, &contextAddress, &functionAddress)) {
+                    KswordArkCallbackRecordRemoveQueryFailure(Builder, KSWORD_ARK_CALLBACK_ENUM_CLASS_REGISTRY, STATUS_RETRY); // 读取失败不能用作不存在证据。
+                    break; // 当前节点失效则停止遍历。
+                } // 结束当前参数读取。
+            } // 结束已校准参数恢复。
             KswordArkCallbackEnumAddRegistryEntry(
                 Builder,
                 ModuleCache,
@@ -2666,6 +2693,7 @@ Return Value:
                 currentAddress,
                 functionAddress,
                 contextAddress,
+                cookie, // 传入真实 Cookie 或零值。
                 &altitudeString,
                 SourceContext,
                 SourceRva);
@@ -2676,6 +2704,9 @@ Return Value:
         index += 1UL;
     }
 
+    if (currentAddress != ListHeadAddress) { // 未完成完整注册链，不能报告注销已确认。
+        KswordArkCallbackRecordRemoveQueryFailure(Builder, KSWORD_ARK_CALLBACK_ENUM_CLASS_REGISTRY, STATUS_DATA_ERROR); // 保留具体查询失败。
+    } // 结束完整性检查。
     return addedCount;
 }
 
@@ -3383,6 +3414,12 @@ Return Value:
 
     if (usingPdbListHead &&
         listHeadState == KswordArkCallbackEnumObjectListEmpty) {
+        if (Builder->RemoveMatchRequest != NULL &&
+            Builder->RemoveMatchRequest->callbackClass == KSWORD_ARK_EXTERNAL_CALLBACK_REMOVE_TYPE_OBJECT &&
+            (Builder->RemoveMatchRequest->objectTypeMask & ObjectTypeMask) != 0UL &&
+            currentAddress == listHeadAddress) { // 已有 PDB offset 的目标对象类型链为空。
+            Builder->RemoveTargetContainerEmpty = TRUE; // 避免旧 empty/unsupported 行否定已验证的空容器。
+        } // 结束目标空链证据。
         return addedCount;
     }
 
@@ -3901,21 +3938,26 @@ Return Value:
 }
 
 NTSTATUS
-KswordArkCallbackEnumRevalidateObjectRemoveRequest(
+KswordArkCallbackEnumRevalidateRemoveRequest(
     _In_ const KSWORD_ARK_REMOVE_EXTERNAL_CALLBACK_EX_REQUEST* RequestPacket,
     _In_ BOOLEAN RequireGenerationMatch,
+    _In_ BOOLEAN MatchIdentity, // 控制前置身份核对或后置注册存在性核对。
     _Out_ BOOLEAN* MatchPresentOut,
     _Out_opt_ ULONG* MatchedFieldFlagsOut,
     _Out_opt_ ULONG64* MatchedRegistrationAddressOut,
-    _Out_opt_ ULONG64* CurrentGenerationOut
+    _Out_opt_ ULONG64* CurrentGenerationOut,
+    _Out_opt_ ULONG64* MatchedContextAddressOut, // 可选输出重新枚举得到的 API 上下文。
+    _Out_opt_ ULONG* MatchedRegistrationTypeOut // 可选输出重新枚举得到的注册子类型。
     )
 /*++
 
 Routine Description:
 
-    Rebuilds the same complete ordered callback snapshot exposed by the default
-    V3 R3 enumeration and matches one exact Object Callback row. No private
-    address supplied by R3 is dereferenced by this routine.
+    Rebuilds the kernel registration sources exposed by the default V3 R3
+    enumeration, omitting unrelated WFP/Minifilter queries. Before unregistering,
+    matches the selected registration keys against one currently enumerated row;
+    after unregistering, checks registration presence independently of display
+    metadata. No private address supplied by R3 is dereferenced here.
 
 --*/
 {
@@ -3926,6 +3968,12 @@ Routine Description:
     }
 
     *MatchPresentOut = FALSE;
+    if (MatchedContextAddressOut != NULL) { // 未匹配时上下文保持零。
+        *MatchedContextAddressOut = 0ULL; // 清空可选上下文输出。
+    } // 结束上下文初始化。
+    if (MatchedRegistrationTypeOut != NULL) { // 未匹配时子类型保持未知。
+        *MatchedRegistrationTypeOut = 0UL; // 清空可选子类型输出。
+    } // 结束子类型初始化。
     if (MatchedFieldFlagsOut != NULL) {
         *MatchedFieldFlagsOut = 0UL;
     }
@@ -3939,13 +3987,15 @@ Routine Description:
     RtlZeroMemory(&builder, sizeof(builder));
     builder.LastStatus = STATUS_SUCCESS;
     builder.RemoveMatchRequest = RequestPacket;
+    builder.RemoveMatchIdentity = MatchIdentity; // 保存本次匹配契约。
     KswordArkCallbackEnumSnapshotBegin(&builder);
     KswordArkCallbackEnumAddSelfCallbacks(&builder);
-    KswordArkCallbackEnumAddMinifilters(&builder);
     KswordArkCallbackEnumAddPrivateCallbacks(&builder);
     KswordArkCallbackExtendedAddSpecialCallbacks(&builder);
-    KswordArkCallbackExternalAddCallbacks(&builder);
-    KswordArkCallbackEnumAddUnsupportedKinds(&builder);
+    KswordArkCallbackExtendedAddBugcheckCallbacks(&builder); // 只重建注销需要的内核注册行。
+    KswordArkCallbackExtendedAddObjectCallbacks(&builder); // 排除无关 WFP 和 Minifilter 查询失败。
+    KswordArkCallbackExtendedAddSystemCallbacks(&builder); // 保持各来源内部顺序和行身份一致。
+    KswordArkCallbackExtendedAddNmiCallbacks(&builder); // NMI 仍使用自身定位和结构验证。
     KswordArkCallbackEnumSnapshotFinalize(&builder);
 
     if (builder.SnapshotRowCount != builder.TotalCount || !NT_SUCCESS(builder.LastStatus)) {
@@ -3961,6 +4011,9 @@ Routine Description:
     if (builder.RemoveMatchCount > 1UL) {
         return STATUS_DATA_ERROR;
     }
+    if (builder.RemoveMatchCount == 0UL && !NT_SUCCESS(builder.RemoveQueryStatus)) { // 未匹配且目标查询失败不能作为不存在证据。
+        return builder.RemoveQueryStatus; // 保留相关查询失败，无关类别失败不阻断注销。
+    } // 结束缺失确认能力检查。
     if (builder.RemoveMatchCount == 1UL) {
         *MatchPresentOut = TRUE;
         if (MatchedFieldFlagsOut != NULL) {
@@ -3971,6 +4024,12 @@ Routine Description:
         if (MatchedRegistrationAddressOut != NULL) {
             *MatchedRegistrationAddressOut = builder.RemoveMatchedRegistrationAddress;
         }
+        if (MatchedContextAddressOut != NULL) { // 只发布唯一匹配行的上下文。
+            *MatchedContextAddressOut = builder.RemoveMatchedContextAddress; // 返回 API 上下文。
+        } // 结束上下文输出。
+        if (MatchedRegistrationTypeOut != NULL) { // 只发布唯一匹配行的注册子类型。
+            *MatchedRegistrationTypeOut = builder.RemoveMatchedRegistrationType; // 返回注册子类型。
+        } // 结束子类型输出。
     }
 
     return STATUS_SUCCESS;

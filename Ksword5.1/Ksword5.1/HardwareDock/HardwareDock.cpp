@@ -1743,7 +1743,7 @@ namespace
 
     // queryD3dKmtAdapterInfo 作用：
     // - 统一组装 D3DKMTQueryAdapterInfo 请求；
-    // - 返回 true 表示驱动接受该查询类型，旧 WDDM 驱动不支持时由调用方继续使用 DXGI 回退。
+    // - 仅组装请求；不能用试调用性能查询来探测支持性，内核故障不会返回 NTSTATUS。
     bool queryD3dKmtAdapterInfo(
         const D3DKMT_HANDLE adapterHandle,
         const KMTQUERYADAPTERINFOTYPE queryType,
@@ -1763,6 +1763,26 @@ namespace
         return ::D3DKMTQueryAdapterInfo(&queryInfo) >= 0;
     }
 
+    bool supportsGpuPerformanceQueriesOnCurrentSystem()
+    {
+        static const bool supported = []()
+        {
+            // 092826-16203-01.dmp：17763.9240 的 GetNodePerfData 解引用空数组。
+            // 对整个 17763 及更早系列关闭该可选查询；版本未知时也只用 DXGI/PDH。
+            const QStringList versionParts = QSysInfo::kernelVersion().split(QLatin1Char('.'));
+            if (versionParts.size() < 3)
+            {
+                return false;
+            }
+            bool majorOk = false;
+            bool buildOk = false;
+            const uint majorVersion = versionParts.at(0).toUInt(&majorOk);
+            const uint buildNumber = versionParts.at(2).toUInt(&buildOk);
+            return majorOk && buildOk && majorVersion >= 10U && buildNumber > 17763U;
+        }();
+        return supported;
+    }
+
     // queryGpuAdapterTelemetrySnapshot 作用：
     // - 输入 DXGI 返回的同一适配器 LUID，读取真实显存段大小和实时 3D/显存频率；
     // - 3D 节点通过 NODEMETADATA 识别，避免把 Copy/Video 节点时钟误当作 GPU 核心速度；
@@ -1777,10 +1797,33 @@ namespace
         }
         *snapshotOut = GpuAdapterTelemetrySnapshot{};
 
+        if (!supportsGpuPerformanceQueriesOnCurrentSystem())
+        {
+            return false;
+        }
+
+        // 静态摘要与周期采样可能同时到达同一适配器，统一串行执行可选遥测。
+        static std::mutex gpuTelemetryMutex;
+        const std::lock_guard<std::mutex> telemetryLock(gpuTelemetryMutex);
+
         D3DKMT_OPENADAPTERFROMLUID openInfo{};
         openInfo.AdapterLuid = adapterLuid;
         if (::D3DKMTOpenAdapterFromLuid(&openInfo) < 0 || openInfo.hAdapter == 0)
         {
+            return false;
+        }
+
+        D3DKMT_DRIVERVERSION driverVersion{};
+        if (!queryD3dKmtAdapterInfo(
+                openInfo.hAdapter,
+                KMTQAITYPE_DRIVERVERSION,
+                &driverVersion,
+                sizeof(driverVersion))
+            || driverVersion < KMT_DRIVERVERSION_WDDM_2_4)
+        {
+            D3DKMT_CLOSEADAPTER closeInfo{};
+            closeInfo.hAdapter = openInfo.hAdapter;
+            ::D3DKMTCloseAdapter(&closeInfo);
             return false;
         }
 
@@ -1820,7 +1863,8 @@ namespace
             anyQuerySucceeded = true;
         }
 
-        ULONG nodeCount = 1;
+        // 枚举失败不能猜测节点 0 存在，再通过性能查询试探。
+        ULONG nodeCount = 0;
         D3DKMT_QUERYSTATISTICS adapterStatistics{};
         adapterStatistics.Type = D3DKMT_QUERYSTATISTICS_ADAPTER;
         adapterStatistics.AdapterLuid = adapterLuid;
@@ -1828,7 +1872,7 @@ namespace
         {
             nodeCount = std::clamp(
                 adapterStatistics.QueryResult.AdapterInformation.NodeCount,
-                1UL,
+                0UL,
                 64UL);
         }
 
@@ -2505,9 +2549,10 @@ namespace
     // 说明：
     // - 该函数会执行 PowerShell + CIM 查询；
     // - 必须在后台线程调用，避免阻塞 UI 线程。
-    QString buildOverviewPeripheralTextSnapshot()
+    QString buildOverviewPeripheralTextSnapshot(const bool includeHardwareDetails = true)
     {
         const QString scriptText = QStringLiteral(
+            "$includeHardwareDetails = %1; "
             "$ErrorActionPreference='SilentlyContinue'; "
             "function Write-Section([string]$title,[object]$rows){ "
             "  if($null -eq $rows){return \"[$title]`n<未检测到>`n`n\"}; "
@@ -2520,29 +2565,29 @@ namespace
             "$baseBoardRows = Get-CimInstance Win32_BaseBoard | Select-Object Manufacturer,Product,Version,SerialNumber; "
             "$biosRows = Get-CimInstance Win32_BIOS | Select-Object Manufacturer,SMBIOSBIOSVersion,ReleaseDate,SerialNumber; "
             "$cpuRows = Get-CimInstance Win32_Processor | Select-Object Name,Manufacturer,NumberOfCores,NumberOfLogicalProcessors,MaxClockSpeed; "
-            "$diskRows = Get-CimInstance Win32_DiskDrive | Select-Object Model,InterfaceType,MediaType,Size,SerialNumber; "
+            "if($includeHardwareDetails){ $diskRows = Get-CimInstance Win32_DiskDrive | Select-Object Model,InterfaceType,MediaType,Size,SerialNumber }; "
             "$gpuRows = Get-CimInstance Win32_VideoController | Select-Object Name,AdapterRAM,DriverVersion,VideoProcessor; "
-            "$soundRows = Get-CimInstance Win32_SoundDevice | Select-Object Name,Manufacturer,Status; "
+            "if($includeHardwareDetails){ $soundRows = Get-CimInstance Win32_SoundDevice | Select-Object Name,Manufacturer,Status }; "
             "$networkRows = Get-CimInstance Win32_NetworkAdapter | Where-Object { $_.PhysicalAdapter -eq $true } | "
             "  Select-Object Name,AdapterType,Speed,MACAddress,NetConnectionStatus,Manufacturer; "
-            "$cameraRows = Get-CimInstance Win32_PnPEntity | "
+            "if($includeHardwareDetails){ $cameraRows = Get-CimInstance Win32_PnPEntity | "
             "  Where-Object { $_.PNPClass -eq 'Image' -or $_.Service -like '*usbvideo*' } | "
-            "  Select-Object Name,Manufacturer,Status,Service,PNPDeviceID; "
+            "  Select-Object Name,Manufacturer,Status,Service,PNPDeviceID }; "
             "$monitorRows = Get-CimInstance Win32_DesktopMonitor | Select-Object Name,MonitorType,ScreenWidth,ScreenHeight,Status; "
-            "$printerRows = Get-CimInstance Win32_Printer | Select-Object Name,DriverName,PortName,WorkOffline,Default; "
-            "$usbRows = Get-CimInstance Win32_USBControllerDevice | Select-Object Dependent -First 30; "
+            "if($includeHardwareDetails){ $printerRows = Get-CimInstance Win32_Printer | Select-Object Name,DriverName,PortName,WorkOffline,Default }; "
+            "if($includeHardwareDetails){ $usbRows = Get-CimInstance Win32_USBControllerDevice | Select-Object Dependent -First 30 }; "
             "$text += Write-Section '主板' $baseBoardRows; "
             "$text += Write-Section 'BIOS' $biosRows; "
             "$text += Write-Section '处理器' $cpuRows; "
-            "$text += Write-Section '磁盘设备' $diskRows; "
+            "if($includeHardwareDetails){ $text += Write-Section '磁盘设备' $diskRows }; "
             "$text += Write-Section '显卡设备' $gpuRows; "
-            "$text += Write-Section '声卡设备' $soundRows; "
+            "if($includeHardwareDetails){ $text += Write-Section '声卡设备' $soundRows }; "
             "$text += Write-Section '网卡设备(物理)' $networkRows; "
-            "$text += Write-Section '摄像头设备' $cameraRows; "
+            "if($includeHardwareDetails){ $text += Write-Section '摄像头设备' $cameraRows }; "
             "$text += Write-Section '显示器设备' $monitorRows; "
-            "$text += Write-Section '打印机设备' $printerRows; "
-            "$text += Write-Section 'USB控制器映射(前30条)' $usbRows; "
-            "$text");
+            "if($includeHardwareDetails){ $text += Write-Section '打印机设备' $printerRows }; "
+            "if($includeHardwareDetails){ $text += Write-Section 'USB控制器映射(前30条)' $usbRows }; "
+            "$text").arg(includeHardwareDetails ? QStringLiteral("$true") : QStringLiteral("$false"));
         return queryPowerShellTextSync(scriptText, 9000);
     }
 
@@ -4458,7 +4503,7 @@ void HardwareDock::showEvent(QShowEvent* showEventPointer)
         initializeR0EvidenceTab();
     }
 
-    startPerformanceSampling(true);
+    startPerformanceSampling(SamplingScope::HardwareDetails);
 
     // splitter 在 Dock 首次显示前可能还没有最终宽度，因此分两轮尝试应用
     // 300px 默认左栏；成功后不再覆盖用户后续拖动结果。
@@ -4475,11 +4520,20 @@ void HardwareDock::showEvent(QShowEvent* showEventPointer)
     scheduleUtilizationLayoutRefresh();
 }
 
-void HardwareDock::startPerformanceSampling(const bool includeDriverHealth)
+void HardwareDock::startPerformanceSampling(const SamplingScope scope)
 {
-    m_driverHealthSamplingEnabled = includeDriverHealth;
+    const bool enableDetails = scope == SamplingScope::HardwareDetails
+        && !m_hardwareDetailsSamplingEnabled;
+    m_hardwareDetailsSamplingEnabled = m_hardwareDetailsSamplingEnabled
+        || scope == SamplingScope::HardwareDetails;
     if (m_initialSamplingStarted)
     {
+        if (enableDetails)
+        {
+            requestAsyncStaticInfoRefresh();
+            requestAsyncSensorRefresh();
+            requestAsyncR0HardwareHealthRefresh();
+        }
         return;
     }
 
@@ -4514,7 +4568,7 @@ void HardwareDock::startInitialSamplingAfterFirstPaint()
         dockPointer->refreshAllViews();
         dockPointer->requestAsyncStaticInfoRefresh();
         dockPointer->requestAsyncSensorRefresh();
-        if (dockPointer->m_driverHealthSamplingEnabled)
+        if (dockPointer->m_hardwareDetailsSamplingEnabled)
         {
             dockPointer->requestAsyncR0HardwareHealthRefresh();
         }
@@ -8585,7 +8639,7 @@ void HardwareDock::refreshAllViews()
     pushBoundedHistorySample(
         &m_networkAggregateHistoryBytesPerSec,
         std::max(0.0, networkRxBytesPerSec) + std::max(0.0, networkTxBytesPerSec));
-    if (m_driverHealthSamplingEnabled)
+    if (m_hardwareDetailsSamplingEnabled)
     {
         requestAsyncR0HardwareHealthRefresh();
     }
@@ -9192,8 +9246,9 @@ bool HardwareDock::sampleGpuUsages(std::vector<GpuUsageSample>* sampleListOut)
 
     if (shouldStartBackgroundSampling)
     {
+        const bool includeGpuClockTelemetry = m_hardwareDetailsSamplingEnabled;
         QThreadPool::globalInstance()->start(
-            [samplingStatePointer]()
+            [samplingStatePointer, includeGpuClockTelemetry]()
             {
                 // DXGI 与 PDH 全部在本线程内完成，COM 接口指针不跨线程传递。
                 const HRESULT comInitializeStatus = ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
@@ -9254,7 +9309,8 @@ bool HardwareDock::sampleGpuUsages(std::vector<GpuUsageSample>* sampleListOut)
                         sample.sharedMemoryGiB = static_cast<double>(adapterDesc.SharedSystemMemory) / oneGiBInBytes;
 
                         GpuAdapterTelemetrySnapshot telemetrySnapshot;
-                        if (queryGpuAdapterTelemetrySnapshot(adapterDesc.AdapterLuid, &telemetrySnapshot))
+                        if (includeGpuClockTelemetry
+                            && queryGpuAdapterTelemetrySnapshot(adapterDesc.AdapterLuid, &telemetrySnapshot))
                         {
                             sample.currentCoreClockMhz = telemetrySnapshot.currentCoreClockMhz;
                             sample.maxCoreClockMhz = telemetrySnapshot.maxCoreClockMhz;
@@ -11879,22 +11935,26 @@ void HardwareDock::requestAsyncStaticInfoRefresh()
         return;
     }
 
+    const bool includeHardwareDetails = m_hardwareDetailsSamplingEnabled;
     QPointer<HardwareDock> safeThis(this);
-    std::thread([safeThis]() {
+    std::thread([safeThis, includeHardwareDetails]() {
         if (safeThis.isNull())
         {
             return;
         }
 
         const QString overviewBaseText = buildOverviewStaticTextSnapshot();
-        const QString peripheralOverviewText = buildOverviewPeripheralTextSnapshot();
+        const QString peripheralOverviewText = buildOverviewPeripheralTextSnapshot(includeHardwareDetails);
         const QString overviewText = overviewBaseText
             + QStringLiteral("\n[硬件设备总览]\n")
             + peripheralOverviewText;
-        const QString gpuWmiText = buildGpuStaticTextSnapshot();
-        const QString memoryText = buildMemoryStaticTextSnapshot();
-        const MemoryHardwareSummarySnapshot memorySummary = queryMemoryHardwareSummarySnapshot();
-        const GpuHardwareSummarySnapshot gpuSummary = queryGpuHardwareSummarySnapshot();
+        // 首页只消费 overviewText；额外的显卡/内存详情查询留给实际打开的硬件页。
+        const QString gpuWmiText = includeHardwareDetails ? buildGpuStaticTextSnapshot() : QString();
+        const QString memoryText = includeHardwareDetails ? buildMemoryStaticTextSnapshot() : QString();
+        const MemoryHardwareSummarySnapshot memorySummary = includeHardwareDetails
+            ? queryMemoryHardwareSummarySnapshot() : MemoryHardwareSummarySnapshot{};
+        const GpuHardwareSummarySnapshot gpuSummary = includeHardwareDetails
+            ? queryGpuHardwareSummarySnapshot() : GpuHardwareSummarySnapshot{};
 
         if (safeThis.isNull())
         {
@@ -11903,7 +11963,7 @@ void HardwareDock::requestAsyncStaticInfoRefresh()
 
         const bool invokeOk = QMetaObject::invokeMethod(
             safeThis.data(),
-            [safeThis, overviewText, gpuWmiText, memoryText, memorySummary, gpuSummary]()
+            [safeThis, includeHardwareDetails, overviewText, gpuWmiText, memoryText, memorySummary, gpuSummary]()
             {
                 if (safeThis.isNull())
                 {
@@ -11911,27 +11971,35 @@ void HardwareDock::requestAsyncStaticInfoRefresh()
                 }
 
                 safeThis->m_cachedOverviewStaticText = overviewText;
-                safeThis->m_cachedGpuStaticText = formatGpuHardwareSummaryText(gpuSummary, gpuWmiText);
-                safeThis->m_cachedMemoryStaticText = memoryText;
-                safeThis->m_memorySpeedMhz = memorySummary.speedMhz;
-                safeThis->m_memorySlotUsed = memorySummary.usedSlots;
-                safeThis->m_memorySlotTotal = memorySummary.totalSlots;
-                safeThis->m_memoryFormFactorText = memorySummary.formFactorText;
-                if (safeThis->m_gpuAdapterNameText.trimmed().isEmpty()
-                    || safeThis->m_gpuAdapterNameText == QStringLiteral("N/A"))
+                if (includeHardwareDetails)
                 {
-                    safeThis->m_gpuAdapterNameText = gpuSummary.adapterNameText;
-                }
-                safeThis->m_gpuDriverVersionText = gpuSummary.driverVersionText;
-                safeThis->m_gpuDriverDateText = gpuSummary.driverDateText;
-                safeThis->m_gpuPnpDeviceIdText = gpuSummary.pnpDeviceIdText;
-                if (safeThis->m_gpuDedicatedMemoryGiB <= 0.0)
-                {
-                    safeThis->m_gpuDedicatedMemoryGiB = gpuSummary.dedicatedMemoryGiB;
+                    safeThis->m_cachedGpuStaticText = formatGpuHardwareSummaryText(gpuSummary, gpuWmiText);
+                    safeThis->m_cachedMemoryStaticText = memoryText;
+                    safeThis->m_memorySpeedMhz = memorySummary.speedMhz;
+                    safeThis->m_memorySlotUsed = memorySummary.usedSlots;
+                    safeThis->m_memorySlotTotal = memorySummary.totalSlots;
+                    safeThis->m_memoryFormFactorText = memorySummary.formFactorText;
+                    if (safeThis->m_gpuAdapterNameText.trimmed().isEmpty()
+                        || safeThis->m_gpuAdapterNameText == QStringLiteral("N/A"))
+                    {
+                        safeThis->m_gpuAdapterNameText = gpuSummary.adapterNameText;
+                    }
+                    safeThis->m_gpuDriverVersionText = gpuSummary.driverVersionText;
+                    safeThis->m_gpuDriverDateText = gpuSummary.driverDateText;
+                    safeThis->m_gpuPnpDeviceIdText = gpuSummary.pnpDeviceIdText;
+                    if (safeThis->m_gpuDedicatedMemoryGiB <= 0.0)
+                    {
+                        safeThis->m_gpuDedicatedMemoryGiB = gpuSummary.dedicatedMemoryGiB;
+                    }
                 }
                 emit safeThis->staticOverviewChanged(safeThis->m_cachedOverviewStaticText);
                 safeThis->refreshStaticHardwareTexts(false);
                 safeThis->m_staticInfoRefreshing.store(false);
+                if (!includeHardwareDetails && safeThis->m_hardwareDetailsSamplingEnabled)
+                {
+                    // 欢迎页采集期间打开了硬件页：概览回投后补采详情，不能丢掉范围升级。
+                    safeThis->requestAsyncStaticInfoRefresh();
+                }
             },
             Qt::QueuedConnection);
 
@@ -12102,6 +12170,11 @@ void HardwareDock::applyDeviceAuditRefreshResult(
 
 void HardwareDock::requestAsyncSensorRefresh()
 {
+    if (!m_hardwareDetailsSamplingEnabled)
+    {
+        return;
+    }
+
     // expectedFlag 用途：原子刷新锁 CAS 期望值（false=当前无任务）。
     bool expectedFlag = false;
     if (!m_sensorRefreshing.compare_exchange_strong(expectedFlag, true))

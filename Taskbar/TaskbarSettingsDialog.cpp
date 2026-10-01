@@ -56,7 +56,7 @@ TaskbarSettingsDialog::TaskbarSettingsDialog(TaskbarNotificationService* notific
     QVBoxLayout* notificationLayout = new QVBoxLayout(notificationGroup);
     notificationLayout->setSpacing(5);
     m_clipboardCheckBox = new QCheckBox(QStringLiteral("剪贴板文字变化"), notificationGroup);
-    m_deviceCheckBox = new QCheckBox(QStringLiteral("设备接入、移除与拓扑变化"), notificationGroup);
+    m_deviceCheckBox = new QCheckBox(QStringLiteral("设备接入"), notificationGroup);
     m_earthquakeCheckBox = new QCheckBox(QStringLiteral("地震预警"), notificationGroup);
     notificationLayout->addWidget(m_clipboardCheckBox);
     notificationLayout->addWidget(m_deviceCheckBox);

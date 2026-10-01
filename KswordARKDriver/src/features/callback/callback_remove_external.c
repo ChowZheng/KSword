@@ -188,16 +188,16 @@ Return Value:
 }
 
 static BOOLEAN
-KswordArkCallbackRemoveExClassRequiresCodeModule(
+KswordArkCallbackRemoveClassUsesCodeAddress(
     _In_ ULONG CallbackClass
     )
 /*++
 
 Routine Description:
 
-    Decide whether callbackAddress must resolve to a loaded kernel module before
-    a public remove attempt is allowed. WFP and minifilter rows carry identifiers
-    or filter objects, so they intentionally bypass this code-address gate.
+    Decide whether callbackAddress is a code pointer. Module attribution is
+    optional diagnostic information. WFP identifiers and minifilter objects
+    are validated by their own public-API backends.
 
 Arguments:
 
@@ -214,7 +214,8 @@ Return Value:
         CallbackClass == KSWORD_ARK_EXTERNAL_CALLBACK_REMOVE_TYPE_IMAGE ||
         CallbackClass == KSWORD_ARK_EXTERNAL_CALLBACK_REMOVE_TYPE_OBJECT ||
         CallbackClass == KSWORD_ARK_EXTERNAL_CALLBACK_REMOVE_TYPE_REGISTRY ||
-        CallbackClass == KSWORD_ARK_EXTERNAL_CALLBACK_REMOVE_TYPE_ETW_PROVIDER;
+        CallbackClass == KSWORD_ARK_EXTERNAL_CALLBACK_REMOVE_TYPE_ETW_PROVIDER ||
+        CallbackClass >= KSWORD_ARK_EXTERNAL_CALLBACK_REMOVE_TYPE_GENERIC_KERNEL; // 扩展行 callbackAddress 仍是代码地址。
 }
 
 static NTSTATUS
@@ -382,17 +383,13 @@ KswordARKCallbackIoctlRemoveExternalCallback( // 实现外部回调移除 IOCTL 
         responsePacket->mappingFlags = KSWORD_ARK_EXTERNAL_CALLBACK_MAPPING_FLAG_MODULE; // 标记模块映射成功。
     } // 结束模块映射标志设置分支。
 
-    if (requestCallbackClass == KSWORD_ARK_EXTERNAL_CALLBACK_REMOVE_TYPE_PROCESS || // 进程 notify 移除必须先确认函数地址落在内核模块范围。
-        requestCallbackClass == KSWORD_ARK_EXTERNAL_CALLBACK_REMOVE_TYPE_THREAD || // 线程 notify 移除必须先确认函数地址落在内核模块范围。
-        requestCallbackClass == KSWORD_ARK_EXTERNAL_CALLBACK_REMOVE_TYPE_IMAGE || // 镜像 notify 移除必须先确认函数地址落在内核模块范围。
-        requestCallbackClass == KSWORD_ARK_EXTERNAL_CALLBACK_REMOVE_TYPE_OBJECT || // 对象回调扩展移除必须先确认函数地址可验证。
-        requestCallbackClass == KSWORD_ARK_EXTERNAL_CALLBACK_REMOVE_TYPE_REGISTRY || // 注册表回调扩展移除必须先确认函数地址可验证。
-        requestCallbackClass == KSWORD_ARK_EXTERNAL_CALLBACK_REMOVE_TYPE_ETW_PROVIDER) { // ETW 回调扩展移除必须先确认函数地址可验证。
-        if (moduleBase == 0ULL || moduleSize == 0UL) { // 未命中系统模块表时拒绝继续进入任何移除路径。
-            operationStatus = STATUS_INVALID_PARAMETER; // 返回参数非法，避免对不可验证地址调用卸载 API。
-            goto CompleteRemoveExternalCallback; // 跳转到统一响应和日志路径。
-        } // 结束模块范围校验失败分支。
-    } // 结束需要内核函数地址类别的统一校验。
+    // 函数地址只拒绝明显非法的用户态/非规范地址；模块查询仅提供诊断。
+    if (KswordArkCallbackRemoveClassUsesCodeAddress(requestCallbackClass) &&
+        (requestCallbackAddress < (ULONG64)(ULONG_PTR)MmSystemRangeStart ||
+         (requestCallbackAddress >> 48U) != 0xFFFFULL)) {
+        operationStatus = STATUS_INVALID_PARAMETER; // 明显非法的内核代码地址。
+        goto CompleteRemoveExternalCallback; // 完成语义回执。
+    } // 结束代码地址检查。
 
     switch (requestCallbackClass) { // 根据缓存后的回调类型分发移除逻辑。
     case KSWORD_ARK_EXTERNAL_CALLBACK_REMOVE_TYPE_PROCESS: // 处理进程创建回调移除。
@@ -471,8 +468,7 @@ Routine Description:
         KSWORD_ARK_CALLBACK_TRUST_PDB_PROFILE |
         KSWORD_ARK_CALLBACK_TRUST_PROFILE_GATED |
         KSWORD_ARK_CALLBACK_TRUST_STORAGE_VALIDATED |
-        KSWORD_ARK_CALLBACK_TRUST_STRUCTURE_SIGNATURE |
-        KSWORD_ARK_CALLBACK_TRUST_OWNER_MODULE_RESOLVED;
+        KSWORD_ARK_CALLBACK_TRUST_STRUCTURE_SIGNATURE; // 不用模块归属约束真实句柄。
     const ULONG requiredCommonFieldFlags =
         KSWORD_ARK_CALLBACK_ENUM_FIELD_CALLBACK_ADDRESS |
         KSWORD_ARK_CALLBACK_ENUM_FIELD_REGISTRATION_ADDRESS |
@@ -489,8 +485,7 @@ Routine Description:
         (RequestPacket->trustFlags & KSWORD_ARK_CALLBACK_TRUST_FALLBACK_PATTERN) == 0UL;
     isHeuristicCandidate =
         RequestPacket->source == KSWORD_ARK_CALLBACK_ENUM_SOURCE_PRIVATE_OBJECT_TYPE_LIST &&
-        (RequestPacket->trustFlags & KSWORD_ARK_CALLBACK_TRUST_FALLBACK_PATTERN) != 0UL &&
-        (RequestPacket->trustFlags & KSWORD_ARK_CALLBACK_TRUST_OWNER_MODULE_RESOLVED) != 0UL;
+        (RequestPacket->trustFlags & KSWORD_ARK_CALLBACK_TRUST_FALLBACK_PATTERN) != 0UL; // 候选身份由重新枚举核对。
 
     if ((!isPdbCandidate && !isHeuristicCandidate) ||
         RequestPacket->registrationAddress == 0ULL ||
@@ -515,13 +510,14 @@ Routine Description:
         return STATUS_INVALID_PARAMETER;
     }
 
-    status = KswordArkCallbackEnumRevalidateObjectRemoveRequest(
+    status = KswordArkCallbackEnumRevalidateRemoveRequest(
         RequestPacket,
-        TRUE,
+        FALSE, // 只要求目标行仍匹配，不因无关回调变化拒绝注销。
+        TRUE, // 调用注销前仍核对完整行身份。
         &matchPresent,
         &matchedFieldFlags,
         &matchedRegistrationAddress,
-        &currentGeneration);
+        &currentGeneration, NULL, NULL); // Object 不需要扩展上下文。
     ResponsePacket->revalidationStatus = status;
     if (!NT_SUCCESS(status)) {
         KswordArkCallbackRemoveExSetMessage(
@@ -561,16 +557,26 @@ Routine Description:
         ResponsePacket->mappingFlags |= KSWORD_ARK_EXTERNAL_CALLBACK_MAPPING_FLAG_EXPERIMENTAL;
     }
 
-    ObUnRegisterCallbacks((PVOID)(ULONG_PTR)matchedRegistrationAddress);
+    { // 外部枚举也可能选中本驱动自己的注册，必须同步卸载状态。
+        KSWORD_ARK_CALLBACK_RUNTIME* runtime = KswordArkCallbackGetRuntime(); // 取得当前已发布 runtime。
+        if (runtime != NULL && (ULONG64)(ULONG_PTR)runtime->ObRegistrationHandle == matchedRegistrationAddress) { // 只同步同一个真实句柄。
+            KswordArkObjectCallbackUnregister(runtime); // 使用已有生命周期入口，只调用一次 ObUnRegisterCallbacks 并清空句柄。
+            (VOID)InterlockedAnd((volatile LONG*)&runtime->RegisteredCallbacksMask,
+                (LONG)~KSWORD_ARK_CALLBACK_REGISTERED_OBJECT); // 自身行不再显示已经移除的注册。
+        } else { // 普通外部注册不修改本驱动 runtime。
+            ObUnRegisterCallbacks((PVOID)(ULONG_PTR)matchedRegistrationAddress); // 使用重新枚举匹配的真实或候选注册块。
+        } // 结束自身/外部句柄分发。
+    } // 结束生命周期同步。
 
     matchPresent = FALSE;
-    status = KswordArkCallbackEnumRevalidateObjectRemoveRequest(
+    status = KswordArkCallbackEnumRevalidateRemoveRequest(
         RequestPacket,
         FALSE,
+        FALSE, // 后置只检查注册是否仍存在，不因显示元数据变化报假成功。
         &matchPresent,
         NULL,
         NULL,
-        &currentGeneration);
+        &currentGeneration, NULL, NULL); // Object 不需要扩展上下文。
     ResponsePacket->revalidationStatus = status;
     if (!NT_SUCCESS(status)) {
         KswordArkCallbackRemoveExSetMessage(
@@ -737,41 +743,45 @@ Return Value:
         goto CompleteRemoveExternalCallbackEx;
     }
 
-    if (requestCopy.callbackClass == KSWORD_ARK_EXTERNAL_CALLBACK_REMOVE_TYPE_REGISTRY ||
-        requestCopy.callbackClass == KSWORD_ARK_EXTERNAL_CALLBACK_REMOVE_TYPE_ETW_PROVIDER) {
+    if (requestCopy.callbackClass == KSWORD_ARK_EXTERNAL_CALLBACK_REMOVE_TYPE_ETW_PROVIDER) {
         operationStatus = STATUS_NOT_SUPPORTED;
         KswordArkCallbackRemoveExSetMessage(
             responsePacket->message,
             RTL_NUMBER_OF(responsePacket->message),
-            L"Removal is disabled for Registry and ETW callbacks because no reliable public path is available.");
+            L"ETW enumeration has no reliable ETW_REG_ENTRY registration handle; a provider node cannot replace it.");
         goto CompleteRemoveExternalCallbackEx;
     }
 
-    if (KswordArkCallbackRemoveExClassRequiresCodeModule(requestCopy.callbackClass)) {
+    if (KswordArkCallbackRemoveClassUsesCodeAddress(requestCopy.callbackClass)) {
         status = KswordArkCallbackResolveModuleByAddress(
             requestCopy.callbackAddress,
             responsePacket->modulePath,
             RTL_NUMBER_OF(responsePacket->modulePath),
             &moduleBase,
             &moduleSize);
-        if (!NT_SUCCESS(status)) {
-            operationStatus = STATUS_INVALID_PARAMETER;
-            responsePacket->revalidationStatus = status;
-            KswordArkCallbackRemoveExSetMessage(
-                responsePacket->message,
-                RTL_NUMBER_OF(responsePacket->message),
-                L"Callback address did not resolve to a loaded kernel module; public remove was refused.");
-            goto CompleteRemoveExternalCallbackEx;
-        }
+        // 模块归属不可解析不会阻止按公开 API 尝试注销。
+        if (NT_SUCCESS(status)) { // 解析成功时保留归属信息。
+            responsePacket->moduleBase = moduleBase; // 回填模块基址。
+            responsePacket->moduleSize = moduleSize; // 回填模块大小。
+            responsePacket->mappingFlags |= KSWORD_ARK_EXTERNAL_CALLBACK_MAPPING_FLAG_MODULE; // 标记解析成功。
+        } // 结束可选模块诊断。
+    } // 结束模块查询。
+    responsePacket->revalidationStatus = STATUS_SUCCESS; // API 与行身份负责操作有效性。
 
-        responsePacket->moduleBase = moduleBase;
-        responsePacket->moduleSize = moduleSize;
-        responsePacket->mappingFlags |= KSWORD_ARK_EXTERNAL_CALLBACK_MAPPING_FLAG_MODULE;
-        responsePacket->revalidationStatus = STATUS_SUCCESS;
-    }
-    else {
-        responsePacket->revalidationStatus = STATUS_SUCCESS;
-    }
+    if (KswordArkCallbackRemoveClassUsesCodeAddress(requestCopy.callbackClass) &&
+        (requestCopy.callbackAddress < (ULONG64)(ULONG_PTR)MmSystemRangeStart ||
+         (requestCopy.callbackAddress >> 48U) != 0xFFFFULL)) {
+        operationStatus = STATUS_INVALID_PARAMETER; // 拒绝明显非法的代码地址。
+        KswordArkCallbackRemoveExSetMessage(responsePacket->message,
+            RTL_NUMBER_OF(responsePacket->message), L"Callback address is not a canonical kernel address."); // 说明地址错误。
+        goto CompleteRemoveExternalCallbackEx; // 完成拒绝回执。
+    } // 结束地址检查。
+
+    if (requestCopy.callbackClass == KSWORD_ARK_EXTERNAL_CALLBACK_REMOVE_TYPE_REGISTRY ||
+        requestCopy.callbackClass >= KSWORD_ARK_EXTERNAL_CALLBACK_REMOVE_TYPE_GENERIC_KERNEL) {
+        operationStatus = KswordArkCallbackRemoveExtendedPublic(&requestCopy, responsePacket); // 扩展类别只使用完整 EX 行身份。
+        goto CompleteRemoveExternalCallbackEx; // 保留后端具体诊断。
+    } // 结束扩展类别分发。
 
     if (requestCopy.callbackClass == KSWORD_ARK_EXTERNAL_CALLBACK_REMOVE_TYPE_OBJECT) {
         operationStatus = KswordArkCallbackRemoveVerifiedObject(&requestCopy, responsePacket);
@@ -810,24 +820,25 @@ Return Value:
         responsePacket->serviceName,
         RTL_NUMBER_OF(responsePacket->serviceName),
         legacyResponse.serviceName);
-    if (NT_SUCCESS(operationStatus)) {
-        KswordArkCallbackRemoveExSetMessage(
-            responsePacket->message,
-            RTL_NUMBER_OF(responsePacket->message),
-            L"Public API remove path completed. Experimental unlink was not used.");
-    }
-    else if (operationStatus == STATUS_NOT_SUPPORTED) {
-        KswordArkCallbackRemoveExSetMessage(
-            responsePacket->message,
-            RTL_NUMBER_OF(responsePacket->message),
-            L"Public API remove path is not yet supported for this callback class; no unlink fallback was executed.");
-    }
-    else {
-        KswordArkCallbackRemoveExSetMessage(
-            responsePacket->message,
-            RTL_NUMBER_OF(responsePacket->message),
-            L"Public API remove path returned a failure NTSTATUS; no unlink fallback was executed.");
-    }
+    // 后端已实现与目标 API 拒绝注销必须区分，不能把 STATUS_NOT_SUPPORTED 解释成没有实现。
+    (VOID)RtlStringCbPrintfW(responsePacket->message, sizeof(responsePacket->message),
+        L"%ws: %ws (NTSTATUS=0x%08lX). %ws", // 同时保留具体 API、原始状态和常见拒绝原因。
+        requestCopy.callbackClass == KSWORD_ARK_EXTERNAL_CALLBACK_REMOVE_TYPE_PROCESS
+            ? L"PsSetCreateProcessNotifyRoutineEx / PsSetCreateProcessNotifyRoutine"
+            : requestCopy.callbackClass == KSWORD_ARK_EXTERNAL_CALLBACK_REMOVE_TYPE_THREAD
+                ? L"PsRemoveCreateThreadNotifyRoutine"
+                : requestCopy.callbackClass == KSWORD_ARK_EXTERNAL_CALLBACK_REMOVE_TYPE_IMAGE
+                    ? L"PsRemoveLoadImageNotifyRoutine"
+                    : requestCopy.callbackClass == KSWORD_ARK_EXTERNAL_CALLBACK_REMOVE_TYPE_MINIFILTER
+                        ? L"FltEnumerateFilters / FltUnloadFilter" : L"WFP management object deletion", // 记录公开后端。
+        NT_SUCCESS(operationStatus) ? L"Public API completed" : L"Public API failed", // 不把失败伪装成未实现。
+        (ULONG)operationStatus, // 输出精确状态码。
+        NT_SUCCESS(operationStatus) ? L"" :
+            requestCopy.callbackClass == KSWORD_ARK_EXTERNAL_CALLBACK_REMOVE_TYPE_MINIFILTER
+                ? L"The filter may have disappeared, omitted its unload callback, or refused unloading."
+                : requestCopy.callbackClass == KSWORD_ARK_EXTERNAL_CALLBACK_REMOVE_TYPE_WFP_CALLOUT
+                    ? L"The management object may have disappeared, remained referenced, or denied deletion."
+                    : L"The notification routine may no longer be registered or the API rejected the request."); // 说明实际失败方向。
 
 CompleteRemoveExternalCallbackEx:
     responsePacket->ntstatus = operationStatus;

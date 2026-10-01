@@ -204,6 +204,9 @@
     <ClInclude Include="src\features\callback\callback_extended_internal.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="src\features\callback\callback_special_identity.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="src\features\callback\callback_extended_kernel.h">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -681,6 +684,12 @@
       <Filter>Source Files\Features\Callback</Filter>
     </ClCompile>
     <ClCompile Include="src\features\callback\callback_remove_external.c">
+      <Filter>Source Files\Features\Callback</Filter>
+    </ClCompile>
+    <ClCompile Include="src\features\callback\callback_remove_extended.c">
+      <Filter>Source Files\Features\Callback</Filter>
+    </ClCompile>
+    <ClCompile Include="src\features\callback\callback_registry_identity.c">
       <Filter>Source Files\Features\Callback</Filter>
     </ClCompile>
     <ClCompile Include="src\features\callback\callback_enum.c">

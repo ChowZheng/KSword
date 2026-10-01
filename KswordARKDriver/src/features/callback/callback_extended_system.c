@@ -225,6 +225,7 @@ Return Value:
 
     RtlZeroMemory(&listHead, sizeof(listHead));
     if (!KswordArkCallbackExtendedReadListEntry(listHeadAddress, &listHead)) {
+        KswordArkCallbackRecordRemoveQueryFailure(Builder, KSWORD_ARK_CALLBACK_ENUM_CLASS_FILE_SYSTEM, STATUS_DATA_ERROR); // 目标读取失败不能证明已消失。
         return;
     }
 
@@ -240,6 +241,7 @@ Return Value:
                 (const VOID*)(ULONG_PTR)currentAddress,
                 &registration,
                 sizeof(registration))) {
+            KswordArkCallbackRecordRemoveQueryFailure(Builder, KSWORD_ARK_CALLBACK_ENUM_CLASS_FILE_SYSTEM, STATUS_DATA_ERROR); // 目标读取失败不能证明已消失。
             break;
         }
         nextAddress = (ULONG64)(ULONG_PTR)registration.Link.Flink;
@@ -285,11 +287,16 @@ Return Value:
         }
 
         if (nextAddress == currentAddress) {
+            KswordArkCallbackRecordRemoveQueryFailure(Builder, KSWORD_ARK_CALLBACK_ENUM_CLASS_FILE_SYSTEM, STATUS_DATA_ERROR); // 目标读取失败不能证明已消失。
             break;
         }
         currentAddress = nextAddress;
         ++index;
     }
+
+    if (currentAddress != listHeadAddress) { // 必须完整遍历到链头。
+        KswordArkCallbackRecordRemoveQueryFailure(Builder, KSWORD_ARK_CALLBACK_ENUM_CLASS_FILE_SYSTEM, STATUS_DATA_ERROR); // 目标读取失败不能证明已消失。
+    } // 非正常结束不确认目标缺失。
 
     if (addedCount == 0UL) {
         KswordArkCallbackExtendedAddRow(
@@ -431,6 +438,7 @@ Return Value:
     if (!KswordArkCallbackExtendedReadPointer(
             GlobalAddress,
             &currentAddress)) {
+        KswordArkCallbackRecordRemoveQueryFailure(Builder, KSWORD_ARK_CALLBACK_ENUM_CLASS_LOGON_SESSION, STATUS_DATA_ERROR); // 目标读取失败不能证明已消失。
         return 0UL;
     }
 
@@ -448,7 +456,8 @@ Return Value:
                     (const VOID*)(ULONG_PTR)currentAddress,
                     &registration,
                     sizeof(registration))) {
-                break;
+                KswordArkCallbackRecordRemoveQueryFailure(Builder, KSWORD_ARK_CALLBACK_ENUM_CLASS_LOGON_SESSION, STATUS_DATA_ERROR); // 目标读取失败不能证明已消失。
+                break; // 当前节点读取失败，不能推进未验证链路。
             }
             nextAddress = (ULONG64)(ULONG_PTR)registration.Next;
             callbackAddress = (ULONG64)(ULONG_PTR)registration.CallbackRoutine;
@@ -462,7 +471,8 @@ Return Value:
                     (const VOID*)(ULONG_PTR)currentAddress,
                     &registration,
                     sizeof(registration))) {
-                break;
+                KswordArkCallbackRecordRemoveQueryFailure(Builder, KSWORD_ARK_CALLBACK_ENUM_CLASS_LOGON_SESSION, STATUS_DATA_ERROR); // 目标读取失败不能证明已消失。
+                break; // 当前节点读取失败，不能推进未验证链路。
             }
             nextAddress = (ULONG64)(ULONG_PTR)registration.Next;
             callbackAddress = (ULONG64)(ULONG_PTR)registration.CallbackRoutine;
@@ -515,12 +525,16 @@ Return Value:
         }
 
         if (nextAddress == currentAddress) {
+            KswordArkCallbackRecordRemoveQueryFailure(Builder, KSWORD_ARK_CALLBACK_ENUM_CLASS_LOGON_SESSION, STATUS_DATA_ERROR); // 目标读取失败不能证明已消失。
             break;
         }
         currentAddress = nextAddress;
         ++index;
     }
 
+    if (currentAddress != 0ULL) { // 必须遍历到正常空链尾。
+        KswordArkCallbackRecordRemoveQueryFailure(Builder, KSWORD_ARK_CALLBACK_ENUM_CLASS_LOGON_SESSION, STATUS_DATA_ERROR); // 目标读取失败不能证明已消失。
+    } // 未完成整条链不能确认缺失。
     return addedCount;
 }
 
@@ -1545,7 +1559,11 @@ Return Value:
     }
 
     KswordArkCallbackEnumInitModuleCache(&moduleCache);
-    if (!NT_SUCCESS(KswordArkCallbackEnumEnsureModuleCache(&moduleCache))) {
+    const NTSTATUS moduleStatus = KswordArkCallbackEnumEnsureModuleCache(&moduleCache); // 保存真实查询状态。
+    if (!NT_SUCCESS(moduleStatus)) {
+        KswordArkCallbackRecordRemoveQueryFailure(Builder, KSWORD_ARK_CALLBACK_ENUM_CLASS_FILE_SYSTEM, moduleStatus); // 相关模块查询失败不能证明缺失。
+        KswordArkCallbackRecordRemoveQueryFailure(Builder, KSWORD_ARK_CALLBACK_ENUM_CLASS_LOGON_SESSION, moduleStatus); // 相关模块查询失败不能证明缺失。
+        KswordArkCallbackRecordRemoveQueryFailure(Builder, KSWORD_ARK_CALLBACK_ENUM_CLASS_SHUTDOWN, moduleStatus); // 相关模块查询失败不能证明缺失。
         KswordArkCallbackEnumFreeModuleCache(&moduleCache);
         return;
     }

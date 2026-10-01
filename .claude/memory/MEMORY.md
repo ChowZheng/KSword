@@ -1,5 +1,6 @@
 # Memory Index
 
+- [欢迎页采样与 GPU 遥测蓝屏](ksword-welcome-gpu-telemetry.md) — 首页采样范围、GetNodePerfData 空指针现场、17763 系列禁用与 WDDM 2.4 门槛
 - [KSword UI/主题架构](ksword-ui-architecture.md) — theme.h 动态/静态 token 边界与构建期门禁、全局样式块链路、WindowChrome 标题栏染色、周期后台刷新与全局进度通知边界
 - [标题栏全局搜索/双模式输入](ksword-global-ui-search.md) — GlobalUiSearch 架构、页面路径/高亮跳转链路、i18n 审计恒等词条与语言包定点插入约定
 - [MSVC/WDK 构建恢复](ksword-build-recovery.md) — `LNK1000 IMAGE::BuildImage` 的一次性 WPO 禁用重建，以及驱动 x64 `ApiValidator` 后置校验边界
@@ -16,6 +17,7 @@
 - [KernelDock 内核知识中心](ksword-kernel-knowledge.md) — 71 专题双语目录、R3/R0 现场证据协议、业务 IOCTL 映射、只读站内路由与验证器约束
 - [内核回调监控通道](ksword-callback-monitor.md) — Callback Monitor v1 多游标 ring、回调 try-lock 发布、Minifilter 双消费者与高频 Qt 模型提交边界
 - [Object Callback 安全注销](ksword-object-callback-remove.md) — PDB RegistrationHandle 语义、EX 行身份/代次重验证、ObUnRegisterCallbacks 与移除后复核边界
+- [扩展回调注销研究](ksword-callback-remove-research.md) — OpenArk/WinObjEx64 源码、Registry Cookie 校准、特殊类别真实参数、Image Verification 包装器计数与 ETW/EMP 句柄缺口
 - [HVM 常驻生命周期保护](ksword-hvm-resident-lifecycle.md) — Intel 生命周期基线、S0 电源回调、处理器拓扑冻结、DriverUnload 互锁与全核 VMXOFF 发布边界
 - [AMD SVM/NPT 实验与重启续接](ksword-hvm-amd-lab.md) — 待硬件验收实现、双启动脚本、VMware 克隆、构建证据与未完成的多核验证
 - [KswordARKLight 调查工作台骨架](ksword-arklight-investigation-workbench.md) — 跨进程驱动租约、二级页懒加载、EntityRef 路由、证据会话与独立测试/CI 门禁

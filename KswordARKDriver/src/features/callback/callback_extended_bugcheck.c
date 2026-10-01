@@ -145,7 +145,7 @@ Return Value:
     KswordArkCallbackExtendedAddSelfBugcheckRow(
         Builder,
         &moduleCache,
-        state->ClassicRegistered,
+        state->ClassicRegistered && state->ClassicRecord.State == BufferInserted, // 外部注销后不再展示为已注册。
         KSWORD_ARK_CALLBACK_ENUM_CLASS_BUGCHECK,
         KSWORD_ARK_CALLBACK_REGISTRATION_TYPE_BUGCHECK_CLASSIC,
         (ULONG64)(ULONG_PTR)state->ClassicRecord.CallbackRoutine,
@@ -156,7 +156,7 @@ Return Value:
     KswordArkCallbackExtendedAddSelfBugcheckRow(
         Builder,
         &moduleCache,
-        state->SecondaryRegistered,
+        state->SecondaryRegistered && state->SecondaryRecord.State == BufferInserted, // 以公共记录实际状态为准。
         KSWORD_ARK_CALLBACK_ENUM_CLASS_BUGCHECK_REASON,
         KSWORD_ARK_CALLBACK_REGISTRATION_TYPE_BUGCHECK_SECONDARY_DUMP,
         (ULONG64)(ULONG_PTR)state->SecondaryRecord.CallbackRoutine,
@@ -167,7 +167,7 @@ Return Value:
     KswordArkCallbackExtendedAddSelfBugcheckRow(
         Builder,
         &moduleCache,
-        state->DumpIoRegistered,
+        state->DumpIoRegistered && state->DumpIoRecord.State == BufferInserted, // 以公共记录实际状态为准。
         KSWORD_ARK_CALLBACK_ENUM_CLASS_BUGCHECK_REASON,
         KSWORD_ARK_CALLBACK_REGISTRATION_TYPE_BUGCHECK_DUMP_IO,
         (ULONG64)(ULONG_PTR)state->DumpIoRecord.CallbackRoutine,
@@ -178,7 +178,7 @@ Return Value:
     KswordArkCallbackExtendedAddSelfBugcheckRow(
         Builder,
         &moduleCache,
-        state->TriageRegistered,
+        state->TriageRegistered && state->TriageRecord.State == BufferInserted, // 以公共记录实际状态为准。
         KSWORD_ARK_CALLBACK_ENUM_CLASS_BUGCHECK_REASON,
         KSWORD_ARK_CALLBACK_REGISTRATION_TYPE_BUGCHECK_TRIAGE_DUMP,
         (ULONG64)(ULONG_PTR)state->TriageRecord.CallbackRoutine,
@@ -242,7 +242,8 @@ Return Value:
     ULONG64 currentAddress = 0ULL;
     KBUGCHECK_CALLBACK_RECORD anchorRecord;
 
-    if (!g_KswordArkBugcheckState.ClassicRegistered) {
+    if (!g_KswordArkBugcheckState.ClassicRegistered ||
+        g_KswordArkBugcheckState.ClassicRecord.State != BufferInserted) { // 已注销记录不再作为链锚点。
         KswordArkCallbackExtendedAddRow(
             Builder,
             ModuleCache,
@@ -357,13 +358,16 @@ Return Value:
 
 --*/
 {
-    if (g_KswordArkBugcheckState.SecondaryRegistered) {
+    if (g_KswordArkBugcheckState.SecondaryRegistered &&
+        g_KswordArkBugcheckState.SecondaryRecord.State == BufferInserted) { // 仅使用仍注册的公共记录。
         return &g_KswordArkBugcheckState.SecondaryRecord;
     }
-    if (g_KswordArkBugcheckState.DumpIoRegistered) {
+    if (g_KswordArkBugcheckState.DumpIoRegistered &&
+        g_KswordArkBugcheckState.DumpIoRecord.State == BufferInserted) { // 排除已注销锚点。
         return &g_KswordArkBugcheckState.DumpIoRecord;
     }
-    if (g_KswordArkBugcheckState.TriageRegistered) {
+    if (g_KswordArkBugcheckState.TriageRegistered &&
+        g_KswordArkBugcheckState.TriageRecord.State == BufferInserted) { // 排除已注销锚点。
         return &g_KswordArkBugcheckState.TriageRecord;
     }
     return NULL;
@@ -519,7 +523,10 @@ Return Value:
     }
 
     KswordArkCallbackEnumInitModuleCache(&moduleCache);
-    if (!NT_SUCCESS(KswordArkCallbackEnumEnsureModuleCache(&moduleCache))) {
+    const NTSTATUS moduleStatus = KswordArkCallbackEnumEnsureModuleCache(&moduleCache); // 保存真实查询状态。
+    if (!NT_SUCCESS(moduleStatus)) {
+        KswordArkCallbackRecordRemoveQueryFailure(Builder, KSWORD_ARK_CALLBACK_ENUM_CLASS_BUGCHECK, moduleStatus); // 相关模块查询失败不能证明缺失。
+        KswordArkCallbackRecordRemoveQueryFailure(Builder, KSWORD_ARK_CALLBACK_ENUM_CLASS_BUGCHECK_REASON, moduleStatus); // 相关模块查询失败不能证明缺失。
         KswordArkCallbackEnumFreeModuleCache(&moduleCache);
         return;
     }

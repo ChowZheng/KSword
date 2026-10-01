@@ -147,15 +147,19 @@ Return Value:
 static BOOLEAN
 KswordArkCallbackEnumRemoveRequestMatchesEntry(
     _In_ const KSWORD_ARK_REMOVE_EXTERNAL_CALLBACK_EX_REQUEST* RequestPacket,
-    _In_ const KSWORD_ARK_CALLBACK_ENUM_ENTRY* Entry
+    _In_ const KSWORD_ARK_CALLBACK_ENUM_ENTRY* Entry,
+    _In_ BOOLEAN MatchIdentity // 后置复核不受名称、模块诊断和可信位变化影响。
     )
 /*++
 
 Routine Description:
 
-    Compares every Object Callback row-identity field carried by the EX request.
-    identityHash additionally covers field flags, context, registration type,
-    module identity, name, and altitude, so an address-only match is impossible.
+    Compares selected callback row-identity fields carried by the EX request.
+    Preflight requires the source, raw storage and operation/object semantics
+    to identify one current registration. The hash proves the caller supplied
+    an enumerated row, but changes in names or module diagnostics do not block
+    unregistering it. Current field capabilities supply the actual API gate.
+    Confirmation checks registration presence independently of display metadata.
 
 --*/
 {
@@ -163,17 +167,23 @@ Routine Description:
         return FALSE;
     }
 
-    return Entry->callbackClass == KSWORD_ARK_CALLBACK_ENUM_CLASS_OBJECT &&
-        RequestPacket->callbackClass == KSWORD_ARK_EXTERNAL_CALLBACK_REMOVE_TYPE_OBJECT &&
-        Entry->source == RequestPacket->source &&
+    // Object 的历史移除编号为 4；新扩展类别的编号与枚举类别一致。
+    return Entry->status == KSWORD_ARK_CALLBACK_ENUM_STATUS_OK && // 未注册诊断行不能算作仍注册。
+        Entry->callbackClass ==
+        (RequestPacket->callbackClass == KSWORD_ARK_EXTERNAL_CALLBACK_REMOVE_TYPE_OBJECT
+            ? KSWORD_ARK_CALLBACK_ENUM_CLASS_OBJECT
+            : RequestPacket->callbackClass == KSWORD_ARK_EXTERNAL_CALLBACK_REMOVE_TYPE_REGISTRY
+                ? KSWORD_ARK_CALLBACK_ENUM_CLASS_REGISTRY : RequestPacket->callbackClass) &&
         Entry->callbackAddress == RequestPacket->callbackAddress &&
-        Entry->registrationAddress == RequestPacket->registrationAddress &&
+        ((!MatchIdentity && RequestPacket->callbackClass == KSWORD_ARK_EXTERNAL_CALLBACK_REMOVE_TYPE_REGISTRY)
+            ? Entry->rawStorageValue == RequestPacket->rawStorageValue // 校准随自身注册变化时仍按原始节点确认。
+            : Entry->registrationAddress == RequestPacket->registrationAddress) &&
+        (!MatchIdentity || ( // 完整前置身份与后置存在性使用不同契约。
+        Entry->source == RequestPacket->source &&
         Entry->rawStorageValue == RequestPacket->rawStorageValue &&
         Entry->operationMask == RequestPacket->operationMask &&
         Entry->objectTypeMask == RequestPacket->objectTypeMask &&
-        Entry->trustFlags == RequestPacket->trustFlags &&
-        Entry->removeBehavior == RequestPacket->removeBehavior &&
-        Entry->identityHash == RequestPacket->identityHash;
+        RequestPacket->identityHash != 0ULL)); // 名称、模块归属和可信显示位变化不改变这组注册参数；能力以当前行重新验证结果为准。
 }
 
 VOID
@@ -249,12 +259,27 @@ Return Value:
     entry->identityHash = identityHash;
     entry->fieldFlags |= KSWORD_ARK_CALLBACK_ENUM_FIELD_IDENTITY_HASH;
 
+    if (Builder->RemoveMatchRequest != NULL &&
+        entry->callbackClass == (Builder->RemoveMatchRequest->callbackClass == KSWORD_ARK_EXTERNAL_CALLBACK_REMOVE_TYPE_OBJECT
+            ? KSWORD_ARK_CALLBACK_ENUM_CLASS_OBJECT
+            : Builder->RemoveMatchRequest->callbackClass == KSWORD_ARK_EXTERNAL_CALLBACK_REMOVE_TYPE_REGISTRY
+                ? KSWORD_ARK_CALLBACK_ENUM_CLASS_REGISTRY : Builder->RemoveMatchRequest->callbackClass) &&
+        NT_SUCCESS(Builder->RemoveQueryStatus) && // 保留更早的具体读取错误。
+        (entry->status == KSWORD_ARK_CALLBACK_ENUM_STATUS_QUERY_FAILED ||
+         (entry->status == KSWORD_ARK_CALLBACK_ENUM_STATUS_UNSUPPORTED &&
+          !Builder->RemoveTargetContainerEmpty))) { // 已确认空容器与未支持查询分别处理。
+        Builder->RemoveQueryStatus = NT_SUCCESS((NTSTATUS)entry->lastStatus)
+            ? STATUS_NOT_SUPPORTED : (NTSTATUS)entry->lastStatus; // 缺失查询能力不能报告后置成功。
+    } // 结束目标查询错误记录。
+
     // EX removal captures the unique, fully reconstructed row while all rows
     // still participate in the same ordered snapshot hash used by R3.
     if (Builder->RemoveMatchRequest != NULL &&
-        KswordArkCallbackEnumRemoveRequestMatchesEntry(Builder->RemoveMatchRequest, entry)) {
+        KswordArkCallbackEnumRemoveRequestMatchesEntry(Builder->RemoveMatchRequest, entry, Builder->RemoveMatchIdentity)) {
         Builder->RemoveMatchedFieldFlags = entry->fieldFlags;
         Builder->RemoveMatchedRegistrationAddress = entry->registrationAddress;
+        Builder->RemoveMatchedContextAddress = entry->contextAddress; // 保存 API 所需的驱动对象或上下文。
+        Builder->RemoveMatchedRegistrationType = entry->registrationType; // 区分 legacy 与扩展子类型。
         Builder->RemoveMatchCount += 1UL;
     }
 

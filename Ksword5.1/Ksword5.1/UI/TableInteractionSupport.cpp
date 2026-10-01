@@ -2605,28 +2605,6 @@ namespace
             QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
     }
 
-    void installDefaultContextMenu(QTableView* tableView)
-    {
-        if (tableView == nullptr || tableView->contextMenuPolicy() != Qt::DefaultContextMenu)
-        {
-            return;
-        }
-
-        tableView->setContextMenuPolicy(Qt::CustomContextMenu);
-        QObject::connect(
-            tableView,
-            &QTableView::customContextMenuRequested,
-            tableView,
-            [tableView](const QPoint& localPosition)
-            {
-                const QModelIndex clickedIndex = tableView->indexAt(localPosition);
-                selectContextRow(tableView, clickedIndex);
-                showStandardTableContextMenu(
-                    tableView,
-                    tableView->viewport()->mapToGlobal(localPosition));
-            });
-    }
-
     void configureTable(QTableView* tableView)
     {
         if (tableView == nullptr || tableView->model() == nullptr)
@@ -2640,7 +2618,6 @@ namespace
         installActionBar(tableView);
         ks::ui::InstallTableSearchSupport(tableView);
         ks::ui::RefreshTableSearchSupport(tableView);
-        installDefaultContextMenu(tableView);
     }
 
     class GlobalTableInteractionSupportFilter final : public QObject
@@ -2835,7 +2812,14 @@ namespace
                 const QModelIndex clickedIndex = tableView->indexAt(viewportPosition);
                 selectContextRow(tableView, clickedIndex);
 
-                // 菜单来源已由通用 item-view 分支记录；这里仅处理表格行选中语义。
+                // 在事件发生时判断当前策略，不能在构造期把 Default 改成 Custom
+                // 并接上通用菜单：页面随后接入的业务菜单会被先弹出的复制菜单遮住。
+                if (tableView->contextMenuPolicy() == Qt::DefaultContextMenu)
+                {
+                    showStandardTableContextMenu(tableView, contextMenuEvent->globalPos());
+                    contextMenuEvent->accept();
+                    return true;
+                }
             }
 
             return QObject::eventFilter(watchedObject, eventObject);
