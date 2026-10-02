@@ -72,6 +72,19 @@ presets+='\n'+fun('const std::vector<EtwPresetProviderDescriptor>& etwPresetProv
 code=code.replace('PARSER',presets+'\nPARSER')
 code=code.replace('PARSER',s[s.index('    // EtwSchemaPropertyEntry'):s.index('    // 100ns 时间戳文本格式化')]).replace('SAMPLE_BYTES',','.join(str(x) for x in payload))
 tests={
+ 'network_translation': r'''
+ if(etwInferNetworkProtocol(QStringLiteral("Microsoft-Windows-TCPIP"),QStringLiteral("UdpEndpointReceiveMessages"),nullptr)!=QStringLiteral("UDP"))return 170;
+ if(!etwInferNetworkProtocol(QStringLiteral("Microsoft-Windows-TCPIP"),QStringLiteral("IpInterfaceRundown"),nullptr).isEmpty())return 171;
+ EtwDecodedPropertyEntry protocol;protocol.normalizedNameText=QStringLiteral("protocol");protocol.valueText=QStringLiteral("17");
+ if(etwInferNetworkProtocol(QStringLiteral("Microsoft-Windows-Winsock-AFD"),QString(),&protocol)!=QStringLiteral("UDP"))return 172;
+ if(etwInferNetworkProtocol(QStringLiteral("Vendor"),QString(),&protocol)!=QStringLiteral("17"))return 173;
+ EtwDecodedPropertyEntry operation;operation.valueText=QStringLiteral("QueryInformation");
+ if(!etwInferNetworkDirection(QStringLiteral("DisconnectIPV4"),nullptr,&operation,QStringLiteral("Kernel-TCPIP"),13).isEmpty())return 174;
+ if(etwInferNetworkDirection(QStringLiteral("TcpIp"),nullptr,nullptr,QStringLiteral("Kernel-TCPIP"),11)!=QStringLiteral("Inbound"))return 175;
+ if(etwInferNetworkDirection(QStringLiteral("TcpIp"),nullptr,nullptr,QStringLiteral("Kernel-TCPIP"),10)!=QStringLiteral("Outbound"))return 176;
+ EtwDecodedPropertyEntry address;address.normalizedNameText=QStringLiteral("sourceaddress");address.valueText=QStringLiteral("0x12345678");address.numericAvailable=true;address.numericValue=0x12345678;decoded={address};
+ auto memory=fill(QStringLiteral("Kernel-PageFault"),QStringLiteral("PageFault"),QStringLiteral("CopyOnWrite"));if(memory.sourceIpValid||!memory.sourceIpText.isEmpty())return 177;
+ ''',
  'file_translation': r'''
  if(inferEtwActionText(QStringLiteral("FileIo"),QStringLiteral("Create"),QStringLiteral("Kernel-FileIO"),64)!=QStringLiteral("创建/打开"))return 160;
  if(inferEtwActionText(QStringLiteral("NameDelete"),QString(),QStringLiteral("Microsoft-Windows-Kernel-File"),0)!=QStringLiteral("移除文件名记录"))return 161;

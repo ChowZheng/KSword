@@ -4312,62 +4312,68 @@ namespace
         const QString& eventNameText,
         const EtwDecodedPropertyEntry* protocolProperty)
     {
+        const QString provider = etwProviderDisplayName(providerNameText, providerNameText).toLower();
+        const QString event = normalizeEtwPropertyName(eventNameText);
         const QString propertyText = etwPropertySingleLineValue(protocolProperty);
         if (!propertyText.isEmpty())
         {
+            const bool ipNumber = protocolProperty->normalizedNameText == QStringLiteral("ipprotocol")
+                || provider == QStringLiteral("microsoft-windows-tcpip") || provider == QStringLiteral("kernel-tcpip")
+                || provider == QStringLiteral("kernel-udpip") || provider == QStringLiteral("microsoft-windows-winsock-afd");
+            if (ipNumber && propertyText == QStringLiteral("6")) return QStringLiteral("TCP");
+            if (ipNumber && propertyText == QStringLiteral("17")) return QStringLiteral("UDP");
             return propertyText;
         }
-
-        const QString probe = (providerNameText + QLatin1Char(' ') + eventNameText).toLower();
-        if (probe.contains(QStringLiteral("tcp")))
-        {
-            return QStringLiteral("TCP");
-        }
-        if (probe.contains(QStringLiteral("udp")))
-        {
-            return QStringLiteral("UDP");
-        }
-        if (probe.contains(QStringLiteral("dns")))
-        {
-            return QStringLiteral("DNS");
-        }
+        // Microsoft-Windows-TCPIP 还记录 UDP/IP 事件，不能只凭 Provider 名把它们都标成 TCP。
+        if (event.startsWith(QStringLiteral("udp"))) return QStringLiteral("UDP");
+        if (event.startsWith(QStringLiteral("tcp"))) return QStringLiteral("TCP");
+        if (provider == QStringLiteral("kernel-udpip")) return QStringLiteral("UDP");
+        if (provider == QStringLiteral("kernel-tcpip")) return QStringLiteral("TCP");
+        if (provider == QStringLiteral("microsoft-windows-dns-client")) return QStringLiteral("DNS");
         return QString();
     }
 
     QString etwInferNetworkDirection(
         const QString& eventNameText,
         const EtwDecodedPropertyEntry* directionProperty,
-        const EtwDecodedPropertyEntry* opcodeProperty)
+        const EtwDecodedPropertyEntry* opcodeProperty,
+        const QString& providerNameText = QString(),
+        const int opcodeValue = -1)
     {
-        QString directionText = etwPropertySingleLineValue(directionProperty);
-        if (!directionText.isEmpty())
+        auto directionFromName = [](QString name) -> QString {
+            name = normalizeEtwPropertyName(name);
+            if (name.endsWith(QStringLiteral("ipv4")) || name.endsWith(QStringLiteral("ipv6"))) name.chop(4);
+            if (name == QStringLiteral("send") || name == QStringLiteral("outbound") || name == QStringLiteral("out")
+                || name == QStringLiteral("outgoing") || name == QStringLiteral("发送")) return QStringLiteral("Outbound");
+            if (name == QStringLiteral("recv") || name == QStringLiteral("receive") || name == QStringLiteral("inbound")
+                || name == QStringLiteral("in") || name == QStringLiteral("incoming") || name == QStringLiteral("接收")) return QStringLiteral("Inbound");
+            return QString();
+        };
+        const QString declaredDirection = etwPropertySingleLineValue(directionProperty);
+        if (!declaredDirection.isEmpty())
         {
-            return directionText;
+            const QString normalized = directionFromName(declaredDirection);
+            return normalized.isEmpty() ? declaredDirection : normalized;
         }
-
-        directionText = etwPropertySingleLineValue(opcodeProperty);
-        if (!directionText.isEmpty())
+        QString direction = directionFromName(etwPropertySingleLineValue(opcodeProperty));
+        if (!direction.isEmpty()) return direction;
+        const QString provider = etwProviderDisplayName(providerNameText, providerNameText).toLower();
+        if (provider == QStringLiteral("kernel-tcpip") || provider == QStringLiteral("kernel-udpip"))
         {
-            const QString lower = directionText.toLower();
-            if (lower.contains(QStringLiteral("send")) || lower.contains(QStringLiteral("out")))
+            if (opcodeValue == 10 || opcodeValue == 26) return QStringLiteral("Outbound");
+            if (opcodeValue == 11 || opcodeValue == 27) return QStringLiteral("Inbound");
+            if (provider == QStringLiteral("kernel-tcpip"))
             {
-                return QStringLiteral("Outbound");
-            }
-            if (lower.contains(QStringLiteral("recv")) || lower.contains(QStringLiteral("in")))
-            {
-                return QStringLiteral("Inbound");
+                if (opcodeValue == 12 || opcodeValue == 28) return QStringLiteral("Outbound");
+                if (opcodeValue == 15 || opcodeValue == 31) return QStringLiteral("Inbound");
             }
         }
-
-        const QString eventLower = eventNameText.toLower();
-        if (eventLower.contains(QStringLiteral("send")) || eventLower.contains(QStringLiteral("connect")))
-        {
-            return QStringLiteral("Outbound");
-        }
-        if (eventLower.contains(QStringLiteral("recv")) || eventLower.contains(QStringLiteral("accept")))
-        {
-            return QStringLiteral("Inbound");
-        }
+        const QString event = normalizeEtwPropertyName(eventNameText);
+        direction = directionFromName(event);
+        if (!direction.isEmpty()) return direction;
+        if (event == QStringLiteral("tcpdatatransfersend")
+            || event == QStringLiteral("udpendpointsendmessages") || event == QStringLiteral("tcpsendcomplete")) return QStringLiteral("Outbound");
+        if (event == QStringLiteral("tcpdatatransferreceive") || event == QStringLiteral("udpendpointreceivemessages")) return QStringLiteral("Inbound");
         return QString();
     }
 
@@ -4493,12 +4499,12 @@ namespace
             propertyList,
             QStringList{ QStringLiteral("destaddress"), QStringLiteral("daddr"), QStringLiteral("dstaddr") });
         etwAssignIpFieldFromProperty(
-            sourceIpProperty,
+            rowOut->resourceTypeText == QStringLiteral("网络") ? sourceIpProperty : nullptr,
             &rowOut->sourceIpText,
             &rowOut->sourceIpValue,
             &rowOut->sourceIpValid);
         etwAssignIpFieldFromProperty(
-            destinationIpProperty,
+            rowOut->resourceTypeText == QStringLiteral("网络") ? destinationIpProperty : nullptr,
             &rowOut->destinationIpText,
             &rowOut->destinationIpValue,
             &rowOut->destinationIpValid);
@@ -4512,14 +4518,15 @@ namespace
             QStringList{ QStringLiteral("destport"), QStringLiteral("dport"), QStringLiteral("dstport") }),
             &rowOut->destinationPort);
 
-        rowOut->protocolText = etwInferNetworkProtocol(
+        rowOut->protocolText = rowOut->resourceTypeText == QStringLiteral("网络") ? etwInferNetworkProtocol(
             providerNameText,
             eventNameText,
-            findFirstEtwProperty(propertyList, QStringList{ QStringLiteral("protocol"), QStringLiteral("ipprotocol") }));
-        rowOut->directionText = etwInferNetworkDirection(
+            findFirstEtwProperty(propertyList, QStringList{ QStringLiteral("ipprotocol"), QStringLiteral("protocol") })) : QString();
+        rowOut->directionText = rowOut->resourceTypeText == QStringLiteral("网络") ? etwInferNetworkDirection(
             eventNameText,
             findFirstEtwProperty(propertyList, QStringList{ QStringLiteral("direction") }),
-            findFirstEtwProperty(propertyList, QStringList{ QStringLiteral("opcode"), QStringLiteral("operation") }));
+            findFirstEtwProperty(propertyList, QStringList{ QStringLiteral("opcode"), QStringLiteral("operation") }),
+            providerNameText, rowOut->opcode) : QString();
         rowOut->domainText = etwPropertySingleLineValue(findFirstEtwProperty(
             propertyList,
             QStringList{ QStringLiteral("domainname"), QStringLiteral("queryname"), QStringLiteral("fqdn"), QStringLiteral("url") }));
