@@ -1,32 +1,84 @@
-# API Monitor x64 definitions
+# x64 API Monitor
 
-`api_monitor_definitions.json` is the build-time source for API identities,
-signatures, binding records, original pointers and ordinary wrappers. IDs 1–614
-belong to the original catalog; never renumber or reuse a removed ID.
+`api_monitor_definitions.json` 是强类型 API 定义的唯一来源。当前有 641 项；原有 614 项的 ID、模块和导出名保持稳定。
+已发布的 ID 不得重编号或复用删除项的 ID。
 
-`tools/api_monitor/generate_definitions.py` uses only the Python standard library.
-MSBuild validates and generates before compiling into `$(IntDir)generated`.
-The Python executable can be overridden using `/p:ApiMonitorPython=...`.
-Unchanged output retains its timestamp. The successful Release build copies the
-source bytes to `profiles/api_monitor_definitions.json` next to the published DLL.
-The main executable has a non-linking dependency on this project.
+| ID | 定义范围 | 数量 |
+| --- | --- | --- |
+| 1–614 | 原有 API | 614 |
+| 615–623 | ALPC、线程查询、现代内存映射/分配、APC 和 CoGetObject | 9 |
+| 624–634 | 异步结果查询、文件回调、IOCP 和取消 | 11 |
+| 635–641 | Winsock 扩展函数 | 7 |
 
-The published JSON is for inspection. Editing it does not enable runtime hooks.
-Rebuild the DLL after changing the source definitions. `SessionReady` reports the
-SHA256 embedded during compilation; the UI compares it with the published file.
+共有 417 个普通生成包装和 224 个具名 C++ 专用处理器。定义数量不代表安装数量；分类关闭、规则排除、导出缺失和入口拒绝安装均按实际结果报告。
 
-Ordinary wrappers call named C++ formatters in `hook/ApiCaptureFormatters.inc`.
-Special behavior (injection, clipboard policy, asynchronous callbacks) remains in
-compiled C++ handlers. `hook/ApiHandlers.json` registers available handler names;
-the generator also verifies their presence in C++ source. New ABI types require
-review and inclusion in the generator's supported Windows/native type set.
-No C++ bodies or arbitrary expressions are accepted as catalog values.
+## 定义与构建
 
-Capture metadata records direction, encoding and an optional bounded length
-source (parameter, unit, indirect flag). Structured legacy capture is delegated
-to its named formatter. A null length does not authorize unbounded reads.
-Generated formatters are protected by an SEH boundary; unreadable data produces
-`capture=unreadable`. Wrappers preserve the original return and last-error value.
+每项包含 ID、模块、导出名、分类、架构、调用约定、完整参数/返回类型、采集方式、方向、编码、长度关系、成功条件、错误来源及绑定符号。
 
-Run `python tools/api_monitor/test_definitions.py` after building, together with
-the production hook, protocol and UI regression fixtures in that directory.
+- 长度关系只引用参数名，指定 `bytes`/`elements` 和是否间接读取；复杂结构及表达式由具名 C++ 处理器负责。
+- `wrapper.kind=generated` 生成普通包装并调用 `capture_handler`；`special` 引用专用 `handler`。处理器登记在 `hook/ApiHandlers.json`，正文位于 C++ 源码。定义中的 `handler` 条件表示由对应处理器解释。
+- 新类型必须加入生成器 ABI 类型白名单；新处理器必须实现并登记。JSON 不接受 C++ 正文或任意执行表达式。
+- `length=null` 不允许无界读取；结构化采集交给具名处理器。普通生成包装的格式化调用受 SEH 保护，不可读数据标记 `capture=unreadable`，并保持原返回值和错误码。
+- Python 生成器只使用标准库，编译前校验并输出到 `$(IntDir)generated`，只更新内容变化的文件。重复 ID/导出/符号、未知类型/处理器、错误长度引用、间接读取类型不匹配和引用环使构建失败。
+- 绑定表、函数指针声明、普通包装和扩展发现元数据均由 JSON 生成。Release 成功后原样复制到 `Ksword5.1/x64/Release/profiles/api_monitor_definitions.json`，不压缩。
+
+在 x64 MSVC 开发环境中可先手动校验/生成：
+
+```powershell
+python tools/api_monitor/generate_definitions.py --definitions APIMonitor_x64/api_monitor_definitions.json --output APIMonitor_x64/APIMonitor_x64/x64/Release/generated
+```
+
+使用本机 64 位 MSBuild，`$msbuild` 必须指向 `Bin/amd64/MSBuild.exe`：
+
+```powershell
+& $msbuild APIMonitor_x64/APIMonitor_x64.vcxproj /t:Build /p:Configuration=Release /p:Platform=x64 /p:PreferredToolArchitecture=x64 /p:PROCESSOR_ARCHITECTURE=AMD64 /p:PROCESSOR_ARCHITEW6432=AMD64 /m:1 /v:minimal
+```
+
+主程序通过非链接项目依赖构建 Agent，主程序检查使用 `tools/Invoke-KSwordBuildCheck.ps1`。可通过 `/p:ApiMonitorPython=...` 指定 Python。
+
+发布 JSON 用于查看/核对，Agent 不从中动态加载 Hook；改定义必须重建。生成代码记录定义 SHA256，事件与快照携带该身份，UI 与发布副本核对并提示缺失/不匹配。更新时同时部署主程序和 Agent；已加载旧 DLL 的进程需要重启。
+
+## 自研引擎与覆盖
+
+指令描述及两遍布局支持已识别指令的 RIP 相对寻址、CALL/JMP rel32、短跳转、短/近条件跳转及覆盖区内部目标重定位，识别并保留 ENDBR64。优先邻近 relay 和 5 字节入口补丁；邻近分配失败时仅安全条件允许才用 14 字节。
+
+未知指令、地址宽度覆盖、超范围位移、跳入指令中间、不可读/不可验证入口和跳转桩循环明确拒绝并报告地址/偏移/原因。同址同 detour 的兼容绑定共享入口，重叠或不兼容处理器拒绝覆盖。Raw 使用同一引擎，无法绕过入口失败。
+
+API 覆盖标签页按 PID 展示 Strong、Raw、Fake、Dynamic 的已安装、共享入口、分类关闭、等待模块、导出缺失、规则排除、可重试失败、不支持和已移除状态。完整快照带会话身份和修订号，由发送线程直接发送，不占普通事件队列；接收端只应用完整快照，中断/断线保留上次完整内容并标记过期。
+
+共享协议版本 `0x20261003`，Windows 包为 1000 字节。根、子进程与剪贴板保护读端共同更新。会话身份、UI generation 和修订检查拒绝旧会话更新。
+
+## 异步与扩展
+
+操作以会话、资源身份和 OVERLAPPED 关联，生成唯一操作 ID，分别记录提交、等待、完成和取消请求。取消成功不表示完成；同步结果、IOCP 与后续查询去重。IOCP 关联检查完成键；句柄关闭/复用产生新身份，未完成 OVERLAPPED 重用标记歧义。
+
+跟踪容量 8192。容量不足或 callback thunk 创建失败时报告未跟踪数量，保留原调用与回调。上下文 thunk 保持 x64 参数和 unwind 元数据；停止后继续执行应用回调，旧操作不向新会话发送事件。UDP 来源地址在完成时有界读取，待完成提交不读无效输出。
+
+通过 WSAIoctl 的 SIO_GET_EXTENSION_FUNCTION_POINTER 发现 AcceptEx、ConnectEx、WSARecvMsg、WSASendMsg、TransmitFile、TransmitPackets、GetAcceptExSockaddrs；已知异步完成路径也触发发现。应用持有的指针不替换；重复发现幂等，不同 provider 地址分别保留原函数和上下文，冲突按失败报告。
+
+## 回归与边界
+
+在 x64 MSVC 开发环境运行：
+
+```powershell
+python tools/api_monitor/run_regressions.py
+```
+
+22 个脚本覆盖原始 614 项冻结身份、确定性生成/非法定义、元数据/返回契约、可执行机器码重定位、共享/冲突/卸载失败/退役 trampoline、租约、管道分片、丢失计数、覆盖快照/会话切换、Qt 状态/筛选及真实自有 x64 文件、IOCP、APC、取消、TCP/UDP 与全部七个扩展路径。UI 使用 offscreen Qt。
+
+可选元数据审计只读本机 SDK 头文件，允许追加原生声明目录：
+
+```powershell
+python tools/api_monitor/audit_definition_metadata.py --headers <SDK-Include-directory> --headers <optional-native-declarations-directory>
+```
+
+本轮核对 2592 个带方向注解的参数，差异为0；定义含217项简单长度关系。原生 ABI 参考 [phnt 声明](https://github.com/winsiderss/phnt)，构建不下载/依赖该目录；没有引入第三方 Hook 或解码实现。
+
+仍有以下边界：
+
+- 任意 COM 方法、直接系统调用、启动前的调用及无法识别的原生异步完成路径不保证覆盖。
+- 未经过本会话 WSAIoctl 发现的扩展地址可能没有 Hook；缺失导出或保守解码器拒绝入口按实际失败显示。
+- 启动前建立的 IOCP 关联无法补推；同键同 OVERLAPPED 的手动投递无法与真实内核完成完全区分。
+- 已公布的 trampoline、stub、回调上下文与模块保留到进程退出，避免在途调用访问释放内存。8192 限制跟踪槽位，重复会话/回调仍累计退役代码内存，当前没有安全回收算法。
+- 本机回归不替代多 Windows 版本、长期压力、严格 CFG/CET、受保护进程和实际界面注入验证。
