@@ -29,6 +29,7 @@ struct ProcessSnapshotRow {
     // peakWorkingSetBytes 用途：NtQuery 快照中的峰值工作集，供“内存”列显示。
     SIZE_T peakWorkingSetBytes = 0;
     SIZE_T privatePageBytes = 0;
+    SIZE_T privateWorkingSetBytes = 0;
     SIZE_T virtualSizeBytes = 0;
     // commitBytes/pagedPoolBytes/nonPagedPoolBytes 用途：SystemProcessInformation 原始内存统计。
     SIZE_T commitBytes = 0;
@@ -46,6 +47,8 @@ struct ProcessSnapshotRow {
     ULONGLONG ioWriteBytes = 0;
     ULONGLONG ioOtherBytes = 0;
     double cpuUsagePercent = 0.0;
+    double diskBytesPerSecond = 0.0;
+    bool diskRateKnown = false;
     std::wstring imageName;
     std::wstring imagePath;
     std::uintptr_t r0ProcessObjectAddress = 0;
@@ -60,6 +63,7 @@ struct ProcessSnapshotRow {
     // r0EnumImagePath 用途：保存 R0 读取到的映像路径，R3 无路径或合成隐藏行时作为诊断证据。
     std::wstring r0EnumImagePath;
     std::wstring r0AuditSummary;
+    bool r0AuditKnown = false;
     std::wstring r0AuditDetail;
     // detailTexts 用途：保存主程序进程库按需采集到的扩展列文本，键为 ProcessColumnId 的整数值。
     std::unordered_map<std::uint8_t, std::wstring> detailTexts;

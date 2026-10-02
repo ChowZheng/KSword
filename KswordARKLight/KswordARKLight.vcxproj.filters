@@ -1,6 +1,9 @@
 <?xml version='1.0' encoding='utf-8'?>
 <Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003" ToolsVersion="4.0">
   <ItemGroup>
+    <Filter Include="ksword\network">
+      <UniqueIdentifier>{626C8F69-998B-46E7-A7E7-03D75EE026DF}</UniqueIdentifier>
+    </Filter>
     <Filter Include="App">
       <UniqueIdentifier>{0092477D-529C-5187-8A74-006645E5557B}</UniqueIdentifier>
     </Filter>
@@ -363,6 +366,12 @@
       <Filter>Features\Process</Filter>
     </ClCompile>
     <ClCompile Include="Features\Process\ProcessDetails.cpp">
+      <Filter>Features\Process</Filter>
+    </ClCompile>
+    <ClCompile Include="Features\Process\ProcessExtraQueries.cpp">
+      <Filter>Features\Process</Filter>
+    </ClCompile>
+    <ClCompile Include="Features\Process\ProcessTelemetry.cpp">
       <Filter>Features\Process</Filter>
     </ClCompile>
     <ClCompile Include="Features\Process\ProcessEnumerator.cpp">
@@ -741,6 +750,9 @@
     <ClCompile Include="..\Ksword5.1\Ksword5.1\ksword\process\process.cpp">
       <Filter>ksword\process</Filter>
     </ClCompile>
+    <ClCompile Include="..\Ksword5.1\Ksword5.1\ksword\network\network_process_etw_monitor.cpp">
+      <Filter>ksword\network</Filter>
+    </ClCompile>
     <ClCompile Include="..\Ksword5.1\Ksword5.1\ksword\string\string.cpp">
       <Filter>ksword\string</Filter>
     </ClCompile>
@@ -1017,6 +1029,12 @@
       <Filter>Features\Process</Filter>
     </ClInclude>
     <ClInclude Include="Features\Process\ProcessDetails.h">
+      <Filter>Features\Process</Filter>
+    </ClInclude>
+    <ClInclude Include="Features\Process\ProcessExtraQueries.h">
+      <Filter>Features\Process</Filter>
+    </ClInclude>
+    <ClInclude Include="Features\Process\ProcessTelemetry.h">
       <Filter>Features\Process</Filter>
     </ClInclude>
     <ClInclude Include="Features\Registry\RegistryActions.h">
@@ -1297,6 +1315,9 @@
     </ClInclude>
     <ClInclude Include="..\Ksword5.1\Ksword5.1\ksword\process\process.h">
       <Filter>ksword\process</Filter>
+    </ClInclude>
+    <ClInclude Include="..\Ksword5.1\Ksword5.1\ksword\network\network_process_etw_monitor.h">
+      <Filter>ksword\network</Filter>
     </ClInclude>
     <ClInclude Include="..\Ksword5.1\Ksword5.1\ksword\string\string.h">
       <Filter>ksword\string</Filter>

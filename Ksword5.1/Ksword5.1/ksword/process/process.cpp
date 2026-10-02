@@ -1013,8 +1013,9 @@ namespace
     // - 按实例名中的 pid_XXXX 聚合同一进程的多个 engine；
     // - 参数 collectEngineText 为 true 时额外记录占用最高的引擎展示名（任务管理器“GPU 引擎”列）；
     // - 返回 PID -> GPU 占用摘要，失败时返回空表。
-    std::unordered_map<std::uint32_t, GpuProcessUsageSample> QueryGpuUsageByPid(const bool collectEngineText)
+    std::unordered_map<std::uint32_t, GpuProcessUsageSample> QueryGpuUsageByPid(const bool collectEngineText, bool& sampleKnown)
     {
+        sampleKnown = false;
         std::unordered_map<std::uint32_t, GpuProcessUsageSample> gpuUsageByPid;
 
         std::lock_guard<std::mutex> queryLock(gpuPdhQueryMutex());
@@ -1083,16 +1084,17 @@ namespace
             {
                 continue;
             }
-            if (item.FmtValue.CStatus != ERROR_SUCCESS)
+            if (item.FmtValue.CStatus != PDH_CSTATUS_VALID_DATA && item.FmtValue.CStatus != PDH_CSTATUS_NEW_DATA)
             {
                 continue;
             }
 
             const double enginePercent = item.FmtValue.doubleValue;
-            if (!std::isfinite(enginePercent) || enginePercent <= 0.0)
+            if (!std::isfinite(enginePercent) || enginePercent < 0.0)
             {
                 continue;
             }
+            sampleKnown = true;
 
             // 同一 PID 可能同时使用 3D/Copy/VideoDecode/Compute 等多个 engine，这里做总和。
             GpuProcessUsageSample& usageSample = gpuUsageByPid[processId];
@@ -1123,8 +1125,9 @@ namespace
     // - 读取 \GPU Process Memory(*)\Dedicated Usage 与 Shared Usage；
     // - 两个计数器都是瞬时原始值，不需要基线样本；
     // - 返回 PID -> 显存占用；计数器不可用时返回空表。
-    std::unordered_map<std::uint32_t, GpuProcessMemorySample> QueryGpuProcessMemoryByPid()
+    std::unordered_map<std::uint32_t, GpuProcessMemorySample> QueryGpuProcessMemoryByPid(bool& sampleKnown)
     {
+        sampleKnown = false;
         std::unordered_map<std::uint32_t, GpuProcessMemorySample> gpuMemoryByPid;
 
         std::lock_guard<std::mutex> queryLock(gpuMemoryPdhQueryMutex());
@@ -1143,11 +1146,11 @@ namespace
 
         // accumulateCounter：把一个通配计数器的全部实例按 PID 聚合到目标字段。
         const auto accumulateCounter =
-            [&gpuMemoryByPid](const HCOUNTER counterHandle, const bool writeDedicated) -> void
+            [&gpuMemoryByPid](const HCOUNTER counterHandle, const bool writeDedicated) -> bool
             {
                 if (counterHandle == nullptr)
                 {
-                    return;
+                    return false;
                 }
 
                 DWORD bufferSize = 0;
@@ -1160,7 +1163,7 @@ namespace
                     nullptr);
                 if (formatStatus != PDH_MORE_DATA || bufferSize == 0 || itemCount == 0)
                 {
-                    return;
+                    return false;
                 }
 
                 std::vector<std::uint64_t> itemStorage(
@@ -1175,21 +1178,24 @@ namespace
                     itemList);
                 if (formatStatus != ERROR_SUCCESS)
                 {
-                    return;
+                    return false;
                 }
 
+                bool valid = false;
                 for (DWORD itemIndex = 0; itemIndex < itemCount; ++itemIndex)
                 {
                     const PDH_FMT_COUNTERVALUE_ITEM_W& item = itemList[itemIndex];
                     const std::uint32_t processId = ExtractPidFromGpuEngineInstanceName(item.szName);
-                    if (processId == 0 || item.FmtValue.CStatus != ERROR_SUCCESS)
+                    if (processId == 0 || (item.FmtValue.CStatus != PDH_CSTATUS_VALID_DATA &&
+                        item.FmtValue.CStatus != PDH_CSTATUS_NEW_DATA))
                     {
                         continue;
                     }
-                    if (item.FmtValue.largeValue <= 0)
+                    if (item.FmtValue.largeValue < 0)
                     {
                         continue;
                     }
+                    valid = true;
 
                     // 同一进程可能在多个适配器上都有显存实例，按 PID 求和。
                     const std::uint64_t usageBytes = static_cast<std::uint64_t>(item.FmtValue.largeValue);
@@ -1203,10 +1209,12 @@ namespace
                         memorySample.sharedBytes += usageBytes;
                     }
                 }
+                return valid;
             };
 
-        accumulateCounter(state.dedicatedCounterHandle, true);
-        accumulateCounter(state.sharedCounterHandle, false);
+        const bool dedicatedKnown = accumulateCounter(state.dedicatedCounterHandle, true);
+        const bool sharedKnown = accumulateCounter(state.sharedCounterHandle, false);
+        sampleKnown = dedicatedKnown && sharedKnown;
         return gpuMemoryByPid;
     }
 
@@ -1225,12 +1233,14 @@ namespace
 
         const bool collectEngineText =
             (detailDemandFlags & ks::process::ProcessDetailDemand::GpuEngine) != 0U;
+        bool usageKnown = false;
         const std::unordered_map<std::uint32_t, GpuProcessUsageSample> gpuUsageByPid =
-            QueryGpuUsageByPid(collectEngineText);
-        if (!gpuUsageByPid.empty())
+            QueryGpuUsageByPid(collectEngineText, usageKnown);
+        if (usageKnown)
         {
             for (ks::process::ProcessRecord& processRecord : processList)
             {
+                processRecord.gpuUsageKnown = true;
                 const auto gpuIt = gpuUsageByPid.find(processRecord.pid);
                 if (gpuIt == gpuUsageByPid.end())
                 {
@@ -1251,9 +1261,10 @@ namespace
             return;
         }
 
+        bool memoryKnown = false;
         const std::unordered_map<std::uint32_t, GpuProcessMemorySample> gpuMemoryByPid =
-            QueryGpuProcessMemoryByPid();
-        if (gpuMemoryByPid.empty())
+            QueryGpuProcessMemoryByPid(memoryKnown);
+        if (!memoryKnown)
         {
             return;
         }
@@ -1441,8 +1452,9 @@ namespace
     }
 
     // 查询进程令牌是否提升（管理员）。
-    bool QueryProcessIsElevatedByHandle(const HANDLE processHandle)
+    bool QueryProcessIsElevatedByHandle(const HANDLE processHandle, bool* knownOut = nullptr)
     {
+        if (knownOut != nullptr) *knownOut = false;
         HANDLE processToken = nullptr;
         if (::OpenProcessToken(processHandle, TOKEN_QUERY, &processToken) == FALSE)
         {
@@ -1463,6 +1475,7 @@ namespace
         {
             return false;
         }
+        if (knownOut != nullptr) *knownOut = true;
         return tokenElevation.TokenIsElevated != 0;
     }
 
@@ -3830,7 +3843,7 @@ namespace ks::process
         // 命令行、用户、管理员状态。
         processRecord.commandLine = QueryProcessCommandLineByHandle(processHandle);
         processRecord.userName = QueryProcessUserNameByHandle(processHandle);
-        processRecord.isAdmin = QueryProcessIsElevatedByHandle(processHandle);
+        processRecord.isAdmin = QueryProcessIsElevatedByHandle(processHandle, &processRecord.isAdminKnown);
         processRecord.architectureText = QueryProcessArchitectureByHandle(processHandle);
         processRecord.priorityText = QueryPriorityTextByHandle(processHandle);
         processRecord.efficiencyModeSupported = QueryProcessEfficiencyModeByHandle(

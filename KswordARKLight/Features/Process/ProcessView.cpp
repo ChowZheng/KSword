@@ -3,6 +3,8 @@
 #include "ProcessActions.h"
 #include "ProcessColumns.h"
 #include "ProcessDetails.h"
+#include "ProcessTelemetry.h"
+#include "ProcessExtraQueries.h"
 #include "ProcessEnumerator.h"
 #include "ProcessModel.h"
 #include "../AuditCommon/AuditFormatting.h"
@@ -24,7 +26,6 @@
 #include <windowsx.h>
 
 #include <algorithm>
-#include <atomic>
 #include <cstring>
 #include <memory>
 #include <sstream>
@@ -301,6 +302,7 @@ struct ProcessViewState {
     HWND listView = nullptr;
     HIMAGELIST imageList = nullptr;
     ProcessModel model;
+    std::shared_ptr<ProcessTelemetry> telemetry = std::make_shared<ProcessTelemetry>();
     std::shared_ptr<std::unordered_map<std::wstring, std::string>> signatureCache =
         std::make_shared<std::unordered_map<std::wstring, std::string>>();
     // activeColumns 用途：当前运行期实际展示的逻辑列；关闭页面后不持久化。
@@ -369,6 +371,7 @@ ULONGLONG ResolveCurrentProcessCreationTime(
 struct KernelProcessSnapshotEntry {
     std::uint32_t processId = 0;
     std::uint32_t parentProcessId = 0;
+    std::uint64_t creationTime100ns = 0;
     std::uint32_t flags = 0;
     std::uint32_t sessionId = 0;
     std::uint32_t fieldFlags = 0;
@@ -1474,6 +1477,7 @@ bool EnumerateProcessesByR0Driver(
         KernelProcessSnapshotEntry processEntry{};
         processEntry.processId = entry.processId;
         processEntry.parentProcessId = entry.parentProcessId;
+        processEntry.creationTime100ns = entry.creationTime100ns;
         processEntry.flags = entry.flags;
         processEntry.sessionId = entry.sessionId;
         processEntry.fieldFlags = entry.fieldFlags;
@@ -1532,6 +1536,8 @@ bool ConfirmR0Injection(HWND owner, const wchar_t* action, DWORD pid, const std:
 void MergeKernelProcessExtension(
     ProcessSnapshotRow& row,
     const KernelProcessSnapshotEntry& kernelProcess) {
+    if (!row.r0KernelOnly && row.creationTime100ns != 0 && kernelProcess.creationTime100ns != 0 &&
+        row.creationTime100ns != kernelProcess.creationTime100ns) return;
     row.r0EnumFlags = kernelProcess.flags;
     row.r0EnumStatus = kernelProcess.r0Status;
     row.r0EnumImagePath = NarrowToWide(kernelProcess.imagePath);
@@ -1547,20 +1553,17 @@ void MergeKernelProcessExtension(
         ::swprintf_s(protectionText, L"0x%02X", static_cast<unsigned int>(kernelProcess.protection));
         row.detailTexts[static_cast<std::uint8_t>(ProcessColumnId::Protection)] = protectionText;
         row.detailTexts[static_cast<std::uint8_t>(ProcessColumnId::Ppl)] =
-            kernelProcess.protection == 0 ? L"无" : std::wstring(L"PPL ") + protectionText;
-    } else {
-        row.detailTexts[static_cast<std::uint8_t>(ProcessColumnId::Protection)] = L"无（驱动未返回字段）";
-        row.detailTexts[static_cast<std::uint8_t>(ProcessColumnId::Ppl)] = L"无（驱动未返回字段）";
+            (kernelProcess.protection & 7U) == 1U ? std::wstring(L"PPL ") + protectionText : L"否";
     }
-    if (kernelProcess.objectTableAddress != 0) {
+    if ((kernelProcess.fieldFlags & KSWORD_ARK_PROCESS_FIELD_OBJECT_TABLE_VALUE_PRESENT) != 0U) {
         wchar_t objectTableText[32]{};
         ::swprintf_s(objectTableText, L"0x%016llX", static_cast<unsigned long long>(kernelProcess.objectTableAddress));
-        row.detailTexts[static_cast<std::uint8_t>(ProcessColumnId::HandleTable)] = objectTableText;
+        row.detailTexts[static_cast<std::uint8_t>(ProcessColumnId::HandleTable)] = kernelProcess.objectTableAddress ? objectTableText : L"无对象表";
     }
-    if (kernelProcess.sectionObjectAddress != 0) {
+    if ((kernelProcess.fieldFlags & KSWORD_ARK_PROCESS_FIELD_SECTION_OBJECT_VALUE_PRESENT) != 0U) {
         wchar_t sectionObjectText[32]{};
         ::swprintf_s(sectionObjectText, L"0x%016llX", static_cast<unsigned long long>(kernelProcess.sectionObjectAddress));
-        row.detailTexts[static_cast<std::uint8_t>(ProcessColumnId::SectionObject)] = sectionObjectText;
+        row.detailTexts[static_cast<std::uint8_t>(ProcessColumnId::SectionObject)] = kernelProcess.sectionObjectAddress ? sectionObjectText : L"无映像节";
     }
 }
 
@@ -1571,6 +1574,7 @@ ProcessSnapshotRow BuildKernelOnlyRow(const KernelProcessSnapshotEntry& kernelPr
     row.processId = static_cast<DWORD>(kernelProcess.processId);
     row.parentProcessId = static_cast<DWORD>(kernelProcess.parentProcessId);
     row.r0KernelOnly = true;
+    row.creationTime100ns = kernelProcess.creationTime100ns;
     MergeKernelProcessExtension(row, kernelProcess);
 
     const std::wstring imageName = NarrowToWide(kernelProcess.imageName);
@@ -1766,6 +1770,7 @@ void ApplyR0ProcessAuditRows(std::vector<ProcessSnapshotRow>& rows, std::wstring
     std::size_t matched = 0;
     std::size_t anomalous = 0;
     for (ProcessSnapshotRow& row : rows) {
+        row.r0AuditKnown = true;
         const auto found = auditByPid.find(row.processId);
         if (found == auditByPid.end()) {
             if (row.r0KernelOnly) {
@@ -1813,25 +1818,26 @@ bool WriteClipboardText(HWND owner, const std::wstring& text) {
     return Ksword::Ui::CopyTextToClipboard(owner, text, L"进程模块");
 }
 
-// ApplyR0KernelColumnDetails 用途：仅在内核列可见时调用 R0 HandleTable 与 SectionObject 查询并回填列表。
+// Keep object-table addresses from the R0 enumeration; query missing image-section addresses only.
 void ApplyR0KernelColumnDetails(std::vector<ProcessSnapshotRow>& rows, const std::vector<ProcessColumnId>& columns) {
     const bool needHandleTable = std::find(columns.begin(), columns.end(), ProcessColumnId::HandleTable) != columns.end();
     const bool needSectionObject = std::find(columns.begin(), columns.end(), ProcessColumnId::SectionObject) != columns.end();
     if (!needHandleTable && !needSectionObject) return;
 
     const ksword::ark::DriverClient driverClient;
+    const auto capabilities = driverClient.queryDriverCapabilities();
     for (ProcessSnapshotRow& row : rows) {
-        if (row.processId == 0 || row.r0KernelOnly) continue;
-        if (needHandleTable) {
-            const ksword::ark::HandleEnumResult handles = driverClient.enumerateProcessHandles(row.processId);
-            if (handles.io.ok) {
-                row.detailTexts[static_cast<std::uint8_t>(ProcessColumnId::HandleTable)] =
-                    L"可用：" + std::to_wstring(handles.returnedCount) + L"/" + std::to_wstring(handles.totalCount) + L" 个句柄";
-            } else {
-                row.detailTexts[static_cast<std::uint8_t>(ProcessColumnId::HandleTable)] = L"R0 查询失败";
-            }
+        if (row.processId == 0) continue;
+        if (needHandleTable && row.detailTexts.find(static_cast<std::uint8_t>(ProcessColumnId::HandleTable)) == row.detailTexts.end()) {
+            row.detailTexts[static_cast<std::uint8_t>(ProcessColumnId::HandleTable)] =
+                capabilities.io.ok ? L"驱动未返回对象表地址" : L"驱动未加载或查询失败";
         }
-        if (needSectionObject) {
+        if (needSectionObject && row.detailTexts.find(static_cast<std::uint8_t>(ProcessColumnId::SectionObject)) == row.detailTexts.end()) {
+            if (row.r0KernelOnly || (!capabilities.io.ok && capabilities.io.win32Error != ERROR_NOT_SUPPORTED &&
+                capabilities.io.win32Error != ERROR_INVALID_FUNCTION)) {
+                row.detailTexts[static_cast<std::uint8_t>(ProcessColumnId::SectionObject)] = L"驱动未返回映像节地址";
+                continue;
+            }
             const ksword::ark::ProcessSectionQueryResult section = driverClient.queryProcessSection(row.processId);
             if (section.io.ok) {
                 wchar_t addressText[32]{};
@@ -1868,15 +1874,20 @@ void ApplyMainProcessDetails(std::vector<ProcessSnapshotRow>& rows,
         liveKeys.insert(key);
         const bool needsStatic = std::any_of(columns.begin(), columns.end(), [](ProcessColumnId id) {
             const auto* descriptor = FindProcessColumn(id);
-            return descriptor && (descriptor->group == ProcessColumnGroup::General ||
-                descriptor->group == ProcessColumnGroup::Security || id == ProcessColumnId::PowerThrottling);
+            return descriptor && (descriptor->group == ProcessColumnGroup::Security ||
+                id == ProcessColumnId::Path || id == ProcessColumnId::CommandLine || id == ProcessColumnId::User ||
+                id == ProcessColumnId::Description || id == ProcessColumnId::ProcessType || id == ProcessColumnId::PowerThrottling);
         });
         if (needsStatic) {
             const bool verifySignature = has(ProcessColumnId::Signature) && signatureBudget > 0 &&
-                signatureCache.find(key) == signatureCache.end() && row.processId > 4;
+                signatureCache.find(key) == signatureCache.end() && row.processId > 4 && !row.imagePath.empty();
             if (verifySignature) --signatureBudget;
             ks::process::FillProcessStaticDetails(details, verifySignature);
+            // Inaccessible rows must not consume the entire signing budget
+            // every round and starve ordinary processes further down the list.
+            if (verifySignature && !details.staticDetailsReady) ++signatureBudget;
             ks::process::FillProcessOnDemandDetails(details, demand, nullptr);
+            QueryProcessExtraDetails(details, demand, has(ProcessColumnId::PowerThrottling));
             // A new handle may have resolved a recycled PID while we queried.
             if (row.processId > 4) {
                 HANDLE process = ::OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, row.processId);
@@ -1900,8 +1911,10 @@ void ApplyMainProcessDetails(std::vector<ProcessSnapshotRow>& rows,
             row.detailTexts[static_cast<std::uint8_t>(ProcessColumnId::GpuDedicatedMemory)] = FormatByteSize(details.gpuDedicatedMemoryBytes);
             row.detailTexts[static_cast<std::uint8_t>(ProcessColumnId::GpuSharedMemory)] = FormatByteSize(details.gpuSharedMemoryBytes);
         }
-        if (!details.gpuEngineText.empty())
-            row.detailTexts[static_cast<std::uint8_t>(ProcessColumnId::GpuEngine)] = NarrowToWide(details.gpuEngineText);
+        if (!details.gpuMemoryKnown) {
+            row.detailTexts[static_cast<std::uint8_t>(ProcessColumnId::GpuDedicatedMemory)] = L"计数器不支持或查询失败";
+            row.detailTexts[static_cast<std::uint8_t>(ProcessColumnId::GpuSharedMemory)] = L"计数器不支持或查询失败";
+        }
     }
     std::erase_if(signatureCache, [&liveKeys](const auto& entry) { return liveKeys.find(entry.first) == liveKeys.end(); });
 }
@@ -1910,12 +1923,13 @@ void ApplyMainProcessDetails(std::vector<ProcessSnapshotRow>& rows,
 // process refresh. It never accesses HWNDs or ProcessViewState and is safe for
 // AsyncSnapshotTask's worker thread.
 ProcessRefreshSnapshot CollectProcessRefreshSnapshot(const std::vector<ProcessColumnId>& columns,
-    std::unordered_map<std::wstring, std::string>& signatureCache) {
+    std::unordered_map<std::wstring, std::string>& signatureCache, ProcessTelemetry& telemetry) {
     ProcessRefreshSnapshot snapshot{};
     snapshot.enumeration = EnumerateProcessesByNtQuerySystemInformation();
     if (!snapshot.enumeration.success) {
         return snapshot;
     }
+    telemetry.Sample(snapshot.enumeration.rows, columns);
     ApplyMainProcessDetails(snapshot.enumeration.rows, columns, signatureCache);
     snapshot.hiddenAudit = ApplyDefaultHiddenProcessAudit(snapshot.enumeration.rows);
     ApplyR0ProcessAuditRows(snapshot.enumeration.rows, snapshot.crossViewStatusSuffix);
@@ -2021,7 +2035,9 @@ void BeginProcessRefresh(ProcessViewState& state) {
     }
     const std::vector<ProcessColumnId> requestedColumns = state.activeColumns;
     state.refreshTask->request(
-        [requestedColumns, signatureCache = state.signatureCache]() { return CollectProcessRefreshSnapshot(requestedColumns, *signatureCache); },
+        [requestedColumns, signatureCache = state.signatureCache, telemetry = state.telemetry]() {
+            return CollectProcessRefreshSnapshot(requestedColumns, *signatureCache, *telemetry);
+        },
         [&state](std::uint64_t, std::optional<ProcessRefreshSnapshot>&& snapshot, std::exception_ptr error) {
             if (state.refreshButton) {
                 ::EnableWindow(state.refreshButton, TRUE);

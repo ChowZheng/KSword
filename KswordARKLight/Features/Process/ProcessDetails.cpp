@@ -77,11 +77,11 @@ void ApplyProcessDetailRecord(ProcessSnapshotRow& row, const ks::process::Proces
     }
     put(C::CommandLine, textOrReason(record.commandLine));
     put(C::User, record.userName.empty() && kernel ? L"NT AUTHORITY\\SYSTEM" : textOrReason(record.userName));
-    put(C::Signature, textOrReason(record.signatureState));
+    put(C::Signature, kernel && record.imagePath.empty() ? L"不适用" : textOrReason(record.signatureState));
     put(C::Description, record.fileDescription.empty() ? L"无描述" : Wide(record.fileDescription));
     put(C::ProcessType, textOrReason(record.architectureText));
     put(C::PackageName, record.packageNameKnown ? (record.packageFullName.empty() ? L"无程序包" : Wide(record.packageFullName)) : L"访问受限或查询失败");
-    put(C::IsAdmin, kernel ? L"不适用" : (record.staticDetailsReady && !record.userName.empty() ? (record.isAdmin ? L"是" : L"否") : L"令牌访问受限"));
+    put(C::IsAdmin, kernel ? L"不适用" : (record.isAdminKnown ? (record.isAdmin ? L"是" : L"否") : L"令牌访问受限"));
     put(C::PowerThrottling, record.efficiencyModeSupported ? (record.efficiencyModeEnabled ? L"已启用" : L"已禁用") : L"查询失败或不支持");
     put(C::Status, record.processStateKnown ? (record.processSuspended ? L"已挂起" : L"运行中") : L"未知");
     put(C::JobObject, record.jobObjectKnown ? (record.inJobObject ? L"是" : L"否") : L"访问受限或查询失败");
@@ -92,6 +92,16 @@ void ApplyProcessDetailRecord(ProcessSnapshotRow& row, const ks::process::Proces
     put(C::DpiAwareness, DpiText(record.dpiAwarenessLevel));
     put(C::EnterpriseContext, textOrReason(record.enterpriseContextText));
     put(C::PplLevel, record.protectionLevelKnown ? Wide(record.protectionLevelText) : L"访问受限或查询失败");
+    if (record.protectionLevelKnown) {
+        put(C::Protection, Wide(record.protectionLevelText));
+        const auto level = record.protectionLevel;
+        put(C::Ppl, level == 0U || level == 2U || level == 3U || level == 4U || level == 6U || level == 8U ? L"是" : L"否");
+    }
+    wchar_t percent[32]{};
+    ::swprintf_s(percent, L"%.1f%%", record.gpuPercent);
+    put(C::Gpu, record.gpuUsageKnown ? percent : L"采样预热或计数器不支持");
+    put(C::GpuEngine, record.gpuUsageKnown ?
+        (record.gpuEngineText.empty() ? L"无活动引擎" : Wide(record.gpuEngineText)) : L"采样预热或计数器不支持");
 }
 
 } // namespace Ksword::Features::Process

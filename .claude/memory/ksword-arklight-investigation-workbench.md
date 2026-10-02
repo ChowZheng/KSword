@@ -36,3 +36,17 @@
 - 只构建 `KswordARKLight.vcxproj` 仍可能运行其 `BuildKswordArkDriverBeforeLightEmbed` 目标。需要显式传入 `/p:KswordArkLightEnsureDriverBuilt=false /p:KswordArkLightSkipDriverSign=true /p:KswordArkLightReuseSignedDriver=true`。
 - Light 的嵌入驱动准备步骤仍需要现有 `KswordARK.sys`；可把 `/p:OutDir=` 指向已有该文件的临时输出目录，避免占用中的仓库 Release EXE 阻止链接。
 - 每次构建后检查日志不含 `KswordARKDriver.vcxproj`、`signing`、`CSignTool`、`Sign-Ksword`，并确认 Light 构建退出码为 0。用户要求按功能分别编译、分别提交时，每次仅暂存本功能修改的文件。
+
+## 进程列采集与刷新（2026-10-02）
+
+- 进程页默认 `ProcessViewPreset::Detail`；初始化下拉框从实际 preset 同步选中项，不能只改默认列后仍显示“监视”。
+- `ProcessDetails` 是需求位图和纯文本映射层；`ProcessExtraQueries` 只读延迟绑定 WIP/效率模式；`ProcessTelemetry` 由页面独占，在串行刷新工作线程中维护 I/O 与网络基线。工作任务捕获共享所有权，页面关闭后仍在执行的任务不会使用悬空缓存。
+- 扩展字段按 PID + creation time 合并；静态查询之后再次核验创建时间。启动时间直接格式化 NtQuery 快照中的 FILETIME，专用工作集来自 `WorkingSetPrivateSize`，不能拿 `PrivatePageCount`（私有提交量）代替。
+- 自动定时器在 refreshTask 正运行时跳过本轮，不增加任务代次。否则签名/R0 查询耗时超过周期时，`AsyncSnapshotTask` 会一直丢弃已完成快照，导致扩展字段永远无法展示。手动请求和列切换仍可合并到下一轮。
+- 签名每轮最多验证 24 个尚无缓存的实例，结果按稳定身份保存并清理死亡实例；已经验证的行不能在下一轮重新变成 Pending。
+- GPU 沿用公共 R3 PDH 后端，接收 `PDH_CSTATUS_VALID_DATA` 和 `PDH_CSTATUS_NEW_DATA`；增加 `gpuUsageKnown`，实测 0 与预热/失败分开。显存两类计数器都成功才标记已知，零值仍是有效样本。该路径不使用 D3DKMT 节点性能查询。
+- 网络列按需启动既有 `ProcessNetworkEtwMonitor` 的独立私有会话，覆盖 TCP/UDP IPv4/IPv6；隐藏网络列后的下一轮停止会话。未提权/丢事件明确显示原因；实例复用、会话重启和计数器回退都重建基线。磁盘列显示进程读写 I/O 字节差值速率（该 R3 计数包含非磁盘 I/O，不能声称是物理磁盘吞吐）。
+- 企业上下文使用系统目录 `edputil.dll` 的 `EdpGetContextForProcess` + `EdpFreeContext`，依微软公开 ABI 解码 WIP 状态和 UI 企业身份；不要把共享后端的固定 Personal 当成实测证据。效率模式在 Win32 查询失败时只读回退到 `NtQueryInformationProcess(ProcessPowerThrottlingState=77)`，不修改目标状态。
+- 管理员列使用 `isAdminKnown` 区分 TokenElevation 读取失败与真实未提升。策略/DPI 枚举转换成中文状态，Unknown 不能按已禁用显示。
+- 内核列保留枚举返回的真实对象表/映像节地址，不用“句柄数”覆盖对象表地址；驱动缺字段时不能宣称无保护。R0-only 行保留驱动创建时间，未返回的用户态统计不能伪造为 0；失败 CrossView 也不能标记“已审计”。
+- 验证：Light Release/x64 完整链接通过；独立 `/W4 /WX` 进程回归涵盖元数据、PID 复用、策略状态、GPU 空闲/失败、专用工作集与 I/O 基线；整套 LightTests 通过。用生产对象链接的隐藏窗口探针验证默认详细列组、671 行真实枚举、用户/GPU/安全视图回填；读取实际 worker 函数的探针验证 WIP、效率模式及真实文件 I/O。未提权探针的网络提供者启用返回 Win32 5，已验证权限降级，没有完成管理员会话实际流量验收；没有执行驱动装载或修改目标进程。

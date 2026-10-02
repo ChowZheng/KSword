@@ -175,6 +175,8 @@
     <ClCompile Include="Features\Process\ProcessActions.cpp" />
     <ClCompile Include="Features\Process\ProcessColumns.cpp" />
     <ClCompile Include="Features\Process\ProcessDetails.cpp" />
+    <ClCompile Include="Features\Process\ProcessExtraQueries.cpp" />
+    <ClCompile Include="Features\Process\ProcessTelemetry.cpp" />
     <ClCompile Include="Features\Process\ProcessEnumerator.cpp" />
     <ClCompile Include="Features\Process\ProcessFeature.cpp" />
     <ClCompile Include="Features\Process\ProcessModel.cpp" />
@@ -305,6 +307,7 @@
     <ClCompile Include="..\Ksword5.1\Ksword5.1\ArkDriverClient\ArkDriverSection.cpp" />
     <ClCompile Include="..\Ksword5.1\Ksword5.1\ksword\file\pe_analyzer.cpp" />
     <ClCompile Include="..\Ksword5.1\Ksword5.1\ksword\process\process.cpp" />
+    <ClCompile Include="..\Ksword5.1\Ksword5.1\ksword\network\network_process_etw_monitor.cpp" />
     <ClCompile Include="..\Ksword5.1\Ksword5.1\ksword\service\service.cpp" />
     <ClCompile Include="..\Ksword5.1\Ksword5.1\ksword\string\string.cpp" />
   </ItemGroup>
@@ -400,6 +403,8 @@
     <ClInclude Include="Features\Process\ProcessView.h" />
     <ClInclude Include="Features\Process\ProcessColumns.h" />
     <ClInclude Include="Features\Process\ProcessDetails.h" />
+    <ClInclude Include="Features\Process\ProcessExtraQueries.h" />
+    <ClInclude Include="Features\Process\ProcessTelemetry.h" />
     <ClInclude Include="Features\Registry\RegistryActions.h" />
     <ClInclude Include="Features\Registry\RegistryFeature.h" />
     <ClInclude Include="Features\Registry\RegistryModel.h" />
@@ -493,6 +498,7 @@
     <None Include="..\Ksword5.1\Ksword5.1\ArkDriverClient\ArkRuntimeDynDataCatalog.inc" />
     <ClInclude Include="..\Ksword5.1\Ksword5.1\ksword\file\pe_analyzer.h" />
     <ClInclude Include="..\Ksword5.1\Ksword5.1\ksword\process\process.h" />
+    <ClInclude Include="..\Ksword5.1\Ksword5.1\ksword\network\network_process_etw_monitor.h" />
     <ClInclude Include="..\Ksword5.1\Ksword5.1\ksword\string\string.h" />
     <ClInclude Include="..\shared\KswordArkLogProtocol.h" />
     <ClInclude Include="..\shared\ProcessTerminateMethods.h" />

@@ -9,6 +9,8 @@
     <ClCompile Include="KswordARKLightTests.cpp"><Filter>Tests</Filter></ClCompile>
     <ClCompile Include="ProcessInformationTests.cpp"><Filter>Tests</Filter></ClCompile>
     <ClCompile Include="..\KswordARKLight\Features\Process\ProcessDetails.cpp"><Filter>Production</Filter></ClCompile>
+    <ClCompile Include="..\KswordARKLight\Features\Process\ProcessTelemetry.cpp"><Filter>Production</Filter></ClCompile>
+    <ClCompile Include="..\Ksword5.1\Ksword5.1\ksword\network\network_process_etw_monitor.cpp"><Filter>Production</Filter></ClCompile>
     <ClCompile Include="..\KswordARKLight\Features\Process\ProcessColumns.cpp"><Filter>Production</Filter></ClCompile>
     <ClCompile Include="..\KswordARKLight\Features\Process\ProcessEnumerator.cpp"><Filter>Production</Filter></ClCompile>
     <ClCompile Include="..\KswordARKLight\Core\NtApi.cpp"><Filter>Production</Filter></ClCompile>

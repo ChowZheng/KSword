@@ -165,6 +165,8 @@ ProcessEnumerationResult EnumerateProcessesByNtQuerySystemInformation() {
         row.workingSetBytes = info->WorkingSetSize;
         row.peakWorkingSetBytes = info->PeakWorkingSetSize;
         row.privatePageBytes = info->PrivatePageCount;
+        row.privateWorkingSetBytes = info->WorkingSetPrivateSize.QuadPart > 0
+            ? static_cast<SIZE_T>(info->WorkingSetPrivateSize.QuadPart) : 0;
         row.virtualSizeBytes = info->VirtualSize;
         row.commitBytes = info->PagefileUsage;
         row.pagedPoolBytes = info->QuotaPagedPoolUsage;

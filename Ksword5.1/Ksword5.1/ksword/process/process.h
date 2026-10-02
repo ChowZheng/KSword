@@ -306,6 +306,7 @@ namespace ks::process
         bool efficiencyModeSupported = false; // 是否成功查询效率模式状态。
         bool efficiencyModeEnabled = false;   // 是否启用效率模式（PowerThrottling ExecutionSpeed）。
         bool isAdmin = false;              // 进程令牌是否已提升（管理员权限）。
+        bool isAdminKnown = false;         // 是否成功读取 TokenElevation，拒绝访问不等于“否”。
         std::uint32_t protectionLevel = 0;  // PPL 保护级别枚举值，来自手动刷新快照。
         bool protectionLevelKnown = false;  // protectionLevelKnown：true 表示本轮已手动查询 PPL。
         std::string protectionLevelText;    // protectionLevelText：PPL 枚举文本，未刷新时保持空。
@@ -330,6 +331,7 @@ namespace ks::process
         double workingSetMB = 0.0;         // RAM 实际使用工作集（MB）。
         double diskMBps = 0.0;             // 磁盘吞吐（MB/s）。
         double gpuPercent = 0.0;           // GPU 百分比（R3 通过 PDH GPU Engine 按 PID 聚合）。
+        bool gpuUsageKnown = false;        // false 表示 PDH 未热身或查询失败，不能把默认 0 当作实测。
         double netKBps = 0.0;              // 网络总吞吐（KB/s，等于下行 + 上行）。
         double netRxKBps = 0.0;            // 网络下行吞吐（KB/s，由进程页抓包聚合写入）。
         double netTxKBps = 0.0;            // 网络上行吞吐（KB/s，由进程页抓包聚合写入）。
