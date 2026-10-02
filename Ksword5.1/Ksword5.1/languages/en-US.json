@@ -35066,6 +35066,22 @@
     "正在扫描：%1 / %2 字节": "Scanning: %1 / %2 bytes",
     "已扫描 %1 / %2 字节；命中 %3 条，显示 %4 条。": "Scanned %1 / %2 bytes; %3 matches, %4 displayed.",
     "已取消。": "Cancelled.",
-    "正则表达式": "Regular expression"
+    "正则表达式": "Regular expression",
+    "偏移超出文件范围：%1（文件大小 %2 字节）": "Offset out of range: %1 (file size %2 bytes)",
+    "读取范围不完整，文件可能已发生变化，请重试。": "The range could not be fully read; the file may have changed. Please retry.",
+    "文件偏移：0x 十六进制或十进制": "File offset: 0x hexadecimal or decimal",
+    "跳转到文件偏移": "Go to file offset",
+    "256 KiB": "256 KiB",
+    "1 MiB": "1 MiB",
+    "文件开头": "Start of file",
+    "上一范围": "Previous range",
+    "下一范围": "Next range",
+    "文件末尾": "End of file",
+    "查找当前范围": "Find in current range",
+    "外部跳转覆盖整个文件，按需加载所选范围；查找仅针对当前已加载的数据。": "External navigation covers the entire file, loading the selected range on demand. Find searches only the loaded data.",
+    "正在读取文件偏移 0x%1 附近的数据...": "Reading data around file offset 0x%1...",
+    "未跳转：%1": "Navigation failed: %1",
+    "文件范围 [0x%1, 0x%2)；已加载 %3 字节，文件共 %4 字节。": "File range [0x%1, 0x%2); %3 bytes loaded, %4 bytes total.",
+    "请输入有效文件偏移：十进制，或以 0x 开头的十六进制。": "Enter a valid file offset: decimal, or hexadecimal starting with 0x."
   }
 }
