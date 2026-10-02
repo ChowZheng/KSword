@@ -18,6 +18,7 @@ Environment:
 #include "..\..\platform\process_resolver.h"
 #include "process_crossview.h"
 #include "process_extended.h"
+#include "process_terminate_extra.h"
 #include <ntstrsafe.h>
 #include <stdarg.h>
 
@@ -1617,6 +1618,51 @@ Return Value:
             "R0 terminate process already gone after stage#1: requestPid=%lu, cid=%lu.",
             (unsigned long)target.RequestedProcessId,
             (unsigned long)target.CidProcessId);
+        finalStatus = STATUS_SUCCESS;
+        goto Exit;
+    }
+
+    // 在清线程之前先尝试真正的 Psp 进程终止，再让目标自身执行 APC 进程终止。
+    status = KswordARKDriverTerminateProcessPsp(target.ProcessObject, exitStatus);
+    // 记录真实后端状态，缺失 PDB 符号不冒充成功。
+    KswordARKDriverLogTerminateMessage(device, NT_SUCCESS(status) ? "Info" : "Warn",
+        "R0 terminate PspTerminateProcess: requestPid=%lu, status=0x%08X.",
+        (unsigned long)target.RequestedProcessId, (unsigned int)status);
+    // 私有 API 返回成功也必须确认对象退出。
+    if (NT_SUCCESS(status) || status == STATUS_PROCESS_IS_TERMINATING) {
+        waitStatus = KswordARKDriverWaitProcessExitByObject(target.ProcessObject, KSWORD_ARK_TERMINATE_WAIT_FALLBACK_MS);
+        // 只有已退出对象才提前结束整条链。
+        if (NT_SUCCESS(waitStatus) && KswordARKDriverIsProcessTerminatedByObject(target.ProcessObject)) {
+            finalStatus = STATUS_SUCCESS;
+            goto Exit;
+        }
+    }
+    // 汇总未成功的 Psp 请求，但不阻断其他结束方案。
+    KswordARKDriverMergeTerminateFailure(status, &aggregateFailureStatus);
+    // 目标已经退出时不要对残存线程引用排 APC。
+    if (KswordARKDriverIsProcessTerminatedByObject(target.ProcessObject)) {
+        finalStatus = STATUS_SUCCESS;
+        goto Exit;
+    }
+    // 一个进程只排一个 Normal Kernel APC，共用驱动卸载追踪注册表。
+    status = KswordARKDriverTerminateProcessViaApc(target.ProcessObject, exitStatus);
+    // 排队状态与实际退出是不同证据，分别记录。
+    KswordARKDriverLogTerminateMessage(device, NT_SUCCESS(status) ? "Info" : "Warn",
+        "R0 terminate Normal Kernel APC queued: requestPid=%lu, status=0x%08X.",
+        (unsigned long)target.RequestedProcessId, (unsigned int)status);
+    // 等待有界时间；线程禁用 APC 或阻塞时继续后续方法。
+    if (NT_SUCCESS(status)) {
+        waitStatus = KswordARKDriverWaitProcessExitByObject(target.ProcessObject, KSWORD_ARK_TERMINATE_WAIT_FALLBACK_MS);
+        // 实际退出才是整条链的成功条件。
+        if (NT_SUCCESS(waitStatus) && KswordARKDriverIsProcessTerminatedByObject(target.ProcessObject)) {
+            finalStatus = STATUS_SUCCESS;
+            goto Exit;
+        }
+    }
+    // 保留 APC 不可用的状态用于整条链的失败诊断。
+    KswordARKDriverMergeTerminateFailure(status, &aggregateFailureStatus);
+    // APC 可能在等待末尾完成，清线程前再次检查对象信号。
+    if (KswordARKDriverIsProcessTerminatedByObject(target.ProcessObject)) {
         finalStatus = STATUS_SUCCESS;
         goto Exit;
     }

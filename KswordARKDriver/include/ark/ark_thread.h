@@ -75,6 +75,14 @@ KswordARKDriverQueueTerminateSystemThreadApc(
     _In_ BOOLEAN SpecialToNormal
     );
 
+// 对已引用且归属核对通过的普通进程线程排入进程终止 APC。
+NTSTATUS
+KswordARKDriverQueueTerminateProcessApc(
+    _In_ PETHREAD ThreadObject,
+    _In_ PEPROCESS ProcessObject,
+    _In_ NTSTATUS ExitStatus
+    );
+
 /*
  * KswordARKThreadIoctlTerminate
  * Inputs:

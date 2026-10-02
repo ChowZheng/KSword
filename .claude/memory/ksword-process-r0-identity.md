@@ -48,3 +48,12 @@ metadata:
 - 两个详情页执行单项 R3 方法前，都用捕获的创建时间验证目标并持有查询句柄，避免 PID 复用；
   R0 驱动结束单列在表外，仍走各自已有的驱动调用与身份保护。
 - 详情页下拉框不包含 HVM 与 DMA：HVM 需要地址和常驻状态编排，DMA 需要另行指定写入地址。
+
+## 2026-10-02 结束方法接入
+
+- 用户先后取消 Ctrl+C 和 Ctrl+Break；R3 共享方法表仍为原有 14 项，未新增控制台信号或辅助进程入口。
+- R0 顺序为清 PP/PPL → ZwTerminateProcess → PspTerminateProcess → Normal Kernel APC → 逐线程终止 → 清零可写用户内存。Psp 只消费精确 PE/RSDS 匹配的 v4 可选 item 1401（GlobalRva/core），检查可执行节和已核对的四参数入口序列（EPROCESS/排除线程/NTSTATUS/flags），未知 ABI 返回不支持；不猜 CALL 或复用其他内核 RVA；老配置缺失该项会继续后续方法。生成器和运行时 PDB 解析器均提供此项。
+- 普通进程 APC 在目标线程自身上下文调用 ZwTerminateProcess(NtCurrentProcess())；与系统线程 APC 共用注册/取消/卸载排空，另持 EPROCESS 引用并核对上下文。未导出 PsGetNextProcessThread 时用 500ms 有界 CID 查询与精确 EPROCESS 归属校验回退。排队成功不等于目标退出。
+- R3-only 组合动作必须以 includeR0Fallback 守住最后实际驱动调用，不能只守住回退前的存在性检查。
+
+- 本机配套发布矩阵仅补充了当前内核的一条 item 1401：先校验 PE SHA256、RSDS GUID/Age、PDB DBI Age 与四参数入口序列，再压缩并回读；2406 个矩阵条目均保留。其他内核需重新生成/应用匹配 PDB 配置。

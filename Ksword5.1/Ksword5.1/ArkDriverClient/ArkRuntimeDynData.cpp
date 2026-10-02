@@ -2084,6 +2084,14 @@ namespace ksword::ark
             const ArkDynModuleIdentity& identity,
             RuntimeDynDataResolveResult& result)
         {
+            // Optional private process routine. Identity validation is shared
+            // with the PDB session and the v4 apply protocol.
+            std::uint32_t terminateRva = 0U;
+            if (resolveSymbolRva(session, "PspTerminateProcess", identity.sizeOfImage, terminateRva)) {
+                appendV4Item(result, KSW_DYN_V4_ITEM_ID_PSP_TERMINATE_PROCESS,
+                    KSW_DYN_V4_ITEM_KIND_GLOBAL_RVA, KSW_DYN_V4_ITEM_FLAG_OPTIONAL,
+                    KSW_DYN_V4_CAPABILITY_GROUP_NTOS_CORE, terminateRva);
+            }
             const struct
             {
                 std::uint32_t itemId;

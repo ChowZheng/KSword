@@ -394,6 +394,7 @@ V4_FIXED_CAPABILITY_GROUP_COUNTS = {
     V4_WORK_QUEUE_GROUP_ID: (23, 0),
 }
 V4_SPECIAL_ITEM_IDS = {
+    "PspTerminateProcess": 1401,
     "EthActiveExWorker": 1001,
     "KprcbTimerTable": 1002,
     "KtimerTableTimerEntries": 1003,
@@ -463,6 +464,7 @@ V4_SPECIAL_ITEM_GROUPS = {
     "FltFilterOperations": V4_FLTMGR_MINIFILTER_GROUP_ID,
     **{name: V4_CI_KERNEL_HASH_GROUP_ID for name in V4_SPECIAL_ITEM_IDS if name.startswith("Ci")},
     **{name: V4_WORK_QUEUE_GROUP_ID for name in V4_SPECIAL_ITEM_IDS if name.startswith("Wq")},
+    "PspTerminateProcess": V4_CORE_GROUP_ID,
 }
 
 

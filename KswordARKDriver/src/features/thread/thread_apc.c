@@ -17,6 +17,9 @@ Environment:
 #include "ark/ark_driver.h"
 #include "../../platform/pool_compat.h"
 
+// ntddk.h 不声明该归属查询，保持与现有进程终止模块一致的导入声明。
+NTSYSAPI PEPROCESS NTAPI PsGetThreadProcess(_In_ PETHREAD Thread);
+
 #ifdef ALLOC_PRAGMA
 #pragma alloc_text (PAGE, KswordARKThreadApcUninitialize)
 #endif
@@ -72,6 +75,10 @@ typedef struct _KSWORD_ARK_THREAD_TERMINATE_APC_CONTEXT
     WORK_QUEUE_ITEM ReaperWorkItem;
     KEVENT NormalRoutineCompletedEvent;
     PETHREAD ThreadObject;
+    // 普通进程 APC 持有精确 EPROCESS 引用，投递时再次核对当前进程。
+    PEPROCESS ProcessObject;
+    // NULL ProcessObject 保留原有系统线程终止语义。
+    NTSTATUS ProcessExitStatus;
     KSWORD_KE_INITIALIZE_APC_FN KeInitializeApc;
     KSWORD_KE_INSERT_QUEUE_APC_FN KeInsertQueueApc;
     KSWORD_KE_REMOVE_QUEUE_APC_FN KeRemoveQueueApc;
@@ -223,6 +230,10 @@ Return Value:
 {
     // 只有最后一个引用负责释放上下文，避免取消与回调并发造成重复释放。
     if (InterlockedDecrement(&Context->ReferenceCount) == 0L) {
+        // EPROCESS 引用独立于线程引用，在最后一个取消/执行引用离开时归还。
+        if (Context->ProcessObject != NULL) {
+            ObDereferenceObject(Context->ProcessObject);
+        }
         // 上下文来自带固定标签的非分页池，必须使用相同标签释放。
         ExFreePoolWithTag(Context, KSWORD_ARK_THREAD_APC_POOL_TAG);
     }
@@ -506,8 +517,17 @@ Return Value:
         context);
     // 系统 worker 将等待 ETHREAD 有信号，不会抢先释放仍在执行的上下文。
     ExQueueWorkItem(&context->ReaperWorkItem, DelayedWorkQueue);
-    // 公开 API 只终止当前系统线程，成功路径不会返回到本驱动代码。
-    (VOID)PsTerminateSystemThread(STATUS_CANCELLED);
+    // 普通进程模式在目标线程自己的 PASSIVE_LEVEL 上结束整个进程。
+    if (context->ProcessObject != NULL) {
+        // 当前进程必须仍是排队时引用的同一 EPROCESS，拒绝跨进程附加上下文。
+        if (PsGetCurrentProcess() == context->ProcessObject) {
+            (VOID)ZwTerminateProcess(NtCurrentProcess(), context->ProcessExitStatus);
+        }
+    }
+    else {
+        // 系统线程模式继续使用原公开 API，不改变驱动线程控制入口。
+        (VOID)PsTerminateSystemThread(STATUS_CANCELLED);
+    }
     // 若 API 异常返回，通知 worker 当前 NormalRoutine 已完成且可以释放上下文。
     (VOID)KeSetEvent(
         &context->NormalRoutineCompletedEvent,
@@ -819,10 +839,12 @@ Return Value:
         NULL);
 }
 
-NTSTATUS
-KswordARKDriverQueueTerminateSystemThreadApc(
+static NTSTATUS
+KswordARKQueueTerminateTrackedApc(
     _In_ PETHREAD ThreadObject,
-    _In_ BOOLEAN SpecialToNormal
+    _In_ BOOLEAN SpecialToNormal,
+    _In_opt_ PEPROCESS ProcessObject,
+    _In_ NTSTATUS ProcessExitStatus
     )
 /*++
 
@@ -888,6 +910,14 @@ Return Value:
     ObReferenceObject(ThreadObject);
     // 保存目标线程对象供 APC 初始化和回收 worker 等待。
     context->ThreadObject = ThreadObject;
+    // 普通进程模式独立保活 EPROCESS；系统线程模式传入 NULL。
+    context->ProcessObject = ProcessObject;
+    // 保存由进程终止 IOCTL 指定的退出状态。
+    context->ProcessExitStatus = ProcessExitStatus;
+    // 引用必须在可能失败的注册动作前建立，以统一交给最终释放函数。
+    if (ProcessObject != NULL) {
+        ObReferenceObject(ProcessObject);
+    }
     // 保存解析后的初始化例程，Special-to-Normal 阶段转换继续使用。
     context->KeInitializeApc = keInitializeApc;
     // 保存解析后的排队例程，所有阶段都经统一原子排队函数调用。
@@ -945,4 +975,34 @@ Return Value:
 
     // 排队成功表示 APC 已进入全局可取消、可排空的生命周期管理。
     return STATUS_SUCCESS;
+}
+
+// 原系统线程 API 的行为和协议保持一致，仍由调用方验证线程身份。
+NTSTATUS
+KswordARKDriverQueueTerminateSystemThreadApc(
+    _In_ PETHREAD ThreadObject,
+    _In_ BOOLEAN SpecialToNormal
+    )
+{
+    // NULL EPROCESS 选择 PsTerminateSystemThread 后端。
+    return KswordARKQueueTerminateTrackedApc(ThreadObject, SpecialToNormal, NULL, STATUS_CANCELLED);
+}
+
+// 普通进程 APC 与系统线程 APC 共用注册、取消和驱动卸载排空机制。
+NTSTATUS
+KswordARKDriverQueueTerminateProcessApc(
+    _In_ PETHREAD ThreadObject,
+    _In_ PEPROCESS ProcessObject,
+    _In_ NTSTATUS ExitStatus
+    )
+{
+    // 必须在引用对象上核对归属，不能仅比较可复用的 PID/TID。
+    if (ThreadObject == NULL || ProcessObject == NULL ||
+        PsGetThreadProcess(ThreadObject) != ProcessObject ||
+        ProcessObject == PsInitialSystemProcess ||
+        ThreadObject == PsGetCurrentThread()) {
+        return STATUS_INVALID_PARAMETER;
+    }
+    // 直接 Normal Kernel APC 在 PASSIVE_LEVEL 调用 ZwTerminateProcess。
+    return KswordARKQueueTerminateTrackedApc(ThreadObject, FALSE, ProcessObject, ExitStatus);
 }

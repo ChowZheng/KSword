@@ -4,6 +4,7 @@ import unittest
 from pathlib import Path
 
 import ksword_profile_release_sync as release_sync
+import ksword_pdb_profile_generator as generator
 
 
 class V4OnlyPackTests(unittest.TestCase):
@@ -83,6 +84,35 @@ class V4OnlyPackTests(unittest.TestCase):
             release_sync.V4_FIXED_CAPABILITY_GROUP_COUNTS[release_sync.V4_TIMER_GROUP_ID],
             (15, 0),
         )
+
+    def test_optional_psp_symbol_survives_pack_without_becoming_required(self) -> None:
+        record = self.make_record("psp", 0, 0, 0)
+        raw = {
+            "name": "PspTerminateProcess", "itemId": 1401, "kind": "GlobalRva",
+            "flags": "optional", "capabilityGroupId": 1, "value": "0x123456",
+        }
+        state = release_sync.ValidationState()
+        normalized = release_sync.validate_v4_items(record.path, {"v4Items": [raw]}, state)
+        self.assertIsNotNone(normalized)
+        record.v4_items = normalized
+        packed = release_sync.build_pack_profile_entry(record)
+        item = packed["items"][0]
+        self.assertEqual(item["itemId"], 1401)
+        self.assertEqual(item["itemKind"], release_sync.V4_ITEM_KIND_IDS["GlobalRva"])
+        self.assertEqual(item["flags"], 2)
+        self.assertEqual(item["capabilityGroupId"], 1)
+        self.assertEqual(item["valueLow"], 0x123456)
+        group = packed["capabilityGroups"][0]
+        self.assertEqual(group["requiredItemCount"], 0)
+        self.assertEqual(group["optionalItemCount"], 1)
+
+    def test_psp_symbol_is_optional_and_limited_to_kernel_profiles(self) -> None:
+        self.assertIn("PspTerminateProcess", generator.V4_OPTIONAL_ITEM_NAMES)
+        self.assertEqual(generator.V4_ITEM_DEFINITIONS["PspTerminateProcess"], (1401, "GlobalRva", 1))
+        for module in ("ntoskrnl", "ntkrla57"):
+            self.assertIn(1, generator.v4_group_ids_for_module(module))
+        for module in ("ci", "fltmgr", "win32k"):
+            self.assertNotIn(1, generator.v4_group_ids_for_module(module))
 
 
 if __name__ == "__main__":

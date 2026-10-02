@@ -1401,6 +1401,12 @@
     <ClCompile Include="src\features\thread\thread_apc.c">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="src\features\process\process_terminate_extra.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClInclude Include="src\features\process\process_terminate_extra.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClCompile Include="src\features\thread\thread_ioctl.c">
       <Filter>Source Files</Filter>
     </ClCompile>

@@ -259,6 +259,8 @@
     <ClCompile Include="src\features\thread\thread_crossview.c" />
     <ClCompile Include="src\features\thread\thread_detail.c" />
     <ClCompile Include="src\features\thread\thread_apc.c" />
+    <ClCompile Include="src\features\process\process_terminate_extra.c" />
+    <ClInclude Include="src\features\process\process_terminate_extra.h" />
     <ClCompile Include="src\features\thread\thread_ioctl.c" />
     <ClCompile Include="src\features\thread\work_queue_query.c" />
     <ClCompile Include="src\features\thread\work_queue_fallback.c" />

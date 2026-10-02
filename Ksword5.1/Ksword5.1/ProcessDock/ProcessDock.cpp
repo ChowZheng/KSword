@@ -11148,7 +11148,7 @@ void ProcessDock::showTableContextMenu(const QPoint& localPosition)
         processContextText("process.menu.r0_terminate", QStringLiteral("R0结束进程")));
     r0TerminateAction->setToolTip(processContextText(
         "process.menu.r0_terminate.tooltip",
-        QStringLiteral("只下发驱动的结束 IOCTL，不跑任何用户态方法。驱动侧本身是四步：先清 PP/PPL 保护字节，再 ZwTerminateProcess、逐线程终止、清零可写用户内存。注意保护字节清零之后不会还原。")));
+        QStringLiteral("驱动先清 PP/PPL 保护字节，再依次尝试 ZwTerminateProcess、PspTerminateProcess（需要匹配 PDB）、Normal Kernel APC、逐线程终止、清零可写用户内存。APC 排队后仍须确认退出；保护字节不会还原。")));
     QAction* r0TerminateTreeAction = contextMenu.addAction(
         buildR0ActionIcon(":/Icon/process_terminate.svg"),
         processContextText("process.menu.r0_terminate_tree", QStringLiteral("R0结束进程树")));
@@ -16604,7 +16604,7 @@ void ProcessDock::executeTerminateProcessActions(
                         << eol;
                 }
             }
-            if (!processExited)
+            if (includeR0Fallback && !processExited)
             {
                 constexpr const char* kR0TerminateMethodName =
                     "R0 TerminateProcess (KswordARK driver)";

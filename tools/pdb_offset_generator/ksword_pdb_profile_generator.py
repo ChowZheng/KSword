@@ -392,6 +392,7 @@ V4_WORK_QUEUE_GLOBAL_SYMBOLS: dict[str, str] = {
 }
 
 V4_GLOBAL_SYMBOLS: dict[str, str] = {
+    "PspTerminateProcess": "PspTerminateProcess",
     **V4_CI_GLOBAL_SYMBOLS,
     **V4_WORK_QUEUE_GLOBAL_SYMBOLS,
 }
@@ -401,6 +402,7 @@ V4_ENUM_VALUE_MAP: dict[str, tuple[str, str]] = {
 }
 
 V4_ITEM_DEFINITIONS: dict[str, tuple[int, str, int]] = {
+    "PspTerminateProcess": (1401, "GlobalRva", 1),
     "EthActiveExWorker": (1001, "BitField", 2),
     "KprcbTimerTable": (1002, "StructOffset", 2),
     "KtimerTableTimerEntries": (1003, "StructOffset", 2),
@@ -454,6 +456,7 @@ V4_ITEM_DEFINITIONS: dict[str, tuple[int, str, int]] = {
 # CI 缓存的最小安全遍历只依赖两个全局、Next、DriverName 和类型大小。
 # 其余列仅在对应 PDB 确实公开字段时进入配置，UI 对缺失列显示“-”。
 V4_OPTIONAL_ITEM_NAMES: set[str] = {
+    "PspTerminateProcess",
     "CiHashEntryTimeDateStamp",
     "CiHashEntryLoadStatus",
     "CiHashEntryImageBase",
@@ -1800,9 +1803,9 @@ def v4_group_ids_for_module(module_class: str | None) -> set[int]:
         # 保留旧的纯类型解析调用语义；CI 组必须额外提供 PE/symbol 上下文。
         return {2, 3}
     if normalized in {"ntoskrnl", "ntoskrnl.exe"}:
-        return {2, 5}
+        return {1, 2, 5}
     if normalized in {"ntkrla57", "ntkrla57.exe"}:
-        return {2}
+        return {1, 2}
     if normalized in {"fltmgr", "fltmgr.sys"}:
         return {3}
     if normalized in {"ci", "ci.dll", "ci.sys"}:
