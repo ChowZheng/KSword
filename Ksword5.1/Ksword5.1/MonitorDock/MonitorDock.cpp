@@ -158,6 +158,7 @@ namespace
         }
         // Rundown describes existing objects, not the thread performing the enumeration.
         return row.opcode == EVENT_TRACE_TYPE_DC_START || row.opcode == EVENT_TRACE_TYPE_DC_END
+            || etwRelatedProcessId(row) == std::numeric_limits<std::uint32_t>::max()
             || (row.targetPidValid && (row.targetPid != row.headerPid || row.targetPid == 0))
             || etwProviderDisplayName(row.providerGuid, row.providerName) == QStringLiteral("Microsoft-Windows-Kernel-Thread")
             || etwProviderDisplayName(row.providerGuid, row.providerName) == QStringLiteral("Kernel-FileIO")
@@ -4491,20 +4492,10 @@ namespace
             propertyList,
             QStringList{ QStringLiteral("subjectprocessid"), QStringLiteral("processid"), QStringLiteral("pid") }),
             &rowOut->securityPid);
-        if (!rowOut->securityPidValid && rowOut->headerPid != 0)
-        {
-            rowOut->securityPid = rowOut->headerPid;
-            rowOut->securityPidValid = true;
-        }
         rowOut->securityTidValid = etwPropertyToUInt32(findFirstEtwProperty(
             propertyList,
             QStringList{ QStringLiteral("threadid"), QStringLiteral("tid"), QStringLiteral("subjectthreadid") }),
             &rowOut->securityTid);
-        if (!rowOut->securityTidValid && rowOut->headerTid != 0)
-        {
-            rowOut->securityTid = rowOut->headerTid;
-            rowOut->securityTidValid = true;
-        }
         rowOut->securityLevelText = rowOut->levelText;
 
         rowOut->scriptHostProcessText = rowOut->processNameText;
@@ -12105,8 +12096,9 @@ void MonitorDock::enqueueEtwEventFromRecord(const struct _EVENT_RECORD* eventRec
             rowData.statusText.clear();
             rowData.detailSummary = QStringLiteral("%1 | PID=%2 TID=%3 | 原始数据=%4字节")
                 .arg(etwToSingleLine(rowData.eventName).isEmpty() ? QStringLiteral("事件") : etwToSingleLine(rowData.eventName))
-                .arg(rowData.headerPid)
-                .arg(rowData.headerTid)
+                .arg(etwRelatedProcessId(rowData) == std::numeric_limits<std::uint32_t>::max()
+                    ? QStringLiteral("未知") : QString::number(etwRelatedProcessId(rowData)))
+                .arg(etwRelatedThreadId(rowData) == 0 ? QStringLiteral("未知") : QString::number(etwRelatedThreadId(rowData)))
                 .arg(static_cast<int>(eventRecord->UserDataLength));
             rowData.decodedReady = true;
         }
@@ -12115,8 +12107,9 @@ void MonitorDock::enqueueEtwEventFromRecord(const struct _EVENT_RECORD* eventRec
         {
             rowData.detailSummary = QStringLiteral("%1 | PID=%2 TID=%3")
                 .arg(etwToSingleLine(rowData.eventName).isEmpty() ? QStringLiteral("事件") : etwToSingleLine(rowData.eventName))
-                .arg(rowData.headerPid)
-                .arg(rowData.headerTid);
+                .arg(etwRelatedProcessId(rowData) == std::numeric_limits<std::uint32_t>::max()
+                    ? QStringLiteral("未知") : QString::number(etwRelatedProcessId(rowData)))
+                .arg(etwRelatedThreadId(rowData) == 0 ? QStringLiteral("未知") : QString::number(etwRelatedThreadId(rowData)));
         }
 
         etwUpdateRelatedIdentity(&rowData);

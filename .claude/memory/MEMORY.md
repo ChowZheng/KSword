@@ -1,5 +1,7 @@
 # Memory Index
 
+- [ETW 解析与进程归属](ksword-etw-decoding.md) — 事件头与关联身份、映像枚举、数组/结构体布局、网络端口和 TraceLogging 缓存
+
 - [API Monitor 生命周期与事件协议](ksword-api-monitor.md) — 会话互斥、在途 Hook 代码保留、后代监控、丢失计数、增量筛选与 EntryOnly 协议
 
 - [欢迎页采样与 GPU 遥测蓝屏](ksword-welcome-gpu-telemetry.md) — 首页采样范围、GetNodePerfData 空指针现场、17763 系列禁用与 WDDM 2.4 门槛

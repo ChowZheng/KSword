@@ -67,6 +67,16 @@ filters=s[s.index('    const std::vector<EtwFilterFieldDescriptor>& etwFilterFie
 code=code.replace('DEPENDENCIES',fun('QString guidToText(')+identity+aliases+descriptor+filters)
 code=code.replace('PARSER',s[s.index('    // EtwSchemaPropertyEntry'):s.index('    // 100ns 时间戳文本格式化')]).replace('SAMPLE_BYTES',','.join(str(x) for x in payload))
 tests={
+ 'missing_identity': r'''
+ record.EventHeader.EventDescriptor.Opcode=10;decoded.clear();auto missing=fill(guidToText(imageGuid),QStringLiteral("Image"),QStringLiteral("Load"));
+ if(missing.securityPidValid||missing.securityTidValid||missing.pidTidText!=QStringLiteral("未知 / 未知"))return 90;
+ auto semantic=inferEtwSemanticSummary(QStringLiteral("Kernel-Image"),QStringLiteral("Image"),QStringLiteral("Load"),decoded);
+ auto summary=buildEtwSummaryText(QStringLiteral("Kernel-Image"),QStringLiteral("Image"),QStringLiteral("Load"),etwRelatedProcessId(missing),etwRelatedThreadId(missing),semantic,decoded);
+ if(summary.contains(QStringLiteral("3212"))||summary.contains(QStringLiteral("4294967295"))||!summary.contains(QStringLiteral("PID=未知")))return 91;
+ schema={};schema.propertyList={prop(0,"SubjectProcessId",TDH_INTYPE_UINT32),prop(1,"ProcessId",TDH_INTYPE_UINT32)};std::uint32_t audit[]={3212,2222};
+ run(schema,audit,sizeof(audit));auto subject=fill(QStringLiteral("Security"),QStringLiteral("Audit"),QString());
+ if(!subject.securityPidValid||subject.securityPid!=3212||etwRelatedProcessId(subject)!=2222)return 92;
+ ''',
  'schema_cache': r'''
  EVENT_RECORD tl{};tl.EventHeader=record.EventHeader;tl.EventHeader.EventDescriptor.Channel=11;tl.EventHeader.EventDescriptor.Id=0;
  unsigned char one[]={5,0,'A',0,7},two[]={5,0,'B',0,8},copy[]={5,0,'A',0,7};
