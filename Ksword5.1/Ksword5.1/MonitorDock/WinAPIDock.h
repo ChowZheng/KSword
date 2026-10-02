@@ -227,6 +227,7 @@ private:
     std::vector<std::uint32_t> m_childSessionPids;          // m_childSessionPids：已发现的自动注入子进程 PID，用于写停止标记。
     std::mutex m_childPipeMutex;                           // m_childPipeMutex：保护子管道线程/句柄/PID 容器。
     std::atomic_bool m_processRefreshPending{ false };     // m_processRefreshPending：进程刷新是否进行中。
+    std::atomic_uint64_t m_sessionGeneration{ 0 };
     std::atomic_bool m_pipeRunning{ false };               // m_pipeRunning：当前监控会话是否在运行。
     std::atomic_bool m_pipeConnected{ false };             // m_pipeConnected：是否已成功连上 Agent 管道。
     std::atomic_bool m_pipeStopFlag{ false };              // m_pipeStopFlag：命名管道线程停止信号。

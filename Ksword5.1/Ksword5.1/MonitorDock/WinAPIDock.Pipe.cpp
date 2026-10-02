@@ -170,13 +170,14 @@ void WinAPIDock::startPipeReadThread()
 
     const QString pipeNameText = m_currentPipeName;
     const std::uint32_t sessionPidValue = m_currentSessionPid;
+    const std::uint64_t generation = m_sessionGeneration.load();
     QPointer<WinAPIDock> guardThis(this);
 
-    m_pipeThread = std::make_unique<std::thread>([guardThis, pipeNameText, sessionPidValue]() {
+    m_pipeThread = std::make_unique<std::thread>([guardThis, generation, pipeNameText, sessionPidValue]() {
         HANDLE pipeHandle = INVALID_HANDLE_VALUE;
         for (int attempt = 0; attempt < 120; ++attempt)
         {
-            if (guardThis == nullptr || guardThis->m_pipeStopFlag.load())
+            if (guardThis == nullptr || guardThis->m_sessionGeneration.load() != generation || guardThis->m_pipeStopFlag.load())
             {
                 return;
             }
@@ -197,8 +198,8 @@ void WinAPIDock::startPipeReadThread()
             const DWORD lastError = ::GetLastError();
             if (lastError != ERROR_FILE_NOT_FOUND && lastError != ERROR_PIPE_BUSY)
             {
-                QMetaObject::invokeMethod(qApp, [guardThis, lastError]() {
-                    if (guardThis == nullptr)
+                QMetaObject::invokeMethod(qApp, [guardThis, generation, lastError]() {
+                    if (guardThis == nullptr || guardThis->m_sessionGeneration.load() != generation)
                     {
                         return;
                     }
@@ -210,6 +211,8 @@ void WinAPIDock::startPipeReadThread()
                         QStringLiteral("内部"),
                         QStringLiteral("命名管道连接失败"),
                         QStringLiteral("CreateFileW 返回错误码 %1。").arg(lastError));
+                    guardThis->updateActionState();
+                    guardThis->updateStatusLabel();
                 }, Qt::QueuedConnection);
                 guardThis->m_pipeRunning.store(false);
                 return;
@@ -221,8 +224,8 @@ void WinAPIDock::startPipeReadThread()
 
         if (pipeHandle == INVALID_HANDLE_VALUE)
         {
-            QMetaObject::invokeMethod(qApp, [guardThis]() {
-                if (guardThis == nullptr)
+            QMetaObject::invokeMethod(qApp, [guardThis, generation]() {
+                if (guardThis == nullptr || guardThis->m_sessionGeneration.load() != generation)
                 {
                     return;
                 }
@@ -242,8 +245,8 @@ void WinAPIDock::startPipeReadThread()
         guardThis->m_pipeConnected.store(true);
         kPro.set(guardThis->m_sessionProgressPid, "Agent 已连接，开始接收 WinAPI 事件", 0, 70.0f);
 
-        QMetaObject::invokeMethod(qApp, [guardThis, sessionPidValue]() {
-            if (guardThis == nullptr)
+        QMetaObject::invokeMethod(qApp, [guardThis, generation, sessionPidValue]() {
+            if (guardThis == nullptr || guardThis->m_sessionGeneration.load() != generation)
             {
                 return;
             }
@@ -271,8 +274,8 @@ void WinAPIDock::startPipeReadThread()
             std::uint32_t childPidValue = 0;
             if (tryExtractAutoInjectChildPid(packetValue, &childPidValue))
             {
-                QMetaObject::invokeMethod(qApp, [guardThis, childPidValue]() {
-                    if (guardThis == nullptr)
+                QMetaObject::invokeMethod(qApp, [guardThis, generation, childPidValue]() {
+                    if (guardThis == nullptr || guardThis->m_sessionGeneration.load() != generation)
                     {
                         return;
                     }
@@ -293,8 +296,8 @@ void WinAPIDock::startPipeReadThread()
             && guardThis->m_pipeRunning.load()
             && guardThis->m_pipeReconnectAttempts.fetch_add(1) < kPipeReconnectLimit;
 
-        QMetaObject::invokeMethod(qApp, [guardThis, retryConnection]() {
-            if (guardThis == nullptr)
+        QMetaObject::invokeMethod(qApp, [guardThis, generation, retryConnection]() {
+            if (guardThis == nullptr || guardThis->m_sessionGeneration.load() != generation)
             {
                 return;
             }
@@ -347,12 +350,13 @@ void WinAPIDock::startChildPipeReadThread(const std::uint32_t childPidValue)
     }
 
     const QString pipeNameText = QString::fromStdWString(ks::winapi_monitor::buildPipeNameForPid(childPidValue));
+    const std::uint64_t generation = m_sessionGeneration.load();
     QPointer<WinAPIDock> guardThis(this);
-    auto childThread = std::make_unique<std::thread>([guardThis, pipeNameText, childPidValue]() {
+    auto childThread = std::make_unique<std::thread>([guardThis, generation, pipeNameText, childPidValue]() {
         HANDLE pipeHandle = INVALID_HANDLE_VALUE;
         for (int attempt = 0; attempt < 120; ++attempt)
         {
-            if (guardThis == nullptr || guardThis->m_pipeStopFlag.load())
+            if (guardThis == nullptr || guardThis->m_sessionGeneration.load() != generation || guardThis->m_pipeStopFlag.load())
             {
                 return;
             }
@@ -373,8 +377,8 @@ void WinAPIDock::startChildPipeReadThread(const std::uint32_t childPidValue)
             const DWORD lastError = ::GetLastError();
             if (lastError != ERROR_FILE_NOT_FOUND && lastError != ERROR_PIPE_BUSY)
             {
-                QMetaObject::invokeMethod(qApp, [guardThis, childPidValue, lastError]() {
-                    if (guardThis == nullptr)
+                QMetaObject::invokeMethod(qApp, [guardThis, generation, childPidValue, lastError]() {
+                    if (guardThis == nullptr || guardThis->m_sessionGeneration.load() != generation)
                     {
                         return;
                     }
@@ -396,8 +400,8 @@ void WinAPIDock::startChildPipeReadThread(const std::uint32_t childPidValue)
 
         if (pipeHandle == INVALID_HANDLE_VALUE)
         {
-            QMetaObject::invokeMethod(qApp, [guardThis, childPidValue]() {
-                if (guardThis == nullptr)
+            QMetaObject::invokeMethod(qApp, [guardThis, generation, childPidValue]() {
+                if (guardThis == nullptr || guardThis->m_sessionGeneration.load() != generation)
                 {
                     return;
                 }
@@ -414,8 +418,8 @@ void WinAPIDock::startChildPipeReadThread(const std::uint32_t childPidValue)
             guardThis->m_childPipeHandleValues.push_back(reinterpret_cast<std::uintptr_t>(pipeHandle));
         }
 
-        QMetaObject::invokeMethod(qApp, [guardThis, childPidValue]() {
-            if (guardThis == nullptr)
+        QMetaObject::invokeMethod(qApp, [guardThis, generation, childPidValue]() {
+            if (guardThis == nullptr || guardThis->m_sessionGeneration.load() != generation)
             {
                 return;
             }

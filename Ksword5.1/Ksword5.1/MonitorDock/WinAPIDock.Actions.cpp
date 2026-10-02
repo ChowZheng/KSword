@@ -1268,6 +1268,7 @@ void WinAPIDock::startMonitoring()
         m_pendingDroppedRows = 0;
     }
 
+    ++m_sessionGeneration;
     m_pipeStopFlag.store(false);
     m_pipeRunning.store(true);
     m_pipeConnected.store(false);
@@ -1342,6 +1343,7 @@ void WinAPIDock::stopMonitoringInternal(const bool waitForThread)
         return;
     }
 
+    ++m_sessionGeneration;
     m_pipeStopFlag.store(true);
     writeChildStopFlags();
 
