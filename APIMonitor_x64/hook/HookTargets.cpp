@@ -435,6 +435,41 @@ namespace apimon
             return HexValue(reinterpret_cast<std::uint64_t>(handleValue));
         }
 
+        // Read only the bounded visible prefix, avoiding no-access/guard pages and tagged pointers.
+        template <typename Char, std::size_t kCount>
+        void AppendCapturedText(wchar_t(&targetBuffer)[kCount], const Char* textPointer, std::size_t maxInputChars)
+        {
+            if (!textPointer || kCount == 0) return;
+            std::size_t write = 0;
+            while (write < kCount && targetBuffer[write]) ++write;
+            if (write == kCount) { targetBuffer[kCount - 1] = 0; return; }
+            bool unreadable = false;
+            std::uintptr_t readableEnd = 0;
+            __try {
+                for (std::size_t input = 0; input < maxInputChars && write + 1 < kCount; ++input) {
+                    const auto address = reinterpret_cast<std::uintptr_t>(textPointer) + input * sizeof(Char);
+                    if (address < reinterpret_cast<std::uintptr_t>(textPointer) || address > UINTPTR_MAX - sizeof(Char))
+                    { unreadable = true; break; }
+                    if (address >= readableEnd || readableEnd - address < sizeof(Char)) {
+                        MEMORY_BASIC_INFORMATION info{};
+                        if (!::VirtualQuery(reinterpret_cast<void*>(address), &info, sizeof(info)) || info.State != MEM_COMMIT
+                            || (info.Protect & (PAGE_NOACCESS | PAGE_GUARD))) { unreadable = true; break; }
+                        readableEnd = reinterpret_cast<std::uintptr_t>(info.BaseAddress) + info.RegionSize;
+                        if (readableEnd <= address || readableEnd - address < sizeof(Char)) { unreadable = true; break; }
+                    }
+                    const Char value = *reinterpret_cast<const Char*>(address);
+                    if (!value) break;
+                    if constexpr (sizeof(Char) == 1) targetBuffer[write++] = static_cast<unsigned char>(value);
+                    else targetBuffer[write++] = value;
+                }
+            } __except (EXCEPTION_EXECUTE_HANDLER) { unreadable = true; }
+            if (unreadable) {
+                constexpr wchar_t marker[] = L"<unreadable>";
+                for (std::size_t i = 0; marker[i] && write + 1 < kCount; ++i) targetBuffer[write++] = marker[i];
+            }
+            targetBuffer[write] = 0;
+        }
+
         // AppendWideText 作用：
         // - 输入：targetBuffer 为栈上定长缓冲，textPointer 为可空宽字符串；
         // - 处理：从当前 NUL 结尾处追加最多 maxInputChars 个字符，溢出时安全截断；
@@ -445,30 +480,7 @@ namespace apimon
             const wchar_t* textPointer,
             const std::size_t maxInputChars = static_cast<std::size_t>(-1))
         {
-            if (kCount == 0 || textPointer == nullptr)
-            {
-                return;
-            }
-
-            std::size_t writeOffset = 0;
-            while (writeOffset < kCount && targetBuffer[writeOffset] != L'\0')
-            {
-                ++writeOffset;
-            }
-            if (writeOffset >= kCount)
-            {
-                targetBuffer[kCount - 1] = L'\0';
-                return;
-            }
-
-            std::size_t inputOffset = 0;
-            while (writeOffset + 1 < kCount
-                && inputOffset < maxInputChars
-                && textPointer[inputOffset] != L'\0')
-            {
-                targetBuffer[writeOffset++] = textPointer[inputOffset++];
-            }
-            targetBuffer[writeOffset] = L'\0';
+            AppendCapturedText(targetBuffer, textPointer, maxInputChars);
         }
 
         // AppendAnsiText 作用：
@@ -481,30 +493,7 @@ namespace apimon
             const char* const textPointer,
             const std::size_t maxInputChars = static_cast<std::size_t>(-1))
         {
-            if (kCount == 0 || textPointer == nullptr)
-            {
-                return;
-            }
-
-            std::size_t writeOffset = 0;
-            while (writeOffset < kCount && targetBuffer[writeOffset] != L'\0')
-            {
-                ++writeOffset;
-            }
-            if (writeOffset >= kCount)
-            {
-                targetBuffer[kCount - 1] = L'\0';
-                return;
-            }
-
-            std::size_t inputOffset = 0;
-            while (writeOffset + 1 < kCount
-                && inputOffset < maxInputChars
-                && textPointer[inputOffset] != '\0')
-            {
-                targetBuffer[writeOffset++] = static_cast<unsigned char>(textPointer[inputOffset++]);
-            }
-            targetBuffer[writeOffset] = L'\0';
+            AppendCapturedText(targetBuffer, textPointer, maxInputChars);
         }
 
         // AppendUnsignedText 前置声明：
@@ -530,17 +519,11 @@ namespace apimon
             wchar_t(&targetBuffer)[kCount],
             const UNICODE_STRING* const unicodePointer)
         {
-            if (unicodePointer == nullptr
-                || unicodePointer->Buffer == nullptr
-                || unicodePointer->Length == 0)
-            {
-                return;
-            }
-
-            AppendWideText(
-                targetBuffer,
-                unicodePointer->Buffer,
-                static_cast<std::size_t>(unicodePointer->Length / sizeof(wchar_t)));
+            if (!unicodePointer) return;
+            UNICODE_STRING value{};
+            if (!ReadExportMemory(unicodePointer, &value, sizeof(value)) || (value.Length & 1) || value.Length > value.MaximumLength)
+            { AppendWideText(targetBuffer, L"<unreadable>"); return; }
+            AppendWideText(targetBuffer, value.Buffer, value.Length / sizeof(wchar_t));
         }
 
         // AppendObjectNameText 作用：
@@ -2209,6 +2192,7 @@ namespace apimon
             }
 
             const NTSTATUS statusValue = g_ldrLoadDllOriginal(searchPathPointer, dllCharacteristicsPointer, dllNamePointer, moduleHandlePointer);
+            const DWORD savedError = ::GetLastError();
             if (NT_SUCCESS(statusValue))
             {
                 RetryPendingHooksFromHook();
@@ -2219,13 +2203,23 @@ namespace apimon
                 AppendWideText(detailBuffer, L"path=");
                 AppendUnicodeStringText(detailBuffer, dllNamePointer);
                 AppendWideText(detailBuffer, L" search=");
-                AppendWideText(detailBuffer, searchPathPointer);
+                if (searchPathPointer && reinterpret_cast<std::uintptr_t>(searchPathPointer) <= 0xFFFF)
+                {
+                    AppendWideText(detailBuffer, L"tagged:");
+                    AppendHexText(detailBuffer, reinterpret_cast<std::uintptr_t>(searchPathPointer));
+                }
+                else AppendWideText(detailBuffer, searchPathPointer);
                 AppendWideText(detailBuffer, L" flags=");
-                AppendHexText(detailBuffer, dllCharacteristicsPointer != nullptr ? *dllCharacteristicsPointer : 0);
+                ULONG flags = 0;
+                if (dllCharacteristicsPointer) (void)ReadExportMemory(dllCharacteristicsPointer, &flags, sizeof(flags));
+                AppendHexText(detailBuffer, flags);
                 AppendWideText(detailBuffer, L" handle=");
-                AppendHexText(detailBuffer, moduleHandlePointer != nullptr ? reinterpret_cast<std::uint64_t>(*moduleHandlePointer) : 0);
+                HANDLE module = nullptr;
+                if (NT_SUCCESS(statusValue) && moduleHandlePointer) (void)ReadExportMemory(moduleHandlePointer, &module, sizeof(module));
+                AppendHexText(detailBuffer, reinterpret_cast<std::uint64_t>(module));
                 SendRawEventWithStatus(ks::winapi_monitor::EventCategory::Loader, L"ntdll", L"LdrLoadDll", statusValue, detailBuffer);
             }
+            ::SetLastError(savedError);
             return statusValue;
         }
 
