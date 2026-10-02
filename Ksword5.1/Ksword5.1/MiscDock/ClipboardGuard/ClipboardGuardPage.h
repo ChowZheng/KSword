@@ -13,6 +13,7 @@
 // ============================================================
 
 #include "../../Framework.h"
+#include "../../MonitorDock/WinApiMonitorProtocol.h"
 #include "../../ArkDriverClient/ArkDriverClient.h"
 
 #include <QString>
@@ -181,7 +182,7 @@ namespace ks::misc
         bool ensureProcessProtected(
             const ks::process::ProcessRecord& processRecord, const ClipboardGuardRule& matchedRule, QString* errorTextOut = nullptr);
         void teardownSession(std::uint32_t pid);
-        void startPipeReadThreadForPid(std::uint32_t pid, const QString& sessionId, const ClipboardGuardRule& rule);
+        void startPipeReadThreadForPid(std::uint32_t pid, const QString& sessionId, const ClipboardGuardRule& rule, ks::winapi_monitor::SessionLease lease);
         void enqueuePendingRow(ClipboardGuardEventRow rowValue);
         void flushPendingRows();
         void appendEventRow(const ClipboardGuardEventRow& rowValue);
@@ -192,6 +193,7 @@ namespace ks::misc
     private:
         struct Session
         {
+            ks::winapi_monitor::SessionLease lease;
             std::uint32_t pid = 0;
             QString sessionId;
             quint32 readAction = 0;

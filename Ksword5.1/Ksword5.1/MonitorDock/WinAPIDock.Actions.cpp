@@ -1232,14 +1232,24 @@ void WinAPIDock::startMonitoring()
         return;
     }
 
+    if (m_pipeThread != nullptr) stopMonitoringInternal(true);
+    DWORD leaseError = 0;
+    if (!m_sessionLease.acquire(pidValue, &leaseError))
+    {
+        QMessageBox::warning(this, QStringLiteral("WinAPI 监控"),
+            QStringLiteral("无法占用 PID=%1 的 Agent 会话（错误码 %2）；该进程可能已由 API 监控或剪贴板保护占用。").arg(pidValue).arg(leaseError));
+        return;
+    }
     QString errorText;
     if (!prepareSessionArtifacts(pidValue, &errorText))
     {
+        m_sessionLease.reset();
         QMessageBox::warning(this, QStringLiteral("WinAPI 监控"), errorText);
         return;
     }
     if (!writeSessionConfigFile(&errorText))
     {
+        m_sessionLease.reset();
         QMessageBox::warning(this, QStringLiteral("WinAPI 监控"), errorText);
         return;
     }
@@ -1360,6 +1370,7 @@ void WinAPIDock::stopMonitoringInternal(const bool waitForThread)
     }
     joinChildPipeThreads();
     closeChildPipeHandles();
+    m_sessionLease.reset();
 
     m_pipeRunning.store(false);
     m_pipeConnected.store(false);
@@ -1380,6 +1391,15 @@ void WinAPIDock::terminateHooksForSelectedProcess()
     if (!currentSelectedPid(&pidValue))
     {
         QMessageBox::information(this, QStringLiteral("终止 Hook"), QStringLiteral("请先选择目标进程或手动输入 PID。"));
+        return;
+    }
+
+    ks::winapi_monitor::SessionLease temporaryLease;
+    DWORD leaseError = 0;
+    if (m_sessionLease.pid() != pidValue && !temporaryLease.acquire(pidValue, &leaseError))
+    {
+        QMessageBox::warning(this, QStringLiteral("终止 Hook"),
+            QStringLiteral("无法占用 PID=%1 的 Agent 会话（错误码 %2）；该进程可能已由 API 监控或剪贴板保护占用。").arg(pidValue).arg(leaseError));
         return;
     }
 

@@ -240,6 +240,7 @@ private:
     QString m_currentPipeName;                             // m_currentPipeName：当前命名管道名。
     QString m_currentConfigPath;                           // m_currentConfigPath：当前会话配置文件路径。
     QString m_currentStopFlagPath;                         // m_currentStopFlagPath：当前停止标记文件路径。
+    ks::winapi_monitor::SessionLease m_sessionLease;
     QString m_currentSessionId;                            // m_currentSessionId：每次启动唯一标识，防 stop/start 过快时遗漏停止标记。
     qint64 m_lastProcessRefreshMs = 0;                     // m_lastProcessRefreshMs：上次完成进程快照的时间戳（ms）。
     bool m_eventFilterActive = false;                      // m_eventFilterActive：是否需要在事件到达时执行全表筛选。

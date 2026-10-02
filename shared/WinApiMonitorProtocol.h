@@ -23,6 +23,47 @@
 
 namespace ks::winapi_monitor
 {
+    // A kernel object lease works across UI/background threads and KSword instances.
+    // CloseHandle releases ownership regardless of the thread that acquired it.
+    class SessionLease
+    {
+    public:
+        SessionLease() = default;
+        ~SessionLease() { reset(); }
+        SessionLease(const SessionLease&) = delete;
+        SessionLease& operator=(const SessionLease&) = delete;
+        SessionLease(SessionLease&& other) noexcept : m_handle(other.m_handle), m_pid(other.m_pid)
+        { other.m_handle = nullptr; other.m_pid = 0; }
+        SessionLease& operator=(SessionLease&& other) noexcept
+        {
+            if (this != &other) { reset(); m_handle = other.m_handle; m_pid = other.m_pid;
+                other.m_handle = nullptr; other.m_pid = 0; }
+            return *this;
+        }
+        bool acquire(std::uint32_t pid, DWORD* error)
+        {
+            if (m_handle && m_pid == pid) return true;
+            if (m_handle || !pid) { if (error) *error = ERROR_BUSY; return false; }
+            const std::wstring name = L"Global\\KswordApiMonSessionLease_" + std::to_wstring(pid);
+            HANDLE handle = ::CreateEventW(nullptr, TRUE, FALSE, name.c_str());
+            const DWORD status = ::GetLastError();
+            if (!handle || status == ERROR_ALREADY_EXISTS)
+            {
+                if (handle) ::CloseHandle(handle);
+                if (error) *error = handle ? ERROR_BUSY : status;
+                return false;
+            }
+            m_handle = handle; m_pid = pid;
+            if (error) *error = ERROR_SUCCESS;
+            return true;
+        }
+        void reset() { if (m_handle) ::CloseHandle(m_handle); m_handle = nullptr; m_pid = 0; }
+        std::uint32_t pid() const { return m_pid; }
+    private:
+        HANDLE m_handle = nullptr;
+        std::uint32_t m_pid = 0;
+    };
+
     // kProtocolVersion：
     // - 作用：协议版本号；
     // - 调用：UI 和 Agent 在收发事件包时都可用于快速校验结构兼容性。

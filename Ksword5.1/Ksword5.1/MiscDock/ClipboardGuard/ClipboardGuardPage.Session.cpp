@@ -388,6 +388,14 @@ namespace ks::misc
             ? QUuid::createUuid().toString(QUuid::WithoutBraces)
             : existingSessionId;
 
+        ks::winapi_monitor::SessionLease lease;
+        DWORD leaseError = 0;
+        if (newSession && !lease.acquire(processRecord.pid, &leaseError))
+        {
+            if (errorTextOut) *errorTextOut = QStringLiteral("无法占用 PID=%1 的 Agent 会话（错误码 %2）；该进程可能已由 API 监控或剪贴板保护占用。")
+                .arg(processRecord.pid).arg(leaseError);
+            return false;
+        }
         QString writeError;
         if (!writeSessionConfigForPid(processRecord.pid, matchedRule, sessionId, &writeError))
         {
@@ -401,7 +409,7 @@ namespace ks::misc
         if (newSession)
         {
             // 先启动管道客户端，再注入 Agent；它建立服务端后即可连接。
-            startPipeReadThreadForPid(processRecord.pid, sessionId, matchedRule);
+            startPipeReadThreadForPid(processRecord.pid, sessionId, matchedRule, std::move(lease));
             const auto residentIt = m_residentAgentCreationTimes.find(processRecord.pid);
             const bool reuseResidentAgent = processRecord.creationTime100ns != 0
                 && residentIt != m_residentAgentCreationTimes.cend()
@@ -480,9 +488,10 @@ namespace ks::misc
     }
 
     void ClipboardGuardPage::startPipeReadThreadForPid(
-        const std::uint32_t pid, const QString& sessionId, const ClipboardGuardRule& rule)
+        const std::uint32_t pid, const QString& sessionId, const ClipboardGuardRule& rule, ks::winapi_monitor::SessionLease lease)
     {
         auto sessionPointer = std::make_unique<Session>();
+        sessionPointer->lease = std::move(lease);
         sessionPointer->pid = pid;
         sessionPointer->sessionId = sessionId;
         sessionPointer->readAction = rule.readAction;
