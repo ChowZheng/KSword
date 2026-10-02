@@ -65,6 +65,17 @@ filters=s[s.index('    const std::vector<EtwFilterFieldDescriptor>& etwFilterFie
 code=code.replace('DEPENDENCIES',fun('QString guidToText(')+identity+aliases+descriptor+filters)
 code=code.replace('PARSER',s[s.index('    // EtwSchemaPropertyEntry'):s.index('    // 100ns 时间戳文本格式化')]).replace('SAMPLE_BYTES',','.join(str(x) for x in payload))
 tests={
+ 'thread_identity': r'''
+ std::uint32_t thread[]={24680,22222};schema.propertyList={prop(0,"ProcessId",TDH_INTYPE_UINT32),prop(1,"TThreadId",TDH_INTYPE_UINT32)};
+ record.EventHeader.ProviderId={0x3d6fa8d1,0xfe05,0x11d0,{0x9d,0xda,0,0xc0,0x4f,0xd7,0xba,0x7c}};
+ run(schema,thread,sizeof(thread));auto tr=fill(QStringLiteral("Thread"),QStringLiteral("Thread"),QStringLiteral("End"));
+ if(!tr.targetTidValid||etwRelatedThreadId(tr)!=22222||etwRelatedProcessId(tr)!=24680)return 30;
+ std::uint32_t ttid=22222;schema.propertyList={prop(0,"TTID",TDH_INTYPE_UINT32)};
+ record.EventHeader.ProviderId={0x90cbdc39,0x4a3e,0x11d1,{0x84,0xf4,0,0,0xf8,4,0x64,0xe3}};
+ run(schema,&ttid,sizeof(ttid));auto file=fill(QStringLiteral("Kernel-FileIO"),QStringLiteral("Read"),QString());
+ if(!file.targetTidValid||file.targetTid!=22222||etwRelatedProcessId(file)!=std::numeric_limits<std::uint32_t>::max())return 31;
+ if(file.pidTidText!=QStringLiteral("未知 / 22222"))return 32;
+ ''',
  'semantics': r'''
  if(row.resourceTypeText!=QStringLiteral("映像")||row.actionText!=QStringLiteral("枚举开始")||row.imagePathText.isEmpty())return 20;
  if(etwProviderDisplayName(guidToText(imageGuid),QString())!=QStringLiteral("Microsoft-Windows-Kernel-Image"))return 21;
@@ -93,7 +104,8 @@ tests={
 }
 selected=list(tests) if args.case=='all' else [args.case]
 if any(name not in tests for name in selected):parser.error('Unknown case')
-body='\n'.join('{'+tests[name]+'}' for name in selected)
+reset='record.EventHeader.ProviderId=imageGuid;record.EventHeader.EventDescriptor.Opcode=3;run(installed,image,sizeof(image));row=fill(guidToText(imageGuid),QStringLiteral("Image"),QStringLiteral("DCStart"));'
+body='\n'.join('{'+reset+tests[name]+'}' for name in selected)
 code=code.replace('TEST_BODY',body).replace('CASE_NAME',','.join(selected))
 
 with tempfile.TemporaryDirectory(prefix='ksword_etw_decode_') as temp:

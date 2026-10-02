@@ -1,4 +1,4 @@
-
+﻿
 #include "MonitorDock.h"
 #include "../../../shared/ui/KsPainterChart.h"
 #include <MonitorDock/EtwArchiveCompression.h>
@@ -130,7 +130,23 @@ namespace
 
     std::uint32_t etwRelatedProcessId(const MonitorDock::EtwCapturedEventRow& row)
     {
-        return row.targetPidValid ? row.targetPid : row.headerPid;
+        if (row.targetPidValid)
+        {
+            return row.targetPid;
+        }
+        const QString provider = etwProviderDisplayName(row.providerGuid, row.providerName);
+        if (provider == QStringLiteral("Kernel-FileIO")
+            || provider == QStringLiteral("Kernel-Process")
+            || provider == QStringLiteral("Microsoft-Windows-Kernel-Thread")
+            || provider == QStringLiteral("Microsoft-Windows-Kernel-Image")
+            || provider == QStringLiteral("Kernel-TCPIP")
+            || provider == QStringLiteral("Kernel-UDPIP"))
+        {
+            // These schemas identify the affected object in the payload. Missing
+            // payload identity is unknown, not the logger's execution context.
+            return std::numeric_limits<std::uint32_t>::max();
+        }
+        return row.headerPid;
     }
 
     std::uint32_t etwRelatedThreadId(const MonitorDock::EtwCapturedEventRow& row)
@@ -142,14 +158,17 @@ namespace
         // Rundown describes existing objects, not the thread performing the enumeration.
         return row.opcode == EVENT_TRACE_TYPE_DC_START || row.opcode == EVENT_TRACE_TYPE_DC_END
             || (row.targetPidValid && (row.targetPid != row.headerPid || row.targetPid == 0))
+            || etwProviderDisplayName(row.providerGuid, row.providerName) == QStringLiteral("Microsoft-Windows-Kernel-Thread")
+            || etwProviderDisplayName(row.providerGuid, row.providerName) == QStringLiteral("Kernel-FileIO")
             ? 0U : row.headerTid;
     }
 
     void etwUpdateRelatedIdentity(MonitorDock::EtwCapturedEventRow* row)
     {
         const std::uint32_t tid = etwRelatedThreadId(*row);
+        const std::uint32_t pid = etwRelatedProcessId(*row);
         row->pidTidText = QStringLiteral("%1 / %2")
-            .arg(etwRelatedProcessId(*row))
+            .arg(pid == std::numeric_limits<std::uint32_t>::max() ? QStringLiteral("未知") : QString::number(pid))
             .arg(tid == 0 ? QStringLiteral("未知") : QString::number(tid));
     }
 
@@ -2476,7 +2495,9 @@ namespace
         {
             return true;
         }
-        return etwNumericInRanges(etwRelatedProcessId(rowData), simpleFilter.pidRangeList);
+        const std::uint32_t pid = etwRelatedProcessId(rowData);
+        return pid != std::numeric_limits<std::uint32_t>::max()
+            && etwNumericInRanges(pid, simpleFilter.pidRangeList);
     }
 
     bool etwSimpleFilterMatchesHeaderFields(
@@ -4115,6 +4136,9 @@ namespace
         const EtwSemanticSummary& semanticSummary,
         const std::vector<EtwDecodedPropertyEntry>& propertyList)
     {
+        const QString pidText = pidValue == std::numeric_limits<std::uint32_t>::max()
+            ? QStringLiteral("未知") : QString::number(pidValue);
+        const QString tidText = tidValue == 0 ? QStringLiteral("未知") : QString::number(tidValue);
         const QString resourceTypeText = etwToSingleLine(semanticSummary.resourceTypeText);
         QString actionText = etwToSingleLine(semanticSummary.actionText);
         QString targetText = etwToSingleLine(semanticSummary.targetText);
@@ -4157,8 +4181,8 @@ namespace
             }
             const QString summaryText = QStringLiteral("文件 %1 | %2 | PID=%3 TID=%4")
                 .arg(actionText, targetText)
-                .arg(pidValue)
-                .arg(tidValue);
+                .arg(pidText)
+                .arg(tidText);
             return appendEtwStatusSummary(summaryText, statusText);
         }
 
@@ -4192,8 +4216,8 @@ namespace
             }
             const QString summaryText = QStringLiteral("注册表 %1 | %2 | PID=%3 TID=%4")
                 .arg(actionText, targetText)
-                .arg(pidValue)
-                .arg(tidValue);
+                .arg(pidText)
+                .arg(tidText);
             return appendEtwStatusSummary(summaryText, statusText);
         }
 
@@ -4201,12 +4225,12 @@ namespace
         {
             const EtwDecodedPropertyEntry* processIdProperty = findFirstEtwProperty(
                 propertyList,
-                QStringList{ QStringLiteral("processid"), QStringLiteral("pid"),
-                QStringLiteral("targetprocessid") });
+                QStringList{ QStringLiteral("targetprocessid"), QStringLiteral("newprocessid"),
+                QStringLiteral("processid"), QStringLiteral("pid") });
             const EtwDecodedPropertyEntry* threadIdProperty = findFirstEtwProperty(
                 propertyList,
-                QStringList{ QStringLiteral("threadid"), QStringLiteral("tid"),
-                QStringLiteral("targetthreadid") });
+                QStringList{ QStringLiteral("targetthreadid"), QStringLiteral("newthreadid"),
+                QStringLiteral("tthreadid"), QStringLiteral("ttid"), QStringLiteral("threadid"), QStringLiteral("tid") });
             const EtwDecodedPropertyEntry* parentPidProperty = findFirstEtwProperty(
                 propertyList,
                 QStringList{ QStringLiteral("parentprocessid"), QStringLiteral("parentid"), QStringLiteral("ppid") });
@@ -4217,10 +4241,10 @@ namespace
 
             const QString processIdText = processIdProperty != nullptr
                 ? etwToSingleLine(processIdProperty->valueText)
-                : QString::number(pidValue);
+                : pidText;
             const QString threadIdText = threadIdProperty != nullptr
                 ? etwToSingleLine(threadIdProperty->valueText)
-                : QString::number(tidValue);
+                : tidText;
 
             QString processDisplayText = targetText;
             if (processDisplayText.isEmpty() && imageProperty != nullptr)
@@ -4270,8 +4294,8 @@ namespace
 
         QString summaryText = QStringLiteral("%1 | %2 | PID=%3 TID=%4")
             .arg(actionText, targetDisplayText)
-            .arg(pidValue)
-            .arg(tidValue);
+            .arg(pidText)
+            .arg(tidText);
         if (!resourceTypeText.isEmpty() && resourceTypeText != QStringLiteral("通用"))
         {
             summaryText = QStringLiteral("%1 %2").arg(resourceTypeText, summaryText);
@@ -4584,7 +4608,8 @@ namespace
 
         const EtwDecodedPropertyEntry* targetTidProperty = findFirstEtwProperty(
             propertyList,
-            QStringList{ QStringLiteral("targetthreadid"), QStringLiteral("threadid"), QStringLiteral("tid") });
+            QStringList{ QStringLiteral("targetthreadid"), QStringLiteral("newthreadid"),
+                QStringLiteral("tthreadid"), QStringLiteral("ttid"), QStringLiteral("threadid"), QStringLiteral("tid") });
         rowOut->targetTidValid = etwPropertyToUInt32(targetTidProperty, &rowOut->targetTid);
 
         rowOut->processNameText = etwPropertySingleLineValue(findFirstEtwProperty(
