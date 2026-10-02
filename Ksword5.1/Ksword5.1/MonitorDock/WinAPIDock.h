@@ -107,6 +107,7 @@ private:
     void initializeConnections();
     void updateActionState();
     void updateStatusLabel();
+    QString eventLossSummary();
 
     void refreshProcessListAsync();
     void populateProcessSelector(const std::vector<ks::process::ProcessRecord>& processList);
@@ -224,6 +225,8 @@ private:
 
     std::deque<EventRow> m_pendingRows;                    // m_pendingRows：后台线程待刷入的有界 FIFO 事件队列。
     std::mutex m_pendingMutex;                             // m_pendingMutex：保护待刷入事件队列。
+    std::unordered_map<std::uint32_t, std::uint64_t> m_agentDroppedRows;
+    std::size_t m_evictedRows = 0;
     std::size_t m_pendingDroppedRows = 0;                   // m_pendingDroppedRows：因队列或渲染预算丢弃的事件数。
     std::unique_ptr<std::thread> m_pipeThread;             // m_pipeThread：命名管道读取线程。
     std::vector<std::unique_ptr<std::thread>> m_childPipeThreads; // m_childPipeThreads：自动注入子进程后的子管道读取线程。

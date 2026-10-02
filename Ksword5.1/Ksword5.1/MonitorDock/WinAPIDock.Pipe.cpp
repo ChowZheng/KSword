@@ -564,9 +564,17 @@ void WinAPIDock::writeChildStopFlags()
 void WinAPIDock::enqueuePendingRow(EventRow rowValue)
 {
     std::lock_guard<std::mutex> lock(m_pendingMutex);
+    if (rowValue.agentStatus == QStringLiteral("EventsDropped"))
+    {
+        bool ok = false;
+        const auto count = rowValue.detailText.toULongLong(&ok);
+        if (ok) m_agentDroppedRows[rowValue.sourcePid] = std::max<std::uint64_t>(m_agentDroppedRows[rowValue.sourcePid], count);
+    }
     if (m_pendingRows.size() >= kPendingRowCapacity)
     {
-        m_pendingRows.pop_front();
+        const auto ordinary = std::find_if(m_pendingRows.begin(), m_pendingRows.end(), [](const EventRow& row) { return !row.internalEvent; });
+        if (ordinary != m_pendingRows.end()) m_pendingRows.erase(ordinary);
+        else m_pendingRows.pop_front();
         ++m_pendingDroppedRows;
     }
     m_pendingRows.push_back(std::move(rowValue));
@@ -606,6 +614,7 @@ void WinAPIDock::flushPendingRows()
 
     if (rowList.empty())
     {
+        updateStatusLabel();
         return;
     }
 
@@ -631,6 +640,7 @@ void WinAPIDock::flushPendingRows()
         const int removeCount = std::max(0, m_eventTable->rowCount() - 12000);
         if (removeCount > 0 && m_eventTable->model() != nullptr)
         {
+            m_evictedRows += removeCount;
             m_eventTable->model()->removeRows(0, removeCount);
         }
 

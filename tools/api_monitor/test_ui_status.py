@@ -16,6 +16,9 @@ code=r"""
 #include <atomic>
 #include <cstdint>
 #include <cstdio>
+#include <deque>
+#include <mutex>
+#include <unordered_map>
 namespace ks::ui {
  enum class StatusRole { Warning, Info, Error, Idle };
  void ApplyStatusRole(QLabel* label,StatusRole role) { label->setProperty("role",static_cast<int>(role)); }
@@ -28,6 +31,11 @@ public:
  std::uint32_t m_currentSessionPid=42;
  std::atomic_bool m_pipeRunning{true},m_pipeConnected{true};
  HookState m_hookState=HookState::Waiting;
+ std::mutex m_pendingMutex;
+ std::unordered_map<std::uint32_t,std::uint64_t> m_agentDroppedRows;
+ std::deque<int> m_pendingRows;
+ std::size_t m_pendingDroppedRows=0,m_evictedRows=0;
+ QString eventLossSummary();
  void updateStatusLabel();
 };
 METHOD
@@ -45,6 +53,8 @@ int main(int argc,char** argv) {
  if(!label.text().contains(QStringLiteral("等待 Agent"))) return 5;
  dock.m_pipeRunning.store(false);dock.updateStatusLabel();
  if(!label.text().contains(QStringLiteral("空闲"))) return 6;
+ dock.m_agentDroppedRows[42]=12;dock.m_pendingDroppedRows=7;dock.m_evictedRows=99;dock.updateStatusLabel();
+ if(!label.text().contains(QStringLiteral("Agent 丢失=12，UI 丢失=7，已移出表格=99")))return 7;
  printf("PASS: connecting, installing, active, partial, failure and idle UI states\n");
 }
 """.replace("STATE_DECL",state).replace("METHOD",method)

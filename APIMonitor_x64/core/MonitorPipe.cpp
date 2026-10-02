@@ -17,6 +17,9 @@ namespace apimon
         constexpr std::size_t kMaxPendingPacketCount = 4096; // kMaxPendingPacketCount：固定环形队列容量，避免 Hook 热路径动态分配。
         constexpr std::uint32_t kMaxFlushBatchCount = 256;   // kMaxFlushBatchCount：单次写管道最多搬运的事件数，控制栈缓冲大小。
         std::array<ks::winapi_monitor::ApiMonitorEventPacket, kMaxPendingPacketCount> g_pendingPacketRing{}; // 固定事件环形缓冲。
+        std::atomic_uint64_t g_droppedPacketCount{0};
+        std::uint64_t g_reportedDroppedPacketCount = 0; // sender thread only
+        constexpr std::size_t kControlPacketReserve = 64;
         std::size_t g_pendingPacketHead = 0;                 // g_pendingPacketHead：下一条待发送事件所在槽位。
         std::size_t g_pendingPacketCount = 0;                // g_pendingPacketCount：当前环形队列中有效事件数量。
         std::atomic_bool g_senderStopFlag{ false };    // g_senderStopFlag：后台发送线程停止信号。
@@ -423,6 +426,8 @@ namespace apimon
         ::AcquireSRWLockExclusive(&g_queueLock);
         g_pendingPacketHead = 0;
         g_pendingPacketCount = 0;
+        g_droppedPacketCount.store(0);
+        g_reportedDroppedPacketCount = 0;
         ::ReleaseSRWLockExclusive(&g_queueLock);
     }
 
@@ -463,8 +468,11 @@ namespace apimon
         CopyWideTextRaw(detailText, packetValue.detailText, std::size(packetValue.detailText), detailLimit);
 
         ::AcquireSRWLockExclusive(&g_queueLock);
-        if (g_pendingPacketCount >= kMaxPendingPacketCount)
+        const std::size_t capacity = categoryValue == ks::winapi_monitor::EventCategory::Internal
+            ? kMaxPendingPacketCount : kMaxPendingPacketCount - kControlPacketReserve;
+        if (g_pendingPacketCount >= capacity)
         {
+            g_droppedPacketCount.fetch_add(1);
             ::ReleaseSRWLockExclusive(&g_queueLock);
             return false;
         }
@@ -502,16 +510,33 @@ namespace apimon
         }
         ::ReleaseSRWLockExclusive(&g_queueLock);
 
-        if (flushCount == 0)
-        {
-            return 0;
-        }
-
         ::AcquireSRWLockExclusive(&g_pipeLock);
         if (g_pipeHandle == INVALID_HANDLE_VALUE)
         {
+            g_droppedPacketCount.fetch_add(flushCount);
             ::ReleaseSRWLockExclusive(&g_pipeLock);
             return 0;
+        }
+
+        const std::uint64_t dropped = g_droppedPacketCount.load();
+        if (dropped != g_reportedDroppedPacketCount)
+        {
+            ks::winapi_monitor::ApiMonitorEventPacket notice{};
+            notice.pid = ::GetCurrentProcessId();
+            notice.tid = ::GetCurrentThreadId();
+            notice.timestamp100ns = QueryNow100ns();
+            notice.category = static_cast<std::uint32_t>(ks::winapi_monitor::EventCategory::Internal);
+            CopyWideText(L"Agent", notice.moduleName, std::size(notice.moduleName));
+            CopyWideText(L"EventsDropped", notice.apiName, std::size(notice.apiName));
+            CopyWideText(std::to_wstring(dropped), notice.detailText, std::size(notice.detailText));
+            if (!WritePendingPacketLocked(notice))
+            {
+                g_droppedPacketCount.fetch_add(flushCount);
+                ClosePipeLocked();
+                ::ReleaseSRWLockExclusive(&g_pipeLock);
+                return 0;
+            }
+            g_reportedDroppedPacketCount = dropped;
         }
 
         std::uint32_t flushedCount = 0;
@@ -520,6 +545,7 @@ namespace apimon
             const auto& packetValue = packetBatch[indexValue];
             if (!WritePendingPacketLocked(packetValue))
             {
+                g_droppedPacketCount.fetch_add(flushCount - indexValue);
                 ClosePipeLocked();
                 break;
             }

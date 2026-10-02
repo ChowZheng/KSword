@@ -381,4 +381,15 @@ void WinAPIDock::updateStatusLabel()
             QStringLiteral("● 空闲  PID=%1 | 事件=%2").arg(pidText).arg(eventCount));
         ks::ui::ApplyStatusRole(m_sessionStatusLabel, ks::ui::StatusRole::Idle);
     }
+    m_sessionStatusLabel->setText(m_sessionStatusLabel->text() + eventLossSummary());
+}
+
+QString WinAPIDock::eventLossSummary()
+{
+    std::lock_guard<std::mutex> lock(m_pendingMutex);
+    std::uint64_t agentDropped = 0;
+    for (const auto& entry : m_agentDroppedRows) agentDropped += entry.second;
+    return QStringLiteral(" | Agent 丢失=%1，UI 丢失=%2，已移出表格=%3，待显示=%4")
+        .arg(static_cast<qulonglong>(agentDropped)).arg(static_cast<qulonglong>(m_pendingDroppedRows))
+        .arg(static_cast<qulonglong>(m_evictedRows)).arg(static_cast<qulonglong>(m_pendingRows.size()));
 }

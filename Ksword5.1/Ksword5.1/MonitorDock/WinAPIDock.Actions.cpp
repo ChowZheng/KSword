@@ -1267,6 +1267,8 @@ void WinAPIDock::startMonitoring()
         std::lock_guard<std::mutex> lock(m_pendingMutex);
         m_pendingRows.clear();
         m_pendingDroppedRows = 0;
+        m_agentDroppedRows.clear();
+        m_evictedRows = 0;
     }
 
     m_hookState = HookState::Waiting;
@@ -1554,6 +1556,7 @@ void WinAPIDock::exportVisibleRowsToTsv()
     }
 
     QTextStream outputStream(&exportFile);
+    outputStream << QStringLiteral("# 仅导出当前表格中的可见记录；这不是完整调用轨迹。%1").arg(eventLossSummary()) << '\n';
     QStringList headerTextList;
     for (int column = 0; column < EventColumnCount; ++column)
     {
