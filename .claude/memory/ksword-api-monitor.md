@@ -28,11 +28,11 @@
 - UI 保留 24000 个待显示事件与 12000 行表格，分别记录 UI 丢失、移出表格和待显示数量。Agent 丢失按 PID 汇总。TSV 只导出当前可见行，包含覆盖范围与计数说明；它不是完整调用轨迹。
 - 筛选文本缓存于时间列 UserRole；已有行不可变，仅筛选条件变化时全表扫描。新行单独筛选，淘汰旧行时同步可见计数。
 - 协议版本 `0x20261003`，Windows 包大小1000字节。包包含 EventKind、API ID、操作 ID、会话身份、快照修订/状态/种类/地址及定义 SHA256。resultKind 为 StatusCode 或 EntryOnly，Raw 结果显示“未采集”，不能因 resultCode=0 标成 OK 或错误。剪贴板分类码为7。
-- 升级必须同时部署新主程序、APIMonitor_x64.dll、APIMonitor_x86.dll 和两个注入助手；旧协议组合不兼容。已加载旧 Agent 的目标进程需要重启后再监控。剪贴板保护的读端也使用共享包布局与版本检查。
+- 升级必须同时部署新主程序、APIMonitor_x64.dll、APIMonitor_x86.dll；旧协议组合不兼容。已加载旧 Agent 的目标进程需要重启后再监控。剪贴板保护的读端也使用共享包布局与版本检查。
 
 ## 回归验证与边界
 
-在 x64 MSVC 开发环境运行 `python tools/api_monitor/run_regressions.py` 顺序执行27个脚本（包括4项 offscreen Qt）。原始614项冻结身份、确定性生成/非法定义、元数据/返回契约、可执行机器码重定位、共享冲突/卸载失败/退役 trampoline、租约、管道分片、覆盖快照/中断/会话切换、晚加载、丢失统计、Qt状态/筛选和真实自有 x64 文件/IOCP/APC/取消/TCP/UDP/七个扩展路径均已通过。
+在 x64 MSVC 开发环境运行 `python tools/api_monitor/run_regressions.py` 顺序执行29个脚本（包括5项 offscreen Qt）。原始614项冻结身份、确定性生成/非法定义、元数据/返回契约、可执行机器码重定位、共享冲突/卸载失败/退役 trampoline、租约、管道分片、覆盖快照/中断/会话切换、晚加载、丢失统计、Qt状态/筛选和真实自有 x64 文件/IOCP/APC/取消/TCP/UDP/七个扩展路径均已通过。
 
 这些测试编译生产代码或生产函数，覆盖指令边界、恢复失败、在途 detour、跨线程租约、字节管道分片、子配置继承、溢出计数与 Qt 状态/增量筛选。UI 测试使用 offscreen Qt Widgets，不替代实际目标程序的注入、长期压力、多系统版本、CFG/CET 或受保护进程验证。主程序构建使用 `tools/Invoke-KSwordBuildCheck.ps1`；两个 Agent 使用 x64 MSBuild 和 HostX64，分别编译 x64/Win32 目标。修改用户可见字符串时定点更新双语包，并通过 i18n 审计。
 
@@ -75,9 +75,21 @@
 - `hook/HookEngineX86.cpp` 包含共享引擎 x86 分支；`InstructionDecoder.inc` 是32位保守解码器，支持绝对地址、相对调用/分支、内部目标、ENDBR32、FF25绝对跳转桩。rel32使用32位回绕，线程检查使用EIP；区间冲突、退役原始指针和恢复失败策略保持一致。
 - `ContextThunk.h` 的32位实现保持 stdcall 参数和清栈，现有异步回调及全部七个 Winsock 扩展复用；停止后保留回调语义。`EntryStubs.h` 的 Raw 保存标志/寄存器/x87/MMX/XMM 后尾跳原调用，Fake 使用 ret N 与 EAX/EDX:EAX；已知 API 清栈值由目标 `sizeof` 生成，未知 Fake 必须显式提供第七字段 `x86StackBytes`，不猜 ABI。
 - WinAPIDock 增加32位栈清理输入/表列，序列化保留空字段并兼容旧六字段配置。32位未知 Fake 仅支持 cdecl/stdcall 的标量/整数返回；不支持 fastcall、浮点/结构返回，不填 out 参数。Native剪贴板阻止桩按真实 HANDLE/BOOL 契约返回NULL/FALSE并设置拒绝错误，32位清栈分别为8/12/0。
-- `shared/ApiMonitorPlatform.h` 查询进程/PE架构。WinAPI和剪贴板保护安装时自动切换同目录的标准 Agent 文件名；自定义 DLL 先校验位数。`ApiMonitorInjection.h` 原生注入按远程目标模块基址解析LoadLibraryW，按模块列表确认加载成功，避免64位HMODULE被DWORD截断；跨位数启动对应助手并验证目标创建时间，超时不释放仍可能使用的远程路径。
-- `APIMonitor_x86/Injector.vcxproj` 同源编译 `APIMonitorInject_x86.exe` 与 `APIMonitorInject_x64.exe`。两个Agent分别依赖对应助手，主程序以非链接依赖构建两套Agent，显式映射 x86 为Win32；解决方案登记新工程。统一发布到 `Ksword5.1/x64/Release`，打包时必须同时带两个DLL、两个助手及profiles JSON。
-- x86 DLL和两个助手使用静态CRT，避免32位运行库覆盖64位主程序目录。x64 DLL仍使用64位动态CRT。自动子进程按实际位数重新选择Agent，子配置记录选择结果，继承会话/根停止路径，32→64和64→32均已验证。
-- x86 Release干净Rebuild及24项回归通过，证据 `.codex-build-logs/apimon-x86-final-regressions.log`。包括真实异步文件/IOCP/APC/取消、TCP/UDP、全部7扩展、Raw/Fake与本机双向注入、跨位数子进程根停止。x64完整回归27项（含Qt规则与生产解析器往返）证据 `.codex-build-logs/apimon-x64-final-regressions.log`。
+- `shared/ApiMonitorPlatform.h` 查询进程/PE架构。WinAPI和剪贴板保护安装时自动切换同目录的标准 Agent 文件名；自定义 DLL 先校验位数。`ApiMonitorInjection.h` 原生注入按远程目标模块基址解析LoadLibraryW，按模块列表确认加载成功，避免64位HMODULE被DWORD截断；主程序直接解析目标PE导出处理32位注入，子进程通过会话管道请求主程序处理并验证目标创建时间，超时不释放仍可能使用的远程路径。
+- 独立Injector工程、源码、解决方案项和Agent依赖已删除。主程序以非链接依赖构建两套Agent，显式映射 x86 为Win32；统一发布到 `Ksword5.1/x64/Release`，打包时携带主程序、两个DLL及profiles JSON。
+- x86 DLL使用静态CRT，避免32位运行库覆盖64位主程序目录。x64 DLL仍使用64位动态CRT。自动子进程按实际位数重新选择Agent，子配置记录选择结果，继承会话/根停止路径，32→64和64→32均已验证。
+- x86 Release干净Rebuild及25项回归通过，证据 `.codex-build-logs/apimon-integrated-x86-regressions.log`。包括真实异步文件/IOCP/APC/取消、TCP/UDP、全部7扩展、Raw/Fake与本机双向注入、跨位数子进程根停止。x64完整回归29项（含Qt规则与生产解析器往返）证据 `.codex-build-logs/apimon-integrated-x64-regressions.log`。
 - 主程序Release检查 `.codex-build-logs/ksword-build-check-20261002-163225.raw.log`：BUILD_RESULT=SUCCESS、EXIT_CODE=0、exe=20301824字节、I18N_AUDIT_PASSED=True。每阶段先编译/测试后分别中文提交；其他工作区修改未纳入。
 - 所有已有覆盖边界继续适用，尤其未知入口拒绝、任意COM/直接系统调用、未发现扩展、跨用户TEMP目录、退役代码内存增长。多Windows版本、严格CFG/CET、长期压力与受保护进程不属于本机回归的证明范围。
+
+
+## 主程序集中注入与助手移除（2026-10-02）
+
+- `shared/ApiMonitorInjectionBroker.cpp` 仅编译进64位主程序，不生成新EXE或DLL；事件协议保持不变，控制请求采用独立固定布局的InjectionProtocol v1（请求288字节、响应528字节），两个位数静态断言一致。
+- 主程序直接注入x64及x86。`ApiMonitorRemoteExports.h` 在目标进程读取PE32/PE64导出表，验证范围、数量、机器类型和可执行映像页；具名/序号及转发导出有界解析，转发深度最多8。不能把本地64位 LoadLibraryW RVA直接用于32位目标。
+- WinAPIDock在启用自动子进程时创建会话专用服务，独立于普通事件队列。INI新增 `injection_broker_pipe/token/pid/creation`，子配置继承。Agent只发请求，主程序选择已注册父进程对应DLL；不接受请求者提供任意DLL路径。校验内核提供的管道客户端PID、创建时间、根令牌、真实父子关系、子配置所属会话及根停止路径；成功子进程登记后可继续请求后代，容量8192。
+- 管道拒绝远程客户端，ACL限当前用户及SYSTEM，首实例防抢占，客户端复核服务PID/创建时间。请求读取、发送和远程加载有界等待；停止会话取消在途管道和加载等待，仍可能被远程线程使用的路径内存保留到目标退出。未完成读取的客户端不能阻塞主程序退出；旧会话或主程序退出时明确失败，不启动任何注入助手。
+- API监控与剪贴板保护的Qt配置写入改为UTF-16LE带BOM，与Win32 INI读取一致；已验证中文/空格路径、broker字段、剪贴板策略、原子提交后撤销旧停止标记。
+- Release中的两套旧助手EXE/PDB/ILK共6文件已移出到本地忽略目录 `.codex-build-logs/retired-apimon-helpers`。重新构建不会生成；源工程和项目依赖均无助手引用。Agent DLL/PDB和profiles JSON保留。
+- 主程序Release构建证据 `.codex-build-logs/ksword-build-check-20261002-180835.raw.log`：BUILD_RESULT=SUCCESS、EXIT_CODE=0、exe=20337152字节、I18N_AUDIT_PASSED=True。会话服务、无助手双位数注入、32→64/64→32真实子进程及根停止回归通过；完整回归证据见上述25/29项日志。
+- 跨用户TEMP目录与ACL、受保护进程、严格CFG/CET及多系统矩阵仍需单独验收；显式改写父进程属性的CreateProcess请求若父子身份不匹配，会拒绝自动注入。更新已驻留旧Agent的进程仍需要重启。

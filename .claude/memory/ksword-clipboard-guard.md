@@ -7,4 +7,4 @@
 - DLL 的 worker 在停止当前会话后仍常驻。重连同一进程时按 PID 加创建时间复用它，避免每次断线都 `LoadLibraryW` 增加模块引用计数；PID 复用或进程退出时丢弃缓存。
 - 当前 `shared/WinApiMonitorProtocol.h::buildSessionDirectory` 依赖调用进程的 `GetTempPathW`。跨用户或 SYSTEM 目标可能看到不同的临时目录，不能把同一用户普通进程上的验证外推为跨账户全局覆盖。
 
-- API Monitor 新增独立32位 Agent 后，剪贴板保护按进程架构选择同目录的 APIMonitor_x86.dll/APIMonitor_x64.dll，并使用对应注入助手；会话 INI 同样写入选择后的路径。两个位数仍共享协议、PID租约与驻留/停止规则。发行时必须携带两个 DLL 和两个 APIMonitorInject 助手。
+- API Monitor 新增独立32位 Agent 后，剪贴板保护按进程架构选择同目录的 APIMonitor_x86.dll/APIMonitor_x64.dll，由64位主程序直接注入；会话 INI 同样写入选择后的路径。两个位数仍共享协议、PID租约与驻留/停止规则。发行时携带主程序与两个 DLL；独立注入助手已移除。会话 INI 使用 UTF-16LE BOM，保持中文路径与 Win32 配置读取一致。
