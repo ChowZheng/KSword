@@ -29,5 +29,5 @@ namespace apimon
 
     // UninstallAllClipboardWin32uHooks 作用：卸载所有已安装的 tier2 hook，
     // 会话结束（UninstallConfiguredHooks）时调用。
-    void UninstallAllClipboardWin32uHooks();
+    bool UninstallAllClipboardWin32uHooks();
 }

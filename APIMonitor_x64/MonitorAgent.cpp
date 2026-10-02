@@ -12,7 +12,7 @@ namespace apimon
     {
         std::atomic_bool g_stopRequested{ false };     // g_stopRequested：全局停止标志。
         std::atomic_bool g_processDetachRequested{ false }; // g_processDetachRequested：DLL 正在卸载，worker 不得重新开启会话。
-        MonitorConfig g_activeConfig{};                // g_activeConfig：当前已加载的会话配置。
+        std::atomic<const MonitorConfig*> g_activeConfig{ new MonitorConfig{} };                // g_activeConfig：当前已加载的会话配置。
         constexpr DWORD kSessionIdlePollMs = 100;       // kSessionIdlePollMs：等待下一次 UI 会话配置时的低频轮询间隔。
         constexpr DWORD kSessionActivePollMs = 250;     // kSessionActivePollMs：已安装 Hook 后检查停止标记的轮询间隔。
 
@@ -129,6 +129,9 @@ namespace apimon
             // - 处理：Agent worker 线程自身的会话等待、事件发送和卸载流程不进入监控事件流；
             // - 返回：无返回值，作用域覆盖可重启 worker 的完整生命周期。
             // - 原因：内部控制线程不是被测业务线程，监控它会引入 Wait/File/Loader 自递归噪声，并可能放大为退出期崩溃。
+            HMODULE pinnedAgent = nullptr;
+            if (!::GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN,
+                    reinterpret_cast<LPCWSTR>(&MonitorWorkerThread), &pinnedAgent)) return 1;
             ScopedInlineHookInternalBypass agentBypassScope;
             while (!g_processDetachRequested.load())
             {
@@ -170,7 +173,8 @@ namespace apimon
                         1,
                         errorText);
                     WaitForCurrentSessionStop(configValue);
-                    UninstallConfiguredHooks();
+                    while (!UninstallConfiguredHooks() && !g_processDetachRequested.load())
+                    ::Sleep(kSessionActivePollMs);
                     StopMonitorPipeServer();
                     continue;
                 }
@@ -192,7 +196,8 @@ namespace apimon
                     L"Configured inline hooks are now active.");
 
                 WaitForCurrentSessionStop(configValue);
-                UninstallConfiguredHooks();
+                while (!UninstallConfiguredHooks() && !g_processDetachRequested.load())
+                    ::Sleep(kSessionActivePollMs);
                 SendMonitorEvent(
                     ks::winapi_monitor::EventCategory::Internal,
                     L"Agent",
@@ -236,12 +241,13 @@ namespace apimon
 
     const MonitorConfig& ActiveConfig()
     {
-        return g_activeConfig;
+        return *g_activeConfig.load();
     }
 
     void ReplaceActiveConfig(const MonitorConfig& configValue)
     {
-        g_activeConfig = configValue;
+        // Immutable snapshots remain valid for detours from the retiring session.
+        g_activeConfig.store(new MonitorConfig(configValue));
     }
 
     bool StopRequested()

@@ -10,67 +10,69 @@ namespace apimon
         constexpr std::size_t kAbsoluteJumpSize = 14; // kAbsoluteJumpSize：FF 25 [rip+0] + 8 字节目标地址，不破坏通用寄存器。
         thread_local std::uint32_t g_inlineHookInternalBypassDepth = 0; // g_inlineHookInternalBypassDepth：HookEngine 内部操作重入屏蔽深度。
 
+        // Allocate the handle list before suspension: a suspended thread may own the heap lock.
         class ScopedOtherThreadsSuspender
         {
         public:
             ScopedOtherThreadsSuspender()
             {
-                const DWORD currentProcessId = ::GetCurrentProcessId();
-                const DWORD currentThreadId = ::GetCurrentThreadId();
-
-                HANDLE snapshotHandle = ::CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
-                if (snapshotHandle == INVALID_HANDLE_VALUE)
+                const DWORD pid = ::GetCurrentProcessId();
+                const DWORD tid = ::GetCurrentThreadId();
+                HANDLE snapshot = ::CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+                if (snapshot == INVALID_HANDLE_VALUE) return;
+                THREADENTRY32 entry{};
+                entry.dwSize = sizeof(entry);
+                bool complete = ::Thread32First(snapshot, &entry) != FALSE;
+                if (complete)
                 {
-                    return;
+                    do
+                    {
+                        if (entry.th32OwnerProcessID != pid || entry.th32ThreadID == tid) continue;
+                        HANDLE thread = ::OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | SYNCHRONIZE,
+                            FALSE, entry.th32ThreadID);
+                        if (thread != nullptr) m_threads.push_back(thread);
+                        else if (::GetLastError() != ERROR_INVALID_PARAMETER) complete = false;
+                    } while (::Thread32Next(snapshot, &entry));
                 }
-
-                THREADENTRY32 threadEntry{};
-                threadEntry.dwSize = sizeof(threadEntry);
-                if (::Thread32First(snapshotHandle, &threadEntry) == FALSE)
+                ::CloseHandle(snapshot);
+                if (!complete) return;
+                for (HANDLE thread : m_threads)
                 {
-                    ::CloseHandle(snapshotHandle);
-                    return;
+                    if (::SuspendThread(thread) == static_cast<DWORD>(-1)) return;
+                    ++m_suspendedCount;
                 }
+                m_ready = true;
+            }
 
-                do
+            bool CanPatch(const void* address, const std::size_t length) const
+            {
+                if (!m_ready) return false;
+                const auto first = reinterpret_cast<std::uintptr_t>(address);
+                for (HANDLE thread : m_threads)
                 {
-                    if (threadEntry.th32OwnerProcessID != currentProcessId
-                        || threadEntry.th32ThreadID == currentThreadId)
-                    {
-                        continue;
-                    }
+                    CONTEXT context{};
+                    context.ContextFlags = CONTEXT_CONTROL;
+                    if (::GetThreadContext(thread, &context) == FALSE) return false;
+                    if (context.Rip >= first && context.Rip < first + length) return false;
+                }
+                return true;
+            }
 
-                    HANDLE threadHandle = ::OpenThread(THREAD_SUSPEND_RESUME, FALSE, threadEntry.th32ThreadID);
-                    if (threadHandle == nullptr)
-                    {
-                        continue;
-                    }
-
-                    if (::SuspendThread(threadHandle) != static_cast<DWORD>(-1))
-                    {
-                        m_suspendedThreadHandles.push_back(threadHandle);
-                    }
-                    else
-                    {
-                        ::CloseHandle(threadHandle);
-                    }
-                } while (::Thread32Next(snapshotHandle, &threadEntry) != FALSE);
-
-                ::CloseHandle(snapshotHandle);
+            void Resume()
+            {
+                while (m_suspendedCount > 0) ::ResumeThread(m_threads[--m_suspendedCount]);
             }
 
             ~ScopedOtherThreadsSuspender()
             {
-                for (auto it = m_suspendedThreadHandles.rbegin(); it != m_suspendedThreadHandles.rend(); ++it)
-                {
-                    ::ResumeThread(*it);
-                    ::CloseHandle(*it);
-                }
+                Resume();
+                for (HANDLE thread : m_threads) ::CloseHandle(thread);
             }
-
         private:
-            ScopedInlineHookInternalBypass m_hookBypass; // m_hookBypass：暂停/恢复线程期间屏蔽 OpenThread/SuspendThread 等自触发 hook。
-            std::vector<HANDLE> m_suspendedThreadHandles;
+            ScopedInlineHookInternalBypass m_hookBypass;
+            std::vector<HANDLE> m_threads;
+            std::size_t m_suspendedCount = 0;
+            bool m_ready = false;
         };
 
         std::size_t ModRmLength(
@@ -474,6 +476,15 @@ namespace apimon
             return InlineHookInstallResult::PermanentFailure;
         }
 
+        // Keep the underlying image resident while an old trampoline may still execute.
+        HMODULE pinnedModule = nullptr;
+        if (!::GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN,
+                reinterpret_cast<LPCWSTR>(targetPointer), &pinnedModule))
+        {
+            ::VirtualFree(trampolinePointer, 0, MEM_RELEASE);
+            if (errorTextOut) *errorTextOut = L"Could not pin the hook target module.";
+            return InlineHookInstallResult::RetryableFailure;
+        }
         std::memcpy(trampolinePointer, targetPointer, patchSize);
         BuildAbsoluteJump(trampolinePointer + patchSize, targetPointer + patchSize);
 
@@ -490,6 +501,15 @@ namespace apimon
         }
 
         ScopedOtherThreadsSuspender suspendOtherThreadsScope;
+        if (!suspendOtherThreadsScope.CanPatch(targetPointer, patchSize))
+        {
+            suspendOtherThreadsScope.Resume();
+            DWORD ignored = 0;
+            ::VirtualProtect(targetPointer, patchSize, oldProtect, &ignored);
+            ::VirtualFree(trampolinePointer, 0, MEM_RELEASE);
+            if (errorTextOut) *errorTextOut = L"A thread is executing the patch region, or cannot be suspended safely.";
+            return InlineHookInstallResult::RetryableFailure;
+        }
         hookOut->targetAddress = targetPointer;
         hookOut->detourAddress = detourAddress;
         hookOut->trampolineAddress = trampolinePointer;
@@ -510,34 +530,29 @@ namespace apimon
         return InlineHookInstallResult::Installed;
     }
 
-    void UninstallInlineHook(InlineHookRecord* hookValue)
+    bool UninstallInlineHook(InlineHookRecord* hookValue)
     {
         ScopedInlineHookInternalBypass hookBypassScope;
-        if (hookValue == nullptr || !hookValue->installed || hookValue->targetAddress == nullptr)
-        {
-            return;
-        }
+        if (hookValue == nullptr || !hookValue->installed) return true;
+        if (hookValue->targetAddress == nullptr) return false;
 
         DWORD oldProtect = 0;
-        if (::VirtualProtect(hookValue->targetAddress, hookValue->patchSize, PAGE_EXECUTE_READWRITE, &oldProtect) != FALSE)
+        if (!::VirtualProtect(hookValue->targetAddress, hookValue->patchSize, PAGE_EXECUTE_READWRITE, &oldProtect))
+            return false;
+        ScopedOtherThreadsSuspender suspended;
+        DWORD ignored = 0;
+        if (!suspended.CanPatch(hookValue->targetAddress, hookValue->patchSize))
         {
-            ScopedOtherThreadsSuspender suspendOtherThreadsScope;
-            std::memcpy(hookValue->targetAddress, hookValue->originalBytes.data(), hookValue->patchSize);
-            ::FlushInstructionCache(::GetCurrentProcess(), hookValue->targetAddress, hookValue->patchSize);
-            DWORD unusedProtect = 0;
-            ::VirtualProtect(hookValue->targetAddress, hookValue->patchSize, oldProtect, &unusedProtect);
+            ::VirtualProtect(hookValue->targetAddress, hookValue->patchSize, oldProtect, &ignored);
+            return false;
         }
-
-        if (hookValue->trampolineAddress != nullptr)
-        {
-            ::VirtualFree(hookValue->trampolineAddress, 0, MEM_RELEASE);
-        }
-
+        std::memcpy(hookValue->targetAddress, hookValue->originalBytes.data(), hookValue->patchSize);
+        ::FlushInstructionCache(::GetCurrentProcess(), hookValue->targetAddress, hookValue->patchSize);
+        ::VirtualProtect(hookValue->targetAddress, hookValue->patchSize, oldProtect, &ignored);
         hookValue->installed = false;
-        hookValue->targetAddress = nullptr;
-        hookValue->detourAddress = nullptr;
-        hookValue->trampolineAddress = nullptr;
-        hookValue->patchSize = 0;
-        hookValue->originalBytes.fill(0);
+        // Calls can be inside the detour, trampoline, or the original function (with a return
+        // address into the trampoline). Retire executable code until process exit; never clear
+        // its original pointer. The target and Agent images are pinned for that lifetime.
+        return true;
     }
 }

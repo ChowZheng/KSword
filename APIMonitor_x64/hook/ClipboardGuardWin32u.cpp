@@ -164,18 +164,16 @@ namespace apimon
             }
         }
 
-        void UninstallOneWin32uTarget(const Win32uClipboardTarget& target)
+        bool UninstallOneWin32uTarget(const Win32uClipboardTarget& target)
         {
-            if (!target.state->installed)
-            {
-                return;
-            }
-            UninstallInlineHook(&target.state->hookRecord);
-            FreeWin32uBlockStub(target.state->entryStubAddress);
+            if (!target.state->installed) return true;
+            if (!UninstallInlineHook(&target.state->hookRecord)) return false;
+            // The tiny entry stub can still be on another thread's instruction/return path.
             target.state->entryStubAddress = nullptr;
-            target.state->originalAddress = nullptr;
             target.state->installed = false;
+            return true;
         }
+
     }
 
     void SyncClipboardWin32uHooks()
@@ -202,11 +200,11 @@ namespace apimon
         }
     }
 
-    void UninstallAllClipboardWin32uHooks()
+    bool UninstallAllClipboardWin32uHooks()
     {
+        bool removed = true;
         for (const Win32uClipboardTarget& target : g_win32uTargets)
-        {
-            UninstallOneWin32uTarget(target);
-        }
+            removed = UninstallOneWin32uTarget(target) && removed;
+        return removed;
     }
 }

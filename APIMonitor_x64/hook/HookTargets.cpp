@@ -10129,26 +10129,18 @@ namespace apimon
             return installedAny;
         }
 
-        void UninstallFakeSuccessHooks()
+        bool UninstallFakeSuccessHooks()
         {
-            // UninstallFakeSuccessHooks 作用：
-            // - 输入：无，使用当前 Fake Success 运行时规则表；
-            // - 处理：撤销 inline patch，释放 trampoline 和动态 fake-return stub，并清空索引；
-            // - 返回：无返回值。
-            auto& ruleList = FakeSuccessRules();
-            for (std::unique_ptr<FakeSuccessRuntimeRule>& rulePointer : ruleList)
-            {
-                if (rulePointer == nullptr)
-                {
-                    continue;
-                }
-                UninstallInlineHook(&rulePointer->hookRecord);
-                rulePointer->originalAddress = nullptr;
-                FreeFakeSuccessEntryStub(rulePointer->entryStubAddress);
-                rulePointer->entryStubAddress = nullptr;
-            }
-            ruleList.clear();
+            auto& entries = FakeSuccessRules();
+            bool removed = true;
+            for (auto& entry : entries)
+                if (entry) removed = UninstallInlineHook(&entry->hookRecord) && removed;
+            if (!removed) return false;
+            // Intentionally retain contexts and entry stubs for in-flight calls until process exit.
+            for (auto& entry : entries) (void)entry.release();
+            entries.clear();
             FakeSuccessRuleMap().clear();
+            return true;
         }
 
         void DiscoverRawHookBindingsForLoadedModules()
@@ -10239,22 +10231,18 @@ namespace apimon
             return installedAny;
         }
 
-        void UninstallRawFallbackHooks()
+        bool UninstallRawFallbackHooks()
         {
-            auto& rawBindingList = RawBindings();
-            for (std::unique_ptr<RawHookBinding>& bindingPointer : rawBindingList)
-            {
-                if (bindingPointer == nullptr)
-                {
-                    continue;
-                }
-                UninstallInlineHook(&bindingPointer->hookRecord);
-                bindingPointer->originalAddress = nullptr;
-                FreeRawEntryStub(bindingPointer->entryStubAddress);
-                bindingPointer->entryStubAddress = nullptr;
-            }
-            rawBindingList.clear();
+            auto& entries = RawBindings();
+            bool removed = true;
+            for (auto& entry : entries)
+                if (entry) removed = UninstallInlineHook(&entry->hookRecord) && removed;
+            if (!removed) return false;
+            // Intentionally retain contexts and entry stubs for in-flight calls until process exit.
+            for (auto& entry : entries) (void)entry.release();
+            entries.clear();
             RawHookKeys().clear();
+            return true;
         }
 
         // RetryPendingHooksUnlocked 作用：
@@ -10339,26 +10327,18 @@ namespace apimon
         return installedAny;
     }
 
-    void UninstallConfiguredHooks()
+    bool UninstallConfiguredHooks()
     {
         const std::lock_guard<std::mutex> lock(g_hookOperationMutex);
         ScopedInlineHookInternalBypass hookOperationBypassScope;
-        for (HookBinding& bindingValue : g_bindings)
-        {
-            UninstallInlineHook(bindingValue.hookRecord);
-            if (bindingValue.originalOut != nullptr)
-            {
-                *bindingValue.originalOut = nullptr;
-            }
-        }
-        UninstallRawFallbackHooks();
-        UninstallFakeSuccessHooks();
-        // OleGetClipboard 拿到的 IDataObject 虚表补丁不挂在 g_bindings[] 的
-        // inline hook 生命周期里（它是运行期动态发现的，不是固定导出地址），
-        // 必须在这里单独复原，且要早于 DLL 可能被卸载的时间点。
-        UninstallAllClipboardDataObjectVTableHooks();
-        // tier2 win32u hook 同理是动态按策略安装的，不在 g_bindings[] 里。
-        UninstallAllClipboardWin32uHooks();
+        bool removed = true;
+        for (HookBinding& binding : g_bindings)
+            removed = UninstallInlineHook(binding.hookRecord) && removed;
+        removed = UninstallRawFallbackHooks() && removed;
+        removed = UninstallFakeSuccessHooks() && removed;
+        removed = UninstallAllClipboardWin32uHooks() && removed;
+        if (removed) UninstallAllClipboardDataObjectVTableHooks();
+        return removed;
     }
     void RetryPendingHooks()
     {

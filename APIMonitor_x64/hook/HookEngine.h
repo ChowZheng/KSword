@@ -66,5 +66,5 @@ namespace apimon
         void** originalOut,
         std::wstring* errorTextOut);
 
-    void UninstallInlineHook(InlineHookRecord* hookValue);
+    bool UninstallInlineHook(InlineHookRecord* hookValue);
 }
