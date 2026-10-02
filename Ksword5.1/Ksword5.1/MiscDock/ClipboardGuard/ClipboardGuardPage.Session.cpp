@@ -546,6 +546,8 @@ namespace ks::misc
                 {
                     continue;
                 }
+                if (packetValue.eventKind != static_cast<std::uint32_t>(ks::winapi_monitor::EventKind::ApiCall)
+                    || packetValue.sessionIdentity != ks::winapi_monitor::sessionIdentity(sessionRawPointer->sessionId.toStdWString())) continue;
                 if (packetValue.category == static_cast<std::uint32_t>(ks::winapi_monitor::EventCategory::Internal))
                 {
                     // 管道连上后 Agent 还要安装 Hook；只有收到确认事件，

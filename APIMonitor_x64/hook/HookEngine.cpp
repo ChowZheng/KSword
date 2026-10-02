@@ -16,25 +16,30 @@ namespace apimon
         public:
             ScopedOtherThreadsSuspender()
             {
-                const DWORD pid = ::GetCurrentProcessId();
+                // Enumerate this process only; a system-wide Toolhelp snapshot per entry is costly.
+                using NextThreadFn = LONG (NTAPI*)(HANDLE, HANDLE, ACCESS_MASK, ULONG, ULONG, PHANDLE);
+                const auto nextThread = reinterpret_cast<NextThreadFn>(
+                    ::GetProcAddress(::GetModuleHandleW(L"ntdll.dll"), "NtGetNextThread"));
+                if (!nextThread) return;
                 const DWORD tid = ::GetCurrentThreadId();
-                HANDLE snapshot = ::CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
-                if (snapshot == INVALID_HANDLE_VALUE) return;
-                THREADENTRY32 entry{};
-                entry.dwSize = sizeof(entry);
-                bool complete = ::Thread32First(snapshot, &entry) != FALSE;
-                if (complete)
+                HANDLE cursor = nullptr;
+                HANDLE ownThread = nullptr;
+                bool complete = false;
+                for (;;)
                 {
-                    do
-                    {
-                        if (entry.th32OwnerProcessID != pid || entry.th32ThreadID == tid) continue;
-                        HANDLE thread = ::OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | SYNCHRONIZE,
-                            FALSE, entry.th32ThreadID);
-                        if (thread != nullptr) m_threads.push_back(thread);
-                        else if (::GetLastError() != ERROR_INVALID_PARAMETER) complete = false;
-                    } while (::Thread32Next(snapshot, &entry));
+                    HANDLE next = nullptr;
+                    const LONG status = nextThread(::GetCurrentProcess(), cursor,
+                        THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_QUERY_LIMITED_INFORMATION | SYNCHRONIZE,
+                        0, 0, &next);
+                    if (status == static_cast<LONG>(0x8000001A)) { complete = true; break; }
+                    if (status < 0 || !next) break;
+                    cursor = next;
+                    const DWORD threadId = ::GetThreadId(next);
+                    if (!threadId) { ::CloseHandle(next); break; }
+                    if (threadId == tid) ownThread = next;
+                    else m_threads.push_back(next);
                 }
-                ::CloseHandle(snapshot);
+                if (ownThread) ::CloseHandle(ownThread);
                 if (!complete) return;
                 for (HANDLE thread : m_threads)
                 {

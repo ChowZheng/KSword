@@ -1186,4 +1186,8 @@
   <ItemGroup>
     <ClInclude Include="..\..\shared\driver\KswordArkHvmRequest.h" />
   </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="..\..\shared\ApiMonitorCoverage.h" />
+  </ItemGroup>
+  <ItemGroup><ClCompile Include="MonitorDock\WinAPIDock.Coverage.cpp" /></ItemGroup>
 </Project>

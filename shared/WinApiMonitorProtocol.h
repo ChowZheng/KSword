@@ -68,7 +68,7 @@ namespace ks::winapi_monitor
     // kProtocolVersion：
     // - 作用：协议版本号；
     // - 调用：UI 和 Agent 在收发事件包时都可用于快速校验结构兼容性。
-    inline constexpr std::uint32_t kProtocolVersion = 0x20261002U;
+    inline constexpr std::uint32_t kProtocolVersion = 0x20261003U;
 
     // kMaxModuleNameChars / kMaxApiNameChars / kMaxDetailChars：
     // - 作用：定义固定长度宽字符缓冲大小；
@@ -128,6 +128,27 @@ namespace ks::winapi_monitor
         Clipboard = 7
     };
 
+    enum class EventKind : std::uint32_t
+    {
+        ApiCall = 0, IoSubmit = 1, IoWait = 2, IoComplete = 3, IoCancel = 4,
+        CoverageBegin = 16, CoverageItem = 17, CoverageEnd = 18
+    };
+    enum class HookKind : std::uint32_t { Strong = 0, Raw = 1, Fake = 2, DynamicExtension = 3 };
+    enum class CoverageState : std::uint32_t
+    {
+        Installed = 0, SharedEntry = 1, CategoryDisabled = 2, WaitingModule = 3,
+        ExportMissing = 4, RuleExcluded = 5, RetryableFailure = 6, Unsupported = 7, Removed = 8
+    };
+    inline std::uint64_t sessionIdentity(const std::wstring& text)
+    {
+        if (text.empty()) return 0;
+        std::uint64_t value = 14695981039346656037ULL;
+        for (const wchar_t ch : text) { value ^= static_cast<std::uint16_t>(ch); value *= 1099511628211ULL; }
+        return value != 0 ? value : 1;
+    }
+    inline bool isCoverageEvent(const std::uint32_t kind)
+    { return kind >= static_cast<std::uint32_t>(EventKind::CoverageBegin) && kind <= static_cast<std::uint32_t>(EventKind::CoverageEnd); }
+
     enum class EventResultKind : std::uint32_t { StatusCode = 0, EntryOnly = 1 };
 
     // ApiMonitorEventPacket：
@@ -146,9 +167,20 @@ namespace ks::winapi_monitor
         wchar_t apiName[kMaxApiNameChars] = {};                 // apiName：API 名称。
         wchar_t detailText[kMaxDetailChars] = {};               // detailText：压缩后的详情文本。
         std::uint32_t resultKind = static_cast<std::uint32_t>(EventResultKind::StatusCode);
+        std::uint32_t eventKind = static_cast<std::uint32_t>(EventKind::ApiCall);
+        std::uint32_t apiId = 0;
+        std::uint32_t coverageState = 0;
+        std::uint32_t hookKind = 0;
+        std::uint32_t snapshotIndex = 0;
+        std::uint32_t snapshotCount = 0;
+        std::uint64_t sessionIdentity = 0;
+        std::uint64_t operationId = 0;
+        std::uint64_t snapshotRevision = 0;
+        std::uint64_t hookAddress = 0;
+        char definitionSha256[65] = {};
     };
 
-    static_assert(sizeof(ApiMonitorEventPacket) == 872, "Windows event packet ABI mismatch");
+    static_assert(sizeof(ApiMonitorEventPacket) == 1000, "Windows event packet ABI mismatch");
 
     static_assert(
         std::is_trivially_copyable_v<ApiMonitorEventPacket>,

@@ -177,10 +177,11 @@ void WinAPIDock::startPipeReadThread()
 
     const QString pipeNameText = m_currentPipeName;
     const std::uint32_t sessionPidValue = m_currentSessionPid;
+    const auto expectedSession = ks::winapi_monitor::sessionIdentity(m_currentSessionId.toStdWString());
     const std::uint64_t generation = m_sessionGeneration.load();
     QPointer<WinAPIDock> guardThis(this);
 
-    m_pipeThread = std::make_unique<std::thread>([guardThis, generation, pipeNameText, sessionPidValue]() {
+    m_pipeThread = std::make_unique<std::thread>([guardThis, generation, pipeNameText, sessionPidValue, expectedSession]() {
         HANDLE pipeHandle = INVALID_HANDLE_VALUE;
         for (int attempt = 0; attempt < 120; ++attempt)
         {
@@ -266,6 +267,7 @@ void WinAPIDock::startPipeReadThread()
             guardThis->updateStatusLabel();
         }, Qt::QueuedConnection);
 
+        ks::winapi_monitor::CoverageSnapshotReceiver coverageReceiver(sessionPidValue, expectedSession);
         while (!guardThis->m_pipeStopFlag.load())
         {
             ks::winapi_monitor::ApiMonitorEventPacket packetValue{};
@@ -279,6 +281,15 @@ void WinAPIDock::startPipeReadThread()
                 continue;
             }
 
+            if (packetValue.sessionIdentity != expectedSession) continue;
+            if (ks::winapi_monitor::isCoverageEvent(packetValue.eventKind))
+            {
+                if (coverageReceiver.consume(packetValue))
+                    guardThis->queueCoverageSnapshot(sessionPidValue, expectedSession, coverageReceiver.revision(), coverageReceiver.items(), false, generation);
+                else if (coverageReceiver.stale())
+                    guardThis->queueCoverageSnapshot(sessionPidValue, expectedSession, coverageReceiver.revision(), {}, true, generation);
+                continue;
+            }
             std::uint32_t childPidValue = 0;
             if (tryExtractAutoInjectChildPid(packetValue, &childPidValue))
             {
@@ -291,9 +302,10 @@ void WinAPIDock::startPipeReadThread()
                 }, Qt::QueuedConnection);
             }
 
-            guardThis->enqueuePendingRow(packetToEventRow(packetValue));
+            guardThis->enqueuePendingRow(packetToEventRow(packetValue), generation);
         }
 
+        guardThis->queueCoverageSnapshot(sessionPidValue, expectedSession, coverageReceiver.revision(), {}, true, generation);
         const std::uintptr_t storedHandleValue = guardThis->m_pipeHandleValue.exchange(0);
         if (storedHandleValue != 0)
         {
@@ -377,9 +389,15 @@ void WinAPIDock::startChildPipeReadThread(const std::uint32_t childPidValue)
     }
 
     const QString pipeNameText = QString::fromStdWString(ks::winapi_monitor::buildPipeNameForPid(childPidValue));
+    wchar_t childSession[1024]{};
+    const auto configPath = ks::winapi_monitor::buildConfigPathForPid(childPidValue);
+    ::GetPrivateProfileStringW(L"monitor", L"session_id", L"", childSession, 1024, configPath.c_str());
+    const std::wstring childSessionText(childSession);
+    if (childSessionText.rfind(m_currentSessionId.toStdWString() + L"_", 0) != 0) return;
+    const auto expectedSession = ks::winapi_monitor::sessionIdentity(childSessionText);
     const std::uint64_t generation = m_sessionGeneration.load();
     QPointer<WinAPIDock> guardThis(this);
-    auto childThread = std::make_unique<std::thread>([guardThis, generation, pipeNameText, childPidValue]() {
+    auto childThread = std::make_unique<std::thread>([guardThis, generation, pipeNameText, childPidValue, expectedSession]() {
         HANDLE pipeHandle = INVALID_HANDLE_VALUE;
         for (int attempt = 0; attempt < 120; ++attempt)
         {
@@ -456,6 +474,7 @@ void WinAPIDock::startChildPipeReadThread(const std::uint32_t childPidValue)
                 QStringLiteral("已开始接收 PID=%1 的自动注入 Agent 事件。").arg(childPidValue));
         }, Qt::QueuedConnection);
 
+        ks::winapi_monitor::CoverageSnapshotReceiver coverageReceiver(childPidValue, expectedSession);
         while (!guardThis->m_pipeStopFlag.load())
         {
             ks::winapi_monitor::ApiMonitorEventPacket packetValue{};
@@ -469,6 +488,15 @@ void WinAPIDock::startChildPipeReadThread(const std::uint32_t childPidValue)
                 continue;
             }
 
+            if (packetValue.sessionIdentity != expectedSession) continue;
+            if (ks::winapi_monitor::isCoverageEvent(packetValue.eventKind))
+            {
+                if (coverageReceiver.consume(packetValue))
+                    guardThis->queueCoverageSnapshot(childPidValue, expectedSession, coverageReceiver.revision(), coverageReceiver.items(), false, generation);
+                else if (coverageReceiver.stale())
+                    guardThis->queueCoverageSnapshot(childPidValue, expectedSession, coverageReceiver.revision(), {}, true, generation);
+                continue;
+            }
             std::uint32_t descendantPid = 0;
             if (tryExtractAutoInjectChildPid(packetValue, &descendantPid))
             {
@@ -477,7 +505,7 @@ void WinAPIDock::startChildPipeReadThread(const std::uint32_t childPidValue)
                     guardThis->startChildPipeReadThread(descendantPid);
                 }, Qt::QueuedConnection);
             }
-            guardThis->enqueuePendingRow(packetToEventRow(packetValue));
+            guardThis->enqueuePendingRow(packetToEventRow(packetValue), generation);
         }
 
         bool shouldClosePipeHandle = false;
@@ -494,6 +522,7 @@ void WinAPIDock::startChildPipeReadThread(const std::uint32_t childPidValue)
         }
         if (shouldClosePipeHandle)
         {
+            guardThis->queueCoverageSnapshot(childPidValue, expectedSession, coverageReceiver.revision(), {}, true, generation);
             ::CloseHandle(pipeHandle);
         }
     });
@@ -565,9 +594,10 @@ void WinAPIDock::writeChildStopFlags()
     }
 }
 
-void WinAPIDock::enqueuePendingRow(EventRow rowValue)
+void WinAPIDock::enqueuePendingRow(EventRow rowValue, const std::uint64_t generation)
 {
     std::lock_guard<std::mutex> lock(m_pendingMutex);
+    if (generation != m_sessionGeneration.load()) return;
     if (rowValue.agentStatus == QStringLiteral("EventsDropped"))
     {
         bool ok = false;
@@ -586,6 +616,7 @@ void WinAPIDock::enqueuePendingRow(EventRow rowValue)
 
 void WinAPIDock::flushPendingRows()
 {
+    flushCoverageUpdates();
     // 表格菜单打开时不提前取走管道事件；否则同键刷新被覆盖后，已经 drain 的
     // EventRow 会丢失，同时 removeRows(0, ...) 会让菜单保存的行号失效。
     const QPointer<WinAPIDock> guardThis(this);

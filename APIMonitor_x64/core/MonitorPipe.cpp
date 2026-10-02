@@ -1,5 +1,7 @@
 #include "pch.h"
 #include "MonitorPipe.h"
+#include "MonitorCoverage.h"
+#include "ApiMonitorMetadata.h"
 #include "../MonitorAgent.h"
 #include "../hook/HookEngine.h"
 
@@ -7,8 +9,14 @@ namespace apimon
 {
     std::uint32_t FlushPendingMonitorEvents(const std::uint32_t maxPacketsToFlush);
 
+    std::uint32_t FlushCoverageSnapshot(std::uint32_t budget);
+
     namespace
     {
+        std::shared_ptr<const CoverageSnapshot> g_sendingCoverage;
+        std::uint32_t g_coverageSendIndex = 0;
+        std::atomic_uint64_t g_lastCoverageRevision{0};
+        std::atomic_uint32_t g_eventFlushesActive{0};
         SRWLOCK g_pipeLock = SRWLOCK_INIT;              // g_pipeLock：保护 g_pipeHandle 的读写与发送序列。
         HANDLE g_pipeHandle = INVALID_HANDLE_VALUE;     // g_pipeHandle：当前已连接的命名管道句柄。
         // g_pipeHandleValue：无锁句柄快照，供 Hook 快速判断“是否监控管道句柄”，避免在 WriteFile Hook 中重入锁导致死锁。
@@ -219,6 +227,7 @@ namespace apimon
                 ScopedInlineHookInternalBypass senderBypassScope;
                 while (!g_senderStopFlag.load())
                 {
+                    (void)FlushCoverageSnapshot(64);
                     (void)FlushPendingMonitorEvents(256);
                     if (g_senderStopFlag.load())
                     {
@@ -389,6 +398,9 @@ namespace apimon
         g_pipeHandle = pipeHandle;
         g_pipeHandleValue.store(reinterpret_cast<std::uintptr_t>(pipeHandle));
         ::ReleaseSRWLockExclusive(&g_pipeLock);
+        BeginCoverageSession(configValue);
+        g_sendingCoverage.reset();
+        g_lastCoverageRevision = 0;
         if (!EnsureSenderThreadStarted(errorTextOut))
         {
             ::AcquireSRWLockExclusive(&g_pipeLock);
@@ -397,6 +409,24 @@ namespace apimon
             return false;
         }
         return true;
+    }
+
+    bool DrainMonitorPipeServer(const DWORD timeoutMs)
+    {
+        if (g_queueWakeEvent) ::SetEvent(g_queueWakeEvent);
+        const ULONGLONG deadline = ::GetTickCount64() + timeoutMs;
+        while (::GetTickCount64() < deadline)
+        {
+            if (!g_pipeHandleValue.load()) return false;
+            const auto snapshot = LatestCoverageSnapshot();
+            ::AcquireSRWLockShared(&g_queueLock);
+            const bool empty = g_pendingPacketCount == 0;
+            ::ReleaseSRWLockShared(&g_queueLock);
+            if (empty && g_eventFlushesActive.load() == 0
+                && (!snapshot || g_lastCoverageRevision.load() == snapshot->revision)) return true;
+            ::Sleep(10);
+        }
+        return false;
     }
 
     void StopMonitorPipeServer()
@@ -418,6 +448,8 @@ namespace apimon
             senderThread->join();
         }
         senderThread.reset();
+        EndCoverageSession();
+        g_sendingCoverage.reset();
 
         ::AcquireSRWLockExclusive(&g_pipeLock);
         ClosePipeLocked();
@@ -452,8 +484,10 @@ namespace apimon
         const wchar_t* apiName,
         const std::int32_t resultCode,
         const wchar_t* detailText,
-        const ks::winapi_monitor::EventResultKind resultKind)
+        const ks::winapi_monitor::EventResultKind resultKind,
+        const ks::winapi_monitor::EventKind eventKind, const std::uint64_t operationId, const std::uint32_t apiId)
     {
+        if (StopRequested() && categoryValue != ks::winapi_monitor::EventCategory::Internal) return false;
         ks::winapi_monitor::ApiMonitorEventPacket packetValue{};
         packetValue.pid = static_cast<std::uint32_t>(::GetCurrentProcessId());
         packetValue.tid = static_cast<std::uint32_t>(::GetCurrentThreadId());
@@ -461,6 +495,11 @@ namespace apimon
         packetValue.category = static_cast<std::uint32_t>(categoryValue);
         packetValue.resultCode = resultCode;
         packetValue.resultKind = static_cast<std::uint32_t>(resultKind);
+        packetValue.eventKind = static_cast<std::uint32_t>(eventKind);
+        packetValue.apiId = apiId ? apiId : FindApiDefinitionId(moduleName, apiName);
+        packetValue.operationId = operationId;
+        packetValue.sessionIdentity = CurrentMonitorSessionIdentity();
+        std::memcpy(packetValue.definitionSha256, kDefinitionSha256, sizeof(packetValue.definitionSha256));
 
         const std::size_t detailLimit = std::min<std::size_t>(
             ActiveConfig().detailLimitChars,
@@ -490,8 +529,57 @@ namespace apimon
         return true;
     }
 
+    std::uint32_t FlushCoverageSnapshot(const std::uint32_t budget)
+    {
+        // Only the sender thread calls this. It bypasses the ordinary event ring entirely.
+        auto latest = LatestCoverageSnapshot();
+        if (!g_sendingCoverage && latest && latest->revision != g_lastCoverageRevision.load())
+        { g_sendingCoverage = std::move(latest); g_coverageSendIndex = 0; }
+        if (!g_sendingCoverage) return 0;
+        std::uint32_t sent = 0;
+        ::AcquireSRWLockExclusive(&g_pipeLock);
+        while (sent < budget && g_sendingCoverage)
+        {
+            ks::winapi_monitor::ApiMonitorEventPacket packet{};
+            const auto count = static_cast<std::uint32_t>(g_sendingCoverage->items.size());
+            if (g_coverageSendIndex == 0)
+                packet.eventKind = static_cast<std::uint32_t>(ks::winapi_monitor::EventKind::CoverageBegin);
+            else if (g_coverageSendIndex <= count)
+                packet = g_sendingCoverage->items[g_coverageSendIndex - 1];
+            else
+            {
+                packet.eventKind = static_cast<std::uint32_t>(ks::winapi_monitor::EventKind::CoverageEnd);
+                packet.snapshotIndex = count;
+            }
+            packet.pid = ::GetCurrentProcessId();
+            packet.sessionIdentity = g_sendingCoverage->session;
+            packet.snapshotRevision = g_sendingCoverage->revision;
+            packet.snapshotCount = count;
+            std::memcpy(packet.definitionSha256, kDefinitionSha256, sizeof(packet.definitionSha256));
+            if (!WritePendingPacketLocked(packet))
+            {
+                g_sendingCoverage.reset();
+                ClosePipeLocked();
+                break;
+            }
+            ++sent;
+            if (++g_coverageSendIndex == count + 2)
+            {
+                g_lastCoverageRevision = g_sendingCoverage->revision;
+                g_sendingCoverage.reset();
+            }
+        }
+        ::ReleaseSRWLockExclusive(&g_pipeLock);
+        return sent;
+    }
+
     std::uint32_t FlushPendingMonitorEvents(const std::uint32_t maxPacketsToFlush)
     {
+        struct FlushScope
+        {
+            FlushScope() { g_eventFlushesActive.fetch_add(1); }
+            ~FlushScope() { g_eventFlushesActive.fetch_sub(1); }
+        } activeFlush;
         if (maxPacketsToFlush == 0)
         {
             return 0;
@@ -527,6 +615,8 @@ namespace apimon
             notice.pid = ::GetCurrentProcessId();
             notice.tid = ::GetCurrentThreadId();
             notice.timestamp100ns = QueryNow100ns();
+            notice.sessionIdentity = CurrentMonitorSessionIdentity();
+            std::memcpy(notice.definitionSha256, kDefinitionSha256, sizeof(notice.definitionSha256));
             notice.category = static_cast<std::uint32_t>(ks::winapi_monitor::EventCategory::Internal);
             CopyWideText(L"Agent", notice.moduleName, std::size(notice.moduleName));
             CopyWideText(L"EventsDropped", notice.apiName, std::size(notice.apiName));

@@ -15,6 +15,7 @@ namespace apimon
 {
     bool StartMonitorPipeServer(const MonitorConfig& configValue, std::wstring* errorTextOut);
     void StopMonitorPipeServer();
+    bool DrainMonitorPipeServer(DWORD timeoutMs = 2000);
     bool SendMonitorEvent(
         ks::winapi_monitor::EventCategory categoryValue,
         const wchar_t* moduleName,
@@ -27,7 +28,10 @@ namespace apimon
         const wchar_t* apiName,
         std::int32_t resultCode,
         const wchar_t* detailText,
-        ks::winapi_monitor::EventResultKind resultKind = ks::winapi_monitor::EventResultKind::StatusCode);
+        ks::winapi_monitor::EventResultKind resultKind = ks::winapi_monitor::EventResultKind::StatusCode,
+        ks::winapi_monitor::EventKind eventKind = ks::winapi_monitor::EventKind::ApiCall,
+        std::uint64_t operationId = 0, std::uint32_t apiId = 0);
+    std::uint32_t FlushCoverageSnapshot(std::uint32_t budget);
     std::uint32_t FlushPendingMonitorEvents(std::uint32_t maxPacketsToFlush);
     bool IsMonitorPipeHandle(HANDLE handleValue);
 }

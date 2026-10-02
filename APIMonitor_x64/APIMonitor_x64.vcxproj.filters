@@ -108,4 +108,10 @@
     <None Include="..\tools\api_monitor\generate_definitions.py"><Filter>源文件</Filter></None>
     <ClInclude Include="hook\ApiCaptureFormatters.inc"><Filter>头文件\hook</Filter></ClInclude>
   </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="core\MonitorCoverage.h" />
+    <ClInclude Include="..\shared\ApiMonitorCoverage.h" />
+    <ClCompile Include="core\MonitorCoverage.cpp" />
+  </ItemGroup>
+  <ItemGroup><ClInclude Include="hook\ApiCoverageReporting.inc" /></ItemGroup>
 </Project>

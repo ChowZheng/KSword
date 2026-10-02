@@ -1276,6 +1276,7 @@ void WinAPIDock::startMonitoring()
     m_hookState = HookState::Waiting;
     m_definitionMismatch = false;
     ++m_sessionGeneration;
+    resetCoverageView();
     m_pipeStopFlag.store(false);
     m_pipeRunning.store(true);
     m_pipeConnected.store(false);
@@ -1385,6 +1386,7 @@ void WinAPIDock::stopMonitoringInternal(const bool waitForThread)
 
     m_pipeRunning.store(false);
     m_pipeConnected.store(false);
+    markCoverageStale();
     m_hookState = HookState::Waiting;
     m_definitionMismatch = false;
     kPro.set(m_sessionProgressPid, "WinAPI 监控已停止", 0, 100.0f);

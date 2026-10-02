@@ -117,6 +117,7 @@ namespace apimon
                     RequestStop();
                     break;
                 }
+                RetryPendingHooks();
                 ::Sleep(kSessionActivePollMs);
             }
         }
@@ -176,6 +177,7 @@ namespace apimon
                     WaitForCurrentSessionStop(configValue);
                     while (!UninstallConfiguredHooks() && !g_processDetachRequested.load())
                     ::Sleep(kSessionActivePollMs);
+                    (void)DrainMonitorPipeServer();
                     StopMonitorPipeServer();
                     continue;
                 }
@@ -205,6 +207,7 @@ namespace apimon
                     L"HooksRemoved",
                     0,
                     L"Inline hooks removed and agent is waiting for the next session.");
+                (void)DrainMonitorPipeServer();
                 StopMonitorPipeServer();
             }
             return 0;

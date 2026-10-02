@@ -203,4 +203,10 @@
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>
+  <ItemGroup>
+    <ClInclude Include="core\MonitorCoverage.h" />
+    <ClInclude Include="..\shared\ApiMonitorCoverage.h" />
+    <ClCompile Include="core\MonitorCoverage.cpp" />
+  </ItemGroup>
+  <ItemGroup><ClInclude Include="hook\ApiCoverageReporting.inc" /></ItemGroup>
 </Project>

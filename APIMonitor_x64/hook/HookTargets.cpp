@@ -6,6 +6,7 @@
 #include "ClipboardGuardWin32u.h"
 #include "../MonitorAgent.h"
 #include "../core/MonitorPipe.h"
+#include "../core/MonitorCoverage.h"
 
 #include <WinReg.h>
 #include <bcrypt.h>
@@ -158,6 +159,17 @@ namespace apimon
             bool m_bypass = false;
         };
 
+        using CoveragePacket = ks::winapi_monitor::ApiMonitorEventPacket;
+        using CoverageState = ks::winapi_monitor::CoverageState;
+        using HookKind = ks::winapi_monitor::HookKind;
+        auto& g_rawCoverageObservations = *new std::unordered_map<std::wstring, CoveragePacket>;
+        auto& g_removedCoverageRows = *new std::vector<CoveragePacket>;
+        CoveragePacket MakeCoverageRow(const wchar_t* module, const wchar_t* api, HookKind kind,
+            CoverageState state, const wchar_t* detail, const InlineHookRecord* record = nullptr);
+        void CaptureRemovedRawCoverage();
+        void CaptureRemovedFakeCoverage();
+        void PublishConfiguredCoverage();
+
         struct HookBinding
         {
             const wchar_t* moduleName;                              // moduleName：导出所在模块名。
@@ -170,6 +182,7 @@ namespace apimon
 
         struct RawHookBinding
         {
+            std::uint32_t apiId = 0;
             std::wstring moduleName;                                // moduleName：Raw Hook 目标模块名。
             std::string procName;                                   // procName：Raw Hook 目标导出名。
             std::wstring procNameWide;                              // procNameWide：事件上报使用的宽字符导出名。
@@ -181,6 +194,7 @@ namespace apimon
 
         struct FakeSuccessRuntimeRule
         {
+            std::uint32_t apiId = 0;
             std::wstring moduleName;                                // moduleName：事件上报使用的模块名。
             std::wstring installModuleName;                         // installModuleName：传给 GetModuleHandleW 的模块名，默认补齐 .dll。
             std::wstring apiName;                                   // apiName：事件上报使用的 API 名。
@@ -1326,14 +1340,15 @@ namespace apimon
             const wchar_t* const apiName,
             const long statusValue,
             const wchar_t* const detailText,
-            const ks::winapi_monitor::EventResultKind resultKind = ks::winapi_monitor::EventResultKind::StatusCode)
+            const ks::winapi_monitor::EventResultKind resultKind = ks::winapi_monitor::EventResultKind::StatusCode,
+            const std::uint32_t apiId = 0)
         {
             return SendMonitorEventRaw(
                 categoryValue,
                 moduleName,
                 apiName,
                 static_cast<std::int32_t>(statusValue),
-                detailText, resultKind);
+                detailText, resultKind, ks::winapi_monitor::EventKind::ApiCall, 0, apiId);
         }
 
         ks::winapi_monitor::EventCategory InferRawHookCategory(const std::wstring& moduleName, const std::string& procName);
@@ -1489,7 +1504,7 @@ namespace apimon
                     ruleValue->moduleName.c_str(),
                     ruleValue->apiName.c_str(),
                     FakeSuccessResultCode(*ruleValue),
-                    detailBuffer);
+                    detailBuffer, ks::winapi_monitor::EventResultKind::StatusCode, ruleValue->apiId);
             }
 
             if (ruleValue->lastErrorKind == FakeSuccessLastErrorKind::Win32)
@@ -1546,6 +1561,7 @@ namespace apimon
                 runtimeRule->apiName = sourceRule.apiName;
                 runtimeRule->apiNameAnsi = std::move(ansiApiName);
                 runtimeRule->matchKey = matchKey;
+                runtimeRule->apiId = RuntimeApiId(runtimeRule->installModuleName.c_str(), runtimeRule->apiName.c_str());
                 runtimeRule->categoryValue = InferRawHookCategory(runtimeRule->installModuleName, runtimeRule->apiNameAnsi);
                 runtimeRule->returnType = sourceRule.returnType;
                 runtimeRule->returnValue = sourceRule.returnValue;
@@ -1708,6 +1724,7 @@ namespace apimon
                 return;
             }
 
+            const DWORD savedError = ::GetLastError();
             wchar_t detailBuffer[ks::winapi_monitor::kMaxDetailChars] = {};
             AppendWideText(detailBuffer, L"Raw ABI fallback target=");
             AppendHexText(detailBuffer, reinterpret_cast<std::uint64_t>(bindingValue->hookRecord.targetAddress));
@@ -1719,7 +1736,8 @@ namespace apimon
                 bindingValue->moduleName.c_str(),
                 bindingValue->procNameWide.c_str(),
                 0,
-                detailBuffer, ks::winapi_monitor::EventResultKind::EntryOnly);
+                detailBuffer, ks::winapi_monitor::EventResultKind::EntryOnly, bindingValue->apiId);
+            ::SetLastError(savedError);
         }
 
         // EmitRawStubByte/EmitRawStubU32/EmitRawStubU64 作用：
@@ -6559,6 +6577,7 @@ namespace apimon
 
         bool TryInstallRawHookBinding(RawHookBinding& bindingValue)
         {
+            if (!CategoryEnabled(bindingValue.categoryValue)) return bindingValue.hookRecord.installed;
             if (bindingValue.hookRecord.installed || bindingValue.hookRecord.permanentlyDisabled)
             {
                 return bindingValue.hookRecord.installed;
@@ -6624,6 +6643,7 @@ namespace apimon
             for (auto& entry : entries)
                 if (entry) removed = UninstallInlineHook(&entry->hookRecord) && removed;
             if (!removed) return false;
+            CaptureRemovedFakeCoverage();
             // Intentionally retain contexts and entry stubs for in-flight calls until process exit.
             for (auto& entry : entries) (void)entry.release();
             entries.clear();
@@ -6636,6 +6656,9 @@ namespace apimon
             const MonitorConfig& configValue = ActiveConfig();
             if (!configValue.enableRawFallback)
             {
+                for (const auto& module : configValue.rawModuleList)
+                    g_rawCoverageObservations[MakeRawHookKey(module, "*")] = MakeCoverageRow(module.c_str(), L"*", HookKind::Raw,
+                        CoverageState::CategoryDisabled, L"Raw monitoring disabled");
                 return;
             }
 
@@ -6647,16 +6670,22 @@ namespace apimon
                 {
                     continue;
                 }
+                const auto moduleKey = MakeRawHookKey(moduleName, "*");
                 if (IsUnsafeRawFallbackModule(moduleName))
                 {
+                    g_rawCoverageObservations[moduleKey] = MakeCoverageRow(moduleName.c_str(), L"*", HookKind::Raw,
+                        CoverageState::RuleExcluded, L"module excluded by Raw safety policy");
                     continue;
                 }
 
                 HMODULE moduleHandle = ::GetModuleHandleW(moduleName.c_str());
                 if (moduleHandle == nullptr)
                 {
+                    g_rawCoverageObservations[moduleKey] = MakeCoverageRow(moduleName.c_str(), L"*", HookKind::Raw,
+                        CoverageState::WaitingModule, L"Raw module not loaded");
                     continue;
                 }
+                g_rawCoverageObservations.erase(moduleKey);
                 if (!EnumerateNamedExports(moduleHandle, &exportNameList))
                 {
                     continue;
@@ -6665,15 +6694,22 @@ namespace apimon
                 std::size_t acceptedCount = 0;
                 for (const std::string& exportName : exportNameList)
                 {
-                    if (acceptedCount >= kMaxRawExportsPerModule)
-                    {
-                        break;
-                    }
+                    const auto observationKey = MakeRawHookKey(moduleName, exportName);
+                    const auto observationApi = AnsiToWide(exportName.c_str());
                     if (!ExportNameLooksHookable(exportName)
                         || IsStrongTypedExport(moduleName, exportName)
                         || (configValue.fakeSuccessRawFallback && FindFakeSuccessRule(moduleName, exportName) != nullptr)
                         || IsRawDeniedByConfig(exportName))
                     {
+                        g_rawCoverageObservations[observationKey] = MakeCoverageRow(moduleName.c_str(), observationApi.c_str(),
+                            HookKind::Raw, CoverageState::RuleExcluded,
+                            IsStrongTypedExport(moduleName, exportName) ? L"Strong definition owns this export; see its actual installation state" : L"export excluded by Raw/Fake rules");
+                        continue;
+                    }
+                    if (acceptedCount >= kMaxRawExportsPerModule)
+                    {
+                        g_rawCoverageObservations[observationKey] = MakeCoverageRow(moduleName.c_str(), observationApi.c_str(),
+                            HookKind::Raw, CoverageState::RetryableFailure, L"waiting for next installation batch");
                         continue;
                     }
 
@@ -6690,6 +6726,7 @@ namespace apimon
                     bindingPointer->procName = exportName;
                     bindingPointer->procNameWide = AnsiToWide(exportName.c_str());
                     bindingPointer->categoryValue = InferRawHookCategory(moduleName, exportName);
+                    bindingPointer->apiId = RuntimeApiId(moduleName.c_str(), bindingPointer->procNameWide.c_str());
                     rawKeySet.insert(rawKey);
                     rawBindingList.push_back(std::move(bindingPointer));
                     ++acceptedCount;
@@ -6702,6 +6739,7 @@ namespace apimon
             const MonitorConfig& configValue = ActiveConfig();
             if (!configValue.enableRawFallback)
             {
+                DiscoverRawHookBindingsForLoadedModules();
                 return false;
             }
 
@@ -6726,12 +6764,15 @@ namespace apimon
             for (auto& entry : entries)
                 if (entry) removed = UninstallInlineHook(&entry->hookRecord) && removed;
             if (!removed) return false;
+            CaptureRemovedRawCoverage();
             // Intentionally retain contexts and entry stubs for in-flight calls until process exit.
             for (auto& entry : entries) (void)entry.release();
             entries.clear();
             RawHookKeys().clear();
             return true;
         }
+
+#include "ApiCoverageReporting.inc"
 
         // RetryPendingHooksUnlocked 作用：
         // - 输入：无，使用全局绑定表；
@@ -6745,6 +6786,7 @@ namespace apimon
             }
             (void)InstallFakeSuccessHooks(nullptr);
             (void)InstallRawFallbackHooks();
+            PublishConfiguredCoverage();
         }
 
         // RetryPendingHooksFromHook 作用：
@@ -6775,6 +6817,8 @@ namespace apimon
         bool hasEnabledCategory = false;
         bool installedAny = false;
         std::wstring failureText;
+        g_removedCoverageRows.clear();
+        g_rawCoverageObservations.clear();
         BuildFakeSuccessRuleIndex();
         for (HookBinding& bindingValue : g_bindings)
         {
@@ -6793,6 +6837,7 @@ namespace apimon
         {
             SyncClipboardWin32uHooks();
         }
+        PublishConfiguredCoverage();
         if (!hasEnabledCategory)
         {
             if (errorTextOut != nullptr)
@@ -6826,6 +6871,7 @@ namespace apimon
         removed = UninstallFakeSuccessHooks() && removed;
         removed = UninstallAllClipboardWin32uHooks() && removed;
         if (removed) UninstallAllClipboardDataObjectVTableHooks();
+        PublishConfiguredCoverage();
         return removed;
     }
     void RetryPendingHooks()

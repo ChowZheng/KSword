@@ -10,6 +10,7 @@
 
 #include "../Framework.h"
 #include "WinApiMonitorProtocol.h"
+#include "../../../shared/ApiMonitorCoverage.h"
 
 #include <QString>  // QString：事件文本、样式文本与会话路径缓存。
 #include <QWidget>  // QWidget：WinAPIDock 的直接基类。
@@ -21,6 +22,7 @@
 #include <memory>   // std::unique_ptr：后台线程对象托管。
 #include <mutex>    // std::mutex：保护待刷入事件队列。
 #include <thread>   // std::thread：进程刷新与命名管道读取线程。
+#include <unordered_map>
 #include <vector>   // std::vector：进程快照与待刷新事件缓存。
 
 class QCheckBox;
@@ -31,6 +33,7 @@ class QPlainTextEdit;
 class QPushButton;
 class QSplitter;
 class QTableWidget;
+class QTabWidget;
 class QTableWidgetItem;
 class QTimer;
 class QToolButton;
@@ -142,7 +145,19 @@ private:
     void closeChildPipeHandles();
     void joinChildPipeThreads();
     void writeChildStopFlags();
-    void enqueuePendingRow(EventRow rowValue);
+    void enqueuePendingRow(EventRow rowValue, std::uint64_t generation);
+    struct CoverageViewState
+    {
+        std::uint64_t session = 0, revision = 0;
+        bool stale = true, complete = false;
+        std::vector<ks::winapi_monitor::ApiMonitorEventPacket> rows;
+    };
+    void queueCoverageSnapshot(std::uint32_t pid, std::uint64_t session, std::uint64_t revision,
+        std::vector<ks::winapi_monitor::ApiMonitorEventPacket> rows, bool stale, std::uint64_t generation);
+    void flushCoverageUpdates();
+    void updateCoverageView();
+    void resetCoverageView();
+    void markCoverageStale();
     void flushPendingRows();
     void appendEventRow(const EventRow& rowValue);
 
@@ -218,6 +233,13 @@ private:
     QLabel* m_eventFilterStatusLabel = nullptr;        // m_eventFilterStatusLabel：过滤结果状态文本。
     QTableWidget* m_eventTable = nullptr;              // m_eventTable：API 事件结果表。
 
+    QTabWidget* m_resultTabs = nullptr;
+    QComboBox* m_coveragePidCombo = nullptr;
+    QLineEdit* m_coverageFilterEdit = nullptr;
+    QLabel* m_coverageStatusLabel = nullptr;
+    QTableWidget* m_coverageTable = nullptr;
+    bool m_coverageDirty = true;
+    std::unordered_map<std::uint32_t, CoverageViewState> m_pendingCoverage, m_coverageViews;
     std::vector<ks::process::ProcessRecord> m_processList; // m_processList：当前系统进程快照。
     static constexpr std::size_t kPendingRowCapacity = 24000; // 后台队列上限，积压时丢弃最旧事件以保护内存与延迟。
     static constexpr std::size_t kUiFlushRowLimit = 160;      // 单个 GUI tick 最多渲染的事件数。

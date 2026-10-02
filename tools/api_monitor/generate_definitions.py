@@ -158,6 +158,32 @@ def generate(source, output):
     write_changed(output / "ApiMonitorBindings.inc", header + table)
     digest = hashlib.sha256(raw).hexdigest()
     write_changed(output / "ApiMonitorDefinitionIdentity.h", header + f'#pragma once\nnamespace apimon {{ inline constexpr char kDefinitionSha256[] = "{digest}"; inline constexpr unsigned kDefinitionCount = {len(apis)}; }}\n')
+    metadata = header + '#pragma once\n#include "ApiMonitorDefinitionIdentity.h"\nnamespace apimon {\n'
+    metadata += 'struct ApiDefinitionIdentity { const wchar_t* name; const wchar_t* module; unsigned id; };\ninline constexpr ApiDefinitionIdentity kApiDefinitionIdentities[] = {\n'
+    for a in sorted(apis, key=lambda a: (a["export"], a["module"].lower())):
+        metadata += f'{{ L"{a["export"]}", L"{a["module"][:-4].lower()}", {a["id"]} }},\n'
+    metadata += '''};
+inline unsigned FindApiDefinitionId(const wchar_t* module, const wchar_t* name)
+{
+    if (!module || !name) return 0;
+    std::size_t first = 0, last = std::size(kApiDefinitionIdentities);
+    while (first < last)
+    {
+        const auto middle = first + (last - first) / 2;
+        const int order = wcscmp(kApiDefinitionIdentities[middle].name, name);
+        if (order < 0) first = middle + 1; else last = middle;
+    }
+    for (; first < std::size(kApiDefinitionIdentities) && wcscmp(kApiDefinitionIdentities[first].name, name) == 0; ++first)
+    {
+        const auto& entry = kApiDefinitionIdentities[first];
+        const auto length = wcslen(entry.module);
+        if (_wcsnicmp(module, entry.module, length) == 0
+            && (module[length] == 0 || _wcsicmp(module + length, L".dll") == 0)) return entry.id;
+    }
+    return 0;
+}
+}\n'''
+    write_changed(output / "ApiMonitorMetadata.h", metadata)
     return digest
 
 

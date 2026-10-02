@@ -29,6 +29,7 @@
 #include <QStyle>
 #include <QTableWidget>
 #include <QTimer>
+#include <QTabWidget>
 #include <QToolButton>
 #include <QStringList>
 #include <QVBoxLayout>
@@ -538,7 +539,43 @@ void WinAPIDock::initializeUi()
         m_eventTable->viewport()->setAutoFillBackground(false);
         m_eventTable->viewport()->setAttribute(Qt::WA_StyledBackground, true);
     }
-    m_rootLayout->addWidget(m_eventTable, 1);
+    m_resultTabs = new QTabWidget(this);
+    m_resultTabs->addTab(m_eventTable, QStringLiteral("API 事件"));
+    QWidget* coveragePanel = new QWidget(m_resultTabs);
+    auto* coverageLayout = new QVBoxLayout(coveragePanel);
+    auto* coverageFilterLayout = new QHBoxLayout();
+    m_coveragePidCombo = new QComboBox(coveragePanel);
+    m_coveragePidCombo->setToolTip(QStringLiteral("选择覆盖快照的进程 PID"));
+    m_coverageFilterEdit = new QLineEdit(coveragePanel);
+    m_coverageFilterEdit->setPlaceholderText(QStringLiteral("筛选 API / Hook 类型 / 覆盖状态 / 原因"));
+    m_coverageFilterEdit->setStyleSheet(blueInputStyle());
+    coverageFilterLayout->addWidget(m_coveragePidCombo);
+    coverageFilterLayout->addWidget(m_coverageFilterEdit, 1);
+    coverageLayout->addLayout(coverageFilterLayout);
+    m_coverageStatusLabel = new QLabel(QStringLiteral("覆盖快照：等待 Agent 完整快照"), coveragePanel);
+    coverageLayout->addWidget(m_coverageStatusLabel);
+    auto* coverageBoundary = new QLabel(QStringLiteral("覆盖边界：任意 COM 方法、直接系统调用、启动监控前的调用及未识别的原生异步完成路径。Raw 仅采集入口。"), coveragePanel);
+    coverageBoundary->setWordWrap(true);
+    coverageLayout->addWidget(coverageBoundary);
+    m_coverageTable = new ks::ui::VisibleTableWidget(coveragePanel);
+    m_coverageTable->setColumnCount(7);
+    m_coverageTable->setHorizontalHeaderLabels({QStringLiteral("PID"), QStringLiteral("API ID"), QStringLiteral("Hook 类型"),
+        QStringLiteral("API"), QStringLiteral("覆盖状态"), QStringLiteral("入口地址"), QStringLiteral("原因")});
+    m_coverageTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    m_coverageTable->setSelectionBehavior(QAbstractItemView::SelectRows);
+    m_coverageTable->setAlternatingRowColors(true);
+    m_coverageTable->setStyleSheet(blueInputStyle());
+    m_coverageTable->horizontalHeader()->setSectionResizeMode(QHeaderView::Interactive);
+    m_coverageTable->horizontalHeader()->setStretchLastSection(true);
+    m_coverageTable->setColumnWidth(3, 240);
+    m_coverageTable->setColumnWidth(4, 120);
+    m_coverageTable->setColumnWidth(5, 140);
+    coverageLayout->addWidget(m_coverageTable, 1);
+    m_resultTabs->addTab(coveragePanel, QStringLiteral("API 覆盖"));
+    m_rootLayout->addWidget(m_resultTabs, 1);
+    connect(m_resultTabs, &QTabWidget::currentChanged, this, [this](int index) { if (index == 1 && m_coverageDirty) updateCoverageView(); });
+    connect(m_coveragePidCombo, &QComboBox::currentIndexChanged, this, [this]() { updateCoverageView(); });
+    connect(m_coverageFilterEdit, &QLineEdit::textChanged, this, [this]() { updateCoverageView(); });
 
     m_uiFlushTimer = new QTimer(this);
     m_uiFlushTimer->setInterval(120);
