@@ -52,6 +52,7 @@
     <ClCompile Include="src\features\kernel\ioctl_registry_query.c" />
     <ClCompile Include="src\features\kernel\driver_integrity.c" />
     <ClCompile Include="src\features\kernel\kernel_unloaded_drivers.c" />
+    <ClCompile Include="src\features\kernel\kernel_unloaded_layout.c" />
     <ClCompile Include="src\features\kernel\ci_hash_fallback.c" />
     <ClCompile Include="src\features\kernel\kernel_unloaded_drivers_ioctl.c" />
     <ClCompile Include="src\features\kernel\kernel_cpu_integrity.c" />
@@ -501,6 +502,7 @@
     <ClInclude Include="src\features\kernel\hook_scan_support.h" />
     <ClInclude Include="src\features\kernel\driver_integrity.h" />
     <ClInclude Include="src\features\kernel\kernel_unloaded_drivers.h" />
+    <ClInclude Include="src\features\kernel\kernel_unloaded_layout.h" />
     <ClInclude Include="src\features\kernel\ci_hash_fallback.h" />
     <ClInclude Include="src\features\kernel\ssdt_fallback.h" />
     <ClInclude Include="src\features\kernel\driver_blind_internal.h" />

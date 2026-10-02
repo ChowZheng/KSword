@@ -480,10 +480,73 @@ KswordARKRuntimeAppendReference(
 }
 
 static ULONG
+KswordARKRuntimeFunctionScanBytes(
+    _In_ const KSW_RUNTIME_IMAGE_VIEW* View,
+    _In_ ULONG_PTR RoutineAddress,
+    _In_ ULONG Limit
+    )
+{
+    IMAGE_DOS_HEADER dos; // 通过安全读取定位当前 PE 的 NT 头。
+    IMAGE_NT_HEADERS64 nt; // x64 函数表由异常目录提供，无需符号文件。
+    IMAGE_DATA_DIRECTORY directory; // 每个函数条目包含起止 RVA。
+    ULONG left = 0UL; // 在有界函数表内二分查找。
+    ULONG right = 0UL; // 右端为不包含的条目下标。
+    ULONG rva = 0UL; // 查找地址必须属于当前映像。
+
+    // 拒绝缺失映像、越界地址和不可执行的入口。
+    if (View == NULL || Limit == 0UL ||
+        !KswordARKRuntimeAddressIsExecutable(View, RoutineAddress, 1U) ||
+        !KswordARKRuntimeReadMemory((const VOID*)View->Base, &dos, sizeof(dos)) ||
+        dos.e_magic != IMAGE_DOS_SIGNATURE || dos.e_lfanew <= 0L ||
+        !KswordARKRuntimeAddressInImage(View, View->Base + (ULONG)dos.e_lfanew, sizeof(nt)) ||
+        !KswordARKRuntimeReadMemory((const VOID*)(View->Base + (ULONG)dos.e_lfanew), &nt, sizeof(nt)) ||
+        nt.Signature != IMAGE_NT_SIGNATURE || nt.FileHeader.Machine != IMAGE_FILE_MACHINE_AMD64 ||
+        nt.OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR64_MAGIC ||
+        nt.OptionalHeader.NumberOfRvaAndSizes <= IMAGE_DIRECTORY_ENTRY_EXCEPTION) {
+        return 0UL; // 缺少可信函数表时不猜测相邻代码边界。
+    }
+    directory = nt.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXCEPTION]; // 读取异常目录描述。
+    // 整张函数表必须完整位于当前映像且长度为条目大小的倍数。
+    if (directory.VirtualAddress == 0UL || directory.Size == 0UL ||
+        directory.Size % sizeof(IMAGE_RUNTIME_FUNCTION_ENTRY) != 0UL ||
+        !KswordARKRuntimeAddressInImage(View, View->Base + directory.VirtualAddress, directory.Size)) {
+        return 0UL; // 不扫描损坏或截断的函数表。
+    }
+    rva = (ULONG)(RoutineAddress - View->Base); // 已检查入口范围，转换不会截断。
+    right = directory.Size / sizeof(IMAGE_RUNTIME_FUNCTION_ENTRY); // 限定查找规模。
+    // PE x64 函数表按 BeginAddress 排序；每步严格缩小搜索区间。
+    while (left < right) {
+        ULONG middle = left + (right - left) / 2UL; // 避免下标相加溢出。
+        IMAGE_RUNTIME_FUNCTION_ENTRY entry; // 只读取本轮所需的条目。
+        ULONG_PTR address = View->Base + directory.VirtualAddress +
+            (SIZE_T)middle * sizeof(entry); // 整体目录范围已验证。
+
+        // 拒绝不可读条目和错误的起止范围。
+        if (!KswordARKRuntimeReadMemory((const VOID*)address, &entry, sizeof(entry)) ||
+            entry.BeginAddress >= entry.EndAddress || entry.EndAddress > View->Size) {
+            return 0UL; // 目录损坏时不回退到固定长度猜测。
+        }
+        if (rva < entry.BeginAddress) { // 入口在当前条目之前。
+            right = middle; // 收缩搜索上界。
+        }
+        else if (rva >= entry.EndAddress) { // 入口在当前条目之后。
+            left = middle + 1UL; // 收缩搜索下界。
+        }
+        else { // 已找到包含该入口的函数范围。
+            ULONG bytes = min(Limit, entry.EndAddress - rva); // 保留原有单函数扫描预算。
+            return KswordARKRuntimeAddressIsExecutable(View, RoutineAddress, bytes)
+                ? bytes : 0UL; // 整段扫描范围也必须属于一个可执行节。
+        }
+    }
+    return 0UL; // 没有函数表条目的叶函数不作为继续遍历的依据。
+}
+
+static ULONG
 KswordARKRuntimeScanRoutine(
     _In_ const KSW_RUNTIME_IMAGE_VIEW* View,
     _In_ ULONG_PTR RoutineAddress,
     _In_ ULONG ScanBytes,
+    _In_ BOOLEAN FunctionBounds,
     _Inout_updates_(ReferenceCapacity) KSW_RUNTIME_DATA_REFERENCE* References,
     _In_ ULONG ReferenceCapacity,
     _Inout_ ULONG* ReferenceCount,
@@ -499,14 +562,19 @@ KswordARKRuntimeScanRoutine(
         return 0UL;
     }
 
+    if (FunctionBounds) { // 卸载缓存扫描必须受 PE 自带函数边界限制。
+        ScanBytes = KswordARKRuntimeFunctionScanBytes(View, RoutineAddress, ScanBytes); // 不扫描相邻函数。
+    }
     for (offset = 0UL; offset < ScanBytes; ++offset) {
         ULONG_PTR instructionAddress = RoutineAddress + offset;
         ULONG_PTR target = 0U;
+        ULONG instructionBytes = 0UL; // 有函数边界时禁止使用跨界指令产生的候选。
 
         if (!KswordARKRuntimeAddressIsExecutable(View, instructionAddress, 1U)) {
             break;
         }
-        if (KswordARKRuntimeDecodeRipReference(instructionAddress, &target, NULL) &&
+        if (KswordARKRuntimeDecodeRipReference(instructionAddress, &target, &instructionBytes) &&
+            (!FunctionBounds || instructionBytes <= ScanBytes - offset) && // 指令整体必须位于扫描范围。
             KswordARKRuntimeAddressInImage(View, target, 1U) &&
             !KswordARKRuntimeAddressIsExecutable(View, target, 1U)) {
             if (!KswordARKRuntimeAppendReference(
@@ -520,6 +588,7 @@ KswordARKRuntimeScanRoutine(
             }
         }
         if (BranchTargets != NULL && branchCount < BranchCapacity &&
+            (!FunctionBounds || ScanBytes - offset >= 5UL) && // rel32 分支也不能跨函数边界。
             KswordARKRuntimeDecodeDirectBranch(instructionAddress, &target) &&
             KswordARKRuntimeAddressIsExecutable(View, target, 1U)) {
             ULONG branchIndex = 0UL;
@@ -539,13 +608,14 @@ KswordARKRuntimeScanRoutine(
     return branchCount;
 }
 
-ULONG
-KswordARKRuntimeCollectAnchoredDataReferences(
+static ULONG
+KswordARKRuntimeCollectAnchoredReferencesInternal(
     _In_ const KSW_RUNTIME_IMAGE_VIEW* View,
     _In_reads_(AnchorCount) PCSTR const* AnchorNames,
     _In_ ULONG AnchorCount,
     _In_ ULONG MaxCallDepth,
     _In_ ULONG RoutineScanBytes,
+    _In_ BOOLEAN FunctionBounds,
     _Out_writes_(ReferenceCapacity) KSW_RUNTIME_DATA_REFERENCE* References,
     _In_ ULONG ReferenceCapacity
     )
@@ -609,6 +679,7 @@ Return Value:
             View,
             work[workIndex].Address,
             RoutineScanBytes,
+            FunctionBounds, // 由调用者选择是否强制使用 PE 函数范围。
             References,
             ReferenceCapacity,
             &referenceCount,
@@ -637,6 +708,36 @@ Return Value:
         workIndex += 1UL;
     }
     return referenceCount;
+}
+
+ULONG
+KswordARKRuntimeCollectAnchoredDataReferences(
+    _In_ const KSW_RUNTIME_IMAGE_VIEW* View,
+    _In_reads_(AnchorCount) PCSTR const* AnchorNames,
+    _In_ ULONG AnchorCount,
+    _In_ ULONG MaxCallDepth,
+    _In_ ULONG RoutineScanBytes,
+    _Out_writes_(ReferenceCapacity) KSW_RUNTIME_DATA_REFERENCE* References,
+    _In_ ULONG ReferenceCapacity
+    )
+{
+    return KswordARKRuntimeCollectAnchoredReferencesInternal(View, AnchorNames,
+        AnchorCount, MaxCallDepth, RoutineScanBytes, FALSE, References, ReferenceCapacity); // 保持其它使用者现有扫描语义。
+}
+
+ULONG
+KswordARKRuntimeCollectFunctionDataReferences(
+    _In_ const KSW_RUNTIME_IMAGE_VIEW* View,
+    _In_reads_(AnchorCount) PCSTR const* AnchorNames,
+    _In_ ULONG AnchorCount,
+    _In_ ULONG MaxCallDepth,
+    _In_ ULONG RoutineScanBytes,
+    _Out_writes_(ReferenceCapacity) KSW_RUNTIME_DATA_REFERENCE* References,
+    _In_ ULONG ReferenceCapacity
+    )
+{
+    return KswordARKRuntimeCollectAnchoredReferencesInternal(View, AnchorNames,
+        AnchorCount, MaxCallDepth, RoutineScanBytes, TRUE, References, ReferenceCapacity); // 以无 PDB 的函数表限制遍历范围。
 }
 
 ULONG
@@ -688,6 +789,7 @@ Return Value:
             View,
             section->Start,
             sectionBytes,
+            FALSE, // 整节扫描不使用单函数边界。
             References,
             ReferenceCapacity,
             &referenceCount,

@@ -96,6 +96,29 @@ powershell -ExecutionPolicy Bypass -File KswordARKDriver\tests\DriverFunctionalM
 
 退出码：`0` 通过，`1` 有失败用例或中途中止，`2` 观察到系统崩溃，`3` 预检未过。
 
+## 已卸载驱动布局离线回归
+
+运行 `pwsh -NoProfile -File KswordARKDriver/tests/UnloadedLayoutRegression.ps1`。
+脚本使用真实的 MmUnloadedDrivers 布局推断和来源布局代码，以有界合成内存替代内核读取，
+不打开驱动设备。23 项用例覆盖整体 profile 未命中时的单项可用性、精确全局 RVA 补全、
+缺失或越界字段、不可读地址、OS/IRQL 门禁、记录不足、歧义步长与重复引用；全局 DynData 状态必须保持不变。
+产物写入 `.codex-build-logs/unloaded-layout-regression/`。它不替代已签名驱动的实机装载验证。
+
+`RuntimeUnloadedScanRegression.ps1` 使用生产 PE 扫描器与生产布局推断代码，
+重放指定内核映像的函数表/调用链和合成卸载记录。需要 Python `pefile`、x64 MSVC 和 WDK。
+传入经独立核实的 `-ExpectedMmUnloadedDriversRva` 作为断言；此 RVA 不作为扫描器输入，
+脚本不读取 PDB 或偏移配置。用法为：
+
+```powershell
+& KswordARKDriver/tests/RuntimeUnloadedScanRegression.ps1 `
+  -KernelImage <内核映像路径> -ExpectedMmUnloadedDriversRva <已独立核实的RVA>
+```
+
+8 项断言覆盖两个装载基址下的动态全局发现、布局验证，以及缺失/越界函数表的拒绝行为。
+当前 `19041.7725` 映像的旧扫描得到 482 个引用仍漏掉目标；受 PE 函数边界约束的新扫描能找到目标。
+这验证离线地址发现与合成记录布局，不证明其它内核版本兼容或实机卸载表可读。
+产物写入 `.codex-build-logs/runtime-unloaded-scan-regression/`。
+
 ## 新增 IOCTL 时要做什么
 
 在 `shared/driver/` 加协议、在 `ioctl_registry.c` 登记之后，`plan_gate.py` 会立刻失败并点名

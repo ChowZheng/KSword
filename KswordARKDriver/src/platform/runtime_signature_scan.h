@@ -82,6 +82,17 @@ KswordARKRuntimeCollectAnchoredDataReferences(
     );
 
 ULONG
+KswordARKRuntimeCollectFunctionDataReferences(
+    _In_ const KSW_RUNTIME_IMAGE_VIEW* View,
+    _In_reads_(AnchorCount) PCSTR const* AnchorNames,
+    _In_ ULONG AnchorCount,
+    _In_ ULONG MaxCallDepth,
+    _In_ ULONG RoutineScanBytes,
+    _Out_writes_(ReferenceCapacity) KSW_RUNTIME_DATA_REFERENCE* References,
+    _In_ ULONG ReferenceCapacity
+    ); // 只扫描 PE 异常目录确认的函数范围；不依赖 PDB。
+
+ULONG
 KswordARKRuntimeCollectExecutableDataReferences(
     _In_ const KSW_RUNTIME_IMAGE_VIEW* View,
     _In_ ULONG ScanByteBudget,

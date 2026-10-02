@@ -8,7 +8,8 @@ Abstract:
 
     Runtime fallback for MmUnloadedDrivers and PiDDBCacheTable.  Candidate
     globals are recovered from bounded call graphs rooted at stable ntoskrnl
-    exports.  No address is published until PE-section checks, uniqueness, and
+    exports, with routine ranges limited by the PE exception directory. No
+    address is published until PE-section checks, uniqueness, and
     live semantic validation agree.  Ambiguous or empty structures fail closed.
 
     Field-shape heuristics alone never authorize a kernel API call here.  A
@@ -28,6 +29,7 @@ Environment:
 #include "kernel_object_probe.h"
 #include "runtime_signature_scan.h"
 #include "pool_compat.h"
+#include "ark/ark_startup.h" // 精确地址补全路径也必须遵守 OS build 上限。
 
 #define KSW_KERNEL_CACHE_TAG 'cCsK'
 #define KSW_KERNEL_CACHE_MAX_REFERENCES 512UL
@@ -301,6 +303,46 @@ Return Value:
     return TRUE;
 }
 
+BOOLEAN
+KswordARKDriverResolveMmUnloadedLayout(
+    _In_ const KSW_DYN_MODULE_IDENTITY_PACKET* NtoskrnlIdentity,
+    _In_ ULONG PointerRva,
+    _Out_ PKSW_RUNTIME_KERNEL_LAYOUT Layout
+    )
+{
+    KSW_RUNTIME_IMAGE_VIEW view; // 本次查询的映像边界与节属性快照。
+    KSW_UNLOADED_LAYOUT_CANDIDATE candidate; // 只发布唯一且多记录一致的布局。
+
+    // 未验证的系统版本、缺失身份和越界 RVA 都不能参与推断。
+    if (Layout == NULL || NtoskrnlIdentity == NULL ||
+        !KswordArkStartupIsOsBuildSupported() || KeGetCurrentIrql() > APC_LEVEL ||
+        NtoskrnlIdentity->present == 0UL || NtoskrnlIdentity->imageBase == 0ULL ||
+        PointerRva == 0UL || PointerRva >= NtoskrnlIdentity->sizeOfImage ||
+        NtoskrnlIdentity->imageBase > (~0ULL - PointerRva)) {
+        return FALSE; // 不写任何不完整的布局结果。
+    }
+    RtlFillMemory(Layout, sizeof(*Layout), 0xFF); // 所有未解析成员保持 -1。
+    RtlZeroMemory(&view, sizeof(view)); // 映像视图必须重新读取。
+    RtlZeroMemory(&candidate, sizeof(candidate)); // 候选不继承旧查询结果。
+
+    // 已知 RVA 仍必须位于当前映像可写数据节，且满足现有布局验证规则。
+    if (!KswordARKRuntimeInitializeImageView(
+            (PVOID)(ULONG_PTR)NtoskrnlIdentity->imageBase,
+            NtoskrnlIdentity->sizeOfImage, &view) ||
+        !KswordARKRuntimeAddressIsWritableData(
+            &view, view.Base + PointerRva, sizeof(PVOID)) ||
+        !KswordARKKernelCacheInferUnloadedLayout(
+            view.Base + PointerRva, 0U, &candidate)) {
+        return FALSE; // 空表、少于两条有效记录或歧义布局都保持不可用。
+    }
+    Layout->UldName = (LONG)candidate.NameOffset; // 运行时验证的名称偏移。
+    Layout->UldStartAddress = (LONG)candidate.StartAddressOffset; // 已验证起址。
+    Layout->UldEndAddress = (LONG)candidate.EndAddressOffset; // 已验证止址。
+    Layout->UldCurrentTime = (LONG)candidate.CurrentTimeOffset; // 已验证时间。
+    Layout->UldTypeSize = (LONG)candidate.RecordSize; // 已验证步长。
+    return TRUE; // 不把推断得到的布局冒充 PDB 类型信息。
+}
+
 static VOID
 KswordARKKernelCacheResolveUnloadedDrivers(
     _In_ const KSW_RUNTIME_IMAGE_VIEW* View,
@@ -335,6 +377,9 @@ KswordARKKernelCacheResolveUnloadedDrivers(
             continue;
         }
         if (candidate.ValidRecordCount == bestScore && bestScore != 0UL) {
+            if (candidate.PointerGlobal == best.PointerGlobal) { // 同一全局被不同函数引用不是新候选。
+                continue; // 保留原有歧义状态，不能清除其它地址造成的歧义。
+            }
             ambiguous = TRUE;
             continue;
         }
@@ -908,7 +953,7 @@ Return Value:
     if (references == NULL) {
         return;
     }
-    referenceCount = KswordARKRuntimeCollectAnchoredDataReferences(
+    referenceCount = KswordARKRuntimeCollectFunctionDataReferences( // 使用 PE 函数边界避免相邻代码耗尽遍历预算。
         &view,
         anchors,
         RTL_NUMBER_OF(anchors),

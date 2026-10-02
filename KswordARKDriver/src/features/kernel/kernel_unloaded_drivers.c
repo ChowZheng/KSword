@@ -16,13 +16,14 @@ Environment:
 --*/
 
 #include "kernel_unloaded_drivers.h"
+#include "kernel_unloaded_layout.h" // 功能自己的地址与布局验证边界。
+#include "../../platform/runtime_signature_scan.h" // 候选内存统一走 MmCopyMemory。
 #include "ci_hash_fallback.h"
 #include "ark/ark_dyndata.h"
 #include "../dyndata/dyndata_v4_internal.h"
 #include "../../platform/kernel_object_probe.h"
 
 #define KSW_MM_UNLOADED_DRIVER_SLOTS 50UL
-#define KSW_UNLOADED_DRIVER_MAX_ENTRY_BYTES 4096UL
 #define KSW_UNLOADED_DRIVER_HARD_WALK_LIMIT 4096UL
 
 typedef struct _KSW_UNLOADED_QUERY_CONTEXT
@@ -30,67 +31,6 @@ typedef struct _KSW_UNLOADED_QUERY_CONTEXT
     KSWORD_ARK_QUERY_UNLOADED_DRIVERS_RESPONSE* Response;
     ULONG MaxRows;
 } KSW_UNLOADED_QUERY_CONTEXT;
-
-static BOOLEAN
-KswordARKUnloadedDynDataSourceIsTrusted(
-    _In_ ULONG Source
-    )
-{
-    return Source == KSW_DYN_FIELD_SOURCE_PDB_PROFILE ||
-        Source == KSW_DYN_FIELD_SOURCE_RUNTIME_PATTERN;
-}
-
-typedef struct _KSW_MM_UNLOADED_LAYOUT
-{
-    PVOID Records;
-    ULONG RecordSize;
-    ULONG NameOffset;
-    ULONG StartAddressOffset;
-    ULONG EndAddressOffset;
-    ULONG CurrentTimeOffset;
-} KSW_MM_UNLOADED_LAYOUT;
-
-typedef struct _KSW_PIDDB_QUERY_LAYOUT
-{
-    PRTL_AVL_TABLE Table;
-    PERESOURCE Lock;
-    ULONG DriverNameOffset;
-    ULONG TimeDateStampOffset;
-    ULONG LoadStatusOffset;
-    ULONG EntrySize;
-} KSW_PIDDB_QUERY_LAYOUT;
-
-static BOOLEAN
-KswordARKUnloadedRvaToAddress(
-    _In_ const KSW_DYN_MODULE_IDENTITY_PACKET* Identity,
-    _In_ ULONG Rva,
-    _In_ SIZE_T RequiredBytes,
-    _Out_ ULONGLONG* AddressOut
-    )
-/*++
-
-Routine Description:
-
-    Convert one identity-matched module RVA into a bounded live kernel address.
-
-Return Value:
-
-    TRUE when the complete requested range lies inside the current image.
-
---*/
-{
-    if (Identity == NULL || AddressOut == NULL ||
-        Identity->present == 0UL || Identity->imageBase == 0ULL ||
-        Identity->sizeOfImage == 0UL || Rva == 0UL ||
-        Rva == KSW_DYN_OFFSET_UNAVAILABLE || Rva >= Identity->sizeOfImage ||
-        RequiredBytes > (SIZE_T)(Identity->sizeOfImage - Rva) ||
-        Identity->imageBase > (~0ULL - Rva)) {
-        return FALSE;
-    }
-
-    *AddressOut = Identity->imageBase + Rva;
-    return TRUE;
-}
 
 static BOOLEAN
 KswordARKUnloadedCopyName(
@@ -122,12 +62,10 @@ Return Value:
     copyBytes = min(
         (ULONG)Source->Length,
         (ULONG)((KSWORD_ARK_UNLOADED_DRIVER_NAME_CHARS - 1U) * sizeof(WCHAR)));
-    __try {
-        RtlCopyMemory(Row->driverName, Source->Buffer, copyBytes);
-    }
-    __except (EXCEPTION_EXECUTE_HANDLER) {
-        RtlZeroMemory(Row->driverName, sizeof(Row->driverName));
-        return FALSE;
+    // 名称缓冲区可能随卸载记录被释放，只允许完整的安全复制。
+    if (!KswordARKRuntimeReadMemory(Source->Buffer, Row->driverName, copyBytes)) {
+        RtlZeroMemory(Row->driverName, sizeof(Row->driverName)); // 清除部分复制残留。
+        return FALSE; // 未取得完整名称时不发布该行。
     }
 
     Row->driverName[copyBytes / sizeof(WCHAR)] = L'\0';
@@ -200,89 +138,6 @@ Return Value:
     Context->Response->lastStatus = Status;
 }
 
-static NTSTATUS
-KswordARKUnloadedResolveMmLayout(
-    _Out_ KSW_MM_UNLOADED_LAYOUT* Layout
-    )
-/*++
-
-Routine Description:
-
-    Resolve the MmUnloadedDrivers pointer and exact _UNLOADED_DRIVERS member
-    layout from the active ntoskrnl PDB profile.
-
-Return Value:
-
-    STATUS_SUCCESS, STATUS_DEVICE_NOT_READY for no active profile, or
-    STATUS_NOT_SUPPORTED for an incomplete/invalid layout.
-
---*/
-{
-    KSW_DYN_STATE state;
-    ULONGLONG recordsPointerAddress = 0ULL;
-    PVOID records = NULL;
-
-    if (Layout == NULL) {
-        return STATUS_INVALID_PARAMETER;
-    }
-    RtlZeroMemory(Layout, sizeof(*Layout));
-    RtlZeroMemory(&state, sizeof(state));
-    KswordARKDynDataSnapshot(&state);
-
-    if (!state.NtosActive) {
-        return STATUS_DEVICE_NOT_READY;
-    }
-    if (!KswordARKUnloadedDynDataSourceIsTrusted(
-            state.KernelSources.UldName) ||
-        !KswordARKUnloadedDynDataSourceIsTrusted(
-            state.KernelSources.UldStartAddress) ||
-        !KswordARKUnloadedDynDataSourceIsTrusted(
-            state.KernelSources.UldEndAddress) ||
-        !KswordARKUnloadedDynDataSourceIsTrusted(
-            state.KernelSources.UldCurrentTime) ||
-        !KswordARKUnloadedDynDataSourceIsTrusted(
-            state.KernelSources.UldTypeSize) ||
-        !KswordARKUnloadedDynDataSourceIsTrusted(
-            state.KernelGlobalSources.MmUnloadedDrivers) ||
-        state.Kernel.UldName == KSW_DYN_OFFSET_UNAVAILABLE ||
-        state.Kernel.UldStartAddress == KSW_DYN_OFFSET_UNAVAILABLE ||
-        state.Kernel.UldEndAddress == KSW_DYN_OFFSET_UNAVAILABLE ||
-        state.Kernel.UldCurrentTime == KSW_DYN_OFFSET_UNAVAILABLE ||
-        state.Kernel.UldTypeSize == KSW_DYN_OFFSET_UNAVAILABLE ||
-        state.Kernel.UldTypeSize < sizeof(UNICODE_STRING) ||
-        state.Kernel.UldTypeSize > KSW_UNLOADED_DRIVER_MAX_ENTRY_BYTES ||
-        state.Kernel.UldName > state.Kernel.UldTypeSize - sizeof(UNICODE_STRING) ||
-        state.Kernel.UldStartAddress > state.Kernel.UldTypeSize - sizeof(PVOID) ||
-        state.Kernel.UldEndAddress > state.Kernel.UldTypeSize - sizeof(PVOID) ||
-        state.Kernel.UldCurrentTime > state.Kernel.UldTypeSize - sizeof(LARGE_INTEGER)) {
-        return STATUS_NOT_SUPPORTED;
-    }
-    if (!KswordARKUnloadedRvaToAddress(
-            &state.Ntoskrnl,
-            state.KernelGlobals.MmUnloadedDrivers,
-            sizeof(PVOID),
-            &recordsPointerAddress)) {
-        return STATUS_NOT_SUPPORTED;
-    }
-
-    __try {
-        records = *(PVOID*)(ULONG_PTR)recordsPointerAddress;
-    }
-    __except (EXCEPTION_EXECUTE_HANDLER) {
-        return GetExceptionCode();
-    }
-    if (records == NULL) {
-        return STATUS_NOT_FOUND;
-    }
-    Layout->Records = records;
-    Layout->RecordSize = state.Kernel.UldTypeSize;
-    Layout->NameOffset = state.Kernel.UldName;
-    Layout->StartAddressOffset = state.Kernel.UldStartAddress;
-    Layout->EndAddressOffset = state.Kernel.UldEndAddress;
-    Layout->CurrentTimeOffset = state.Kernel.UldCurrentTime;
-    return STATUS_SUCCESS;
-}
-
 static BOOLEAN
 KswordARKUnloadedReadMmRow(
     _In_ const KSW_MM_UNLOADED_LAYOUT* Layout,
@@ -293,7 +148,7 @@ KswordARKUnloadedReadMmRow(
 
 Routine Description:
 
-    Read one fixed MmUnloadedDrivers slot using only PDB-bounded offsets.
+    Read one fixed MmUnloadedDrivers slot using PDB or runtime-validated bounded offsets.
 
 Return Value:
 
@@ -317,23 +172,12 @@ Return Value:
     record = (const UCHAR*)Layout->Records +
         ((SIZE_T)Index * Layout->RecordSize);
 
-    __try {
-        RtlCopyMemory(&name, record + Layout->NameOffset, sizeof(name));
-        RtlCopyMemory(
-            &startAddress,
-            record + Layout->StartAddressOffset,
-            sizeof(startAddress));
-        RtlCopyMemory(
-            &endAddress,
-            record + Layout->EndAddressOffset,
-            sizeof(endAddress));
-        RtlCopyMemory(
-            &currentTime,
-            record + Layout->CurrentTimeOffset,
-            sizeof(currentTime));
-    }
-    __except (EXCEPTION_EXECUTE_HANDLER) {
-        return FALSE;
+    // 所有记录字段逐项安全读取；记录数组不是被锁定的内核对象。
+    if (!KswordARKRuntimeReadMemory(record + Layout->NameOffset, &name, sizeof(name)) ||
+        !KswordARKRuntimeReadMemory(record + Layout->StartAddressOffset, &startAddress, sizeof(startAddress)) ||
+        !KswordARKRuntimeReadMemory(record + Layout->EndAddressOffset, &endAddress, sizeof(endAddress)) ||
+        !KswordARKRuntimeReadMemory(record + Layout->CurrentTimeOffset, &currentTime, sizeof(currentTime))) {
+        return FALSE; // 并发失效或不可读记录不得进入输出。
     }
 
     if (!KswordARKUnloadedCopyName(&name, Row)) {
@@ -396,85 +240,6 @@ Return Value:
             KswordARKUnloadedAppendRow(Context, &row);
         }
     }
-    return STATUS_SUCCESS;
-}
-
-static NTSTATUS
-KswordARKUnloadedResolvePiDdbLayout(
-    _Out_ KSW_PIDDB_QUERY_LAYOUT* Layout
-    )
-/*++
-
-Routine Description:
-
-    Resolve the PiDDB AVL table, its ERESOURCE, and exact entry field offsets
-    from the identity-matched ntoskrnl profile.
-
-Return Value:
-
-    STATUS_SUCCESS or a readable profile/layout status.
-
---*/
-{
-    KSW_DYN_STATE state;
-    ULONGLONG tableAddress = 0ULL;
-    ULONGLONG lockAddress = 0ULL;
-
-    if (Layout == NULL) {
-        return STATUS_INVALID_PARAMETER;
-    }
-    RtlZeroMemory(Layout, sizeof(*Layout));
-    RtlZeroMemory(&state, sizeof(state));
-    KswordARKDynDataSnapshot(&state);
-
-    if (!state.NtosActive) {
-        return STATUS_DEVICE_NOT_READY;
-    }
-    if (!KswordARKUnloadedDynDataSourceIsTrusted(
-            state.KernelSources.PiDdbDriverName) ||
-        !KswordARKUnloadedDynDataSourceIsTrusted(
-            state.KernelSources.PiDdbTimeDateStamp) ||
-        !KswordARKUnloadedDynDataSourceIsTrusted(
-            state.KernelSources.PiDdbLoadStatus) ||
-        !KswordARKUnloadedDynDataSourceIsTrusted(
-            state.KernelSources.PiDdbTypeSize) ||
-        !KswordARKUnloadedDynDataSourceIsTrusted(
-            state.KernelGlobalSources.PiDDBCacheTable) ||
-        !KswordARKUnloadedDynDataSourceIsTrusted(
-            state.KernelGlobalSources.PiDDBLock) ||
-        state.Kernel.PiDdbDriverName == KSW_DYN_OFFSET_UNAVAILABLE ||
-        state.Kernel.PiDdbTimeDateStamp == KSW_DYN_OFFSET_UNAVAILABLE ||
-        state.Kernel.PiDdbLoadStatus == KSW_DYN_OFFSET_UNAVAILABLE ||
-        state.Kernel.PiDdbTypeSize == KSW_DYN_OFFSET_UNAVAILABLE ||
-        state.Kernel.PiDdbTypeSize < sizeof(UNICODE_STRING) ||
-        state.Kernel.PiDdbTypeSize > KSW_UNLOADED_DRIVER_MAX_ENTRY_BYTES ||
-        state.Kernel.PiDdbDriverName >
-            state.Kernel.PiDdbTypeSize - sizeof(UNICODE_STRING) ||
-        state.Kernel.PiDdbTimeDateStamp >
-            state.Kernel.PiDdbTypeSize - sizeof(ULONG) ||
-        state.Kernel.PiDdbLoadStatus >
-            state.Kernel.PiDdbTypeSize - sizeof(NTSTATUS)) {
-        return STATUS_NOT_SUPPORTED;
-    }
-    if (!KswordARKUnloadedRvaToAddress(
-            &state.Ntoskrnl,
-            state.KernelGlobals.PiDDBCacheTable,
-            sizeof(RTL_AVL_TABLE),
-            &tableAddress) ||
-        !KswordARKUnloadedRvaToAddress(
-            &state.Ntoskrnl,
-            state.KernelGlobals.PiDDBLock,
-            sizeof(ERESOURCE),
-            &lockAddress)) {
-        return STATUS_NOT_SUPPORTED;
-    }
-
-    Layout->Table = (PRTL_AVL_TABLE)(ULONG_PTR)tableAddress;
-    Layout->Lock = (PERESOURCE)(ULONG_PTR)lockAddress;
-    Layout->DriverNameOffset = state.Kernel.PiDdbDriverName;
-    Layout->TimeDateStampOffset = state.Kernel.PiDdbTimeDateStamp;
-    Layout->LoadStatusOffset = state.Kernel.PiDdbLoadStatus;
-    Layout->EntrySize = state.Kernel.PiDdbTypeSize;
     return STATUS_SUCCESS;
 }
 
