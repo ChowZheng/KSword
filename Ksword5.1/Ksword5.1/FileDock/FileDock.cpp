@@ -21,6 +21,7 @@
 #include "../UI/CodeEditorWidget.h"
 #include "../UI/HexEditorWidget.h"
 #include "../UI/ReportStructuredView.h"
+#include "../UI/ThemeStatusRole.h"
 #include "../UI/TableColumnAutoFit.h"
 #include "../UI/TableInteractionSupport.h"
 #include "../ArkDriverClient/ArkDriverClient.h"
@@ -138,6 +139,7 @@
 #include <utility>
 
 #include <Aclapi.h>
+#include <Softpub.h>
 #include <Sddl.h>
 
 #pragma comment(lib, "Advapi32.lib")
@@ -7925,91 +7927,91 @@ namespace
             return result;
         }
 
-        void startSignatureLoad(CodeEditorWidget* textEditorWidget)
+        static QPair<QString, QString> signatureTrustPresentation(
+            const ks::file::metadata::SignatureInspection& signature)
         {
-            // 用途：后台先用 R3 WinVerifyTrust/证书链/Catalog API 验证，再补充 KswordARK
-            // PE Security Directory、WIN_CERTIFICATE 外层结构和内核 CI 缓存签名等级。
-            // 输入：textEditorWidget 为签名页显示目标。
-            // 处理：R3 与 R0 证据并列展示，不经过 PowerShell。
-            // 返回：无。
-            if (textEditorWidget == nullptr)
+            switch (signature.trustStatus)
             {
-                return;
+            case ERROR_SUCCESS:
+                return {QStringLiteral("签名有效，受信任"), QStringLiteral("文件签名通过本机 Windows 信任验证。")};
+            case TRUST_E_NOSIGNATURE:
+                if (signature.embedded)
+                    return {QStringLiteral("签名无法识别"), QStringLiteral("存在证书表，但未能识别可验证的文件签名。")};
+                if (signature.catalog)
+                    return {QStringLiteral("Catalog 签名待验证"), QStringLiteral("已找到 Catalog 文件，文件签名验证未通过；Catalog 信任状态尚未确认。")};
+                return {QStringLiteral("未签名"), QStringLiteral("未找到可验证的文件签名。")};
+            case TRUST_E_BAD_DIGEST:
+                return {QStringLiteral("签名摘要不匹配"), QStringLiteral("文件内容与签名摘要不一致，可能已被修改或损坏。")};
+            case CERT_E_UNTRUSTEDROOT:
+            case CERT_E_CHAINING:
+            case TRUST_E_SUBJECT_NOT_TRUSTED:
+                return {QStringLiteral("不受信任"), QStringLiteral("签名未通过本机信任策略，或无法构建受信任的证书链。")};
+            case CERT_E_EXPIRED:
+                return {QStringLiteral("证书已过期或尚未生效"), QStringLiteral("证书在验证所采用的时间点不处于有效期内。")};
+            case CERT_E_REVOKED:
+                return {QStringLiteral("证书已吊销"), QStringLiteral("签名证书已被吊销，验证未通过。")};
+            case CRYPT_E_REVOCATION_OFFLINE:
+            case CERT_E_REVOCATION_FAILURE:
+                return {QStringLiteral("吊销状态无法确认"), QStringLiteral("本机缓存不足以完成吊销检查，不能确认签名受信任。")};
+            default:
+                return {QStringLiteral("签名验证失败"), QStringLiteral("无法完成签名信任验证，请展开详细信息查看状态码与证据。")};
             }
+        }
 
-            textEditorWidget->setLocalizedText(
-                QStringLiteral("正在通过 R3 WinVerifyTrust 与 KswordARK R0 读取签名证据...\n目标: %1")
-                    .arg(QDir::toNativeSeparators(m_filePath)));
-
+        void startSignatureLoad(QWidget* page, QLabel* stateLabel, QLabel* hintLabel,
+            const QVector<QPointer<QLabel>>& values, QPlainTextEdit* evidenceEditor)
+        {
             const QString filePathSnapshot = m_filePath;
             const QString ntPathSnapshot = buildDriverNtPath(filePathSnapshot);
-            QPointer<FileDetailDialog> guardThis(this);
-            QPointer<CodeEditorWidget> editorGuard(textEditorWidget);
-            auto* task = QRunnable::create([guardThis, editorGuard, filePathSnapshot, ntPathSnapshot]()
+            const QPointer<QWidget> pageGuard(page);
+            const QPointer<QLabel> stateGuard(stateLabel), hintGuard(hintLabel);
+            const QPointer<QPlainTextEdit> evidenceGuard(evidenceEditor);
+            auto* task = QRunnable::create([pageGuard, stateGuard, hintGuard, values, evidenceGuard,
+                filePathSnapshot, ntPathSnapshot]()
                 {
-                    QString finalText;
-                    const ks::file::metadata::SignatureInspection r3Signature =
-                        ks::file::metadata::inspectSignature(filePathSnapshot);
-                    finalText += QStringLiteral("[R3 WinVerifyTrust / 证书链]\n");
-                    finalText += QStringLiteral("WinVerifyTrust: 0x%1\n")
-                        .arg(static_cast<quint32>(r3Signature.trustStatus), 8, 16, QLatin1Char('0'));
-                    finalText += QStringLiteral("嵌入式签名: %1\n")
-                        .arg(r3Signature.embedded ? QStringLiteral("是") : QStringLiteral("否"));
-                    finalText += QStringLiteral("Catalog 签名: %1\n")
-                        .arg(r3Signature.catalog ? QStringLiteral("是") : QStringLiteral("否"));
-                    finalText += QStringLiteral("Catalog 路径: %1\n")
-                        .arg(r3Signature.catalogPath.isEmpty() ? QStringLiteral("-") : r3Signature.catalogPath);
-                    finalText += QStringLiteral("签名者: %1\n")
-                        .arg(r3Signature.signer.isEmpty() ? QStringLiteral("-") : r3Signature.signer);
-                    finalText += QStringLiteral("颁发者: %1\n")
-                        .arg(r3Signature.issuer.isEmpty() ? QStringLiteral("-") : r3Signature.issuer);
-                    finalText += QStringLiteral("证书 SHA-256: %1\n")
-                        .arg(r3Signature.sha256Fingerprint.isEmpty()
-                            ? QStringLiteral("-") : r3Signature.sha256Fingerprint);
-                    finalText += QStringLiteral("有效期: %1 → %2\n")
-                        .arg(r3Signature.validFrom.isEmpty() ? QStringLiteral("-") : r3Signature.validFrom)
-                        .arg(r3Signature.validUntil.isEmpty() ? QStringLiteral("-") : r3Signature.validUntil);
-                    finalText += QStringLiteral("时间戳签名者: %1\n")
-                        .arg(r3Signature.timestampSigner.isEmpty()
-                            ? QStringLiteral("-") : r3Signature.timestampSigner);
-                    finalText += QStringLiteral("链状态: %1\n\n")
-                        .arg(r3Signature.chainStatus.isEmpty() ? QStringLiteral("-") : r3Signature.chainStatus);
-                    if (ntPathSnapshot.isEmpty())
-                    {
-                        finalText += QStringLiteral("无法生成供内核使用的 NT 路径。\n");
-                        finalText += QStringLiteral("目标: %1")
-                            .arg(QDir::toNativeSeparators(filePathSnapshot));
-                    }
-                    else
-                    {
-                        const ksword::ark::ImageSignatureQueryResult signatureResult =
-                            ksword::ark::DriverClient().queryImageSignature(ntPathSnapshot.toStdWString());
-                        finalText += QStringLiteral("[R0 内核签名证据]\n");
-                        finalText += QStringLiteral("目标: %1\n")
-                            .arg(QDir::toNativeSeparators(filePathSnapshot));
-                        finalText += QStringLiteral("NT 路径: %1\n\n").arg(ntPathSnapshot);
-                        finalText += QString::fromStdString(
-                            ksword::ark::formatImageSignatureEvidence(signatureResult));
-                        finalText += QStringLiteral("\n");
-                        finalText += QStringLiteral(
-                            "结论边界：WinVerifyTrust 负责 R3 信任验证；PE 证书表及 WIN_CERTIFICATE 是磁盘结构证据；CI cached signing level 是独立的内核缓存结果。Catalog 签名不能从目标文件本身删除。");
-                    }
-
-                    FileDetailDialog* targetDialog = guardThis.data();
-                    if (targetDialog == nullptr)
-                    {
-                        return;
-                    }
-                    QMetaObject::invokeMethod(
-                        targetDialog,
-                        [editorGuard, finalText]()
+                    const auto signature = ks::file::metadata::inspectSignature(filePathSnapshot);
+                    if (pageGuard == nullptr) return;
+                    QMetaObject::invokeMethod(pageGuard.data(), [pageGuard, stateGuard, hintGuard, values, signature]()
                         {
-                            if (editorGuard != nullptr)
-                            {
-                                editorGuard->setLocalizedText(finalText);
-                            }
-                        },
-                        Qt::QueuedConnection);
+                            if (pageGuard == nullptr || stateGuard == nullptr || hintGuard == nullptr) return;
+                            const auto presentation = signatureTrustPresentation(signature);
+                            stateGuard->setText(ks::i18n::sourceText(presentation.first));
+                            hintGuard->setText(ks::i18n::sourceText(presentation.second));
+                            ks::ui::ApplyStatusRole(stateGuard, signature.trustStatus == ERROR_SUCCESS
+                                ? ks::ui::StatusRole::Success : ks::ui::StatusRole::Warning);
+                            const QString unavailable = ks::i18n::sourceText(QStringLiteral("未获取到"));
+                            const QString yes = ks::i18n::sourceText(QStringLiteral("是"));
+                            const QString no = ks::i18n::sourceText(QStringLiteral("否"));
+                            const QStringList texts{
+                                signature.issuer.isEmpty() ? unavailable : signature.issuer,
+                                signature.signer.isEmpty() ? unavailable : signature.signer,
+                                signature.signingTime.isEmpty()
+                                    ? ks::i18n::sourceText(QStringLiteral("未获取到可信时间戳")) : signature.signingTime,
+                                signature.embedded ? yes : no,
+                                signature.catalog ? yes : no,
+                                signature.catalogPath.isEmpty() ? unavailable : signature.catalogPath,
+                                signature.sha256Fingerprint.isEmpty() ? unavailable : signature.sha256Fingerprint,
+                                signature.validFrom.isEmpty() ? unavailable : signature.validFrom,
+                                signature.validUntil.isEmpty() ? unavailable : signature.validUntil,
+                                signature.timestampSigner.isEmpty() ? unavailable : signature.timestampSigner,
+                                QStringLiteral("0x%1").arg(static_cast<quint32>(signature.trustStatus), 8, 16, QLatin1Char('0')),
+                                signature.chainStatus.isEmpty() ? unavailable : signature.chainStatus};
+                            for (qsizetype index = 0; index < values.size(); ++index)
+                                if (values.at(index) != nullptr) values.at(index)->setText(texts.at(index));
+                        }, Qt::QueuedConnection);
+
+                    // R3 结果先回填，内核查询慢或不可用时不阻挡签名摘要。
+                    QString evidence;
+                    if (ntPathSnapshot.isEmpty())
+                        evidence = ks::i18n::sourceText(QStringLiteral("无法生成供内核使用的 NT 路径。"));
+                    else
+                        evidence = QString::fromStdString(ksword::ark::formatImageSignatureEvidence(
+                            ksword::ark::DriverClient().queryImageSignature(ntPathSnapshot.toStdWString())));
+                    if (pageGuard == nullptr) return;
+                    QMetaObject::invokeMethod(pageGuard.data(), [evidenceGuard, evidence]()
+                        {
+                            if (evidenceGuard != nullptr) evidenceGuard->setPlainText(evidence);
+                        }, Qt::QueuedConnection);
                 });
             task->setAutoDelete(true);
             QThreadPool::globalInstance()->start(task);
@@ -11376,10 +11378,95 @@ namespace
         {
             QWidget* page = new QWidget(this);
             QVBoxLayout* layout = new QVBoxLayout(page);
-            CodeEditorWidget* textEditorWidget = new CodeEditorWidget(page);
-            textEditorWidget->setReadOnly(true);
-            layout->addWidget(textEditorWidget, 1);
-            startSignatureLoad(textEditorWidget);
+            QScrollArea* scroll = new QScrollArea(page);
+            scroll->setWidgetResizable(true);
+            scroll->setFrameShape(QFrame::NoFrame);
+            QWidget* content = new QWidget(scroll);
+            QVBoxLayout* contentLayout = new QVBoxLayout(content);
+            QGroupBox* summary = new QGroupBox(ks::i18n::sourceText(QStringLiteral("签名概览")), content);
+            QVBoxLayout* summaryLayout = new QVBoxLayout(summary);
+            QLabel* state = new QLabel(ks::i18n::sourceText(QStringLiteral("正在验证签名...")), summary);
+            state->setTextFormat(Qt::PlainText);
+            state->setWordWrap(true);
+            state->setTextInteractionFlags(Qt::TextSelectableByMouse);
+            QFont stateFont = state->font();
+            stateFont.setBold(true);
+            stateFont.setPointSizeF(stateFont.pointSizeF() + 3.0);
+            state->setFont(stateFont);
+            ks::ui::ApplyStatusRole(state, ks::ui::StatusRole::Info);
+            summaryLayout->addWidget(state);
+            QLabel* hint = new QLabel(summary);
+            hint->setTextFormat(Qt::PlainText);
+            hint->setWordWrap(true);
+            summaryLayout->addWidget(hint);
+            QFormLayout* summaryForm = new QFormLayout();
+            summaryForm->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+            summaryForm->setRowWrapPolicy(QFormLayout::WrapLongRows);
+            QVector<QPointer<QLabel>> values;
+            const auto addField = [&values](QFormLayout* form, QWidget* parent, const QString& title)
+                {
+                    QLabel* name = new QLabel(ks::i18n::sourceText(title), parent);
+                    QLabel* value = new QLabel(ks::i18n::sourceText(QStringLiteral("正在读取...")), parent);
+                    value->setTextFormat(Qt::PlainText);
+                    value->setWordWrap(true);
+                    value->setMinimumWidth(0);
+                    value->setTextInteractionFlags(Qt::TextSelectableByMouse);
+                    form->addRow(name, value);
+                    values.append(value);
+                };
+            addField(summaryForm, summary, QStringLiteral("颁发者"));
+            addField(summaryForm, summary, QStringLiteral("签名者"));
+            addField(summaryForm, summary, QStringLiteral("签名时间（本地时间）"));
+            summaryLayout->addLayout(summaryForm);
+            contentLayout->addWidget(summary);
+
+            QToolButton* toggle = new QToolButton(content);
+            toggle->setText(ks::i18n::sourceText(QStringLiteral("详细信息与原始证据")));
+            toggle->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+            toggle->setCheckable(true);
+            toggle->setArrowType(Qt::RightArrow);
+            contentLayout->addWidget(toggle);
+            QWidget* details = new QWidget(content);
+            QVBoxLayout* detailsLayout = new QVBoxLayout(details);
+            detailsLayout->setContentsMargins(0, 0, 0, 0);
+            QGroupBox* certificate = new QGroupBox(ks::i18n::sourceText(QStringLiteral("证书与验证详情")), details);
+            QFormLayout* detailForm = new QFormLayout(certificate);
+            detailForm->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+            detailForm->setRowWrapPolicy(QFormLayout::WrapLongRows);
+            for (const QString& title : QStringList{
+                QStringLiteral("嵌入式签名"), QStringLiteral("Catalog 文件已找到"), QStringLiteral("Catalog 路径"),
+                QStringLiteral("证书 SHA-256 指纹"), QStringLiteral("证书生效时间"), QStringLiteral("证书到期时间"),
+                QStringLiteral("时间戳签名者"), QStringLiteral("Windows 信任验证状态码"), QStringLiteral("签名者链状态码")})
+                addField(detailForm, certificate, title);
+            QLabel* verificationHint = new QLabel(ks::i18n::sourceText(QStringLiteral(
+                "验证使用本机证书与吊销缓存。签名时间来自可信时间戳，证书有效期不是签名时间。")), certificate);
+            verificationHint->setWordWrap(true);
+            detailForm->addRow(verificationHint);
+            detailsLayout->addWidget(certificate);
+            QGroupBox* evidenceGroup = new QGroupBox(ks::i18n::sourceText(QStringLiteral("R0 内核原始证据")), details);
+            QVBoxLayout* evidenceLayout = new QVBoxLayout(evidenceGroup);
+            QLabel* boundary = new QLabel(ks::i18n::sourceText(QStringLiteral(
+                "内核证书表和 CI 缓存是独立证据；缺失内核信息不会改写上方 Windows 信任验证结果。")), evidenceGroup);
+            boundary->setWordWrap(true);
+            evidenceLayout->addWidget(boundary);
+            QPlainTextEdit* evidence = new QPlainTextEdit(evidenceGroup);
+            evidence->setReadOnly(true);
+            evidence->setLineWrapMode(QPlainTextEdit::NoWrap);
+            evidence->setMinimumHeight(180);
+            evidence->setPlainText(ks::i18n::sourceText(QStringLiteral("正在读取内核证据...")));
+            evidenceLayout->addWidget(evidence);
+            detailsLayout->addWidget(evidenceGroup);
+            contentLayout->addWidget(details);
+            details->hide();
+            connect(toggle, &QToolButton::toggled, details, [toggle, details](bool expanded)
+                {
+                    toggle->setArrowType(expanded ? Qt::DownArrow : Qt::RightArrow);
+                    details->setVisible(expanded);
+                });
+            contentLayout->addStretch(1);
+            scroll->setWidget(content);
+            layout->addWidget(scroll);
+            startSignatureLoad(page, state, hint, values, evidence);
             return page;
         }
 

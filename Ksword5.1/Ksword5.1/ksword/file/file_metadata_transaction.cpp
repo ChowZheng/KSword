@@ -2092,7 +2092,8 @@ SignatureInspection ks::file::metadata::inspectSignature(const QString& filePath
     if (providerData != nullptr)
     {
         CRYPT_PROVIDER_SGNR* signer = ::WTHelperGetProvSignerFromChain(providerData, 0U, FALSE, 0U);
-        if (signer != nullptr && signer->csCertChain > 0U)
+        if (signer != nullptr && signer->csCertChain > 0U && signer->pasCertChain != nullptr
+            && signer->pasCertChain[0].pCert != nullptr)
         {
             PCCERT_CONTEXT certificate = signer->pasCertChain[0].pCert;
             result.signer = certificateName(certificate, CERT_NAME_SIMPLE_DISPLAY_TYPE);
@@ -2108,11 +2109,16 @@ SignatureInspection ks::file::metadata::inspectSignature(const QString& filePath
         }
         CRYPT_PROVIDER_SGNR* counterSigner =
             ::WTHelperGetProvSignerFromChain(providerData, 0U, TRUE, 0U);
-        if (counterSigner != nullptr && counterSigner->csCertChain > 0U)
+        if (counterSigner != nullptr && counterSigner->csCertChain > 0U
+            && counterSigner->pasCertChain != nullptr && counterSigner->pasCertChain[0].pCert != nullptr)
         {
             result.timestampSigner = certificateName(
                 counterSigner->pasCertChain[0].pCert,
                 CERT_NAME_SIMPLE_DISPLAY_TYPE);
+            // 主签名者的验证基准在有效 countersignature 存在时是签名时间。
+            // 没有可信时间戳时保留空值，不能把验证当下或证书有效期当签名时间。
+            if (signer != nullptr && counterSigner->dwError == ERROR_SUCCESS)
+                result.signingTime = fileTimeText(signer->sftVerifyAsOf);
         }
     }
     trustData.dwStateAction = WTD_STATEACTION_CLOSE;

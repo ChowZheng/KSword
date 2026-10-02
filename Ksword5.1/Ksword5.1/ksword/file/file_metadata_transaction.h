@@ -239,6 +239,7 @@ namespace ks::file::metadata
         QString validFrom;
         QString validUntil;
         QString timestampSigner;
+        QString signingTime; // 已通过时间戳签名者校验的签名时间；不使用当前验证时间代替。
         QString chainStatus;
     };
 
