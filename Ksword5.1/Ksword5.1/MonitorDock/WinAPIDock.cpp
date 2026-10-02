@@ -205,6 +205,9 @@ void WinAPIDock::updateActionState()
     std::uint32_t currentPidValue = 0;
     const bool hasPid = currentSelectedPid(&currentPidValue);
     const bool running = m_pipeRunning.load();
+    for (QCheckBox* check : {m_hookFileCheck, m_hookRegistryCheck, m_hookNetworkCheck,
+            m_hookProcessCheck, m_hookLoaderCheck, m_hookClipboardCheck, m_autoInjectChildCheck})
+        if (check) check->setEnabled(!running);
     const bool hasEvents = m_eventTable != nullptr && m_eventTable->rowCount() > 0;
 
     if (m_processRefreshButton != nullptr)
@@ -340,9 +343,30 @@ void WinAPIDock::updateStatusLabel()
     {
         if (m_pipeConnected.load())
         {
-            m_sessionStatusLabel->setText(
-                QStringLiteral("● 监控中  PID=%1 | 事件=%2").arg(pidText).arg(eventCount));
-            ks::ui::ApplyStatusRole(m_sessionStatusLabel, ks::ui::StatusRole::Info);
+            QString text;
+            ks::ui::StatusRole role = ks::ui::StatusRole::Warning;
+            switch (m_hookState)
+            {
+            case HookState::Active:
+                text = QStringLiteral("● 监控中  PID=%1 | 事件=%2");
+                role = ks::ui::StatusRole::Info;
+                break;
+            case HookState::Partial:
+                text = QStringLiteral("● 部分 Hook 生效  PID=%1 | 事件=%2");
+                break;
+            case HookState::Failed:
+                text = QStringLiteral("● Hook 安装失败  PID=%1 | 事件=%2");
+                role = ks::ui::StatusRole::Error;
+                break;
+            case HookState::Removed:
+                text = QStringLiteral("● Hook 已移除  PID=%1 | 事件=%2");
+                break;
+            default:
+                text = QStringLiteral("● Agent 已连接，正在安装 Hook  PID=%1 | 事件=%2");
+                break;
+            }
+            m_sessionStatusLabel->setText(text.arg(pidText).arg(eventCount));
+            ks::ui::ApplyStatusRole(m_sessionStatusLabel, role);
         }
         else
         {

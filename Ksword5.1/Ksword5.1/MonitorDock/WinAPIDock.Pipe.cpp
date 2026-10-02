@@ -107,6 +107,9 @@ namespace
         rowValue.resultText = packetResultCodeText(packetValue.resultCode);
         rowValue.pidTidText = QStringLiteral("%1 / %2").arg(packetValue.pid).arg(packetValue.tid);
         rowValue.detailText = packetWideText(packetValue.detailText);
+        rowValue.sourcePid = packetValue.pid;
+        if (packetValue.category == static_cast<std::uint32_t>(ks::winapi_monitor::EventCategory::Internal)
+            && moduleNameText == QStringLiteral("Agent")) rowValue.agentStatus = apiNameText;
         rowValue.internalEvent =
             packetValue.category == static_cast<std::uint32_t>(ks::winapi_monitor::EventCategory::Internal);
         return rowValue;
@@ -254,6 +257,7 @@ void WinAPIDock::startPipeReadThread()
                 QStringLiteral("内部"),
                 QStringLiteral("管道已连接"),
                 QStringLiteral("已与 PID=%1 的 Agent 建立命名管道连接。").arg(sessionPidValue));
+            guardThis->m_hookState = HookState::Installing;
             guardThis->updateActionState();
             guardThis->updateStatusLabel();
         }, Qt::QueuedConnection);
@@ -302,6 +306,7 @@ void WinAPIDock::startPipeReadThread()
                 return;
             }
             guardThis->m_pipeConnected.store(false);
+            guardThis->m_hookState = HookState::Waiting;
             if (retryConnection && !guardThis->m_pipeStopFlag.load() && guardThis->m_pipeRunning.load())
             {
                 guardThis->appendInternalEvent(
@@ -639,6 +644,19 @@ void WinAPIDock::flushPendingRows()
 
 void WinAPIDock::appendEventRow(const EventRow& rowValue)
 {
+    if (rowValue.sourcePid == m_currentSessionPid && !rowValue.agentStatus.isEmpty())
+    {
+        if (rowValue.agentStatus == QStringLiteral("SessionReady")) m_hookState = HookState::Installing;
+        else if (rowValue.agentStatus == QStringLiteral("InstallHooksFailed")) m_hookState = HookState::Failed;
+        else if (rowValue.agentStatus == QStringLiteral("HooksPartial")) m_hookState = HookState::Partial;
+        else if (rowValue.agentStatus == QStringLiteral("HooksInstalled"))
+        {
+            if (m_hookState != HookState::Partial) m_hookState = HookState::Active;
+            kPro.set(m_sessionProgressPid, "WinAPI Hook 安装完成", 0, 100.0f);
+        }
+        else if (rowValue.agentStatus == QStringLiteral("HooksRemoved")) m_hookState = HookState::Removed;
+        if (m_hookState == HookState::Failed) kPro.set(m_sessionProgressPid, "WinAPI Hook 安装失败", 0, 100.0f);
+    }
     if (m_eventTable == nullptr)
     {
         return;

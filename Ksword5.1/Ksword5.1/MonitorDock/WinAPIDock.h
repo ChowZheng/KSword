@@ -87,6 +87,8 @@ public:
     // EventRow：
     // - 作用：缓存一行待刷入 UI 的 API 事件；
     // - internalEvent：是否是 UI/Agent 自己生成的内部状态事件。
+    enum class HookState { Waiting, Installing, Active, Partial, Failed, Removed };
+
     struct EventRow
     {
         QString time100nsText;
@@ -95,6 +97,8 @@ public:
         QString resultText;
         QString pidTidText;
         QString detailText;
+        QString agentStatus;
+        std::uint32_t sourcePid = 0;
         bool internalEvent = false;
     };
 
@@ -227,6 +231,7 @@ private:
     std::vector<std::uint32_t> m_childSessionPids;          // m_childSessionPids：已发现的自动注入子进程 PID，用于写停止标记。
     std::mutex m_childPipeMutex;                           // m_childPipeMutex：保护子管道线程/句柄/PID 容器。
     std::atomic_bool m_processRefreshPending{ false };     // m_processRefreshPending：进程刷新是否进行中。
+    HookState m_hookState = HookState::Waiting;
     std::atomic_uint64_t m_sessionGeneration{ 0 };
     std::atomic_bool m_pipeRunning{ false };               // m_pipeRunning：当前监控会话是否在运行。
     std::atomic_bool m_pipeConnected{ false };             // m_pipeConnected：是否已成功连上 Agent 管道。

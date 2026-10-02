@@ -5921,6 +5921,17 @@
     "notification.copy.log_template": "%1\n%2\n%3\n文件：%4\n函数：%5\nGUID：%6"
   },
   "source_translations": {
+    "SessionReady": "SessionReady",
+    "InstallHooksFailed": "InstallHooksFailed",
+    "HooksPartial": "HooksPartial",
+    "HooksRemoved": "HooksRemoved",
+    "WinAPI Hook 安装完成": "WinAPI Hook 安装完成",
+    "WinAPI Hook 安装失败": "WinAPI Hook 安装失败",
+    "● 部分 Hook 生效  PID=%1 | 事件=%2": "● 部分 Hook 生效  PID=%1 | 事件=%2",
+    "● Hook 安装失败  PID=%1 | 事件=%2": "● Hook 安装失败  PID=%1 | 事件=%2",
+    "● Hook 已移除  PID=%1 | 事件=%2": "● Hook 已移除  PID=%1 | 事件=%2",
+    "● Agent 已连接，正在安装 Hook  PID=%1 | 事件=%2": "● Agent 已连接，正在安装 Hook  PID=%1 | 事件=%2",
+    "Agent": "Agent",
     "无法占用 PID=%1 的 Agent 会话（错误码 %2）；该进程可能已由 API 监控或剪贴板保护占用。": "无法占用 PID=%1 的 Agent 会话（错误码 %2）；该进程可能已由 API 监控或剪贴板保护占用。",
     "卸载所属过滤器": "卸载所属过滤器",
     "此操作将卸载所属过滤器及其全部回调和实例，并非仅移除选中的回调。过滤器可能拒绝卸载。": "此操作将卸载所属过滤器及其全部回调和实例，并非仅移除选中的回调。过滤器可能拒绝卸载。",
