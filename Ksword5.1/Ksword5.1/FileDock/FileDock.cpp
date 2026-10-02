@@ -50,6 +50,7 @@
 #include <QDateTime>
 #include <QDateTimeEdit>
 #include <QEvent>
+#include <QElapsedTimer>
 #include <QFile>
 #include <QFileDevice>
 #include <QFileInfo>
@@ -5648,10 +5649,27 @@ namespace
             }
         };
 
+        struct PrintableStringMatch
+        {
+            qint64 offset = 0;
+            QString encoding;
+            QString text;
+        };
+
         struct PrintableStringsPreview
         {
-            QString sourcePrefixText;  // sourcePrefixText：应用生成且需要翻译的说明。
-            QString rawStringText;     // rawStringText：从文件提取的原始字符串，不得翻译。
+            QVector<PrintableStringMatch> matches;
+            qint64 matchedCount = 0;
+            qint64 scannedBytes = 0;
+            qint64 fileBytes = 0;
+            bool cancelled = false;
+            QString errorText;
+        };
+
+        struct StringScanControl
+        {
+            quint64 generation = 0;
+            std::shared_ptr<std::atomic_bool> cancel;
         };
 
         struct FileMetadataSnapshot
@@ -8056,117 +8074,121 @@ namespace
             QThreadPool::globalInstance()->start(task);
         }
 
-        static PrintableStringsPreview extractPrintableStringsPreview(const QString& filePath)
+        static PrintableStringsPreview extractPrintableStringsPreview(
+            const QString& filePath, const QString& query, const bool useRegex,
+            const bool caseSensitive, const int minimumLength, const bool scanAscii,
+            const bool scanUtf16, const std::shared_ptr<std::atomic_bool>& cancel,
+            const std::function<void(qint64, qint64)>& progress = {})
         {
-            // 用途：以分块方式提取可打印 ASCII 字符串，替代 readAll。
-            // 输入：filePath 为目标文件路径。
-            // 处理：最多输出 2000 条字符串，最多扫描 128MiB，避免超大文件长时间占用线程。
-            // 返回：可翻译的程序说明与必须逐字保留的文件字符串分开承载。
-            PrintableStringsPreview preview{};
+            PrintableStringsPreview result;
+            QRegularExpression expression(query, caseSensitive ? QRegularExpression::NoPatternOption
+                : QRegularExpression::CaseInsensitiveOption);
+            if (useRegex && !expression.isValid())
+            {
+                result.errorText = ks::i18n::sourceText(QStringLiteral("正则表达式无效：%1"))
+                    .arg(expression.errorString());
+                return result;
+            }
             QFile file(filePath);
             if (!file.open(QIODevice::ReadOnly))
             {
-                preview.sourcePrefixText = QStringLiteral("无法读取文件，无法提取字符串。\nQFile错误码: %1")
-                    .arg(static_cast<int>(file.error()));
-                return preview;
+                result.errorText = file.errorString();
+                return result;
             }
-
-            constexpr qint64 kChunkBytes = 1024 * 1024;
-            constexpr qint64 kMaxScanBytes = 128LL * 1024LL * 1024LL;
-            QString current;
-            QStringList result;
-            qint64 scannedBytes = 0;
-            while (!file.atEnd() && result.size() < 2000 && scannedBytes < kMaxScanBytes)
-            {
-                const QByteArray bytes = file.read(std::min(kChunkBytes, kMaxScanBytes - scannedBytes));
-                if (bytes.isEmpty())
+            result.fileBytes = file.size();
+            struct Run { QString text; qint64 start = 0; qint64 lastMatch = -1; };
+            Run ascii, utf16[2];
+            constexpr qsizetype maxCandidateChars = 65536;
+            constexpr qsizetype maxRows = 20000;
+            const Qt::CaseSensitivity sensitivity = caseSensitive ? Qt::CaseSensitive : Qt::CaseInsensitive;
+            const auto emitRun = [&](Run& run, const int width, const QString& encoding)
                 {
-                    break;
-                }
-                scannedBytes += bytes.size();
-                for (char ch : bytes)
-                {
-                    const unsigned char c = static_cast<unsigned char>(ch);
-                    if (std::isprint(c) != 0)
+                    if (run.text.size() < minimumLength) return;
+                    qsizetype matchPosition = 0;
+                    // 超长连续字符串分段时保留重叠，避免普通搜索跨片段丢失；不重复同一命中。
+                    const qsizetype searchFrom = run.lastMatch >= run.start
+                        ? static_cast<qsizetype>((run.lastMatch - run.start) / width + 1) : 0;
+                    if (!query.isEmpty())
                     {
-                        current.append(QChar::fromLatin1(ch));
+                        matchPosition = useRegex ? expression.match(run.text, searchFrom).capturedStart()
+                            : run.text.indexOf(query, searchFrom, sensitivity);
+                        if (matchPosition < 0) return;
                     }
-                    else
+                    const qint64 offset = run.start + matchPosition * width;
+                    run.lastMatch = offset;
+                    ++result.matchedCount;
+                    if (result.matches.size() < maxRows)
                     {
-                        if (current.length() >= 4)
-                        {
-                            result.append(current);
-                            if (result.size() >= 2000)
-                            {
-                                break;
-                            }
-                        }
-                        current.clear();
+                        const qsizetype previewStart = std::max<qsizetype>(0, matchPosition - 128);
+                        result.matches.append({offset, encoding, run.text.mid(previewStart, 1024)});
                     }
-                }
-            }
-            if (current.length() >= 4 && result.size() < 2000)
-            {
-                result.append(current);
-            }
-
-            preview.rawStringText = result.join('\n');
-            if (preview.rawStringText.trimmed().isEmpty())
-            {
-                preview.sourcePrefixText = QStringLiteral("<未提取到可打印字符串，或文件内容全部为二进制不可见字符。>");
-            }
-            if (!file.atEnd())
-            {
-                if (!preview.sourcePrefixText.isEmpty())
+                };
+            const auto feed = [&](Run& run, const QChar character, const bool printable,
+                const qint64 offset, const int width, const QString& encoding)
                 {
-                    preview.sourcePrefixText += QStringLiteral("\n\n");
-                }
-                preview.sourcePrefixText += QStringLiteral("[提示] 已达到扫描/显示上限：扫描 %1 字节，显示 %2 条。\n\n")
-                    .arg(scannedBytes)
-                    .arg(result.size());
-            }
-            return preview;
-        }
-
-        void startStringsLoad(CodeEditorWidget* textEditorWidget)
-        {
-            // 用途：后台提取字符串页内容。
-            // 输入：textEditorWidget 为字符串页显示目标。
-            // 处理：分块扫描文件，结果完成后回填 UI。
-            // 返回：无。
-            if (textEditorWidget == nullptr)
-            {
-                return;
-            }
-
-            textEditorWidget->setLocalizedText(QStringLiteral("字符串扫描中...\n目标: %1")
-                .arg(QDir::toNativeSeparators(m_filePath)));
-            const QString filePathSnapshot = m_filePath;
-            QPointer<FileDetailDialog> guardThis(this);
-            QPointer<CodeEditorWidget> editorGuard(textEditorWidget);
-            auto* task = QRunnable::create([guardThis, editorGuard, filePathSnapshot]()
-                {
-                    const PrintableStringsPreview preview = FileDetailDialog::extractPrintableStringsPreview(filePathSnapshot);
-                    FileDetailDialog* targetDialog = guardThis.data();
-                    if (targetDialog == nullptr)
+                    if (!printable)
                     {
+                        emitRun(run, width, encoding);
+                        run.text.clear();
+                        run.lastMatch = -1;
                         return;
                     }
-                    QMetaObject::invokeMethod(
-                        targetDialog,
-                        [editorGuard, preview]()
-                        {
-                            if (editorGuard != nullptr)
-                            {
-                                editorGuard->setLocalizedTextWithRawSuffix(
-                                    preview.sourcePrefixText,
-                                    preview.rawStringText);
-                            }
-                        },
-                        Qt::QueuedConnection);
-                });
-            task->setAutoDelete(true);
-            QThreadPool::globalInstance()->start(task);
+                    if (run.text.isEmpty()) run.start = offset;
+                    run.text.append(character);
+                    if (run.text.size() >= maxCandidateChars)
+                    {
+                        emitRun(run, width, encoding);
+                        const qsizetype overlap = query.isEmpty() ? 0
+                            : std::min<qsizetype>(maxCandidateChars - 1, std::max<qsizetype>(4096, query.size()));
+                        const qsizetype consumed = run.text.size() - overlap;
+                        run.text.remove(0, consumed);
+                        run.start += consumed * width;
+                    }
+                };
+            QElapsedTimer progressTimer;
+            progressTimer.start();
+            unsigned char previousByte = 0;
+            while (!file.atEnd())
+            {
+                if (cancel != nullptr && cancel->load()) { result.cancelled = true; break; }
+                const QByteArray bytes = file.read(1024 * 1024);
+                if (bytes.isEmpty())
+                {
+                    if (file.error() != QFileDevice::NoError) result.errorText = file.errorString();
+                    break;
+                }
+                for (qsizetype index = 0; index < bytes.size(); ++index)
+                {
+                    if ((index & 4095) == 0 && cancel != nullptr && cancel->load())
+                    {
+                        result.cancelled = true;
+                        break;
+                    }
+                    const auto byte = static_cast<unsigned char>(bytes.at(index));
+                    const qint64 offset = result.scannedBytes;
+                    if (scanAscii)
+                        feed(ascii, QChar::fromLatin1(static_cast<char>(byte)), byte >= 0x20 && byte <= 0x7e,
+                            offset, 1, QStringLiteral("ASCII"));
+                    if (scanUtf16 && offset > 0)
+                    {
+                        const QChar character(static_cast<ushort>(previousByte | (static_cast<unsigned int>(byte) << 8)));
+                        feed(utf16[(offset - 1) & 1], character, character.isPrint(), offset - 1, 2,
+                            QStringLiteral("UTF-16LE"));
+                    }
+                    previousByte = byte;
+                    ++result.scannedBytes;
+                }
+                if (result.cancelled) break;
+                if (progress && progressTimer.elapsed() >= 500)
+                {
+                    progress(result.scannedBytes, result.fileBytes);
+                    progressTimer.restart();
+                }
+            }
+            if (scanAscii) emitRun(ascii, 1, QStringLiteral("ASCII"));
+            if (scanUtf16)
+                for (Run& run : utf16) emitRun(run, 2, QStringLiteral("UTF-16LE"));
+            return result;
         }
 
         static QString dependencyRowsToClipboardText(QTableWidget* table, const bool dllOnly)
@@ -11579,11 +11601,148 @@ namespace
         {
             QWidget* page = new QWidget(this);
             QVBoxLayout* layout = new QVBoxLayout(page);
-            CodeEditorWidget* textEditorWidget = new CodeEditorWidget(page);
-            textEditorWidget->setReadOnly(true);
-            layout->addWidget(textEditorWidget, 1);
-            startStringsLoad(textEditorWidget);
-
+            QHBoxLayout* searchBar = new QHBoxLayout();
+            QLineEdit* query = new QLineEdit(page);
+            query->setClearButtonEnabled(true);
+            query->setPlaceholderText(ks::i18n::sourceText(QStringLiteral("查找字符串；留空扫描全部")));
+            QCheckBox* regex = new QCheckBox(ks::i18n::sourceText(QStringLiteral("正则表达式")), page);
+            QCheckBox* caseSensitive = new QCheckBox(ks::i18n::sourceText(QStringLiteral("区分大小写")), page);
+            searchBar->addWidget(query, 1);
+            searchBar->addWidget(regex);
+            searchBar->addWidget(caseSensitive);
+            layout->addLayout(searchBar);
+            QHBoxLayout* options = new QHBoxLayout();
+            QComboBox* encoding = new QComboBox(page);
+            encoding->addItems({QStringLiteral("ASCII"), QStringLiteral("UTF-16LE"), QStringLiteral("ASCII + UTF-16LE")});
+            QSpinBox* minimumLength = new QSpinBox(page);
+            minimumLength->setRange(4, 1024);
+            minimumLength->setValue(4);
+            options->addWidget(encoding);
+            options->addWidget(new QLabel(ks::i18n::sourceText(QStringLiteral("最小长度")), page));
+            options->addWidget(minimumLength);
+            QPushButton* scan = new QPushButton(ks::i18n::sourceText(QStringLiteral("查找 / 扫描全文件")), page);
+            QPushButton* cancel = new QPushButton(ks::i18n::sourceText(QStringLiteral("取消")), page);
+            cancel->setEnabled(false);
+            options->addWidget(scan);
+            options->addWidget(cancel);
+            options->addStretch();
+            layout->addLayout(options);
+            QLabel* status = new QLabel(page);
+            status->setTextFormat(Qt::PlainText);
+            status->setWordWrap(true);
+            layout->addWidget(status);
+            QTableWidget* table = new ks::ui::VisibleTableWidget(page);
+            table->setColumnCount(3);
+            table->setHorizontalHeaderLabels({ks::i18n::sourceText(QStringLiteral("命中偏移")),
+                ks::i18n::sourceText(QStringLiteral("编码")), ks::i18n::sourceText(QStringLiteral("字符串预览"))});
+            table->setEditTriggers(QAbstractItemView::NoEditTriggers);
+            table->setSelectionBehavior(QAbstractItemView::SelectRows);
+            table->setSelectionMode(QAbstractItemView::ExtendedSelection);
+            table->setWordWrap(false);
+            table->setAlternatingRowColors(true);
+            table->horizontalHeader()->setStretchLastSection(true);
+            table->setMinimumSize(0, 0);
+            layout->addWidget(table, 1);
+            installFileTableCopyMenu(table);
+            QLabel* hint = new QLabel(ks::i18n::sourceText(QStringLiteral(
+                "搜索覆盖整个文件，仅显示匹配项。双击可在十六进制页定位；超长字符串分段展示，列表最多显示 20000 条。")), page);
+            hint->setWordWrap(true);
+            layout->addWidget(hint);
+            const auto control = std::make_shared<StringScanControl>();
+            QObject::connect(page, &QObject::destroyed, [control]()
+                {
+                    if (control->cancel != nullptr) control->cancel->store(true);
+                });
+            connect(cancel, &QPushButton::clicked, page, [control]()
+                {
+                    if (control->cancel != nullptr) control->cancel->store(true);
+                });
+            const QString path = m_filePath;
+            const QPointer<QWidget> pageGuard(page);
+            const QPointer<QTableWidget> tableGuard(table);
+            const QPointer<QLabel> statusGuard(status);
+            const QPointer<QPushButton> cancelGuard(cancel);
+            const auto launch = [query, regex, caseSensitive, encoding, minimumLength, control, path,
+                pageGuard, tableGuard, statusGuard, cancelGuard]()
+                {
+                    if (control->cancel != nullptr) control->cancel->store(true);
+                    const quint64 generation = ++control->generation;
+                    tableGuard->setRowCount(0);
+                    if (regex->isChecked())
+                    {
+                        const QRegularExpression expression(query->text());
+                        if (!expression.isValid())
+                        {
+                            statusGuard->setText(ks::i18n::sourceText(QStringLiteral("正则表达式无效：%1"))
+                                .arg(expression.errorString()));
+                            cancelGuard->setEnabled(false);
+                            return;
+                        }
+                    }
+                    control->cancel = std::make_shared<std::atomic_bool>(false);
+                    const auto cancelRequested = control->cancel;
+                    const QString queryText = query->text();
+                    const bool useRegex = regex->isChecked(), sensitive = caseSensitive->isChecked();
+                    const int minimum = minimumLength->value(), mode = encoding->currentIndex();
+                    tableGuard->setRowCount(0);
+                    statusGuard->setText(ks::i18n::sourceText(QStringLiteral("正在扫描整个文件...")));
+                    cancelGuard->setEnabled(true);
+                    auto* task = QRunnable::create([path, queryText, useRegex, sensitive, minimum, mode,
+                        cancelRequested, generation, control, pageGuard, tableGuard, statusGuard, cancelGuard]()
+                        {
+                            const auto progress = [generation, control, pageGuard, statusGuard](qint64 bytes, qint64 total)
+                                {
+                                    if (pageGuard == nullptr) return;
+                                    QMetaObject::invokeMethod(pageGuard.data(), [generation, control, statusGuard, bytes, total]()
+                                        {
+                                            if (statusGuard != nullptr && generation == control->generation)
+                                                statusGuard->setText(ks::i18n::sourceText(QStringLiteral("正在扫描：%1 / %2 字节"))
+                                                    .arg(bytes).arg(total));
+                                        }, Qt::QueuedConnection);
+                                };
+                            const auto result = extractPrintableStringsPreview(path, queryText, useRegex, sensitive,
+                                minimum, mode != 1, mode != 0, cancelRequested, progress);
+                            if (pageGuard == nullptr) return;
+                            QMetaObject::invokeMethod(pageGuard.data(), [result, generation, control, tableGuard, statusGuard, cancelGuard]()
+                                {
+                                    if (tableGuard == nullptr || statusGuard == nullptr || cancelGuard == nullptr
+                                        || generation != control->generation) return;
+                                    cancelGuard->setEnabled(false);
+                                    tableGuard->setSortingEnabled(false);
+                                    tableGuard->setUpdatesEnabled(false);
+                                    tableGuard->setRowCount(static_cast<int>(result.matches.size()));
+                                    for (qsizetype row = 0; row < result.matches.size(); ++row)
+                                    {
+                                        const auto& match = result.matches.at(row);
+                                        auto* offset = new QTableWidgetItem(QStringLiteral("0x%1").arg(match.offset, 16, 16, QLatin1Char('0')));
+                                        offset->setData(Qt::UserRole, match.offset);
+                                        tableGuard->setItem(static_cast<int>(row), 0, offset);
+                                        tableGuard->setItem(static_cast<int>(row), 1, new QTableWidgetItem(match.encoding));
+                                        tableGuard->setItem(static_cast<int>(row), 2, new QTableWidgetItem(match.text));
+                                    }
+                                    tableGuard->resizeColumnToContents(0);
+                                    tableGuard->resizeColumnToContents(1);
+                                    tableGuard->setUpdatesEnabled(true);
+                                    tableGuard->setSortingEnabled(true);
+                                    QString summary = ks::i18n::sourceText(QStringLiteral("已扫描 %1 / %2 字节；命中 %3 条，显示 %4 条。"))
+                                        .arg(result.scannedBytes).arg(result.fileBytes).arg(result.matchedCount).arg(result.matches.size());
+                                    if (result.cancelled) summary.prepend(ks::i18n::sourceText(QStringLiteral("已取消。")));
+                                    if (!result.errorText.isEmpty()) summary += QLatin1Char('\n') + result.errorText;
+                                    statusGuard->setText(summary);
+                                }, Qt::QueuedConnection);
+                        });
+                    task->setAutoDelete(true);
+                    QThreadPool::globalInstance()->start(task);
+                };
+            connect(scan, &QPushButton::clicked, page, launch);
+            connect(query, &QLineEdit::returnPressed, page, launch);
+            connect(table, &QTableWidget::cellDoubleClicked, this, [this, table](int row, int)
+                {
+                    if (m_tabWidget == nullptr || table->item(row, 0) == nullptr) return;
+                    m_tabWidget->setProperty("ks_file_detail_hex_offset", table->item(row, 0)->data(Qt::UserRole));
+                    m_tabWidget->setCurrentIndex(13);
+                });
+            launch();
             return page;
         }
 

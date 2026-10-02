@@ -35053,6 +35053,19 @@
     "无法生成供内核使用的 NT 路径。": "Cannot generate an NT path for the kernel query.",
     "时间戳签名者": "Timestamp signer",
     "签名者": "Signer",
-    "颁发者": "Issuer"
+    "颁发者": "Issuer",
+    "正则表达式无效：%1": "Invalid regular expression: %1",
+    "UTF-16LE": "UTF-16LE",
+    "ASCII + UTF-16LE": "ASCII + UTF-16LE",
+    "查找字符串；留空扫描全部": "Find strings; leave blank to scan all",
+    "最小长度": "Minimum length",
+    "查找 / 扫描全文件": "Find / scan entire file",
+    "字符串预览": "String preview",
+    "搜索覆盖整个文件，仅显示匹配项。双击可在十六进制页定位；超长字符串分段展示，列表最多显示 20000 条。": "Search covers the entire file and shows only matches. Double-click to locate in the hex page. Long strings are split; the list shows up to 20,000 results.",
+    "正在扫描整个文件...": "Scanning the entire file...",
+    "正在扫描：%1 / %2 字节": "Scanning: %1 / %2 bytes",
+    "已扫描 %1 / %2 字节；命中 %3 条，显示 %4 条。": "Scanned %1 / %2 bytes; %3 matches, %4 displayed.",
+    "已取消。": "Cancelled.",
+    "正则表达式": "Regular expression"
   }
 }
