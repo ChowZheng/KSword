@@ -34971,6 +34971,9 @@
     "调试": "Debugging",
     "microsoft-windows-windows defender": "microsoft-windows-windows defender",
     "开始": "Begin",
-    "PerfInfo": "PerfInfo"
+    "PerfInfo": "PerfInfo",
+    "设置删除标记": "Set deletion flag",
+    "记录文件名": "Record file name",
+    "移除文件名记录": "Remove file name record"
   }
 }

@@ -72,6 +72,17 @@ presets+='\n'+fun('const std::vector<EtwPresetProviderDescriptor>& etwPresetProv
 code=code.replace('PARSER',presets+'\nPARSER')
 code=code.replace('PARSER',s[s.index('    // EtwSchemaPropertyEntry'):s.index('    // 100ns 时间戳文本格式化')]).replace('SAMPLE_BYTES',','.join(str(x) for x in payload))
 tests={
+ 'file_translation': r'''
+ if(inferEtwActionText(QStringLiteral("FileIo"),QStringLiteral("Create"),QStringLiteral("Kernel-FileIO"),64)!=QStringLiteral("创建/打开"))return 160;
+ if(inferEtwActionText(QStringLiteral("NameDelete"),QString(),QStringLiteral("Microsoft-Windows-Kernel-File"),0)!=QStringLiteral("移除文件名记录"))return 161;
+ if(inferEtwActionText(QStringLiteral("SetDelete"),QString(),QStringLiteral("Microsoft-Windows-Kernel-File"),0)!=QStringLiteral("设置删除标记"))return 162;
+ EtwDecodedPropertyEntry object;object.normalizedNameText=QStringLiteral("fileobject");object.valueText=QStringLiteral("0xffff800000001000");decoded={object};
+ auto semantic=inferEtwSemanticSummary(QStringLiteral("Kernel-FileIO"),QStringLiteral("FileIo"),QStringLiteral("Read"),decoded,67);
+ if(!semantic.targetText.isEmpty())return 163;
+ EtwDecodedPropertyEntry path;path.normalizedNameText=QStringLiteral("openpath");path.valueText=QStringLiteral("C:\\existing.txt");decoded.push_back(path);
+ record.EventHeader.EventDescriptor.Opcode=64;auto opened=fill(QStringLiteral("Kernel-FileIO"),QStringLiteral("FileIo"),QStringLiteral("Create"));
+ if(opened.filePathText!=path.valueText||opened.targetText!=path.valueText||opened.actionText!=QStringLiteral("创建/打开"))return 164;
+ ''',
  'opcode_translation': r'''
  struct OpcodeCase{const char* provider;const char* event;const char* opcode;int value;const char* expected;};
  const OpcodeCase cases[]={

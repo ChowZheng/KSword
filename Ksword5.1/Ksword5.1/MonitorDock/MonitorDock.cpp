@@ -1572,7 +1572,8 @@ namespace
             QStringLiteral("接收"),
             QStringLiteral("开始"), QStringLiteral("结束"), QStringLiteral("加载"), QStringLiteral("卸载"),
             QStringLiteral("枚举开始"), QStringLiteral("枚举结束"), QStringLiteral("枚举"),
-            QStringLiteral("断开连接"), QStringLiteral("刷新"), QStringLiteral("重置"), QStringLiteral("完成")
+            QStringLiteral("断开连接"), QStringLiteral("刷新"), QStringLiteral("重置"), QStringLiteral("完成"),
+            QStringLiteral("创建/打开"), QStringLiteral("设置删除标记"), QStringLiteral("记录文件名"), QStringLiteral("移除文件名记录")
         };
         return kActionList;
     }
@@ -3634,6 +3635,16 @@ namespace
         const bool isClassicImage = resource == QStringLiteral("映像")
             && etwProviderDisplayName(providerNameText, providerNameText).compare(
                 QStringLiteral("Microsoft-Windows-Kernel-Process"), Qt::CaseInsensitive) != 0;
+        if (resource == QStringLiteral("文件"))
+        {
+            if (event == QStringLiteral("namecreate") || opcode == QStringLiteral("filecreate")) return QStringLiteral("记录文件名");
+            if (event == QStringLiteral("namedelete") || opcode == QStringLiteral("filedelete")) return QStringLiteral("移除文件名记录");
+            if (event == QStringLiteral("setdelete") || opcode == QStringLiteral("setdelete")) return QStringLiteral("设置删除标记");
+            // NtCreateFile 的 Create 事件包含创建与打开请求，不证明磁盘上新建了文件。
+            if (event == QStringLiteral("create") || event == QStringLiteral("fileiocreate") || opcode == QStringLiteral("create"))
+                return QStringLiteral("创建/打开");
+            if (event == QStringLiteral("createnewfile")) return QStringLiteral("创建/启动");
+        }
         if (opcodeValue == EVENT_TRACE_TYPE_DC_START || opcode == QStringLiteral("dcstart")) return QStringLiteral("枚举开始");
         if (opcodeValue == EVENT_TRACE_TYPE_DC_END || opcode == QStringLiteral("dcend") || opcode == QStringLiteral("dcstop"))
             return QStringLiteral("枚举结束");
@@ -3749,9 +3760,9 @@ namespace
 
         const EtwDecodedPropertyEntry* filePathProperty = findFirstEtwProperty(
             propertyList,
-            QStringList{ QStringLiteral("filename"), QStringLiteral("filepath"), QStringLiteral("targetfilename"),
+            QStringList{ QStringLiteral("openpath"), QStringLiteral("filename"), QStringLiteral("filepath"), QStringLiteral("targetfilename"),
             QStringLiteral("newfilename"), QStringLiteral("oldfilename"), QStringLiteral("pathname"),
-            QStringLiteral("targetname"), QStringLiteral("relativefilename"), QStringLiteral("fileobject") });
+            QStringLiteral("targetname"), QStringLiteral("relativefilename") });
         const EtwDecodedPropertyEntry* oldFileProperty = findFirstEtwProperty(
             propertyList,
             QStringList{ QStringLiteral("oldfilename") });
@@ -3944,7 +3955,7 @@ namespace
             {
                 const EtwDecodedPropertyEntry* filePathProperty = findFirstEtwProperty(
                     propertyList,
-                    QStringList{ QStringLiteral("filename"), QStringLiteral("filepath"),
+                    QStringList{ QStringLiteral("openpath"), QStringLiteral("filename"), QStringLiteral("filepath"),
                     QStringLiteral("targetfilename"), QStringLiteral("newfilename"),
                     QStringLiteral("oldfilename"), QStringLiteral("pathname"),
                     QStringLiteral("targetname"), QStringLiteral("relativefilename") });
@@ -4414,7 +4425,7 @@ namespace
 
         rowOut->filePathText = etwPropertySingleLineValue(findFirstEtwProperty(
             propertyList,
-            QStringList{ QStringLiteral("filename"), QStringLiteral("filepath"), QStringLiteral("pathname"),
+            QStringList{ QStringLiteral("openpath"), QStringLiteral("filename"), QStringLiteral("filepath"), QStringLiteral("pathname"),
             QStringLiteral("targetfilename"), QStringLiteral("relativefilename"), QStringLiteral("targetname") }));
         if (rowOut->filePathText.isEmpty() && rowOut->resourceTypeText == QStringLiteral("文件"))
         {

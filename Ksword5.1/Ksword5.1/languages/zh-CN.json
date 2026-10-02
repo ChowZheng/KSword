@@ -34971,6 +34971,9 @@
     "调试": "调试",
     "microsoft-windows-windows defender": "microsoft-windows-windows defender",
     "开始": "开始",
-    "PerfInfo": "PerfInfo"
+    "PerfInfo": "PerfInfo",
+    "设置删除标记": "设置删除标记",
+    "记录文件名": "记录文件名",
+    "移除文件名记录": "移除文件名记录"
   }
 }
