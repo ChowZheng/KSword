@@ -3364,6 +3364,33 @@ namespace
             .toUpper();
     }
 
+    QString processProtectionText(const std::uint8_t protection)
+    {
+        // PS_PROTECTION 的 Type/Audit/Signer 由共享协议定义，代码保留完整原始字节。
+        const unsigned int type = protection & 0x07U;
+        if (type == KSWORD_PS_PROTECTED_TYPE_NONE)
+        {
+            return QStringLiteral("-");
+        }
+        QString signerName = QStringLiteral("Unknown");
+        if (type == KSWORD_PS_PROTECTED_TYPE_LIGHT || type == KSWORD_PS_PROTECTED_TYPE_FULL)
+        {
+            switch (protection >> 4U)
+            {
+            case KSWORD_PS_PROTECTED_SIGNER_AUTHENTICODE_VALUE: signerName = QStringLiteral("Authenticode"); break;
+            case KSWORD_PS_PROTECTED_SIGNER_CODEGEN_VALUE: signerName = QStringLiteral("CodeGen"); break;
+            case KSWORD_PS_PROTECTED_SIGNER_ANTIMALWARE_VALUE: signerName = QStringLiteral("Antimalware"); break;
+            case KSWORD_PS_PROTECTED_SIGNER_LSA_VALUE: signerName = QStringLiteral("Lsa"); break;
+            case KSWORD_PS_PROTECTED_SIGNER_WINDOWS_VALUE: signerName = QStringLiteral("Windows"); break;
+            case KSWORD_PS_PROTECTED_SIGNER_WINTCB_VALUE: signerName = QStringLiteral("WinTCB"); break;
+            case KSWORD_PS_PROTECTED_SIGNER_WINSYSTEM_VALUE: signerName = QStringLiteral("WinSystem"); break;
+            case KSWORD_PS_PROTECTED_SIGNER_APP_VALUE: signerName = QStringLiteral("App"); break;
+            default: break;
+            }
+        }
+        return QStringLiteral("%1(0x%2)").arg(signerName).arg(byteHexText(protection).mid(2));
+    }
+
     bool resolvePplSignatureLevelsForUi(
         const std::uint8_t protectionLevel,
         std::uint8_t* const signatureLevelOut,
@@ -13407,9 +13434,7 @@ QString ProcessDock::formatColumnText(const ks::process::ProcessRecord& processR
         {
             return QStringLiteral("Unavailable");
         }
-        return (processRecord.r0Protection == 0U)
-            ? QStringLiteral("None (0x00)")
-            : QStringLiteral("PPL %1").arg(byteHexText(processRecord.r0Protection));
+        return processProtectionText(processRecord.r0Protection);
     case TableColumn::HandleCount:
         return QString::number(processRecord.handleCount);
     case TableColumn::HandleTable:
