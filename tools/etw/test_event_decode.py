@@ -72,6 +72,20 @@ presets+='\n'+fun('const std::vector<EtwPresetProviderDescriptor>& etwPresetProv
 code=code.replace('PARSER',presets+'\nPARSER')
 code=code.replace('PARSER',s[s.index('    // EtwSchemaPropertyEntry'):s.index('    // 100ns 时间戳文本格式化')]).replace('SAMPLE_BYTES',','.join(str(x) for x in payload))
 tests={
+ 'classic_categories': r'''
+ struct ClassicCase{const char* guid;int opcode;const char* provider;const char* resource;};
+ const ClassicCase cases[]={
+ {"{3D6FA8D1-FE05-11D0-9DDA-00C04FD7BA7C}",36,"Kernel-CSwitch","性能分析"},
+ {"{3D6FA8D4-FE05-11D0-9DDA-00C04FD7BA7C}",10,"Kernel-DiskIO","磁盘"},
+ {"{3D6FA8D4-FE05-11D0-9DDA-00C04FD7BA7C}",34,"Kernel-Driver","驱动"},
+ {"{3D6FA8D3-FE05-11D0-9DDA-00C04FD7BA7C}",32,"Kernel-HardFault","内存"},
+ {"{3D6FA8D3-FE05-11D0-9DDA-00C04FD7BA7C}",98,"Kernel-VirtualAlloc","内存"},
+ {"{CE1DBFB4-137E-4DA6-87B0-3F59AA102CBC}",46,"Kernel-Profile","性能分析"},
+ {"{CE1DBFB4-137E-4DA6-87B0-3F59AA102CBC}",68,"Kernel-DPC","性能分析"},
+ {"{CE1DBFB4-137E-4DA6-87B0-3F59AA102CBC}",51,"Kernel-SystemCall","性能分析"},
+ {"{45D8CCCD-539F-4B72-A8B7-5C683142609A}",33,"Kernel-ALPC","进程间通信"}};
+ for(const auto& c:cases){auto guid=QString::fromLatin1(c.guid);auto name=etwProviderDisplayName(guid,guid,c.opcode);if(name!=QString::fromLatin1(c.provider)||inferEtwResourceType(name,QString())!=QString::fromUtf8(c.resource))return 140;}
+ ''',
  'status_translation': r'''
  schema={};schema.propertyList={prop(0,"Result",TDH_INTYPE_BOOLEAN)};std::uint32_t result=0;
  run(schema,&result,sizeof(result));auto semantic=inferEtwSemanticSummary(QStringLiteral("Microsoft-Windows-Security-Auditing"),QStringLiteral("Audit"),QString(),decoded);
@@ -143,6 +157,18 @@ tests={
    }
    entry.insert(QStringLiteral("events"),definitions);catalog.append(entry);
  }
+ const char* classics[]={"{2CB15D1D-5FC1-11D2-ABE1-00A0C911F518}","{3D6FA8D0-FE05-11D0-9DDA-00C04FD7BA7C}","{3D6FA8D1-FE05-11D0-9DDA-00C04FD7BA7C}","{9A280AC0-C8E0-11D1-84E2-00C04FB998A2}","{BF3A50C5-A9C9-4988-A005-2DF0B7C80F80}","{90CBDC39-4A3E-11D1-84F4-0000F80464E3}","{AE53722E-C863-11D2-8659-00C04FA321A1}","{3D6FA8D4-FE05-11D0-9DDA-00C04FD7BA7C}","{3D6FA8D3-FE05-11D0-9DDA-00C04FD7BA7C}","{CE1DBFB4-137E-4DA6-87B0-3F59AA102CBC}","{D837CA92-12B9-44A5-AD6A-3A65B3578AA8}","{45D8CCCD-539F-4B72-A8B7-5C683142609A}"};
+ ULONG classicCount=0;
+ for(const char* text:classics){auto guidText=QString::fromLatin1(text);auto wide=guidText.toStdWString();GUID guid{};CLSIDFromString(wide.c_str(),&guid);
+   QJsonObject entry;entry.insert(QStringLiteral("classic_guid"),guidText);QJsonArray definitions;
+   for(int version=0;version<=5;++version)for(int opcode=0;opcode<=255;++opcode){EVENT_RECORD r{};r.EventHeader.Flags=EVENT_HEADER_FLAG_CLASSIC_HEADER|EVENT_HEADER_FLAG_64_BIT_HEADER;r.EventHeader.ProviderId=guid;r.EventHeader.EventDescriptor.Version=version;r.EventHeader.EventDescriptor.Opcode=opcode;
+     EtwSchemaEntry info;if(!tryBuildEtwSchemaByTdh(&r,&info))continue;auto name=etwProviderDisplayName(guidText,guidText,opcode);auto event=info.eventNameText.isEmpty()?info.taskNameText:info.eventNameText;
+     QJsonObject definition;definition.insert(QStringLiteral("version"),version);definition.insert(QStringLiteral("provider"),name);definition.insert(QStringLiteral("event"),event);definition.insert(QStringLiteral("opcode"),info.opcodeNameText);definition.insert(QStringLiteral("opcode_value"),opcode);definition.insert(QStringLiteral("resource"),inferEtwResourceType(name,event));definition.insert(QStringLiteral("action"),inferEtwActionText(event,info.opcodeNameText,name,opcode));
+     QJsonArray fields;for(const auto& p:info.propertyList){QJsonObject field;field.insert(QStringLiteral("name"),p.propertyNameText);field.insert(QStringLiteral("meaning"),p.meaningText);fields.append(field);}definition.insert(QStringLiteral("fields"),fields);definitions.append(definition);++classicCount;
+   }
+   entry.insert(QStringLiteral("events"),definitions);catalog.append(entry);
+ }
+ printf("CLASSIC CATALOG: event definitions=%lu\n",classicCount);
  QFile output(QString::fromLocal8Bit(qgetenv("KSWORD_ETW_CATALOG_OUTPUT")));if(!output.open(QIODevice::WriteOnly))return 103;
  output.write(QJsonDocument(catalog).toJson(QJsonDocument::Indented));printf("CATALOG: preset manifests=%lu events=%lu\n",availableProviders,eventCount);
  ''',

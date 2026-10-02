@@ -108,8 +108,34 @@
 
 namespace
 {
-    QString etwProviderDisplayName(const QString& providerGuid, const QString& fallback)
+    QString etwProviderDisplayName(const QString& providerGuid, const QString& fallback, const int opcode = -1)
     {
+        // 多个经典类别共享事件类 GUID，须结合 opcode 区分调度、磁盘及性能子类。
+        if (providerGuid.compare(QStringLiteral("{3D6FA8D1-FE05-11D0-9DDA-00C04FD7BA7C}"), Qt::CaseInsensitive) == 0)
+        {
+            if (opcode == 36) return QStringLiteral("Kernel-CSwitch");
+            if (opcode == 50) return QStringLiteral("Kernel-Dispatcher");
+        }
+        if (providerGuid.compare(QStringLiteral("{3D6FA8D4-FE05-11D0-9DDA-00C04FD7BA7C}"), Qt::CaseInsensitive) == 0)
+        {
+            if (opcode == 12 || opcode == 13 || opcode == 15 || opcode == 16) return QStringLiteral("Kernel-DiskIOInit");
+            if (opcode == 34 || opcode == 35 || opcode == 37 || opcode == 52 || opcode == 53) return QStringLiteral("Kernel-Driver");
+            return QStringLiteral("Kernel-DiskIO");
+        }
+        if (providerGuid.compare(QStringLiteral("{3D6FA8D3-FE05-11D0-9DDA-00C04FD7BA7C}"), Qt::CaseInsensitive) == 0)
+        {
+            if (opcode == 32) return QStringLiteral("Kernel-HardFault");
+            if (opcode == 98 || opcode == 99 || opcode == 128 || opcode == 129) return QStringLiteral("Kernel-VirtualAlloc");
+            return QStringLiteral("Kernel-PageFault");
+        }
+        if (providerGuid.compare(QStringLiteral("{CE1DBFB4-137E-4DA6-87B0-3F59AA102CBC}"), Qt::CaseInsensitive) == 0)
+        {
+            if (opcode == 46) return QStringLiteral("Kernel-Profile");
+            if (opcode == 51 || opcode == 52) return QStringLiteral("Kernel-SystemCall");
+            if (opcode == 66 || opcode == 68 || opcode == 69) return QStringLiteral("Kernel-DPC");
+            if (opcode == 67) return QStringLiteral("Kernel-Interrupt");
+            return QStringLiteral("PerfInfo");
+        }
         static const std::pair<const char*, const char*> names[]{
             { "{2CB15D1D-5FC1-11D2-ABE1-00A0C911F518}", "Microsoft-Windows-Kernel-Image" },
             { "{3D6FA8D0-FE05-11D0-9DDA-00C04FD7BA7C}", "Kernel-Process" },
@@ -117,7 +143,9 @@ namespace
             { "{9A280AC0-C8E0-11D1-84E2-00C04FB998A2}", "Kernel-TCPIP" },
             { "{BF3A50C5-A9C9-4988-A005-2DF0B7C80F80}", "Kernel-UDPIP" },
             { "{90CBDC39-4A3E-11D1-84F4-0000F80464E3}", "Kernel-FileIO" },
-            { "{AE53722E-C863-11D2-8659-00C04FA321A1}", "Kernel-Registry" }
+            { "{AE53722E-C863-11D2-8659-00C04FA321A1}", "Kernel-Registry" },
+            { "{D837CA92-12B9-44A5-AD6A-3A65B3578AA8}", "Kernel-SplitIO" },
+            { "{45D8CCCD-539F-4B72-A8B7-5C683142609A}", "Kernel-ALPC" }
         };
         for (const auto& entry : names)
         {
@@ -1613,7 +1641,8 @@ namespace
             || lower.contains(QStringLiteral("kernel-dpc"))
             || lower.contains(QStringLiteral("kernel-interrupt"))
             || lower.contains(QStringLiteral("kernel-systemcall"))
-            || lower.contains(QStringLiteral("kernel-profile")))
+            || lower.contains(QStringLiteral("kernel-profile"))
+            || lower == QStringLiteral("perfinfo"))
         {
             return QStringLiteral("性能分析");
         }
@@ -1640,6 +1669,8 @@ namespace
     QString etwTimelineTypeFromCapturedRow(const MonitorDock::EtwCapturedEventRow& rowData)
     {
         const QString providerNameText = rowData.providerName.trimmed();
+        if (providerNameText == QStringLiteral("Kernel-CSwitch") || providerNameText == QStringLiteral("Kernel-Dispatcher"))
+            return QStringLiteral("线程");
         if (providerNameText.contains(QStringLiteral("Kernel-Process"), Qt::CaseInsensitive))
         {
             return QStringLiteral("进程");
@@ -2691,6 +2722,7 @@ namespace
         QString cacheKeyText;                               // cacheKeyText：事件类型缓存键。
         QString eventNameText;                              // eventNameText：事件名。
         QString taskNameText;                               // taskNameText：任务名。
+        QString providerNameText;                           // TDH 声明的 Provider 名，供手动 GUID 订阅兜底。
         QString opcodeNameText;                             // opcodeNameText：操作码名。
         std::vector<EtwSchemaPropertyEntry> propertyList;   // 包含顶层属性及结构体成员。
         ULONG topLevelPropertyCount = 0;
@@ -3013,6 +3045,7 @@ namespace
         localSchema.cacheKeyText = QString::fromStdString(etwSchemaKeyFromRecord(eventRecord));
         localSchema.eventNameText = etwTextAtOffset(rawInfoBuffer, eventInfo->EventNameOffset);
         localSchema.taskNameText = etwTextAtOffset(rawInfoBuffer, eventInfo->TaskNameOffset);
+        localSchema.providerNameText = etwTextAtOffset(rawInfoBuffer, eventInfo->ProviderNameOffset);
         localSchema.opcodeNameText = etwTextAtOffset(rawInfoBuffer, eventInfo->OpcodeNameOffset);
 
         localSchema.topLevelPropertyCount = eventInfo->TopLevelPropertyCount;
@@ -11955,7 +11988,7 @@ void MonitorDock::enqueueEtwEventFromRecord(const struct _EVENT_RECORD* eventRec
     }
 
     const QString providerGuidText = guidToText(eventRecord->EventHeader.ProviderId);
-    QString providerNameText = etwProviderDisplayName(providerGuidText, providerGuidText);
+    QString providerNameText = etwProviderDisplayName(providerGuidText, providerGuidText, eventRecord->EventHeader.EventDescriptor.Opcode);
     const auto providerNameIt = m_etwCaptureProviderNames.constFind(providerGuidText);
     if (providerNameIt != m_etwCaptureProviderNames.cend())
     {
@@ -11987,6 +12020,12 @@ void MonitorDock::enqueueEtwEventFromRecord(const struct _EVENT_RECORD* eventRec
     const bool schemaReady = tryGetEtwSchemaCached(eventRecord, &schemaEntry);
     if (schemaReady)
     {
+        if (providerNameText == providerGuidText && !schemaEntry.providerNameText.trimmed().isEmpty())
+        {
+            providerNameText = schemaEntry.providerNameText.trimmed();
+            rowData.providerName = providerNameText;
+            rowData.providerCategory = etwInferProviderCategory(providerNameText);
+        }
         rowData.taskName = schemaEntry.taskNameText.trimmed();
         rowData.opcodeName = schemaEntry.opcodeNameText.trimmed();
         if (!schemaEntry.eventNameText.trimmed().isEmpty())

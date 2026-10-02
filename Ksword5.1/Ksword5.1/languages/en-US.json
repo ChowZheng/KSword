@@ -34970,6 +34970,7 @@
     "进程间通信": "Interprocess communication",
     "调试": "Debugging",
     "microsoft-windows-windows defender": "microsoft-windows-windows defender",
-    "开始": "Begin"
+    "开始": "Begin",
+    "PerfInfo": "PerfInfo"
   }
 }
