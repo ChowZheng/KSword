@@ -11495,7 +11495,16 @@ namespace
             statusLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
             layout->addWidget(statusLabel, 0);
 
-            QTableWidget* table = new ks::ui::VisibleTableWidget(page);
+            QSplitter* splitter = new QSplitter(Qt::Vertical, page);
+            splitter->setChildrenCollapsible(false);
+            splitter->setMinimumSize(0, 0);
+            splitter->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Ignored);
+            QWidget* tablePane = new QWidget(splitter);
+            QVBoxLayout* tableLayout = new QVBoxLayout(tablePane);
+            tableLayout->setContentsMargins(0, 0, 0, 0);
+            QTableWidget* table = new ks::ui::VisibleTableWidget(tablePane);
+            table->setMinimumHeight(0);
+            table->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Ignored);
             table->setColumnCount(6);
             table->setHorizontalHeaderLabels(QStringList{
                 QStringLiteral("DLL 名称"),
@@ -11515,11 +11524,23 @@ namespace
             {
                 table->horizontalHeader()->setStretchLastSection(true);
             }
-            layout->addWidget(table, 3);
+            tableLayout->addWidget(table);
 
-            CodeEditorWidget* detailEditor = new CodeEditorWidget(page);
+            // 两个直接子面板各占一块布局空间，也兼容统一详情布局的接管。
+            QWidget* detailPane = new QWidget(splitter);
+            QVBoxLayout* detailLayout = new QVBoxLayout(detailPane);
+            detailLayout->setContentsMargins(0, 0, 0, 0);
+            CodeEditorWidget* detailEditor = new CodeEditorWidget(detailPane);
             detailEditor->setReadOnly(true);
-            layout->addWidget(detailEditor, 1);
+            detailEditor->setMinimumHeight(0);
+            detailEditor->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Ignored);
+            detailLayout->addWidget(detailEditor);
+            splitter->addWidget(tablePane);
+            splitter->addWidget(detailPane);
+            splitter->setStretchFactor(0, 2);
+            splitter->setStretchFactor(1, 1);
+            splitter->setSizes({400, 200});
+            layout->addWidget(splitter, 1);
 
             connect(table, &QTableWidget::customContextMenuRequested, this, [table](const QPoint& position)
                 {
