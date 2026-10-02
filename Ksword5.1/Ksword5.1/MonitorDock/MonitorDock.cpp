@@ -1572,7 +1572,7 @@ namespace
             QStringLiteral("接收"),
             QStringLiteral("开始"), QStringLiteral("结束"), QStringLiteral("加载"), QStringLiteral("卸载"),
             QStringLiteral("枚举开始"), QStringLiteral("枚举结束"), QStringLiteral("枚举"),
-            QStringLiteral("断开连接"), QStringLiteral("刷新"), QStringLiteral("重置")
+            QStringLiteral("断开连接"), QStringLiteral("刷新"), QStringLiteral("重置"), QStringLiteral("完成")
         };
         return kActionList;
     }
@@ -3651,12 +3651,12 @@ namespace
             {"begin", QStringLiteral("开始")}, {"end", QStringLiteral("结束")}, {"stop", QStringLiteral("结束")},
             {"terminate", QStringLiteral("结束")}, {"open", QStringLiteral("打开")}, {"close", QStringLiteral("关闭")},
             {"cleanup", QStringLiteral("关闭")}, {"read", QStringLiteral("读取/查询")}, {"query", QStringLiteral("读取/查询")},
-            {"queryinformation", QStringLiteral("读取/查询")}, {"querykey", QStringLiteral("读取/查询")},
+            {"queryinformation", QStringLiteral("读取/查询")}, {"queryinfo", QStringLiteral("读取/查询")}, {"querykey", QStringLiteral("读取/查询")},
             {"queryvalue", QStringLiteral("读取/查询")}, {"queryvaluekey", QStringLiteral("读取/查询")},
             {"querymultiplevalue", QStringLiteral("读取/查询")}, {"querymultiplevaluekey", QStringLiteral("读取/查询")},
             {"querysecurity", QStringLiteral("读取/查询")}, {"querysecuritykey", QStringLiteral("读取/查询")}, {"queryea", QStringLiteral("读取/查询")},
             {"write", QStringLiteral("写入/设置")}, {"setvalue", QStringLiteral("写入/设置")}, {"setvaluekey", QStringLiteral("写入/设置")},
-            {"setinformation", QStringLiteral("写入/设置")}, {"setinformationkey", QStringLiteral("写入/设置")},
+            {"setinformation", QStringLiteral("写入/设置")}, {"setinfo", QStringLiteral("写入/设置")}, {"setinformationkey", QStringLiteral("写入/设置")},
             {"setsecurity", QStringLiteral("写入/设置")}, {"setsecuritykey", QStringLiteral("写入/设置")}, {"setea", QStringLiteral("写入/设置")},
             {"delete", QStringLiteral("删除")}, {"remove", QStringLiteral("删除")}, {"deletekey", QStringLiteral("删除")},
             {"deletevalue", QStringLiteral("删除")}, {"deletevaluekey", QStringLiteral("删除")}, {"deletepath", QStringLiteral("删除")},
@@ -3667,10 +3667,13 @@ namespace
             {"createkey", QStringLiteral("创建/启动")}, {"openkey", QStringLiteral("打开")}, {"closekey", QStringLiteral("关闭")},
             {"enum", QStringLiteral("枚举")}, {"direnum", QStringLiteral("枚举")}, {"enumeratekey", QStringLiteral("枚举")},
             {"enumeratevaluekey", QStringLiteral("枚举")}, {"rundown", QStringLiteral("枚举")},
-            {"flush", QStringLiteral("刷新")}, {"flushkey", QStringLiteral("刷新")}, {"reset", QStringLiteral("重置")}
+            {"flush", QStringLiteral("刷新")}, {"flushkey", QStringLiteral("刷新")}, {"flushbuffers", QStringLiteral("刷新")},
+            {"operationend", QStringLiteral("完成")}, {"reset", QStringLiteral("重置")}
         };
         auto translate = [](const QString& name) -> QString {
-            const auto found = actions.find(name.toStdString());
+            QString operation = name;
+            if (operation.endsWith(QStringLiteral("ipv4")) || operation.endsWith(QStringLiteral("ipv6"))) operation.chop(4);
+            const auto found = actions.find(operation.toStdString());
             return found == actions.end() ? QString() : found->second;
         };
         // TDH 的操作码名称可能已本地化；数值路径优先，英文明确操作名作为兜底。
@@ -3689,6 +3692,8 @@ namespace
             if (!action.isEmpty()) return action;
         }
         if (event == QStringLiteral("disconnectipv4") || event == QStringLiteral("disconnectipv6")) return QStringLiteral("断开连接");
+        // 经典事件经常只有 Task="Image/Thread/TcpIp"，具体事件名在自定义操作码中。
+        if (opcodeValue >= 10 && !opcodeNameText.trimmed().isEmpty()) return opcodeNameText.trimmed();
         if (!eventNameText.trimmed().isEmpty()) return eventNameText.trimmed();
         if (!opcodeNameText.trimmed().isEmpty()) return opcodeNameText.trimmed();
         return QStringLiteral("未知动作");

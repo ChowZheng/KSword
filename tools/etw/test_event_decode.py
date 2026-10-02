@@ -72,6 +72,19 @@ presets+='\n'+fun('const std::vector<EtwPresetProviderDescriptor>& etwPresetProv
 code=code.replace('PARSER',presets+'\nPARSER')
 code=code.replace('PARSER',s[s.index('    // EtwSchemaPropertyEntry'):s.index('    // 100ns 时间戳文本格式化')]).replace('SAMPLE_BYTES',','.join(str(x) for x in payload))
 tests={
+ 'opcode_translation': r'''
+ struct OpcodeCase{const char* provider;const char* event;const char* opcode;int value;const char* expected;};
+ const OpcodeCase cases[]={
+ {"Kernel-TCPIP","TcpIp","SendIPV4",10,"发送"},{"Kernel-UDPIP","UdpIp","RecvIPV6",27,"接收"},
+ {"Kernel-TCPIP","TcpIp","DisconnectIPV4",13,"断开连接"},
+ {"Kernel-FileIO","FileIo","QueryInfo",74,"读取/查询"},{"Kernel-FileIO","FileIo","SetInfo",69,"写入/设置"},
+ {"Kernel-FileIO","FileIo","OperationEnd",76,"完成"},
+ {"Microsoft-Windows-Kernel-Image","Image","LoaderError",164,"LoaderError"},
+ {"Microsoft-Windows-Kernel-Thread","Thread","Thread Migration",61,"Thread Migration"},
+ {"Kernel-PageFault","PageFault","CopyOnWrite",12,"CopyOnWrite"},
+ {"Microsoft-Windows-TCPIP","TcpConnectTcbTimeout","信息",0,"TcpConnectTcbTimeout"}};
+ for(const auto& c:cases)if(inferEtwActionText(QString::fromUtf8(c.event),QString::fromUtf8(c.opcode),QString::fromUtf8(c.provider),c.value)!=QString::fromUtf8(c.expected))return 150;
+ ''',
  'classic_categories': r'''
  struct ClassicCase{const char* guid;int opcode;const char* provider;const char* resource;};
  const ClassicCase cases[]={
