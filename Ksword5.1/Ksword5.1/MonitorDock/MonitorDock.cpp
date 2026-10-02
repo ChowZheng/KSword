@@ -3538,6 +3538,11 @@ namespace
                     consumeBytes = 2;
                     if (etwReadScalar(fieldDataPointer, availableBytes, &value))
                     {
+                        // TDH 的端口输出类型使用网络字节序，原始 UINT16 不能直接显示。
+                        if (propertySchema.outType == TDH_OUTTYPE_PORT)
+                        {
+                            value = static_cast<std::uint16_t>((value >> 8) | (value << 8));
+                        }
                         decodedEntry.numericAvailable = true;
                         decodedEntry.numericValue = value;
                         decodedEntry.valueText = QString::number(value);

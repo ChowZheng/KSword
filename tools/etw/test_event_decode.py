@@ -65,6 +65,14 @@ filters=s[s.index('    const std::vector<EtwFilterFieldDescriptor>& etwFilterFie
 code=code.replace('DEPENDENCIES',fun('QString guidToText(')+identity+aliases+descriptor+filters)
 code=code.replace('PARSER',s[s.index('    // EtwSchemaPropertyEntry'):s.index('    // 100ns 时间戳文本格式化')]).replace('SAMPLE_BYTES',','.join(str(x) for x in payload))
 tests={
+ 'ports': r'''
+ unsigned char ports[]={0x01,0xbb,0x00,0x50};schema.propertyList={prop(0,"sport",TDH_INTYPE_UINT16),prop(1,"dport",TDH_INTYPE_UINT16)};
+ for(auto& p:schema.propertyList)p.outType=TDH_OUTTYPE_PORT;
+ run(schema,ports,sizeof(ports));auto network=fill(QStringLiteral("Kernel-TCPIP"),QStringLiteral("Send"),QString());
+ if(!network.sourcePortValid||network.sourcePort!=443||!network.destinationPortValid||network.destinationPort!=80||parsed!=4)return 40;
+ TRACE_EVENT_INFO info{};ULONG bytes=64;USHORT consumed=0;wchar_t formatted[32]{};
+ auto status=TdhFormatProperty(&info,nullptr,8,TDH_INTYPE_UINT16,TDH_OUTTYPE_PORT,2,2,ports,&bytes,formatted,&consumed);if(status!=ERROR_SUCCESS||QString::fromWCharArray(formatted)!=QStringLiteral("443")||consumed!=2){printf("port TDH status=%lu consumed=%u value=%s\n",status,consumed,qPrintable(QString::fromWCharArray(formatted)));return 41;}
+ ''',
  'thread_identity': r'''
  std::uint32_t thread[]={24680,22222};schema.propertyList={prop(0,"ProcessId",TDH_INTYPE_UINT32),prop(1,"TThreadId",TDH_INTYPE_UINT32)};
  record.EventHeader.ProviderId={0x3d6fa8d1,0xfe05,0x11d0,{0x9d,0xda,0,0xc0,0x4f,0xd7,0xba,0x7c}};
