@@ -2055,6 +2055,10 @@ namespace apimon
                 L"root_stop_flag_path=" + (configValue.rootStopFlagPath.empty() ? configValue.stopFlagPath : configValue.rootStopFlagPath) + L"\r\n"
                 L"session_id=" + configValue.sessionId + L"_" + std::to_wstring(childPidValue) + L"_" + std::to_wstring(::GetTickCount64()) + L"\r\n"
                 L"agent_dll_path=" + configValue.agentDllPath + L"\r\n"
+                L"injection_broker_pipe=" + configValue.injectionEndpoint.pipeName + L"\r\n"
+                L"injection_broker_token=" + configValue.injectionEndpoint.token + L"\r\n"
+                L"injection_broker_pid=" + std::to_wstring(configValue.injectionEndpoint.hostPid) + L"\r\n"
+                L"injection_broker_creation=" + std::to_wstring(configValue.injectionEndpoint.hostCreation) + L"\r\n"
                 L"enable_file=" + std::to_wstring(configValue.enableFile ? 1 : 0) + L"\r\n"
                 L"enable_registry=" + std::to_wstring(configValue.enableRegistry ? 1 : 0) + L"\r\n"
                 L"enable_network=" + std::to_wstring(configValue.enableNetwork ? 1 : 0) + L"\r\n"
@@ -2121,14 +2125,16 @@ namespace apimon
 
         // InjectAgentIntoChildProcess 作用：
         // - 输入：childPidValue 为子进程 PID，dllPath 为匹配子进程位数的 Agent 路径；
-        // - 处理：按子进程位数选择原生注入或对应注入助手；
+        // - 处理：请求主程序会话注入服务，保持目标位数与进程身份校验；
         // - 返回：注入成功返回 true，失败返回 false 并填充 errorTextOut。
         bool InjectAgentIntoChildProcess(
             const DWORD childPidValue,
-            const std::wstring& dllPath,
+            const HANDLE childProcess,
+            const MonitorConfig& config,
             std::wstring* const errorTextOut)
         {
-            return ks::winapi_monitor::injectAgent(childPidValue, dllPath, errorTextOut);
+            return ks::winapi_monitor::requestChildInjection(config.injectionEndpoint, childPidValue,
+                ks::winapi_monitor::processCreationIdentity(childProcess), errorTextOut);
         }
 
         // AutoInjectChildIfRequested 作用：
@@ -2161,7 +2167,7 @@ namespace apimon
             if (successValue) successValue = WriteChildMonitorConfig(processInfoPointer->dwProcessId, childConfig, &errorText);
             if (successValue)
             {
-                successValue = InjectAgentIntoChildProcess(processInfoPointer->dwProcessId, childConfig.agentDllPath, &errorText);
+                successValue = InjectAgentIntoChildProcess(processInfoPointer->dwProcessId, processInfoPointer->hProcess, childConfig, &errorText);
             }
 
             // The UI takes over the lease after receiving this notification.

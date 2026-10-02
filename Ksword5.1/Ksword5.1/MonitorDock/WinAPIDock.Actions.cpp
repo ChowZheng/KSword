@@ -43,6 +43,7 @@
 #include <QTableWidget>
 #include <QTableWidgetItem>
 #include <QTextStream>
+#include <QStringConverter>
 #include <QTimer>
 #include <QUuid>
 #include <QVBoxLayout>
@@ -1115,11 +1116,18 @@ bool WinAPIDock::writeSessionConfigFile(QString* errorTextOut) const
     }
 
     QTextStream outputStream(&configFile);
+    outputStream.setEncoding(QStringConverter::Utf16LE);
+    outputStream.setGenerateByteOrderMark(true);
     outputStream << "[monitor]\n";
     outputStream << "pipe_name=" << m_currentPipeName << '\n';
     outputStream << "root_stop_flag_path=" << m_currentStopFlagPath << '\n';
     outputStream << "stop_flag_path=" << m_currentStopFlagPath << '\n';
     outputStream << "session_id=" << m_currentSessionId << '\n';
+    const auto endpoint = m_injectionBroker ? m_injectionBroker->endpoint() : ks::winapi_monitor::InjectionEndpoint{};
+    outputStream << "injection_broker_pipe=" << QString::fromStdWString(endpoint.pipeName) << '\n';
+    outputStream << "injection_broker_token=" << QString::fromStdWString(endpoint.token) << '\n';
+    outputStream << "injection_broker_pid=" << endpoint.hostPid << '\n';
+    outputStream << "injection_broker_creation=" << endpoint.hostCreation << '\n';
     outputStream << "agent_dll_path=" << (m_agentDllPathEdit != nullptr ? QDir::cleanPath(m_agentDllPathEdit->text().trimmed()) : QString()) << '\n';
     outputStream << "enable_file=" << ((m_hookFileCheck != nullptr && m_hookFileCheck->isChecked()) ? 1 : 0) << '\n';
     outputStream << "enable_registry=" << ((m_hookRegistryCheck != nullptr && m_hookRegistryCheck->isChecked()) ? 1 : 0) << '\n';
@@ -1273,8 +1281,24 @@ void WinAPIDock::startMonitoring()
         QMessageBox::warning(this, QStringLiteral("WinAPI 监控"), errorText);
         return;
     }
+    m_injectionBroker.reset();
+    if (m_autoInjectChildCheck != nullptr && m_autoInjectChildCheck->isChecked())
+    {
+        auto broker = std::make_unique<ks::winapi_monitor::InjectionBroker>();
+        std::wstring brokerError;
+        if (!broker->start(pidValue, selectedDllPath, m_currentSessionId.toStdWString(),
+                m_currentStopFlagPath.toStdWString(), &brokerError))
+        {
+            m_sessionLease.reset();
+            QMessageBox::warning(this, QStringLiteral("WinAPI 监控"),
+                QStringLiteral("DLL 注入失败：%1").arg(QString::fromStdWString(brokerError)));
+            return;
+        }
+        m_injectionBroker = std::move(broker);
+    }
     if (!writeSessionConfigFile(&errorText))
     {
+        m_injectionBroker.reset();
         m_sessionLease.reset();
         QMessageBox::warning(this, QStringLiteral("WinAPI 监控"), errorText);
         return;
@@ -1374,6 +1398,7 @@ void WinAPIDock::stopMonitoringInternal(const bool waitForThread)
 {
     if (!m_pipeRunning.load() && (m_pipeThread == nullptr || !m_pipeThread->joinable()))
     {
+        m_injectionBroker.reset();
         return;
     }
 
@@ -1390,6 +1415,8 @@ void WinAPIDock::stopMonitoringInternal(const bool waitForThread)
             stopFile.close();
         }
     }
+
+    m_injectionBroker.reset();
 
     if (m_pipeThread != nullptr && m_pipeThread->joinable())
     {

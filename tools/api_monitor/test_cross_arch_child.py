@@ -7,6 +7,7 @@ import tempfile
 import uuid
 from compiler_environment import target_environment
 from live_fixture_support import LiveFixture, ROOT, ARCHITECTURE, kernel, INVALID, session_identity
+from injection_host_support import InjectionHost
 
 child_source=r'''
 #include <Windows.h>
@@ -37,7 +38,7 @@ int wmain(int argc,wchar_t** argv){
 }
 '''
 other="x64" if ARCHITECTURE=="x86" else "x86"
-with tempfile.TemporaryDirectory(prefix="ksword_child_arch_") as temporary:
+with InjectionHost() as host, tempfile.TemporaryDirectory(prefix="ksword_child_arch_") as temporary:
     folder=Path(temporary);cpp=folder/"child.cpp";cpp.write_text(child_source,encoding="utf-8")
     environment=target_environment(other);compiler=shutil.which("cl",path=environment["PATH"])
     child=folder/"child.exe"
@@ -48,7 +49,7 @@ with tempfile.TemporaryDirectory(prefix="ksword_child_arch_") as temporary:
     source=source.replace('#include "ApiMonitorInjection.h"','#include "'+(ROOT/"shared/ApiMonitorInjection.h").as_posix()+'"')
     observer=None;config_path=stop_path=None
     try:
-        with LiveFixture(source,{"enable_process":1,"auto_inject_child":1}) as parent:
+        with LiveFixture(source,{"enable_process":1,"auto_inject_child":1},injector=host.inject) as parent:
             parent.wait_for(lambda f:any(e.api=="HooksInstalled" for e in f.events))
             parent.command("C")
             parent.wait_for(lambda f:any(e.api in ("AutoInjectChild","AutoInjectChildFailed") for e in f.events))
@@ -62,6 +63,9 @@ with tempfile.TemporaryDirectory(prefix="ksword_child_arch_") as temporary:
             assert Path(values["agent_dll_path"]).name==f"APIMonitor_{other}.dll"
             assert Path(values["root_stop_flag_path"])==parent.stop
             assert values["session_id"].startswith(parent.session_text+"_")
+            parent_config=configparser.ConfigParser(interpolation=None);parent_config.read(parent.config,encoding="utf-16")
+            for key in ("injection_broker_pipe","injection_broker_token","injection_broker_pid","injection_broker_creation"):
+                assert values[key]==parent_config["monitor"][key]
             observer=object.__new__(LiveFixture)
             observer.pid=pid;observer.session=session_identity(values["session_id"])
             observer.process=parent.process;observer.handle=None;observer.bytes=bytearray()

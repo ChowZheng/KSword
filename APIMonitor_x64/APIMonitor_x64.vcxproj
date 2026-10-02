@@ -218,12 +218,9 @@
   <ItemGroup><ClInclude Include="hook\WinsockExtensionHandlers.inc" /></ItemGroup>
   <ItemGroup><ClInclude Include="hook\ExportCatalog.h" /></ItemGroup>
   <ItemGroup>
-    <ProjectReference Include="..\APIMonitor_x86\Injector.vcxproj">
-      <Project>{FA92D149-18C9-4BB0-A57E-6D63713E3AE2}</Project><SetPlatform>Platform=x64</SetPlatform>
-      <LinkLibraryDependencies>false</LinkLibraryDependencies><ReferenceOutputAssembly>false</ReferenceOutputAssembly>
-    </ProjectReference>
     <ClInclude Include="..\shared\ApiMonitorPlatform.h" />
     <ClInclude Include="..\shared\ApiMonitorInjection.h" />
   </ItemGroup>
   <ItemGroup><ClInclude Include="..\shared\ApiMonitorRemoteExports.h" /></ItemGroup>
+  <ItemGroup><ClInclude Include="..\shared\ApiMonitorInjectionProtocol.h" /></ItemGroup>
 </Project>

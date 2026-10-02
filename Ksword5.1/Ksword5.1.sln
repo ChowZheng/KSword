@@ -44,8 +44,6 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "KswordCheatEngineLauncher",
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "APIMonitor_x86", "..\APIMonitor_x86\APIMonitor_x86.vcxproj", "{250A09F6-9F1F-456A-A407-901BA91E3B3D}"
 EndProject
-Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "APIMonitorInjector", "..\APIMonitor_x86\Injector.vcxproj", "{FA92D149-18C9-4BB0-A57E-6D63713E3AE2}"
-EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|x64 = Debug|x64
@@ -56,10 +54,6 @@ Global
 		{250A09F6-9F1F-456A-A407-901BA91E3B3D}.Debug|x64.Build.0 = Debug|Win32
 		{250A09F6-9F1F-456A-A407-901BA91E3B3D}.Release|x64.ActiveCfg = Release|Win32
 		{250A09F6-9F1F-456A-A407-901BA91E3B3D}.Release|x64.Build.0 = Release|Win32
-		{FA92D149-18C9-4BB0-A57E-6D63713E3AE2}.Debug|x64.ActiveCfg = Debug|x64
-		{FA92D149-18C9-4BB0-A57E-6D63713E3AE2}.Debug|x64.Build.0 = Debug|x64
-		{FA92D149-18C9-4BB0-A57E-6D63713E3AE2}.Release|x64.ActiveCfg = Release|x64
-		{FA92D149-18C9-4BB0-A57E-6D63713E3AE2}.Release|x64.Build.0 = Release|x64
 		{CFEC311C-A4F4-46C6-8A41-7333EE5FB817}.Debug|x64.ActiveCfg = Debug|x64
 		{CFEC311C-A4F4-46C6-8A41-7333EE5FB817}.Debug|x64.Build.0 = Debug|x64
 		{CFEC311C-A4F4-46C6-8A41-7333EE5FB817}.Release|x64.ActiveCfg = Release|x64

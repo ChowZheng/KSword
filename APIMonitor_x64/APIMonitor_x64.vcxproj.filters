@@ -124,4 +124,5 @@
   <ItemGroup><ClInclude Include="hook\ExportCatalog.h" /></ItemGroup>
   <ItemGroup><ClInclude Include="..\shared\ApiMonitorPlatform.h" /><ClInclude Include="..\shared\ApiMonitorInjection.h" /></ItemGroup>
   <ItemGroup><ClInclude Include="..\shared\ApiMonitorRemoteExports.h" /></ItemGroup>
+  <ItemGroup><ClInclude Include="..\shared\ApiMonitorInjectionProtocol.h" /></ItemGroup>
 </Project>

@@ -51,17 +51,17 @@ int wmain(int argc,wchar_t** argv) {
 with tempfile.TemporaryDirectory(prefix="ksword 跨位数注入 ") as temporary:
     folder=Path(temporary);release=ROOT/"Ksword5.1/x64/Release"
     for arch in ("x86","x64"):
-        for name in (f"APIMonitor_{arch}.dll",f"APIMonitorInject_{arch}.exe"):
-            if ARCHITECTURE=="x64" and name.endswith(".exe"):continue
+        for name in (f"APIMonitor_{arch}.dll",):
             shutil.copy2(release/name,folder/name)
     # Copy x64 CRT alongside the copied Agent if the machine lacks the redistributable.
     for name in ("MSVCP140.dll","VCRUNTIME140.dll","VCRUNTIME140_1.dll"):
         if (release/name).exists():shutil.copy2(release/name,folder/name)
     cpp=folder/"controller.cpp";cpp.write_text(controller,encoding="utf-8")
     executable=folder/"controller.exe"
-    subprocess.run(["cl","/nologo","/EHsc","/std:c++17","/utf-8","/MT","/I"+str(ROOT/"shared"),str(cpp),
-                    "/Fe:"+str(executable),"/Fo:"+str(folder/"controller.obj"),"/link","Shell32.lib"],check=True)
     environments={arch:target_environment(arch) for arch in ("x86","x64")}
+    compiler=shutil.which("cl",path=environments["x64"]["PATH"])
+    subprocess.run([compiler,"/nologo","/EHsc","/std:c++17","/utf-8","/MT","/I"+str(ROOT/"shared"),str(cpp),
+                    "/Fe:"+str(executable),"/Fo:"+str(folder/"controller.obj"),"/link","Shell32.lib"],check=True,env=environments["x64"])
     for target in ("x86","x64"):
         opposite="x64" if target=="x86" else "x86"
         wrong=folder/"custom-wrong.dll";shutil.copy2(folder/f"APIMonitor_{opposite}.dll",wrong)
@@ -74,4 +74,4 @@ with tempfile.TemporaryDirectory(prefix="ksword 跨位数注入 ") as temporary:
             assert set(range(1,642)).issubset(ids), sorted(set(range(1,642))-ids)
             assert {r.api for r in fixture.snapshots[-1][1] if r.hook_kind==3} == {
                 "AcceptEx","ConnectEx","WSARecvMsg","WSASendMsg","TransmitFile","TransmitPackets","GetAcceptExSockaddrs"}
-print(f"PASS: {ARCHITECTURE} controller injects both Release Agents; quoted Unicode paths, custom PE mismatch, PID identity, full coverage and stop")
+print("PASS: x64 main-program injector without helpers loads both Release Agents; Unicode paths, PE mismatch, PID identity, full coverage and stop")

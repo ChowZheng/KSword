@@ -22,6 +22,7 @@
 #include <QTableWidget>
 #include <QTableWidgetItem>
 #include <QTextStream>
+#include <QStringConverter>
 #include <QThreadPool>
 #include <QUuid>
 
@@ -321,6 +322,8 @@ namespace ks::misc
         };
 
         QTextStream outputStream(&configFile);
+        outputStream.setEncoding(QStringConverter::Utf16LE);
+        outputStream.setGenerateByteOrderMark(true);
         outputStream << "[monitor]\n";
         outputStream << "pipe_name=" << QString::fromStdWString(ks::winapi_monitor::buildPipeNameForPid(pid)) << '\n';
         outputStream << "stop_flag_path=" << QString::fromStdWString(ks::winapi_monitor::buildStopFlagPathForPid(pid)) << '\n';

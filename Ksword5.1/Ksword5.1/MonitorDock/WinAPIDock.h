@@ -11,6 +11,7 @@
 #include "../Framework.h"
 #include "WinApiMonitorProtocol.h"
 #include "../../../shared/ApiMonitorCoverage.h"
+#include "../../../shared/ApiMonitorInjectionBroker.h"
 
 #include <QString>  // QString：事件文本、样式文本与会话路径缓存。
 #include <QWidget>  // QWidget：WinAPIDock 的直接基类。
@@ -277,6 +278,7 @@ private:
     QString m_currentConfigPath;                           // m_currentConfigPath：当前会话配置文件路径。
     QString m_currentStopFlagPath;                         // m_currentStopFlagPath：当前停止标记文件路径。
     ks::winapi_monitor::SessionLease m_sessionLease;
+    std::unique_ptr<ks::winapi_monitor::InjectionBroker> m_injectionBroker;
     QString m_currentSessionId;                            // m_currentSessionId：每次启动唯一标识，防 stop/start 过快时遗漏停止标记。
     qint64 m_lastProcessRefreshMs = 0;                     // m_lastProcessRefreshMs：上次完成进程快照的时间戳（ms）。
     QString m_eventFilterKeyword; // Existing rows are immutable; rescan only when the keyword changes.

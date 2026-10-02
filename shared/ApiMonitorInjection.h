@@ -127,27 +127,6 @@ namespace ks::winapi_monitor
         const DWORD saved = ::GetLastError(); ::CloseHandle(process);
         if (!valid) { ::SetLastError(saved); return false; }
         if (image != machine) return platformFailure(error, L"Agent DLL does not match target architecture", ERROR_BAD_EXE_FORMAT);
-        if (machine == currentMachine()
-#ifdef _WIN64
-            || machine == IMAGE_FILE_MACHINE_I386
-#endif
-            ) return injectAgentNative(pid, path, error, creation);
-        const std::wstring helper = platformDirectory(path) + (machine == IMAGE_FILE_MACHINE_I386
-            ? L"\\APIMonitorInject_x86.exe" : L"\\APIMonitorInject_x64.exe");
-        USHORT helperMachine = 0;
-        if (!queryImageMachine(helper, &helperMachine, error, false)) return false;
-        if (helperMachine != machine) return platformFailure(error, L"injector helper architecture mismatch", ERROR_BAD_EXE_FORMAT);
-        std::wstring command = quoteWindowsArgument(helper) + L" --pid " + std::to_wstring(pid)
-            + L" --creation " + std::to_wstring(creation) + L" --dll " + quoteWindowsArgument(path);
-        STARTUPINFOW startup{}; startup.cb = sizeof(startup); PROCESS_INFORMATION child{};
-        if (!::CreateProcessW(helper.c_str(), command.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW,
-                nullptr, platformDirectory(helper).c_str(), &startup, &child))
-            return platformFailure(error, L"start architecture injector helper", ::GetLastError());
-        const DWORD wait = ::WaitForSingleObject(child.hProcess, 20000); DWORD exitCode = ERROR_TIMEOUT;
-        if (wait == WAIT_OBJECT_0 && !::GetExitCodeProcess(child.hProcess, &exitCode)) exitCode = ::GetLastError();
-        if (wait == WAIT_FAILED) exitCode = ::GetLastError();
-        ::CloseHandle(child.hThread); ::CloseHandle(child.hProcess);
-        if (wait != WAIT_OBJECT_0 || exitCode) return platformFailure(error, L"architecture injector helper failed", exitCode);
-        return true;
+        return injectAgentNative(pid, path, error, creation);
     }
 }
