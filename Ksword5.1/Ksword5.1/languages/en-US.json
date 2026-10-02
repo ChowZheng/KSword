@@ -34974,6 +34974,19 @@
     "PerfInfo": "PerfInfo",
     "设置删除标记": "Set deletion flag",
     "记录文件名": "Record file name",
-    "移除文件名记录": "Remove file name record"
+    "移除文件名记录": "Remove file name record",
+    "文件名/路径": "File name/path",
+    "映像名称/路径": "Image name/path",
+    "键名称": "Key name",
+    "处置值": "Disposition value",
+    "请求访问权限": "Requested access rights",
+    "目标进程ID": "Target process ID",
+    "新进程ID": "New process ID",
+    "映像基址": "Image base address",
+    "映像大小": "Image size",
+    "目标文件名/路径": "Target file name/path",
+    "源文件名/路径": "Source file name/path",
+    "新文件名/路径": "New file name/path",
+    "注册表配置单元": "Registry hive"
   }
 }

@@ -72,6 +72,20 @@ presets+='\n'+fun('const std::vector<EtwPresetProviderDescriptor>& etwPresetProv
 code=code.replace('PARSER',presets+'\nPARSER')
 code=code.replace('PARSER',s[s.index('    // EtwSchemaPropertyEntry'):s.index('    // 100ns 时间戳文本格式化')]).replace('SAMPLE_BYTES',','.join(str(x) for x in payload))
 tests={
+ 'field_translation': r'''
+ if(!etwPropertyMeaningText(QStringLiteral("pid")).isEmpty()||!etwPropertyMeaningText(QStringLiteral("parentid")).isEmpty())return 180;
+ if(etwPropertyMeaningText(QStringLiteral("pid"),QStringLiteral("网络"))!=QStringLiteral("进程ID"))return 181;
+ if(etwPropertyMeaningText(QStringLiteral("disposition"))!=QStringLiteral("处置值"))return 182;
+ if(etwPropertyMeaningText(QStringLiteral("filename"))!=QStringLiteral("文件名/路径"))return 183;
+ schema={};schema.propertyList={prop(0,"PID",TDH_INTYPE_UINT32),prop(1,"TID",TDH_INTYPE_UINT32),prop(2,"ParentId",TDH_INTYPE_UINT32)};
+ std::uint32_t aliases[]={0x1234,55,66};run(schema,aliases,sizeof(aliases));auto vendor=fill(QStringLiteral("Vendor-Device"),QStringLiteral("ProductInfo"),QString());
+ if(vendor.targetPidValid||vendor.targetTidValid||vendor.parentPidValid||vendor.securityPidValid||vendor.securityTidValid)return 184;
+ auto network=fill(QStringLiteral("Kernel-TCPIP"),QStringLiteral("TcpIp"),QStringLiteral("Send"));if(!network.targetPidValid||network.targetPid!=0x1234||!network.targetTidValid)return 185;
+ schema.propertyList={prop(0,"ProcessId",TDH_INTYPE_UINT32),prop(1,"ThreadId",TDH_INTYPE_UINT32)};run(schema,aliases,8);
+ vendor=fill(QStringLiteral("Vendor-Device"),QStringLiteral("ProductInfo"),QString());if(!vendor.targetPidValid||!vendor.targetTidValid)return 186;
+ schema.propertyList={prop(0,"IssuingThreadId",TDH_INTYPE_UINT32)};std::uint32_t issuing=22222;run(schema,&issuing,sizeof(issuing));
+ auto disk=fill(QStringLiteral("Kernel-DiskIO"),QStringLiteral("DiskIo"),QStringLiteral("Read"));if(!disk.targetTidValid||disk.targetTid!=22222)return 187;
+ ''',
  'network_translation': r'''
  if(etwInferNetworkProtocol(QStringLiteral("Microsoft-Windows-TCPIP"),QStringLiteral("UdpEndpointReceiveMessages"),nullptr)!=QStringLiteral("UDP"))return 170;
  if(!etwInferNetworkProtocol(QStringLiteral("Microsoft-Windows-TCPIP"),QStringLiteral("IpInterfaceRundown"),nullptr).isEmpty())return 171;
@@ -189,7 +203,7 @@ tests={
      if(event.isEmpty())event=task;if(event.isEmpty())event=opcode;
      QJsonObject definition;definition.insert(QStringLiteral("id"),descriptor.Id);definition.insert(QStringLiteral("version"),descriptor.Version);definition.insert(QStringLiteral("event"),event);definition.insert(QStringLiteral("task"),task);definition.insert(QStringLiteral("opcode"),opcode);definition.insert(QStringLiteral("opcode_value"),descriptor.Opcode);
      definition.insert(QStringLiteral("resource"),inferEtwResourceType(preset.providerNameText,event));definition.insert(QStringLiteral("action"),inferEtwActionText(event,opcode,preset.providerNameText,descriptor.Opcode));
-     QJsonArray fields;for(ULONG j=0;j<info->TopLevelPropertyCount;++j){const auto& property=info->EventPropertyInfoArray[j];QString name=etwTextAtOffset(buffer.data(),property.NameOffset);QJsonObject field;field.insert(QStringLiteral("name"),name);field.insert(QStringLiteral("meaning"),etwPropertyMeaningText(normalizeEtwPropertyName(name)));fields.append(field);}definition.insert(QStringLiteral("fields"),fields);
+     QJsonArray fields;for(ULONG j=0;j<info->TopLevelPropertyCount;++j){const auto& property=info->EventPropertyInfoArray[j];QString name=etwTextAtOffset(buffer.data(),property.NameOffset);QJsonObject field;field.insert(QStringLiteral("name"),name);field.insert(QStringLiteral("meaning"),etwPropertyMeaningText(normalizeEtwPropertyName(name),inferEtwResourceType(preset.providerNameText,event)));fields.append(field);}definition.insert(QStringLiteral("fields"),fields);
      definitions.append(definition);++eventCount;
    }
    entry.insert(QStringLiteral("events"),definitions);catalog.append(entry);

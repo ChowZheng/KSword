@@ -2784,38 +2784,52 @@ namespace
     // etwPropertyMeaningText：
     // - 作用：给常见属性名提供中文语义说明；
     // - 调用：构建 schema 时写入缓存，避免后续重复判断。
-    QString etwPropertyMeaningText(const QString& normalizedNameText)
+    QString inferEtwResourceType(const QString& providerNameText, const QString& eventNameText);
+
+    QString etwPropertyMeaningText(const QString& normalizedNameText, const QString& resourceTypeText = QString())
     {
+        if (normalizedNameText == QStringLiteral("pid") || normalizedNameText == QStringLiteral("tid"))
+        {
+            const bool ids = resourceTypeText == QStringLiteral("进程线程") || resourceTypeText == QStringLiteral("映像")
+                || resourceTypeText == QStringLiteral("文件") || resourceTypeText == QStringLiteral("网络") || resourceTypeText == QStringLiteral("安全审计");
+            return !ids ? QString() : normalizedNameText == QStringLiteral("pid") ? QStringLiteral("进程ID") : QStringLiteral("线程ID");
+        }
+        if (normalizedNameText == QStringLiteral("parentid"))
+            return resourceTypeText == QStringLiteral("进程线程") ? QStringLiteral("父进程ID") : QString();
+        if (normalizedNameText == QStringLiteral("disposition"))
+            return resourceTypeText == QStringLiteral("注册表") ? QStringLiteral("处置结果") : QStringLiteral("处置值");
         static const std::unordered_map<std::string, QString> kMeaningMap{
             {"processid", QStringLiteral("进程ID")},
             {"threadid", QStringLiteral("线程ID")},
+            {"tthreadid", QStringLiteral("线程ID")}, {"ttid", QStringLiteral("线程ID")},
+            {"issuingthreadid", QStringLiteral("线程ID")},
+            {"targetprocessid", QStringLiteral("目标进程ID")}, {"newprocessid", QStringLiteral("新进程ID")},
+            {"imagebase", QStringLiteral("映像基址")}, {"imagesize", QStringLiteral("映像大小")},
+            {"openpath", QStringLiteral("文件路径")},
             {"parentprocessid", QStringLiteral("父进程ID")},
-            {"imagename", QStringLiteral("映像路径")},
+            {"imagename", QStringLiteral("映像名称/路径")},
             {"imagefilename", QStringLiteral("映像文件")},
             {"commandline", QStringLiteral("命令行")},
             {"processname", QStringLiteral("进程名称")},
-            {"pid", QStringLiteral("进程ID")},
-            {"parentid", QStringLiteral("父进程ID")},
-            {"filename", QStringLiteral("文件路径")},
+            {"filename", QStringLiteral("文件名/路径")},
             {"filepath", QStringLiteral("文件路径")},
             {"pathname", QStringLiteral("路径")},
-            {"targetfilename", QStringLiteral("目标文件路径")},
+            {"targetfilename", QStringLiteral("目标文件名/路径")},
             {"targetname", QStringLiteral("目标名称")},
             {"relativefilename", QStringLiteral("相对文件名")},
-            {"oldfilename", QStringLiteral("源文件路径")},
-            {"newfilename", QStringLiteral("新文件路径")},
+            {"oldfilename", QStringLiteral("源文件名/路径")},
+            {"newfilename", QStringLiteral("新文件名/路径")},
             {"fileobject", QStringLiteral("文件对象指针")},
-            {"keyname", QStringLiteral("注册表键路径")},
-            {"keypath", QStringLiteral("注册表键路径")},
-            {"hive", QStringLiteral("注册表根键")},
+            {"keyname", QStringLiteral("键名称")},
+            {"keypath", QStringLiteral("键路径")},
+            {"hive", QStringLiteral("注册表配置单元")},
             {"valuename", QStringLiteral("注册表值名称")},
-            {"objectname", QStringLiteral("对象路径")},
-            {"path", QStringLiteral("对象路径")},
+            {"objectname", QStringLiteral("对象名称")},
+            {"path", QStringLiteral("路径")},
             {"operation", QStringLiteral("操作类型")},
-            {"disposition", QStringLiteral("处置结果")},
-            {"desiredaccess", QStringLiteral("目标访问权限")},
+            {"desiredaccess", QStringLiteral("请求访问权限")},
             {"shareaccess", QStringLiteral("共享访问权限")},
-            {"status", QStringLiteral("状态码")},
+            {"status", QStringLiteral("状态")},
             {"ntstatus", QStringLiteral("NT状态码")},
             {"result", QStringLiteral("结果")},
             {"opcode", QStringLiteral("操作码")},
@@ -3063,7 +3077,10 @@ namespace
                 propertyEntry.propertyNameText = QStringLiteral("Property_%1").arg(propertyIndex);
             }
             propertyEntry.normalizedNameText = normalizeEtwPropertyName(propertyEntry.propertyNameText);
-            propertyEntry.meaningText = etwPropertyMeaningText(propertyEntry.normalizedNameText);
+            propertyEntry.meaningText = etwPropertyMeaningText(propertyEntry.normalizedNameText,
+                inferEtwResourceType(etwProviderDisplayName(guidToText(eventRecord->EventHeader.ProviderId),
+                    localSchema.providerNameText, eventRecord->EventHeader.EventDescriptor.Opcode),
+                    localSchema.eventNameText.isEmpty() ? localSchema.taskNameText : localSchema.eventNameText));
             propertyEntry.flags = static_cast<ULONG>(propertyInfo.Flags);
             propertyEntry.isStruct = (propertyInfo.Flags & PropertyStruct) != 0;
             propertyEntry.fixedLength = propertyInfo.length;
@@ -4394,22 +4411,19 @@ namespace
         rowOut->targetText = etwSingleLineOrEmpty(semanticSummary.targetText);
         rowOut->statusText = etwSingleLineOrEmpty(semanticSummary.statusText);
 
-        const EtwDecodedPropertyEntry* targetPidProperty = findFirstEtwProperty(
-            propertyList,
-            QStringList{ QStringLiteral("targetprocessid"), QStringLiteral("newprocessid"),
-                QStringLiteral("processid"), QStringLiteral("pid") });
-        rowOut->targetPidValid = etwPropertyToUInt32(targetPidProperty, &rowOut->targetPid);
-
-        const EtwDecodedPropertyEntry* parentPidProperty = findFirstEtwProperty(
-            propertyList,
-            QStringList{ QStringLiteral("parentprocessid"), QStringLiteral("parentid"), QStringLiteral("ppid") });
-        rowOut->parentPidValid = etwPropertyToUInt32(parentPidProperty, &rowOut->parentPid);
-
-        const EtwDecodedPropertyEntry* targetTidProperty = findFirstEtwProperty(
-            propertyList,
-            QStringList{ QStringLiteral("targetthreadid"), QStringLiteral("newthreadid"),
-                QStringLiteral("tthreadid"), QStringLiteral("ttid"), QStringLiteral("threadid"), QStringLiteral("tid") });
-        rowOut->targetTidValid = etwPropertyToUInt32(targetTidProperty, &rowOut->targetTid);
+        const bool shortIdAliases = rowOut->resourceTypeText == QStringLiteral("进程线程")
+            || rowOut->resourceTypeText == QStringLiteral("映像") || rowOut->resourceTypeText == QStringLiteral("文件")
+            || rowOut->resourceTypeText == QStringLiteral("网络") || rowOut->resourceTypeText == QStringLiteral("安全审计");
+        QStringList processIds{QStringLiteral("targetprocessid"), QStringLiteral("newprocessid"), QStringLiteral("processid")};
+        if (shortIdAliases) processIds.push_back(QStringLiteral("pid"));
+        rowOut->targetPidValid = etwPropertyToUInt32(findFirstEtwProperty(propertyList, processIds), &rowOut->targetPid);
+        QStringList parentIds{QStringLiteral("parentprocessid"), QStringLiteral("ppid")};
+        if (rowOut->resourceTypeText == QStringLiteral("进程线程")) parentIds.push_back(QStringLiteral("parentid"));
+        rowOut->parentPidValid = etwPropertyToUInt32(findFirstEtwProperty(propertyList, parentIds), &rowOut->parentPid);
+        QStringList threadIds{QStringLiteral("targetthreadid"), QStringLiteral("newthreadid"), QStringLiteral("tthreadid"),
+            QStringLiteral("ttid"), QStringLiteral("issuingthreadid"), QStringLiteral("threadid")};
+        if (shortIdAliases) threadIds.push_back(QStringLiteral("tid"));
+        rowOut->targetTidValid = etwPropertyToUInt32(findFirstEtwProperty(propertyList, threadIds), &rowOut->targetTid);
 
         rowOut->processNameText = etwPropertySingleLineValue(findFirstEtwProperty(
             propertyList,
@@ -4549,14 +4563,15 @@ namespace
         rowOut->sidText = etwPropertySingleLineValue(findFirstEtwProperty(
             propertyList,
             QStringList{ QStringLiteral("sid"), QStringLiteral("usersid"), QStringLiteral("subjectusersid") }));
-        rowOut->securityPidValid = etwPropertyToUInt32(findFirstEtwProperty(
-            propertyList,
-            QStringList{ QStringLiteral("subjectprocessid"), QStringLiteral("processid"), QStringLiteral("pid") }),
-            &rowOut->securityPid);
-        rowOut->securityTidValid = etwPropertyToUInt32(findFirstEtwProperty(
-            propertyList,
-            QStringList{ QStringLiteral("threadid"), QStringLiteral("tid"), QStringLiteral("subjectthreadid") }),
-            &rowOut->securityTid);
+        QStringList securityPids{QStringLiteral("subjectprocessid"), QStringLiteral("processid")};
+        QStringList securityTids{QStringLiteral("subjectthreadid"), QStringLiteral("threadid")};
+        if (rowOut->resourceTypeText == QStringLiteral("安全审计"))
+        {
+            securityPids.push_back(QStringLiteral("pid"));
+            securityTids.push_back(QStringLiteral("tid"));
+        }
+        rowOut->securityPidValid = etwPropertyToUInt32(findFirstEtwProperty(propertyList, securityPids), &rowOut->securityPid);
+        rowOut->securityTidValid = etwPropertyToUInt32(findFirstEtwProperty(propertyList, securityTids), &rowOut->securityTid);
         rowOut->securityLevelText = rowOut->levelText;
 
         rowOut->scriptHostProcessText = rowOut->processNameText;
