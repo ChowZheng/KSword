@@ -50,3 +50,19 @@
 - 管理员列使用 `isAdminKnown` 区分 TokenElevation 读取失败与真实未提升。策略/DPI 枚举转换成中文状态，Unknown 不能按已禁用显示。
 - 内核列保留枚举返回的真实对象表/映像节地址，不用“句柄数”覆盖对象表地址；驱动缺字段时不能宣称无保护。R0-only 行保留驱动创建时间，未返回的用户态统计不能伪造为 0；失败 CrossView 也不能标记“已审计”。
 - 验证：Light Release/x64 完整链接通过；独立 `/W4 /WX` 进程回归涵盖元数据、PID 复用、策略状态、GPU 空闲/失败、专用工作集与 I/O 基线；整套 LightTests 通过。用生产对象链接的隐藏窗口探针验证默认详细列组、671 行真实枚举、用户/GPU/安全视图回填；读取实际 worker 函数的探针验证 WIP、效率模式及真实文件 I/O。未提权探针的网络提供者启用返回 Win32 5，已验证权限降级，没有完成管理员会话实际流量验收；没有执行驱动装载或修改目标进程。
+
+## 进程页状态行与内存输入（2026-10-02）
+
+- 进程页移除常驻状态控件及其 20px 占位，不再拼接每轮同步数量与 R0 原始错误。操作诊断送到 `OutputDebugStringW`，既有操作失败弹窗继续保留。
+- 内存页初始地址和进程导航后的地址均留空，明确提示十六进制；无前缀地址复用 `NumericTextParse` 的十六进制模式，PID/长度仍按十进制（支持显式 `0x`）解析。读取/写入本地拒绝空地址、地址范围溢出和超过共享协议限制的长度；区域查询显式允许 `0x0`，不可与读取校验混淆。
+- 读取结果先显示实际完成情况，随后保留原始 IOCTL/NT 字段。`transport OK + PARTIAL_COPY + 0 bytes` 是读取失败；只有真实返回的非空字节才能创建快照，不以通信成功或补零代替读取成功。
+- 本轮 Release、完整 LightTests 和生产对象链接的隐藏窗口验证通过；窗口探针验证状态控件不存在、列表紧接工具栏、空地址不发起读取或新增操作历史。只读自身有效缓冲区的 R0 探针仍返回 Win32 2，未装载驱动，实际成功读取未验收。
+
+## 回调遍历同步（2026-10-02）
+
+- 核对 10 月 1 日 `75ab8a61` 与 `696774c1`：前者补充 13 个扩展注销类别并移除主程序实验 unlink 入口，后者修复 Process Ex2 配对注销与 Minifilter owner unload。共享头增加注销类别常量、明确 Minifilter EX 字段语义；IOCTL 编号、协议版本、结构布局未变，Callback Monitor 通道也未变。
+- Light 直接复用共享协议及 `ArkDriverClient`，纯逻辑集中在 `Features/Kernel/CallbackEnumeration`：展示注册子类型、按数值协议字段判断 verified/candidate/unavailable，菜单与 facade 使用同一身份解析与 EX 封包，缺 V3 generation/identity hash 不执行注销。Object 的实际 RegistrationHandle 与诊断节点不能互换；Registry Cookie 是值。
+- Minifilter 子行保持显示的 operation record，EX 请求的 `registrationAddress` 携带 `contextAddress` 中的所属 FilterObject，`rawStorageValue` 携带子行的 `registrationAddress`；父行用 IDENTIFIER 回退。私有发现的子行仍为候选，公开卸载 API 不提升来源可信度。菜单和确认说明卸载所属过滤器的全部回调及实例，并可能被过滤器拒绝。
+- Light 移除实验 unlink 菜单与执行路径；内部旧 action 枚举保留编号并本地拒绝。枚举不再自行截断到 256 行。注册类型列必须映射 `RegistrationTypeText`，不能误把列别名加到 IAT/EAT 页面。
+- 注销响应先验证长度/size/version，再判断 NTSTATUS；失败保留当前枚举表并展示原始驱动错误，成功重新枚举，不能把注销响应当成枚举表渲染。
+- 验证：Light Release/x64 构建、整套 LightTests、44 项回调策略/封包/列映射回归，以及 `tools/callback_remove_tests/run.py --cc cl` 的生产 R0 模拟测试通过。未实际注销回调、卸载过滤器或装载驱动。

@@ -53,6 +53,9 @@
   <ItemGroup>
     <ClCompile Include="KswordARKLightTests.cpp" />
     <ClCompile Include="ProcessInformationTests.cpp" />
+    <ClCompile Include="CallbackEnumerationTests.cpp" />
+    <ClCompile Include="..\KswordARKLight\Features\Kernel\CallbackEnumeration.cpp" />
+    <ClCompile Include="..\KswordARKLight\Features\Kernel\KernelPageLayout.cpp" />
     <ClCompile Include="..\KswordARKLight\Features\Process\ProcessDetails.cpp" />
     <ClCompile Include="..\KswordARKLight\Features\Process\ProcessTelemetry.cpp" />
     <ClCompile Include="..\Ksword5.1\Ksword5.1\ksword\network\network_process_etw_monitor.cpp" />
@@ -107,12 +110,15 @@
     <ClCompile Include="..\KswordARKLight\Features\SysTools\IoctlDecoder.cpp" />
     <ClCompile Include="..\KswordARKLight\Features\Window\Win32kTimerEvidenceModel.cpp" />
     <ClCompile Include="..\KswordARKLight\Features\Memory\MemorySnapshot.cpp" />
+    <ClCompile Include="..\KswordARKLight\Features\Memory\DriverMemoryModel.cpp" />
     <ClCompile Include="..\KswordARKLight\Features\Memory\MemoryInspection.cpp" />
     <ClCompile Include="..\KswordARKLight\Features\Memory\MemoryWritePlan.cpp" />
     <ClCompile Include="..\KswordARKLight\Ui\EvidenceSession.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="TestSupport.h" />
+    <ClInclude Include="..\KswordARKLight\Features\Kernel\CallbackEnumeration.h" />
+    <ClInclude Include="..\KswordARKLight\Features\Kernel\KernelPageLayout.h" />
     <ClInclude Include="..\shared\driver\KswordArkHvmEptSwitch.h" />
     <ClInclude Include="..\shared\evidence\CrossViewDiff.h" />
     <ClInclude Include="..\shared\evidence\EntityGraph.h" />
@@ -142,6 +148,7 @@
     <ClInclude Include="..\KswordARKLight\Features\SysTools\IoctlDecoder.h" />
     <ClInclude Include="..\KswordARKLight\Features\Window\Win32kTimerEvidenceModel.h" />
     <ClInclude Include="..\KswordARKLight\Features\Memory\MemorySnapshot.h" />
+    <ClInclude Include="..\KswordARKLight\Features\Memory\DriverMemoryModel.h" />
     <ClInclude Include="..\KswordARKLight\Features\Memory\MemoryInspection.h" />
     <ClInclude Include="..\KswordARKLight\Features\Memory\MemoryWritePlan.h" />
     <ClInclude Include="..\KswordARKLight\Ui\EvidenceSession.h" />

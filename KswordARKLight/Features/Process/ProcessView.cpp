@@ -45,7 +45,6 @@ constexpr int kColumnsButtonId = 52011;
 constexpr int kPresetButtonId = 52012;
 constexpr int kPauseButtonId = 52003;
 constexpr int kPickerButtonId = 52004;
-constexpr int kStatusTextId = 52005;
 constexpr int kProcessListId = 52006;
 constexpr int kRefreshSliderId = 52007;
 constexpr int kFilterBarId = 52010;
@@ -297,7 +296,6 @@ struct ProcessViewState {
     HWND pauseButton = nullptr;
     HWND pickerButton = nullptr;
     HWND refreshSlider = nullptr;
-    HWND statusText = nullptr;
     HWND filterBar = nullptr;
     HWND listView = nullptr;
     HIMAGELIST imageList = nullptr;
@@ -422,12 +420,11 @@ ProcessViewState* StateFromWindow(HWND hwnd) {
     return reinterpret_cast<ProcessViewState*>(::GetWindowLongPtrW(hwnd, GWLP_USERDATA));
 }
 
-// SetStatus writes a short human-readable status line. Inputs are page state and
-// text; processing updates the STATIC control; no value is returned.
-void SetStatus(ProcessViewState& state, const std::wstring& text) {
-    if (state.statusText) {
-        ::SetWindowTextW(state.statusText, text.c_str());
-    }
+// TraceProcessStatus preserves operation diagnostics without a status control or
+// reserved row in the process page.
+void TraceProcessStatus(const std::wstring& text) {
+    const std::wstring message = L"KswordARKLight process: " + text + L"\n";
+    ::OutputDebugStringW(message.c_str());
 }
 
 // RefreshIntervalMs returns the active refresh period in milliseconds. Input is
@@ -554,7 +551,7 @@ int IconIndexForPath(ProcessViewState& state, const std::wstring& path) {
     return index;
 }
 
-// LayoutChildren positions the toolbar, status text and ListView. Inputs are the
+// LayoutChildren positions the toolbar and ListView. Inputs are the
 // page state and client rectangle; processing uses fixed toolbar heights and the
 // remaining area for process rows; no value is returned.
 void LayoutChildren(ProcessViewState& state, const RECT& rc) {
@@ -575,7 +572,6 @@ void LayoutChildren(ProcessViewState& state, const RECT& rc) {
     ::MoveWindow(state.refreshSlider, x, buttonTop + 2, 110, buttonHeight - 4, TRUE);
     x += 110;
 
-    const int statusTop = buttonTop + buttonHeight;
     const int width = std::max(100, static_cast<int>(rc.right - rc.left));
     const int height = std::max(100, static_cast<int>(rc.bottom - rc.top));
     if (state.filterBar) {
@@ -586,9 +582,7 @@ void LayoutChildren(ProcessViewState& state, const RECT& rc) {
             buttonHeight,
             TRUE);
     }
-    ::MoveWindow(state.statusText, 0, statusTop, width, 20, TRUE);
-
-    const int listTop = statusTop + 20;
+    const int listTop = buttonTop + buttonHeight;
     ::MoveWindow(state.listView,
         0,
         listTop,
@@ -1243,7 +1237,7 @@ void ApplyProcessFilter(ProcessViewState& state,
         ::InvalidateRect(state.listView, nullptr, FALSE);
     }
     if (!result.query.empty()) {
-        SetStatus(state,
+        TraceProcessStatus(
             L"筛选结果 " + std::to_wstring(state.visibleRowIndexes.size()) +
             L" / " + std::to_wstring(state.presentationRows.size()) + L" 行。");
     }
@@ -1289,7 +1283,7 @@ void RequestProcessFilter(ProcessViewState& state,
         },
         [&state](std::uint64_t, std::optional<ProcessFilterResult>&& result, std::exception_ptr error) {
             if (error || !result.has_value()) {
-                SetStatus(state, L"进程筛选任务异常结束。已保留当前可见结果。");
+                TraceProcessStatus(L"进程筛选任务异常结束。已保留当前可见结果。");
                 return;
             }
             ApplyProcessFilter(state, std::move(*result));
@@ -1372,7 +1366,7 @@ std::wstring VisibleRowsAsTsv(const ProcessViewState& state) {
 void ExportVisibleResults(ProcessViewState& state) {
     const std::wstring text = VisibleRowsAsTsv(state);
     if (text.empty()) {
-        SetStatus(state, L"没有可导出的可见进程结果。");
+        TraceProcessStatus(L"没有可导出的可见进程结果。");
         return;
     }
 
@@ -1386,13 +1380,13 @@ void ExportVisibleResults(ProcessViewState& state) {
         text,
         &error)) {
     case Ksword::Ui::SaveTextFileResult::Saved:
-        SetStatus(state, L"可见进程结果已导出为 TSV，并已记录到证据会话。");
+        TraceProcessStatus(L"可见进程结果已导出为 TSV，并已记录到证据会话。");
         break;
     case Ksword::Ui::SaveTextFileResult::Cancelled:
-        SetStatus(state, L"已取消导出可见进程结果。");
+        TraceProcessStatus(L"已取消导出可见进程结果。");
         break;
     case Ksword::Ui::SaveTextFileResult::Failed:
-        SetStatus(state, L"导出可见进程结果失败：" + error);
+        TraceProcessStatus(L"导出可见进程结果失败：" + error);
         break;
     }
 }
@@ -1944,12 +1938,11 @@ void ApplyProcessRefresh(ProcessViewState& state, ProcessRefreshSnapshot snapsho
     if (!snapshot.enumeration.success) {
         state.model.setRows({});
         RebuildRows(state);
-        SetStatus(state, L"进程枚举失败: " + snapshot.enumeration.diagnosticText);
+        TraceProcessStatus(L"进程枚举失败: " + snapshot.enumeration.diagnosticText);
         return;
     }
 
     std::vector<ProcessSnapshotRow> rows = std::move(snapshot.enumeration.rows);
-    const HiddenProcessAuditResult& hiddenAudit = snapshot.hiddenAudit;
     const ULONGLONG nowMs = ::GetTickCount64();
     const ULONGLONG elapsedMs = state.previousSampleTickMs == 0 ? 0 : nowMs - state.previousSampleTickMs;
     const DWORD processorCount = std::max<DWORD>(1, ::GetActiveProcessorCount(ALL_PROCESSOR_GROUPS));
@@ -1996,16 +1989,6 @@ void ApplyProcessRefresh(ProcessViewState& state, ProcessRefreshSnapshot snapsho
         }
     }
 
-    const std::size_t activeCount = activeRowsByIdentity.size();
-    const std::size_t addedCount = std::count_if(
-        state.visualStateByIdentity.begin(),
-        state.visualStateByIdentity.end(),
-        [](const auto& entry) { return entry.second == ProcessRowVisualState::Added; });
-    const std::size_t removedCount = std::count_if(
-        state.visualStateByIdentity.begin(),
-        state.visualStateByIdentity.end(),
-        [](const auto& entry) { return entry.second == ProcessRowVisualState::Removed; });
-
     state.previousCpuTime100ns = std::move(newCpuTimes);
     state.previousSampleTickMs = nowMs;
     state.lastActiveRowsByIdentity = std::move(activeRowsByIdentity);
@@ -2013,13 +1996,6 @@ void ApplyProcessRefresh(ProcessViewState& state, ProcessRefreshSnapshot snapsho
 
     state.model.setRows(std::move(rows));
     RebuildRows(state, &previousVisualStates);
-    SetStatus(state,
-        L"已同步 " + std::to_wstring(activeCount) +
-        L" 个进程；新增 " + std::to_wstring(addedCount) +
-        L"，退出 " + std::to_wstring(removedCount) +
-        L" 个进程；刷新 " + std::to_wstring(state.refreshIntervalSeconds) +
-        L"s；" + hiddenAudit.detailText + snapshot.crossViewStatusSuffix +
-        L"；左 Ctrl 按下时跳过自动刷新。");
 }
 
 // BeginProcessRefresh only schedules work and updates lightweight feedback. A
@@ -2029,7 +2005,7 @@ void BeginProcessRefresh(ProcessViewState& state) {
     if (!state.refreshTask) {
         return;
     }
-    SetStatus(state, state.refreshTask->running() ? L"进程刷新已排队，等待当前快照完成…" : L"正在后台枚举进程与 R0 证据…");
+    TraceProcessStatus(state.refreshTask->running() ? L"进程刷新已排队，等待当前快照完成…" : L"正在后台枚举进程与 R0 证据…");
     if (state.refreshButton) {
         ::EnableWindow(state.refreshButton, FALSE);
     }
@@ -2043,7 +2019,7 @@ void BeginProcessRefresh(ProcessViewState& state) {
                 ::EnableWindow(state.refreshButton, TRUE);
             }
             if (error || !snapshot.has_value()) {
-                SetStatus(state, L"进程刷新任务异常结束。请检查驱动状态和访问权限。");
+                TraceProcessStatus(L"进程刷新任务异常结束。请检查驱动状态和访问权限。");
                 return;
             }
             ApplyProcessRefresh(state, std::move(*snapshot));
@@ -2058,7 +2034,7 @@ void ApplyPreset(ProcessViewState& state, ProcessViewPreset preset) {
     RebuildRows(state);
     UpdateToolbarTexts(state);
     ::PostMessageW(state.hwnd, kMsgRequestRefresh, 0, 0);
-    SetStatus(state, std::wstring(L"已切换到") + ProcessViewPresetTitle(preset) + L"列组。");
+    TraceProcessStatus(std::wstring(L"已切换到") + ProcessViewPresetTitle(preset) + L"列组。");
 }
 
 // ToggleColumn 用途：按用户菜单选择显示或隐藏一个逻辑列；名称和 PID 永远保留。
@@ -2194,7 +2170,7 @@ void ShowColumnMenu(ProcessViewState& state, POINT screenPoint) {
 void ToggleRefreshPaused(ProcessViewState& state) {
     state.refreshPaused = !state.refreshPaused;
     UpdateToolbarTexts(state);
-    SetStatus(state, state.refreshPaused ? L"自动刷新已暂停。" : L"自动刷新已恢复。");
+    TraceProcessStatus(state.refreshPaused ? L"自动刷新已暂停。" : L"自动刷新已恢复。");
 }
 
 // SelectPid highlights all visible rows matching one PID. Inputs are page state
@@ -2228,7 +2204,7 @@ void BeginPicker(ProcessViewState& state) {
     state.pickingWindow = true;
     ::SetCapture(state.hwnd);
     ::SetCursor(::LoadCursorW(nullptr, IDC_CROSS));
-    SetStatus(state, L"拖动到目标窗口后释放鼠标，将根据窗口 HWND 选中对应进程。");
+    TraceProcessStatus(L"拖动到目标窗口后释放鼠标，将根据窗口 HWND 选中对应进程。");
 }
 
 // CompletePicker ends drag-select. Input is page state. Processing reads the
@@ -2249,11 +2225,11 @@ void CompletePicker(ProcessViewState& state) {
     }
 
     if (pid != 0 && SelectPid(state, pid)) {
-        SetStatus(state, L"已通过窗口拖选定位 PID " + std::to_wstring(pid) + L"。");
+        TraceProcessStatus(L"已通过窗口拖选定位 PID " + std::to_wstring(pid) + L"。");
     } else if (pid != 0) {
-        SetStatus(state, L"窗口属于 PID " + std::to_wstring(pid) + L"，但当前列表中未找到可见行。请刷新后重试。");
+        TraceProcessStatus(L"窗口属于 PID " + std::to_wstring(pid) + L"，但当前列表中未找到可见行。请刷新后重试。");
     } else {
-        SetStatus(state, L"未能从释放位置解析窗口进程。");
+        TraceProcessStatus(L"未能从释放位置解析窗口进程。");
     }
 }
 
@@ -2283,15 +2259,15 @@ void BeginProcessAction(
     std::vector<ProcessSnapshotRow> snapshotRows,
     std::wstring workingText) {
     if (!state.actionTask) {
-        SetStatus(state, L"进程操作任务不可用。");
+        TraceProcessStatus(L"进程操作任务不可用。");
         return;
     }
     if (state.actionTask->running()) {
-        SetStatus(state, L"另一个进程操作正在后台执行，请等待完成。");
+        TraceProcessStatus(L"另一个进程操作正在后台执行，请等待完成。");
         return;
     }
 
-    SetStatus(state, std::move(workingText));
+    TraceProcessStatus(std::move(workingText));
     state.actionTask->request(
         [actionId, selectedPids = std::move(selectedPids), snapshotRows = std::move(snapshotRows)]() mutable {
             ProcessViewActionResult completed{};
@@ -2301,11 +2277,11 @@ void BeginProcessAction(
         },
         [&state](std::uint64_t, std::optional<ProcessViewActionResult>&& completed, std::exception_ptr error) {
             if (error || !completed.has_value()) {
-                SetStatus(state, L"后台进程操作异常结束。");
+                TraceProcessStatus(L"后台进程操作异常结束。");
                 return;
             }
 
-            SetStatus(state, completed->result.title + L": " + completed->result.detail);
+            TraceProcessStatus(completed->result.title + L": " + completed->result.detail);
             if (!completed->result.success) {
                 ::MessageBoxW(
                     state.hwnd,
@@ -2328,15 +2304,15 @@ void BeginR0Injection(
     std::vector<ProcessSnapshotRow> snapshotRows,
     std::wstring payloadPath) {
     if (!state.actionTask) {
-        SetStatus(state, L"R0 注入任务不可用。");
+        TraceProcessStatus(L"R0 注入任务不可用。");
         return;
     }
     if (state.actionTask->running()) {
-        SetStatus(state, L"另一个进程操作正在后台执行，请等待完成。");
+        TraceProcessStatus(L"另一个进程操作正在后台执行，请等待完成。");
         return;
     }
 
-    SetStatus(state, dllMode ? L"正在后台执行 R0 DLL 注入…" : L"正在后台读取并执行 R0 Shellcode 注入…");
+    TraceProcessStatus(dllMode ? L"正在后台执行 R0 DLL 注入…" : L"正在后台读取并执行 R0 Shellcode 注入…");
     state.actionTask->request(
         [dllMode, selectedPids = std::move(selectedPids), snapshotRows = std::move(snapshotRows), payloadPath = std::move(payloadPath)]() mutable {
             ProcessViewActionResult completed{};
@@ -2348,11 +2324,11 @@ void BeginR0Injection(
         },
         [&state](std::uint64_t, std::optional<ProcessViewActionResult>&& completed, std::exception_ptr error) {
             if (error || !completed.has_value()) {
-                SetStatus(state, L"后台 R0 注入异常结束。");
+                TraceProcessStatus(L"后台 R0 注入异常结束。");
                 return;
             }
 
-            SetStatus(state, completed->result.title + L": " + completed->result.detail);
+            TraceProcessStatus(completed->result.title + L": " + completed->result.detail);
             if (!completed->result.success) {
                 ::MessageBoxW(
                     state.hwnd,
@@ -2376,13 +2352,13 @@ void ExecuteMenuItem(ProcessViewState& state, ProcessActionId actionId) {
         }
         if (actionId == ProcessActionId::CopyVisibleResults) {
             const bool copied = WriteClipboardText(state.hwnd, VisibleRowsAsText(state));
-            SetStatus(state, copied ? L"已复制全部可见进程结果。" : L"复制失败：当前没有可见结果或剪贴板不可用。");
+            TraceProcessStatus(copied ? L"已复制全部可见进程结果。" : L"复制失败：当前没有可见结果或剪贴板不可用。");
             return;
         }
         const bool allColumns = actionId == ProcessActionId::CopyRow;
         const std::wstring text = SelectedRowsAsText(state, allColumns);
         const bool copied = WriteClipboardText(state.hwnd, text);
-        SetStatus(state, copied ? L"已复制选中进程行文本。" : L"复制失败：没有可复制的选中行或剪贴板不可用。");
+        TraceProcessStatus(copied ? L"已复制选中进程行文本。" : L"复制失败：没有可复制的选中行或剪贴板不可用。");
         return;
     }
 
@@ -2391,7 +2367,7 @@ void ExecuteMenuItem(ProcessViewState& state, ProcessActionId actionId) {
         if (selectedIndexes.size() != 1U ||
             selectedIndexes.front() < 0 ||
             static_cast<std::size_t>(selectedIndexes.front()) >= state.presentationRows.size()) {
-            SetStatus(state, L"进程详细信息需要单选一个进程。");
+            TraceProcessStatus(L"进程详细信息需要单选一个进程。");
             return;
         }
         const ProcessPresentationRow& selectedRow =
@@ -2400,7 +2376,7 @@ void ExecuteMenuItem(ProcessViewState& state, ProcessActionId actionId) {
             state.hwnd,
             selectedRow.processId,
             selectedRow.creationTime100ns);
-        SetStatus(state, opened ? L"已打开进程详细信息窗口。" : L"进程详细信息窗口创建失败。");
+        TraceProcessStatus(opened ? L"已打开进程详细信息窗口。" : L"进程详细信息窗口创建失败。");
         return;
     }
 
@@ -2413,7 +2389,7 @@ void ExecuteMenuItem(ProcessViewState& state, ProcessActionId actionId) {
         const std::vector<int> selectedIndexes = SelectedDisplayIndexes(state);
         if (selectedIndexes.size() != 1U || selectedIndexes.front() < 0 ||
             static_cast<std::size_t>(selectedIndexes.front()) >= state.presentationRows.size()) {
-            SetStatus(state, L"关联调查需要单选一个进程。");
+            TraceProcessStatus(L"关联调查需要单选一个进程。");
             return;
         }
         const ProcessPresentationRow& selectedRow =
@@ -2428,7 +2404,7 @@ void ExecuteMenuItem(ProcessViewState& state, ProcessActionId actionId) {
             break;
         case ProcessActionId::OpenImageInFileModule:
             if (selectedRow.iconPath.empty()) {
-                SetStatus(state, L"该进程没有可用的映像路径。");
+                TraceProcessStatus(L"该进程没有可用的映像路径。");
                 return;
             }
             request.target = Ksword::Core::NavigationTarget::FileBrowser;
@@ -2451,14 +2427,14 @@ void ExecuteMenuItem(ProcessViewState& state, ProcessActionId actionId) {
             return;
         }
         const bool routed = Ksword::Ui::RequestEntityNavigation(state.hwnd, request);
-        SetStatus(state, routed ? L"已跳转到关联调查模块。" : L"关联调查模块当前无法接收该实体。");
+        TraceProcessStatus(routed ? L"已跳转到关联调查模块。" : L"关联调查模块当前无法接收该实体。");
         return;
     }
 
     if (actionId == ProcessActionId::R0InjectDll || actionId == ProcessActionId::R0InjectShellcode) {
         const std::vector<DWORD> pids = SelectedPids(state);
         if (pids.size() != 1) {
-            SetStatus(state, L"R0 注入需要单选一个进程。");
+            TraceProcessStatus(L"R0 注入需要单选一个进程。");
             return;
         }
 
@@ -2468,11 +2444,11 @@ void ExecuteMenuItem(ProcessViewState& state, ProcessActionId actionId) {
             dllMode ? L"DLL 文件 (*.dll)\0*.dll\0所有文件 (*.*)\0*.*\0" : L"Shellcode/二进制文件 (*.*)\0*.*\0",
             dllMode ? L"选择要注入的 DLL" : L"选择要注入的 Shellcode 二进制文件");
         if (payloadPath.empty()) {
-            SetStatus(state, L"已取消 R0 注入。");
+            TraceProcessStatus(L"已取消 R0 注入。");
             return;
         }
         if (!ConfirmR0Injection(state.hwnd, dllMode ? L"DLL 注入" : L"Shellcode 注入", pids.front(), payloadPath)) {
-            SetStatus(state, L"用户取消 R0 注入。");
+            TraceProcessStatus(L"用户取消 R0 注入。");
             return;
         }
 
@@ -2690,7 +2666,6 @@ void CreateChildControls(ProcessViewState& state) {
         ::SendMessageW(state.refreshSlider, TBM_SETTICFREQ, 1, 0);
         ::SendMessageW(state.refreshSlider, TBM_SETPOS, TRUE, state.refreshIntervalSeconds);
     }
-    state.statusText = Ksword::Ui::CreateText(state.hwnd, kStatusTextId, L"准备枚举进程。", 0, 0, 0, 0);
     state.filterBar = Ksword::Ui::CreateFilterBar(state.hwnd, kFilterBarId, L"筛选进程、PID、路径和 R0 证据", 0, 0, 0, 0);
     state.listView = CreateProcessListView(state.hwnd, kProcessListId);
     state.imageList = CreateIconList();
@@ -2757,7 +2732,7 @@ NotifyResult HandleListNotify(ProcessViewState& state, NMHDR* header) {
             const ProcessFriendlyGroup groupId = group->display.group;
             state.model.toggleGroupCollapsed(groupId);
             RebuildRows(state);
-            SetStatus(state, state.model.isGroupCollapsed(groupId) ? L"已折叠进程分组。" : L"已展开进程分组。");
+            TraceProcessStatus(state.model.isGroupCollapsed(groupId) ? L"已折叠进程分组。" : L"已展开进程分组。");
             return { true, 0 };
         }
     }
@@ -2784,7 +2759,7 @@ LRESULT CALLBACK ProcessViewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
             state->refreshTask = std::make_unique<Ksword::Ui::AsyncSnapshotTask<ProcessRefreshSnapshot>>(hwnd, kMsgRefreshCompleted);
             state->filterTask = std::make_unique<Ksword::Ui::AsyncSnapshotTask<ProcessFilterResult>>(hwnd, kMsgFilterCompleted);
             state->actionTask = std::make_unique<Ksword::Ui::AsyncSnapshotTask<ProcessViewActionResult>>(hwnd, kMsgActionCompleted);
-            SetStatus(*state, L"进程页已创建，等待首次异步刷新。");
+            TraceProcessStatus(L"进程页已创建，等待首次异步刷新。");
             ::PostMessageW(hwnd, kMsgInitialRefresh, 0, 0);
         }
         return 0;
@@ -2801,10 +2776,10 @@ LRESULT CALLBACK ProcessViewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
             const ULONGLONG creationTime = ResolveCurrentProcessCreationTime(
                 *state, request->processId, request->expectedCreationTime100ns);
             if (creationTime != 0U && OpenProcessDetailWindow(hwnd, request->processId, creationTime)) {
-                SetStatus(*state, L"已按稳定进程身份打开详细信息窗口。");
+                TraceProcessStatus(L"已按稳定进程身份打开详细信息窗口。");
                 return TRUE;
             }
-            SetStatus(*state, L"无法确认当前 PID 对应的进程实例，已拒绝跨页打开。");
+            TraceProcessStatus(L"无法确认当前 PID 对应的进程实例，已拒绝跨页打开。");
         }
         return FALSE;
     case kMsgRefreshCompleted:
@@ -2871,7 +2846,7 @@ LRESULT CALLBACK ProcessViewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                 return 0;
             }
             if ((::GetAsyncKeyState(VK_LCONTROL) & 0x8000) != 0) {
-                SetStatus(*state, L"左 Ctrl 按下，跳过本次自动刷新。");
+                TraceProcessStatus(L"左 Ctrl 按下，跳过本次自动刷新。");
                 return 0;
             }
             BeginProcessRefresh(*state);
@@ -2883,7 +2858,7 @@ LRESULT CALLBACK ProcessViewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
             const LRESULT pos = ::SendMessageW(state->refreshSlider, TBM_GETPOS, 0, 0);
             state->refreshIntervalSeconds = static_cast<UINT>(std::clamp<LRESULT>(pos, 1, 10));
             RestartRefreshTimer(*state);
-            SetStatus(*state, L"自动刷新频率: " + std::to_wstring(state->refreshIntervalSeconds) + L"s。");
+            TraceProcessStatus(L"自动刷新频率: " + std::to_wstring(state->refreshIntervalSeconds) + L"s。");
             return 0;
         }
         break;
@@ -2921,7 +2896,7 @@ LRESULT CALLBACK ProcessViewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
             if (::GetCapture() == hwnd) {
                 ::ReleaseCapture();
             }
-            SetStatus(*state, L"拖动选中进程已取消。");
+            TraceProcessStatus(L"拖动选中进程已取消。");
             return 0;
         }
         break;
@@ -2934,7 +2909,7 @@ LRESULT CALLBACK ProcessViewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
     case WM_CAPTURECHANGED:
         if (state && state->pickingWindow && reinterpret_cast<HWND>(lParam) != hwnd) {
             state->pickingWindow = false;
-            SetStatus(*state, L"拖动选中进程已取消。");
+            TraceProcessStatus(L"拖动选中进程已取消。");
         }
         break;
     case WM_CTLCOLORSTATIC: {

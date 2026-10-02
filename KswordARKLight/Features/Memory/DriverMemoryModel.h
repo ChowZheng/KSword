@@ -69,12 +69,14 @@ bool ParseUnsignedInteger(const std::wstring& text,
 // ParseReadRequest validates PID, address and length text for a driver memory
 // read. Inputs are raw edit-control strings; processing performs range checks;
 // output is true with request set on success, false with errorText set on
-// failure.
+// failure. Addresses are hexadecimal even without a 0x prefix. Only region
+// queries may opt into a null address; reads require an explicit nonzero target.
 bool ParseReadRequest(const std::wstring& processIdText,
     const std::wstring& addressText,
     const std::wstring& lengthText,
     DriverMemoryReadRequest& request,
-    std::wstring& errorText);
+    std::wstring& errorText,
+    bool allowNullAddress = false);
 
 // ParseWriteRequest validates PID, address and hex text for a driver memory
 // write. Inputs are raw edit-control strings; processing parses all byte tokens;
@@ -85,6 +87,13 @@ bool ParseWriteRequest(const std::wstring& processIdText,
     const std::wstring& hexText,
     DriverMemoryWriteRequest& request,
     std::wstring& errorText);
+
+// FormatMemoryReadSummary distinguishes a completed transfer from a successful
+// driver transport that returned no bytes. Raw protocol diagnostics follow this
+// summary in the client, so history rows start with the actual read outcome.
+std::wstring FormatMemoryReadSummary(const DriverMemoryReadRequest& request,
+    bool transportSucceeded, DWORD win32Error, std::uint32_t protocolStatus,
+    std::size_t bytesRead);
 
 // ParseHexBytes parses human-entered hexadecimal bytes. Input accepts whitespace
 // separators and optional 0x prefixes; processing requires each token to be one

@@ -1,4 +1,5 @@
 #include "KernelFacade.h"
+#include "CallbackEnumeration.h"
 
 #include "KernelDynDataProfiles.h"
 #include "KernelNativeQueries.h"
@@ -1217,33 +1218,6 @@ std::uint32_t InlinePatchLength(const std::uint32_t hookType, const std::uint32_
     return std::min<std::uint32_t>(desired, availableBytes);
 }
 
-// CallbackRemoveTypeForClass converts callback enumeration classes into the
-// removeExternalCallbackEx request class expected by the driver protocol.
-// Inputs are enum rows from ArkDriverClient; output is zero when no safe public
-// removal path exists.
-std::uint32_t CallbackRemoveTypeForClass(const std::uint32_t callbackClass) {
-    switch (callbackClass) {
-    case KSWORD_ARK_CALLBACK_TYPE_REGISTRY:
-        return KSWORD_ARK_EXTERNAL_CALLBACK_REMOVE_TYPE_REGISTRY;
-    case KSWORD_ARK_CALLBACK_TYPE_PROCESS_CREATE:
-        return KSWORD_ARK_EXTERNAL_CALLBACK_REMOVE_TYPE_PROCESS;
-    case KSWORD_ARK_CALLBACK_TYPE_THREAD_CREATE:
-        return KSWORD_ARK_EXTERNAL_CALLBACK_REMOVE_TYPE_THREAD;
-    case KSWORD_ARK_CALLBACK_TYPE_IMAGE_LOAD:
-        return KSWORD_ARK_EXTERNAL_CALLBACK_REMOVE_TYPE_IMAGE;
-    case KSWORD_ARK_CALLBACK_TYPE_OBJECT:
-        return KSWORD_ARK_EXTERNAL_CALLBACK_REMOVE_TYPE_OBJECT;
-    case KSWORD_ARK_CALLBACK_TYPE_MINIFILTER:
-        return KSWORD_ARK_EXTERNAL_CALLBACK_REMOVE_TYPE_MINIFILTER;
-    case KSWORD_ARK_CALLBACK_ENUM_CLASS_WFP_CALLOUT:
-        return KSWORD_ARK_EXTERNAL_CALLBACK_REMOVE_TYPE_WFP_CALLOUT;
-    case KSWORD_ARK_CALLBACK_ENUM_CLASS_ETW_PROVIDER:
-        return KSWORD_ARK_EXTERNAL_CALLBACK_REMOVE_TYPE_ETW_PROVIDER;
-    default:
-        return 0;
-    }
-}
-
 // Crc32Step advances the same reflected CRC32 algorithm used by the callback
 // rule validator in R0. Inputs are a byte span and a running CRC value; output
 // is the updated running value before final bit inversion.
@@ -1700,17 +1674,7 @@ std::wstring CallbackRegisteredMaskText(const std::uint32_t mask) {
 // Input is a shared callback enum class; output is the operator-facing class
 // label used in the lightweight table.
 std::wstring CallbackEnumClassText(const std::uint32_t callbackClass) {
-    switch (callbackClass) {
-    case KSWORD_ARK_CALLBACK_ENUM_CLASS_REGISTRY: return L"注册表 CmCallback";
-    case KSWORD_ARK_CALLBACK_ENUM_CLASS_PROCESS: return L"进程 Notify";
-    case KSWORD_ARK_CALLBACK_ENUM_CLASS_THREAD: return L"线程 Notify";
-    case KSWORD_ARK_CALLBACK_ENUM_CLASS_IMAGE: return L"镜像加载 Notify";
-    case KSWORD_ARK_CALLBACK_ENUM_CLASS_OBJECT: return L"Object Callback";
-    case KSWORD_ARK_CALLBACK_ENUM_CLASS_MINIFILTER: return L"Minifilter";
-    case KSWORD_ARK_CALLBACK_ENUM_CLASS_WFP_CALLOUT: return L"WFP Callout";
-    case KSWORD_ARK_CALLBACK_ENUM_CLASS_ETW_PROVIDER: return L"ETW Provider/Consumer";
-    default: return std::wstring(L"未知(") + std::to_wstring(callbackClass) + L")";
-    }
+    return CallbackClassLabel(callbackClass);
 }
 
 // CallbackEnumSourceText mirrors KswordARK's source-name mapping. Input is the
@@ -1889,6 +1853,11 @@ std::wstring CallbackEnumTrustBucket(const ksword::ark::CallbackEnumEntry& entry
         (entry.trustFlags & (KSWORD_ARK_CALLBACK_TRUST_PDB_PROFILE | KSWORD_ARK_CALLBACK_TRUST_REVALIDATED)) != 0U) {
         return L"trusted（可信/自有或预留 PDB）";
     }
+    if (entry.callbackClass == KSWORD_ARK_CALLBACK_ENUM_CLASS_MINIFILTER &&
+        (CallbackEnumIsFallbackSource(entry.source) ||
+         (entry.trustFlags & KSWORD_ARK_CALLBACK_TRUST_FALLBACK_PATTERN) != 0U)) {
+        return L"fallback/pattern（私有结构诊断）";
+    }
     if (CallbackEnumIsPublicApiSource(entry.source) ||
         (entry.trustFlags & KSWORD_ARK_CALLBACK_TRUST_PUBLIC_API) != 0U ||
         (entry.removeBehavior & KSWORD_ARK_CALLBACK_REMOVE_BEHAVIOR_PUBLIC_API) != 0U) {
@@ -1901,35 +1870,8 @@ std::wstring CallbackEnumTrustBucket(const ksword::ark::CallbackEnumEntry& entry
     return L"fallback（未知来源保守展示）";
 }
 
-// CallbackEnumRemovePolicyText mirrors the original Dock's conservative remove
-// policy. Input is one callback row; output states whether safe removal is
-// verified, merely candidate, experimental-only, or not allowed.
 std::wstring CallbackEnumRemovePolicyText(const ksword::ark::CallbackEnumEntry& entry) {
-    if (entry.source == KSWORD_ARK_CALLBACK_ENUM_SOURCE_PRIVATE_UNSUPPORTED ||
-        entry.status != KSWORD_ARK_CALLBACK_ENUM_STATUS_OK ||
-        CallbackRemoveTypeForClass(entry.callbackClass) == 0U) {
-        return L"not removable（不可移除）";
-    }
-
-    const bool removableCandidate = (entry.fieldFlags & KSWORD_ARK_CALLBACK_ENUM_FIELD_REMOVABLE_CANDIDATE) != 0U;
-    const bool verifiedRemove =
-        (entry.fieldFlags & KSWORD_ARK_CALLBACK_ENUM_FIELD_VERIFIED_REMOVE) != 0U ||
-        (entry.removeBehavior & KSWORD_ARK_CALLBACK_REMOVE_BEHAVIOR_PUBLIC_API) != 0U;
-    const bool experimentalRemove =
-        (entry.fieldFlags & KSWORD_ARK_CALLBACK_ENUM_FIELD_EXPERIMENTAL_REMOVE) != 0U ||
-        (entry.removeBehavior & KSWORD_ARK_CALLBACK_REMOVE_BEHAVIOR_EXPERIMENTAL_UNLINK) != 0U;
-    const bool hasRequestValue = entry.callbackAddress != 0 || entry.registrationAddress != 0 || entry.rawStorageValue != 0;
-
-    if (hasRequestValue && (verifiedRemove || (removableCandidate && CallbackEnumIsPublicApiSource(entry.source)))) {
-        return L"removable verified（公开 API 可验证）";
-    }
-    if (removableCandidate && hasRequestValue) {
-        return L"removable candidate（旧协议候选）";
-    }
-    if ((experimentalRemove || CallbackEnumIsFallbackSource(entry.source)) && hasRequestValue) {
-        return L"experimental only（仅预留 unlink）";
-    }
-    return L"not removable（不可移除）";
+    return CallbackRemovalLabel(entry);
 }
 
 // KernelHookStatusText mirrors KswordARK's kernelHookStatusText. Input is a
@@ -3531,13 +3473,15 @@ KernelOperationResult QueryCallbackEnumeration(const KernelRequest& request) {
         L" total=" + std::to_wstring(query.totalCount) +
         L" flags=" + HexText(query.flags)));
 
-    const std::size_t limit = std::min<std::size_t>(query.entries.size(), 256);
+    const std::size_t limit = query.entries.size();
     for (std::size_t i = 0; i < limit; ++i) {
         const ksword::ark::CallbackEnumEntry& entry = query.entries[i];
         PushFilteredRow(result, Row({
             { L"类别", CallbackEnumClassText(entry.callbackClass) },
             { L"Class", std::to_wstring(entry.callbackClass) },
             { L"ClassText", CallbackEnumClassText(entry.callbackClass) },
+            { L"RegistrationType", std::to_wstring(entry.registrationType) },
+            { L"RegistrationTypeText", CallbackRegistrationLabel(entry.registrationType, entry.callbackClass) },
             { L"名称", entry.name },
             { L"Name", entry.name },
             { L"Altitude", entry.altitude },
@@ -3552,6 +3496,7 @@ KernelOperationResult QueryCallbackEnumeration(const KernelRequest& request) {
             { L"SourceTrust", CallbackEnumTrustBucket(entry) },
             { L"状态", std::wstring(CallbackEnumStatusText(entry.status)) + L" (" + std::to_wstring(entry.status) + L")" },
             { L"Status", std::wstring(CallbackEnumStatusText(entry.status)) + L" (" + std::to_wstring(entry.status) + L")" },
+            { L"StatusCode", std::to_wstring(entry.status) },
             { L"OperationMask", HexText(entry.operationMask) },
             { L"ObjectTypeMask", HexText(entry.objectTypeMask) },
             { L"Generation", HexText(entry.generation) },
@@ -3569,6 +3514,7 @@ KernelOperationResult QueryCallbackEnumeration(const KernelRequest& request) {
             { L"RemoveText", CallbackEnumRemoveBehaviorText(entry.removeBehavior) },
             { L"移除策略", CallbackEnumRemovePolicyText(entry) },
             { L"RemovePolicy", CallbackEnumRemovePolicyText(entry) },
+            { L"RemovePolicyGlyph", CallbackRemovalGlyph(entry) },
             { L"LastStatus", HexText(static_cast<std::uint32_t>(entry.lastStatus)) },
         }, entry.modulePath.empty() ? entry.detail : entry.modulePath + L" | " + entry.detail), request.filterText.empty() ? request.moduleFilterText : request.filterText);
     }
@@ -5723,66 +5669,35 @@ KernelOperationResult ExecuteInlineHookNopPatch(const KernelActionRequest& reque
 // API behavior path. Inputs are selected callback row fields; output reports the
 // EX response packet and never uses the experimental unlink behavior.
 KernelOperationResult ExecuteCallbackSafeRemove(const KernelActionRequest& request) {
-    std::uint32_t callbackClass = 0;
-    std::uint64_t callbackAddress = 0;
-    std::uint64_t registrationAddress = 0;
-    std::uint64_t rawStorageValue = 0;
-    std::uint64_t generation = 0;
-    std::uint64_t identityHash = 0;
-    std::uint32_t source = 0;
-    std::uint32_t operationMask = 0;
-    std::uint32_t objectTypeMask = 0;
-    std::uint32_t trustFlags = 0;
-    std::uint32_t removeBehavior = 0;
-    if (!ParseUnsigned32(FieldValue(request, L"Class"), callbackClass) ||
-        !ParseUnsigned64(FieldValue(request, L"Callback"), callbackAddress) ||
-        callbackClass == 0 ||
-        callbackAddress == 0) {
-        return MakeActionError(request, L"当前行缺少 Callback Enumeration 的 Class/Callback 字段。");
-    }
-    ParseUnsigned64(FieldValue(request, L"Registration"), registrationAddress);
-    ParseUnsigned64(FieldValue(request, L"RawStorageValue"), rawStorageValue);
-    ParseUnsigned64(FieldValue(request, L"Generation"), generation);
-    ParseUnsigned64(FieldValue(request, L"IdentityHash"), identityHash);
-    ParseUnsigned32(FieldValue(request, L"Source"), source);
-    ParseUnsigned32(FieldValue(request, L"OperationMask"), operationMask);
-    ParseUnsigned32(FieldValue(request, L"ObjectTypeMask"), objectTypeMask);
-    ParseUnsigned32(FieldValue(request, L"Trust"), trustFlags);
-    ParseUnsigned32(FieldValue(request, L"Remove"), removeBehavior);
-
+    ksword::ark::CallbackEnumEntry entry;
     KSWORD_ARK_REMOVE_EXTERNAL_CALLBACK_EX_REQUEST packet{};
-    packet.size = sizeof(packet);
-    packet.version = KSWORD_ARK_EXTERNAL_CALLBACK_REMOVE_PROTOCOL_VERSION;
-    packet.callbackClass = CallbackRemoveTypeForClass(callbackClass);
-    if (packet.callbackClass == 0) {
-        return MakeActionError(request, L"当前回调类型没有安全公开 API 移除映射。");
+    std::wstring error;
+    if (!ParseCallbackRemovalFields(request.rowFields, entry, error) ||
+        !BuildCallbackRemovalRequest(entry, packet, error)) {
+        return MakeActionError(request, error);
     }
-    packet.flags = KSWORD_ARK_EXTERNAL_CALLBACK_REMOVE_FLAG_REQUIRE_REVALIDATION;
-    packet.callbackAddress = callbackAddress;
-    packet.registrationAddress = registrationAddress;
-    packet.rawStorageValue = rawStorageValue;
-    packet.enumerationGeneration = generation;
-    packet.identityHash = identityHash;
-    packet.source = source;
-    packet.operationMask = operationMask;
-    packet.objectTypeMask = objectTypeMask;
-    packet.trustFlags = trustFlags;
-    packet.removeBehavior = removeBehavior != 0
-        ? removeBehavior
-        : (KSWORD_ARK_CALLBACK_REMOVE_BEHAVIOR_PUBLIC_API | KSWORD_ARK_CALLBACK_REMOVE_BEHAVIOR_REQUIRE_REVALIDATION);
 
     const ksword::ark::DriverClient client;
     const ksword::ark::CallbackRemoveExResult removed = client.removeExternalCallbackEx(packet);
     const KSWORD_ARK_REMOVE_EXTERNAL_CALLBACK_EX_RESPONSE& response = removed.response;
+    const std::wstring responseText(response.message,
+        std::find(response.message, response.message + KSWORD_ARK_CALLBACK_ENUM_DETAIL_CHARS, L'\0'));
 
     KernelOperationResult result;
     result.supported = true;
-    result.success = removed.io.ok && response.ntstatus >= 0;
+    const bool responseValid = CallbackRemovalResponseValid(response, removed.io.bytesReturned);
+    result.success = removed.io.ok && responseValid && response.ntstatus >= 0;
     result.destructiveAction = true;
-    result.message = std::wstring(L"Callback 安全移除")
+    result.message = std::wstring(entry.callbackClass == KSWORD_ARK_CALLBACK_ENUM_CLASS_MINIFILTER
+        ? L"卸载所属过滤器" : L"Callback 安全移除")
         + (result.success ? L"完成。" : L"未完成。")
         + L" "
         + Utf8ToWide(removed.io.message);
+    if (removed.io.ok) {
+        result.message += L" NTSTATUS=" + HexText(static_cast<std::uint32_t>(response.ntstatus)) +
+            L"，重验证=" + HexText(static_cast<std::uint32_t>(response.revalidationStatus)) + L" " + responseText;
+        if (!responseValid) result.message += L" 驱动响应长度、尺寸或版本不符合 EX 协议。";
+    }
     result.rows.push_back(Row({
         { L"Action", L"CallbackSafeRemove" },
         { L"IO", removed.io.ok ? L"OK" : L"FAIL" },
@@ -5817,121 +5732,11 @@ KernelOperationResult ExecuteCallbackSafeRemove(const KernelActionRequest& reque
         { L"ModuleSize", HexText(response.moduleSize) },
         { L"ModulePath", response.modulePath },
         { L"Service", response.serviceName },
-        { L"Message", response.message },
+        { L"Message", responseText },
     }, Utf8ToWide(removed.io.message)));
     return result;
 }
 
-
-// ExecuteCallbackExperimentalUnlink sends the original KernelDock experimental
-// unlink request through ArkDriverClient::removeExternalCallbackEx. Inputs are
-// the selected CallbackEnum row fields; processing sets the protocol's explicit
-// EXPERIMENTAL_UNLINK flag and behavior bits; output reports the R0 response.
-KernelOperationResult ExecuteCallbackExperimentalUnlink(const KernelActionRequest& request) {
-    std::uint32_t callbackClass = 0;
-    std::uint64_t callbackAddress = 0;
-    std::uint64_t registrationAddress = 0;
-    std::uint64_t rawStorageValue = 0;
-    std::uint64_t generation = 0;
-    std::uint64_t identityHash = 0;
-    std::uint32_t source = 0;
-    std::uint32_t operationMask = 0;
-    std::uint32_t objectTypeMask = 0;
-    std::uint32_t trustFlags = 0;
-    std::uint32_t removeBehavior = 0;
-    if (!ParseUnsigned32(FieldValue(request, L"Class"), callbackClass) || callbackClass == 0) {
-        return MakeActionError(request, L"当前行缺少 Callback Enumeration 的 Class 字段。");
-    }
-    ParseUnsigned64(FieldValue(request, L"Callback"), callbackAddress);
-    ParseUnsigned64(FieldValue(request, L"Registration"), registrationAddress);
-    ParseUnsigned64(FieldValue(request, L"RawStorageValue"), rawStorageValue);
-    ParseUnsigned64(FieldValue(request, L"Generation"), generation);
-    ParseUnsigned64(FieldValue(request, L"IdentityHash"), identityHash);
-    ParseUnsigned32(FieldValue(request, L"Source"), source);
-    ParseUnsigned32(FieldValue(request, L"OperationMask"), operationMask);
-    ParseUnsigned32(FieldValue(request, L"ObjectTypeMask"), objectTypeMask);
-    ParseUnsigned32(FieldValue(request, L"Trust"), trustFlags);
-    ParseUnsigned32(FieldValue(request, L"Remove"), removeBehavior);
-
-    const std::uint64_t primaryRemoveValue = rawStorageValue != 0 ? rawStorageValue :
-        (registrationAddress != 0 ? registrationAddress : callbackAddress);
-    if (primaryRemoveValue == 0) {
-        return MakeActionError(request, L"当前行缺少 Callback/Registration/RawStorageValue，无法构造 experimental unlink 请求。");
-    }
-
-    KSWORD_ARK_REMOVE_EXTERNAL_CALLBACK_EX_REQUEST packet{};
-    packet.size = sizeof(packet);
-    packet.version = KSWORD_ARK_EXTERNAL_CALLBACK_REMOVE_PROTOCOL_VERSION;
-    packet.callbackClass = CallbackRemoveTypeForClass(callbackClass);
-    if (packet.callbackClass == 0) {
-        return MakeActionError(request, L"当前回调类型没有 removeExternalCallbackEx 映射，不能发送 experimental unlink。");
-    }
-    packet.flags = KSWORD_ARK_EXTERNAL_CALLBACK_REMOVE_FLAG_EXPERIMENTAL_UNLINK |
-        KSWORD_ARK_EXTERNAL_CALLBACK_REMOVE_FLAG_REQUIRE_REVALIDATION;
-    packet.callbackAddress = callbackAddress;
-    packet.registrationAddress = registrationAddress;
-    packet.rawStorageValue = rawStorageValue;
-    packet.enumerationGeneration = generation;
-    packet.identityHash = identityHash;
-    packet.source = source;
-    packet.operationMask = operationMask;
-    packet.objectTypeMask = objectTypeMask;
-    packet.trustFlags = trustFlags;
-    packet.removeBehavior = removeBehavior != 0
-        ? (removeBehavior | KSWORD_ARK_CALLBACK_REMOVE_BEHAVIOR_EXPERIMENTAL_UNLINK | KSWORD_ARK_CALLBACK_REMOVE_BEHAVIOR_REQUIRE_REVALIDATION)
-        : (KSWORD_ARK_CALLBACK_REMOVE_BEHAVIOR_EXPERIMENTAL_UNLINK | KSWORD_ARK_CALLBACK_REMOVE_BEHAVIOR_REQUIRE_REVALIDATION);
-
-    const ksword::ark::DriverClient client;
-    const ksword::ark::CallbackRemoveExResult removed = client.removeExternalCallbackEx(packet);
-    const KSWORD_ARK_REMOVE_EXTERNAL_CALLBACK_EX_RESPONSE& response = removed.response;
-
-    KernelOperationResult result;
-    result.supported = true;
-    result.success = removed.io.ok && response.ntstatus >= 0;
-    result.destructiveAction = true;
-    result.message = std::wstring(L"Callback experimental unlink ")
-        + (result.success ? L"完成。" : L"未完成或被 R0 拒绝。")
-        + L" "
-        + Utf8ToWide(removed.io.message);
-    result.rows.push_back(Row({
-        { L"Action", L"CallbackExperimentalUnlink" },
-        { L"IO", removed.io.ok ? L"OK" : L"FAIL" },
-        { L"Win32", std::to_wstring(removed.io.win32Error) },
-        { L"BytesReturned", std::to_wstring(removed.io.bytesReturned) },
-        { L"RequestClass", std::to_wstring(packet.callbackClass) },
-        { L"RequestFlags", HexText(packet.flags) },
-        { L"RequestCallback", HexText(packet.callbackAddress) },
-        { L"RequestRegistration", HexText(packet.registrationAddress) },
-        { L"RequestRawStorageValue", HexText(packet.rawStorageValue) },
-        { L"RequestGeneration", HexText(packet.enumerationGeneration) },
-        { L"RequestIdentityHash", HexText(packet.identityHash) },
-        { L"RequestBehavior", HexText(packet.removeBehavior) },
-        { L"RequestBehaviorText", CallbackEnumRemoveBehaviorText(packet.removeBehavior) },
-        { L"ResponseClass", std::to_wstring(response.callbackClass) },
-        { L"ResponseClassText", CallbackEnumClassText(response.callbackClass) },
-        { L"ResponseSource", std::to_wstring(response.source) },
-        { L"ResponseSourceText", CallbackEnumSourceText(response.source) },
-        { L"Callback", HexText(response.callbackAddress) },
-        { L"Registration", HexText(response.registrationAddress) },
-        { L"RawStorageValue", HexText(response.rawStorageValue) },
-        { L"Generation", HexText(response.enumerationGeneration) },
-        { L"IdentityHash", HexText(response.identityHash) },
-        { L"NTSTATUS", HexText(static_cast<std::uint32_t>(response.ntstatus)) },
-        { L"Revalidation", HexText(static_cast<std::uint32_t>(response.revalidationStatus)) },
-        { L"ResponseTrust", HexText(response.trustFlags) },
-        { L"ResponseTrustText", CallbackEnumTrustFlagsText(response.trustFlags) },
-        { L"ResponseBehavior", HexText(response.removeBehavior) },
-        { L"ResponseBehaviorText", CallbackEnumRemoveBehaviorText(response.removeBehavior) },
-        { L"Mapping", HexText(response.mappingFlags) },
-        { L"MappingText", CallbackEnumMappingText(response.mappingFlags) },
-        { L"ModuleBase", HexText(response.moduleBase) },
-        { L"ModuleSize", HexText(response.moduleSize) },
-        { L"ModulePath", response.modulePath },
-        { L"Service", response.serviceName },
-        { L"Message", response.message },
-    }, Utf8ToWide(removed.io.message)));
-    return result;
-}
 
 // ExecuteCallbackRuntimeControl performs page-level callback runtime operations.
 // Inputs are action id and current filter text; processing goes only through
@@ -6901,7 +6706,7 @@ KernelOperationResult KernelFacade::ExecuteAction(const KernelActionRequest& req
     case KernelActionId::CallbackSafeRemove:
         return ExecuteCallbackSafeRemove(request);
     case KernelActionId::CallbackExperimentalUnlink:
-        return ExecuteCallbackExperimentalUnlink(request);
+        return MakeActionError(request, L"强制 unlink 尚无驱动实现，该入口已移除。");
     case KernelActionId::MinifilterSetBypassPids:
     case KernelActionId::MinifilterClearBypassPids:
         return ExecuteSetMinifilterBypassPids(request);

@@ -413,10 +413,12 @@ void SelectAllEditText(HWND edit) {
 // UI font. Inputs are parent/id/geometry/style flags; processing calls
 // CreateWindowExW; output is the child HWND.
 HWND CreateEdit(HWND parent, int id, const wchar_t* text, int x, int y, int w, int h, DWORD extraStyle) {
+    const DWORD horizontalStyle = (extraStyle & ES_MULTILINE) && (extraStyle & ES_READONLY)
+        ? 0U : ES_AUTOHSCROLL;
     HWND hwnd = ::CreateWindowExW(WS_EX_CLIENTEDGE,
         L"EDIT",
         text ? text : L"",
-        WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL | extraStyle,
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | horizontalStyle | extraStyle,
         x,
         y,
         w,
@@ -483,15 +485,15 @@ void PaintLabels(HWND hwnd, HDC dc) {
     const COLORREF text = Ksword::Ui::AppTheme().textColor;
     const COLORREF muted = Ksword::Ui::AppTheme().mutedTextColor;
     RECT title{ 12, 8, rc.right - 12, 28 };
-    Ksword::Ui::DrawTextLine(dc, L"Driver Memory Read / Write / Verify", title, text, Ksword::Ui::SystemUIFont(), DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    Ksword::Ui::DrawTextLine(dc, L"进程内存", title, text, Ksword::Ui::SystemUIFont(), DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 
     RECT pid{ 12, 38, 70, 62 };
     RECT address{ 200, 38, 272, 62 };
     RECT length{ 472, 38, 544, 62 };
     RECT filter{ 12, 96, rc.right - 12, 118 };
     Ksword::Ui::DrawTextLine(dc, L"PID", pid, muted, Ksword::Ui::SystemUIFont(), DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-    Ksword::Ui::DrawTextLine(dc, L"Address", address, muted, Ksword::Ui::SystemUIFont(), DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-    Ksword::Ui::DrawTextLine(dc, L"Length", length, muted, Ksword::Ui::SystemUIFont(), DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    Ksword::Ui::DrawTextLine(dc, L"地址 HEX", address, muted, Ksword::Ui::SystemUIFont(), DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    Ksword::Ui::DrawTextLine(dc, L"长度 字节", length, muted, Ksword::Ui::SystemUIFont(), DT_LEFT | DT_VCENTER | DT_SINGLELINE);
     Ksword::Ui::DrawTextLine(dc, L"操作历史筛选（匹配全部列和状态）", filter, muted, Ksword::Ui::SystemUIFont(), DT_LEFT | DT_VCENTER | DT_SINGLELINE);
     const DriverMemoryViewState* state = StateFromWindow(hwnd);
     const std::wstring snapshotText = state && state->snapshots.current()
@@ -544,7 +546,7 @@ bool SelectProcessForMemoryOperations(DriverMemoryViewState& state, const DWORD 
         ::SetWindowTextW(state.pidEdit, std::to_wstring(processId).c_str());
     }
     if (state.addressEdit) {
-        ::SetWindowTextW(state.addressEdit, L"0x0");
+        ::SetWindowTextW(state.addressEdit, L"");
     }
     if (state.lengthEdit) {
         ::SetWindowTextW(state.lengthEdit, L"16");
@@ -626,7 +628,7 @@ void HandleQueryRegion(DriverMemoryViewState& state) {
     DriverMemoryReadRequest request;
     std::wstring error;
     if (!ParseReadRequest(GetWindowTextString(state.pidEdit),
-            GetWindowTextString(state.addressEdit), L"1", request, error)) {
+            GetWindowTextString(state.addressEdit), L"1", request, error, true)) {
         SetStatus(state, error);
         return;
     }
@@ -1352,11 +1354,13 @@ void ShowMemoryHistoryContextMenu(DriverMemoryViewState& state, POINT screenPoin
 // value is returned because missing children are handled by normal HWND checks.
 void CreateChildControls(DriverMemoryViewState& state) {
     state.pidEdit = CreateEdit(state.hwnd, kPidEditId, L"", 0, 0, 0, 0, 0);
-    state.addressEdit = CreateEdit(state.hwnd, kAddressEditId, L"0x0", 0, 0, 0, 0, 0);
+    state.addressEdit = CreateEdit(state.hwnd, kAddressEditId, L"", 0, 0, 0, 0, 0);
+    ::SendMessageW(state.addressEdit, EM_SETCUEBANNER, TRUE,
+        reinterpret_cast<LPARAM>(L"输入十六进制地址"));
     state.lengthEdit = CreateEdit(state.hwnd, kLengthEditId, L"16", 0, 0, 0, 0, 0);
-    state.readButton = Ksword::Ui::CreateButton(state.hwnd, kReadButtonId, L"Read", 0, 0, 0, 0);
+    state.readButton = Ksword::Ui::CreateButton(state.hwnd, kReadButtonId, L"读取", 0, 0, 0, 0);
     state.queryRegionButton = Ksword::Ui::CreateButton(state.hwnd, kQueryRegionButtonId, L"R0 区域", 0, 0, 0, 0);
-    state.writeButton = Ksword::Ui::CreateButton(state.hwnd, kWriteButtonId, L"Write", 0, 0, 0, 0);
+    state.writeButton = Ksword::Ui::CreateButton(state.hwnd, kWriteButtonId, L"写入", 0, 0, 0, 0);
     state.previewDiffButton = Ksword::Ui::CreateButton(state.hwnd, kPreviewDiffButtonId, L"预览差异", 0, 0, 0, 0);
     state.applyDiffButton = Ksword::Ui::CreateButton(state.hwnd, kApplyDiffButtonId, L"应用差异", 0, 0, 0, 0);
     state.snapshotPreviousButton = Ksword::Ui::CreateButton(state.hwnd, kSnapshotPreviousButtonId, L"上一快照", 0, 0, 0, 0);
@@ -1379,7 +1383,7 @@ void CreateChildControls(DriverMemoryViewState& state) {
     }
     state.statusEdit = CreateEdit(state.hwnd,
         kStatusEditId,
-        L"Driver-only memory read/write surface. Requests are sent through ArkDriverClient and the shared memory IOCTL protocol.",
+        L"选择 PID，输入目标地址和长度后读取。地址按十六进制解析。",
         0,
         0,
         0,

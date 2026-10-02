@@ -7,6 +7,7 @@
 #include "../KswordARKLight/Features/SysTools/IoctlDecoder.h"
 #include "../KswordARKLight/Features/Window/Win32kTimerEvidenceModel.h"
 #include "../KswordARKLight/Features/Memory/MemorySnapshot.h"
+#include "../KswordARKLight/Features/Memory/DriverMemoryModel.h"
 #include "../KswordARKLight/Features/Memory/MemoryInspection.h"
 #include "../KswordARKLight/Features/Memory/MemoryWritePlan.h"
 #include "../KswordARKLight/Ui/EvidenceSession.h"
@@ -416,6 +417,70 @@ int wmain() {
             Ksword::Features::Window::Win32kTimerEvidenceStatusText(0xA5A5A5A5U).find(L"0xA5A5A5A5") != std::wstring::npos,
         L"Win32k timer evidence preserves known and unknown protocol status codes");
 
+    // Exercise the Light page's actual parser as well as the shared numeric
+    // utility: address digits must not silently become a decimal address.
+    using Ksword::Features::Memory::DriverMemoryReadRequest;
+    using Ksword::Features::Memory::DriverMemoryWriteRequest;
+    using Ksword::Features::Memory::ParseReadRequest;
+    using Ksword::Features::Memory::ParseWriteRequest;
+    using Ksword::Features::Memory::FormatMemoryReadSummary;
+    DriverMemoryReadRequest readRequest{};
+    DriverMemoryWriteRequest writeRequest{};
+    std::wstring memoryInputError;
+    Expect(ParseReadRequest(L"7516", L"1233", L"16", readRequest, memoryInputError) &&
+            readRequest.processId == 7516U && readRequest.address == 0x1233U && readRequest.length == 16U,
+        L"Light memory address is hexadecimal while PID and length remain decimal");
+    Expect(ParseReadRequest(L"7516", L" 7ff60000abcd ", L"0x10", readRequest, memoryInputError) &&
+            readRequest.address == 0x7FF60000ABCDULL && readRequest.length == 16U,
+        L"Light memory accepts unprefixed hex letters and explicit hex lengths");
+    Expect(!ParseReadRequest(L"7516", L"", L"16", readRequest, memoryInputError),
+        L"Light memory requires an explicit read address");
+    Expect(!ParseReadRequest(L"7516", L"0x0", L"16", readRequest, memoryInputError),
+        L"Light memory rejects null reads locally");
+    Expect(ParseReadRequest(L"7516", L"0x0", L"1", readRequest, memoryInputError, true) &&
+            readRequest.address == 0U,
+        L"Light region query can inspect the null-address region");
+    Expect(!ParseReadRequest(L"0", L"1000", L"16", readRequest, memoryInputError) &&
+            !ParseReadRequest(L"4294967296", L"1000", L"16", readRequest, memoryInputError),
+        L"Light memory rejects zero or overflowing PIDs");
+    Expect(!ParseReadRequest(L"7516", L"1000", L"0", readRequest, memoryInputError) &&
+            !ParseReadRequest(L"7516", L"1000", L"1048577", readRequest, memoryInputError),
+        L"Light memory rejects empty or excessive reads before submitting work");
+    Expect(!ParseReadRequest(L"7516", L"FFFFFFFFFFFFFFFF", L"2", readRequest, memoryInputError) &&
+            !ParseReadRequest(L"7516", L"10000000000000000", L"1", readRequest, memoryInputError),
+        L"Light memory rejects address and end-address overflow");
+    Expect(ParseReadRequest(L"7516", L"FFFFFFFFFFFFFFFF", L"1", readRequest, memoryInputError),
+        L"Light memory allows the last representable byte for driver validation");
+    Expect(!ParseReadRequest(L"7516", L"0x", L"16", readRequest, memoryInputError) &&
+            !ParseReadRequest(L"7516", L"12 33", L"16", readRequest, memoryInputError) &&
+            !ParseReadRequest(L"7516", L"-1233", L"16", readRequest, memoryInputError),
+        L"Light memory rejects incomplete prefixes, internal spaces and signed addresses");
+    Expect(ParseWriteRequest(L"7516", L"1233", L"AA 0xBB 00", writeRequest, memoryInputError) &&
+            writeRequest.address == 0x1233U && writeRequest.bytes == std::vector<std::uint8_t>{ 0xAAU, 0xBBU, 0U },
+        L"Light writes share the hexadecimal address rule");
+    Expect(!ParseWriteRequest(L"7516", L"0", L"AA", writeRequest, memoryInputError) &&
+            !ParseWriteRequest(L"7516", L"FFFFFFFFFFFFFFFF", L"AA BB", writeRequest, memoryInputError),
+        L"Light writes reject null and overflowing ranges");
+    const DriverMemoryReadRequest observedRequest{ 7516U, 0U, 16U };
+    Expect(FormatMemoryReadSummary(observedRequest, false, ERROR_FILE_NOT_FOUND,
+            KSWORD_ARK_MEMORY_READ_STATUS_UNAVAILABLE, 0U).find(L"驱动设备不可用") != std::wstring::npos,
+        L"Missing-driver reads report device unavailability before raw IOCTL details");
+    Expect(FormatMemoryReadSummary(observedRequest, true, ERROR_SUCCESS,
+            KSWORD_ARK_MEMORY_READ_STATUS_PARTIAL_COPY, 0U).find(L"读取失败") == 0U,
+        L"Successful transport with zero partial-copy bytes still reports a failed read");
+    Expect(FormatMemoryReadSummary(observedRequest, true, ERROR_SUCCESS,
+            KSWORD_ARK_MEMORY_READ_STATUS_PARTIAL_COPY, 8U).find(L"部分读取：已返回 8/16") == 0U,
+        L"Nonempty partial copy preserves the actual short-read count");
+    Expect(FormatMemoryReadSummary(observedRequest, true, ERROR_SUCCESS,
+            KSWORD_ARK_MEMORY_READ_STATUS_OK, 16U).find(L"读取完成：16/16") == 0U,
+        L"A complete read reports the requested and returned bytes");
+    Expect(FormatMemoryReadSummary(observedRequest, false, ERROR_ACCESS_DENIED,
+            KSWORD_ARK_MEMORY_READ_STATUS_UNAVAILABLE, 0U).find(L"权限不足") != std::wstring::npos,
+        L"Driver access denied is distinguished from an unreadable address");
+    Expect(FormatMemoryReadSummary(observedRequest, true, ERROR_SUCCESS,
+            KSWORD_ARK_MEMORY_READ_STATUS_ZERO_FILLED, 16U).find(L"读取失败") == 0U,
+        L"Synthetic zero-filled responses are never presented as a successful read");
+
     MemorySnapshotHistory snapshots(2U);
     Expect(!snapshots.record(0U, 0x1000U, 4U, { 1U }, L"bad"), L"snapshot rejects missing pid");
     Expect(snapshots.record(42U, 0x1000U, 4U, { 1U, 2U, 3U, 4U }, L"first"), L"first snapshot recorded");
@@ -501,6 +566,7 @@ int wmain() {
     // 下一阶段验收（docs/next/KSword_Next_Roadmap_Acceptance.md）的离线自动测试。
     // 每个套件调用 shared/evidence 的生产实现，返回自己的失败计数。
     failures += RunProcessInformationTests();
+    failures += RunCallbackEnumerationTests();
     failures += RunEvidenceContractTests();
     failures += RunCrossViewTests();
     failures += RunEntityGraphTests();

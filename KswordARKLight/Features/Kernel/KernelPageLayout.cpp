@@ -212,7 +212,7 @@ std::vector<std::wstring> CanonicalColumnNames(const KernelFeatureId featureId) 
     case KernelFeatureId::DriverStatus:
         return { L"功能", L"状态", L"策略", L"所需DynData", L"已满足DynData", L"依赖字段", L"原因" };
     case KernelFeatureId::CallbackEnumeration:
-        return { L"类别", L"来源", L"可信状态", L"状态", L"移除策略", L"名称", L"回调/对象地址", L"模块", L"Altitude" };
+        return { L"类别", L"注册类型", L"来源", L"可信状态", L"状态", L"可移除", L"名称", L"回调/对象地址", L"模块", L"Altitude" };
     case KernelFeatureId::CallbackIntercept:
         return { L"Section", L"Type", L"Enabled", L"Mode", L"Rules", L"Pending", L"Status" };
     case KernelFeatureId::KernelExecutableMemory:
@@ -390,10 +390,12 @@ std::vector<std::wstring> ColumnAliases(const KernelFeatureId featureId, const s
     }
     if (featureId == KernelFeatureId::CallbackEnumeration) {
         if (columnName == L"类别") return { L"ClassText", L"Class" };
+        if (columnName == L"注册类型") return { L"RegistrationTypeText", L"RegistrationType" };
         if (columnName == L"来源") return { L"SourceText", L"Source" };
         if (columnName == L"可信状态") return { L"SourceTrust", L"TrustText" };
         if (columnName == L"状态") return { L"Status" };
         if (columnName == L"移除策略") return { L"RemovePolicy" };
+        if (columnName == L"可移除") return { L"RemovePolicyGlyph" };
         if (columnName == L"名称") return { L"Name" };
         if (columnName == L"回调/对象地址") return { L"Callback", L"Object" };
         if (columnName == L"模块") return { L"ModulePath", L"Module" };

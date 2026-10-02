@@ -8,6 +8,9 @@
   <ItemGroup>
     <ClCompile Include="KswordARKLightTests.cpp"><Filter>Tests</Filter></ClCompile>
     <ClCompile Include="ProcessInformationTests.cpp"><Filter>Tests</Filter></ClCompile>
+    <ClCompile Include="CallbackEnumerationTests.cpp"><Filter>Tests</Filter></ClCompile>
+    <ClCompile Include="..\KswordARKLight\Features\Kernel\CallbackEnumeration.cpp"><Filter>Production</Filter></ClCompile>
+    <ClCompile Include="..\KswordARKLight\Features\Kernel\KernelPageLayout.cpp"><Filter>Production</Filter></ClCompile>
     <ClCompile Include="..\KswordARKLight\Features\Process\ProcessDetails.cpp"><Filter>Production</Filter></ClCompile>
     <ClCompile Include="..\KswordARKLight\Features\Process\ProcessTelemetry.cpp"><Filter>Production</Filter></ClCompile>
     <ClCompile Include="..\Ksword5.1\Ksword5.1\ksword\network\network_process_etw_monitor.cpp"><Filter>Production</Filter></ClCompile>
@@ -56,12 +59,15 @@
     <ClCompile Include="..\KswordARKLight\Features\SysTools\IoctlDecoder.cpp"><Filter>Production</Filter></ClCompile>
     <ClCompile Include="..\KswordARKLight\Features\Window\Win32kTimerEvidenceModel.cpp"><Filter>Production</Filter></ClCompile>
     <ClCompile Include="..\KswordARKLight\Features\Memory\MemorySnapshot.cpp"><Filter>Production</Filter></ClCompile>
+    <ClCompile Include="..\KswordARKLight\Features\Memory\DriverMemoryModel.cpp"><Filter>Production</Filter></ClCompile>
     <ClCompile Include="..\KswordARKLight\Features\Memory\MemoryInspection.cpp"><Filter>Production</Filter></ClCompile>
     <ClCompile Include="..\KswordARKLight\Features\Memory\MemoryWritePlan.cpp"><Filter>Production</Filter></ClCompile>
     <ClCompile Include="..\KswordARKLight\Ui\EvidenceSession.cpp"><Filter>Production</Filter></ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="TestSupport.h"><Filter>Tests</Filter></ClInclude>
+    <ClInclude Include="..\KswordARKLight\Features\Kernel\CallbackEnumeration.h"><Filter>Production</Filter></ClInclude>
+    <ClInclude Include="..\KswordARKLight\Features\Kernel\KernelPageLayout.h"><Filter>Production</Filter></ClInclude>
     <ClInclude Include="..\shared\driver\KswordArkHvmEptSwitch.h"><Filter>Production\Evidence</Filter></ClInclude>
     <ClInclude Include="..\shared\evidence\CrossViewDiff.h"><Filter>Production\Evidence</Filter></ClInclude>
     <ClInclude Include="..\shared\evidence\EntityGraph.h"><Filter>Production\Evidence</Filter></ClInclude>
@@ -91,6 +97,7 @@
     <ClInclude Include="..\KswordARKLight\Features\SysTools\IoctlDecoder.h"><Filter>Production</Filter></ClInclude>
     <ClInclude Include="..\KswordARKLight\Features\Window\Win32kTimerEvidenceModel.h"><Filter>Production</Filter></ClInclude>
     <ClInclude Include="..\KswordARKLight\Features\Memory\MemorySnapshot.h"><Filter>Production</Filter></ClInclude>
+    <ClInclude Include="..\KswordARKLight\Features\Memory\DriverMemoryModel.h"><Filter>Production</Filter></ClInclude>
     <ClInclude Include="..\KswordARKLight\Features\Memory\MemoryInspection.h"><Filter>Production</Filter></ClInclude>
     <ClInclude Include="..\KswordARKLight\Features\Memory\MemoryWritePlan.h"><Filter>Production</Filter></ClInclude>
     <ClInclude Include="..\KswordARKLight\Ui\EvidenceSession.h"><Filter>Production</Filter></ClInclude>

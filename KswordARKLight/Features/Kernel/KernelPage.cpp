@@ -1,4 +1,5 @@
 #include "KernelPage.h"
+#include "CallbackEnumeration.h"
 
 #include "KernelCatalog.h"
 #include "KernelPageLayout.h"
@@ -100,7 +101,6 @@ constexpr UINT_PTR kMenuCopyRow = 51102;
 constexpr UINT_PTR kMenuCopyAll = 51103;
 constexpr UINT_PTR kMenuInlineNopPatch = 51104;
 constexpr UINT_PTR kMenuCallbackSafeRemove = 51105;
-constexpr UINT_PTR kMenuCallbackExperimentalUnlink = 51106;
 constexpr UINT_PTR kMenuCallbackOpenModuleFolder = 51107;
 constexpr UINT_PTR kMenuCallbackModuleFileDetail = 51108;
 constexpr UINT_PTR kMenuMinifilterSetBypass = 51109;
@@ -1385,127 +1385,6 @@ bool IsIntegrityHiddenColumn(const std::wstring& name) {
         name == L"LastStatus";
 }
 
-// CallbackRemoveClassForEnumClass maps one callback-enumeration row class to
-// the R0 remove protocol class. Input is the hidden "Class" cell value; output
-// is zero when no public remove path exists for that callback category.
-std::uint32_t CallbackRemoveClassForEnumClass(const std::uint32_t callbackClass) {
-    switch (callbackClass) {
-    case KSWORD_ARK_CALLBACK_ENUM_CLASS_REGISTRY:
-        return KSWORD_ARK_EXTERNAL_CALLBACK_REMOVE_TYPE_REGISTRY;
-    case KSWORD_ARK_CALLBACK_ENUM_CLASS_PROCESS:
-        return KSWORD_ARK_EXTERNAL_CALLBACK_REMOVE_TYPE_PROCESS;
-    case KSWORD_ARK_CALLBACK_ENUM_CLASS_THREAD:
-        return KSWORD_ARK_EXTERNAL_CALLBACK_REMOVE_TYPE_THREAD;
-    case KSWORD_ARK_CALLBACK_ENUM_CLASS_IMAGE:
-        return KSWORD_ARK_EXTERNAL_CALLBACK_REMOVE_TYPE_IMAGE;
-    case KSWORD_ARK_CALLBACK_ENUM_CLASS_OBJECT:
-        return KSWORD_ARK_EXTERNAL_CALLBACK_REMOVE_TYPE_OBJECT;
-    case KSWORD_ARK_CALLBACK_ENUM_CLASS_MINIFILTER:
-        return KSWORD_ARK_EXTERNAL_CALLBACK_REMOVE_TYPE_MINIFILTER;
-    case KSWORD_ARK_CALLBACK_ENUM_CLASS_WFP_CALLOUT:
-        return KSWORD_ARK_EXTERNAL_CALLBACK_REMOVE_TYPE_WFP_CALLOUT;
-    case KSWORD_ARK_CALLBACK_ENUM_CLASS_ETW_PROVIDER:
-        return KSWORD_ARK_EXTERNAL_CALLBACK_REMOVE_TYPE_ETW_PROVIDER;
-    default:
-        return 0;
-    }
-}
-
-// CallbackEnumPrimaryRemoveValue selects the address/id that remove operations
-// can send for one visible callback row. Inputs are selected-row text fields;
-// output follows the original KernelDock priority for callback, registration,
-// and raw storage values.
-std::uint64_t CallbackEnumPrimaryRemoveValue(
-    const std::uint64_t callbackAddress,
-    const std::uint64_t registrationAddress,
-    const std::uint64_t rawStorageValue,
-    const std::uint32_t fieldFlags) {
-    if (callbackAddress != 0 &&
-        ((fieldFlags & KSWORD_ARK_CALLBACK_ENUM_FIELD_CALLBACK_ADDRESS) != 0 ||
-            (fieldFlags & KSWORD_ARK_CALLBACK_ENUM_FIELD_IDENTIFIER) != 0 ||
-            (fieldFlags & KSWORD_ARK_CALLBACK_ENUM_FIELD_HANDLE) != 0 ||
-            (fieldFlags & KSWORD_ARK_CALLBACK_ENUM_FIELD_REMOVABLE_CANDIDATE) != 0)) {
-        return callbackAddress;
-    }
-    if (registrationAddress != 0 &&
-        (fieldFlags & KSWORD_ARK_CALLBACK_ENUM_FIELD_IDENTIFIER) != 0) {
-        return registrationAddress;
-    }
-    return rawStorageValue != 0 ? rawStorageValue : registrationAddress;
-}
-
-// CallbackEnumFallbackSource reports whether a callback row came from private
-// unsupported/pattern diagnostics. Input is the shared source id; output drives
-// experimental-only menu enablement without calling the driver.
-bool CallbackEnumFallbackSource(const std::uint32_t source) {
-    return source == KSWORD_ARK_CALLBACK_ENUM_SOURCE_PRIVATE_PATTERN_SCAN ||
-        source == KSWORD_ARK_CALLBACK_ENUM_SOURCE_PRIVATE_NOTIFY_ARRAY ||
-        source == KSWORD_ARK_CALLBACK_ENUM_SOURCE_PRIVATE_REGISTRY_LIST ||
-        source == KSWORD_ARK_CALLBACK_ENUM_SOURCE_PRIVATE_OBJECT_TYPE_LIST ||
-        source == KSWORD_ARK_CALLBACK_ENUM_SOURCE_PRIVATE_UNSUPPORTED;
-}
-
-// CallbackEnumSafeRemoveAllowed mirrors the original table menu policy for the
-// public API path. Inputs are selected-row numeric/text fields; output is true
-// only for a single verified/candidate row with a compatible request value.
-bool CallbackEnumSafeRemoveAllowed(
-    const std::uint32_t callbackClass,
-    const std::uint32_t status,
-    const std::uint32_t source,
-    const std::uint32_t fieldFlags,
-    const std::uint32_t removeBehavior,
-    const std::uint64_t requestValue,
-    const std::wstring& removePolicy) {
-    if (CallbackRemoveClassForEnumClass(callbackClass) == 0 ||
-        status != KSWORD_ARK_CALLBACK_ENUM_STATUS_OK ||
-        requestValue == 0 ||
-        ContainsCaseInsensitive(removePolicy, L"not removable") ||
-        ContainsCaseInsensitive(removePolicy, L"不可移除") ||
-        ContainsCaseInsensitive(removePolicy, L"experimental only")) {
-        return false;
-    }
-    const bool verified = (fieldFlags & KSWORD_ARK_CALLBACK_ENUM_FIELD_VERIFIED_REMOVE) != 0 ||
-        (removeBehavior & KSWORD_ARK_CALLBACK_REMOVE_BEHAVIOR_PUBLIC_API) != 0;
-    const bool candidate = (fieldFlags & KSWORD_ARK_CALLBACK_ENUM_FIELD_REMOVABLE_CANDIDATE) != 0 ||
-        ContainsCaseInsensitive(removePolicy, L"candidate") ||
-        ContainsCaseInsensitive(removePolicy, L"verified");
-    const bool publicSource = source == KSWORD_ARK_CALLBACK_ENUM_SOURCE_PUBLIC_API ||
-        source == KSWORD_ARK_CALLBACK_ENUM_SOURCE_FLTMGR_ENUMERATION ||
-        source == KSWORD_ARK_CALLBACK_ENUM_SOURCE_WFP_MGMT_API ||
-        source == KSWORD_ARK_CALLBACK_ENUM_SOURCE_ETW_DYNDATA;
-    return verified || candidate || publicSource;
-}
-
-// CallbackEnumExperimentalUnlinkAllowed mirrors the original unlink menu policy.
-// Inputs are selected-row numeric/text fields; output is false for diagnostics
-// with no address-like storage or for explicitly non-removable rows.
-bool CallbackEnumExperimentalUnlinkAllowed(
-    const std::uint32_t callbackClass,
-    const std::uint32_t status,
-    const std::uint32_t source,
-    const std::uint32_t fieldFlags,
-    const std::uint32_t removeBehavior,
-    const std::uint64_t requestValue,
-    const std::uint64_t contextAddress,
-    const std::wstring& removePolicy) {
-    if (CallbackRemoveClassForEnumClass(callbackClass) == 0 ||
-        status != KSWORD_ARK_CALLBACK_ENUM_STATUS_OK ||
-        ContainsCaseInsensitive(removePolicy, L"not removable") ||
-        ContainsCaseInsensitive(removePolicy, L"不可移除")) {
-        return false;
-    }
-    const bool hasAnyStorage = requestValue != 0 || contextAddress != 0;
-    if (!hasAnyStorage) {
-        return false;
-    }
-    const bool experimental = (fieldFlags & KSWORD_ARK_CALLBACK_ENUM_FIELD_EXPERIMENTAL_REMOVE) != 0 ||
-        (removeBehavior & KSWORD_ARK_CALLBACK_REMOVE_BEHAVIOR_EXPERIMENTAL_UNLINK) != 0 ||
-        ContainsCaseInsensitive(removePolicy, L"experimental") ||
-        ContainsCaseInsensitive(removePolicy, L"candidate") ||
-        ContainsCaseInsensitive(removePolicy, L"verified");
-    return experimental || CallbackEnumFallbackSource(source);
-}
-
 // ReadWholeFileText reads a UTF-16LE-BOM or UTF-8 text file selected by the
 // user. Inputs are path and error sink; output is decoded Unicode text.
 std::wstring ReadWholeFileText(const std::wstring& path, std::wstring* errorText) {
@@ -2122,10 +2001,6 @@ LRESULT KernelPage::HandleMessage(HWND hwnd, const UINT msg, const WPARAM wParam
         }
         if (LOWORD(wParam) == kMenuCallbackSafeRemove) {
             ExecuteSelectedAction(KernelActionId::CallbackSafeRemove);
-            return 0;
-        }
-        if (LOWORD(wParam) == kMenuCallbackExperimentalUnlink) {
-            ExecuteSelectedAction(KernelActionId::CallbackExperimentalUnlink);
             return 0;
         }
         if (LOWORD(wParam) == kMenuCallbackOpenModuleFolder) {
@@ -5128,15 +5003,30 @@ void KernelPage::ExecuteSelectedAction(const KernelActionId actionId) {
             L"规则数: " + std::to_wstring(callbackRules_.size()) + L"\n\n"
             L"该操作会改变 R0 callback runtime 的 ruleVersion。是否继续？";
         break;
-    case KernelActionId::CallbackSafeRemove:
-        confirmTitle = L"Callback 安全移除";
+    case KernelActionId::CallbackSafeRemove: {
+        if (!resultList_ || ListView_GetSelectedCount(resultList_) != 1) {
+            ::MessageBoxW(hwnd_, L"请单选一条回调记录。", L"回调移除", MB_OK | MB_ICONINFORMATION);
+            return;
+        }
+        ksword::ark::CallbackEnumEntry entry;
+        KSWORD_ARK_REMOVE_EXTERNAL_CALLBACK_EX_REQUEST packet{};
+        std::wstring error;
+        if (!ParseCallbackRemovalFields(request.rowFields, entry, error) ||
+            !BuildCallbackRemovalRequest(entry, packet, error)) {
+            ::MessageBoxW(hwnd_, error.c_str(), L"回调移除", MB_OK | MB_ICONINFORMATION);
+            return;
+        }
+        const bool unloadFilter = entry.callbackClass == KSWORD_ARK_CALLBACK_ENUM_CLASS_MINIFILTER;
+        confirmTitle = unloadFilter ? L"卸载所属过滤器" : L"Callback 安全移除";
         confirmText =
             L"将通过 ArkDriverClient::removeExternalCallbackEx 的公开 API 路径移除当前回调。\n\n"
             L"名称: " + FirstSelectedRowValue({ L"Name", L"名称" }) + L"\n"
             L"地址: " + SelectedRowField(L"Callback") + L"\n"
-            L"模块: " + FirstSelectedRowValue({ L"ModulePath", L"Module", L"模块" }) + L"\n\n"
-            L"不会使用 experimental unlink。是否继续？";
+            L"模块: " + FirstSelectedRowValue({ L"ModulePath", L"Module", L"模块" }) + L"\n\n" +
+            (unloadFilter ? L"此操作将卸载所属过滤器及其全部回调和实例。过滤器可能拒绝卸载。是否继续？"
+                : L"使用公开 API 注销，并由驱动重新验证当前注册身份。是否继续？");
         break;
+    }
     case KernelActionId::MinifilterSetBypassPids:
         requireSelectedRow = false;
         confirmTitle = L"设置 Minifilter 放行 PID";
@@ -5332,7 +5222,9 @@ void KernelPage::ExecuteSelectedAction(const KernelActionId actionId) {
 
 void KernelPage::ExecuteActionInBackground(KernelActionRequest request, const KernelActionId actionId, const bool offerForcedRetry) {
     if (!actionTask_) {
-        RenderResult(facade_.ExecuteAction(request));
+        const KernelOperationResult result = facade_.ExecuteAction(request);
+        if (actionId == KernelActionId::CallbackSafeRemove) PresentCallbackRemovalResult(result);
+        else RenderResult(result);
         return;
     }
     const KernelFeatureId featureId = request.featureId;
@@ -5383,8 +5275,26 @@ void KernelPage::ExecuteActionInBackground(KernelActionRequest request, const Ke
                     return;
                 }
             }
-            RenderResult(*result);
+            if (actionId == KernelActionId::CallbackSafeRemove) PresentCallbackRemovalResult(*result);
+            else RenderResult(*result);
         });
+}
+
+void KernelPage::PresentCallbackRemovalResult(const KernelOperationResult& result) {
+    if (result.success) {
+        RefreshSelectedFeature();
+        return;
+    }
+    // An action response is not an enumeration snapshot. Preserve the current
+    // table and show the exact driver rejection instead of discarding its rows.
+    std::wostringstream detail;
+    detail << result.message << L"\r\n";
+    for (const KernelResultRow& row : result.rows) {
+        for (const auto& field : row.columns) detail << field.first << L": " << field.second << L"\r\n";
+    }
+    ::SetWindowTextW(statusText_, result.message.c_str());
+    ::SetWindowTextW(detailEdit_, detail.str().c_str());
+    ::MessageBoxW(hwnd_, result.message.c_str(), L"回调移除未完成", MB_OK | MB_ICONWARNING);
 }
 
 void KernelPage::RenderDescriptor(const KernelFeatureDescriptor& descriptor) {
@@ -7540,7 +7450,7 @@ void KernelPage::RebuildCallbackEnumerationListFromCache() {
     // RebuildCallbackEnumerationListFromCache mirrors the original
     // KernelDock.CallbackEnum table. Inputs are raw rows from
     // ArkDriverClient::enumerateCallbacks; processing keeps the exact visible
-    // nine columns, preserves hidden protocol fields for remove actions, and
+    // registration subtypes and policy glyphs, preserves hidden protocol fields for remove actions, and
     // applies the local filter edit; output updates resultList_ and detailEdit_.
     if (!resultList_) {
         return;
@@ -7576,6 +7486,9 @@ void KernelPage::RebuildCallbackEnumerationListFromCache() {
     }
     addColumnIfMissing(displayColumns, L"SourceIndex");
     addColumnIfMissing(displayColumns, L"Class");
+    addColumnIfMissing(displayColumns, L"StatusCode");
+    addColumnIfMissing(displayColumns, L"RegistrationType");
+    addColumnIfMissing(displayColumns, L"RemovePolicy");
     addColumnIfMissing(displayColumns, L"Source");
     addColumnIfMissing(displayColumns, L"Callback");
     addColumnIfMissing(displayColumns, L"Context");
@@ -7666,7 +7579,11 @@ void KernelPage::RebuildCallbackEnumerationListFromCache() {
     currentRows_ = std::move(displayRows);
     ClearResultTable();
     for (std::size_t index = 0; index < currentColumns_.size(); ++index) {
-        const bool hidden = currentColumns_[index] == L"SourceIndex" ||
+        const bool hidden = currentColumns_[index] == L"类别" ||
+            currentColumns_[index] == L"StatusCode" ||
+            currentColumns_[index] == L"RegistrationType" ||
+            currentColumns_[index] == L"RemovePolicy" ||
+            currentColumns_[index] == L"SourceIndex" ||
             currentColumns_[index] == L"Class" ||
             currentColumns_[index] == L"Source" ||
             currentColumns_[index] == L"Callback" ||
@@ -7690,8 +7607,8 @@ void KernelPage::RebuildCallbackEnumerationListFromCache() {
         int width = hidden ? 0 : ColumnWidth(currentColumns_[index]);
         if (currentColumns_[index] == L"可信状态") {
             width = 170;
-        } else if (currentColumns_[index] == L"移除策略") {
-            width = 200;
+        } else if (currentColumns_[index] == L"可移除") {
+            width = 64;
         } else if (currentColumns_[index] == L"回调/对象地址") {
             width = 180;
         } else if (currentColumns_[index] == L"模块") {
@@ -8733,14 +8650,12 @@ LRESULT KernelPage::HandleResultListCustomDraw(const LPARAM lParam) {
         return CDRF_DODEFAULT;
     }
 
-    if (columnName == L"移除策略") {
-        if (ContainsCaseInsensitive(value, L"not removable") || ContainsCaseInsensitive(value, L"不可移除")) {
+    if (columnName == L"可移除") {
+        if (value == L"×") {
             draw->clrText = RGB(0x8A, 0x8A, 0x8A);
-        } else if (ContainsCaseInsensitive(value, L"verified") || ContainsCaseInsensitive(value, L"公开") ||
-            ContainsCaseInsensitive(value, L"可移除")) {
+        } else if (value == L"√") {
             draw->clrText = RGB(0x3A, 0x8F, 0x3A);
-        } else if (ContainsCaseInsensitive(value, L"candidate") || ContainsCaseInsensitive(value, L"experimental") ||
-            ContainsCaseInsensitive(value, L"候选") || ContainsCaseInsensitive(value, L"实验")) {
+        } else if (value == L"!") {
             draw->clrText = RGB(0xD7, 0x7A, 0x00);
         }
         return CDRF_DODEFAULT;
@@ -9038,6 +8953,7 @@ std::wstring KernelPage::BuildOriginalStyleSelectedRowDetail(const KernelFeature
             cell({ L"移除策略", L"RemovePolicy" }).find(L"候选") != std::wstring::npos;
         std::wostringstream detail;
         detail << L"类别: " << cell({ L"类别", L"ClassText", L"Class" }) << L"\r\n"
+               << L"注册类型: " << cell({ L"注册类型", L"RegistrationTypeText", L"RegistrationType" }) << L"\r\n"
                << L"来源: " << cell({ L"来源", L"SourceText", L"Source" }) << L"\r\n"
                << L"可信状态: " << trustText << L"\r\n"
                << L"移除策略: " << cell({ L"移除策略", L"RemovePolicy" }) << L"\r\n"
@@ -9057,15 +8973,16 @@ std::wstring KernelPage::BuildOriginalStyleSelectedRowDetail(const KernelFeature
                << L"操作掩码: " << cell({ L"OperationMask" }) << L"\r\n"
                << L"对象类型掩码: " << cell({ L"ObjectTypeMask" }) << L"\r\n"
                << L"字段标志: " << cell({ L"FieldFlags" }) << L"\r\n"
-               << L"可信标志(预留): " << cell({ L"Trust" }) << L"\r\n"
-               << L"移除行为(预留): " << cell({ L"Remove" }) << L"\r\n"
-               << L"移除标志(预留): " << cell({ L"RemoveFlags" }) << L"\r\n"
-               << L"Generation(预留): " << cell({ L"Generation" }) << L"\r\n"
-               << L"IdentityHash(预留): " << cell({ L"IdentityHash" }) << L"\r\n"
-               << L"RawStorageValue(预留): " << cell({ L"RawStorageValue" }) << L"\r\n"
+               << L"可信标志: " << cell({ L"Trust" }) << L"\r\n"
+               << L"移除行为: " << cell({ L"Remove" }) << L"\r\n"
+               << L"移除标志: " << cell({ L"RemoveFlags" }) << L"\r\n"
+               << L"Generation: " << cell({ L"Generation" }) << L"\r\n"
+               << L"IdentityHash: " << cell({ L"IdentityHash" }) << L"\r\n"
+               << L"RawStorageValue: " << cell({ L"RawStorageValue" }) << L"\r\n"
                << L"LastStatus: " << cell({ L"LastStatus" }) << L"\r\n\r\n"
                << L"说明: 主地址显示会优先显示真实回调函数；定位/诊断行没有真实回调函数时显示全局数组、链表节点、标识符或诊断值。"
-               << L"旧协议尚未返回 generation/identity hash/raw storage value 时保持 0 或空值；实验 unlink 仅为 UI 预留，不作为默认路径。\r\n\r\n"
+               << L"√ 表示可验证的公开 API 路径；! 表示注销前须重验证的候选；× 表示不可移除。"
+               << L"Minifilter 操作会卸载所属过滤器及其全部回调和实例。旧驱动缺少完整身份时不能执行 EX 注销。\r\n\r\n"
                << L"详情:\r\n" << cell({ L"Detail", L"FieldText", L"TrustText", L"RemoveText" });
         return detail.str();
     }
@@ -12568,61 +12485,14 @@ bool KernelPage::ShowCallbackEnumerationContextMenu(POINT screenPoint, const Ker
     const std::wstring moduleFile = SelectedCallbackModulePath();
     const bool hasModuleFile = !moduleFile.empty() && ::GetFileAttributesW(moduleFile.c_str()) != INVALID_FILE_ATTRIBUTES;
 
-    std::uint32_t callbackClass = 0;
-    std::uint32_t status = 0;
-    std::uint32_t source = 0;
-    std::uint32_t fieldFlags = 0;
-    std::uint32_t removeBehavior = 0;
-    std::uint64_t callbackAddress = 0;
-    std::uint64_t registrationAddress = 0;
-    std::uint64_t rawStorageValue = 0;
-    std::uint64_t contextAddress = 0;
-    std::uint64_t parsed = 0;
-    if (ParseUnsigned64Value(FirstSelectedRowField({ L"Class" }), parsed)) {
-        callbackClass = static_cast<std::uint32_t>(parsed);
-    }
-    if (ParseUnsigned64Value(FirstSelectedRowField({ L"Source" }), parsed)) {
-        source = static_cast<std::uint32_t>(parsed);
-    }
-    if (ParseUnsigned64Value(FirstSelectedRowField({ L"FieldFlags" }), parsed)) {
-        fieldFlags = static_cast<std::uint32_t>(parsed);
-    }
-    if (ParseUnsigned64Value(FirstSelectedRowField({ L"Remove" }), parsed)) {
-        removeBehavior = static_cast<std::uint32_t>(parsed);
-    }
-    ParseUnsigned64Value(FirstSelectedRowField({ L"Callback" }), callbackAddress);
-    ParseUnsigned64Value(FirstSelectedRowField({ L"Registration" }), registrationAddress);
-    ParseUnsigned64Value(FirstSelectedRowField({ L"RawStorageValue" }), rawStorageValue);
-    ParseUnsigned64Value(FirstSelectedRowField({ L"Context" }), contextAddress);
-
-    const std::wstring statusText = FirstSelectedRowField({ L"Status", L"状态" });
-    if (ContainsCaseInsensitive(statusText, L"可见") || ContainsCaseInsensitive(statusText, L"OK") ||
-        ContainsCaseInsensitive(statusText, L"success") || ContainsCaseInsensitive(statusText, L"(1)")) {
-        status = KSWORD_ARK_CALLBACK_ENUM_STATUS_OK;
-    }
-    const std::wstring removePolicy = FirstSelectedRowField({ L"RemovePolicy", L"移除策略" });
-    const std::uint64_t requestValue = CallbackEnumPrimaryRemoveValue(
-        callbackAddress,
-        registrationAddress,
-        rawStorageValue,
-        fieldFlags);
-    const bool canSafeRemove = singleSelection && CallbackEnumSafeRemoveAllowed(
-        callbackClass,
-        status,
-        source,
-        fieldFlags,
-        removeBehavior,
-        requestValue,
-        removePolicy);
-    const bool canExperimentalUnlink = singleSelection && CallbackEnumExperimentalUnlinkAllowed(
-        callbackClass,
-        status,
-        source,
-        fieldFlags,
-        removeBehavior,
-        requestValue,
-        contextAddress,
-        removePolicy);
+    const KernelActionRequest action = BuildCurrentActionRequest(KernelActionId::CallbackSafeRemove);
+    ksword::ark::CallbackEnumEntry entry;
+    KSWORD_ARK_REMOVE_EXTERNAL_CALLBACK_EX_REQUEST packet{};
+    std::wstring error;
+    const bool canSafeRemove = singleSelection &&
+        ParseCallbackRemovalFields(action.rowFields, entry, error) &&
+        BuildCallbackRemovalRequest(entry, packet, error);
+    const bool unloadFilter = entry.callbackClass == KSWORD_ARK_CALLBACK_ENUM_CLASS_MINIFILTER;
 
     HMENU menu = ::CreatePopupMenu();
     if (!menu) {
@@ -12632,8 +12502,7 @@ bool KernelPage::ShowCallbackEnumerationContextMenu(POINT screenPoint, const Ker
     ::AppendMenuW(menu, MF_STRING | (hasModuleFile ? MF_ENABLED : MF_GRAYED), kMenuCallbackOpenModuleFolder, L"打开模块所在目录");
     ::AppendMenuW(menu, MF_STRING | (hasModuleFile ? MF_ENABLED : MF_GRAYED), kMenuCallbackModuleFileDetail, L"模块文件详细信息");
     ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-    ::AppendMenuW(menu, MF_STRING | (canSafeRemove ? MF_ENABLED : MF_GRAYED), kMenuCallbackSafeRemove, L"安全移除（公开 API）");
-    ::AppendMenuW(menu, MF_STRING | (canExperimentalUnlink ? MF_ENABLED : MF_GRAYED), kMenuCallbackExperimentalUnlink, L"实验性强制移除（unlink）");
+    ::AppendMenuW(menu, MF_STRING | (canSafeRemove ? MF_ENABLED : MF_GRAYED), kMenuCallbackSafeRemove, unloadFilter ? L"卸载所属过滤器" : L"安全移除（公开 API）");
     ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
 
     HMENU copyMenu = ::CreatePopupMenu();

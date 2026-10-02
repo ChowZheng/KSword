@@ -230,6 +230,9 @@
     <ClCompile Include="Features\Kernel\KernelCallbackEnumerationFeature.cpp">
       <Filter>Features\Kernel</Filter>
     </ClCompile>
+    <ClCompile Include="Features\Kernel\CallbackEnumeration.cpp">
+      <Filter>Features\Kernel</Filter>
+    </ClCompile>
     <ClCompile Include="Features\Kernel\KernelCallbackEventReceiver.cpp">
       <Filter>Features\Kernel</Filter>
     </ClCompile>
@@ -879,6 +882,9 @@
       <Filter>Features\Kernel</Filter>
     </ClInclude>
     <ClInclude Include="Features\Kernel\KernelCallbackEnumerationFeature.h">
+      <Filter>Features\Kernel</Filter>
+    </ClInclude>
+    <ClInclude Include="Features\Kernel\CallbackEnumeration.h">
       <Filter>Features\Kernel</Filter>
     </ClInclude>
     <ClInclude Include="Features\Kernel\KernelCallbackEventReceiver.h">

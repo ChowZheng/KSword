@@ -68,3 +68,4 @@ int RunMemoryTamperCrossViewTests(); // 内存内容交叉视图（shared/eviden
 int RunDmaProcessOpPlanTests();      // DMA 进程操作计划（shared/evidence，空隙/备份/读回校验）
 
 int RunProcessInformationTests();
+int RunCallbackEnumerationTests();

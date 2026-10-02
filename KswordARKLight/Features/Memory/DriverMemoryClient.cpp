@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <limits>
 #include <sstream>
 #include <string>
 
@@ -66,7 +67,9 @@ std::wstring FormatReadStatus(
     const DriverMemoryReadRequest& request,
     const ksword::ark::VirtualMemoryReadResult& driverResult) {
     std::wostringstream stream;
-    stream << L"R0 read "
+    stream << FormatMemoryReadSummary(request, driverResult.io.ok, driverResult.io.win32Error,
+               driverResult.readStatus, driverResult.data.size())
+           << L" R0 read "
            << (driverResult.io.ok ? L"transport OK" : L"transport failed")
            << L"; protocol=" << MemoryReadStatusText(driverResult.readStatus)
            << L"; pid=" << request.processId
@@ -207,6 +210,9 @@ DriverMemoryReadResult DriverMemoryClient::ReadMemory(const DriverMemoryReadRequ
     if (request.length > KSWORD_ARK_MEMORY_READ_MAX_BYTES) {
         return MakeReadValidationError(request, L"Read length exceeds shared driver limit.");
     }
+    if (request.address == 0U || request.length - 1U > std::numeric_limits<std::uint64_t>::max() - request.address) {
+        return MakeReadValidationError(request, L"目标地址为空或地址范围溢出。");
+    }
 
     const ksword::ark::DriverClient client;
     const ksword::ark::VirtualMemoryReadResult driverResult = client.readVirtualMemory(
@@ -235,6 +241,9 @@ DriverMemoryWriteResult DriverMemoryClient::WriteMemory(const DriverMemoryWriteR
     }
     if (request.bytes.size() > KSWORD_ARK_MEMORY_WRITE_MAX_BYTES) {
         return MakeWriteValidationError(request, L"Write payload exceeds shared driver limit.");
+    }
+    if (request.address == 0U || request.bytes.size() - 1U > std::numeric_limits<std::uint64_t>::max() - request.address) {
+        return MakeWriteValidationError(request, L"目标地址为空或地址范围溢出。");
     }
 
     const ksword::ark::DriverClient client;

@@ -94,6 +94,7 @@ private:
     void OnFeatureSelectionChanged();
     void RefreshSelectedFeature();
     void ExecuteActionInBackground(KernelActionRequest request, KernelActionId actionId, bool offerForcedRetry);
+    void PresentCallbackRemovalResult(const KernelOperationResult& result);
     void LocateNextResult();
     void ExecuteObjectNamespaceToolbarAction();
     void ExecuteObjectNamespaceDetailAction();
