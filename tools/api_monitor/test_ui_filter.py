@@ -16,6 +16,8 @@ packetparser=pipe[pipe.index("    // packetWideText："):pipe.index("    // tryE
 trim=pipe[pipe.index("        const int removeCount"):pipe.index("        m_eventTable->setUpdatesEnabled(updatesEnabled);")]
 code=r'''
 #include <QApplication>
+#include <QFile>
+#include <QCryptographicHash>
 #include <QLabel>
 #include <QLineEdit>
 #include <QTableWidget>
@@ -31,7 +33,7 @@ ENUM_DECL
 ROW_DECL
  CountingTable* m_eventTable=nullptr;QLabel* m_eventFilterStatusLabel=nullptr;QLineEdit* m_eventFilterEdit=nullptr;
  QString m_eventFilterKeyword;int m_visibleEventCount=0;size_t m_evictedRows=0;
- uint32_t m_currentSessionPid=0;int m_sessionProgressPid=0;HookState m_hookState=HookState::Waiting;
+ uint32_t m_currentSessionPid=0;int m_sessionProgressPid=0;HookState m_hookState=HookState::Waiting; bool m_definitionMismatch=false;
  static QTableWidgetItem* createReadOnlyItem(const QString& text){return new QTableWidgetItem(text);}
  void applyEventFilter();void appendEventRow(const EventRow&);
  void trimRows(){TRIM_BODY}

@@ -31,6 +31,7 @@ public:
  std::uint32_t m_currentSessionPid=42;
  std::atomic_bool m_pipeRunning{true},m_pipeConnected{true};
  HookState m_hookState=HookState::Waiting;
+ bool m_definitionMismatch=false;
  std::mutex m_pendingMutex;
  std::unordered_map<std::uint32_t,std::uint64_t> m_agentDroppedRows;
  std::deque<int> m_pendingRows;
@@ -55,6 +56,8 @@ int main(int argc,char** argv) {
  if(!label.text().contains(QStringLiteral("空闲"))) return 6;
  dock.m_agentDroppedRows[42]=12;dock.m_pendingDroppedRows=7;dock.m_evictedRows=99;dock.updateStatusLabel();
  if(!label.text().contains(QStringLiteral("Agent 丢失=12，UI 丢失=7，已移出表格=99")))return 7;
+ dock.m_definitionMismatch=true;dock.updateStatusLabel();
+ if(!label.text().contains(QStringLiteral("API 定义不匹配"))) return 8;
  printf("PASS: connecting, installing, active, partial, failure and idle UI states\n");
 }
 """.replace("STATE_DECL",state).replace("METHOD",method)

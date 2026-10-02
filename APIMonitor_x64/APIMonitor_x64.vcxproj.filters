@@ -102,4 +102,10 @@
       <Filter>源文件</Filter>
     </ClCompile>
   </ItemGroup>
+  <ItemGroup>
+    <None Include="api_monitor_definitions.json"><Filter>资源文件</Filter></None>
+    <None Include="hook\ApiHandlers.json"><Filter>资源文件</Filter></None>
+    <None Include="..\tools\api_monitor\generate_definitions.py"><Filter>源文件</Filter></None>
+    <ClInclude Include="hook\ApiCaptureFormatters.inc"><Filter>头文件\hook</Filter></ClInclude>
+  </ItemGroup>
 </Project>

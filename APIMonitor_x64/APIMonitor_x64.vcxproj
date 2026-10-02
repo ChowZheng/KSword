@@ -75,7 +75,7 @@
     <ClCompile>
       <LanguageStandard>stdcpp20</LanguageStandard>
       <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
-      <AdditionalIncludeDirectories>$(ProjectDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(IntDir)generated;$(ProjectDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <WarningLevel>Level3</WarningLevel>
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>WIN32;_DEBUG;APIMONITORX64_EXPORTS;_WINDOWS;_USRDLL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
@@ -94,7 +94,7 @@
     <ClCompile>
       <LanguageStandard>stdcpp20</LanguageStandard>
       <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
-      <AdditionalIncludeDirectories>$(ProjectDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(IntDir)generated;$(ProjectDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <WarningLevel>Level3</WarningLevel>
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
@@ -115,7 +115,7 @@
     <ClCompile>
       <LanguageStandard>stdcpp20</LanguageStandard>
       <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
-      <AdditionalIncludeDirectories>$(ProjectDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(IntDir)generated;$(ProjectDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <WarningLevel>Level3</WarningLevel>
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>_DEBUG;APIMONITORX64_EXPORTS;_WINDOWS;_USRDLL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
@@ -134,7 +134,7 @@
     <ClCompile>
       <LanguageStandard>stdcpp20</LanguageStandard>
       <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
-      <AdditionalIncludeDirectories>$(ProjectDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(IntDir)generated;$(ProjectDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <WarningLevel>Level3</WarningLevel>
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
@@ -184,6 +184,22 @@
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">Create</PrecompiledHeader>
     </ClCompile>
   </ItemGroup>
+  <ItemGroup>
+    <None Include="api_monitor_definitions.json" />
+    <None Include="hook\ApiHandlers.json" />
+    <None Include="..\tools\api_monitor\generate_definitions.py" />
+    <ClInclude Include="hook\ApiCaptureFormatters.inc" />
+  </ItemGroup>
+  <PropertyGroup>
+    <ApiMonitorPython Condition="'$(ApiMonitorPython)'==''">python</ApiMonitorPython>
+  </PropertyGroup>
+  <Target Name="GenerateApiMonitorDefinitions" BeforeTargets="ClCompile" Condition="'$(Platform)'=='x64'">
+    <Exec Command="&quot;$(ApiMonitorPython)&quot; &quot;$(ProjectDir)..\tools\api_monitor\generate_definitions.py&quot; --definitions &quot;$(ProjectDir)api_monitor_definitions.json&quot; --output &quot;$(IntDir)generated&quot;" />
+  </Target>
+  <Target Name="PublishApiMonitorDefinitions" AfterTargets="Build" Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <MakeDir Directories="$(OutDir)profiles" />
+    <Copy SourceFiles="$(ProjectDir)api_monitor_definitions.json" DestinationFiles="$(OutDir)profiles\api_monitor_definitions.json" SkipUnchangedFiles="true" />
+  </Target>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>

@@ -382,6 +382,11 @@ void WinAPIDock::updateStatusLabel()
         ks::ui::ApplyStatusRole(m_sessionStatusLabel, ks::ui::StatusRole::Idle);
     }
     m_sessionStatusLabel->setText(m_sessionStatusLabel->text() + eventLossSummary());
+    if (m_definitionMismatch)
+    {
+        m_sessionStatusLabel->setText(m_sessionStatusLabel->text() + QStringLiteral(" | API 定义不匹配或缺失"));
+        ks::ui::ApplyStatusRole(m_sessionStatusLabel, ks::ui::StatusRole::Warning);
+    }
 }
 
 QString WinAPIDock::eventLossSummary()

@@ -1,0 +1,177 @@
+"""Validate the build-time API catalog and emit deterministic C++ (stdlib only).
+
+The distributed JSON is documentation, never executable runtime configuration.
+Handlers are compiled C++ registered separately; catalog values cannot inject code.
+"""
+import argparse
+import hashlib
+import json
+from pathlib import Path
+import re
+
+SUPPORTED_TYPES = set(['ACCESS_MASK', 'ALG_ID', 'BCRYPT_ALG_HANDLE', 'BCRYPT_ALG_HANDLE*', 'BCRYPT_HASH_HANDLE', 'BCRYPT_HASH_HANDLE*', 'BCRYPT_KEY_HANDLE', 'BCRYPT_KEY_HANDLE*', 'BOOL', 'BOOLEAN', 'BYTE*', 'COSERVERINFO*', 'CRYPTPROTECT_PROMPTSTRUCT*', 'DATA_BLOB*', 'DLL_DIRECTORY_COOKIE', 'DNS_STATUS', 'DWORD', 'DWORD*', 'DWORD_PTR', 'FARPROC', 'FILE_INFO_BY_HANDLE_CLASS', 'FINDEX_INFO_LEVELS', 'FINDEX_SEARCH_OPS', 'GET_FILEEX_INFO_LEVELS', 'GROUP', 'GUID*', 'HANDLE', 'HANDLE*', 'HBITMAP', 'HCERTCHAINENGINE', 'HCERTSTORE', 'HCERTSTORE*', 'HCRYPTHASH', 'HCRYPTHASH*', 'HCRYPTKEY', 'HCRYPTKEY*', 'HCRYPTMSG*', 'HCRYPTPROV', 'HCRYPTPROV*', 'HCRYPTPROV_LEGACY', 'HDC', 'HGDIOBJ', 'HHOOK', 'HINSTANCE', 'HINTERNET', 'HKEY', 'HMODULE', 'HMODULE*', 'HOOKPROC', 'HRESULT', 'HWND', 'HostEntPtr', 'IDataObject*', 'IDataObject**', 'INT', 'INTERNET_PORT', 'IUnknown*', 'JOBOBJECTINFOCLASS', 'KS_FILE_INFORMATION_CLASS', 'KS_KEY_INFORMATION_CLASS', 'KS_KEY_VALUE_INFORMATION_CLASS', 'KsIoApcRoutine', 'LARGE_INTEGER', 'LONG', 'LPARAM', 'LPBINDSTATUSCALLBACK', 'LPBOOL', 'LPBYTE', 'LPBYTE*', 'LPCGUID', 'LPCONTEXT', 'LPCREATEFILE2_EXTENDED_PARAMETERS', 'LPCSTR', 'LPCSTR*', 'LPCVOID', 'LPCWSTR', 'LPCWSTR*', 'LPDWORD', 'LPFILETIME', 'LPHANDLE', 'LPHEAPENTRY32', 'LPHEAPLIST32', 'LPINT', 'LPLONG', 'LPMODULEENTRY32W', 'LPOVERLAPPED', 'LPPROCESS_INFORMATION', 'LPPROC_THREAD_ATTRIBUTE_LIST', 'LPPROGRESS_ROUTINE', 'LPQOS', 'LPQUERY_SERVICE_CONFIGA', 'LPQUERY_SERVICE_CONFIGW', 'LPSECURITY_ATTRIBUTES', 'LPSERVICE_STATUS', 'LPSTARTUPINFOA', 'LPSTARTUPINFOW', 'LPSTR', 'LPSTR*', 'LPTHREADENTRY32', 'LPTHREAD_START_ROUTINE', 'LPUNKNOWN', 'LPURL_COMPONENTS', 'LPURL_COMPONENTSA', 'LPURL_COMPONENTSW', 'LPVOID', 'LPVOID*', 'LPWSABUF', 'LPWSADATA', 'LPWSAOVERLAPPED', 'LPWSAOVERLAPPED_COMPLETION_ROUTINE', 'LPWSAPROTOCOL_INFOA', 'LPWSAPROTOCOL_INFOW', 'LPWSTR', 'LPWSTR*', 'LSTATUS', 'MULTI_QI*', 'NCRYPT_HANDLE', 'NCRYPT_KEY_HANDLE', 'NCRYPT_KEY_HANDLE*', 'NCRYPT_PROV_HANDLE', 'NCRYPT_PROV_HANDLE*', 'NTSTATUS', 'PADDRINFOA*', 'PADDRINFOW*', 'PANSI_STRING', 'PAPCFUNC', 'PBOOL', 'PBYTE', 'PCCERT_CHAIN_CONTEXT', 'PCCERT_CHAIN_CONTEXT*', 'PCCERT_CONTEXT', 'PCERT_CHAIN_PARA', 'PCERT_CHAIN_POLICY_PARA', 'PCERT_CHAIN_POLICY_STATUS', 'PCEVENT_DESCRIPTOR', 'PCHAR', 'PCONTEXT', 'PCSTR', 'PCWSTR', 'PDNS_RECORDA*', 'PDNS_RECORDW*', 'PDWORD', 'PDWORD_PTR', 'PENABLECALLBACK', 'PEVENT_DATA_DESCRIPTOR', 'PEVENT_TRACE_LOGFILEA', 'PEVENT_TRACE_LOGFILEW', 'PEVENT_TRACE_PROPERTIES', 'PFILETIME', 'PHANDLE', 'PHKEY', 'PIO_STATUS_BLOCK', 'PKS_CLIENT_ID', 'PLARGE_INTEGER', 'PLONG', 'PLUID', 'PLUID_AND_ATTRIBUTES', 'POBJECT_ATTRIBUTES', 'PREGHANDLE', 'PROCESSENTRY32W*', 'PSECURITY_DESCRIPTOR', 'PSID', 'PSID_AND_ATTRIBUTES', 'PSIZE_T', 'PTOKEN_PRIVILEGES', 'PTRACEHANDLE', 'PUCHAR', 'PULONG', 'PUNICODE_STRING', 'PVOID', 'PVOID*', 'PWCHAR', 'PWSTR', 'REFCLSID', 'REFIID', 'REGHANDLE', 'REGSAM', 'RPC_BINDING_HANDLE', 'RPC_BINDING_HANDLE*', 'RPC_CSTR', 'RPC_CSTR*', 'RPC_EP_INQ_HANDLE', 'RPC_EP_INQ_HANDLE*', 'RPC_IF_ID*', 'RPC_STATUS', 'RPC_WSTR', 'RPC_WSTR*', 'SC_ENUM_TYPE', 'SC_HANDLE', 'SC_STATUS_TYPE', 'SECURITY_IMPERSONATION_LEVEL', 'SECURITY_STATUS', 'SHELLEXECUTEINFOA*', 'SHELLEXECUTEINFOW*', 'SIZE_T', 'SIZE_T*', 'SOCKET', 'SOLE_AUTHENTICATION_SERVICE*', 'TOKEN_INFORMATION_CLASS', 'TOKEN_TYPE', 'TRACEHANDLE', 'UCHAR', 'UINT', 'UINT*', 'ULONG', 'ULONG*', 'ULONG64', 'ULONGLONG', 'ULONG_PTR', 'USHORT', 'USHORT*', 'UUID*', 'VOID', 'VOID*', 'WNDENUMPROC', 'WORD', 'WSAEVENT', 'char*', 'const ADDRINFOA*', 'const ADDRINFOW*', 'const BYTE*', 'const CONTEXT*', 'const HANDLE*', 'const LPSECURITY_ATTRIBUTES', 'const char*', 'const sockaddr*', 'const timeval*', 'const void*', 'const void**', 'fd_set*', 'int', 'int*', 'long', 'sockaddr*', 'tagMODULEENTRY32*', 'tagPROCESSENTRY32*', 'u_long*', 'unsigned int', 'unsigned long', 'void', 'void*'])
+IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z_0-9]*$")
+POLICIES = {"bool", "handle", "dword_nonzero", "uint_nonzero", "int_positive",
+            "ulong_status", "long_status", "security_status", "rpc_status",
+            "void", "lstatus", "ntstatus", "wsa_int", "hresult"}
+
+
+def require(condition, message):
+    if not condition:
+        raise ValueError(message)
+
+
+def validate(catalog, handlers):
+    require(catalog.get("schema_version") == 1, "unsupported schema_version")
+    ids, exports, symbols = set(), set(), set()
+    for api in catalog["apis"]:
+        name = api["export"]
+        require(IDENTIFIER.fullmatch(name), f"invalid export: {name}")
+        require(isinstance(api["id"], int) and 0 < api["id"] < 0x80000000
+                and api["id"] not in ids, f"duplicate/invalid ID: {name}")
+        ids.add(api["id"])
+        module = api["module"]
+        require(re.fullmatch(r"[A-Za-z0-9_]+\.dll", module), f"invalid module: {name}")
+        key = (module.lower(), name)
+        require(key not in exports, f"duplicate export: {key}")
+        exports.add(key)
+        require(api["architectures"] == ["x64"], f"unsupported architecture: {name}")
+        require(api["category"] in {"File", "Registry", "Network", "Process", "Loader", "Clipboard"}, f"bad category: {name}")
+        require(api["calling_convention"] in {"WINAPI", "NTAPI", "WSAAPI", "RPC_ENTRY"}, f"bad convention: {name}")
+        require(api["return_type"] in SUPPORTED_TYPES, f"invalid return type: {name}")
+        binding = api["binding"]
+        require(binding["scope"] in {"targets", "clipboard"}, f"invalid scope: {name}")
+        for field in ("type_alias", "record", "original", "hook"):
+            symbol = binding[field]
+            require(IDENTIFIER.fullmatch(symbol) and symbol not in symbols, f"duplicate/invalid symbol: {symbol}")
+            symbols.add(symbol)
+        names = set()
+        for param in api["parameters"]:
+            require(IDENTIFIER.fullmatch(param["name"]) and param["name"] not in names, f"bad parameter: {name}")
+            names.add(param["name"])
+            require(param["type"] in SUPPORTED_TYPES and param["type"] != "void", f"invalid parameter type: {name}.{param['name']}")
+            require(param["direction"] in {"in", "out", "inout"}, f"bad direction: {name}")
+            require(param["capture"] in {"handler", "formatter", "address", "value", "utf16", "ansi"}, f"bad capture: {name}")
+            require(param["encoding"] in {"none", "utf16", "ansi", "bytes"}, f"bad encoding: {name}")
+        for param in api["parameters"]:
+            length = param["length"]
+            if length is not None:
+                require(isinstance(length, dict) and length.get("parameter") in names
+                        and length["parameter"] != param["name"]
+                        and length.get("unit") in {"bytes", "elements"}
+                        and isinstance(length.get("indirect", False), bool), f"bad length reference: {name}")
+                source = next(p for p in api["parameters"] if p["name"] == length["parameter"])
+                require(source["encoding"] == "none" and source["type"] in {
+                    "DWORD", "ULONG", "SIZE_T", "UINT", "int", "ULONG_PTR", "ULONGLONG", "LPDWORD", "PULONG", "PSIZE_T", "int*"}, f"non-size length source: {name}")
+        wrapper = api["wrapper"]
+        require(wrapper["kind"] in {"special", "generated"}, f"bad wrapper: {name}")
+        handler = wrapper.get("handler") if wrapper["kind"] == "special" else wrapper.get("capture_handler")
+        require(handler in handlers, f"unknown C++ handler: {name}: {handler}")
+        if wrapper["kind"] == "generated":
+            require(wrapper["policy"] in POLICIES, f"unknown return policy: {name}")
+            if wrapper["policy"] == "wsa_int":
+                require(wrapper["success"] in {"zero", "not_socket_error"}, f"bad WSA success rule: {name}")
+        require(api["return"]["error_source"] in {"handler", "wsa_last_error", "return_status", "win32_last_error"}, f"bad error source: {name}")
+        require(api["return"]["success"] in POLICIES | {"handler", "zero", "not_socket_error", "not_invalid_handle", "nonnegative"}, f"bad success rule: {name}")
+
+
+def signature(api):
+    return ", ".join(p["type"] + " " + p["name"] for p in api["parameters"])
+
+
+def declaration(api, external=False):
+    b = api["binding"]
+    types = ", ".join(p["type"] for p in api["parameters"])
+    result = f"using {b['type_alias']} = {api['return_type']}({api['calling_convention']}*)({types});\n"
+    result += f"{'extern ' if external else ''}InlineHookRecord {b['record']}{';' if external else '{};'}\n"
+    result += f"{'extern ' if external else ''}{b['type_alias']} {b['original']}{';' if external else ' = nullptr;'}\n"
+    if external:
+        result += f"{api['return_type']} {api['calling_convention']} {b['hook']}({signature(api)});\n"
+    return result
+
+
+def wrapper(api):
+    b, w = api["binding"], api["wrapper"]
+    params, ret = signature(api), api["return_type"]
+    args = ", ".join(p["name"] for p in api["parameters"])
+    policy = w["policy"]
+    result = "resultHandle" if policy == "handle" else "statusValue" if policy in {
+        "ulong_status", "long_status", "security_status", "rpc_status", "lstatus", "ntstatus", "hresult"} else "resultValue"
+    capture_args = "detailBuffer" + (", " + args if args else "") + (", " + result if ret != "void" else "")
+    capture_params = "wchar_t (&detailBuffer)[ks::winapi_monitor::kMaxDetailChars]" + (", " + params if params else "") + (f", {ret} {result}" if ret != "void" else "")
+    # SEH boundary contains no C++ objects/destructors. Invalid output pointers cannot crash the target.
+    code = f"void {w['capture_handler']}Checked({capture_params})\n{{\n"
+    code += f"    __try {{ {w['capture_handler']}({capture_args}); }}\n"
+    code += "    __except (EXCEPTION_EXECUTE_HANDLER) { wcscpy_s(detailBuffer, ks::winapi_monitor::kMaxDetailChars, L\"capture=unreadable\"); }\n}\n"
+    code += f"{ret} {api['calling_convention']} {b['hook']}({params})\n{{\n    ScopedHookGuard guardValue;\n"
+    call = f"{b['original']}({args})"
+    code += f"    if (guardValue.bypass()) {{ {'return ' if ret != 'void' else ''}{call};{' return;' if ret == 'void' else ''} }}\n"
+    code += f"    {'' if ret == 'void' else f'const {ret} {result} = '}{call};\n"
+    code += "    const DWORD savedError = ::GetLastError();\n"
+    if policy == "wsa_int":
+        code += "    const int savedWsaError = ::WSAGetLastError();\n"
+    code += "    wchar_t detailBuffer[ks::winapi_monitor::kMaxDetailChars] = {};\n"
+    code += f"    {w['capture_handler']}Checked({capture_args});\n"
+    success = {"bool": f"{result} != FALSE", "handle": f"{result} != nullptr",
+               "dword_nonzero": f"{result} != 0", "uint_nonzero": f"{result} != 0",
+               "int_positive": f"{result} > 0"}.get(policy)
+    if policy == "wsa_int":
+        success = f"{result} == 0" if w["success"] == "zero" else f"{result} != SOCKET_ERROR"
+    status = "0" if ret == "void" else f"({success}) ? 0 : {'savedWsaError' if policy == 'wsa_int' else 'savedError'}" if success else f"static_cast<std::int32_t>({result})"
+    module = api["module"][:-4]
+    code += f"    SendRawEventWithStatus(ks::winapi_monitor::EventCategory::{api['category']}, L\"{module}\", L\"{api['export']}\", {status}, detailBuffer);\n"
+    if policy == "wsa_int":
+        code += "    ::WSASetLastError(savedWsaError);\n"
+    code += "    ::SetLastError(savedError);\n"
+    if ret != "void":
+        code += f"    return {result};\n"
+    return code + "}\n"
+
+
+def write_changed(path, content):
+    encoded = content.encode("utf-8")
+    if not path.exists() or path.read_bytes() != encoded:
+        path.write_bytes(encoded)
+
+
+def generate(source, output):
+    raw = source.read_bytes()
+    catalog = json.loads(raw)
+    registered = set(json.loads((source.parent / "hook/ApiHandlers.json").read_text(encoding="utf-8")))
+    # A registered name must also exist as a C++ definition/declaration.
+    cpp = "\n".join(p.read_text(encoding="utf-8-sig") for p in (source.parent / "hook").glob("*.*") if p.suffix in {".cpp", ".h", ".inc"})
+    handlers = {h for h in registered if re.search(r"\b" + re.escape(h) + r"\s*\(", cpp)}
+    validate(catalog, handlers)
+    output.mkdir(parents=True, exist_ok=True)
+    header = "// Generated from api_monitor_definitions.json. Do not edit.\n"
+    apis = catalog["apis"]
+    write_changed(output / "ApiMonitorDeclarations.inc", header + "\n".join(declaration(a) for a in apis if a["binding"]["scope"] == "targets"))
+    clip = [a for a in apis if a["binding"]["scope"] == "clipboard"]
+    write_changed(output / "ApiMonitorClipboardDeclarations.inc", header + "\n".join(declaration(a, True) for a in clip))
+    write_changed(output / "ApiMonitorClipboardDefinitions.inc", header + "\n".join(f"InlineHookRecord {a['binding']['record']}{{}};\n{a['binding']['type_alias']} {a['binding']['original']} = nullptr;" for a in clip))
+    write_changed(output / "ApiMonitorWrappers.inc", header + "\n".join(wrapper(a) for a in apis if a["wrapper"]["kind"] == "generated"))
+    table = "HookBinding g_bindings[] = {\n"
+    for a in apis:
+        b = a["binding"]
+        table += f"    {{ L\"{a['module']}\", \"{a['export']}\", ks::winapi_monitor::EventCategory::{a['category']}, &{b['record']}, reinterpret_cast<void*>(&{b['hook']}), reinterpret_cast<void**>(&{b['original']}) }},\n"
+    table += "};\n"
+    write_changed(output / "ApiMonitorBindings.inc", header + table)
+    digest = hashlib.sha256(raw).hexdigest()
+    write_changed(output / "ApiMonitorDefinitionIdentity.h", header + f'#pragma once\nnamespace apimon {{ inline constexpr char kDefinitionSha256[] = "{digest}"; inline constexpr unsigned kDefinitionCount = {len(apis)}; }}\n')
+    return digest
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--definitions", type=Path, required=True)
+    parser.add_argument("--output", type=Path, required=True)
+    args = parser.parse_args()
+    try:
+        digest = generate(args.definitions, args.output)
+    except (ValueError, KeyError, TypeError) as error:
+        parser.exit(1, f"API definitions validation failed: {error}\n")
+    print(f"API definitions validated/generated: SHA256={digest}")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,5 +1,6 @@
 #include "pch.h"
 #include "MonitorAgent.h"
+#include "ApiMonitorDefinitionIdentity.h"
 #include "core/MonitorPipe.h"
 #include "hook/HookEngine.h"
 #include "hook/HookTargets.h"
@@ -162,7 +163,7 @@ namespace apimon
                     L"Agent",
                     L"SessionReady",
                     0,
-                    L"Agent connected and pipe server is ready.");
+                    std::wstring(L"definitionSha256=") + std::wstring(kDefinitionSha256, kDefinitionSha256 + 64));
 
                 if (!InstallConfiguredHooks(&errorText))
                 {

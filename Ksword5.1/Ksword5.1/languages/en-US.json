@@ -5921,6 +5921,8 @@
     "notification.copy.log_template": "%1\n%2\n%3\nFile: %4\nFunction: %5\nGUID: %6"
   },
   "source_translations": {
+    " | API 定义不匹配或缺失": " | API definitions missing or mismatched",
+    "definitionSha256=": "definitionSha256=",
     " | Agent 丢失=%1，UI 丢失=%2，已移出表格=%3，待显示=%4": " | Agent lost=%1, UI lost=%2, removed from table=%3, pending=%4",
     "# 仅导出当前表格中的可见记录；这不是完整调用轨迹。%1": "# Export contains only visible records in the current table; it is not a complete call trace.%1",
     "EventsDropped": "EventsDropped",

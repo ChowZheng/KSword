@@ -1151,6 +1151,11 @@
     <Warning Condition="!Exists('$(KswordArkSignScript)')" Text="Ksword5.1 auto test-sign skipped because script was not found: $(KswordArkSignScript)" />
   </Target>
   <ItemGroup>
+    <ProjectReference Include="..\..\APIMonitor_x64\APIMonitor_x64.vcxproj">
+      <Project>{CEF9AD14-A819-4792-AA6B-009DB21334EE}</Project>
+      <LinkLibraryDependencies>false</LinkLibraryDependencies>
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+    </ProjectReference>
     <ProjectReference Include="..\..\DwmZOrderAgent\DwmZOrderAgent.vcxproj">
       <Project>{CFEC311C-A4F4-46C6-8A41-7333EE5FB817}</Project>
       <LinkLibraryDependencies>false</LinkLibraryDependencies>

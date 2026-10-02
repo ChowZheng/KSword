@@ -1,33 +1,11 @@
-#include "pch.h"
+﻿#include "pch.h"
 #include "ClipboardGuardHook.h"
 #include "ClipboardGuardCommon.h"
 #include "ClipboardGuardVTableHook.h"
 
 namespace apimon
 {
-    // ---- 原函数指针定义（声明在 ClipboardGuardHook.h，供 g_bindings[] 与本文件共用）----
-    OpenClipboardFn g_openClipboardOriginal = nullptr;
-    CloseClipboardFn g_closeClipboardOriginal = nullptr;
-    GetClipboardDataFn g_getClipboardDataOriginal = nullptr;
-    SetClipboardDataFn g_setClipboardDataOriginal = nullptr;
-    EmptyClipboardFn g_emptyClipboardOriginal = nullptr;
-    EnumClipboardFormatsFn g_enumClipboardFormatsOriginal = nullptr;
-    IsClipboardFormatAvailableFn g_isClipboardFormatAvailableOriginal = nullptr;
-    GetPriorityClipboardFormatFn g_getPriorityClipboardFormatOriginal = nullptr;
-    OleGetClipboardFn g_oleGetClipboardOriginal = nullptr;
-    OleSetClipboardFn g_oleSetClipboardOriginal = nullptr;
-
-    // ---- Hook 记录定义 ----
-    InlineHookRecord g_openClipboardHook{};
-    InlineHookRecord g_closeClipboardHook{};
-    InlineHookRecord g_getClipboardDataHook{};
-    InlineHookRecord g_setClipboardDataHook{};
-    InlineHookRecord g_emptyClipboardHook{};
-    InlineHookRecord g_enumClipboardFormatsHook{};
-    InlineHookRecord g_isClipboardFormatAvailableHook{};
-    InlineHookRecord g_getPriorityClipboardFormatHook{};
-    InlineHookRecord g_oleGetClipboardHook{};
-    InlineHookRecord g_oleSetClipboardHook{};
+#include "ApiMonitorClipboardDefinitions.inc"
 
     // HookedOpenClipboard 作用：
     // - 处理：OpenClipboard 只是"声明接下来要用剪贴板"，不搬运任何数据，
