@@ -66,6 +66,16 @@ filters=s[s.index('    const std::vector<EtwFilterFieldDescriptor>& etwFilterFie
 code=code.replace('DEPENDENCIES',fun('QString guidToText(')+identity+aliases+descriptor+filters)
 code=code.replace('PARSER',s[s.index('    // EtwSchemaPropertyEntry'):s.index('    // 100ns 时间戳文本格式化')]).replace('SAMPLE_BYTES',','.join(str(x) for x in payload))
 tests={
+ 'id_bounds': r'''
+ schema={};schema.propertyList={prop(0,"ProcessId",TDH_INTYPE_UINT64)};std::uint64_t oversized=0x100000001ULL;
+ run(schema,&oversized,sizeof(oversized));std::uint32_t value=0;if(etwPropertyToUInt32(&decoded[0],&value))return 70;
+ EtwDecodedPropertyEntry text;text.valueText=QStringLiteral("4294967297");if(etwPropertyToUInt32(&text,&value))return 71;
+ text.valueText=QStringLiteral("0xffffffff");if(!etwPropertyToUInt32(&text,&value)||value!=0xffffffffU)return 72;
+ schema.propertyList={prop(0,"ProcessId",TDH_INTYPE_INT8)};signed char negative=-1;
+ run(schema,&negative,sizeof(negative));if(etwPropertyToUInt32(&decoded[0],&value))return 73;
+ schema.propertyList={prop(0,"ProcessId",TDH_INTYPE_UINT32)};std::uint32_t valid=3212;
+ run(schema,&valid,sizeof(valid));if(!etwPropertyToUInt32(&decoded[0],&value)||value!=3212)return 74;
+ ''',
  'layout': r'''
  std::uint32_t array[]={11,22,333};schema={};schema.propertyList={prop(0,"Values",TDH_INTYPE_UINT32,2),prop(1,"ProcessId",TDH_INTYPE_UINT32)};
  if(!run(schema,array,sizeof(array))||parsed!=12||!decoded[1].numericAvailable||decoded[1].numericValue!=333||decoded[0].numericAvailable)return 50;

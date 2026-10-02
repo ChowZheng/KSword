@@ -3456,6 +3456,10 @@ namespace
                     {
                         std::uint64_t value = 0;
                         std::memcpy(&value, userData + cursor, integerSize);
+                        const bool signedInteger = property.inType == TDH_INTYPE_INT8
+                            || property.inType == TDH_INTYPE_INT16 || property.inType == TDH_INTYPE_INT32;
+                        if (signedInteger && (value & (1ULL << (integerSize * 8 - 1))) != 0)
+                            value |= std::numeric_limits<std::uint64_t>::max() << (integerSize * 8);
                         numericValues[property.propertyIndex] = value;
                         if (property.outType == TDH_OUTTYPE_PORT && integerSize == 2)
                             value = ((value >> 8) | (value << 8)) & 0xFFFF;
@@ -4168,6 +4172,7 @@ namespace
         }
         if (propertyPointer->numericAvailable)
         {
+            if (propertyPointer->numericValue > std::numeric_limits<std::uint32_t>::max()) return false;
             *valueOut = static_cast<std::uint32_t>(propertyPointer->numericValue);
             return true;
         }
@@ -4176,7 +4181,8 @@ namespace
         {
             return false;
         }
-        *valueOut = static_cast<std::uint32_t>(parsedValue & 0xFFFFFFFFULL);
+        if (parsedValue > std::numeric_limits<std::uint32_t>::max()) return false;
+        *valueOut = static_cast<std::uint32_t>(parsedValue);
         return true;
     }
 
