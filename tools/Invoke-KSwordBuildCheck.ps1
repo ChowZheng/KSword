@@ -60,6 +60,9 @@ $agentFile = Join-Path $resolvedRoot 'AGENTS.md'
 $projectPath = Join-Path $resolvedRoot 'Ksword5.1\Ksword5.1\Ksword5.1.vcxproj'
 $artifactPath = Join-Path $resolvedRoot 'Ksword5.1\x64\Release\Ksword5.1.exe'
 $qtDirectory = Join-Path $resolvedRoot '.deps\Qt\6.9.3\msvc2022_64'
+if (-not (Test-Path -LiteralPath $qtDirectory)) {
+    $qtDirectory = 'D:\Software\Qt\6.9.3\msvc2022_64'
+}
 $qtMsBuildDirectory = Join-Path $resolvedRoot '.deps\QtVsTools\msbuild'
 $primaryMsBuild = 'C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\MSBuild\Current\Bin\amd64\MSBuild.exe'
 $fallbackMsBuild = 'D:\Software\VS\MSBuild\Current\Bin\amd64\MSBuild.exe'
@@ -188,6 +191,10 @@ try {
         -WindowStyle Hidden `
         -PassThru
 
+    # Windows PowerShell can lose ExitCode if no process handle was retained.
+    # Read it while the child is alive; null is never a successful build result.
+    $null = $process.Handle
+
     $timeoutMilliseconds = $TimeoutMinutes * 60 * 1000
     $heartbeatMilliseconds = $HeartbeatSeconds * 1000
 
@@ -214,6 +221,7 @@ try {
         $process.WaitForExit()
         $process.Refresh()
         $exitCode = $process.ExitCode
+        if ($null -eq $exitCode) { throw 'MSBuild exit code was unavailable.' }
     }
 }
 finally {

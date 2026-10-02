@@ -89,7 +89,7 @@ void KernelHvmTab::startResident()
      * 而那条回答只说"请求不合法"，不指是哪一位——菜单那侧已经按方向各拦了
      * 一次，这一侧不拦的话就留下一个绕过去的入口。
      */
-    if (nestedDispatch && ksword::kvm::isLocalEptEnabled())
+    if (m_snapshot.backend == KSWORD_ARK_HVM_BACKEND_VMX && nestedDispatch && ksword::kvm::isLocalEptEnabled())
     {
         QMessageBox::warning(
             this,
@@ -104,8 +104,17 @@ void KernelHvmTab::startResident()
     QString warning = kernelText(
         "kernel.hvm.resident.start.warning",
         QStringLiteral(
-            "全 CPU 自检和生命周期保护通过后，驱动尝试让全部 CPU 进入常驻；任一核失败会回滚已进入的核。AMD SVM/NPT 目前仅供实验，不提供内层 SVM 或 EPT 扩展。常驻期间驱动不可卸载；无法证明退出完整时保留资源和卸载保护。硬件异常仍可能需要重启。"));
-    if (nestedDispatch)
+            "全 CPU 自检和生命周期保护通过后，驱动尝试让全部 CPU 进入常驻；任一核失败会回滚已进入的核。AMD SVM/NPT 与嵌套 SVM 仍为实验性，内层系统启动尚未验收。常驻期间驱动不可卸载；无法证明退出完整时保留资源和卸载保护。硬件异常仍可能需要重启。"));
+    if (nestedDispatch && !ksword::kvm::isWriteAccessEnabled())
+    {
+        QMessageBox::warning(this, QStringLiteral("HVM"), ks::i18n::sourceText(QStringLiteral("请先开启允许 R-1 写操作，再启用来宾嵌套。")));
+        return;
+    }
+    if (nestedDispatch && m_snapshot.backend == KSWORD_ARK_HVM_BACKEND_SVM)
+    {
+        warning += ks::i18n::sourceText(QStringLiteral("\n\n本次使用实验性嵌套 SVM 分派、VMCB 退出反射与 NPT 合成；需要已按嵌套模式准备资源。"));
+    }
+    else if (nestedDispatch)
     {
         /*
          * 这段文案原先写着"仅实现 VMfail 失败语义；不会成功 VMXON、不会进入

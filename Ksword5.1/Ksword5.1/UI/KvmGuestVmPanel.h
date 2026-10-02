@@ -14,6 +14,8 @@
 #include <QWidget>
 
 #include <functional>
+#include <atomic>
+#include <memory>
 
 class QLabel;
 class QPushButton;
@@ -37,6 +39,11 @@ private:
     // 一步的三块：标题恒定，状态与按钮随每次刷新重算。
     struct StepRow
     {
+        QWidget* container = nullptr;
+        QLabel* title = nullptr;
+        QLabel* explanation = nullptr;
+        QString originalTitle;
+        QString originalExplanation;
         QLabel* status = nullptr;
         QPushButton* action = nullptr;
     };
@@ -55,9 +62,10 @@ private:
     // 在后台线程跑一段阻塞工作，完成后回 UI 线程刷新。
     void runInBackground(const std::function<QString()>& work);
 
-    void enableAllSwitches();
-    void startMonitor();
-    void restartVmwareDriver();
+    static void enableAllSwitches();
+    static QString startMonitor();
+    static QString restartVmwareDriver(const std::shared_ptr<std::atomic<unsigned long long>>& completion);
+    bool confirmActivation();
 
     // 本页每改动一次配置就调用它，把第 5 步的"已完成"作废。
     // 因为那一步的全部意义就是"在最后一次改动之后重新问过一遍能力"：
@@ -79,19 +87,15 @@ private:
     bool m_busy = false;
     bool m_queryInFlight = false;
 
-    // m_backendSupported：本页这五步只对 Intel 嵌套 VMX 成立。
-    //
-    // 三个开关（允许嵌套、允许别人跑在我们下面、隐藏身份）改的都是 VMX 派发
-    // 路径上的位，AMD SVM 后端没有对应实现——在 AMD 上按下去不会报错，只会
-    // 什么都不发生，而用户会一直以为自己漏了哪一步。所以按后端灰掉并说清楚。
-    //
-    // 初值取 false：第一次状态查询回来之前后端未知，此时放行按钮等于让用户
-    // 在一个还没读出后端的界面上下手。
+    // 后端能力位确认嵌套支持后才开放；未知后端与旧 AMD 驱动默认关闭。
     bool m_backendSupported = false;
 
     // 「重启过了吗」只能按本次会话记账：服务当前在跑，不代表它是在三个开关
     // 改完之后才起来的——而那个区别正是这一步存在的理由。宁可说"待重启"，
     // 也不要拿"正在运行"冒充"已经重新问过能力"。
     // 见 markConfigurationChanged()：任何一次改动都会把它清回 false。
-    bool m_vmwareDriverRestarted = false;
+    std::shared_ptr<std::atomic<unsigned long long>> m_vmwareDriverRestarted = std::make_shared<std::atomic<unsigned long long>>(0ULL);
+    bool m_vmwareInstalled = false;
+    bool m_vmwareQueryValid = false;
+    unsigned long m_backend = 0;
 };

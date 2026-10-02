@@ -108,6 +108,7 @@ KvmDock::KvmDock(QWidget* const parent)
 {
     initializeUi();
     updateLifecycleView();
+    applyState(ksword::kvm::KvmState{});
 }
 
 void KvmDock::setActionHandler(ActionHandler handler)
@@ -255,6 +256,9 @@ void KvmDock::initializeUi()
     auto* const installRow = new ks::ui::FlowLayout(installGroup, 6, 6, 4);
     // 引导式入口放在第一个：它是这一组里唯一一个不要求用户先自己算出物理页地址的。
     // 下面那七个面板保留原样给专家用——它们能做的事更多，代价是每一个值都要自己备好。
+    m_selfTestButton = new QPushButton(ks::i18n::sourceText(QStringLiteral("全核 SVM 自检")), installGroup);
+    installRow->addWidget(m_selfTestButton);
+    connect(m_selfTestButton, &QPushButton::clicked, this, [this]() { requestAction(Action::SelfTest); });
     m_hookWizardButton = new QPushButton(
         ks::i18n::sourceText(QStringLiteral("添加 Hook（引导式）...")),
         installGroup);
@@ -444,6 +448,10 @@ void KvmDock::initializeUi()
     tabs->addTab(detailPage, ks::i18n::sourceText(QStringLiteral("状态详情")));
     // 页名不再写 VT-x/EPT：同一页在 AMD 机器上显示 SVM/NPT 的读数，
     // 页名钉死在一套架构上会让另一套的用户以为这页与自己无关。
+    m_hvmTab->onBusyChanged = [this](bool running) {
+        setOperationRunning(running);
+        if (m_commandOperationHandler) { m_commandOperationHandler(running); }
+    };
     tabs->addTab(m_hvmTab, ks::i18n::sourceText(QStringLiteral("硬件虚拟化证据")));
     // 默认落在「控制」而不是第一页：「跑第三方虚拟机」是给撞上问题的人准备的
     // 出口，不是这一页的主线。主线是三步生命周期，它在「控制」上。
@@ -455,6 +463,11 @@ void KvmDock::initializeUi()
     connect(m_pollTimer, &QTimer::timeout, this, [this]() {
         refreshStateAsync();
     });
+}
+
+void KvmDock::testPreparedBackend()
+{
+    m_hvmTab->testPreparedBackend();
 }
 
 void KvmDock::refreshStateAsync()
@@ -501,11 +514,42 @@ void KvmDock::applyState(const ksword::kvm::KvmState& state)
     // 第 2 步的窗口期明明开着，步骤条却还停在第 1 步。resourcesReady 是驱动
     // 对 PREPARE 已执行且未 TEARDOWN 的直接回报，没有这层歧义。
     m_resourcesReady = state.resourcesReady;
+    m_selfTestPassed = state.selfTestPassed;
     m_amdBackend = state.backend == KSWORD_ARK_HVM_BACKEND_SVM;
+    m_backendKnown = m_amdBackend || state.backend == KSWORD_ARK_HVM_BACKEND_VMX;
     m_residentActive = state.residentActive;
     m_faulted = state.faulted;
-    m_availabilityText = ksword::kvm::describeAvailability(state.availability);
+    m_availabilityText = state.admissionReason;
+    if (!state.configurationReason.isEmpty() && !state.residentActive) { m_hardwareAvailable = false; m_availabilityText = state.configurationReason; }
     m_detailText = state.detail;
+    for (QPushButton* button : { m_hookWizardButton, m_viewButton, m_domainButton, m_msrButton, m_crButton, m_processButton })
+    {
+        button->setVisible(state.backend == KSWORD_ARK_HVM_BACKEND_VMX);
+    }
+    m_tabs->setTabVisible(m_tabs->indexOf(m_watchPanel), state.backend == KSWORD_ARK_HVM_BACKEND_VMX);
+    m_soakButton->setVisible(state.backend == KSWORD_ARK_HVM_BACKEND_VMX);
+    m_selfTestButton->setVisible(m_amdBackend);
+
+    m_stepTwoLabel->setText(m_amdBackend ? ks::i18n::sourceText(QStringLiteral("第 2 步 · 全核 SVM 自检"))
+        : ks::i18n::sourceText(QStringLiteral("第 2 步 · 安装视图 / 策略 / 域")));
+    if (auto* group = qobject_cast<QGroupBox*>(m_selfTestButton->parentWidget()))
+    {
+        group->setTitle(m_amdBackend ? ks::i18n::sourceText(QStringLiteral("第 2 步 · 自检与内存访问"))
+            : ks::i18n::sourceText(QStringLiteral("第 2 步 · 安装（必须在常驻之前）")));
+    }
+    m_hintLabel->setText(m_amdBackend
+        ? ks::i18n::sourceText(QStringLiteral("AMD 使用 SVM/VMCB/NPT。Intel 专属偏好保留但不应用；嵌套模式必须在准备前选择，内层系统启动仍待独立验收。"))
+        : ks::i18n::sourceText(QStringLiteral("标题栏 KVM 按钮的右键菜单原样保留，能力与这一页一致；这一页额外把生命周期顺序和每一步的前置条件写出来。")));
+    for (QPushButton* button : {m_prepareButton, m_releaseButton})
+    {
+        if (!button->property("ks_intel_tooltip").isValid()) { button->setProperty("ks_intel_tooltip", button->property("ks_base_tooltip")); }
+    }
+    m_prepareButton->setProperty("ks_base_tooltip", m_amdBackend
+        ? ks::i18n::sourceText(QStringLiteral("准备 AMD SVM/VMCB/NPT 资源，不进入常驻；嵌套模式在此确定，随后执行全核自检。"))
+        : m_prepareButton->property("ks_intel_tooltip").toString());
+    m_releaseButton->setProperty("ks_base_tooltip", m_amdBackend
+        ? ks::i18n::sourceText(QStringLiteral("释放 SVM/VMCB/NPT 资源；更改嵌套模式后必须释放并重新准备。"))
+        : m_releaseButton->property("ks_intel_tooltip").toString());
     updateLifecycleView();
 }
 
@@ -517,6 +561,12 @@ void KvmDock::updateLifecycleView()
     StepPhase stepTwoPhase = StepPhase::Pending;
     StepPhase stepThreePhase = StepPhase::Pending;
     if (m_residentActive)
+    {
+        stepOnePhase = StepPhase::Done;
+        stepTwoPhase = StepPhase::Done;
+        stepThreePhase = StepPhase::Active;
+    }
+    else if (m_resourcesReady && m_amdBackend && m_selfTestPassed)
     {
         stepOnePhase = StepPhase::Done;
         stepTwoPhase = StepPhase::Done;
@@ -544,6 +594,14 @@ void KvmDock::updateLifecycleView()
     {
         stateText = ks::i18n::sourceText(QStringLiteral("当前：KswordARK 驱动未运行。先用标题栏的 R0 按钮启动驱动服务，这一页的入口在那之前都不会生效。"));
     }
+    else if (!m_backendKnown)
+    {
+        stateText = ks::i18n::sourceText(QStringLiteral("还读不到虚拟化后端，请先启动 R0 并刷新。"));
+    }
+    else if (m_residentActive && m_amdBackend)
+    {
+        stateText = ks::i18n::sourceText(QStringLiteral("当前：AMD SVM 常驻中。需要更改嵌套模式时，先停止、释放并重新准备；部分常驻或回滚状态也必须先完成停止。"));
+    }
     else if (m_faulted)
     {
         stateText = ks::i18n::sourceText(QStringLiteral("当前：故障或待回滚。先执行“重置故障状态”，其余入口在那之前都不会生效。"));
@@ -558,9 +616,8 @@ void KvmDock::updateLifecycleView()
     }
     else if (m_resourcesReady && m_amdBackend)
     {
-        // AMD 下第 2 步是空的：安装类入口全都还没有 SVM 实现。照搬 Intel 的
-        // 那句话会让用户去找一个按不下去的窗口期，所以这一态单独说清楚。
-        stateText = ks::i18n::sourceText(QStringLiteral("当前：第 2 步。资源已按 AMD SVM/NPT 准备好且未常驻。第 2 步的安装类入口尚无 SVM 实现，AMD 上可以直接进入第 3 步启动常驻。"));
+        // AMD 第 2 步使用已准备资源做全核 SVM 自检。
+        stateText = ks::i18n::sourceText(QStringLiteral("当前：AMD SVM/NPT 资源已准备。全核自检通过后可启动常驻，嵌套配置须与准备时一致。"));
     }
     else if (m_resourcesReady)
     {
@@ -596,6 +653,8 @@ void KvmDock::updateLifecycleView()
         return QString();
     };
     const QString resourceGateReason = resourceStageReason();
+    m_selfTestButton->setEnabled(resourceGateReason.isEmpty() && m_resourcesReady);
+    setGatedTooltip(m_selfTestButton, resourceGateReason);
     m_prepareButton->setEnabled(resourceGateReason.isEmpty());
     setGatedTooltip(m_prepareButton, resourceGateReason);
     // 释放资源不看硬件门：硬件门回答的是"能不能常驻"，而释放要做的事正好相反
@@ -604,6 +663,7 @@ void KvmDock::updateLifecycleView()
     const QString releaseReason = m_operationRunning ? busyGate
         : !m_driverRunning ? driverGate
         : m_residentActive ? residentGate
+        : !m_backendKnown ? m_availabilityText
         : QString();
     m_releaseButton->setEnabled(releaseReason.isEmpty());
     setGatedTooltip(m_releaseButton, releaseReason);
@@ -616,25 +676,16 @@ void KvmDock::updateLifecycleView()
 
     // 这八个入口只要驱动在就能打开：里面读得到状态，写得动的动作各自有门。
     // 常驻期间照样能开，否则用户连"现在装了什么"都看不到。
-    const QString panelGateReason = m_driverRunning ? QString() : driverGate;
+    const QString panelGateReason = !m_driverRunning ? driverGate : !m_backendKnown ? m_availabilityText : QString();
     for (QPushButton* const button :
          { m_hookWizardButton, m_viewButton, m_domainButton, m_msrButton, m_crButton,
            m_memoryButton, m_eventButton, m_processButton })
     {
-        button->setEnabled(m_driverRunning);
+        button->setEnabled(m_driverRunning && m_backendKnown);
         setGatedTooltip(button, panelGateReason);
     }
 
-    // AMD 后端：结构不变，把没有对应实现的入口灰掉并说明原因。
-    //
-    // 灰掉的这一组共同点不是"AMD 做不到"，而是它们全都建立在 EPT 分离视图这
-    // 一套机制上（隐蔽 Hook、视图、执行域、R-1 进程处置与注入都要切 EPTP），
-    // 而 SVM/NPT 后端目前只做到资源准备、逐核 VMRUN 自检与常驻。MSR 与 CR
-    // 策略同理，它们消费的是 VMCS 字段而不是 VMCB 的对应位。
-    //
-    // 留着按钮而不是把它们藏起来，是因为"这台机器上没有这个功能"和"这个版本
-    // 还没做"要分得开：藏起来的入口无法表达后者，用户只会以为自己找错了地方。
-    // 内存操作与事件流不在其中：它们走的是物理内存窗口与事件环，与后端无关。
+    // Intel 专属入口按后端隐藏；内存操作与事件流继续使用通用接口。
     if (m_amdBackend)
     {
         const QString amdGate = ks::i18n::sourceText(QStringLiteral("灰掉的原因：这一项建立在 EPT 分离视图或 VMCS 字段上，当前的 AMD SVM/NPT 后端还没有对应实现。AMD 上可用的是资源准备、逐核自检与常驻。"));
@@ -659,7 +710,7 @@ void KvmDock::updateLifecycleView()
     setGatedTooltip(m_residentButton, residentReason);
 
     const QString soakReason = resourceGateReason;
-    m_soakButton->setEnabled(soakReason.isEmpty());
+    m_soakButton->setEnabled(!m_amdBackend && soakReason.isEmpty());
     setGatedTooltip(m_soakButton, soakReason);
 
     const auto faultResetReason = [&]() -> QString {

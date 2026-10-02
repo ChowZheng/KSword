@@ -4,6 +4,12 @@
 逐项进度与缺失硬件证据见 [状态记录](../../docs/next/ksword-amd-lab-status.md)。
 宿主固定 Windows 10 / VMware Workstation 16.2.5，不升级系统或更换硬件。
 
+## AMD/Intel UI 离线回归
+
+在仓库根目录运行 `tools\hvm_lab\build-ui-tests.cmd`。它使用规定的 HostX64 MSVC 与 Qt 6.9.3，在 `/W4 /WX` 下链接生产 Dock、第三方 VM 页、证据页、KvmControl 和 DriverClient；IOCTL 传输、SCM、确认以及未使用的 EPT watch 页由模拟实现替代。不会打开真实驱动、进入虚拟化或变更实际服务，设置写入临时 INI 目录。
+
+覆盖请求标志、旧 AMD 驱动、准备模式不匹配、代次竞争、失败中断、部分常驻/回滚、metrics 格式与独立记录有效性，以及 AMD 原生/VMware/未知外层/固件关闭/未知后端。默认输出 72 张中英文、深浅主题、520/1050 宽截图到 `tools/hvm_lab/artifacts/ui-admission-20261001/screenshots`，可传入其它输出目录。字体取本机 Microsoft YaHei，Qt/VC 路径使用仓库依赖或 AGENTS.md 规定的回退位置。这些证据不替代实机常驻、内层 OS 启动或性能验收。
+
 宿主 CET 候选支持用户态 `XSS.CET_U`，使用 XSAVES/XRSTORS 保存当前线程状态；非零 `S_CET`（内核 CET 控制）仍明确拒绝，未实现内核影子栈返回链。构建后先用 `Test-HostSvmAdmission.ps1` 仅装载/查询/卸载核验准入；`backendStatus=0` 仅表示准入成功，不是 VMRUN 或常驻通过。该候选保持 HVM v6，不能把新 CLI 与旧 v5 来宾驱动混用。
 
 实体机准入通过后，管理员运行 `Test-HostSvmSelfTest.ps1`，其固定流程是装载→prepare→逐CPU串行self-test→status/metrics核验→teardown→卸载。SYS/CLI须匹配已归档准入哈希；每条命令执行前落盘日志，核对逐核集合、代次、CPUID退出和资源释放。不执行resident或内层VM；物理宿主32逻辑处理器即检查32个串行往返，不是32核并发常驻。若执行不完整或无法证明释放，保留驱动与资源并报告证据目录，不将CLI终止当作回滚成功。`Test-HostSelfTestEvidence.ps1`只运行证据验证器的模拟测试。

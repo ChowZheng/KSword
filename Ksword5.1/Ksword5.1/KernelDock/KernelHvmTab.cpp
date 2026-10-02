@@ -347,7 +347,7 @@ void KernelHvmTab::initializeUi()
     m_detailEdit->setPlaceholderText(
         kernelText(
             "kernel.hvm.detail.placeholder",
-            QStringLiteral("刷新后显示 VMX MSR、EPT 映射与生命周期证据")));
+            QStringLiteral("刷新后显示后端能力、页表与生命周期证据")));
     splitter->addWidget(m_cpuTable);
     splitter->addWidget(m_detailEdit);
     splitter->setStretchFactor(0, 2);
@@ -394,25 +394,29 @@ void KernelHvmTab::refreshAsync()
         return;
     }
     m_operationRunning = true;
+    if (onBusyChanged) { onBusyChanged(true); }
     m_statusLabel->setText(
         kernelText(
             "kernel.hvm.status.refreshing",
-            QStringLiteral("正在读取 CPUID、VMX MSR 与后端状态...")));
+            QStringLiteral("正在读取处理器能力与虚拟化后端状态...")));
     updateButtons();
     QPointer<KernelHvmTab> safeThis(this);
     std::thread([safeThis]() {
         ksword::ark::DriverClient client;
         auto result = client.queryHvmStatus();
+        ksword::ark::HvmMetricsResult metrics{};
+        if (result.io.ok && result.response.backend == KSWORD_ARK_HVM_BACKEND_SVM) { metrics = client.queryHvmMetrics(); }
         if (safeThis == nullptr)
         {
             return;
         }
         QMetaObject::invokeMethod(
             safeThis,
-            [safeThis, result = std::move(result)]() mutable {
+            [safeThis, result = std::move(result), metrics = std::move(metrics)]() mutable {
                 if (safeThis != nullptr)
                 {
                     safeThis->applyStatus(std::move(result));
+                    safeThis->applyMetrics(std::move(metrics));
                 }
             },
             Qt::QueuedConnection);
@@ -422,6 +426,7 @@ void KernelHvmTab::refreshAsync()
 void KernelHvmTab::applyStatus(ksword::ark::HvmStatusResult result)
 {
     m_operationRunning = false;
+    if (onBusyChanged) { onBusyChanged(false); }
     m_supported = result.io.ok && !result.unsupported;
     if (!m_supported)
     {
@@ -554,7 +559,7 @@ void KernelHvmTab::applyStatus(ksword::ark::HvmStatusResult result)
     {
         m_summaryLabel->setText(kernelText(
             "kernel.hvm.summary.amd",
-            QStringLiteral("AMD SVM / VMCB / NPT（实验性）　准备 / 自检 / 常驻：%1 / %2 / %3　NPT 就绪：%4\n完整读数见下方详情；内层 SVM 与 EPT 扩展未实现。"))
+            QStringLiteral("AMD SVM / VMCB / NPT（实验性）　准备 / 自检 / 常驻：%1 / %2 / %3　NPT 就绪：%4\n完整读数见下方详情；嵌套 SVM 为实验性，内层系统启动尚未验收。"))
             .arg(m_snapshot.preparedProcessorCount)
             .arg(m_snapshot.selfTestPassedProcessorCount)
             .arg(m_snapshot.residentProcessorCount)
@@ -563,6 +568,14 @@ void KernelHvmTab::applyStatus(ksword::ark::HvmStatusResult result)
                 : kernelText("kernel.hvm.no_plain", QStringLiteral("否"))));
     }
 
+    m_cpuTable->setColumnCount(CpuColumnCount);
+    m_cpuTable->setHorizontalHeaderLabels({
+        kernelText("kernel.hvm.cpu.processor", QStringLiteral("处理器")),
+        kernelText("kernel.hvm.cpu.resource", QStringLiteral("控制结构")),
+        kernelText("kernel.hvm.cpu.self_test", QStringLiteral("自检")),
+        kernelText("kernel.hvm.cpu.guest_exit", QStringLiteral("来宾 / VM-exit")),
+        kernelText("kernel.hvm.cpu.vmx_result", QStringLiteral("执行状态")),
+        kernelText("kernel.hvm.cpu.ntstatus", QStringLiteral("NTSTATUS")) });
     const int rowCount = static_cast<int>(std::min<unsigned long>(
         m_snapshot.processorCount,
         KSWORD_ARK_HVM_MAX_PROCESSORS));
@@ -673,115 +686,25 @@ void KernelHvmTab::runControlAsync(
         return;
     }
     m_operationRunning = true;
+    if (onBusyChanged) { onBusyChanged(true); }
     m_statusLabel->setText(
         kernelText(
             "kernel.hvm.status.operating",
             QStringLiteral("正在执行 HVM 生命周期操作...")));
     updateButtons();
-    const unsigned long generation = m_snapshot.generation;
-    /*
-     * ALLOW_NESTED 取自用户的嵌套开关，不再由"当前在哪个功能页"决定。
-     *
-     * 原先的规则把这一位绑在 `m_featureArea == NestedVmx` 上，并且**结构性地
-     * 不包含 START_RESIDENT**。后果是在任何嵌套或开着 VBS 的机器上，这个页面的
-     * 「启动驻留 VMM」恒定失败：驱动检测到外层已有 hypervisor 而请求没带这一位，
-     * 返回 STATUS_HV_FEATURE_UNAVAILABLE，界面报 HYPERVISOR_CONFLICT。
-     *
-     * 更难查的是它只在**最后一步**炸：PREPARE 和 SELF_TEST 在嵌套页是带这一位
-     * 的，所以前两步顺利通过，用户走到最后才撞墙，而报错说的是"hypervisor 冲突"
-     * ——听起来像环境问题，不像请求少了一位。
-     *
-     * 权威来源只有一个：ksword::kvm::isNestedAllowed()，也就是虚拟化菜单里那个
-     * 开关，KvmControl 那一层用的就是它。这里跟着它走，就不会再有两个入口对同
-     * 一条命令给出不同标志位的情况。
-     *
-     * VALIDATE_NESTED 保留它自己的额外条件：它的用途就是探测嵌套能力，勾了要探
-     * 的项就得带上这一位，哪怕总开关还没开。
-     *
-     * 只对白名单里含 ALLOW_NESTED 的命令给：TEARDOWN / STOP_RESIDENT / RESET_FAULT
-     * 不接受它，多给一位整条请求会被判 INVALID_REQUEST。
-     */
-    const bool commandAcceptsNested =
-        command == KSWORD_ARK_HVM_CONTROL_PREPARE ||
-        command == KSWORD_ARK_HVM_CONTROL_SELF_TEST ||
-        command == KSWORD_ARK_HVM_CONTROL_LAUNCH_TEST_GUEST ||
-        command == KSWORD_ARK_HVM_CONTROL_START_RESIDENT ||
-        command == KSWORD_ARK_HVM_CONTROL_SOAK ||
-        command == KSWORD_ARK_HVM_CONTROL_VALIDATE_NESTED;
-    const bool allowNested = commandAcceptsNested &&
-        (ksword::kvm::isNestedAllowed() ||
-         (command == KSWORD_ARK_HVM_CONTROL_VALIDATE_NESTED &&
-          (enableNestedVmx || enableEvmcs)));
-    /*
-     * 后端选择必须跟着同一个权威来源，而且只能在 PREPARE 上给。
-     *
-     * 这两位**只有 PREPARE 会读** —— 驱动在准备资源时就把后端定下来，之后
-     * START_RESIDENT 查的是那个已经定好的值。而这里原先一位都不给（controlHvm
-     * 后面几个参数有默认值 false），于是从这个页面准备出来的资源永远是默认的
-     * MTF 后端。
-     *
-     * 后果只在缺 MTF 的机器上显形 —— 也就是**每一台嵌套或开着 VBS 的机器**：
-     * 分离视图只有 EPTP 切换后端装得上，从这里准备就永远装不上，而界面上没有
-     * 任何东西说明这件事。同一个开关在虚拟化菜单那条路上是生效的，两条路对同一
-     * 设置给出不同结果。
-     *
-     * 白名单是硬的：多给一位，整条请求会被判 INVALID_REQUEST 而不是忽略那一位。
-     */
-    const bool prepareBackendFlags =
-        (command == KSWORD_ARK_HVM_CONTROL_PREPARE);
-    /*
-     * 私有 EPT 这一位要发两次：PREPARE 一次，START_RESIDENT 再一次。
-     *
-     * 这不是冗余。PREPARE 置的是 LocalEptArmed（层次备好了没有），而驱动真正
-     * 决定这次常驻用不用私有层次的判据是
-     * `(Flags & ENABLE_LOCAL_EPT) && Runtime->LocalEptArmed` —— 两个都要。
-     * 只在 PREPARE 发的话，前半永远为假，于是常驻永远跑在共享层次上。
-     *
-     * 症状与上面 PREPARE 那段同形：多核机器上 EPT 视图装不上，而界面上没有
-     * 任何东西说明原因——开关是勾着的，准备也成功了。白名单确认过
-     * START_RESIDENT 收这一位（hvm_runtime.c 的 allowedFlags）。
-     *
-     * EPTP 切换后端刻意不跟：START_RESIDENT 的白名单里**没有**
-     * ENABLE_EPTP_SWITCH，多发一位整条请求会被判 INVALID_REQUEST。后端在
-     * 准备时就选定，常驻启动查的是那个已经定好的值。
-     */
-    const bool residentFeatureFlags =
-        (command == KSWORD_ARK_HVM_CONTROL_START_RESIDENT);
-    const bool enableLocalEpt =
-        (prepareBackendFlags || residentFeatureFlags) &&
-        ksword::kvm::isLocalEptEnabled();
-    const bool enableEptpSwitch =
-        prepareBackendFlags && ksword::kvm::isEptpSwitchEnabled();
-    const bool enableVe = residentFeatureFlags && ksword::kvm::isVeEnabled();
-    const bool enableVmFunc = residentFeatureFlags && ksword::kvm::isVmFuncEnabled();
-    const bool hideHypervisor = residentFeatureFlags && ksword::kvm::isHypervisorHidden();
     QPointer<KernelHvmTab> safeThis(this);
-    std::thread([
-        safeThis,
-        command,
-        generation,
-        force,
-        allowNested,
-        enableEptEvents,
-        enableNestedVmx,
-        enableEvmcs,
-        enableLocalEpt,
-        enableEptpSwitch, enableVe, enableVmFunc, hideHypervisor]() {
+    std::thread([safeThis, command, force, enableEptEvents, enableNestedVmx, enableEvmcs]() {
         ksword::ark::DriverClient client;
-        auto control = client.controlHvm(
-            command,
-            generation,
-            force,
-            allowNested,
-            true,
-            enableEptEvents,
-            enableNestedVmx,
-            enableEvmcs,
-            enableVe,
-            enableVmFunc,
-            enableLocalEpt,
-            enableEptpSwitch, 0UL, hideHypervisor);
+        const auto before = client.queryHvmStatus();
+        ksword::ark::HvmControlResult control{};
+        if (before.io.ok && !before.unsupported)
+        {
+            control = ksword::kvm::controlWithPreferences(client, before.response, command,
+                force, enableEptEvents, enableNestedVmx, enableEvmcs);
+        }
         auto status = client.queryHvmStatus();
+        ksword::ark::HvmMetricsResult metrics{};
+        if (status.io.ok && status.response.backend == KSWORD_ARK_HVM_BACKEND_SVM) { metrics = client.queryHvmMetrics(); }
         if (safeThis == nullptr)
         {
             return;
@@ -791,13 +714,15 @@ void KernelHvmTab::runControlAsync(
             [safeThis,
              command,
              control = std::move(control),
-             status = std::move(status)]() mutable {
+             status = std::move(status),
+             metrics = std::move(metrics)]() mutable {
                 if (safeThis != nullptr)
                 {
                     safeThis->applyControl(
                         command,
                         std::move(control),
                         std::move(status));
+                    safeThis->applyMetrics(std::move(metrics));
                 }
             },
             Qt::QueuedConnection);
@@ -810,6 +735,7 @@ void KernelHvmTab::applyControl(
     ksword::ark::HvmStatusResult status)
 {
     m_operationRunning = false;
+    if (onBusyChanged) { onBusyChanged(false); }
     const bool partial =
         control.io.ok &&
         control.response.status ==
@@ -854,13 +780,13 @@ void KernelHvmTab::applyControl(
         {
             action = kernelText(
                 "kernel.hvm.action.prepared",
-                QStringLiteral("VMX/EPT 后端已准备"));
+                QStringLiteral("虚拟化后端资源已准备"));
         }
         else if (command == KSWORD_ARK_HVM_CONTROL_SELF_TEST)
         {
             action = kernelText(
                 "kernel.hvm.action.tested",
-                QStringLiteral("逐 CPU VMX 自检已完成"));
+                QStringLiteral("逐 CPU 虚拟化自检已完成"));
         }
         else if (command == KSWORD_ARK_HVM_CONTROL_LAUNCH_TEST_GUEST)
         {
@@ -873,7 +799,7 @@ void KernelHvmTab::applyControl(
             action = kernelText(
                 "kernel.hvm.action.resident_started",
                 QStringLiteral(
-                    "所有目标 CPU 已进入驻留 VMX non-root；"
+                    "所有目标 CPU 已进入虚拟化常驻；"
                     "只有完整 rendezvous 成功后才标记为 active"));
         }
         else if (command == KSWORD_ARK_HVM_CONTROL_STOP_RESIDENT)
@@ -881,7 +807,7 @@ void KernelHvmTab::applyControl(
             action = kernelText(
                 "kernel.hvm.action.resident_stopped",
                 QStringLiteral(
-                    "驻留 VMM 已停止；所有完成处理器均已 VMXOFF 并恢复原始 CR4"));
+                    "驻留 VMM 已停止；所有目标处理器均已确认退出虚拟化并恢复 Windows 状态"));
         }
         else if (command == KSWORD_ARK_HVM_CONTROL_RESET_FAULT)
         {
@@ -1008,26 +934,14 @@ void KernelHvmTab::updateButtons()
     const bool guestRunning =
         (m_snapshot.stateFlags &
             KSWORD_ARK_HVM_STATE_GUEST_RUNNING) != 0U;
-    const bool residentActive =
+    const bool residentActive = m_snapshot.residentProcessorCount > 0 ||
         (m_snapshot.stateFlags &
             KSWORD_ARK_HVM_STATE_RESIDENT_ACTIVE) != 0U;
-    const bool selfTestPassed =
-        (m_snapshot.stateFlags &
-            KSWORD_ARK_HVM_STATE_SELF_TEST_PASSED) != 0U;
-    const bool residentAvailable =
-        (m_snapshot.featureFlags &
-            (KSWORD_ARK_HVM_FEATURE_RESIDENT_VMM |
-             KSWORD_ARK_HVM_FEATURE_RESIDENT_LIFECYCLE_GUARDED)) ==
-            (KSWORD_ARK_HVM_FEATURE_RESIDENT_VMM |
-             KSWORD_ARK_HVM_FEATURE_RESIDENT_LIFECYCLE_GUARDED) &&
-        m_snapshot.residentImplementation !=
-            KSWORD_ARK_HVM_IMPLEMENTATION_UNSUPPORTED &&
-        (m_snapshot.stateFlags &
-            (KSWORD_ARK_HVM_STATE_EPT_TRUNCATED |
-             KSWORD_ARK_HVM_STATE_POWER_TRANSITION_PENDING |
-             KSWORD_ARK_HVM_STATE_FAULTED |
-             KSWORD_ARK_HVM_STATE_ROLLBACK_REQUIRED |
-             KSWORD_ARK_HVM_STATE_UNLOAD_GUARD_ARMED)) == 0U;
+    ksword::ark::HvmStatusResult gateResult{};
+    gateResult.io.ok = m_supported;
+    gateResult.response = m_snapshot;
+    const auto gate = ksword::kvm::stateFromStatus(gateResult);
+    const bool residentAvailable = gate.residentAdmission && gate.configurationReason.isEmpty();
     m_refreshButton->setEnabled(!m_operationRunning);
 
     // 下面每个按钮各算一次「第一条挡住它的门」。顺序与 setEnabled 的条件
@@ -1052,7 +966,7 @@ void KernelHvmTab::updateButtons()
     };
 
     m_prepareButton->setEnabled(
-        !m_operationRunning && m_supported && !resourcesReady);
+        !m_operationRunning && m_supported && !resourcesReady && !residentActive);
     setGateTooltip(m_prepareButton, [&]() -> QString {
         const QString common = commonReason();
         if (!common.isEmpty()) { return common; }
@@ -1067,7 +981,7 @@ void KernelHvmTab::updateButtons()
 
     m_selfTestButton->setEnabled(
         !m_operationRunning &&
-        m_supported &&
+        m_supported && residentAvailable &&
         resourcesReady &&
         !residentActive);
     setGateTooltip(m_selfTestButton, [&]() -> QString {
@@ -1075,6 +989,7 @@ void KernelHvmTab::updateButtons()
         if (!common.isEmpty()) { return common; }
         if (!resourcesReady) { return needResourcesReason; }
         if (residentActive) { return residentActiveReason; }
+        if (!residentAvailable) { return gate.configurationReason.isEmpty() ? gate.admissionReason : gate.configurationReason; }
         return QString();
     }());
 
@@ -1132,7 +1047,7 @@ void KernelHvmTab::updateButtons()
         !m_operationRunning &&
         m_supported &&
         residentAvailable &&
-        selfTestPassed &&
+        gate.selfTestPassed &&
         !residentActive &&
         m_featureArea != FeatureArea::Evmcs);
     setGateTooltip(m_startResidentButton, [&]() -> QString {
@@ -1146,67 +1061,9 @@ void KernelHvmTab::updateButtons()
         }
         if (!residentAvailable)
         {
-            /*
-             * 逐位说出**实际**挡住它的那一条，而不是背一串可能的原因。
-             *
-             * 原先这里是一句静态文案，列的原因与上面 residentAvailable 的计算
-             * 早已对不上：它说"外层已有 Hypervisor"会挡，而代码根本没查那一位
-             * ——而且那句话本身也过时了，常驻在外层 hypervisor 底下现在是能跑的
-             * （请求带 ALLOW_NESTED）；反过来它漏掉了代码确实在查的
-             * UNLOAD_GUARD_ARMED。
-             *
-             * 从同一组标志位推导，两边就不可能再各说各话。
-             */
-            const auto blockedBy = [&](const unsigned long long flag) {
-                return (m_snapshot.stateFlags & flag) != 0ULL;
-            };
-            if (m_snapshot.residentImplementation ==
-                    KSWORD_ARK_HVM_IMPLEMENTATION_UNSUPPORTED ||
-                (m_snapshot.featureFlags &
-                    (KSWORD_ARK_HVM_FEATURE_RESIDENT_VMM |
-                     KSWORD_ARK_HVM_FEATURE_RESIDENT_LIFECYCLE_GUARDED)) !=
-                    (KSWORD_ARK_HVM_FEATURE_RESIDENT_VMM |
-                     KSWORD_ARK_HVM_FEATURE_RESIDENT_LIFECYCLE_GUARDED))
-            {
-                return kernelText(
-                    "kernel.hvm.gate.resident_unsupported",
-                    QStringLiteral("灰掉的原因：驱动没有报告可用的常驻 VMM 后端（能力位或实现成熟度不足）。"));
-            }
-            if (blockedBy(KSWORD_ARK_HVM_STATE_EPT_TRUNCATED))
-            {
-                return kernelText(
-                    "kernel.hvm.gate.resident_ept_truncated",
-                    QStringLiteral("灰掉的原因：EPT 恒等映射被截断，常驻启动会看不到部分物理内存。"));
-            }
-            if (blockedBy(KSWORD_ARK_HVM_STATE_POWER_TRANSITION_PENDING))
-            {
-                return kernelText(
-                    "kernel.hvm.gate.resident_power_pending",
-                    QStringLiteral("灰掉的原因：有一次电源状态转换正在进行，此时启动常驻会在挂起路径上失去处理器。"));
-            }
-            if (blockedBy(KSWORD_ARK_HVM_STATE_FAULTED))
-            {
-                return kernelText(
-                    "kernel.hvm.gate.resident_faulted",
-                    QStringLiteral("灰掉的原因：运行时处于 FAULTED。先“清除故障”，而它要求常驻已经停下。"));
-            }
-            if (blockedBy(KSWORD_ARK_HVM_STATE_ROLLBACK_REQUIRED))
-            {
-                return kernelText(
-                    "kernel.hvm.gate.resident_rollback",
-                    QStringLiteral("灰掉的原因：上一次操作留下了待回滚的状态，必须先“释放后端”。"));
-            }
-            if (blockedBy(KSWORD_ARK_HVM_STATE_UNLOAD_GUARD_ARMED))
-            {
-                return kernelText(
-                    "kernel.hvm.gate.resident_unload_guard",
-                    QStringLiteral("灰掉的原因：驱动卸载保护已武装 —— 有一次卸载正在等待常驻退出。"));
-            }
-            return kernelText(
-                "kernel.hvm.gate.resident_unavailable",
-                QStringLiteral("灰掉的原因：驱动侧常驻硬件门未通过，但没有单独一条状态位能解释它。请把“刷新”后的状态位报出来。"));
+            return !gate.configurationReason.isEmpty() ? gate.configurationReason : gate.admissionReason;
         }
-        if (!selfTestPassed)
+        if (!gate.selfTestPassed)
         {
             return kernelText(
                 "kernel.hvm.gate.self_test_required",
@@ -1250,66 +1107,16 @@ void KernelHvmTab::updateButtons()
         }
         return QString();
     }());
+    m_launchButton->setVisible(!amd);
+    m_featureActionButton->setVisible(!amd);
     if (amd)
     {
-        // 按钮文案不换。原先这里把「准备资源」改写成 "SVM / VMCB / NPT"，
-        // 那是把一个动作名替换成了一个架构名：按钮不再说明自己做什么，而后端
-        // 是什么在页面顶部的状态里已经写着。
         m_launchButton->setEnabled(false);
         m_featureActionButton->setEnabled(false);
-        const QString amdFeatureReason = kernelText(
-            "kernel.hvm.gate.amd_intel_only",
-            QStringLiteral("灰掉的原因：这一项建立在 Intel VMX 的 VMCS 字段或 EPT 分离视图上，当前的 AMD SVM/NPT 后端还没有对应实现。"));
-        setGateTooltip(m_launchButton, amdFeatureReason);
-        setGateTooltip(m_featureActionButton, amdFeatureReason);
-
-        // Intel 专属开关不会被悄悄套用到 AMD 上。
-        //
-        // 灰掉两个按钮并逐条点名是哪些开关：这几个开关全都持久化或跨会话保留，
-        // 用户很可能是在另一台 Intel 机器上打开的，到这里只看到两个灰按钮而
-        // 完全不知道该去哪儿关。原先这里没有任何说明，那就是一条死路。
-        QStringList blockingOptions;
-        if (ksword::kvm::isLocalEptEnabled())
-        {
-            blockingOptions << kernelText("kernel.hvm.option.local_ept",
-                QStringLiteral("每处理器私有 EPT"));
-        }
-        if (ksword::kvm::isEptpSwitchEnabled())
-        {
-            blockingOptions << kernelText("kernel.hvm.option.eptp_switch",
-                QStringLiteral("EPTP 切换后端"));
-        }
-        if (ksword::kvm::isNestedDispatchEnabled())
-        {
-            blockingOptions << kernelText("kernel.hvm.option.nested_dispatch",
-                QStringLiteral("嵌套 VMX 派发"));
-        }
-        if (ksword::kvm::isVeEnabled())
-        {
-            blockingOptions << kernelText("kernel.hvm.option.ve",
-                QStringLiteral("#VE 反射"));
-        }
-        if (ksword::kvm::isVmFuncEnabled())
-        {
-            blockingOptions << kernelText("kernel.hvm.option.vmfunc",
-                QStringLiteral("VMFUNC"));
-        }
-        if (ksword::kvm::isHypervisorHidden())
-        {
-            blockingOptions << kernelText("kernel.hvm.option.hide_hypervisor",
-                QStringLiteral("隐藏 Hypervisor 身份"));
-        }
-        if (!blockingOptions.isEmpty())
-        {
-            const QString optionReason = kernelText(
-                "kernel.hvm.gate.amd_intel_options",
-                QStringLiteral("灰掉的原因：以下 Intel 专属选项当前是打开的，AMD 后端不接受它们：%1。请在标题栏 KVM 按钮的右键菜单里关掉后重试。"))
-                .arg(blockingOptions.join(
-                    kernelText("kernel.hvm.option.separator", QStringLiteral("、"))));
-            m_prepareButton->setEnabled(false);
-            m_startResidentButton->setEnabled(false);
-            setGateTooltip(m_prepareButton, optionReason);
-            setGateTooltip(m_startResidentButton, optionReason);
-        }
+    }
+    if (!gate.residentAdmission || !gate.configurationReason.isEmpty())
+    {
+        m_prepareButton->setEnabled(false);
+        setGateTooltip(m_prepareButton, !gate.configurationReason.isEmpty() ? gate.configurationReason : gate.admissionReason);
     }
 }

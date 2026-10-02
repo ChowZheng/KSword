@@ -561,7 +561,8 @@ namespace ksword::ark
             // soakMilliseconds：仅 KSWORD_ARK_HVM_CONTROL_SOAK 读取，
             // 表示常驻保持时长；驱动侧会把它夹到协议规定的上下界之间。
             unsigned long soakMilliseconds = 0,
-            bool hideHypervisor = false) const;
+            bool hideHypervisor = false,
+            bool enableNestedSvm = false) const;
         HvmEptRuleResult controlHvmEptRule(
             unsigned long operation,
             unsigned long expectedGeneration,

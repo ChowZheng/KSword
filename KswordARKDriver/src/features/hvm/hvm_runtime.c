@@ -19,6 +19,8 @@ Environment:
 
 #include "hvm_internal.h"
 #include "hvm_backend.h"
+/* Shared masks keep GUI admission and lifecycle registration consistent. */
+#include "driver/KswordArkHvmRequest.h"
 #include "hvm_metrics.h"
 #include "hvm_nested_ept.h"
 // KswordARKAllocateNonPagedPool：L1 位图副本不进硬件，用普通池即可。
@@ -2371,31 +2373,26 @@ KswordARKHvmEnableResidentLifecycle(
     )
 {
 #if defined(_M_AMD64)
-    static const ULONGLONG requiredFeatures =
-        KSWORD_ARK_HVM_FEATURE_INTEL |
-        KSWORD_ARK_HVM_FEATURE_VMX |
-        KSWORD_ARK_HVM_FEATURE_FEATURE_CONTROL_LOCKED |
-        KSWORD_ARK_HVM_FEATURE_VMX_OUTSIDE_SMX |
-        KSWORD_ARK_HVM_FEATURE_EPT |
-        KSWORD_ARK_HVM_FEATURE_EPT_WB |
-        KSWORD_ARK_HVM_FEATURE_EPT_4_LEVEL |
-        KSWORD_ARK_HVM_FEATURE_EPT_2MB |
-        KSWORD_ARK_HVM_FEATURE_INVEPT |
-        KSWORD_ARK_HVM_FEATURE_INVEPT_SINGLE;
+    /* Check hardware before this routine registers the common lifecycle guards. */
+    const ULONGLONG requiredFeatures = KswordArkHvmHardwareFeatures(g_KswordHvm.BackendId);
     UNICODE_STRING callbackName =
         RTL_CONSTANT_STRING(L"\\Callback\\PowerState");
     OBJECT_ATTRIBUTES objectAttributes;
     NTSTATUS status = STATUS_SUCCESS;
 
-    /* AMD and every other non-Intel vendor remain a hard driver-side denial. */
+    /* Missing initialization cannot authorize either backend. */
     if (DriverObject == NULL || !g_KswordHvm.Initialized) {
         return STATUS_INVALID_PARAMETER;
     }
     if (g_KswordHvm.QueryStatus != KSWORD_ARK_HVM_QUERY_STATUS_OK) {
         return g_KswordHvm.LastStatus;
     }
-    if (g_KswordHvm.BackendId != KSWORD_ARK_HVM_BACKEND_SVM &&
-        (g_KswordHvm.FeatureFlags & requiredFeatures) != requiredFeatures) {
+    /* Admit AMD only with complete SVM discovery; unknown vendors remain closed. */
+    if ((g_KswordHvm.BackendId != KSWORD_ARK_HVM_BACKEND_VMX && g_KswordHvm.BackendId != KSWORD_ARK_HVM_BACKEND_SVM) ||
+        (g_KswordHvm.FeatureFlags & requiredFeatures) != requiredFeatures ||
+        (g_KswordHvm.BackendId == KSWORD_ARK_HVM_BACKEND_SVM &&
+         (g_KswordHvm.SvmCapabilities.asidCount < 2 || g_KswordHvm.SvmCapabilities.msrValidMask != 15 ||
+          g_KswordHvm.SvmCapabilities.rejectReason != KSWORD_ARK_SVM_REJECT_NONE))) {
         g_KswordHvm.LastStatus = STATUS_NOT_SUPPORTED;
         return STATUS_NOT_SUPPORTED;
     }

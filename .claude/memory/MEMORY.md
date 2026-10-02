@@ -20,7 +20,7 @@
 - [内核回调监控通道](ksword-callback-monitor.md) — Callback Monitor v1 多游标 ring、回调 try-lock 发布、Minifilter 双消费者与高频 Qt 模型提交边界
 - [Object Callback 安全注销](ksword-object-callback-remove.md) — PDB RegistrationHandle 语义、EX 行身份/代次重验证、ObUnRegisterCallbacks 与移除后复核边界
 - [扩展回调注销研究](ksword-callback-remove-research.md) — OpenArk/WinObjEx64 源码、Registry Cookie 校准、特殊类别真实参数、Image Verification 包装器计数与 ETW/EMP 句柄缺口
-- [HVM 常驻生命周期保护](ksword-hvm-resident-lifecycle.md) — Intel 生命周期基线、S0 电源回调、处理器拓扑冻结、DriverUnload 互锁与全核 VMXOFF 发布边界
+- [HVM 常驻生命周期保护](ksword-hvm-resident-lifecycle.md) — Intel/AMD 准入与 UI 状态发布、S0 电源回调、处理器拓扑冻结、DriverUnload 互锁与全核退出边界
 - [调试器共享后端与 x64dbg 适配](ksword-debugger-backend.md) — 原生会话借用、64 导出 ABI、真实 Windows 停止事件、HVM 执行断点、独立调试器与控制日志 Tab
 - [AMD SVM/NPT 实验与重启续接](ksword-hvm-amd-lab.md) — 待硬件验收实现、双启动脚本、VMware 克隆、构建证据与未完成的多核验证
 - [KswordARKLight 调查工作台骨架](ksword-arklight-investigation-workbench.md) — 跨进程驱动租约、二级页懒加载、EntityRef 路由、证据会话与独立测试/CI 门禁

@@ -51,6 +51,7 @@ public:
         ToggleResident,
         Soak,
         PrepareResources,
+        SelfTest,
         ReleaseResources,
         ResetFault,
         OpenHookWizard,
@@ -89,6 +90,7 @@ public:
     // refreshStateAsync：后台线程读一次状态快照。
     // queryState 是阻塞 IOCTL，绝不能在 UI 线程直接调用。
     void refreshStateAsync();
+    void testPreparedBackend();
 
 protected:
     void showEvent(QShowEvent* event) override;
@@ -111,16 +113,14 @@ private:
     // 等于把 ArkDriverClient 的包含链带进 MainWindow.h。
     bool m_driverRunning = false;      // 驱动服务在跑（availability != DriverNotRunning）。
     bool m_hardwareAvailable = false;  // 硬件门通过（Available 或 NotPrepared）。
+    bool m_selfTestPassed = false;
     bool m_resourcesReady = false;     // 资源已准备，即第 2 步的窗口期已打开。
     bool m_residentActive = false;     // 至少一个逻辑处理器处于 VMX non-root。
     bool m_faulted = false;            // 存在故障或待回滚，必须先重置。
     bool m_operationRunning = false;   // 由 MainWindow 推进来的命令执行中标志。
     bool m_queryInFlight = false;      // 合并并发轮询，避免请求在驱动侧堆积。
-    // m_amdBackend：当前后端是 AMD SVM/NPT。
-    //
-    // 界面结构不随它变——同一套页、同一批按钮，缺的项灰掉并说明为什么。
-    // 换一套界面的代价是两条路径各自演化，而 AMD 上真正不同的只有"哪些入口
-    // 现在还没有对应实现"这一件事，为它重画一遍界面不成比例。
+    // 当前后端决定适用的页面和动作；查询前控制入口保持关闭。
+    bool m_backendKnown = false;
     bool m_amdBackend = false;
     QString m_availabilityText;        // 不可用时的原因，直接来自门面。
     QString m_detailText;              // 快照详情，与标题栏按钮 tooltip 同源。
@@ -133,6 +133,7 @@ private:
     QLabel* m_detailLabel = nullptr;
 
     QPushButton* m_prepareButton = nullptr;
+    QPushButton* m_selfTestButton = nullptr;
     QPushButton* m_releaseButton = nullptr;
     QPushButton* m_evidenceButton = nullptr;
     QPushButton* m_hookWizardButton = nullptr;

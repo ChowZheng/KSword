@@ -1,6 +1,6 @@
 # HVM 常驻生命周期保护
 
-2026-09-17 续记：下文是 Intel 生命周期基线。新增 AMD 实验实现和未完成的硬件验收见 [AMD 实验续接](ksword-hvm-amd-lab.md)；不能把 Intel 历史运行证据用于 AMD。
+2026-10-01：准入门与 GUI 已统一为 Intel/AMD 分支，以下电源与返回链细节仍以 Intel 历史基线为主。AMD 实验实现和未完成的硬件验收见 [AMD 实验续接](ksword-hvm-amd-lab.md)；不能把 Intel 历史运行证据用于 AMD。
 
 ## 能力发布原则
 
@@ -8,24 +8,28 @@
 
 - `KSWORD_ARK_HVM_FEATURE_RESIDENT_VMM`
 - `KSWORD_ARK_HVM_FEATURE_MULTICORE_RENDEZVOUS`
-- `KSWORD_ARK_HVM_FEATURE_EPT_RULES`
+- `KSWORD_ARK_HVM_FEATURE_EPT_RULES`（仅 Intel）
 - `KSWORD_ARK_HVM_FEATURE_RESIDENT_LIFECYCLE_GUARDED`
 
 注册失败只关闭常驻 HVM，不能让整个 KswordARK 驱动加载失败。`capability-only` 表示保护链可用但尚未进入 VMX non-root；只有完整全 CPU rendezvous 成功才标记 `active`。
 
-## Intel-only 与硬件门
+## Intel/AMD 硬件门与嵌套发布
 
-常驻启动必须精确匹配 `GenuineIntel`。AMD 与其它 CPU vendor 在 `KswordARKHvmReadCapabilities` 返回 unsupported，不得由 UI、确认偏好或控制 flag 绕过。还必须满足：
+生命周期注册按已识别后端检查硬件条件，未知后端继续拒绝。Intel 的条件为：
 
 - VMX 与已锁定的 `IA32_FEATURE_CONTROL`；
 - VMX outside SMX；
 - EPT、WB、四级 walk、2 MiB leaf；
 - INVEPT 与 single-context INVEPT；
-- CPUID 不得报告已有 Hypervisor；
+- 外层 Hypervisor 必须通过现有嵌套硬件准入，并显式允许作为来宾运行；偏好不能绕过 Hyper-V/VBS 拒绝；
 - 准备数、自检通过数、活动 CPU 数和每 CPU `RESOURCE_READY | SELF_TESTED | VMXON_SUCCEEDED` 必须完全一致；
 - EPT 不得为 `EPT_TRUNCATED`。
 
-Nested VMX/eVMCS 的 partial 状态不是隐藏锁。未实现完整 vmcs02、L2 exit reflection、shadow EPT 和 VP-assist/clean-field 所有权时，验证入口可以开放，但不得显示 active 或宣称可运行 L2。
+AMD 检查 AMD/SVM/NPT/NRIP、ASID >= 2、完整 MSR 证据与 `rejectReason=NONE`；仍保留全核自检、电源、拓扑、卸载、回滚和状态准入。AMD 外层仅接受显式允许的 `VMwareVMware`，未知外层及 Hyper-V/VBS 继续拒绝。GUI 的共同准入与请求过滤在 `shared/driver/KswordArkHvmRequest.h`，标题栏、Dock 控制页和证据页通过 `KvmState` 读取同一判定。
+
+共享查询协议布局与版本未变，featureFlags 新增 bit 54..58：`NESTED_SVM_DISPATCH`、`NESTED_SVM_PREPARED`、`NESTED_SVM_ARMED`、`NESTED_VMX_ARMED`、`HYPERVISOR_IDENTITY_HIDDEN`。支持、资源模式、全核运行证据分别发布；未支持这些位的旧 AMD 驱动不能开放来宾嵌套。AMD PREPARE/START_RESIDENT 发送 `ENABLE_NESTED_SVM`，SELF_TEST 使用已准备模式；Intel 偏好在 AMD 上保留但过滤出请求。准备模式与请求不同，要求明确停止、释放、重新准备，不能自动替换资源。
+
+Intel 已有 vmcs12、退出反射和影子 EPT 路径，不能再用“Nested 一律不运行 L2”的早期描述。`NESTED_VMX_ARMED` 表示全核派发已武装，独立于瞬时 L2 状态；AMD 的实际武装也不提升实验成熟度或证明内层 OS 启动。eVMCS 仍没有 VP-assist/clean-field 接管，能力检查不能解释为 active。
 
 ## 电源、拓扑与卸载互锁
 

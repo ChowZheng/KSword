@@ -2527,6 +2527,13 @@ KswordARKHvmResidentStart(
     KswordARKHvmStateClear(Runtime, KSWORD_ARK_HVM_STATE_RESIDENT_STARTING);
     /* Publish resident active only after every target processor succeeds. */
     KswordARKHvmStateSet(Runtime, KSWORD_ARK_HVM_STATE_RESIDENT_ACTIVE);
+    /* Publish only this successful run's dispatch mode, never a previous menu request. */
+    Runtime->FeatureFlags &= ~KSWORD_ARK_HVM_FEATURE_NESTED_VMX_ARMED;
+    /* Full rendezvous success proves the configured dispatcher is installed on all CPUs. */
+    if (Flags & KSWORD_ARK_HVM_CONTROL_FLAG_ENABLE_NESTED_VMX) {
+        /* Armed does not imply any L2 has executed or change nested implementation maturity. */
+        Runtime->FeatureFlags |= KSWORD_ARK_HVM_FEATURE_NESTED_VMX_ARMED;
+    }
     /*
      * Publish whether the #VE control is armed on this residency.  It says
      * the control is on, not that any #VE can be delivered: suppress-#VE on

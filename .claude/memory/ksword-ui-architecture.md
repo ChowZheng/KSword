@@ -7,6 +7,9 @@ metadata:
 
 KSword 主程序位于 `Ksword5.1/Ksword5.1`（Qt 6.9.3 Widgets + Qt Advanced Docking System，MSVC vcxproj 构建）。
 
+- 2026-10-01 虚拟化 Dock 按驱动后端适配：AMD 使用“准备 → 全核 SVM 自检 → 常驻”，隐藏 EPT watch/分离视图/执行域/Hook/VMCS 策略/SOAK，保留通用内存、事件、停止和释放。第三方 VM 页为四步嵌套 SVM 流程，Intel 仍五步；实际启用必须读取驱动位，不能从本地开关或 VMware 服务 Running 推断。证据页校验 metrics 版本/长度/行数、代次与 CPU 身份，raw/general/hotspots 各自检查有效位与偶数序列，无效显示暂不可用。
+- 离屏 UI 回归入口 `tools/hvm_lab/build-ui-tests.cmd`：链接实际 Dock、Guest、Evidence、KvmControl 与 DriverClient，仅替换 IOCTL 传输、确认和 SCM。测试源码由该独立构建清单登记，不进入主程序 vcxproj。Windows Qt offscreen 需显式加载中文字体，配合 `SetDarkModeEnabled` 与完整 palette（包括 PlaceholderText/AlternateBase/disabled roles）；否则缺字或默认浅色 palette 会制造错误的窄窗口/深色截图。Qt DLL 需部署到测试 exe 目录。
+
 - QADS 已升级到 **5.1.1**（`v5.1.1`，commit `023ce95934fecfd4cf5c672c9c404fabe0f54923`）。版本、许可证与复现步骤见 `third_party/qt_advanced_docking_system/NOTICE.md`；CMake 包装保留 `qtadvanceddocking[d].dll/.lib` 文件名，避免改名 DLL 后 import library 仍指向上游新文件名。`include/ads/ads_version.h` 是构建生成的必要头文件，升级时须与其余头文件、Release/Debug import library 和 DLL 一起更新。
 - ADS 5.x 默认跟随 palette 自动加载内部 QSS。KSword 必须在创建 `CDockManager` 前设置 `DisableStylesheet=true`；仅在外观应用末尾 `setStyleSheet("")` 不够，后续 palette 事件仍会重新加载默认样式。`include/ads/` 属于上游头文件，Git 用 `-text` 保留混合 LF/CRLF，避免升级产生整文件换行 diff。
 

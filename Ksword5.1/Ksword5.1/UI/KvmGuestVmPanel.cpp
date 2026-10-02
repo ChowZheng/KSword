@@ -4,6 +4,10 @@
 #include "../ksword/service/service.h"
 #include "../theme.h"
 #include "KvmControl.h"
+#include "ThemeStatusRole.h"
+#include "../Framework/DestructiveActionConfirmation.h"
+#include <windows.h>
+#include <tlhelp32.h>
 
 #include <QFrame>
 #include <QHBoxLayout>
@@ -46,8 +50,7 @@ namespace
     {
         if (label == nullptr) { return; }
         label->setText(text);
-        label->setStyleSheet(QStringLiteral("color:%1;").arg(
-            done ? KswordTheme::SuccessHex() : KswordTheme::WarningHex()));
+        ks::ui::ApplyStatusRole(label, done ? ks::ui::StatusRole::Success : ks::ui::StatusRole::Warning);
     }
 }
 
@@ -67,7 +70,7 @@ KvmGuestVmPanel::KvmGuestVmPanel(QWidget* parent)
 
     m_intro = new QLabel(host);
     m_intro->setWordWrap(true);
-    m_intro->setText(ks::i18n::sourceText(QStringLiteral("本机启用 KSwordVM 之后，它会占住 CPU 的虚拟化功能。VMware、VirtualBox、WSL2、Docker Desktop 要用的是同一套功能，因此必须由 KSwordVM 主动让出来，并且对它们隐藏自己的存在。下面五步全部完成之后，这些软件就能照常打开虚拟机。顺序是有讲究的：前三步是设置，第四步才把 KSwordVM 真正跑起来，第五步让 VMware 重新去问一次 CPU 能力。少做任何一步虚拟机软件都会打不开，而且它给出的错误提示不会提到 KSwordVM。")));
+    m_intro->setText(ks::i18n::sourceText(QStringLiteral("Intel 嵌套 VMX 允许来宾使用虚拟化指令。下面按顺序设置外层许可、来宾嵌套和身份选项，再准备、自检与启动，最后按需重新识别 VMware 能力。驱动确认启用后，仍需单独验证第三方虚拟机；这些步骤不保证所有软件兼容。")));
     layout->addWidget(m_intro);
 
     auto* const buttonRow = new QHBoxLayout();
@@ -75,11 +78,15 @@ KvmGuestVmPanel::KvmGuestVmPanel(QWidget* parent)
         ks::i18n::sourceText(QStringLiteral("一键完成全部五步")), host);
     m_doAll->setToolTip(ks::i18n::sourceText(QStringLiteral("按顺序执行：打开三个设置，准备并启动 KSwordVM，最后重启 VMware 的驱动服务。每一步的结果都会显示在下面的清单里。")));
     connect(m_doAll, &QPushButton::clicked, this, [this]() {
-        runInBackground([this]() -> QString {
-            enableAllSwitches();
-            startMonitor();
-            restartVmwareDriver();
-            return ks::i18n::sourceText(QStringLiteral("五步已执行完，请看下面每一步的状态。"));
+        if (!confirmActivation()) { return; }
+        runInBackground([completion = m_vmwareDriverRestarted]() -> QString {
+            const auto before = ksword::kvm::queryState();
+            if (!before.residentActive) { enableAllSwitches(); }
+            const QString startError = startMonitor();
+            if (!startError.isEmpty()) { return startError; }
+            const QString restartError = restartVmwareDriver(completion);
+            if (!restartError.isEmpty()) { return restartError; }
+            return ks::i18n::sourceText(QStringLiteral("流程已完成；请查看驱动回读状态。内层系统运行仍需单独验证。"));
         });
     });
     buttonRow->addWidget(m_doAll);
@@ -93,11 +100,10 @@ KvmGuestVmPanel::KvmGuestVmPanel(QWidget* parent)
 
     m_stepAllowNested = addStep(layout, 1,
         ks::i18n::sourceText(QStringLiteral("允许 KSwordVM 运行在虚拟机里")),
-        ks::i18n::sourceText(QStringLiteral("如果这台电脑本身就是一台虚拟机，或者系统开着「内存完整性」，那么 KSwordVM 只能以这种方式运行。代价是每一条虚拟化指令都要由外面那层软件代为处理，速度会明显变慢。不确定要不要开就开着，它不改动系统任何设置。")),
+        ks::i18n::sourceText(QStringLiteral("仅在当前外层明确提供嵌套虚拟化时允许进入。此许可不能绕过 Hyper-V/VBS 的硬件准入拒绝；裸机无需开启。")),
         ks::i18n::sourceText(QStringLiteral("打开")),
         [this]() {
-            runInBackground([this]() -> QString {
-                markConfigurationChanged();
+            runInBackground([completion = m_vmwareDriverRestarted]() -> QString {
                 ksword::kvm::setNestedAllowed(true);
                 return ks::i18n::sourceText(QStringLiteral("第 1 步已打开。"));
             });
@@ -108,8 +114,9 @@ KvmGuestVmPanel::KvmGuestVmPanel(QWidget* parent)
         ks::i18n::sourceText(QStringLiteral("这一项和上一项方向相反：上一项是让 KSwordVM 跑在别人下面，这一项是让别人跑在 KSwordVM 下面。不打开的话，VMware 一按「开启此虚拟机」就会失败。它有两个前提：需要先打开「允许 R-1 写操作」，并且关掉「每处理器私有 EPT」，后者和这一项不能同时开，同时开会被整条拒绝。")),
         ks::i18n::sourceText(QStringLiteral("打开")),
         [this]() {
-            runInBackground([this]() -> QString {
-                if (ksword::kvm::isLocalEptEnabled())
+            if (!confirmActivation()) { return; }
+            runInBackground([completion = m_vmwareDriverRestarted]() -> QString {
+                if (ksword::kvm::queryState().backend == KSWORD_ARK_HVM_BACKEND_VMX && ksword::kvm::isLocalEptEnabled())
                 {
                     return ks::i18n::sourceText(QStringLiteral("打不开：「每处理器私有 EPT」正开着，它和这一项不能同时开，请先关掉它。"));
                 }
@@ -117,7 +124,6 @@ KvmGuestVmPanel::KvmGuestVmPanel(QWidget* parent)
                 {
                     return ks::i18n::sourceText(QStringLiteral("打不开：需要先打开「允许 R-1 写操作」。"));
                 }
-                markConfigurationChanged();
                 ksword::kvm::setNestedDispatchEnabled(true);
                 return ks::i18n::sourceText(QStringLiteral("第 2 步已打开。"));
             });
@@ -128,8 +134,7 @@ KvmGuestVmPanel::KvmGuestVmPanel(QWidget* parent)
         ks::i18n::sourceText(QStringLiteral("这一步不能省。VMware 启动时会先检查 CPU 上有没有别的虚拟化软件，一旦发现就直接弹「与 Hyper-V 不兼容」并退出，它连能力都不会去问，所以前两步做得再对也救不回来。打开之后虚拟机软件就看不到 KSwordVM 了。")),
         ks::i18n::sourceText(QStringLiteral("打开")),
         [this]() {
-            runInBackground([this]() -> QString {
-                markConfigurationChanged();
+            runInBackground([completion = m_vmwareDriverRestarted]() -> QString {
                 ksword::kvm::setHypervisorHidden(true);
                 return ks::i18n::sourceText(QStringLiteral("第 3 步已打开。"));
             });
@@ -140,9 +145,9 @@ KvmGuestVmPanel::KvmGuestVmPanel(QWidget* parent)
         ks::i18n::sourceText(QStringLiteral("分配资源、做一次自检，然后正式接管 CPU 的虚拟化功能。前三步是设置，只有走完这一步它们才真正生效：设置是在启动的那一刻被读取的，启动之后再改开关不会影响已经跑起来的这一份。")),
         ks::i18n::sourceText(QStringLiteral("启动")),
         [this]() {
-            runInBackground([this]() -> QString {
-                startMonitor();
-                return QString();
+            if (!confirmActivation()) { return; }
+            runInBackground([completion = m_vmwareDriverRestarted]() -> QString {
+                return startMonitor();
             });
         });
 
@@ -151,9 +156,8 @@ KvmGuestVmPanel::KvmGuestVmPanel(QWidget* parent)
         ks::i18n::sourceText(QStringLiteral("VMware 的驱动只在它自己启动的时候问一次 CPU 支持哪些虚拟化能力，问完就记住了。前面几步改完之后它手里还是旧答案，所以必须让它重启一次重新问。这一步动的是 VMware 自己的服务，不是 KSwordVM；重启前请先关掉所有正在运行的虚拟机。")),
         ks::i18n::sourceText(QStringLiteral("重启 VMware 驱动服务")),
         [this]() {
-            runInBackground([this]() -> QString {
-                restartVmwareDriver();
-                return QString();
+            runInBackground([completion = m_vmwareDriverRestarted]() -> QString {
+                return restartVmwareDriver(completion);
             });
         });
 
@@ -186,8 +190,11 @@ KvmGuestVmPanel::StepRow KvmGuestVmPanel::addStep(
     const std::function<void()>& onClicked)
 {
     StepRow row;
+    row.originalTitle = QStringLiteral("%1. %2").arg(number).arg(title);
+    row.originalExplanation = explanation;
 
     auto* const box = new QFrame(parentLayout->parentWidget());
+    row.container = box;
     box->setFrameShape(QFrame::StyledPanel);
     auto* const boxLayout = new QVBoxLayout(box);
     boxLayout->setContentsMargins(12, 10, 12, 10);
@@ -196,6 +203,7 @@ KvmGuestVmPanel::StepRow KvmGuestVmPanel::addStep(
     auto* const headerRow = new QHBoxLayout();
     auto* const titleLabel = new QLabel(
         QStringLiteral("%1. %2").arg(number).arg(title), box);
+    row.title = titleLabel;
     titleLabel->setStyleSheet(QStringLiteral("font-weight:600;"));
     titleLabel->setWordWrap(true);
     headerRow->addWidget(titleLabel, 1);
@@ -209,6 +217,7 @@ KvmGuestVmPanel::StepRow KvmGuestVmPanel::addStep(
     boxLayout->addLayout(headerRow);
 
     auto* const why = new QLabel(explanation, box);
+    row.explanation = why;
     why->setWordWrap(true);
     why->setStyleSheet(
         QStringLiteral("color:%1;").arg(KswordTheme::TextSecondaryHex()));
@@ -226,6 +235,7 @@ void KvmGuestVmPanel::showEvent(QShowEvent* event)
 
 void KvmGuestVmPanel::setBusy(const bool busy)
 {
+    const bool changed = m_busy != busy;
     m_busy = busy;
     // 「刷新」不看后端：读一次状态在哪台机器上都成立，而它正是用户在 AMD 上
     // 唯一还能按的东西——把它一起灰掉，这一页就没有任何出口了。
@@ -238,28 +248,35 @@ void KvmGuestVmPanel::setBusy(const bool busy)
     {
         if (row->action != nullptr) { row->action->setEnabled(actionsEnabled); }
     }
-    if (onBusyChanged) { onBusyChanged(busy); }
+    if (changed && onBusyChanged) { onBusyChanged(busy); }
 }
 
 void KvmGuestVmPanel::runInBackground(const std::function<QString()>& work)
 {
     if (m_busy) { return; }
+    markConfigurationChanged();
     setBusy(true);
     QPointer<KvmGuestVmPanel> safeThis(this);
     std::thread([safeThis, work]() {
         QString message;
         if (work) { message = work(); }
         const ksword::kvm::KvmState state = ksword::kvm::queryState();
+        ks::service::ServiceStatus vmwareStatus{};
+        std::uint32_t serviceError = 0;
+        const bool vmwareInstalled = ks::service::QueryServiceStatus(kVmwareDriverService, &vmwareStatus, nullptr, &serviceError);
+        const bool vmwareQueryValid = vmwareInstalled || serviceError == ERROR_SERVICE_DOES_NOT_EXIST;
         if (safeThis == nullptr) { return; }
         QMetaObject::invokeMethod(
             safeThis,
-            [safeThis, state, message]() {
+            [safeThis, state, message, vmwareInstalled, vmwareQueryValid]() {
                 if (safeThis == nullptr) { return; }
                 safeThis->setBusy(false);
                 if (!message.isEmpty() && safeThis->m_lastMessage != nullptr)
                 {
                     safeThis->m_lastMessage->setText(message);
                 }
+                safeThis->m_vmwareInstalled = vmwareInstalled;
+                safeThis->m_vmwareQueryValid = vmwareQueryValid;
                 safeThis->applyState(state);
             },
             Qt::QueuedConnection);
@@ -273,12 +290,18 @@ void KvmGuestVmPanel::refreshAsync()
     QPointer<KvmGuestVmPanel> safeThis(this);
     std::thread([safeThis]() {
         const ksword::kvm::KvmState state = ksword::kvm::queryState();
+        ks::service::ServiceStatus vmwareStatus{};
+        std::uint32_t serviceError = 0;
+        const bool vmwareInstalled = ks::service::QueryServiceStatus(kVmwareDriverService, &vmwareStatus, nullptr, &serviceError);
+        const bool vmwareQueryValid = vmwareInstalled || serviceError == ERROR_SERVICE_DOES_NOT_EXIST;
         if (safeThis == nullptr) { return; }
         QMetaObject::invokeMethod(
             safeThis,
-            [safeThis, state]() {
+            [safeThis, state, vmwareInstalled, vmwareQueryValid]() {
                 if (safeThis == nullptr) { return; }
                 safeThis->m_queryInFlight = false;
+                safeThis->m_vmwareInstalled = vmwareInstalled;
+                safeThis->m_vmwareQueryValid = vmwareQueryValid;
                 safeThis->applyState(state);
             },
             Qt::QueuedConnection);
@@ -287,105 +310,189 @@ void KvmGuestVmPanel::refreshAsync()
 
 void KvmGuestVmPanel::markConfigurationChanged()
 {
-    m_vmwareDriverRestarted = false;
+    m_vmwareDriverRestarted->store(0ULL);
+}
+
+bool KvmGuestVmPanel::confirmActivation()
+{
+    if (!ksword::kvm::isWriteAccessEnabled())
+    {
+        m_lastMessage->setText(ks::i18n::sourceText(QStringLiteral("请先在标题栏虚拟化菜单开启允许 R-1 写操作。")));
+        return false;
+    }
+    return ks::ui::confirmDestructiveAction(this, QStringLiteral("KvmGuestActivate"),
+        ks::i18n::sourceText(QStringLiteral("启用来宾嵌套与常驻")),
+        ks::i18n::sourceText(QStringLiteral("本机全部逻辑处理器")),
+        ks::i18n::sourceText(QStringLiteral("将允许 ring 0 代码运行内层虚拟机，并尝试全核常驻。AMD 嵌套仍为实验性，内层系统尚未完成验收。已运行虚拟机必须先关闭；任何一步失败会停止后续流程。")));
 }
 
 void KvmGuestVmPanel::enableAllSwitches()
 {
-    markConfigurationChanged();
-    ksword::kvm::setNestedAllowed(true);
-    if (!ksword::kvm::isLocalEptEnabled() && ksword::kvm::isWriteAccessEnabled())
+    const auto state = ksword::kvm::queryState();
+    if (state.hypervisorPresent) { ksword::kvm::setNestedAllowed(true); }
+    if (ksword::kvm::isWriteAccessEnabled() &&
+        (state.backend == KSWORD_ARK_HVM_BACKEND_SVM || !ksword::kvm::isLocalEptEnabled()))
     {
         ksword::kvm::setNestedDispatchEnabled(true);
     }
-    ksword::kvm::setHypervisorHidden(true);
+    if (state.backend == KSWORD_ARK_HVM_BACKEND_VMX) { ksword::kvm::setHypervisorHidden(true); }
 }
 
-void KvmGuestVmPanel::startMonitor()
+QString KvmGuestVmPanel::startMonitor()
 {
-    const ksword::kvm::KvmState before = ksword::kvm::queryState();
-    if (before.residentActive) { return; }
-    // 重新起一次 KSwordVM，等于让能力过滤器换了一份；vmx86 上一次问到的答案
-    // 就此作废，第 5 步必须重做。
-    markConfigurationChanged();
-    const ksword::kvm::KvmCommandResult prepared = ksword::kvm::ensurePrepared();
-    if (!prepared.ok) { return; }
-    const ksword::kvm::KvmState prepState = ksword::kvm::queryState();
-    (void)ksword::kvm::startResident(prepState.generation);
+    const auto before = ksword::kvm::queryState();
+    if (!before.configurationReason.isEmpty()) { return before.configurationReason; }
+    if (before.residentActive)
+    {
+        if (!before.residentComplete || !before.nestedArmed ||
+            (before.backend == KSWORD_ARK_HVM_BACKEND_VMX && !before.identityHidden))
+        {
+            return ks::i18n::sourceText(QStringLiteral("当前常驻未全核启用来宾嵌套；请停止常驻、释放资源后重新准备。"));
+        }
+        return QString();
+    }
+    if (!ksword::kvm::isNestedDispatchEnabled())
+    {
+        return ks::i18n::sourceText(QStringLiteral("请先开启允许来宾嵌套，再准备资源与启动常驻。"));
+    }
+    const auto started = ksword::kvm::startResident(before.generation);
+    if (!started.ok) { return started.message; }
+    const auto after = ksword::kvm::queryState();
+    if (!after.residentComplete || !after.nestedArmed ||
+        (after.backend == KSWORD_ARK_HVM_BACKEND_VMX && !after.identityHidden))
+    {
+        return ks::i18n::sourceText(QStringLiteral("驱动尚未确认全核常驻与嵌套启用，未继续重启 VMware 服务。"));
+    }
+    return QString();
 }
 
-void KvmGuestVmPanel::restartVmwareDriver()
+QString KvmGuestVmPanel::restartVmwareDriver(const std::shared_ptr<std::atomic<unsigned long long>>& completion)
 {
+    const auto state = ksword::kvm::queryState();
+    if (!state.residentComplete || !state.nestedArmed || state.faulted || !state.configurationReason.isEmpty() ||
+        (state.backend == KSWORD_ARK_HVM_BACKEND_VMX && !state.identityHidden))
+    {
+        return ks::i18n::sourceText(QStringLiteral("驱动尚未确认全核常驻与嵌套启用，未继续重启 VMware 服务。"));
+    }
     ks::service::ServiceStatus status{};
-    if (!ks::service::QueryServiceStatus(kVmwareDriverService, &status))
+    std::uint32_t serviceError = 0;
+    if (!ks::service::QueryServiceStatus(kVmwareDriverService, &status, nullptr, &serviceError))
     {
-        // 没装 VMware 就没有这个服务，不是错误。
-        return;
+        if (serviceError == ERROR_SERVICE_DOES_NOT_EXIST) { return QString(); }
+        return ks::i18n::sourceText(QStringLiteral("无法查询 VMware 驱动服务，未继续重启。"));
     }
-    (void)ks::service::StopServiceByName(
-        kVmwareDriverService, 15000U, kServiceStopped);
-    if (ks::service::StartServiceByName(
-            kVmwareDriverService, 15000U, kServiceRunning))
+    // Never stop a VMware driver while its VM process is alive.
+    const HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snapshot == INVALID_HANDLE_VALUE)
     {
-        m_vmwareDriverRestarted = true;
+        return ks::i18n::sourceText(QStringLiteral("无法检查运行中的虚拟机，未重启 VMware 服务。"));
     }
+    PROCESSENTRY32W process{};
+    process.dwSize = sizeof(process);
+    bool activeVm = false;
+    if (Process32FirstW(snapshot, &process))
+    {
+        do { if (_wcsicmp(process.szExeFile, L"vmware-vmx.exe") == 0) { activeVm = true; break; } }
+        while (Process32NextW(snapshot, &process));
+    }
+    else { activeVm = true; }
+    CloseHandle(snapshot);
+    if (activeVm) { return ks::i18n::sourceText(QStringLiteral("请先关闭所有 VMware 虚拟机，再重新识别 CPU 能力。")); }
+    if (!ks::service::StopServiceByName(kVmwareDriverService, 15000U, kServiceStopped) ||
+        !ks::service::StartServiceByName(kVmwareDriverService, 15000U, kServiceRunning))
+    {
+        return ks::i18n::sourceText(QStringLiteral("重启 VMware 驱动服务失败，请检查服务状态。"));
+    }
+    const auto after = ksword::kvm::queryState();
+    if (after.generation != state.generation || !after.residentComplete || !after.nestedArmed || after.faulted)
+    {
+        return ks::i18n::sourceText(QStringLiteral("VMware 服务已完成重启，但驱动代次或常驻状态已变化；请刷新后重新检查。"));
+    }
+    completion->store(static_cast<unsigned long long>(after.generation) + 1ULL);
+    return QString();
 }
 
 void KvmGuestVmPanel::applyState(const ksword::kvm::KvmState& state)
 {
-    // 后端判据先算：下面五步全都建立在 Intel 的嵌套 VMX 派发上。
-    // setBusy 不改忙碌位，只是拿新的 m_backendSupported 把按钮重刷一遍。
-    m_backendSupported = state.backend == KSWORD_ARK_HVM_BACKEND_VMX;
+    m_backend = state.backend;
+    const bool amd = state.backend == KSWORD_ARK_HVM_BACKEND_SVM;
+    m_backendSupported = (state.backend == KSWORD_ARK_HVM_BACKEND_VMX || amd) && state.nestedSupported;
+    const auto rows = { &m_stepAllowNested, &m_stepHostGuests, &m_stepHideIdentity, &m_stepStartMonitor, &m_stepRestartVmware };
+    for (StepRow* row : rows)
+    {
+        row->title->setText(row->originalTitle);
+        row->explanation->setText(row->originalExplanation);
+    }
+    m_stepHideIdentity.container->setVisible(!amd);
+    m_stepAllowNested.action->setEnabled(state.hypervisorPresent);
+    if (!m_intro->property("ks_intel_text").isValid()) { m_intro->setProperty("ks_intel_text", m_intro->text()); }
+    if (amd)
+    {
+        m_intro->setText(ks::i18n::sourceText(QStringLiteral("AMD 使用实验性嵌套 SVM：虚拟 VMCB、权限图合并、退出反射和 NPT 合成。请在准备资源前开启来宾嵌套；AMD 不使用 Intel 身份隐藏选项。实际启用仍不代表内层操作系统或所有第三方软件已通过验收。")));
+        m_doAll->setText(ks::i18n::sourceText(QStringLiteral("按顺序配置并启动 AMD 嵌套")));
+        m_doAll->setToolTip(ks::i18n::sourceText(QStringLiteral("设置适用的嵌套选项，准备与自检，再启动；失败立即停止，成功后按需重新识别 VMware 能力。")));
+        m_stepHostGuests.title->setText(ks::i18n::sourceText(QStringLiteral("2. 允许来宾嵌套 SVM（实验性）")));
+        m_stepHostGuests.explanation->setText(ks::i18n::sourceText(QStringLiteral("需要允许 R-1 写操作；此配置在准备资源时确定。更改后必须停止常驻、释放资源并重新准备，不能仅在启动时切换。")));
+        m_stepStartMonitor.title->setText(ks::i18n::sourceText(QStringLiteral("3. 准备、自检并启动全核 SVM 常驻")));
+        m_stepStartMonitor.explanation->setText(ks::i18n::sourceText(QStringLiteral("先准备所选 SVM 模式，再逐核自检，最后启动全核常驻；任一阶段失败立即停止。菜单开关仅表示请求，以驱动回读的嵌套实际启用为准。")));
+        m_stepRestartVmware.title->setText(ks::i18n::sourceText(QStringLiteral("4. 按需让 VMware 重新识别 CPU 能力")));
+        m_stepAllowNested.explanation->setText(ks::i18n::sourceText(QStringLiteral("裸机无需外层嵌套许可。作为来宾运行时仅支持显式允许的 VMware 外层；Hyper-V/VBS 和未知外层不会因打开此选项而获准。")));
+    }
+    else
+    {
+        m_intro->setText(m_intro->property("ks_intel_text").toString());
+        m_doAll->setText(ks::i18n::sourceText(QStringLiteral("一键完成全部五步")));
+    }
     setBusy(m_busy);
+    m_stepAllowNested.action->setEnabled(!m_busy && m_backendSupported && state.hypervisorPresent && !state.residentActive);
+    m_stepHostGuests.action->setEnabled(!m_busy && m_backendSupported && !state.residentActive);
+    m_stepHideIdentity.action->setEnabled(!m_busy && m_backendSupported && !state.residentActive);
+    m_stepStartMonitor.action->setEnabled(!m_busy && m_backendSupported &&
+        ((state.residentAdmission && state.configurationReason.isEmpty()) ||
+         (state.residentComplete && state.nestedArmed && !state.faulted)));
+    m_doAll->setEnabled(m_stepStartMonitor.action->isEnabled());
+    m_stepRestartVmware.action->setEnabled(!m_busy && m_backendSupported && state.residentComplete && state.nestedArmed && !state.faulted && state.configurationReason.isEmpty());
     if (!m_backendSupported)
     {
-        // 五步全部标成"不适用"而不是"待办"：待办意味着按一下就能推进，
-        // 而这里按下去什么都不会发生——那是这一页最容易骗到人的一种显示。
-        const QString reason = state.backend == KSWORD_ARK_HVM_BACKEND_SVM
-            ? ks::i18n::sourceText(QStringLiteral("这一页只对 Intel 嵌套 VMX 成立。当前是 AMD SVM/NPT 后端：它不提供把第三方虚拟机跑在 KSwordVM 之下的能力，上面五步在这里按下去不会有任何效果。"))
-            : ks::i18n::sourceText(QStringLiteral("还读不到虚拟化后端。请先用标题栏的 R0 按钮启动 KswordARK 驱动服务，再回到这一页。"));
-        for (StepRow* const row : { &m_stepAllowNested, &m_stepHostGuests,
-                                    &m_stepHideIdentity, &m_stepStartMonitor,
-                                    &m_stepRestartVmware })
-        {
-            paintStatus(row->status,
-                        ks::i18n::sourceText(QStringLiteral("不适用")), false);
-        }
-        if (m_verdict != nullptr)
-        {
-            m_verdict->setText(reason);
-            m_verdict->setStyleSheet(QStringLiteral("font-weight:600;"));
-        }
+        const QString reason = state.backend == KSWORD_ARK_HVM_BACKEND_NONE
+            ? ks::i18n::sourceText(QStringLiteral("还读不到虚拟化后端，请先启动 R0 并刷新。"))
+            : ks::i18n::sourceText(QStringLiteral("当前驱动没有发布来宾嵌套支持，请更新驱动或检查硬件准入状态。"));
+        for (StepRow* row : rows) { paintStatus(row->status, reason, false); }
+        m_verdict->setText(reason);
         return;
     }
-    const bool allowNested = ksword::kvm::isNestedAllowed();
+    const bool allowNested = !state.hypervisorPresent || ksword::kvm::isNestedAllowed();
     const bool hostGuests = ksword::kvm::isNestedDispatchEnabled();
-    const bool hideIdentity = ksword::kvm::isHypervisorHidden();
-    const bool running = state.residentActive;
+    const bool hideIdentity = amd || state.identityHidden;
+    const bool running = state.residentComplete && state.nestedArmed;
 
     paintStatus(m_stepAllowNested.status,
                 allowNested ? doneMark() : todoMark(), allowNested);
     paintStatus(m_stepHostGuests.status,
-                hostGuests ? doneMark() : todoMark(), hostGuests);
+                state.nestedArmed ? doneMark() : hostGuests
+                    ? ks::i18n::sourceText(QStringLiteral("已请求，尚未实际启用")) : todoMark(), state.nestedArmed);
     paintStatus(m_stepHideIdentity.status,
-                hideIdentity ? doneMark() : todoMark(), hideIdentity);
+                hideIdentity ? doneMark() : ksword::kvm::isHypervisorHidden()
+                    ? ks::i18n::sourceText(QStringLiteral("已请求，尚未实际启用")) : todoMark(), hideIdentity);
     paintStatus(m_stepStartMonitor.status,
                 running
                     ? doneMark()
                     : ks::i18n::sourceText(QStringLiteral("没在运行")),
                 running);
 
-    ks::service::ServiceStatus vmwareStatus{};
-    const bool vmwareInstalled =
-        ks::service::QueryServiceStatus(kVmwareDriverService, &vmwareStatus);
+    const bool vmwareInstalled = m_vmwareInstalled;
     QString vmwareText;
     bool vmwareDone = false;
-    if (!vmwareInstalled)
+    if (!m_vmwareQueryValid)
+    {
+        vmwareText = ks::i18n::sourceText(QStringLiteral("查询失败"));
+    }
+    else if (!vmwareInstalled)
     {
         vmwareText = ks::i18n::sourceText(QStringLiteral("没装 VMware"));
         vmwareDone = true; // 没装就不需要这一步。
     }
-    else if (m_vmwareDriverRestarted)
+    else if (m_vmwareDriverRestarted->load() == static_cast<unsigned long long>(state.generation) + 1ULL)
     {
         vmwareText = doneMark();
         vmwareDone = true;
@@ -400,11 +507,13 @@ void KvmGuestVmPanel::applyState(const ksword::kvm::KvmState& state)
     QString verdict;
     if (allowNested && hostGuests && hideIdentity && running && vmwareDone)
     {
-        verdict = ks::i18n::sourceText(QStringLiteral("现在可以打开 VMware、VirtualBox 或 WSL2 了。如果仍然打不开，请先把已经开着的虚拟机全部关掉，再重启一次 VMware 的驱动服务。"));
+        verdict = amd
+            ? ks::i18n::sourceText(QStringLiteral("驱动已确认全核嵌套 SVM 启用。可继续单独验证内层系统；当前仍为实验性，不保证所有第三方软件兼容。"))
+            : ks::i18n::sourceText(QStringLiteral("驱动已确认全核嵌套 VMX 启用；请继续验证第三方虚拟机运行。"));
     }
     else if (!running)
     {
-        verdict = ks::i18n::sourceText(QStringLiteral("还不行：KSwordVM 没在运行。请先把上面的设置打开，再执行第 4 步。"));
+        verdict = ks::i18n::sourceText(QStringLiteral("驱动尚未确认全核来宾嵌套启用，请按上面的顺序设置、准备、自检并启动。"));
     }
     else if (!hideIdentity)
     {
@@ -414,6 +523,10 @@ void KvmGuestVmPanel::applyState(const ksword::kvm::KvmState& state)
     {
         verdict = ks::i18n::sourceText(QStringLiteral("还不行：没有允许别的虚拟机跑在 KSwordVM 下面，VMware 一开虚拟机就会失败。"));
     }
+    else if (!m_vmwareQueryValid)
+    {
+        verdict = ks::i18n::sourceText(QStringLiteral("无法查询 VMware 驱动服务，未继续重启。"));
+    }
     else if (!vmwareDone)
     {
         verdict = ks::i18n::sourceText(QStringLiteral("就差最后一步：VMware 的驱动手里还是旧的 CPU 能力答案，重启一次它的服务即可。"));
@@ -422,6 +535,8 @@ void KvmGuestVmPanel::applyState(const ksword::kvm::KvmState& state)
     {
         verdict = ks::i18n::sourceText(QStringLiteral("还有步骤没完成，请看上面的清单。"));
     }
+    if (!state.configurationReason.isEmpty()) { verdict = state.configurationReason; }
+    else if (!state.residentAdmission && !state.residentActive) { verdict = state.admissionReason; }
     if (m_verdict != nullptr)
     {
         m_verdict->setText(verdict);

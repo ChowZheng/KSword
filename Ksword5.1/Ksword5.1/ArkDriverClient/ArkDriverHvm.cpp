@@ -31,6 +31,14 @@ namespace ksword::ark
             sizeof(result.response));
         result.unsupported = !result.io.ok &&
             isUnsupportedHvmError(result.io.win32Error);
+        if (result.io.ok && (result.io.bytesReturned != sizeof(result.response) ||
+            result.response.version != KSWORD_ARK_HVM_PROTOCOL_VERSION ||
+            result.response.size != sizeof(result.response) ||
+            result.response.processorCount > KSWORD_ARK_HVM_MAX_PROCESSORS))
+        {
+            result.io.ok = false;
+            result.io.win32Error = ERROR_INVALID_DATA;
+        }
         result.io.ntStatus = result.response.lastStatus;
 
         std::ostringstream stream;
@@ -65,6 +73,7 @@ namespace ksword::ark
             response.version != KSWORD_ARK_HVM_METRICS_VERSION ||
             response.size != sizeof(response) ||
             response.processorCount > KSWORD_ARK_HVM_MAX_PROCESSORS ||
+            response.svmProcessorCount > KSWORD_ARK_HVM_MAX_PROCESSORS ||
             response.qpcFrequency == 0))
         {
             result.io.ok = false;
@@ -99,7 +108,8 @@ namespace ksword::ark
         const bool enableLocalEpt,
         const bool enableEptpSwitch,
         const unsigned long soakMilliseconds,
-        const bool hideHypervisor) const
+        const bool hideHypervisor,
+        const bool enableNestedSvm) const
     {
         HvmControlResult result{};
         KSWORD_ARK_CONTROL_HVM_REQUEST request{};
@@ -156,6 +166,10 @@ namespace ksword::ark
         if (hideHypervisor)
         {
             request.flags |= KSWORD_ARK_HVM_CONTROL_FLAG_HIDE_HYPERVISOR;
+        }
+        if (enableNestedSvm)
+        {
+            request.flags |= KSWORD_ARK_HVM_CONTROL_FLAG_ENABLE_NESTED_SVM;
         }
         const unsigned long flags = request.flags;
         KswordArkHvmBuildControlRequest(&request, command, flags,

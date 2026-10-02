@@ -1,5 +1,14 @@
 # AMD 实验后端与重启续接
 
+## 2026-10-01 AMD/Intel Dock 与常驻准入统一（离线交付）
+
+- GUI 已接通现有通用嵌套 SVM：AMD 的 PREPARE/START_RESIDENT 显式发送 ENABLE_NESTED_SVM，自检复用 SVM 路径；Intel 请求与偏好保持原后端语义。AMD 不携带 Intel EPT/VMFUNC/#VE/身份隐藏标志，旧驱动缺少能力位时关闭 AMD 嵌套入口。新增共享 featureFlags 位 54–58，不改协议版本或结构布局；支持、准备和全核实际启用分别由驱动资源/运行状态发布，Intel 嵌套与身份隐藏也读回实际运行状态。
+- KvmState 和共享纯策略统一标题栏、Dock、证据页的硬件与生命周期准入。AMD 检查 SVM/NPT/NRIP、ASID、MSR 和拒绝原因，外层仅显式允许 VMware；Intel 检查 VMX/EPT/INVEPT。模式不匹配要求停止、释放后重备，不自动清理；启动前重查代次，全核自检和完整常驻计数不可由本地开关替代。部分常驻保留停止入口，故障状态保留可用的释放入口。
+- AMD 默认控制页为准备→全核自检→启动，隐藏 Intel 视图/域/Hook/VMCS/SOAK，第三方 VM 页改为实验性 SVM 流程。证据页含 SVM/NRIP/ASID、拒绝原因、VMCB/HSAVE/NPT、逐核阶段/原始退出码、实际嵌套启用、L2/NPF/影子缓存；metrics 版本/长度/CPU 集合/代次/记录有效位不符显示暂不可用。一键流程失败立即停止，VMware 服务状态不代表配置生效。
+- 验证：新 tools/hvm_lab/build-ui-tests.cmd 实际链接生产客户端/控制/页面和语言管理器，以模拟 IOCTL/SCM 执行 **364 checks / 0 failures**，涵盖能力门、旧驱动、模式/代次变化、失败中断、部分常驻、metrics 无效以及中英文/深浅主题/窄窗口（72 张截图）。既有 **23 个 HVM 离线目标**、hvm_ctl JSON/PS5.1、语言包和主题 token 审计通过。IOCTL 功能计划门通过；只读审计 211 个注册项、0 未注册、0 HIGH，24 个既有 MEDIUM 查询写访问项未在本轮修改。
+- Release/x64：主程序由 Invoke-KSwordBuildCheck.ps1 使用 MSVC HostX64 成功（BUILD_RESULT=SUCCESS、EXIT_CODE=0、i18n PASS）；KswordCLI、KswordARKLight、CheatEnginePlugin、TitanEnginePlugin 和 hvm_ctl 同步构建。驱动标准 WDK Build /WX 零警告，x64 ApiValidator 输出 Universal，INF/CAT 后置检查无错误/警告；SYS **未签名**。日志位于 tools/hvm_lab/artifacts/ui-admission-20261001，最终主程序构建日志 .codex-build-logs/ksword-build-check-20261001-215724.raw.log。
+- 本轮只接线、状态发布与准入/UI，没有改变嵌套算法/NPT 缓存策略，未加载驱动、启动 VM、操作宿主服务或重启。AMD 仍实验性，以上离线与构建结果不构成实机常驻或完整内层 OS 启动验收，也不覆盖历史性能问题。保留工作区原有 WelcomeDock.cpp 版本变更。
+
 2026-09-24 v8实测已收敛根因：换版后32核常驻、8vCPU VM启动采样完成。v8 cache-a/b约5.69s，32核中31对有效，lookups20929/hits14288（68.3%）/resets6641，resets几乎全由tlbRequested=6641；c/d约5.74s，lookups13061/hits0/resets13061，tlbRequested=13061；ownerChanged仅20/15，跨CPU不是主因证据。VM仍logo慢。基于AMD指南，TLB_CONTROL硬件flush不等于必须重建稳定NPT02，做v9：TLB请求单独统计但不作软件shadow reset，INVLPGA/epoch/key/owner仍清空。v9新候选tools/hvm_lab/artifacts/npt-cache-reuse-v9未签未加载，metrics9，离线session2586、CLI/分析器/WDK/API/CAT PASS。此修复仍待实机验证。
 
 2026-09-24 v8诊断补充：用户怀疑正常VM应单核连续而当前多核来回切换。metrics8新增ownerTransitions与ownerCpuTransitions；后者由VMCB owner table记录上一次Windows group:number，表示同一VMCB跨CPU接手的相关信号，不等于证明guest线程迁移。缓存资格、调度、TLB策略不变。新离线session2620、CLI JSON与WDK/API/CAT零警告通过；候选仍未签/加载。

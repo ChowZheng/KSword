@@ -60,16 +60,17 @@ namespace
     };
 
     /*
-     * 优先级是有意的：先答"能不能用"，再答"现在处于哪一步"。
-     *
-     * 故障排在常驻之前，因为故障态下即使还有处理器在常驻，用户要做的第一件事
-     * 也是重置而不是停止——把它画成普通的"正在跑"会把这一步藏起来。
+     * 已常驻时优先表达停止入口；故障/准入拒绝不能遮住部分常驻的退出路径。
+     * 未常驻时才按故障、硬件和准备模式判定能否进入。
      */
     KvmButtonState resolveKvmButtonState(
         const ksword::kvm::KvmAvailability availability,
         const bool residentActive,
-        const bool faulted)
+        const bool faulted,
+        const bool admissionReady)
     {
+        // Retained residency must remain stoppable even after a capability or power refusal.
+        if (residentActive) { return KvmButtonState::Resident; }
         if (availability != ksword::kvm::KvmAvailability::Available &&
             availability != ksword::kvm::KvmAvailability::NotPrepared &&
             availability != ksword::kvm::KvmAvailability::Faulted)
@@ -80,10 +81,7 @@ namespace
         {
             return KvmButtonState::Faulted;
         }
-        if (residentActive)
-        {
-            return KvmButtonState::Resident;
-        }
+        if (!admissionReady) { return KvmButtonState::Unavailable; }
         if (availability == ksword::kvm::KvmAvailability::NotPrepared)
         {
             return KvmButtonState::NotPrepared;
@@ -189,6 +187,9 @@ void MainWindow::handleKvmDockAction(const KvmDock::Action action)
     case KvmDock::Action::ToggleResident:
         handleKvmStatusButtonClicked();
         return;
+    case KvmDock::Action::SelfTest:
+        if (m_kvmWidget != nullptr) { m_kvmWidget->testPreparedBackend(); }
+        return;
     case KvmDock::Action::Soak:
         runKvmSoak(5000);
         return;
@@ -246,7 +247,8 @@ void MainWindow::applyKvmButtonState()
         buildKvmButtonStyle(resolveKvmButtonState(
             m_kvmAvailability,
             m_kvmResidentActive,
-            m_kvmFaulted)));
+            m_kvmFaulted,
+            m_kvmAvailable)));
     // 操作进行中禁用按钮：常驻切换与保持自检都会独占驱动侧状态锁。
     m_kvmStatusButton->setEnabled(!m_kvmOperationRunning);
     /*
@@ -300,12 +302,11 @@ void MainWindow::refreshKvmStatusAsync()
                  * 的故障和"这机器不支持"长得一样。按钮状态现在从这个原值算。
                  */
                 safeThis->m_kvmAvailability = state.availability;
-                safeThis->m_kvmAvailable =
-                    state.availability == ksword::kvm::KvmAvailability::Available ||
-                    state.availability == ksword::kvm::KvmAvailability::NotPrepared;
+                safeThis->m_kvmAvailable = state.residentAdmission && state.configurationReason.isEmpty();
                 safeThis->m_kvmFaulted = state.faulted;
                 safeThis->m_kvmGeneration = state.generation;
                 safeThis->m_kvmBackend = state.backend;
+                safeThis->m_kvmNestedSupported = state.nestedSupported;
                 safeThis->m_kvmTooltip = state.detail;
                 safeThis->applyKvmButtonState();
             },
@@ -328,7 +329,7 @@ void MainWindow::handleKvmStatusButtonClicked()
                 "KswordARK 驱动未运行。请先点击 R0 启动驱动服务。")));
         return;
     }
-    if (m_kvmFaulted)
+    if (m_kvmFaulted && !m_kvmResidentActive)
     {
         QMessageBox::warning(
             this,
@@ -358,7 +359,7 @@ void MainWindow::handleKvmStatusButtonClicked()
             QStringLiteral("KvmStartResident"),
             ks::i18n::sourceText(QStringLiteral("启动 KSwordVM 常驻")),
             ks::i18n::sourceText(QStringLiteral("本机全部逻辑处理器")),
-            ks::i18n::sourceText(QStringLiteral("所有逻辑处理器将进入 VMX non-root 运行。与 Hyper-V/VBS 冲突、驱动异常或电源转换失败都可能导致系统不稳定或蓝屏。首次使用建议先执行“常驻保持自检”。")));
+            ks::i18n::sourceText(QStringLiteral("全部逻辑处理器将使用 Intel VMX/EPT 或 AMD SVM/NPT 进入来宾态。必须通过全核自检与生命周期保护；AMD 嵌套仍为实验性。硬件、驱动或电源转换异常可能导致系统不稳定或蓝屏。")));
         if (!confirmed)
         {
             return;
@@ -497,7 +498,7 @@ void MainWindow::runKvmPrepare()
                     QMessageBox::information(
                         safeThis,
                         QStringLiteral("KVM"),
-                        ks::i18n::sourceText(QStringLiteral("资源已准备，尚未进入常驻。现在是安装分离视图 / MSR 策略 / CR 策略 / 执行域的窗口期 —— 启动常驻之后这几张表就不可变了。")));
+                        ks::i18n::sourceText(QStringLiteral("资源与全核自检已就绪，尚未常驻。Intel 可配置视图、策略与域；AMD 按准备时选择的 SVM 模式启动常驻。")));
                 }
                 safeThis->refreshKvmStatusAsync();
             },
@@ -517,7 +518,7 @@ void MainWindow::runKvmRelease()
         QStringLiteral("KvmReleaseResources"),
         ks::i18n::sourceText(QStringLiteral("释放 KVM 资源")),
         ks::i18n::sourceText(QStringLiteral("本机全部逻辑处理器")),
-        ks::i18n::sourceText(QStringLiteral("将释放全部每处理器资源与 EPT 层次。已安装的分离视图、MSR 策略、CR 策略与执行域会一并消失，叶项与权限恢复原状。改过后端选择或每处理器私有 EPT 时需要这一步：那些选择只在准备资源时被消费。")));
+        ks::i18n::sourceText(QStringLiteral("将释放全部每处理器资源与 EPT/NPT 层次，并清除准备和自检证据。Intel 视图、策略与域会一并消失；修改 AMD 嵌套模式后也需要释放并重新准备。")));
     if (!confirmed)
     {
         return;
@@ -597,6 +598,7 @@ void MainWindow::runKvmFaultReset()
 void MainWindow::showKvmMenu(const QPoint& globalPosition)
 {
     QMenu menu(this);
+    const bool backendKnown = m_kvmBackend == KSWORD_ARK_HVM_BACKEND_VMX || m_kvmBackend == KSWORD_ARK_HVM_BACKEND_SVM;
 
     // 常驻开关与左键一致，放进菜单只是为了让能力集中可见。
     QAction* const toggleAction = menu.addAction(m_kvmResidentActive
@@ -637,17 +639,20 @@ void MainWindow::showKvmMenu(const QPoint& globalPosition)
         m_kvmAvailable);
     // 一条 sourceText 必须是**一个不拆行的字面量**：相邻字符串拼接会被
     // i18n 提取器当成多个独立词条，于是语言包里多出几条永远匹配不上的碎片。
-    prepareAction->setToolTip(ks::i18n::sourceText(QStringLiteral("分配每处理器资源并建立 EPT，但不进入常驻。分离视图、MSR 策略、CR 策略与执行域都必须在这一步之后、启动常驻之前安装 —— 常驻期间这几张表都是不可变的。")));
+    prepareAction->setToolTip(m_kvmBackend == KSWORD_ARK_HVM_BACKEND_SVM
+        ? ks::i18n::sourceText(QStringLiteral("准备 AMD SVM/VMCB/NPT 资源，不进入常驻；嵌套模式在此确定，随后执行全核自检。"))
+        : ks::i18n::sourceText(QStringLiteral("分配每处理器资源并建立 EPT，但不进入常驻。分离视图、MSR 策略、CR 策略与执行域都必须在这一步之后、启动常驻之前安装 —— 常驻期间这几张表都是不可变的。")));
     connect(prepareAction, &QAction::triggered, this, [this]() {
         runKvmPrepare();
     });
 
     QAction* const releaseAction = menu.addAction(
         ks::i18n::sourceText(QStringLiteral("释放资源")));
-    releaseAction->setEnabled(!m_kvmOperationRunning &&
-        !m_kvmResidentActive &&
-        m_kvmAvailable);
-    releaseAction->setToolTip(ks::i18n::sourceText(QStringLiteral("释放全部可逆资源，回到未准备状态。改过分离视图后端或每处理器私有 EPT 之后必须走这一步 —— 那两个选择只在准备资源时被消费，已准备的运行时改开关不会生效。")));
+    releaseAction->setEnabled(!m_kvmOperationRunning && !m_kvmResidentActive &&
+        m_r0DriverServiceRunning && backendKnown);
+    releaseAction->setToolTip(m_kvmBackend == KSWORD_ARK_HVM_BACKEND_SVM
+        ? ks::i18n::sourceText(QStringLiteral("释放 SVM/VMCB/NPT 资源；更改嵌套模式后必须释放并重新准备。"))
+        : ks::i18n::sourceText(QStringLiteral("释放全部可逆资源，回到未准备状态。改过分离视图后端或每处理器私有 EPT 之后必须走这一步 —— 那两个选择只在准备资源时被消费，已准备的运行时改开关不会生效。")));
     connect(releaseAction, &QAction::triggered, this, [this]() {
         runKvmRelease();
     });
@@ -660,7 +665,10 @@ void MainWindow::showKvmMenu(const QPoint& globalPosition)
         ks::i18n::sourceText(QStringLiteral("允许嵌套运行（作为 L1）")));
     nestedAction->setCheckable(true);
     nestedAction->setChecked(ksword::kvm::isNestedAllowed());
-    nestedAction->setToolTip(ks::i18n::sourceText(QStringLiteral("在虚拟机内或开着 VBS/HVCI 的机器上，KSwordVM 只能作为 L1 运行：每条 VMX 操作都由外层 hypervisor 模拟，性能明显下降，可用能力也只剩外层愿意暴露的那部分。")));
+    nestedAction->setEnabled(backendKnown && !m_kvmOperationRunning && !m_kvmResidentActive);
+    nestedAction->setToolTip(m_kvmBackend == KSWORD_ARK_HVM_BACKEND_SVM
+        ? ks::i18n::sourceText(QStringLiteral("裸机无需外层嵌套许可。作为来宾运行时仅支持显式允许的 VMware 外层；Hyper-V/VBS 和未知外层不会因打开此选项而获准。"))
+        : ks::i18n::sourceText(QStringLiteral("在虚拟机内或开着 VBS/HVCI 的机器上，KSwordVM 只能作为 L1 运行：每条 VMX 操作都由外层 hypervisor 模拟，性能明显下降，可用能力也只剩外层愿意暴露的那部分。")));
     connect(nestedAction, &QAction::triggered, this, [this](const bool checked) {
         ksword::kvm::setNestedAllowed(checked);
         applyKvmButtonState();
@@ -679,9 +687,18 @@ void MainWindow::showKvmMenu(const QPoint& globalPosition)
      */
     QAction* const nestedDispatchAction = menu.addAction(
         ks::i18n::sourceText(QStringLiteral("允许来宾嵌套（我们作为宿主）")));
+    nestedDispatchAction->setEnabled(!m_kvmOperationRunning && !m_kvmResidentActive && m_kvmNestedSupported);
     nestedDispatchAction->setCheckable(true);
     nestedDispatchAction->setChecked(ksword::kvm::isNestedDispatchEnabled());
+    if (m_kvmBackend == KSWORD_ARK_HVM_BACKEND_SVM)
+    {
+        nestedDispatchAction->setText(ks::i18n::sourceText(QStringLiteral("允许来宾嵌套 SVM（实验性）")));
+        nestedDispatchAction->setToolTip(ks::i18n::sourceText(QStringLiteral("在 AMD 上启用实验性 VMCB 分派、退出反射与 NPT 合成。必须在准备资源前选择；改变后先停止、释放并重新准备。本开关不持久化，内层系统启动尚未验收。")));
+    }
+    else
+    {
     nestedDispatchAction->setToolTip(ks::i18n::sourceText(QStringLiteral("与上一项方向相反：上一项是让我们跑在别人底下，这一项是让别人跑在我们底下。打开后，来宾里的 ring 0 代码可以真的 VMXON、维护自己的 vmcs12、把 L2 跑起来；退出先落到我们手上，L1 要 EPT 时由影子层次按需合成。关着时 VMX 指令被注 #UD——对已经在跑的 VMware / VirtualBox / WSL2 来说就是「虚拟机打不开了」。与每处理器私有 EPT 互斥。本开关不持久化。")));
+    }
     connect(nestedDispatchAction, &QAction::triggered, this,
             [this, nestedDispatchAction](const bool checked) {
         if (!checked)
@@ -694,7 +711,7 @@ void MainWindow::showKvmMenu(const QPoint& globalPosition)
         // 互斥是驱动的硬拒绝：嵌套要把来宾的 EPT 层次和我们的合成成一个指针，
         // 而私有根会让这个合成变成处理器相关的。同时请求会被判
         // STATUS_INVALID_PARAMETER，而那条回答只说"请求不合法"，不指哪一位。
-        if (ksword::kvm::isLocalEptEnabled())
+        if (m_kvmBackend == KSWORD_ARK_HVM_BACKEND_VMX && ksword::kvm::isLocalEptEnabled())
         {
             nestedDispatchAction->setChecked(false);
             QMessageBox::warning(
@@ -711,7 +728,7 @@ void MainWindow::showKvmMenu(const QPoint& globalPosition)
             QMessageBox::warning(
                 this,
                 ks::i18n::sourceText(QStringLiteral("嵌套派发需要先开启写权限")),
-                ks::i18n::sourceText(QStringLiteral("打开嵌套派发会让来宾获得一整套它原本拿不到的 VMX 能力，属于写权限门管辖的范围。请先打开「允许 R-1 写操作」。")));
+                ks::i18n::sourceText(QStringLiteral("嵌套派发会向来宾开放 VMX 或 SVM 能力，属于写权限门管辖的范围。请先打开「允许 R-1 写操作」。")));
             return;
         }
         const bool confirmed = ks::ui::confirmDestructiveAction(
@@ -719,7 +736,9 @@ void MainWindow::showKvmMenu(const QPoint& globalPosition)
             QStringLiteral("KvmEnableNestedDispatch"),
             ks::i18n::sourceText(QStringLiteral("允许来宾嵌套")),
             ks::i18n::sourceText(QStringLiteral("本机全部 ring 0 代码")),
-            ks::i18n::sourceText(QStringLiteral("打开后，这台机器上任何 ring 0 代码都能在我们底下起一台虚拟机，而我们只看得到它产生的退出，看不到它在里面跑什么。影子 EPT 层次按需合成，MSR 与 I/O 位图按 L1 自己的那份合并，每核要额外占用若干页。位图在每次进入 L2 时重算一遍、不缓存，所以来宾越频繁地进出 L2 越贵。")));
+            m_kvmBackend == KSWORD_ARK_HVM_BACKEND_SVM
+                ? ks::i18n::sourceText(QStringLiteral("AMD 来宾将获得实验性嵌套 SVM 能力，通过 VMCB 反射与 NPT 合成运行内层代码。每核需要额外资源；完整内层系统兼容性及性能尚未验收。"))
+                : ks::i18n::sourceText(QStringLiteral("打开后，这台机器上任何 ring 0 代码都能在我们底下起一台虚拟机，而我们只看得到它产生的退出，看不到它在里面跑什么。影子 EPT 层次按需合成，MSR 与 I/O 位图按 L1 自己的那份合并，每核要额外占用若干页。位图在每次进入 L2 时重算一遍、不缓存，所以来宾越频繁地进出 L2 越贵。")));
         if (!confirmed)
         {
             nestedDispatchAction->setChecked(false);
@@ -978,7 +997,7 @@ void MainWindow::showKvmMenu(const QPoint& globalPosition)
     // R-1 内存面板不要求常驻：私有页表窗口在驱动加载时就已建立。
     QAction* const memoryAction = menu.addAction(
         ks::i18n::sourceText(QStringLiteral("R-1 内存操作...")));
-    memoryAction->setEnabled(m_r0DriverServiceRunning);
+    memoryAction->setEnabled(m_r0DriverServiceRunning && backendKnown);
     connect(memoryAction, &QAction::triggered, this, [this]() {
         // 无父窗口模态：内存面板要能和主界面并排使用。
         KvmMemoryDialog* const dialog = new KvmMemoryDialog(this);
@@ -1029,7 +1048,7 @@ void MainWindow::showKvmMenu(const QPoint& globalPosition)
     // 事件流是只读的，任何时候都能看——它是上面几项能力唯一的实时证据。
     QAction* const eventAction = menu.addAction(
         ks::i18n::sourceText(QStringLiteral("事件流...")));
-    eventAction->setEnabled(m_r0DriverServiceRunning);
+    eventAction->setEnabled(m_r0DriverServiceRunning && backendKnown);
     connect(eventAction, &QAction::triggered, this, [this]() {
         KvmEventDialog* const dialog = new KvmEventDialog(this);
         dialog->setAttribute(Qt::WA_DeleteOnClose);
@@ -1063,17 +1082,16 @@ void MainWindow::showKvmMenu(const QPoint& globalPosition)
     // 与 KvmDock 上那组门同一个判据、同一句说明——这两处各判各的，用户会在一个
     // 入口里按不动、在另一个入口里按了没反应。
     //
-    // 上面那批开关**不跟着灰**：它们里有持久化的（私有 EPT、EPTP 切换），用户
-    // 很可能是在另一台 Intel 机器上打开的，而 AMD 下它们开着会挡住准备资源。
-    // 一起灰掉就把唯一的关闭入口也关上了，那是一条死路。
-    if (m_kvmBackend == KSWORD_ARK_HVM_BACKEND_SVM)
+    // Intel 专属偏好保留，并仅在 Intel 后端显示和应用。
+    const bool intelBackend = m_kvmBackend == KSWORD_ARK_HVM_BACKEND_VMX;
+    for (QAction* const action : { viewAction, domainAction, msrAction, crAction, processAction,
+                                  soakAction, localEptAction, eptpSwitchAction, veAction, vmFuncAction, hideHypervisorAction })
     {
-        const QString amdReason = ks::i18n::sourceText(QStringLiteral("这一项建立在 Intel VMX 的 VMCS 字段或 EPT 分离视图上，当前的 AMD SVM/NPT 后端还没有对应实现。"));
-        for (QAction* const action : { viewAction, domainAction, msrAction, crAction, processAction })
-        {
-            action->setEnabled(false);
-            action->setToolTip(amdReason);
-        }
+        action->setVisible(intelBackend);
+    }
+    if (m_kvmBackend == KSWORD_ARK_HVM_BACKEND_NONE)
+    {
+        nestedDispatchAction->setEnabled(false);
     }
 
     menu.exec(globalPosition);

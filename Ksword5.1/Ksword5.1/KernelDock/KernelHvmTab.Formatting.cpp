@@ -1,6 +1,10 @@
 ﻿#include "KernelHvmTab.h"
 
 #include "KernelDock.h"
+#include "../UI/KvmControl.h"
+#include <QTableWidget>
+#include <QTableWidgetItem>
+#include <QTextEdit>
 
 #include <QStringList>
 
@@ -13,10 +17,31 @@ QString KernelHvmTab::buildDetail(
 {
     if (response.backend == KSWORD_ARK_HVM_BACKEND_SVM)
     {
-        return kernelText("kernel.hvm.amd.detail", QStringLiteral("实验性 AMD SVM / VMCB / NPT\n协议：%1　代次：%2\nCPU 准备 / 自检 / 常驻：%3 / %4 / %5\nNPT 就绪：%6\n状态：%7\n最近 NTSTATUS：%8\n原始退出信息请导出 metrics；内层 SVM 与 EPT 扩展未实现。"))
+        QString detail = kernelText("kernel.hvm.amd.detail", QStringLiteral("实验性 AMD SVM / VMCB / NPT\n协议：%1　代次：%2\nCPU 准备 / 自检 / 常驻：%3 / %4 / %5\nNPT 就绪：%6\n状态：%7\n最近 NTSTATUS：%8\n嵌套 SVM 已接入；内层操作系统启动尚未验收，Intel EPT 扩展不适用。"))
             .arg(response.version).arg(response.generation).arg(response.preparedProcessorCount)
             .arg(response.selfTestPassedProcessorCount).arg(response.residentProcessorCount)
             .arg(response.slatReady).arg(stateText(response.stateFlags)).arg(ntStatusText(response.backendStatus));
+        const QString unavailable = kernelText("kernel.hvm.amd.unavailable", QStringLiteral("暂不可用"));
+        const auto raw = [&unavailable](unsigned long mask, unsigned long bit, unsigned long long value) {
+            return (mask & bit) ? QStringLiteral("0x%1").arg(value, 0, 16) : unavailable;
+        };
+        const auto& caps = response.svmCapabilities;
+        detail += kernelText("kernel.hvm.amd.capabilities", QStringLiteral("\nSVM / NPT / NRIP：%1 / %2 / %3；ASID：%4；物理地址宽度：%5\n准入拒绝代码：%6；MSR 有效掩码：0x%7；状态有效掩码：0x%8\nVM_CR / EFER / HSAVE：%9 / %10 / %11\nCR4 / XCR0 / XSS：%12 / %13 / %14"))
+            .arg((response.featureFlags & KSWORD_ARK_HVM_FEATURE_SVM) != 0)
+            .arg((response.featureFlags & KSWORD_ARK_HVM_FEATURE_NPT) != 0)
+            .arg((response.featureFlags & KSWORD_ARK_HVM_FEATURE_SVM_NRIP) != 0)
+            .arg(response.svmCapabilities.asidCount).arg(response.svmCapabilities.physicalBits)
+            .arg(response.svmCapabilities.rejectReason)
+            .arg(response.svmCapabilities.msrValidMask, 0, 16).arg(response.svmCapabilities.stateValidMask, 0, 16)
+            .arg(raw(caps.msrValidMask, 1UL, caps.vmCr)).arg(raw(caps.msrValidMask, 2UL, caps.efer))
+            .arg(raw(caps.msrValidMask, 4UL, caps.hsave)).arg(raw(caps.stateValidMask, KSWORD_ARK_SVM_VALID_CR4, caps.cr4))
+            .arg(raw(caps.stateValidMask, KSWORD_ARK_SVM_VALID_XCR0, caps.xcr0)).arg(raw(caps.stateValidMask, KSWORD_ARK_SVM_VALID_XSS, caps.xss));
+        ksword::ark::HvmStatusResult result{};
+        result.io.ok = true;
+        result.response = response;
+        const auto state = ksword::kvm::stateFromStatus(result);
+        detail += QLatin1Char('\n') + state.detail;
+        return detail;
     }
     QString detail = kernelText(
         "kernel.hvm.detail",
@@ -128,6 +153,68 @@ QString KernelHvmTab::buildDetail(
     return detail;
 }
 
+void KernelHvmTab::applyMetrics(ksword::ark::HvmMetricsResult result)
+{
+    if (m_snapshot.backend != KSWORD_ARK_HVM_BACKEND_SVM) { return; }
+    const QString unavailable = kernelText("kernel.hvm.amd.unavailable", QStringLiteral("暂不可用"));
+    if (!result.io.ok || !result.response || result.response->backend != KSWORD_ARK_HVM_BACKEND_SVM ||
+        result.response->svmProcessorCount != m_snapshot.processorCount)
+    {
+        m_detailEdit->append(kernelText("kernel.hvm.amd.metrics_unavailable", QStringLiteral("AMD metrics 暂不可用；未将缺失或不兼容的快照解释为零次退出。")));
+        return;
+    }
+    const auto& metrics = *result.response;
+    for (unsigned long i = 0; i < metrics.svmProcessorCount; ++i)
+    {
+        const auto& row = metrics.svmProcessors[i];
+        if (row.generation != m_snapshot.generation || row.group != m_snapshot.processors[i].processorGroup ||
+            row.number != m_snapshot.processors[i].processorNumber)
+        {
+            m_detailEdit->append(kernelText("kernel.hvm.amd.metrics_changed", QStringLiteral("AMD metrics 与状态的代次或处理器集合不同，请刷新；未合并两次运行的证据。")));
+            return;
+        }
+    }
+    m_cpuTable->setColumnCount(9);
+    m_cpuTable->setHorizontalHeaderLabels({
+        kernelText("kernel.hvm.cpu.processor", QStringLiteral("处理器")),
+        kernelText("kernel.hvm.cpu.vmx_result", QStringLiteral("执行状态")),
+        kernelText("kernel.hvm.amd.raw_exit", QStringLiteral("SVM 原始退出码")),
+        QStringLiteral("VMCB PA"), QStringLiteral("HSAVE PA"), QStringLiteral("NPT PA"),
+        kernelText("kernel.hvm.amd.general", QStringLiteral("嵌套实际启用")),
+        kernelText("kernel.hvm.amd.l2_exits", QStringLiteral("L2 硬件退出")),
+        kernelText("kernel.hvm.amd.npf", QStringLiteral("NPF / 影子页")) });
+    QStringList details;
+    for (unsigned long i = 0; i < metrics.svmProcessorCount; ++i)
+    {
+        const auto& cpu = metrics.svmProcessors[i];
+        const auto& general = cpu.general;
+        const bool rawValid = cpu.valid && cpu.sequence && !(cpu.sequence & 1U);
+        const bool generalValid = general.valid && general.sequence && !(general.sequence & 1ULL);
+        const auto hex = [](unsigned long long value) { return QStringLiteral("0x%1").arg(value, 0, 16); };
+        const QString npf = cpu.hotspots.valid && cpu.hotspots.sequence && !(cpu.hotspots.sequence & 1ULL)
+            ? QString::number(cpu.hotspots.levels[1].npf) : unavailable;
+        const QStringList cells = {
+            QStringLiteral("%1:%2").arg(cpu.group).arg(cpu.number), executionStageText(cpu.stage),
+            rawValid ? hex(cpu.exitCode) : unavailable, hex(cpu.vmcbPa), hex(cpu.hsavePa), hex(cpu.nptRootPa),
+            generalValid ? QString::number(general.enabled) : unavailable,
+            generalValid ? QString::number(general.hardwareExits) : unavailable,
+            npf + QStringLiteral(" / ") + (generalValid ? QString::number(general.shadowPages) : unavailable) };
+        for (int column = 0; column < cells.size(); ++column)
+        {
+            m_cpuTable->setItem(static_cast<int>(i), column, new QTableWidgetItem(cells[column]));
+        }
+        if (generalValid)
+        {
+            details << kernelText("kernel.hvm.amd.cache", QStringLiteral("CPU %1:%2：嵌套 phase/action/GIF：%3/%4/%5；L2 退出：%6；NPF：%7；影子页：%8\nNPT 缓存查找 / 命中 / 重置 / 失败：%9 / %10 / %11 / %12；INVLPGA：%13；epoch：%14"))
+                .arg(cpu.group).arg(cpu.number).arg(general.phase).arg(general.action).arg(general.gif)
+                .arg(general.hardwareExits).arg(npf).arg(general.shadowPages)
+                .arg(general.nptCache.lookups).arg(general.nptCache.hits).arg(general.nptCache.resets)
+                .arg(general.nptCache.resetFailures).arg(general.invlpgaCount).arg(general.shadowEpoch);
+        }
+    }
+    m_detailEdit->append(details.join(QLatin1Char('\n')));
+}
+
 QString KernelHvmTab::featureText(const std::uint64_t flags)
 {
     struct FeatureName
@@ -135,7 +222,7 @@ QString KernelHvmTab::featureText(const std::uint64_t flags)
         std::uint64_t flag;
         const char* name;
     };
-    static constexpr std::array<FeatureName, 43> names{{
+    static constexpr std::array<FeatureName, 48> names{{
         { KSWORD_ARK_HVM_FEATURE_INTEL, "Intel" },
         { KSWORD_ARK_HVM_FEATURE_VMX, "VMX" },
         { KSWORD_ARK_HVM_FEATURE_FEATURE_CONTROL_LOCKED, "FeatureControlLocked" },
@@ -178,7 +265,12 @@ QString KernelHvmTab::featureText(const std::uint64_t flags)
         { KSWORD_ARK_HVM_FEATURE_SVM_NRIP, "SvmNextRip" },
         { KSWORD_ARK_HVM_FEATURE_SVM_DECODE_ASSISTS, "SvmDecodeAssists" },
         { KSWORD_ARK_HVM_FEATURE_SVM_FLUSH_BY_ASID, "SvmFlushByAsid" },
-        { KSWORD_ARK_HVM_FEATURE_SVM_FIRMWARE_DISABLED, "SvmFirmwareDisabled" }
+        { KSWORD_ARK_HVM_FEATURE_SVM_FIRMWARE_DISABLED, "SvmFirmwareDisabled" },
+        { KSWORD_ARK_HVM_FEATURE_NESTED_SVM_DISPATCH, "NestedSvmDispatch" },
+        { KSWORD_ARK_HVM_FEATURE_NESTED_SVM_PREPARED, "NestedSvmPrepared" },
+        { KSWORD_ARK_HVM_FEATURE_NESTED_SVM_ARMED, "NestedSvmArmed" },
+        { KSWORD_ARK_HVM_FEATURE_NESTED_VMX_ARMED, "NestedVmxArmed" },
+        { KSWORD_ARK_HVM_FEATURE_HYPERVISOR_IDENTITY_HIDDEN, "HypervisorIdentityHidden" }
     }};
     QStringList values;
     for (const auto& value : names)

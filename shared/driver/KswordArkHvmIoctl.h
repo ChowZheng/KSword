@@ -284,6 +284,16 @@
  * not the request flags, to know which backend a given residency is using.
  */
 #define KSWORD_ARK_HVM_FEATURE_EPTP_SWITCH_ARMED          0x0020000000000000ULL
+/* Software supports the experimental general SVM dispatcher, not full OS acceptance. */
+#define KSWORD_ARK_HVM_FEATURE_NESTED_SVM_DISPATCH        0x0040000000000000ULL
+/* The successful PREPARE owns general nested resources on the complete CPU set. */
+#define KSWORD_ARK_HVM_FEATURE_NESTED_SVM_PREPARED        0x0080000000000000ULL
+/* Every resident CPU has the general dispatcher bound; this is not L2 OS proof. */
+#define KSWORD_ARK_HVM_FEATURE_NESTED_SVM_ARMED           0x0100000000000000ULL
+/* Full resident VMX dispatch is armed; unlike NESTED_VMX_ACTIVE this is not L2 execution. */
+#define KSWORD_ARK_HVM_FEATURE_NESTED_VMX_ARMED           0x0200000000000000ULL
+/* The current full-set Intel residency actually hides user-mode Hypervisor identity. */
+#define KSWORD_ARK_HVM_FEATURE_HYPERVISOR_IDENTITY_HIDDEN  0x0400000000000000ULL
 
 #define KSWORD_ARK_HVM_STATE_INITIALIZED      0x00000001UL
 #define KSWORD_ARK_HVM_STATE_RESOURCES_READY  0x00000002UL

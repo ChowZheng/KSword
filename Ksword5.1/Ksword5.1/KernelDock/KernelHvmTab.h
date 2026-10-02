@@ -5,6 +5,7 @@
 #include <QWidget>
 
 #include <cstdint>
+#include <functional>
 
 class QLabel;
 class QPushButton;
@@ -27,6 +28,8 @@ public:
     explicit KernelHvmTab(QWidget* parent = nullptr);
     KernelHvmTab(FeatureArea featureArea, QWidget* parent);
     ~KernelHvmTab() override = default;
+    void testPreparedBackend() { selfTestBackend(); }
+    std::function<void(bool)> onBusyChanged;
 
 protected:
     void showEvent(QShowEvent* event) override;
@@ -34,6 +37,7 @@ protected:
 private:
     void initializeUi();
     void refreshAsync();
+    void applyMetrics(ksword::ark::HvmMetricsResult result);
     void applyStatus(ksword::ark::HvmStatusResult result);
     void runControlAsync(
         unsigned long command,

@@ -1,4 +1,5 @@
 #include "KvmControl.h"
+#include "../../../shared/driver/KswordArkHvmRequest.h"
 
 #include "../Internationalization/LanguageManager.h"
 
@@ -71,6 +72,20 @@ namespace ksword::kvm
         {
             QStringList lines;
             lines << ks::i18n::sourceText(QStringLiteral("KSwordVM（R-1 层）"));
+            if (state.backend == KSWORD_ARK_HVM_BACKEND_NONE) { lines << state.shortStatus; return lines.join(QLatin1Char('\n')); }
+            if (state.backend == KSWORD_ARK_HVM_BACKEND_SVM)
+            {
+                lines << ks::i18n::sourceText(QStringLiteral("AMD SVM / VMCB / NPT（实验性）"));
+                lines << state.shortStatus;
+                lines << ks::i18n::sourceText(QStringLiteral("CPU 常驻：%1/%2；NPT 就绪：%3；全核自检：%4"))
+                    .arg(state.residentProcessorCount).arg(state.processorCount).arg(state.slatReady).arg(state.selfTestPassed);
+                lines << ks::i18n::sourceText(QStringLiteral("嵌套 SVM 支持 / 请求 / 已准备 / 实际启用：%1 / %2 / %3 / %4"))
+                    .arg(state.nestedSupported).arg(state.nestedRequested).arg(state.nestedPrepared).arg(state.nestedArmed);
+                if (!state.admissionReason.isEmpty()) { lines << state.admissionReason; }
+                if (!state.configurationReason.isEmpty()) { lines << state.configurationReason; }
+                lines << ks::i18n::sourceText(QStringLiteral("Intel 专属偏好保留，但不应用于 AMD。嵌套启用不代表内层操作系统启动已验收。"));
+                return lines.join(QLatin1Char('\n'));
+            }
             if (state.availability != KvmAvailability::Available &&
                 !state.residentActive)
             {
@@ -185,50 +200,20 @@ namespace ksword::kvm
             {
                 return KvmAvailability::DriverNotRunning;
             }
-            switch (result.response.queryStatus)
+            if (result.response.queryStatus == KSWORD_ARK_HVM_QUERY_STATUS_BACKEND_NOT_IMPLEMENTED)
             {
-            case KSWORD_ARK_HVM_QUERY_STATUS_FIRMWARE_DISABLED:
-                return KvmAvailability::FirmwareDisabled;
-            case KSWORD_ARK_HVM_QUERY_STATUS_HYPERVISOR_CONFLICT:
-                return KvmAvailability::HypervisorConflict;
-            case KSWORD_ARK_HVM_QUERY_STATUS_UNSUPPORTED_CPU:
-                return KvmAvailability::UnsupportedCpu;
-            case KSWORD_ARK_HVM_QUERY_STATUS_BACKEND_NOT_IMPLEMENTED:
                 return KvmAvailability::BackendNotImplemented;
-            default:
-                break;
             }
-            if ((result.response.stateFlags &
-                    (KSWORD_ARK_HVM_STATE_FAULTED |
-                     KSWORD_ARK_HVM_STATE_ROLLBACK_REQUIRED)) != 0UL)
+            switch (KswordArkHvmResidentGate(&result.response, isNestedAllowed()))
             {
-                return KvmAvailability::Faulted;
-            }
-            // 外层有 hypervisor 而嵌套模式没开：驱动会拒绝常驻，但这是用户
-            // 一个开关就能解决的，报成"不支持"会让人以为得换机器。
-            if ((result.response.featureFlags &
-                    KSWORD_ARK_HVM_FEATURE_HYPERVISOR_PRESENT) != 0ULL &&
-                !isNestedAllowed())
-            {
-                return KvmAvailability::NestedNotAllowed;
-            }
-            // 分别检查 VMX 与 SVM 的能力门；EPT/MSR bitmap 不是 AMD 能力位。
-            const unsigned long long requiredFeatures =
-                result.response.backend == KSWORD_ARK_HVM_BACKEND_SVM ?
-                (KSWORD_ARK_HVM_FEATURE_AMD |
-                 KSWORD_ARK_HVM_FEATURE_SVM |
-                 KSWORD_ARK_HVM_FEATURE_NPT |
-                 KSWORD_ARK_HVM_FEATURE_RESIDENT_LIFECYCLE_GUARDED) :
-                (
-                KSWORD_ARK_HVM_FEATURE_INTEL |
-                KSWORD_ARK_HVM_FEATURE_VMX |
-                KSWORD_ARK_HVM_FEATURE_EPT |
-                KSWORD_ARK_HVM_FEATURE_MSR_BITMAP |
-                KSWORD_ARK_HVM_FEATURE_RESIDENT_LIFECYCLE_GUARDED);
-            if ((result.response.featureFlags & requiredFeatures) !=
-                requiredFeatures)
-            {
-                return KvmAvailability::UnsupportedCpu;
+            case KswHvmGateFirmware: return KvmAvailability::FirmwareDisabled;
+            case KswHvmGateOuterConflict: return KvmAvailability::HypervisorConflict;
+            case KswHvmGateOuterOptIn: return KvmAvailability::NestedNotAllowed;
+            case KswHvmGateFault: return KvmAvailability::Faulted;
+            case KswHvmGatePower: return KvmAvailability::PowerTransition;
+            case KswHvmGateBusy: return KvmAvailability::Busy;
+            case KswHvmGateUnsupported: return KvmAvailability::UnsupportedCpu;
+            default: break;
             }
             if ((result.response.stateFlags &
                     KSWORD_ARK_HVM_STATE_RESOURCES_READY) == 0UL)
@@ -259,6 +244,13 @@ namespace ksword::kvm
                 command.message = ks::i18n::sourceText(
                     QStringLiteral("%1 失败：当前驱动不提供该能力。"))
                     .arg(actionName);
+                return command;
+            }
+            if (!result.io.ok)
+            {
+                command.message = ks::i18n::sourceText(QStringLiteral("%1 失败：%2。"))
+                    .arg(actionName).arg(result.io.message.empty() ? describeAvailability(KvmAvailability::DriverNotRunning)
+                        : QString::fromStdString(result.io.message));
                 return command;
             }
             QString reason;
@@ -419,32 +411,40 @@ namespace ksword::kvm
                 QStringLiteral("KswordARK 驱动未运行，请先启用 R0"));
         case KvmAvailability::UnsupportedCpu:
             return ks::i18n::sourceText(
-                QStringLiteral("处理器不满足常驻硬件门（Intel VMX + EPT + MSR bitmap）"));
+                QStringLiteral("处理器或后端不满足常驻条件（Intel VMX/EPT 或 AMD SVM/NPT/NRIP，及完整生命周期保护）"));
         case KvmAvailability::FirmwareDisabled:
             return ks::i18n::sourceText(
                 QStringLiteral("固件中已关闭虚拟化，请在 BIOS/UEFI 中开启"));
         case KvmAvailability::HypervisorConflict:
             return ks::i18n::sourceText(
-                QStringLiteral("Hyper-V/VBS 已占用 VMX root，需先关闭后重启"));
+                QStringLiteral("外层 Hypervisor 与当前后端冲突；AMD 仅接受明确允许的 VMware 外层"));
         case KvmAvailability::NotPrepared:
             return ks::i18n::sourceText(QStringLiteral("尚未准备资源，点击后自动准备"));
         case KvmAvailability::Faulted:
             return ks::i18n::sourceText(QStringLiteral("存在故障或待回滚，需要先重置"));
         case KvmAvailability::BackendNotImplemented:
             return ks::i18n::sourceText(
-                QStringLiteral("处理器支持 AMD SVM，但本版本尚未实现 SVM 后端"));
+                QStringLiteral("当前驱动没有实现此处理器的虚拟化后端"));
+        case KvmAvailability::PowerTransition:
+            return ks::i18n::sourceText(QStringLiteral("系统正在电源转换，暂时不能启动常驻"));
+        case KvmAvailability::Busy:
+            return ks::i18n::sourceText(QStringLiteral("另一项虚拟化操作正在执行"));
         case KvmAvailability::NestedNotAllowed:
             return ks::i18n::sourceText(
-                QStringLiteral("检测到外层 hypervisor（虚拟机或 VBS/HVCI）。在右键菜单中开启嵌套模式后可以作为 L1 运行"));
+                QStringLiteral("检测到受支持的外层 Hypervisor；请在右键菜单中明确允许作为来宾运行"));
         }
         return QString();
     }
 
     KvmState queryState()
     {
-        KvmState state;
         ksword::ark::DriverClient client;
-        const auto result = client.queryHvmStatus();
+        return stateFromStatus(client.queryHvmStatus());
+    }
+
+    KvmState stateFromStatus(const ksword::ark::HvmStatusResult& result)
+    {
+        KvmState state;
         state.availability = classify(result);
         if (!result.io.ok || result.unsupported)
         {
@@ -455,6 +455,21 @@ namespace ksword::kvm
 
         const auto& response = result.response;
         state.backend = response.backend;
+        state.nestedRequested = isNestedDispatchEnabled();
+        state.nestedSupported = (response.backend == KSWORD_ARK_HVM_BACKEND_VMX || response.backend == KSWORD_ARK_HVM_BACKEND_SVM) && ((response.featureFlags & (response.backend == KSWORD_ARK_HVM_BACKEND_SVM
+            ? KSWORD_ARK_HVM_FEATURE_NESTED_SVM_DISPATCH : KSWORD_ARK_HVM_FEATURE_NESTED_VMX_DISPATCH)) != 0 ||
+            (response.backend == KSWORD_ARK_HVM_BACKEND_VMX && response.nestedImplementation != KSWORD_ARK_HVM_IMPLEMENTATION_UNSUPPORTED));
+        state.nestedPrepared = (response.featureFlags & KSWORD_ARK_HVM_FEATURE_NESTED_SVM_PREPARED) != 0;
+        state.nestedArmed = (response.featureFlags & (response.backend == KSWORD_ARK_HVM_BACKEND_SVM
+            ? KSWORD_ARK_HVM_FEATURE_NESTED_SVM_ARMED : KSWORD_ARK_HVM_FEATURE_NESTED_VMX_ARMED)) != 0;
+        state.identityHidden = (response.featureFlags & KSWORD_ARK_HVM_FEATURE_HYPERVISOR_IDENTITY_HIDDEN) != 0;
+        state.selfTestPassed = (response.stateFlags & KSWORD_ARK_HVM_STATE_SELF_TEST_PASSED) != 0 && response.processorCount > 0 &&
+            response.selfTestPassedProcessorCount == response.processorCount && response.preparedProcessorCount == response.processorCount;
+        state.slatReady = response.slatReady != 0;
+        state.residentAdmission = state.availability == KvmAvailability::Available || state.availability == KvmAvailability::NotPrepared;
+        state.admissionReason = state.backend == KSWORD_ARK_HVM_BACKEND_NONE
+            ? ks::i18n::sourceText(QStringLiteral("还读不到虚拟化后端，请先启动 R0 并刷新。"))
+            : state.residentAdmission ? QString() : describeAvailability(state.availability);
         state.generation = response.generation;
         state.processorCount = response.processorCount;
         state.residentProcessorCount = response.residentProcessorCount;
@@ -510,6 +525,10 @@ namespace ksword::kvm
         state.monitorTrapFlagReady = (response.featureFlags &
             KSWORD_ARK_HVM_FEATURE_MONITOR_TRAP_FLAG) != 0ULL;
 
+        if (!KswordArkHvmNestedModeMatches(&response, state.nestedRequested))
+        {
+            state.configurationReason = ks::i18n::sourceText(QStringLiteral("AMD 嵌套配置尚未生效或驱动不支持；请停止常驻、释放资源后重新准备，并使用支持嵌套 SVM 的驱动。"));
+        }
         if (state.residentActive)
         {
             state.shortStatus = state.residentComplete
@@ -518,10 +537,68 @@ namespace ksword::kvm
         }
         else
         {
-            state.shortStatus = describeAvailability(state.availability);
+            state.shortStatus = state.backend == KSWORD_ARK_HVM_BACKEND_NONE ? state.admissionReason : describeAvailability(state.availability);
         }
         state.detail = buildDetail(state);
         return state;
+    }
+
+    ksword::ark::HvmControlResult controlWithPreferences(
+        const ksword::ark::DriverClient& client, const KSWORD_ARK_QUERY_HVM_RESPONSE& status,
+        const unsigned long command, const bool force, const bool enableEptEvents,
+        const bool enableNestedVmx, const bool enableEvmcs, const unsigned long soakMilliseconds)
+    {
+        const bool prepare = command == KSWORD_ARK_HVM_CONTROL_PREPARE;
+        const bool start = command == KSWORD_ARK_HVM_CONTROL_START_RESIDENT;
+        const bool nested = isNestedDispatchEnabled() || enableNestedVmx;
+        const bool entering = prepare || start || command == KSWORD_ARK_HVM_CONTROL_SELF_TEST || command == KSWORD_ARK_HVM_CONTROL_SOAK;
+        const bool acquiring = entering || command == KSWORD_ARK_HVM_CONTROL_VALIDATE_NESTED;
+        if (acquiring && (!KswordArkHvmNestedModeMatches(&status, nested) ||
+            (nested && (prepare || start) && !isWriteAccessEnabled())))
+        {
+            ksword::ark::HvmControlResult failure{};
+            failure.io.ok = false;
+            ksword::ark::HvmStatusResult snapshot{};
+            snapshot.io.ok = true;
+            snapshot.response = status;
+            failure.io.message = !KswordArkHvmNestedModeMatches(&status, nested)
+                ? stateFromStatus(snapshot).configurationReason.toStdString()
+                : ks::i18n::sourceText(QStringLiteral("嵌套派发需要先开启允许 R-1 写操作。")).toStdString();
+            failure.response.status = nested && (prepare || start) && !isWriteAccessEnabled() ? KSWORD_ARK_HVM_CONTROL_STATUS_CONFIRMATION_REQUIRED
+                : KSWORD_ARK_HVM_CONTROL_STATUS_NOT_PREPARED;
+            failure.response.lastStatus = static_cast<long>(0xC0000184UL);
+            return failure;
+        }
+        if (entering && KswordArkHvmResidentGate(&status, isNestedAllowed()) != KswHvmGateReady)
+        {
+            ksword::ark::HvmControlResult failure{};
+            failure.io.ok = false;
+            ksword::ark::HvmStatusResult snapshot{};
+            snapshot.io.ok = true;
+            snapshot.response = status;
+            failure.io.message = stateFromStatus(snapshot).admissionReason.toStdString();
+            return failure;
+        }
+        unsigned long flags = KSWORD_ARK_HVM_CONTROL_FLAG_UI_CONFIRMED;
+        if (force) { flags |= KSWORD_ARK_HVM_CONTROL_FLAG_FORCE; }
+        if (acquiring && (isNestedAllowed() || (command == KSWORD_ARK_HVM_CONTROL_VALIDATE_NESTED && (enableNestedVmx || enableEvmcs)))) { flags |= KSWORD_ARK_HVM_CONTROL_FLAG_ALLOW_NESTED; }
+        if (enableEptEvents) { flags |= KSWORD_ARK_HVM_CONTROL_FLAG_ENABLE_EPT_EVENTS; }
+        if (start ? nested : enableNestedVmx) { flags |= KSWORD_ARK_HVM_CONTROL_FLAG_ENABLE_NESTED_VMX; }
+        if (enableEvmcs) { flags |= KSWORD_ARK_HVM_CONTROL_FLAG_ENABLE_EVMCS; }
+        if (start && isVeEnabled()) { flags |= KSWORD_ARK_HVM_CONTROL_FLAG_ENABLE_VE; }
+        if (start && isVmFuncEnabled()) { flags |= KSWORD_ARK_HVM_CONTROL_FLAG_ENABLE_VMFUNC; }
+        if ((prepare || start) && isLocalEptEnabled()) { flags |= KSWORD_ARK_HVM_CONTROL_FLAG_ENABLE_LOCAL_EPT; }
+        if (prepare && isEptpSwitchEnabled()) { flags |= KSWORD_ARK_HVM_CONTROL_FLAG_ENABLE_EPTP_SWITCH; }
+        if (start && isHypervisorHidden()) { flags |= KSWORD_ARK_HVM_CONTROL_FLAG_HIDE_HYPERVISOR; }
+        flags = KswordArkHvmBackendControlFlags(status.backend, command, flags, nested);
+        const auto has = [flags](unsigned long bit) { return (flags & bit) != 0; };
+        return client.controlHvm(command, status.generation, has(KSWORD_ARK_HVM_CONTROL_FLAG_FORCE),
+            has(KSWORD_ARK_HVM_CONTROL_FLAG_ALLOW_NESTED), true,
+            has(KSWORD_ARK_HVM_CONTROL_FLAG_ENABLE_EPT_EVENTS), has(KSWORD_ARK_HVM_CONTROL_FLAG_ENABLE_NESTED_VMX),
+            has(KSWORD_ARK_HVM_CONTROL_FLAG_ENABLE_EVMCS), has(KSWORD_ARK_HVM_CONTROL_FLAG_ENABLE_VE),
+            has(KSWORD_ARK_HVM_CONTROL_FLAG_ENABLE_VMFUNC), has(KSWORD_ARK_HVM_CONTROL_FLAG_ENABLE_LOCAL_EPT),
+            has(KSWORD_ARK_HVM_CONTROL_FLAG_ENABLE_EPTP_SWITCH), soakMilliseconds,
+            has(KSWORD_ARK_HVM_CONTROL_FLAG_HIDE_HYPERVISOR), has(KSWORD_ARK_HVM_CONTROL_FLAG_ENABLE_NESTED_SVM));
     }
 
     KvmCommandResult ensurePrepared()
@@ -536,45 +613,21 @@ namespace ksword::kvm
             return failure;
         }
 
-        // 不忽略已选择的 Intel 扩展：AMD 首版没有对应实现。
-        if (status.response.backend == KSWORD_ARK_HVM_BACKEND_SVM &&
-            (isLocalEptEnabled() || isEptpSwitchEnabled() ||
-             isNestedDispatchEnabled() || isVeEnabled() ||
-             isVmFuncEnabled() || isHypervisorHidden()))
+        const auto before = stateFromStatus(status);
+        if (!before.residentAdmission || !before.configurationReason.isEmpty())
         {
             KvmCommandResult failure;
-            failure.message = ks::i18n::sourceText(QStringLiteral("AMD 常驻不支持所选的 Intel 扩展。请关闭 EPT、嵌套派发、VE、VMFUNC 和身份隐藏选项后重试。"));
+            failure.message = !before.configurationReason.isEmpty() ? before.configurationReason : before.admissionReason;
             return failure;
         }
-        unsigned long generation = status.response.generation;
         // 资源已经就绪时不重复分配：PREPARE 对已就绪状态会返回 ALREADY_PREPARED。
         if ((status.response.stateFlags &
                 KSWORD_ARK_HVM_STATE_RESOURCES_READY) == 0UL)
         {
             // 后端选择只有 PREPARE 会读：驱动在准备资源时就决定武装与否，
             // 而 START_RESIDENT 的白名单会把这一位判成 INVALID_REQUEST。
-            const auto prepared = client.controlHvm(
-                KSWORD_ARK_HVM_CONTROL_PREPARE,
-                generation,
-                false,
-                isNestedAllowed(),
-                true,
-                false,
-                false,
-                false,
-                false,
-                false,
-                /*
-                 * enableLocalEpt 必须在这里发，不能只在 START_RESIDENT 发。
-                 *
-                 * LocalEptArmed 只由 PREPARE 置位——常驻启动时驱动查的是那个
-                 * 已经定下来的值。只在 START_RESIDENT 带这一位的话，门口过得了
-                 * （白名单里有它），随后 LocalEptArmed 恒为假，驱动以
-                 * STATUS_NOT_SUPPORTED 拒绝，界面显示"CPU 不支持"——而真因是
-                 * 这一位从来没到过能置位的那条路径上。
-                 */
-                isLocalEptEnabled(),
-                isEptpSwitchEnabled());
+            const auto prepared = controlWithPreferences(client, status.response,
+                KSWORD_ARK_HVM_CONTROL_PREPARE, false);
             auto result = toCommandResult(
                 prepared,
                 ks::i18n::sourceText(QStringLiteral("准备 KVM 资源")));
@@ -582,7 +635,6 @@ namespace ksword::kvm
             {
                 return result;
             }
-            generation = prepared.response.newGeneration;
         }
         // PREPARE may select a different backend from the requested one. Read back
         // the actual armed bits before reporting readiness or entering residency.
@@ -593,24 +645,25 @@ namespace ksword::kvm
             failure.message = ks::i18n::sourceText(QStringLiteral("准备后状态查询失败，未继续自检或启动。"));
             return failure;
         }
-        generation = status.response.generation;
-        if ((isEptpSwitchEnabled() && !(status.response.featureFlags & KSWORD_ARK_HVM_FEATURE_EPTP_SWITCH_ARMED)) ||
-            (isLocalEptEnabled() && !(status.response.featureFlags & KSWORD_ARK_HVM_FEATURE_LOCAL_EPT_ARMED)))
+        const bool intel = status.response.backend == KSWORD_ARK_HVM_BACKEND_VMX;
+        if (!stateFromStatus(status).configurationReason.isEmpty())
+        {
+            KvmCommandResult failure;
+            failure.message = stateFromStatus(status).configurationReason;
+            return failure;
+        }
+        if (intel && ((isEptpSwitchEnabled() && !(status.response.featureFlags & KSWORD_ARK_HVM_FEATURE_EPTP_SWITCH_ARMED)) ||
+            (isLocalEptEnabled() && !(status.response.featureFlags & KSWORD_ARK_HVM_FEATURE_LOCAL_EPT_ARMED))))
         {
             KvmCommandResult failure;
             failure.message = ks::i18n::sourceText(QStringLiteral("请求的 EPT 后端未实际武装。请停止常驻、释放资源后重新准备，并检查硬件能力。"));
             return failure;
         }
         // 自检证明每个逻辑处理器完成后端硬件往返，是常驻启动的前置条件。
-        if ((status.response.stateFlags &
-                KSWORD_ARK_HVM_STATE_SELF_TEST_PASSED) == 0UL)
+        if (!stateFromStatus(status).selfTestPassed)
         {
-            const auto tested = client.controlHvm(
-                KSWORD_ARK_HVM_CONTROL_SELF_TEST,
-                generation,
-                true,
-                isNestedAllowed(),
-                true);
+            const auto tested = controlWithPreferences(client, status.response,
+                KSWORD_ARK_HVM_CONTROL_SELF_TEST, true);
             return toCommandResult(
                 tested,
                 ks::i18n::sourceText(QStringLiteral("KVM 自检")));
@@ -638,13 +691,15 @@ namespace ksword::kvm
          * 而每处理器私有根会让这个合成变成处理器相关的。所以这里说清楚是哪两
          * 个开关冲突、为什么冲突。
          */
-        if (isHypervisorHidden() && !isNestedDispatchEnabled())
+        const auto initial = queryState();
+        const bool intel = initial.backend == KSWORD_ARK_HVM_BACKEND_VMX;
+        if (intel && isHypervisorHidden() && !isNestedDispatchEnabled())
         {
             KvmCommandResult failure;
             failure.message = ks::i18n::sourceText(QStringLiteral("隐藏 Hypervisor 身份要求同时开启嵌套派发。"));
             return failure;
         }
-        if (isLocalEptEnabled() && isNestedDispatchEnabled())
+        if (intel && isLocalEptEnabled() && isNestedDispatchEnabled())
         {
             KvmCommandResult conflict;
             conflict.ok = false;
@@ -667,29 +722,17 @@ namespace ksword::kvm
             return failure;
         }
         (void)expectedGeneration;
-        const unsigned long generation = refreshed.response.generation;
-        const auto started = client.controlHvm(
-            KSWORD_ARK_HVM_CONTROL_START_RESIDENT,
-            generation,
-            true,
-            isNestedAllowed(),
-            true,
-            refreshed.response.backend != KSWORD_ARK_HVM_BACKEND_SVM,
-            /*
-             * enableNestedVmx 原先硬写成 false，于是**这条路径永远拿不到嵌套
-             * 派发**。整个嵌套功能只有 KernelDock 的那一页能打开，而那一页又
-             * 把它绑死在"当前在哪个功能页"上，没有开关可言。一项已经端到端
-             * 验证过的能力，在主界面上不存在。
-             */
-            isNestedDispatchEnabled(),
-            false,
-            isVeEnabled(),
-            isVmFuncEnabled(),
-            isLocalEptEnabled(),
-            false, 0UL, isHypervisorHidden());
-        // enableEptpSwitch 刻意留在默认的 false：后端在上面的 ensurePrepared
-        // 里就随 PREPARE 定下来了，这一位出现在 START_RESIDENT 上会被驱动的
-        // 白名单判成 INVALID_REQUEST。
+        const auto current = stateFromStatus(refreshed);
+        if (!current.configurationReason.isEmpty() || (current.nestedRequested && !isWriteAccessEnabled()))
+        {
+            KvmCommandResult failure;
+            failure.message = !current.configurationReason.isEmpty() ? current.configurationReason
+                : ks::i18n::sourceText(QStringLiteral("嵌套派发需要先开启允许 R-1 写操作。"));
+            return failure;
+        }
+        const auto started = controlWithPreferences(client, refreshed.response,
+            KSWORD_ARK_HVM_CONTROL_START_RESIDENT, true,
+            intel, isNestedDispatchEnabled());
         return toCommandResult(
             started,
             ks::i18n::sourceText(QStringLiteral("启动 KVM 常驻")));
@@ -713,6 +756,12 @@ namespace ksword::kvm
         const unsigned long expectedGeneration,
         const unsigned long milliseconds)
     {
+        if (queryState().backend != KSWORD_ARK_HVM_BACKEND_VMX)
+        {
+            KvmCommandResult failure;
+            failure.message = ks::i18n::sourceText(QStringLiteral("当前后端不提供常驻保持自检。"));
+            return failure;
+        }
         const auto prepared = ensurePrepared();
         if (!prepared.ok)
         {

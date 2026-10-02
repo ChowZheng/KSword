@@ -23,17 +23,19 @@ namespace ksword::kvm
     {
         Available,          // 能力齐备，可以启动常驻。
         DriverNotRunning,   // KswordARK 驱动服务未运行（先点 R0）。
-        UnsupportedCpu,     // 非 Intel、无 VMX/EPT，或缺 MSR bitmap 等硬门。
+        UnsupportedCpu,     // 缺少后端对应的 SVM/NPT 或 VMX/EPT 硬门。
         FirmwareDisabled,   // 固件里关闭了虚拟化。
         HypervisorConflict, // Hyper-V/VBS 已占用 VMX root。
         NotPrepared,        // 资源尚未准备（PREPARE 未执行或已 TEARDOWN）。
         Faulted,            // 存在故障或需要回滚，必须先重置。
-        // 硬件支持虚拟化，但本版本没有对应后端（当前即 AMD SVM）。
+        // 硬件支持虚拟化，但本版本没有对应后端。
         // 与 UnsupportedCpu 分开：前者要换机器，后者要等软件。
         BackendNotImplemented,
         // 外层已有 hypervisor（虚拟机内，或裸机开着 VBS/HVCI），但嵌套模式没开。
         // 这一态是可以由用户自己解决的，所以必须与"不支持"分开报。
-        NestedNotAllowed
+        NestedNotAllowed,
+        PowerTransition,
+        Busy
     };
 
     // KvmState：一次状态快照。UI 只读这个结构，不直接解析 featureFlags。
@@ -51,7 +53,17 @@ namespace ksword::kvm
         // availability 仍然是 Available——BackendNotImplemented 说的是"驱动
         // 没有这个处理器的后端"，那是另一件事。
         unsigned long backend = KSWORD_ARK_HVM_BACKEND_NONE;
-        bool residentActive = false;   // 至少一个逻辑处理器处于 VMX non-root。
+        bool nestedSupported = false;
+        bool nestedPrepared = false;
+        bool nestedArmed = false;
+        bool identityHidden = false;
+        bool nestedRequested = false;
+        bool selfTestPassed = false;
+        bool slatReady = false;
+        bool residentAdmission = false;
+        QString admissionReason;
+        QString configurationReason;
+        bool residentActive = false;   // 至少一个逻辑处理器仍持有常驻状态。
         bool residentComplete = false; // 全部逻辑处理器都在 non-root。
         bool sustainedProven = false;  // 通过过 SOAK，证明常驻能长期存活。
         bool msrBitmapReady = false;   // 有 MSR bitmap，常驻才可能存活。
@@ -136,6 +148,15 @@ namespace ksword::kvm
 
     // queryState：读取一次完整状态快照。阻塞，必须在后台线程调用。
     KvmState queryState();
+    // Both query entrypoints decode the same admission and actual-mode evidence.
+    KvmState stateFromStatus(const ksword::ark::HvmStatusResult& result);
+    // All GUI lifecycle callers share backend selection and retained-preference filtering.
+    ksword::ark::HvmControlResult controlWithPreferences(
+        const ksword::ark::DriverClient& client,
+        const KSWORD_ARK_QUERY_HVM_RESPONSE& status,
+        unsigned long command, bool force,
+        bool enableEptEvents = false, bool enableNestedVmx = false,
+        bool enableEvmcs = false, unsigned long soakMilliseconds = 0);
 
     // ensurePrepared：按需执行 PREPARE + SELF_TEST，使常驻具备启动条件。
     // 已经准备好时直接返回成功，不重复分配资源。
