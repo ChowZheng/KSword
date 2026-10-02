@@ -51,8 +51,8 @@ InstructionDescription DecodeInstruction(const unsigned char* code, std::size_t 
         case 0x01: case 0x03: case 0x09: case 0x0B: case 0x21: case 0x23: case 0x29: case 0x2B:
         case 0x31: case 0x33: case 0x39: case 0x3B: case 0x84: case 0x85:
         case 0x88: case 0x89: case 0x8A: case 0x8B: case 0x8D: case 0xFF: break;
-        case 0x81: case 0xC7: immediate = operand16 ? 2 : 4; break;
-        case 0x80: case 0x83: case 0xC6: immediate = 1; break;
+        case 0x69: case 0x81: case 0xC7: immediate = operand16 ? 2 : 4; break;
+        case 0x6B: case 0x80: case 0x83: case 0xC6: immediate = 1; break;
         case 0xF6: case 0xF7:
             if (offset >= size || ((code[offset] >> 3) & 7) == 1) return {};
             if (((code[offset] >> 3) & 7) == 0) immediate = op == 0xF6 ? 1 : operand16 ? 2 : 4;

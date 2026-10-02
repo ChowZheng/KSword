@@ -43,6 +43,27 @@
     <ClInclude Include="hook\InstructionDecoder.inc" />
     <ClInclude Include="..\APIMonitor_x64\hook\HookEngine.h" />
     <ClInclude Include="..\APIMonitor_x64\pch.h" />
+    <ClInclude Include="hook\EntryStubs.h" />
+    <ClCompile Include="..\APIMonitor_x64\MonitorAgent.cpp" />
+    <ClCompile Include="..\APIMonitor_x64\core\MonitorConfig.cpp" />
+    <ClCompile Include="..\APIMonitor_x64\core\MonitorPipe.cpp" />
+    <ClCompile Include="..\APIMonitor_x64\core\MonitorCoverage.cpp" />
+    <ClCompile Include="..\APIMonitor_x64\core\MonitorAsyncIo.cpp" />
+    <ClCompile Include="..\APIMonitor_x64\hook\HookTargets.cpp" />
+    <ClCompile Include="..\APIMonitor_x64\hook\ClipboardGuardCommon.cpp" />
+    <ClCompile Include="..\APIMonitor_x64\hook\ClipboardGuardHook.cpp" />
+    <ClCompile Include="..\APIMonitor_x64\hook\ClipboardGuardVTableHook.cpp" />
+    <ClCompile Include="..\APIMonitor_x64\hook\ClipboardGuardWin32u.cpp" />
+    <None Include="..\APIMonitor_x64\api_monitor_definitions.json" />
+    <None Include="..\APIMonitor_x64\hook\ApiHandlers.json" />
   </ItemGroup>
+  <PropertyGroup><ApiMonitorPython Condition="'$(ApiMonitorPython)'==''">python</ApiMonitorPython></PropertyGroup>
+  <Target Name="GenerateApiMonitorDefinitions" BeforeTargets="ClCompile">
+    <Exec Command="&quot;$(ApiMonitorPython)&quot; &quot;$(ProjectDir)..\tools\api_monitor\generate_definitions.py&quot; --definitions &quot;$(ProjectDir)..\APIMonitor_x64\api_monitor_definitions.json&quot; --output &quot;$(IntDir)generated&quot; --architecture x86" />
+  </Target>
+  <Target Name="PublishApiMonitorDefinitions" AfterTargets="Build" Condition="'$(Configuration)'=='Release'">
+    <MakeDir Directories="$(OutDir)profiles" />
+    <Copy SourceFiles="$(ProjectDir)..\APIMonitor_x64\api_monitor_definitions.json" DestinationFiles="$(OutDir)profiles\api_monitor_definitions.json" SkipUnchangedFiles="true" />
+  </Target>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 </Project>

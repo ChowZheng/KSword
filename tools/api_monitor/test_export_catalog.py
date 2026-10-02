@@ -11,8 +11,8 @@ extern "C" __declspec(dllexport) DWORD FixtureExport(){return 42;}
 #define CHECK(x) do{if(!(x)){printf("FAIL %d\n",__LINE__);return 1;}}while(0)
 int main(){using namespace apimon;std::vector<std::string> names;
  CHECK(EnumerateNamedExports(GetModuleHandleW(L"ntdll.dll"),&names));CHECK(std::binary_search(names.begin(),names.end(),"NtQueryInformationThread"));
- auto module=GetModuleHandleW(nullptr);CHECK(EnumerateNamedExports(module,&names));CHECK(std::binary_search(names.begin(),names.end(),"FixtureExport"));
- auto* base=reinterpret_cast<BYTE*>(module);auto* dos=reinterpret_cast<IMAGE_DOS_HEADER*>(base);auto* nt=reinterpret_cast<IMAGE_NT_HEADERS64*>(base+dos->e_lfanew);
+ auto module=GetModuleHandleW(nullptr);CHECK(EnumerateNamedExports(module,&names));CHECK(std::binary_search(names.begin(),names.end(),"FixtureExport")||std::binary_search(names.begin(),names.end(),"_FixtureExport"));
+ auto* base=reinterpret_cast<BYTE*>(module);auto* dos=reinterpret_cast<IMAGE_DOS_HEADER*>(base);auto* nt=reinterpret_cast<IMAGE_NT_HEADERS*>(base+dos->e_lfanew);
  auto* exports=reinterpret_cast<IMAGE_EXPORT_DIRECTORY*>(base+nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT].VirtualAddress);
  DWORD previous=0;LONG oldOffset=dos->e_lfanew;VirtualProtect(dos,sizeof(*dos),PAGE_READWRITE,&previous);dos->e_lfanew=0x7fffffff;
  CHECK(!EnumerateNamedExports(module,&names));dos->e_lfanew=oldOffset;DWORD ignored=0;VirtualProtect(dos,sizeof(*dos),previous,&ignored);

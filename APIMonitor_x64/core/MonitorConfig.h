@@ -46,6 +46,7 @@ namespace apimon
 
     struct FakeSuccessRule
     {
+        std::optional<unsigned> x86StackBytes; // Optional seventh rule field; zero means caller cleanup.
         std::wstring moduleName;                                    // moduleName：规则匹配的模块名，含或不含 .dll 均可由匹配层规范化。
         std::wstring apiName;                                       // apiName：规则匹配的导出 API 名，大小写不敏感。
         FakeSuccessReturnType returnType = FakeSuccessReturnType::Scalar; // returnType：UI 模板选择后的返回语义。

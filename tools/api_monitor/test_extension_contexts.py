@@ -39,7 +39,13 @@ namespace apimon {
 using namespace apimon;using namespace ks::winapi_monitor;
 #define CHECK(x) do{if(!(x)){printf("FAIL %d\n",__LINE__);return 1;}}while(0)
 void* Code(unsigned value){auto* code=static_cast<unsigned char*>(VirtualAlloc(nullptr,4096,MEM_COMMIT|MEM_RESERVE,PAGE_READWRITE));
- code[0]=0xB8;memcpy(code+1,&value,4);code[5]=0xC3;DWORD protect=0;VirtualProtect(code,4096,PAGE_EXECUTE_READ,&protect);return code;}
+ code[0]=0xB8;memcpy(code+1,&value,4);
+#ifdef _M_IX86
+ code[5]=0xC2;code[6]=32;code[7]=0; // AcceptEx: eight 32-bit stdcall arguments
+#else
+ code[5]=0xC3;
+#endif
+ DWORD protect=0;VirtualProtect(code,4096,PAGE_EXECUTE_READ,&protect);return code;}
 int main(){
  const GUID accept=WSAID_ACCEPTEX,connect=WSAID_CONNECTEX;void* first=Code(21),*second=Code(22),*third=Code(23);
  DiscoverExtension(accept,first);DiscoverExtension(accept,first);CHECK(g_extensions.size()==1&&g_extensions[0]->record.installed);

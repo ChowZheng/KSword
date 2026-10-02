@@ -21,7 +21,7 @@ namespace apimon
             const DWORD access = info.Protect & 0xFF;
             if (access != PAGE_READONLY && access != PAGE_READWRITE && access != PAGE_WRITECOPY
                 && access != PAGE_EXECUTE_READ && access != PAGE_EXECUTE_READWRITE && access != PAGE_EXECUTE_WRITECOPY) return false;
-            const auto end = reinterpret_cast<std::uintptr_t>(info.BaseAddress) + info.RegionSize;
+            const auto end = reinterpret_cast<std::uintptr_t>(info.BaseAddress) + static_cast<std::uintptr_t>(info.RegionSize);
             if (end <= cursor) return false;
             cursor = (std::min)(end, first + size);
         }
@@ -40,10 +40,10 @@ namespace apimon
         IMAGE_DOS_HEADER dos{};
         if (!ReadExportMemory(base, &dos, sizeof(dos)) || dos.e_magic != IMAGE_DOS_SIGNATURE
             || dos.e_lfanew <= 0 || dos.e_lfanew > 1024 * 1024) return false;
-        IMAGE_NT_HEADERS64 nt{};
+        IMAGE_NT_HEADERS nt{};
         if (!ReadExportMemory(base + dos.e_lfanew, &nt, sizeof(nt)) || nt.Signature != IMAGE_NT_SIGNATURE
-            || nt.OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR64_MAGIC
-            || nt.FileHeader.SizeOfOptionalHeader < sizeof(IMAGE_OPTIONAL_HEADER64)
+            || nt.OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR_MAGIC
+            || nt.FileHeader.SizeOfOptionalHeader < sizeof(IMAGE_OPTIONAL_HEADER)
             || nt.OptionalHeader.NumberOfRvaAndSizes <= IMAGE_DIRECTORY_ENTRY_EXPORT) return false;
         const auto size = nt.OptionalHeader.SizeOfImage;
         const auto valid = [size](DWORD rva, std::size_t count) { return rva && rva < size && count <= size - rva; };

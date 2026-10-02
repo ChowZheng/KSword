@@ -10,6 +10,9 @@
 #include "../core/MonitorAsyncIo.h"
 #include "ContextThunk.h"
 #include "ExportCatalog.h"
+#ifdef _M_IX86
+#include "../../APIMonitor_x86/hook/EntryStubs.h"
+#endif
 
 #include <WinReg.h>
 #include <bcrypt.h>
@@ -96,6 +99,9 @@ namespace apimon
         using HostEntPtr = hostent*;
         struct ExtensionContext;
 #include "ApiMonitorDeclarations.inc"
+#ifdef _M_IX86
+#include "ApiMonitorStackAbi.inc"
+#endif
 
 
 
@@ -204,6 +210,7 @@ namespace apimon
 
         struct FakeSuccessRuntimeRule
         {
+            std::optional<unsigned> x86StackBytes;
             std::uint32_t apiId = 0;
             std::wstring moduleName;                                // moduleName：事件上报使用的模块名。
             std::wstring installModuleName;                         // installModuleName：传给 GetModuleHandleW 的模块名，默认补齐 .dll。
@@ -1481,7 +1488,7 @@ namespace apimon
             }
             if (ruleValue.returnType == FakeSuccessReturnType::Handle)
             {
-                return (ruleValue.returnValue != 0 && ruleValue.returnValue != 0xFFFFFFFFFFFFFFFFULL)
+                return (ruleValue.returnValue != 0 && static_cast<std::uintptr_t>(ruleValue.returnValue) != UINTPTR_MAX)
                     ? 0
                     : static_cast<std::int32_t>(ruleValue.returnValue & 0xFFFFFFFFULL);
             }
@@ -1573,6 +1580,7 @@ namespace apimon
                 runtimeRule->categoryValue = InferRawHookCategory(runtimeRule->installModuleName, runtimeRule->apiNameAnsi);
                 runtimeRule->returnType = sourceRule.returnType;
                 runtimeRule->returnValue = sourceRule.returnValue;
+                runtimeRule->x86StackBytes = sourceRule.x86StackBytes;
                 runtimeRule->lastErrorKind = sourceRule.lastErrorKind;
                 runtimeRule->lastErrorValue = sourceRule.lastErrorValue;
 
@@ -1588,6 +1596,23 @@ namespace apimon
         // - 返回：可执行内存地址，作为 InstallInlineHook 的 detourAddress，失败返回 nullptr。
         void* BuildFakeSuccessEntryStub(FakeSuccessRuntimeRule* const ruleValue)
         {
+#ifdef _M_IX86
+            if (!ruleValue) return nullptr;
+            for (const auto& abi : kApiStackAbi) {
+                if (NormalizeModuleNameForMatch(ruleValue->installModuleName) == NormalizeModuleNameForMatch(abi.module)
+                    && _wcsicmp(ruleValue->apiName.c_str(), abi.name) == 0)
+                {
+                    if (ruleValue->x86StackBytes && *ruleValue->x86StackBytes != abi.stackBytes) {
+                        ruleValue->hookRecord.lastFailure = L"explicit x86 cleanup conflicts with the known API ABI"; return nullptr;
+                    }
+                    return BuildX86FakeStub(ruleValue, reinterpret_cast<void*>(&FakeSuccessEnter), abi.stackBytes);
+                }
+            }
+            if (ruleValue->x86StackBytes)
+                return BuildX86FakeStub(ruleValue, reinterpret_cast<void*>(&FakeSuccessEnter), *ruleValue->x86StackBytes);
+            ruleValue->hookRecord.lastFailure = L"x86 Fake requires a known ABI or explicit stack byte count";
+            return nullptr;
+#else
             if (ruleValue == nullptr)
             {
                 return nullptr;
@@ -1620,6 +1645,7 @@ namespace apimon
 
             ::FlushInstructionCache(::GetCurrentProcess(), codePointer, offsetValue);
             return codePointer;
+#endif
         }
 
         void FreeFakeSuccessEntryStub(void* const stubAddress)
@@ -1690,7 +1716,7 @@ namespace apimon
                         detailTextOut,
                         ruleValue,
                         InlineHookInstallResult::PermanentFailure,
-                        L"VirtualAlloc for fake-return stub failed.");
+                        ruleValue.hookRecord.lastFailure.empty() ? L"VirtualAlloc for fake-return stub failed." : ruleValue.hookRecord.lastFailure);
                     return false;
                 }
             }
@@ -1795,6 +1821,9 @@ namespace apimon
         // - 返回：可作为 InstallInlineHook hookAddress 的可执行内存地址，失败返回 nullptr。
         void* BuildRawEntryStub(RawHookBinding* const bindingValue)
         {
+#ifdef _M_IX86
+            return bindingValue ? BuildX86RawStub(bindingValue, reinterpret_cast<void*>(&RawHookEnter), &bindingValue->originalAddress) : nullptr;
+#else
             if (bindingValue == nullptr)
             {
                 return nullptr;
@@ -1862,6 +1891,7 @@ namespace apimon
 
             ::FlushInstructionCache(::GetCurrentProcess(), codePointer, offsetValue);
             return codePointer;
+#endif
         }
 
         void FreeRawEntryStub(void* const stubAddress)

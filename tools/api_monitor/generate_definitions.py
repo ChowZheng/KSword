@@ -42,7 +42,9 @@ def validate(catalog, handlers):
         key = (module.lower(), name)
         require(key not in exports, f"duplicate export: {key}")
         exports.add(key)
-        require(api["architectures"] == ["x64"], f"unsupported architecture: {name}")
+        require(isinstance(api["architectures"], list) and bool(api["architectures"])
+                and set(api["architectures"]) <= {"x86", "x64"}
+                and len(set(api["architectures"])) == len(api["architectures"]), f"unsupported architecture: {name}")
         require(api["category"] in {"File", "Registry", "Network", "Process", "Loader", "Clipboard"}, f"bad category: {name}")
         require(api["calling_convention"] in {"WINAPI", "NTAPI", "WSAAPI", "RPC_ENTRY"}, f"bad convention: {name}")
         require(api["return_type"] in SUPPORTED_TYPES, f"invalid return type: {name}")
@@ -164,7 +166,7 @@ def write_changed(path, content):
         path.write_bytes(encoded)
 
 
-def generate(source, output):
+def generate(source, output, architecture="x64"):
     raw = source.read_bytes()
     catalog = json.loads(raw)
     registered = set(json.loads((source.parent / "hook/ApiHandlers.json").read_text(encoding="utf-8")))
@@ -174,7 +176,8 @@ def generate(source, output):
     validate(catalog, handlers)
     output.mkdir(parents=True, exist_ok=True)
     header = "// Generated from api_monitor_definitions.json. Do not edit.\n"
-    apis = catalog["apis"]
+    require(architecture in {"x86", "x64"}, "unsupported generation architecture")
+    apis = [a for a in catalog["apis"] if architecture in a["architectures"]]
     declarations = header + "\n".join(declaration(a) for a in apis if a["binding"]["scope"] == "targets")
     extensions = [a for a in apis if a["binding"]["scope"] == "extension"]
     extension_declarations = header
@@ -183,6 +186,13 @@ def generate(source, output):
         extension_declarations += f"\nusing {a['binding']['type_alias']} = {a['return_type']}({a['calling_convention']}*)({types});\n"
         extension_declarations += f"{a['return_type']} {a['calling_convention']} {a['wrapper']['handler']}(ExtensionContext* context, {signature(a)});\n"
     declarations += '\n#include "ApiMonitorExtensionDeclarations.inc"\n'
+    abi = header + '#pragma once\nstruct ApiStackAbi { const wchar_t* module; const wchar_t* name; unsigned stackBytes; unsigned returnBytes; };\n'
+    abi += 'const ApiStackAbi kApiStackAbi[] = {\n'
+    for a in apis:
+        sizes = ' + '.join(f'((sizeof({p["type"]}) + 3) & ~3u)' for p in a['parameters']) or '0'
+        return_bytes = '0' if a['return_type'] in {'void', 'VOID'} else f'sizeof({a["return_type"]})'
+        abi += f'{{ L"{a["module"]}", L"{a["export"]}", {sizes}, {return_bytes} }},\n'
+    write_changed(output / 'ApiMonitorStackAbi.inc', abi + '};\n')
     write_changed(output / "ApiMonitorExtensionDeclarations.inc", extension_declarations)
     write_changed(output / "ApiMonitorDeclarations.inc", declarations)
     clip = [a for a in apis if a["binding"]["scope"] == "clipboard"]
@@ -239,9 +249,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--definitions", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--architecture", choices=("x86", "x64"), default="x64")
     args = parser.parse_args()
     try:
-        digest = generate(args.definitions, args.output)
+        digest = generate(args.definitions, args.output, args.architecture)
     except (ValueError, KeyError, TypeError) as error:
         parser.exit(1, f"API definitions validation failed: {error}\n")
     print(f"API definitions validated/generated: SHA256={digest}")

@@ -21,6 +21,8 @@ mutations = [
     lambda c: c["apis"][1].update(id=c["apis"][0]["id"]),
     lambda c: c["apis"][1].update(module=c["apis"][0]["module"], export=c["apis"][0]["export"]),
     lambda c: c["apis"][0].update(return_type="HANDLE;system(1)"),
+    lambda c: c["apis"][0].update(architectures=["arm64"]),
+    lambda c: c["apis"][0].update(architectures=["x86", "x86"]),
     lambda c: c["apis"][0]["parameters"][0].update(type="Nonexistent"),
     lambda c: c["apis"][0]["parameters"][0].update(name="x);injected("),
     lambda c: c["apis"][0]["wrapper"].update(handler="UnknownHandler"),
@@ -54,6 +56,10 @@ with tempfile.TemporaryDirectory(prefix="ksword_definitions_") as temporary:
     assert digest == hashlib.sha256(source.read_bytes()).hexdigest()
     assert "HookedCreateFileW" in (directory / "ApiMonitorBindings.inc").read_text()
     assert "APIMON_SIMPLE" not in (directory / "ApiMonitorWrappers.inc").read_text()
+    x86 = directory / "x86"
+    assert generator.generate(source, x86, "x86") == digest
+    assert (directory / "ApiMonitorDeclarations.inc").read_bytes() == (x86 / "ApiMonitorDeclarations.inc").read_bytes()
+    assert "sizeof(ULONGLONG)" in (x86 / "ApiMonitorStackAbi.inc").read_text()
 published = root / "Ksword5.1/x64/Release/profiles/api_monitor_definitions.json"
 if published.exists():
     assert published.read_bytes() == source.read_bytes(), "published catalog must match successful build"

@@ -9,7 +9,8 @@ import time
 import uuid
 
 ROOT = Path(__file__).resolve().parents[2]
-AGENT = ROOT / "Ksword5.1/x64/Release/APIMonitor_x64.dll"
+ARCHITECTURE = os.environ.get("KSWORD_APIMON_ARCH", "x64")
+AGENT = ROOT / f"Ksword5.1/x64/Release/APIMonitor_{ARCHITECTURE}.dll"
 kernel = ctypes.WinDLL("kernel32", use_last_error=True)
 kernel.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p,
                               wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
@@ -54,7 +55,7 @@ def session_identity(text):
 class LiveFixture:
     def __init__(self, source, configuration=None):
         if not AGENT.exists():
-            raise RuntimeError("build x64 Release Agent first")
+            raise RuntimeError(f"build {ARCHITECTURE} Release Agent first")
         self.temporary = tempfile.TemporaryDirectory(prefix="ksword_apimon_live_")
         self.directory = Path(self.temporary.name)
         cpp = self.directory / "fixture.cpp"

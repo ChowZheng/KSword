@@ -29,8 +29,9 @@ int wmain(int argc,wchar_t** argv) {
    if(mapping&&view){auto h=mapping(INVALID_HANDLE_VALUE,nullptr,FILE_MAP_ALL_ACCESS,PAGE_READWRITE,SEC_COMMIT,4096,nullptr,nullptr,0);if(!h)return 11;
     auto p=view(h,GetCurrentProcess(),nullptr,0,4096,0,PAGE_READWRITE,nullptr,0);if(!p)return 12;UnmapViewOfFile(p);CloseHandle(h);}
    using Query=NTSTATUS(NTAPI*)(HANDLE,THREADINFOCLASS,PVOID,ULONG,PULONG);
-   BYTE info[256]{};ULONG length=0;auto query=reinterpret_cast<Query>(GetProcAddress(nt,"NtQueryInformationThread"));
-   if(query&&query(GetCurrentThread(),static_cast<THREADINFOCLASS>(0),info,48,&length)<0)return 13;
+   struct BasicThreadInfo {LONG status;PVOID teb;HANDLE pid,tid;ULONG_PTR affinity;LONG priority,basePriority;};
+   BasicThreadInfo info{};ULONG length=0;auto query=reinterpret_cast<Query>(GetProcAddress(nt,"NtQueryInformationThread"));
+   if(query&&query(GetCurrentThread(),static_cast<THREADINFOCLASS>(0),&info,sizeof(info),&length)<0)return 13;
    using Connect=NTSTATUS(NTAPI*)(PHANDLE,const UNICODE_STRING*,POBJECT_ATTRIBUTES,PVOID,ULONG,PSID,PVOID,PSIZE_T,PVOID,PVOID,PLARGE_INTEGER);
    auto connect=reinterpret_cast<Connect>(GetProcAddress(nt,"NtAlpcConnectPort"));
    WCHAR missing[]=L"\\RPC Control\\KswordOwnedNonexistentPort";UNICODE_STRING name{sizeof(missing)-2,sizeof(missing),missing};HANDLE port=nullptr;

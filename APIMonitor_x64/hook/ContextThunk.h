@@ -9,6 +9,30 @@ namespace apimon
     // Published code and its unwind table remain valid until process exit.
     inline void* BuildContextThunk(void* context, void* dispatcher, unsigned arguments) noexcept
     {
+#ifdef _M_IX86
+        // Current completion/extension arguments are 32-bit scalars/pointers, stdcall.
+        if (arguments > 11) return nullptr;
+        auto* page = static_cast<unsigned char*>(::VirtualAlloc(nullptr, 4096, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
+        if (!page) return nullptr;
+        unsigned cursor = 0;
+        auto byte = [&](unsigned value) { page[cursor++] = static_cast<unsigned char>(value); };
+        auto imm32 = [&](std::uintptr_t value) { std::memcpy(page + cursor, &value, 4); cursor += 4; };
+        byte(0xF3); byte(0x0F); byte(0x1E); byte(0xFB);
+        byte(0x55); byte(0x8B); byte(0xEC);
+        for (unsigned index = arguments; index > 0; --index) {
+            byte(0xFF); byte(0x75); byte(4 + index * 4);
+        }
+        byte(0x68); imm32(reinterpret_cast<std::uintptr_t>(context));
+        byte(0xB8); imm32(reinterpret_cast<std::uintptr_t>(dispatcher));
+        byte(0xFF); byte(0xD0); // stdcall dispatcher removes args including context
+        byte(0x8B); byte(0xE5); byte(0x5D);
+        byte(0xC2); byte(arguments * 4); byte(0);
+        DWORD previous = 0;
+        if (!::VirtualProtect(page, 4096, PAGE_EXECUTE_READ, &previous))
+        { ::VirtualFree(page, 0, MEM_RELEASE); return nullptr; }
+        ::FlushInstructionCache(::GetCurrentProcess(), page, cursor);
+        return page;
+#else
         if (arguments > 11) return nullptr;
         auto* page = static_cast<unsigned char*>(::VirtualAlloc(nullptr, 4096, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
         if (!page) return nullptr;
@@ -45,5 +69,6 @@ namespace apimon
         { ::VirtualFree(page, 0, MEM_RELEASE); return nullptr; }
         ::FlushInstructionCache(::GetCurrentProcess(), page, cursor);
         return page;
+#endif
     }
 }

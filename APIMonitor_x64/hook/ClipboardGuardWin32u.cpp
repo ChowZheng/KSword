@@ -4,6 +4,9 @@
 #include "HookEngine.h"
 #include "../core/MonitorCoverage.h"
 #include "../MonitorAgent.h"
+#ifdef _M_IX86
+#include "../../APIMonitor_x86/hook/EntryStubs.h"
+#endif
 
 namespace apimon
 {
@@ -69,8 +72,9 @@ namespace apimon
                     nullptr,
                     ClipboardPolicyAction::Block);
             }
-            constexpr std::uint64_t kStatusAccessDenied = 0xC0000022ULL;
-            return kStatusAccessDenied;
+            // These three APIs return HANDLE/BOOL, not NTSTATUS. A blocked call must be NULL/FALSE.
+            ::SetLastError(ERROR_ACCESS_DENIED);
+            return 0;
         }
 
         void EmitStubByte(unsigned char* const codePointer, std::size_t& offsetValue, const unsigned char byteValue)
@@ -93,6 +97,12 @@ namespace apimon
         // - 返回：可执行内存地址，失败返回 nullptr。
         void* BuildWin32uBlockStub(const Win32uBlockContext* const contextPointer)
         {
+#ifdef _M_IX86
+            if (!contextPointer) return nullptr;
+            const unsigned bytes = wcscmp(contextPointer->apiName, L"NtUserGetClipboardData") == 0 ? 8
+                : wcscmp(contextPointer->apiName, L"NtUserSetClipboardData") == 0 ? 12 : 0;
+            return BuildX86FakeStub(const_cast<Win32uBlockContext*>(contextPointer), reinterpret_cast<void*>(&Win32uBlockEnter), bytes);
+#else
             constexpr std::size_t kStubBytes = 64;
             unsigned char* const codePointer = static_cast<unsigned char*>(::VirtualAlloc(
                 nullptr, kStubBytes, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
@@ -115,6 +125,7 @@ namespace apimon
 
             ::FlushInstructionCache(::GetCurrentProcess(), codePointer, offsetValue);
             return codePointer;
+#endif
         }
 
         void FreeWin32uBlockStub(void* const stubAddress)

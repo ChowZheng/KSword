@@ -26,14 +26,14 @@ using namespace apimon;using namespace ks::winapi_monitor;
 #define CHECK(x) do{if(!(x)){printf("FAIL %d\n",__LINE__);return 1;}}while(0)
 IoToken Start(std::uintptr_t h,OVERLAPPED* ov,bool callback=false){return BeginIo(h,ov,L"Fixture",L"Read",EventCategory::File,42,callback);}
 std::size_t Completions(std::uint64_t id){return std::count_if(events.begin(),events.end(),[&](auto& e){return e.operation==id&&e.kind==EventKind::IoComplete;});}
-std::uint64_t WINAPI Dispatcher(void* context,std::uint64_t a,std::uint64_t b,std::uint64_t c,std::uint64_t d,std::uint64_t e,std::uint64_t f,std::uint64_t g,std::uint64_t h)
+std::uint64_t WINAPI Dispatcher(void* context,std::uintptr_t a,std::uintptr_t b,std::uintptr_t c,std::uintptr_t d,std::uintptr_t e,std::uintptr_t f,std::uintptr_t g,std::uintptr_t h)
  {return reinterpret_cast<std::uintptr_t>(context)+a+2*b+3*c+4*d+5*e+6*f+7*g+8*h;}
 void WINAPI Throwing(void*){throw std::runtime_error("owned callback exception");}
 bool observerCalled=false;
 void Observer(const IoToken&,DWORD){observerCalled=true;ObserveIoResult(999,nullptr,false,0,0);}
 int main(){
  auto thunk=BuildContextThunk(reinterpret_cast<void*>(100),reinterpret_cast<void*>(&Dispatcher),8);CHECK(thunk);
- using Function=std::uint64_t(WINAPI*)(std::uint64_t,std::uint64_t,std::uint64_t,std::uint64_t,std::uint64_t,std::uint64_t,std::uint64_t,std::uint64_t);
+ using Function=std::uint64_t(WINAPI*)(std::uintptr_t,std::uintptr_t,std::uintptr_t,std::uintptr_t,std::uintptr_t,std::uintptr_t,std::uintptr_t,std::uintptr_t);
  CHECK(reinterpret_cast<Function>(thunk)(1,2,3,4,5,6,7,8)==304);
  auto throwing=BuildContextThunk(nullptr,reinterpret_cast<void*>(&Throwing),0);CHECK(throwing);
  bool unwound=false;try{reinterpret_cast<void(WINAPI*)()>(throwing)();}catch(const std::runtime_error&){unwound=true;}CHECK(unwound);

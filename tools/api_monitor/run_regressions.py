@@ -1,9 +1,19 @@
 """Run each API Monitor regression in the x64 MSVC developer environment."""
 from pathlib import Path
+import argparse
+import os
 import subprocess
 import sys
 
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument("--architecture", choices=("x86", "x64"), default="x64")
+args = parser.parse_args()
+os.environ["KSWORD_APIMON_ARCH"] = args.architecture
 tests = sorted(Path(__file__).resolve().parent.glob("test_*.py"))
+if args.architecture == "x86":
+    tests = [t for t in tests if t.name != "test_hook_decoder.py" and not t.name.startswith("test_ui_")]
+else:
+    tests = [t for t in tests if not t.name.startswith("test_x86_")]
 for test in tests:
     print(f"REGRESSION_START={test.name}", flush=True)
     subprocess.run([sys.executable, str(test)], check=True, timeout=300)

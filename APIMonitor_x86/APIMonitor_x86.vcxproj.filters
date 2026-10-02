@@ -7,5 +7,18 @@
     <ClInclude Include="hook\InstructionDecoder.inc"><Filter>hook</Filter></ClInclude>
     <ClInclude Include="..\APIMonitor_x64\hook\HookEngine.h"><Filter>hook</Filter></ClInclude>
     <ClInclude Include="..\APIMonitor_x64\pch.h" />
+    <ClInclude Include="hook\EntryStubs.h"><Filter>hook</Filter></ClInclude>
+    <ClCompile Include="..\APIMonitor_x64\MonitorAgent.cpp" />
+    <ClCompile Include="..\APIMonitor_x64\core\MonitorConfig.cpp" />
+    <ClCompile Include="..\APIMonitor_x64\core\MonitorPipe.cpp" />
+    <ClCompile Include="..\APIMonitor_x64\core\MonitorCoverage.cpp" />
+    <ClCompile Include="..\APIMonitor_x64\core\MonitorAsyncIo.cpp" />
+    <ClCompile Include="..\APIMonitor_x64\hook\HookTargets.cpp"><Filter>hook</Filter></ClCompile>
+    <ClCompile Include="..\APIMonitor_x64\hook\ClipboardGuardCommon.cpp"><Filter>hook</Filter></ClCompile>
+    <ClCompile Include="..\APIMonitor_x64\hook\ClipboardGuardHook.cpp"><Filter>hook</Filter></ClCompile>
+    <ClCompile Include="..\APIMonitor_x64\hook\ClipboardGuardVTableHook.cpp"><Filter>hook</Filter></ClCompile>
+    <ClCompile Include="..\APIMonitor_x64\hook\ClipboardGuardWin32u.cpp"><Filter>hook</Filter></ClCompile>
+    <None Include="..\APIMonitor_x64\api_monitor_definitions.json" />
+    <None Include="..\APIMonitor_x64\hook\ApiHandlers.json" />
   </ItemGroup>
 </Project>

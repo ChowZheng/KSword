@@ -219,6 +219,13 @@ namespace apimon
                 }
 
                 ruleList.push_back(std::move(ruleValue));
+                if (partList.size() > 6 && !TrimWideCopy(partList[6]).empty()) {
+                    std::uint64_t stackBytes = 0;
+                    if (!ParseUnsignedInteger(TrimWideCopy(partList[6]), &stackBytes) || stackBytes > 65532 || (stackBytes & 3)) {
+                        ruleList.pop_back(); continue;
+                    }
+                    ruleList.back().x86StackBytes = static_cast<unsigned>(stackBytes);
+                }
             }
             return ruleList;
         }

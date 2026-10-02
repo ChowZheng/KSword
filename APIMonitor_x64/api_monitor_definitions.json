@@ -7,6 +7,7 @@
       "export": "CreateFileA",
       "category": "File",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -91,6 +92,7 @@
       "export": "CreateFileW",
       "category": "File",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -175,6 +177,7 @@
       "export": "CreateFile2",
       "category": "File",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -243,6 +246,7 @@
       "export": "ReadFile",
       "category": "File",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -315,6 +319,7 @@
       "export": "WriteFile",
       "category": "File",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -387,6 +392,7 @@
       "export": "DeviceIoControl",
       "category": "File",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -487,6 +493,7 @@
       "export": "DeleteFileW",
       "category": "File",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -524,6 +531,7 @@
       "export": "DeleteFileA",
       "category": "File",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -561,6 +569,7 @@
       "export": "MoveFileExW",
       "category": "File",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -613,6 +622,7 @@
       "export": "MoveFileExA",
       "category": "File",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -665,6 +675,7 @@
       "export": "CopyFileW",
       "category": "File",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -717,6 +728,7 @@
       "export": "CopyFileA",
       "category": "File",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -769,6 +781,7 @@
       "export": "CopyFileExW",
       "category": "File",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -845,6 +858,7 @@
       "export": "CopyFileExA",
       "category": "File",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -921,6 +935,7 @@
       "export": "GetFileAttributesW",
       "category": "File",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -957,6 +972,7 @@
       "export": "GetFileAttributesA",
       "category": "File",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -993,6 +1009,7 @@
       "export": "GetFileAttributesExW",
       "category": "File",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -1045,6 +1062,7 @@
       "export": "GetFileAttributesExA",
       "category": "File",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -1097,6 +1115,7 @@
       "export": "SetFileAttributesW",
       "category": "File",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -1141,6 +1160,7 @@
       "export": "SetFileAttributesA",
       "category": "File",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -1185,6 +1205,7 @@
       "export": "FindFirstFileExW",
       "category": "File",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -1261,6 +1282,7 @@
       "export": "FindFirstFileExA",
       "category": "File",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -1337,6 +1359,7 @@
       "export": "CreateDirectoryW",
       "category": "File",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -1381,6 +1404,7 @@
       "export": "CreateDirectoryA",
       "category": "File",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -1425,6 +1449,7 @@
       "export": "RemoveDirectoryW",
       "category": "File",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -1462,6 +1487,7 @@
       "export": "RemoveDirectoryA",
       "category": "File",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -1499,6 +1525,7 @@
       "export": "SetFileInformationByHandle",
       "category": "File",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -1563,6 +1590,7 @@
       "export": "CreateFileMappingW",
       "category": "File",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -1640,6 +1668,7 @@
       "export": "CreateFileMappingA",
       "category": "File",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -1717,6 +1746,7 @@
       "export": "OpenFileMappingW",
       "category": "File",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -1770,6 +1800,7 @@
       "export": "OpenFileMappingA",
       "category": "File",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -1823,6 +1854,7 @@
       "export": "FlushViewOfFile",
       "category": "File",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -1868,6 +1900,7 @@
       "export": "CreateHardLinkW",
       "category": "File",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -1921,6 +1954,7 @@
       "export": "CreateHardLinkA",
       "category": "File",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -1974,6 +2008,7 @@
       "export": "ReplaceFileW",
       "category": "File",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -2051,6 +2086,7 @@
       "export": "ReplaceFileA",
       "category": "File",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -2128,6 +2164,7 @@
       "export": "SetEndOfFile",
       "category": "File",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -2165,6 +2202,7 @@
       "export": "LockFileEx",
       "category": "File",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -2242,6 +2280,7 @@
       "export": "UnlockFileEx",
       "category": "File",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -2311,6 +2350,7 @@
       "export": "CreateSymbolicLinkW",
       "category": "File",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -2363,6 +2403,7 @@
       "export": "CreateSymbolicLinkA",
       "category": "File",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -2415,6 +2456,7 @@
       "export": "GetFinalPathNameByHandleW",
       "category": "File",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -2479,6 +2521,7 @@
       "export": "GetFinalPathNameByHandleA",
       "category": "File",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -2543,6 +2586,7 @@
       "export": "GetFileSizeEx",
       "category": "File",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -2588,6 +2632,7 @@
       "export": "SetFilePointerEx",
       "category": "File",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -2649,6 +2694,7 @@
       "export": "CreateNamedPipeW",
       "category": "File",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -2742,6 +2788,7 @@
       "export": "CreateNamedPipeA",
       "category": "File",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -2835,6 +2882,7 @@
       "export": "ConnectNamedPipe",
       "category": "File",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -2880,6 +2928,7 @@
       "export": "DisconnectNamedPipe",
       "category": "File",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -2917,6 +2966,7 @@
       "export": "WaitNamedPipeW",
       "category": "File",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -2962,6 +3012,7 @@
       "export": "WaitNamedPipeA",
       "category": "File",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -3007,6 +3058,7 @@
       "export": "TransactNamedPipe",
       "category": "File",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -3100,6 +3152,7 @@
       "export": "CreateProcessA",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -3208,6 +3261,7 @@
       "export": "CreateProcessW",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -3316,6 +3370,7 @@
       "export": "OpenProcess",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -3368,6 +3423,7 @@
       "export": "OpenThread",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -3420,6 +3476,7 @@
       "export": "TerminateProcess",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -3464,6 +3521,7 @@
       "export": "CreateThread",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -3540,6 +3598,7 @@
       "export": "CreateRemoteThread",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -3624,6 +3683,7 @@
       "export": "CreateRemoteThreadEx",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -3717,6 +3777,7 @@
       "export": "VirtualAllocEx",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -3785,6 +3846,7 @@
       "export": "VirtualFreeEx",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -3845,6 +3907,7 @@
       "export": "VirtualProtectEx",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -3913,6 +3976,7 @@
       "export": "VirtualAlloc",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -3974,6 +4038,7 @@
       "export": "VirtualFree",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -4027,6 +4092,7 @@
       "export": "VirtualProtect",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -4088,6 +4154,7 @@
       "export": "WriteProcessMemory",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -4160,6 +4227,7 @@
       "export": "ReadProcessMemory",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -4232,6 +4300,7 @@
       "export": "SuspendThread",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -4268,6 +4337,7 @@
       "export": "ResumeThread",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -4304,6 +4374,7 @@
       "export": "QueueUserAPC",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -4356,6 +4427,7 @@
       "export": "GetThreadContext",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -4400,6 +4472,7 @@
       "export": "SetThreadContext",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -4444,6 +4517,7 @@
       "export": "CloseHandle",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -4481,6 +4555,7 @@
       "export": "DuplicateHandle",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -4566,6 +4641,7 @@
       "export": "MapViewOfFile",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -4635,6 +4711,7 @@
       "export": "MapViewOfFileEx",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -4712,6 +4789,7 @@
       "export": "UnmapViewOfFile",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -4749,6 +4827,7 @@
       "export": "CreateMutexW",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -4802,6 +4881,7 @@
       "export": "CreateMutexA",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -4855,6 +4935,7 @@
       "export": "OpenMutexW",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -4908,6 +4989,7 @@
       "export": "OpenMutexA",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -4961,6 +5043,7 @@
       "export": "CreateEventW",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -5022,6 +5105,7 @@
       "export": "CreateEventA",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -5083,6 +5167,7 @@
       "export": "OpenEventW",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -5136,6 +5221,7 @@
       "export": "OpenEventA",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -5189,6 +5275,7 @@
       "export": "CreateSemaphoreW",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -5250,6 +5337,7 @@
       "export": "CreateSemaphoreA",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -5311,6 +5399,7 @@
       "export": "OpenSemaphoreW",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -5364,6 +5453,7 @@
       "export": "OpenSemaphoreA",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -5417,6 +5507,7 @@
       "export": "WaitForSingleObject",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -5461,6 +5552,7 @@
       "export": "WaitForMultipleObjects",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -5525,6 +5617,7 @@
       "export": "SetEvent",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -5562,6 +5655,7 @@
       "export": "ResetEvent",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -5599,6 +5693,7 @@
       "export": "ReleaseMutex",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -5636,6 +5731,7 @@
       "export": "ReleaseSemaphore",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -5689,6 +5785,7 @@
       "export": "GetEnvironmentVariableW",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -5745,6 +5842,7 @@
       "export": "GetEnvironmentVariableA",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -5801,6 +5899,7 @@
       "export": "SetEnvironmentVariableW",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -5846,6 +5945,7 @@
       "export": "SetEnvironmentVariableA",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -5891,6 +5991,7 @@
       "export": "ExpandEnvironmentStringsW",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -5947,6 +6048,7 @@
       "export": "ExpandEnvironmentStringsA",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -6003,6 +6105,7 @@
       "export": "WinExec",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -6047,6 +6150,7 @@
       "export": "CreateToolhelp32Snapshot",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -6091,6 +6195,7 @@
       "export": "ShellExecuteExW",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -6127,6 +6232,7 @@
       "export": "ShellExecuteExA",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -6163,6 +6269,7 @@
       "export": "ShellExecuteW",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -6239,6 +6346,7 @@
       "export": "ShellExecuteA",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -6315,6 +6423,7 @@
       "export": "OpenProcessToken",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -6368,6 +6477,7 @@
       "export": "OpenThreadToken",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -6429,6 +6539,7 @@
       "export": "AdjustTokenPrivileges",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -6510,6 +6621,7 @@
       "export": "DuplicateToken",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -6563,6 +6675,7 @@
       "export": "DuplicateTokenEx",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -6640,6 +6753,7 @@
       "export": "CreateProcessAsUserW",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -6756,6 +6870,7 @@
       "export": "CreateProcessAsUserA",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -6872,6 +6987,7 @@
       "export": "CreateProcessWithTokenW",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -6972,6 +7088,7 @@
       "export": "CreateProcessWithLogonW",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -7088,6 +7205,7 @@
       "export": "ImpersonateLoggedOnUser",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -7125,6 +7243,7 @@
       "export": "RevertToSelf",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -7153,6 +7272,7 @@
       "export": "SetThreadToken",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -7198,6 +7318,7 @@
       "export": "LookupPrivilegeValueW",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -7251,6 +7372,7 @@
       "export": "LookupPrivilegeValueA",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -7304,6 +7426,7 @@
       "export": "OpenSCManagerW",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -7357,6 +7480,7 @@
       "export": "OpenSCManagerA",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -7410,6 +7534,7 @@
       "export": "OpenServiceW",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -7463,6 +7588,7 @@
       "export": "OpenServiceA",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -7516,6 +7642,7 @@
       "export": "CreateServiceW",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -7649,6 +7776,7 @@
       "export": "CreateServiceA",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -7782,6 +7910,7 @@
       "export": "ChangeServiceConfigW",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -7899,6 +8028,7 @@
       "export": "ChangeServiceConfigA",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -8016,6 +8146,7 @@
       "export": "ChangeServiceConfig2W",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -8069,6 +8200,7 @@
       "export": "ChangeServiceConfig2A",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -8122,6 +8254,7 @@
       "export": "StartServiceW",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -8179,6 +8312,7 @@
       "export": "StartServiceA",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -8236,6 +8370,7 @@
       "export": "ControlService",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -8289,6 +8424,7 @@
       "export": "DeleteService",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -8326,6 +8462,7 @@
       "export": "CloseServiceHandle",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -8363,6 +8500,7 @@
       "export": "QueryServiceStatusEx",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -8436,6 +8574,7 @@
       "export": "QueryServiceConfigW",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -8501,6 +8640,7 @@
       "export": "QueryServiceConfigA",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -8566,6 +8706,7 @@
       "export": "EnumServicesStatusExW",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -8679,6 +8820,7 @@
       "export": "EnumServicesStatusExA",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -8792,6 +8934,7 @@
       "export": "CryptAcquireContextW",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -8861,6 +9004,7 @@
       "export": "CryptAcquireContextA",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -8930,6 +9074,7 @@
       "export": "CryptCreateHash",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -8999,6 +9144,7 @@
       "export": "CryptHashData",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -9064,6 +9210,7 @@
       "export": "CryptDeriveKey",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -9133,6 +9280,7 @@
       "export": "CryptEncrypt",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -9222,6 +9370,7 @@
       "export": "CryptDecrypt",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -9303,6 +9452,7 @@
       "export": "CryptGenRandom",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -9360,6 +9510,7 @@
       "export": "CryptReleaseContext",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -9405,6 +9556,7 @@
       "export": "CryptImportKey",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -9486,6 +9638,7 @@
       "export": "CryptExportKey",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -9567,6 +9720,7 @@
       "export": "CryptDestroyKey",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -9604,6 +9758,7 @@
       "export": "CryptDestroyHash",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -9641,6 +9796,7 @@
       "export": "LoadLibraryA",
       "category": "Loader",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -9677,6 +9833,7 @@
       "export": "LoadLibraryW",
       "category": "Loader",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -9713,6 +9870,7 @@
       "export": "LoadLibraryExA",
       "category": "Loader",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -9765,6 +9923,7 @@
       "export": "LoadLibraryExW",
       "category": "Loader",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -9817,6 +9976,7 @@
       "export": "FreeLibrary",
       "category": "Loader",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -9854,6 +10014,7 @@
       "export": "GetProcAddress",
       "category": "Loader",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -9898,6 +10059,7 @@
       "export": "SetDllDirectoryW",
       "category": "Loader",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -9935,6 +10097,7 @@
       "export": "SetDllDirectoryA",
       "category": "Loader",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -9972,6 +10135,7 @@
       "export": "SetDefaultDllDirectories",
       "category": "Loader",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -10009,6 +10173,7 @@
       "export": "AddDllDirectory",
       "category": "Loader",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -10046,6 +10211,7 @@
       "export": "RemoveDllDirectory",
       "category": "Loader",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -10083,6 +10249,7 @@
       "export": "Module32FirstW",
       "category": "Loader",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -10128,6 +10295,7 @@
       "export": "Module32NextW",
       "category": "Loader",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -10173,6 +10341,7 @@
       "export": "Module32First",
       "category": "Loader",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -10218,6 +10387,7 @@
       "export": "Module32Next",
       "category": "Loader",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -10263,6 +10433,7 @@
       "export": "GetModuleHandleW",
       "category": "Loader",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -10300,6 +10471,7 @@
       "export": "GetModuleHandleA",
       "category": "Loader",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -10337,6 +10509,7 @@
       "export": "GetModuleHandleExW",
       "category": "Loader",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -10390,6 +10563,7 @@
       "export": "GetModuleHandleExA",
       "category": "Loader",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -10443,6 +10617,7 @@
       "export": "GetModuleFileNameW",
       "category": "Loader",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -10495,6 +10670,7 @@
       "export": "GetModuleFileNameA",
       "category": "Loader",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -10547,6 +10723,7 @@
       "export": "LdrLoadDll",
       "category": "Loader",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "NTAPI",
@@ -10607,6 +10784,7 @@
       "export": "LdrGetProcedureAddress",
       "category": "Loader",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "NTAPI",
@@ -10667,6 +10845,7 @@
       "export": "RegOpenKeyW",
       "category": "Registry",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -10719,6 +10898,7 @@
       "export": "RegOpenKeyA",
       "category": "Registry",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -10771,6 +10951,7 @@
       "export": "RegOpenKeyExW",
       "category": "Registry",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -10839,6 +11020,7 @@
       "export": "RegOpenKeyExA",
       "category": "Registry",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -10907,6 +11089,7 @@
       "export": "RegCreateKeyW",
       "category": "Registry",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -10959,6 +11142,7 @@
       "export": "RegCreateKeyA",
       "category": "Registry",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -11011,6 +11195,7 @@
       "export": "RegCreateKeyExW",
       "category": "Registry",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -11111,6 +11296,7 @@
       "export": "RegCreateKeyExA",
       "category": "Registry",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -11211,6 +11397,7 @@
       "export": "RegQueryValueExW",
       "category": "Registry",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -11291,6 +11478,7 @@
       "export": "RegQueryValueExA",
       "category": "Registry",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -11371,6 +11559,7 @@
       "export": "RegGetValueW",
       "category": "Registry",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -11459,6 +11648,7 @@
       "export": "RegGetValueA",
       "category": "Registry",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -11547,6 +11737,7 @@
       "export": "RegSetValueExW",
       "category": "Registry",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -11627,6 +11818,7 @@
       "export": "RegSetValueExA",
       "category": "Registry",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -11707,6 +11899,7 @@
       "export": "RegSetKeyValueW",
       "category": "Registry",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -11787,6 +11980,7 @@
       "export": "RegSetKeyValueA",
       "category": "Registry",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -11867,6 +12061,7 @@
       "export": "RegDeleteValueW",
       "category": "Registry",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -11911,6 +12106,7 @@
       "export": "RegDeleteValueA",
       "category": "Registry",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -11955,6 +12151,7 @@
       "export": "RegDeleteKeyW",
       "category": "Registry",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -11999,6 +12196,7 @@
       "export": "RegDeleteKeyA",
       "category": "Registry",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -12043,6 +12241,7 @@
       "export": "RegDeleteKeyExW",
       "category": "Registry",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -12103,6 +12302,7 @@
       "export": "RegDeleteKeyExA",
       "category": "Registry",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -12163,6 +12363,7 @@
       "export": "RegDeleteTreeW",
       "category": "Registry",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -12207,6 +12408,7 @@
       "export": "RegDeleteTreeA",
       "category": "Registry",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -12251,6 +12453,7 @@
       "export": "RegCopyTreeW",
       "category": "Registry",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -12303,6 +12506,7 @@
       "export": "RegCopyTreeA",
       "category": "Registry",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -12355,6 +12559,7 @@
       "export": "RegLoadKeyW",
       "category": "Registry",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -12407,6 +12612,7 @@
       "export": "RegLoadKeyA",
       "category": "Registry",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -12459,6 +12665,7 @@
       "export": "RegSaveKeyW",
       "category": "Registry",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -12511,6 +12718,7 @@
       "export": "RegSaveKeyA",
       "category": "Registry",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -12563,6 +12771,7 @@
       "export": "RegRenameKey",
       "category": "Registry",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -12615,6 +12824,7 @@
       "export": "RegEnumKeyExW",
       "category": "Registry",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -12715,6 +12925,7 @@
       "export": "RegEnumKeyExA",
       "category": "Registry",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -12815,6 +13026,7 @@
       "export": "RegEnumValueW",
       "category": "Registry",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -12915,6 +13127,7 @@
       "export": "RegEnumValueA",
       "category": "Registry",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -13015,6 +13228,7 @@
       "export": "RegCloseKey",
       "category": "Registry",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -13051,6 +13265,7 @@
       "export": "RegQueryInfoKeyW",
       "category": "Registry",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -13179,6 +13394,7 @@
       "export": "RegQueryInfoKeyA",
       "category": "Registry",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -13307,6 +13523,7 @@
       "export": "RegFlushKey",
       "category": "Registry",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -13343,6 +13560,7 @@
       "export": "RegDeleteKeyValueW",
       "category": "Registry",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -13395,6 +13613,7 @@
       "export": "RegDeleteKeyValueA",
       "category": "Registry",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -13447,6 +13666,7 @@
       "export": "RegConnectRegistryW",
       "category": "Registry",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -13499,6 +13719,7 @@
       "export": "RegConnectRegistryA",
       "category": "Registry",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -13551,6 +13772,7 @@
       "export": "RegCreateKeyTransactedW",
       "category": "Registry",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -13668,6 +13890,7 @@
       "export": "RegCreateKeyTransactedA",
       "category": "Registry",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -13785,6 +14008,7 @@
       "export": "RegOpenKeyTransactedW",
       "category": "Registry",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -13870,6 +14094,7 @@
       "export": "RegOpenKeyTransactedA",
       "category": "Registry",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -13955,6 +14180,7 @@
       "export": "RegDeleteKeyTransactedW",
       "category": "Registry",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -14032,6 +14258,7 @@
       "export": "RegDeleteKeyTransactedA",
       "category": "Registry",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -14109,6 +14336,7 @@
       "export": "RegReplaceKeyW",
       "category": "Registry",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -14170,6 +14398,7 @@
       "export": "RegReplaceKeyA",
       "category": "Registry",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -14231,6 +14460,7 @@
       "export": "RegRestoreKeyW",
       "category": "Registry",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -14284,6 +14514,7 @@
       "export": "RegRestoreKeyA",
       "category": "Registry",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -14337,6 +14568,7 @@
       "export": "RegUnLoadKeyW",
       "category": "Registry",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -14382,6 +14614,7 @@
       "export": "RegUnLoadKeyA",
       "category": "Registry",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -14427,6 +14660,7 @@
       "export": "RegLoadAppKeyW",
       "category": "Registry",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -14496,6 +14730,7 @@
       "export": "RegLoadAppKeyA",
       "category": "Registry",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -14565,6 +14800,7 @@
       "export": "RegNotifyChangeKeyValue",
       "category": "Registry",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -14634,6 +14870,7 @@
       "export": "NtCreateKey",
       "category": "Registry",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "NTAPI",
@@ -14718,6 +14955,7 @@
       "export": "NtOpenKey",
       "category": "Registry",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "NTAPI",
@@ -14770,6 +15008,7 @@
       "export": "NtOpenKeyEx",
       "category": "Registry",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "NTAPI",
@@ -14830,6 +15069,7 @@
       "export": "NtSetValueKey",
       "category": "Registry",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "NTAPI",
@@ -14910,6 +15150,7 @@
       "export": "NtQueryValueKey",
       "category": "Registry",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "NTAPI",
@@ -14990,6 +15231,7 @@
       "export": "NtEnumerateKey",
       "category": "Registry",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "NTAPI",
@@ -15070,6 +15312,7 @@
       "export": "NtEnumerateValueKey",
       "category": "Registry",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "NTAPI",
@@ -15150,6 +15393,7 @@
       "export": "NtDeleteKey",
       "category": "Registry",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "NTAPI",
@@ -15186,6 +15430,7 @@
       "export": "NtDeleteValueKey",
       "category": "Registry",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "NTAPI",
@@ -15230,6 +15475,7 @@
       "export": "NtFlushKey",
       "category": "Registry",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "NTAPI",
@@ -15266,6 +15512,7 @@
       "export": "NtRenameKey",
       "category": "Registry",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "NTAPI",
@@ -15310,6 +15557,7 @@
       "export": "NtLoadKey",
       "category": "Registry",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "NTAPI",
@@ -15354,6 +15602,7 @@
       "export": "NtSaveKey",
       "category": "Registry",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "NTAPI",
@@ -15398,6 +15647,7 @@
       "export": "NtQueryKey",
       "category": "Registry",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "NTAPI",
@@ -15470,6 +15720,7 @@
       "export": "NtQueryMultipleValueKey",
       "category": "Registry",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "NTAPI",
@@ -15554,6 +15805,7 @@
       "export": "NtNotifyChangeKey",
       "category": "Registry",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "NTAPI",
@@ -15666,6 +15918,7 @@
       "export": "NtLoadKey2",
       "category": "Registry",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "NTAPI",
@@ -15718,6 +15971,7 @@
       "export": "NtSaveKeyEx",
       "category": "Registry",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "NTAPI",
@@ -15770,6 +16024,7 @@
       "export": "NtLoadDriver",
       "category": "Registry",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "NTAPI",
@@ -15806,6 +16061,7 @@
       "export": "NtUnloadDriver",
       "category": "Registry",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "NTAPI",
@@ -15842,6 +16098,7 @@
       "export": "NtCreateKeyTransacted",
       "category": "Registry",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "NTAPI",
@@ -15935,6 +16192,7 @@
       "export": "NtOpenKeyTransacted",
       "category": "Registry",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "NTAPI",
@@ -15996,6 +16254,7 @@
       "export": "NtOpenKeyTransactedEx",
       "category": "Registry",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "NTAPI",
@@ -16065,6 +16324,7 @@
       "export": "NtReplaceKey",
       "category": "Registry",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "NTAPI",
@@ -16118,6 +16378,7 @@
       "export": "NtRestoreKey",
       "category": "Registry",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "NTAPI",
@@ -16171,6 +16432,7 @@
       "export": "NtUnloadKey",
       "category": "Registry",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "NTAPI",
@@ -16208,6 +16470,7 @@
       "export": "NtUnloadKey2",
       "category": "Registry",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "NTAPI",
@@ -16253,6 +16516,7 @@
       "export": "NtUnloadKeyEx",
       "category": "Registry",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "NTAPI",
@@ -16298,6 +16562,7 @@
       "export": "NtCreateFile",
       "category": "File",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "NTAPI",
@@ -16418,6 +16683,7 @@
       "export": "NtOpenFile",
       "category": "File",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "NTAPI",
@@ -16494,6 +16760,7 @@
       "export": "NtReadFile",
       "category": "File",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "NTAPI",
@@ -16598,6 +16865,7 @@
       "export": "NtWriteFile",
       "category": "File",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "NTAPI",
@@ -16702,6 +16970,7 @@
       "export": "NtSetInformationFile",
       "category": "File",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "NTAPI",
@@ -16774,6 +17043,7 @@
       "export": "NtQueryInformationFile",
       "category": "File",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "NTAPI",
@@ -16846,6 +17116,7 @@
       "export": "NtDeleteFile",
       "category": "File",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "NTAPI",
@@ -16882,6 +17153,7 @@
       "export": "NtQueryAttributesFile",
       "category": "File",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "NTAPI",
@@ -16926,6 +17198,7 @@
       "export": "NtQueryFullAttributesFile",
       "category": "File",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "NTAPI",
@@ -16970,6 +17243,7 @@
       "export": "NtDeviceIoControlFile",
       "category": "File",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "NTAPI",
@@ -17086,6 +17360,7 @@
       "export": "NtFsControlFile",
       "category": "File",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "NTAPI",
@@ -17202,6 +17477,7 @@
       "export": "NtQueryDirectoryFile",
       "category": "File",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "NTAPI",
@@ -17322,6 +17598,7 @@
       "export": "NtQueryDirectoryFileEx",
       "category": "File",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "NTAPI",
@@ -17434,6 +17711,7 @@
       "export": "NtOpenProcess",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "NTAPI",
@@ -17494,6 +17772,7 @@
       "export": "NtOpenThread",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "NTAPI",
@@ -17554,6 +17833,7 @@
       "export": "NtTerminateProcess",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "NTAPI",
@@ -17598,6 +17878,7 @@
       "export": "NtCreateUserProcess",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "NTAPI",
@@ -17714,6 +17995,7 @@
       "export": "NtCreateProcessEx",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "NTAPI",
@@ -17814,6 +18096,7 @@
       "export": "NtCreateThreadEx",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "NTAPI",
@@ -17930,6 +18213,7 @@
       "export": "NtAllocateVirtualMemory",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "NTAPI",
@@ -18006,6 +18290,7 @@
       "export": "NtFreeVirtualMemory",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "NTAPI",
@@ -18066,6 +18351,7 @@
       "export": "NtProtectVirtualMemory",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "NTAPI",
@@ -18134,6 +18420,7 @@
       "export": "NtWriteVirtualMemory",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "NTAPI",
@@ -18206,6 +18493,7 @@
       "export": "NtReadVirtualMemory",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "NTAPI",
@@ -18278,6 +18566,7 @@
       "export": "NtMapViewOfSection",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "NTAPI",
@@ -18386,6 +18675,7 @@
       "export": "NtUnmapViewOfSection",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "NTAPI",
@@ -18430,6 +18720,7 @@
       "export": "NtDuplicateObject",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "NTAPI",
@@ -18514,6 +18805,7 @@
       "export": "NtQueryInformationProcess",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "NTAPI",
@@ -18586,6 +18878,7 @@
       "export": "NtSetInformationProcess",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "NTAPI",
@@ -18650,6 +18943,7 @@
       "export": "NtQueryVirtualMemory",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "NTAPI",
@@ -18730,6 +19024,7 @@
       "export": "NtCreateSection",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "NTAPI",
@@ -18814,6 +19109,7 @@
       "export": "NtOpenSection",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "NTAPI",
@@ -18866,6 +19162,7 @@
       "export": "NtQueueApcThread",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "NTAPI",
@@ -18934,6 +19231,7 @@
       "export": "NtQueueApcThreadEx",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "NTAPI",
@@ -19010,6 +19308,7 @@
       "export": "NtSuspendThread",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "NTAPI",
@@ -19054,6 +19353,7 @@
       "export": "NtResumeThread",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "NTAPI",
@@ -19098,6 +19398,7 @@
       "export": "NtGetContextThread",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "NTAPI",
@@ -19142,6 +19443,7 @@
       "export": "NtSetContextThread",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "NTAPI",
@@ -19186,6 +19488,7 @@
       "export": "NtClose",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "NTAPI",
@@ -19223,6 +19526,7 @@
       "export": "socket",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WSAAPI",
@@ -19275,6 +19579,7 @@
       "export": "WSASocketW",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WSAAPI",
@@ -19351,6 +19656,7 @@
       "export": "WSASocketA",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WSAAPI",
@@ -19427,6 +19733,7 @@
       "export": "closesocket",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WSAAPI",
@@ -19463,6 +19770,7 @@
       "export": "shutdown",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WSAAPI",
@@ -19507,6 +19815,7 @@
       "export": "connect",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WSAAPI",
@@ -19563,6 +19872,7 @@
       "export": "WSAConnect",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WSAAPI",
@@ -19651,6 +19961,7 @@
       "export": "send",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WSAAPI",
@@ -19715,6 +20026,7 @@
       "export": "WSASend",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WSAAPI",
@@ -19803,6 +20115,7 @@
       "export": "sendto",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WSAAPI",
@@ -19887,6 +20200,7 @@
       "export": "recv",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WSAAPI",
@@ -19951,6 +20265,7 @@
       "export": "WSARecv",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WSAAPI",
@@ -20039,6 +20354,7 @@
       "export": "recvfrom",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WSAAPI",
@@ -20123,6 +20439,7 @@
       "export": "bind",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WSAAPI",
@@ -20179,6 +20496,7 @@
       "export": "listen",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WSAAPI",
@@ -20223,6 +20541,7 @@
       "export": "accept",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WSAAPI",
@@ -20279,6 +20598,7 @@
       "export": "WSAIoctl",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WSAAPI",
@@ -20387,6 +20707,7 @@
       "export": "WSASendTo",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WSAAPI",
@@ -20495,6 +20816,7 @@
       "export": "WSARecvFrom",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WSAAPI",
@@ -20603,6 +20925,7 @@
       "export": "GetAddrInfoW",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WSAAPI",
@@ -20665,6 +20988,7 @@
       "export": "getaddrinfo",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WSAAPI",
@@ -20727,6 +21051,7 @@
       "export": "DnsQuery_W",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -20803,6 +21128,7 @@
       "export": "DnsQuery_A",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -20879,6 +21205,7 @@
       "export": "WinHttpOpen",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -20948,6 +21275,7 @@
       "export": "WinHttpConnect",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -21009,6 +21337,7 @@
       "export": "WinHttpOpenRequest",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -21094,6 +21423,7 @@
       "export": "WinHttpSendRequest",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -21187,6 +21517,7 @@
       "export": "WinHttpReceiveResponse",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -21232,6 +21563,7 @@
       "export": "WinHttpReadData",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -21297,6 +21629,7 @@
       "export": "WinHttpWriteData",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -21362,6 +21695,7 @@
       "export": "WinHttpQueryHeaders",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -21443,6 +21777,7 @@
       "export": "WinHttpQueryDataAvailable",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -21488,6 +21823,7 @@
       "export": "WinHttpSetOption",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -21553,6 +21889,7 @@
       "export": "WinHttpCloseHandle",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -21590,6 +21927,7 @@
       "export": "InternetOpenW",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -21659,6 +21997,7 @@
       "export": "InternetOpenA",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -21728,6 +22067,7 @@
       "export": "InternetConnectW",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -21821,6 +22161,7 @@
       "export": "InternetConnectA",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -21914,6 +22255,7 @@
       "export": "HttpOpenRequestW",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -22007,6 +22349,7 @@
       "export": "HttpOpenRequestA",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -22100,6 +22443,7 @@
       "export": "HttpSendRequestW",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -22177,6 +22521,7 @@
       "export": "HttpSendRequestA",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -22254,6 +22599,7 @@
       "export": "InternetReadFile",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -22319,6 +22665,7 @@
       "export": "InternetWriteFile",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -22384,6 +22731,7 @@
       "export": "InternetOpenUrlW",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -22465,6 +22813,7 @@
       "export": "InternetOpenUrlA",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -22546,6 +22895,7 @@
       "export": "InternetQueryDataAvailable",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -22607,6 +22957,7 @@
       "export": "InternetSetOptionW",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -22668,6 +23019,7 @@
       "export": "InternetSetOptionA",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -22729,6 +23081,7 @@
       "export": "InternetCrackUrlW",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -22794,6 +23147,7 @@
       "export": "InternetCrackUrlA",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -22859,6 +23213,7 @@
       "export": "InternetCloseHandle",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -22896,6 +23251,7 @@
       "export": "URLDownloadToFileW",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -22964,6 +23320,7 @@
       "export": "URLDownloadToFileA",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -23032,6 +23389,7 @@
       "export": "BCryptOpenAlgorithmProvider",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -23093,6 +23451,7 @@
       "export": "BCryptCreateHash",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -23186,6 +23545,7 @@
       "export": "BCryptHashData",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -23251,6 +23611,7 @@
       "export": "BCryptFinishHash",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -23316,6 +23677,7 @@
       "export": "BCryptEncrypt",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -23437,6 +23799,7 @@
       "export": "BCryptDecrypt",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -23558,6 +23921,7 @@
       "export": "BCryptGenRandom",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -23623,6 +23987,7 @@
       "export": "BCryptCloseAlgorithmProvider",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -23668,6 +24033,7 @@
       "export": "BCryptDestroyHash",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -23705,6 +24071,7 @@
       "export": "BCryptGenerateSymmetricKey",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -23798,6 +24165,7 @@
       "export": "BCryptImportKey",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -23907,6 +24275,7 @@
       "export": "BCryptImportKeyPair",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -23996,6 +24365,7 @@
       "export": "BCryptDestroyKey",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -24033,6 +24403,7 @@
       "export": "CoInitializeEx",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -24078,6 +24449,7 @@
       "export": "CoInitializeSecurity",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -24183,6 +24555,7 @@
       "export": "CoUninitialize",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -24210,6 +24583,7 @@
       "export": "CoCreateInstance",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -24279,6 +24653,7 @@
       "export": "CoCreateInstanceEx",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -24360,6 +24735,7 @@
       "export": "CoGetClassObject",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -24429,6 +24805,7 @@
       "export": "SetWindowsHookExW",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -24490,6 +24867,7 @@
       "export": "SetWindowsHookExA",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -24551,6 +24929,7 @@
       "export": "UnhookWindowsHookEx",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -24588,6 +24967,7 @@
       "export": "EnumProcesses",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -24645,6 +25025,7 @@
       "export": "EnumProcessModules",
       "category": "Loader",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -24710,6 +25091,7 @@
       "export": "EnumProcessModulesEx",
       "category": "Loader",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -24783,6 +25165,7 @@
       "export": "GetMappedFileNameW",
       "category": "Loader",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -24848,6 +25231,7 @@
       "export": "GetMappedFileNameA",
       "category": "Loader",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -24913,6 +25297,7 @@
       "export": "EnumWindows",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -24958,6 +25343,7 @@
       "export": "EnumChildWindows",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -25011,6 +25397,7 @@
       "export": "FindWindowW",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -25056,6 +25443,7 @@
       "export": "FindWindowA",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -25101,6 +25489,7 @@
       "export": "FindWindowExW",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -25162,6 +25551,7 @@
       "export": "FindWindowExA",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -25223,6 +25613,7 @@
       "export": "GetWindowThreadProcessId",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -25268,6 +25659,7 @@
       "export": "GetForegroundWindow",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -25296,6 +25688,7 @@
       "export": "GetDC",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -25333,6 +25726,7 @@
       "export": "ReleaseDC",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -25378,6 +25772,7 @@
       "export": "OpenClipboard",
       "category": "Clipboard",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -25414,6 +25809,7 @@
       "export": "CloseClipboard",
       "category": "Clipboard",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -25441,6 +25837,7 @@
       "export": "GetClipboardData",
       "category": "Clipboard",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -25477,6 +25874,7 @@
       "export": "SetClipboardData",
       "category": "Clipboard",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -25521,6 +25919,7 @@
       "export": "EmptyClipboard",
       "category": "Clipboard",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -25548,6 +25947,7 @@
       "export": "EnumClipboardFormats",
       "category": "Clipboard",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -25584,6 +25984,7 @@
       "export": "IsClipboardFormatAvailable",
       "category": "Clipboard",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -25620,6 +26021,7 @@
       "export": "GetPriorityClipboardFormat",
       "category": "Clipboard",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -25668,6 +26070,7 @@
       "export": "OleGetClipboard",
       "category": "Clipboard",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -25704,6 +26107,7 @@
       "export": "OleSetClipboard",
       "category": "Clipboard",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -25740,6 +26144,7 @@
       "export": "CreateCompatibleDC",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -25777,6 +26182,7 @@
       "export": "DeleteDC",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -25814,6 +26220,7 @@
       "export": "CreateCompatibleBitmap",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -25867,6 +26274,7 @@
       "export": "BitBlt",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -25968,6 +26376,7 @@
       "export": "StretchBlt",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -26085,6 +26494,7 @@
       "export": "DeleteObject",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -26122,6 +26532,7 @@
       "export": "StartTraceW",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -26175,6 +26586,7 @@
       "export": "StartTraceA",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -26228,6 +26640,7 @@
       "export": "ControlTraceW",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -26289,6 +26702,7 @@
       "export": "ControlTraceA",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -26350,6 +26764,7 @@
       "export": "EnableTraceEx2",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -26443,6 +26858,7 @@
       "export": "OpenTraceW",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -26479,6 +26895,7 @@
       "export": "OpenTraceA",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -26515,6 +26932,7 @@
       "export": "ProcessTrace",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -26580,6 +26998,7 @@
       "export": "CloseTrace",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -26617,6 +27036,7 @@
       "export": "EventRegister",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -26678,6 +27098,7 @@
       "export": "EventUnregister",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -26715,6 +27136,7 @@
       "export": "EventWrite",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -26780,6 +27202,7 @@
       "export": "EventWriteEx",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -26877,6 +27300,7 @@
       "export": "WinVerifyTrust",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -26930,6 +27354,7 @@
       "export": "CryptQueryObject",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -27047,6 +27472,7 @@
       "export": "CertOpenStore",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -27116,6 +27542,7 @@
       "export": "CertCloseStore",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -27161,6 +27588,7 @@
       "export": "CertFindCertificateInStore",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -27238,6 +27666,7 @@
       "export": "CertGetCertificateChain",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -27331,6 +27760,7 @@
       "export": "CertVerifyCertificateChainPolicy",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -27392,6 +27822,7 @@
       "export": "CryptProtectData",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -27477,6 +27908,7 @@
       "export": "CryptUnprotectData",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -27562,6 +27994,7 @@
       "export": "NCryptOpenStorageProvider",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -27615,6 +28048,7 @@
       "export": "NCryptOpenKey",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -27684,6 +28118,7 @@
       "export": "NCryptCreatePersistedKey",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -27761,6 +28196,7 @@
       "export": "NCryptFinalizeKey",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -27806,6 +28242,7 @@
       "export": "NCryptEncrypt",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -27907,6 +28344,7 @@
       "export": "NCryptDecrypt",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -28008,6 +28446,7 @@
       "export": "NCryptSignHash",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -28109,6 +28548,7 @@
       "export": "NCryptVerifySignature",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -28202,6 +28642,7 @@
       "export": "NCryptExportKey",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -28299,6 +28740,7 @@
       "export": "NCryptImportKey",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -28396,6 +28838,7 @@
       "export": "NCryptDeleteKey",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -28441,6 +28884,7 @@
       "export": "NCryptFreeObject",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -28478,6 +28922,7 @@
       "export": "RpcStringBindingComposeW",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "RPC_ENTRY",
@@ -28555,6 +29000,7 @@
       "export": "RpcStringBindingComposeA",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "RPC_ENTRY",
@@ -28632,6 +29078,7 @@
       "export": "RpcBindingFromStringBindingW",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "RPC_ENTRY",
@@ -28677,6 +29124,7 @@
       "export": "RpcBindingFromStringBindingA",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "RPC_ENTRY",
@@ -28722,6 +29170,7 @@
       "export": "RpcBindingFree",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "RPC_ENTRY",
@@ -28759,6 +29208,7 @@
       "export": "RpcMgmtEpEltInqBegin",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "RPC_ENTRY",
@@ -28836,6 +29286,7 @@
       "export": "RpcMgmtEpEltInqNextW",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "RPC_ENTRY",
@@ -28905,6 +29356,7 @@
       "export": "RpcMgmtEpEltInqNextA",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "RPC_ENTRY",
@@ -28974,6 +29426,7 @@
       "export": "RpcMgmtEpEltInqDone",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "RPC_ENTRY",
@@ -29011,6 +29464,7 @@
       "export": "NtQueryInformationToken",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "NTAPI",
@@ -29084,6 +29538,7 @@
       "export": "NtSetInformationToken",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "NTAPI",
@@ -29149,6 +29604,7 @@
       "export": "NtAdjustPrivilegesToken",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "NTAPI",
@@ -29230,6 +29686,7 @@
       "export": "NtCreateMutant",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "NTAPI",
@@ -29291,6 +29748,7 @@
       "export": "NtOpenMutant",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "NTAPI",
@@ -29344,6 +29802,7 @@
       "export": "NtReleaseMutant",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "NTAPI",
@@ -29389,6 +29848,7 @@
       "export": "NtCreateEvent",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "NTAPI",
@@ -29458,6 +29918,7 @@
       "export": "NtOpenEvent",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "NTAPI",
@@ -29511,6 +29972,7 @@
       "export": "NtSetEvent",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "NTAPI",
@@ -29556,6 +30018,7 @@
       "export": "NtResetEvent",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "NTAPI",
@@ -29601,6 +30064,7 @@
       "export": "NtWaitForSingleObject",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "NTAPI",
@@ -29654,6 +30118,7 @@
       "export": "NtWaitForMultipleObjects",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "NTAPI",
@@ -29727,6 +30192,7 @@
       "export": "NtQuerySystemInformation",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "NTAPI",
@@ -29792,6 +30258,7 @@
       "export": "NtQueryObject",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "NTAPI",
@@ -29865,6 +30332,7 @@
       "export": "LogonUserW",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -29942,6 +30410,7 @@
       "export": "LogonUserA",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -30019,6 +30488,7 @@
       "export": "GetTokenInformation",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -30092,6 +30562,7 @@
       "export": "SetTokenInformation",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -30157,6 +30628,7 @@
       "export": "CheckTokenMembership",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -30210,6 +30682,7 @@
       "export": "CreateRestrictedToken",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -30323,6 +30796,7 @@
       "export": "ImpersonateSelf",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -30360,6 +30834,7 @@
       "export": "ImpersonateNamedPipeClient",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -30397,6 +30872,7 @@
       "export": "CredReadW",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -30458,6 +30934,7 @@
       "export": "CredReadA",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -30519,6 +30996,7 @@
       "export": "CredEnumerateW",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -30584,6 +31062,7 @@
       "export": "CredEnumerateA",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -30649,6 +31128,7 @@
       "export": "CredWriteW",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -30694,6 +31174,7 @@
       "export": "CredWriteA",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -30739,6 +31220,7 @@
       "export": "CredDeleteW",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -30792,6 +31274,7 @@
       "export": "CredDeleteA",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -30845,6 +31328,7 @@
       "export": "CredFree",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -30882,6 +31366,7 @@
       "export": "LsaOpenPolicy",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -30943,6 +31428,7 @@
       "export": "LsaClose",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -30980,6 +31466,7 @@
       "export": "LsaEnumerateLogonSessions",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -31025,6 +31512,7 @@
       "export": "LsaGetLogonSessionData",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -31070,6 +31558,7 @@
       "export": "LsaFreeReturnBuffer",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -31107,6 +31596,7 @@
       "export": "LsaLookupNames2",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -31184,6 +31674,7 @@
       "export": "LsaLookupSids2",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -31261,6 +31752,7 @@
       "export": "OpenEventLogW",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -31306,6 +31798,7 @@
       "export": "OpenEventLogA",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -31351,6 +31844,7 @@
       "export": "RegisterEventSourceW",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -31396,6 +31890,7 @@
       "export": "RegisterEventSourceA",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -31441,6 +31936,7 @@
       "export": "ReadEventLogW",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -31530,6 +32026,7 @@
       "export": "ReadEventLogA",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -31619,6 +32116,7 @@
       "export": "ClearEventLogW",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -31664,6 +32162,7 @@
       "export": "ClearEventLogA",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -31709,6 +32208,7 @@
       "export": "ReportEventW",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -31818,6 +32318,7 @@
       "export": "ReportEventA",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -31927,6 +32428,7 @@
       "export": "CloseEventLog",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -31964,6 +32466,7 @@
       "export": "NetUserEnum",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -32057,6 +32560,7 @@
       "export": "NetLocalGroupEnum",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -32142,6 +32646,7 @@
       "export": "NetGroupEnum",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -32227,6 +32732,7 @@
       "export": "NetShareEnum",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -32312,6 +32818,7 @@
       "export": "NetSessionEnum",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -32413,6 +32920,7 @@
       "export": "NetServerEnum",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -32514,6 +33022,7 @@
       "export": "NetWkstaGetInfo",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -32567,6 +33076,7 @@
       "export": "NetApiBufferFree",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -32604,6 +33114,7 @@
       "export": "GetExtendedTcpTable",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -32681,6 +33192,7 @@
       "export": "GetExtendedUdpTable",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -32758,6 +33270,7 @@
       "export": "GetTcpTable2",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -32815,6 +33328,7 @@
       "export": "GetUdpTable",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -32868,6 +33382,7 @@
       "export": "GetAdaptersAddresses",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -32941,6 +33456,7 @@
       "export": "GetNetworkParams",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -32990,6 +33506,7 @@
       "export": "GetIpNetTable2",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -33035,6 +33552,7 @@
       "export": "GetIfTable2",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -33072,6 +33590,7 @@
       "export": "FreeMibTable",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -33109,6 +33628,7 @@
       "export": "WTSOpenServerW",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -33146,6 +33666,7 @@
       "export": "WTSOpenServerA",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -33183,6 +33704,7 @@
       "export": "WTSCloseServer",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -33220,6 +33742,7 @@
       "export": "WTSEnumerateSessionsW",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -33293,6 +33816,7 @@
       "export": "WTSEnumerateSessionsA",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -33366,6 +33890,7 @@
       "export": "WTSEnumerateProcessesW",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -33435,6 +33960,7 @@
       "export": "WTSEnumerateProcessesA",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -33504,6 +34030,7 @@
       "export": "WTSQuerySessionInformationW",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -33577,6 +34104,7 @@
       "export": "WTSQuerySessionInformationA",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -33650,6 +34178,7 @@
       "export": "WTSFreeMemory",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -33687,6 +34216,7 @@
       "export": "CreateJobObjectW",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -33732,6 +34262,7 @@
       "export": "CreateJobObjectA",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -33777,6 +34308,7 @@
       "export": "OpenJobObjectW",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -33830,6 +34362,7 @@
       "export": "OpenJobObjectA",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -33883,6 +34416,7 @@
       "export": "AssignProcessToJobObject",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -33928,6 +34462,7 @@
       "export": "TerminateJobObject",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -33973,6 +34508,7 @@
       "export": "SetInformationJobObject",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -34038,6 +34574,7 @@
       "export": "QueryInformationJobObject",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -34111,6 +34648,7 @@
       "export": "AcquireCredentialsHandleW",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -34212,6 +34750,7 @@
       "export": "AcquireCredentialsHandleA",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -34313,6 +34852,7 @@
       "export": "InitializeSecurityContextW",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -34438,6 +34978,7 @@
       "export": "InitializeSecurityContextA",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -34563,6 +35104,7 @@
       "export": "AcceptSecurityContext",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -34664,6 +35206,7 @@
       "export": "EncryptMessage",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -34725,6 +35268,7 @@
       "export": "DecryptMessage",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -34786,6 +35330,7 @@
       "export": "DeleteSecurityContext",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -34823,6 +35368,7 @@
       "export": "FreeCredentialsHandle",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -34860,6 +35406,7 @@
       "export": "Process32FirstW",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -34905,6 +35452,7 @@
       "export": "Process32First",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -34950,6 +35498,7 @@
       "export": "Process32NextW",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -34995,6 +35544,7 @@
       "export": "Process32Next",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -35040,6 +35590,7 @@
       "export": "Thread32First",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -35085,6 +35636,7 @@
       "export": "Thread32Next",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -35130,6 +35682,7 @@
       "export": "Heap32ListFirst",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -35175,6 +35728,7 @@
       "export": "Heap32ListNext",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -35220,6 +35774,7 @@
       "export": "Heap32First",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -35273,6 +35828,7 @@
       "export": "Heap32Next",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -35310,6 +35866,7 @@
       "export": "QueryFullProcessImageNameW",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -35371,6 +35928,7 @@
       "export": "QueryFullProcessImageNameA",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -35432,6 +35990,7 @@
       "export": "GetProcessImageFileNameW",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -35489,6 +36048,7 @@
       "export": "GetProcessImageFileNameA",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -35546,6 +36106,7 @@
       "export": "GetProcessId",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -35583,6 +36144,7 @@
       "export": "GetThreadId",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -35620,6 +36182,7 @@
       "export": "IsWow64Process",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -35665,6 +36228,7 @@
       "export": "IsWow64Process2",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -35718,6 +36282,7 @@
       "export": "Wow64DisableWow64FsRedirection",
       "category": "File",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -35755,6 +36320,7 @@
       "export": "Wow64RevertWow64FsRedirection",
       "category": "File",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -35792,6 +36358,7 @@
       "export": "GetTempPathW",
       "category": "File",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -35841,6 +36408,7 @@
       "export": "GetTempPathA",
       "category": "File",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -35890,6 +36458,7 @@
       "export": "GetTempFileNameW",
       "category": "File",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -35951,6 +36520,7 @@
       "export": "GetTempFileNameA",
       "category": "File",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -36012,6 +36582,7 @@
       "export": "GetFullPathNameW",
       "category": "File",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -36077,6 +36648,7 @@
       "export": "GetFullPathNameA",
       "category": "File",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -36142,6 +36714,7 @@
       "export": "SearchPathW",
       "category": "File",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -36223,6 +36796,7 @@
       "export": "SearchPathA",
       "category": "File",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -36304,6 +36878,7 @@
       "export": "GetShortPathNameW",
       "category": "File",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -36361,6 +36936,7 @@
       "export": "GetShortPathNameA",
       "category": "File",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -36418,6 +36994,7 @@
       "export": "GetLongPathNameW",
       "category": "File",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -36475,6 +37052,7 @@
       "export": "GetLongPathNameA",
       "category": "File",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -36532,6 +37110,7 @@
       "export": "CreatePipe",
       "category": "File",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -36593,6 +37172,7 @@
       "export": "CreateMailslotW",
       "category": "File",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -36654,6 +37234,7 @@
       "export": "CreateMailslotA",
       "category": "File",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -36715,6 +37296,7 @@
       "export": "CreateDirectoryExW",
       "category": "File",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -36768,6 +37350,7 @@
       "export": "CreateDirectoryExA",
       "category": "File",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -36821,6 +37404,7 @@
       "export": "WSAStartup",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WSAAPI",
@@ -36867,6 +37451,7 @@
       "export": "WSACleanup",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WSAAPI",
@@ -36896,6 +37481,7 @@
       "export": "select",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WSAAPI",
@@ -36966,6 +37552,7 @@
       "export": "ioctlsocket",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WSAAPI",
@@ -37020,6 +37607,7 @@
       "export": "setsockopt",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WSAAPI",
@@ -37094,6 +37682,7 @@
       "export": "getsockopt",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WSAAPI",
@@ -37168,6 +37757,7 @@
       "export": "getsockname",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WSAAPI",
@@ -37226,6 +37816,7 @@
       "export": "getpeername",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WSAAPI",
@@ -37284,6 +37875,7 @@
       "export": "WSAEventSelect",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WSAAPI",
@@ -37338,6 +37930,7 @@
       "export": "WSAAsyncSelect",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WSAAPI",
@@ -37400,6 +37993,7 @@
       "export": "gethostbyname",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WSAAPI",
@@ -37437,6 +38031,7 @@
       "export": "gethostbyaddr",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WSAAPI",
@@ -37494,6 +38089,7 @@
       "export": "GetNameInfoW",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WSAAPI",
@@ -37592,6 +38188,7 @@
       "export": "getnameinfo",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WSAAPI",
@@ -37690,6 +38287,7 @@
       "export": "WinHttpAddRequestHeaders",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -37755,6 +38353,7 @@
       "export": "WinHttpSetCredentials",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -37832,6 +38431,7 @@
       "export": "WinHttpCrackUrl",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -37897,6 +38497,7 @@
       "export": "WinHttpCreateUrl",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -37962,6 +38563,7 @@
       "export": "WinHttpSetTimeouts",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -38031,6 +38633,7 @@
       "export": "HttpQueryInfoW",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -38104,6 +38707,7 @@
       "export": "HttpQueryInfoA",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -38177,6 +38781,7 @@
       "export": "InternetQueryOptionW",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -38242,6 +38847,7 @@
       "export": "InternetQueryOptionA",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -38307,6 +38913,7 @@
       "export": "NtOpenDirectoryObject",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "NTAPI",
@@ -38360,6 +38967,7 @@
       "export": "NtQueryDirectoryObject",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "NTAPI",
@@ -38449,6 +39057,7 @@
       "export": "NtCreateSymbolicLinkObject",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "NTAPI",
@@ -38510,6 +39119,7 @@
       "export": "NtOpenSymbolicLinkObject",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "NTAPI",
@@ -38563,6 +39173,7 @@
       "export": "NtQuerySymbolicLinkObject",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "NTAPI",
@@ -38616,6 +39227,7 @@
       "export": "NtCreateSemaphore",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "NTAPI",
@@ -38685,6 +39297,7 @@
       "export": "NtOpenSemaphore",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "NTAPI",
@@ -38738,6 +39351,7 @@
       "export": "NtReleaseSemaphore",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "NTAPI",
@@ -38791,6 +39405,7 @@
       "export": "NtAlpcConnectPort",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "NTAPI",
@@ -38912,6 +39527,7 @@
       "export": "NtAlpcSendWaitReceivePort",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "NTAPI",
@@ -39009,6 +39625,7 @@
       "export": "NtQueryInformationThread",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "NTAPI",
@@ -39082,6 +39699,7 @@
       "export": "VirtualAlloc2",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -39171,6 +39789,7 @@
       "export": "VirtualAlloc2FromApp",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -39260,6 +39879,7 @@
       "export": "MapViewOfFile3",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -39365,6 +39985,7 @@
       "export": "CreateFileMapping2",
       "category": "File",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -39470,6 +40091,7 @@
       "export": "QueueUserAPC2",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -39531,6 +40153,7 @@
       "export": "CoGetObject",
       "category": "Process",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -39592,6 +40215,7 @@
       "export": "ReadFileEx",
       "category": "File",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -39664,6 +40288,7 @@
       "export": "WriteFileEx",
       "category": "File",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -39736,6 +40361,7 @@
       "export": "GetOverlappedResult",
       "category": "File",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -39796,6 +40422,7 @@
       "export": "GetOverlappedResultEx",
       "category": "File",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -39864,6 +40491,7 @@
       "export": "GetQueuedCompletionStatus",
       "category": "File",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -39932,6 +40560,7 @@
       "export": "GetQueuedCompletionStatusEx",
       "category": "File",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -40012,6 +40641,7 @@
       "export": "CreateIoCompletionPort",
       "category": "File",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -40072,6 +40702,7 @@
       "export": "SetFileCompletionNotificationModes",
       "category": "File",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -40116,6 +40747,7 @@
       "export": "WSAGetOverlappedResult",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WSAAPI",
@@ -40184,6 +40816,7 @@
       "export": "CancelIo",
       "category": "File",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -40220,6 +40853,7 @@
       "export": "CancelIoEx",
       "category": "File",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WINAPI",
@@ -40265,6 +40899,7 @@
       "extension_guid": "b5367df1-cbac-11cf-95ca-00805f48a192",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WSAAPI",
@@ -40358,6 +40993,7 @@
       "extension_guid": "25a207b9-ddf3-4660-8ee9-76e58c74063e",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WSAAPI",
@@ -40451,6 +41087,7 @@
       "extension_guid": "f689d7c8-6f1f-436b-8a53-e54fe351c322",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WSAAPI",
@@ -40520,6 +41157,7 @@
       "extension_guid": "a441e712-754f-43ca-84a7-0dee44cf606d",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WSAAPI",
@@ -40597,6 +41235,7 @@
       "extension_guid": "b5367df0-cbac-11cf-95ca-00805f48a192",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WSAAPI",
@@ -40682,6 +41321,7 @@
       "extension_guid": "d9689da0-1f90-11d3-9971-00c04f68c876",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WSAAPI",
@@ -40763,6 +41403,7 @@
       "extension_guid": "b5367df2-cbac-11cf-95ca-00805f48a192",
       "category": "Network",
       "architectures": [
+        "x86",
         "x64"
       ],
       "calling_convention": "WSAAPI",
