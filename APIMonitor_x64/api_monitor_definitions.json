@@ -37982,6 +37982,807 @@
         "capture_handler": "CaptureNtReleaseSemaphore",
         "policy": "ntstatus"
       }
+    },
+    {
+      "id": 615,
+      "module": "ntdll.dll",
+      "export": "NtAlpcConnectPort",
+      "category": "Process",
+      "architectures": [
+        "x64"
+      ],
+      "calling_convention": "NTAPI",
+      "return_type": "NTSTATUS",
+      "parameters": [
+        {
+          "name": "port",
+          "type": "PHANDLE",
+          "direction": "out",
+          "encoding": "none",
+          "capture": "formatter",
+          "length": null
+        },
+        {
+          "name": "name",
+          "type": "const UNICODE_STRING*",
+          "direction": "in",
+          "encoding": "none",
+          "capture": "formatter",
+          "length": null
+        },
+        {
+          "name": "object",
+          "type": "POBJECT_ATTRIBUTES",
+          "direction": "in",
+          "encoding": "none",
+          "capture": "formatter",
+          "length": null
+        },
+        {
+          "name": "attributes",
+          "type": "KS_ALPC_PORT_ATTRIBUTES*",
+          "direction": "in",
+          "encoding": "none",
+          "capture": "formatter",
+          "length": null
+        },
+        {
+          "name": "flags",
+          "type": "ULONG",
+          "direction": "in",
+          "encoding": "none",
+          "capture": "formatter",
+          "length": null
+        },
+        {
+          "name": "sid",
+          "type": "PSID",
+          "direction": "in",
+          "encoding": "none",
+          "capture": "formatter",
+          "length": null
+        },
+        {
+          "name": "message",
+          "type": "KS_PORT_MESSAGE*",
+          "direction": "inout",
+          "encoding": "none",
+          "capture": "formatter",
+          "length": {
+            "parameter": "length",
+            "unit": "bytes",
+            "indirect": true
+          }
+        },
+        {
+          "name": "length",
+          "type": "PSIZE_T",
+          "direction": "inout",
+          "encoding": "none",
+          "capture": "formatter",
+          "length": null
+        },
+        {
+          "name": "outAttributes",
+          "type": "KS_ALPC_MESSAGE_ATTRIBUTES*",
+          "direction": "inout",
+          "encoding": "none",
+          "capture": "formatter",
+          "length": null
+        },
+        {
+          "name": "inAttributes",
+          "type": "KS_ALPC_MESSAGE_ATTRIBUTES*",
+          "direction": "inout",
+          "encoding": "none",
+          "capture": "formatter",
+          "length": null
+        },
+        {
+          "name": "timeout",
+          "type": "PLARGE_INTEGER",
+          "direction": "in",
+          "encoding": "none",
+          "capture": "formatter",
+          "length": null
+        }
+      ],
+      "return": {
+        "success": "ntstatus",
+        "error_source": "return_status"
+      },
+      "binding": {
+        "type_alias": "NtAlpcConnectPortFn",
+        "record": "g_ntAlpcConnectPortHook",
+        "original": "g_ntAlpcConnectPortOriginal",
+        "hook": "HookedNtAlpcConnectPort",
+        "scope": "targets"
+      },
+      "wrapper": {
+        "kind": "generated",
+        "policy": "ntstatus",
+        "capture_handler": "CaptureNtAlpcConnectPort"
+      }
+    },
+    {
+      "id": 616,
+      "module": "ntdll.dll",
+      "export": "NtAlpcSendWaitReceivePort",
+      "category": "Process",
+      "architectures": [
+        "x64"
+      ],
+      "calling_convention": "NTAPI",
+      "return_type": "NTSTATUS",
+      "parameters": [
+        {
+          "name": "port",
+          "type": "HANDLE",
+          "direction": "in",
+          "encoding": "none",
+          "capture": "formatter",
+          "length": null
+        },
+        {
+          "name": "flags",
+          "type": "ULONG",
+          "direction": "in",
+          "encoding": "none",
+          "capture": "formatter",
+          "length": null
+        },
+        {
+          "name": "send",
+          "type": "KS_PORT_MESSAGE*",
+          "direction": "in",
+          "encoding": "none",
+          "capture": "formatter",
+          "length": null
+        },
+        {
+          "name": "sendAttributes",
+          "type": "KS_ALPC_MESSAGE_ATTRIBUTES*",
+          "direction": "inout",
+          "encoding": "none",
+          "capture": "formatter",
+          "length": null
+        },
+        {
+          "name": "receive",
+          "type": "KS_PORT_MESSAGE*",
+          "direction": "out",
+          "encoding": "none",
+          "capture": "formatter",
+          "length": {
+            "parameter": "length",
+            "unit": "bytes",
+            "indirect": true
+          }
+        },
+        {
+          "name": "length",
+          "type": "PSIZE_T",
+          "direction": "inout",
+          "encoding": "none",
+          "capture": "formatter",
+          "length": null
+        },
+        {
+          "name": "receiveAttributes",
+          "type": "KS_ALPC_MESSAGE_ATTRIBUTES*",
+          "direction": "inout",
+          "encoding": "none",
+          "capture": "formatter",
+          "length": null
+        },
+        {
+          "name": "timeout",
+          "type": "PLARGE_INTEGER",
+          "direction": "in",
+          "encoding": "none",
+          "capture": "formatter",
+          "length": null
+        }
+      ],
+      "return": {
+        "success": "ntstatus",
+        "error_source": "return_status"
+      },
+      "binding": {
+        "type_alias": "NtAlpcSendWaitReceivePortFn",
+        "record": "g_ntAlpcSendWaitReceivePortHook",
+        "original": "g_ntAlpcSendWaitReceivePortOriginal",
+        "hook": "HookedNtAlpcSendWaitReceivePort",
+        "scope": "targets"
+      },
+      "wrapper": {
+        "kind": "generated",
+        "policy": "ntstatus",
+        "capture_handler": "CaptureNtAlpcSendWaitReceivePort"
+      }
+    },
+    {
+      "id": 617,
+      "module": "ntdll.dll",
+      "export": "NtQueryInformationThread",
+      "category": "Process",
+      "architectures": [
+        "x64"
+      ],
+      "calling_convention": "NTAPI",
+      "return_type": "NTSTATUS",
+      "parameters": [
+        {
+          "name": "thread",
+          "type": "HANDLE",
+          "direction": "in",
+          "encoding": "none",
+          "capture": "formatter",
+          "length": null
+        },
+        {
+          "name": "infoClass",
+          "type": "THREADINFOCLASS",
+          "direction": "in",
+          "encoding": "none",
+          "capture": "formatter",
+          "length": null
+        },
+        {
+          "name": "information",
+          "type": "PVOID",
+          "direction": "out",
+          "encoding": "none",
+          "capture": "formatter",
+          "length": {
+            "parameter": "length",
+            "unit": "bytes",
+            "indirect": false
+          }
+        },
+        {
+          "name": "length",
+          "type": "ULONG",
+          "direction": "in",
+          "encoding": "none",
+          "capture": "formatter",
+          "length": null
+        },
+        {
+          "name": "returned",
+          "type": "PULONG",
+          "direction": "out",
+          "encoding": "none",
+          "capture": "formatter",
+          "length": null
+        }
+      ],
+      "return": {
+        "success": "ntstatus",
+        "error_source": "return_status"
+      },
+      "binding": {
+        "type_alias": "NtQueryInformationThreadFn",
+        "record": "g_ntQueryInformationThreadHook",
+        "original": "g_ntQueryInformationThreadOriginal",
+        "hook": "HookedNtQueryInformationThread",
+        "scope": "targets"
+      },
+      "wrapper": {
+        "kind": "generated",
+        "policy": "ntstatus",
+        "capture_handler": "CaptureNtQueryInformationThread"
+      }
+    },
+    {
+      "id": 618,
+      "module": "KernelBase.dll",
+      "export": "VirtualAlloc2",
+      "category": "Process",
+      "architectures": [
+        "x64"
+      ],
+      "calling_convention": "WINAPI",
+      "return_type": "PVOID",
+      "parameters": [
+        {
+          "name": "process",
+          "type": "HANDLE",
+          "direction": "in",
+          "encoding": "none",
+          "capture": "formatter",
+          "length": null
+        },
+        {
+          "name": "base",
+          "type": "PVOID",
+          "direction": "in",
+          "encoding": "none",
+          "capture": "formatter",
+          "length": null
+        },
+        {
+          "name": "size",
+          "type": "SIZE_T",
+          "direction": "in",
+          "encoding": "none",
+          "capture": "formatter",
+          "length": null
+        },
+        {
+          "name": "allocation",
+          "type": "ULONG",
+          "direction": "in",
+          "encoding": "none",
+          "capture": "formatter",
+          "length": null
+        },
+        {
+          "name": "protection",
+          "type": "ULONG",
+          "direction": "in",
+          "encoding": "none",
+          "capture": "formatter",
+          "length": null
+        },
+        {
+          "name": "parameters",
+          "type": "MEM_EXTENDED_PARAMETER*",
+          "direction": "inout",
+          "encoding": "none",
+          "capture": "formatter",
+          "length": {
+            "parameter": "count",
+            "unit": "elements",
+            "indirect": false
+          }
+        },
+        {
+          "name": "count",
+          "type": "ULONG",
+          "direction": "in",
+          "encoding": "none",
+          "capture": "formatter",
+          "length": null
+        }
+      ],
+      "return": {
+        "success": "handle",
+        "error_source": "win32_last_error"
+      },
+      "binding": {
+        "type_alias": "VirtualAlloc2Fn",
+        "record": "g_virtualAlloc2Hook",
+        "original": "g_virtualAlloc2Original",
+        "hook": "HookedVirtualAlloc2",
+        "scope": "targets"
+      },
+      "wrapper": {
+        "kind": "generated",
+        "policy": "handle",
+        "capture_handler": "CaptureVirtualAlloc2"
+      }
+    },
+    {
+      "id": 619,
+      "module": "KernelBase.dll",
+      "export": "VirtualAlloc2FromApp",
+      "category": "Process",
+      "architectures": [
+        "x64"
+      ],
+      "calling_convention": "WINAPI",
+      "return_type": "PVOID",
+      "parameters": [
+        {
+          "name": "process",
+          "type": "HANDLE",
+          "direction": "in",
+          "encoding": "none",
+          "capture": "formatter",
+          "length": null
+        },
+        {
+          "name": "base",
+          "type": "PVOID",
+          "direction": "in",
+          "encoding": "none",
+          "capture": "formatter",
+          "length": null
+        },
+        {
+          "name": "size",
+          "type": "SIZE_T",
+          "direction": "in",
+          "encoding": "none",
+          "capture": "formatter",
+          "length": null
+        },
+        {
+          "name": "allocation",
+          "type": "ULONG",
+          "direction": "in",
+          "encoding": "none",
+          "capture": "formatter",
+          "length": null
+        },
+        {
+          "name": "protection",
+          "type": "ULONG",
+          "direction": "in",
+          "encoding": "none",
+          "capture": "formatter",
+          "length": null
+        },
+        {
+          "name": "parameters",
+          "type": "MEM_EXTENDED_PARAMETER*",
+          "direction": "inout",
+          "encoding": "none",
+          "capture": "formatter",
+          "length": {
+            "parameter": "count",
+            "unit": "elements",
+            "indirect": false
+          }
+        },
+        {
+          "name": "count",
+          "type": "ULONG",
+          "direction": "in",
+          "encoding": "none",
+          "capture": "formatter",
+          "length": null
+        }
+      ],
+      "return": {
+        "success": "handle",
+        "error_source": "win32_last_error"
+      },
+      "binding": {
+        "type_alias": "VirtualAlloc2FromAppFn",
+        "record": "g_virtualAlloc2FromAppHook",
+        "original": "g_virtualAlloc2FromAppOriginal",
+        "hook": "HookedVirtualAlloc2FromApp",
+        "scope": "targets"
+      },
+      "wrapper": {
+        "kind": "generated",
+        "policy": "handle",
+        "capture_handler": "CaptureVirtualAlloc2FromApp"
+      }
+    },
+    {
+      "id": 620,
+      "module": "KernelBase.dll",
+      "export": "MapViewOfFile3",
+      "category": "Process",
+      "architectures": [
+        "x64"
+      ],
+      "calling_convention": "WINAPI",
+      "return_type": "PVOID",
+      "parameters": [
+        {
+          "name": "mapping",
+          "type": "HANDLE",
+          "direction": "in",
+          "encoding": "none",
+          "capture": "formatter",
+          "length": null
+        },
+        {
+          "name": "process",
+          "type": "HANDLE",
+          "direction": "in",
+          "encoding": "none",
+          "capture": "formatter",
+          "length": null
+        },
+        {
+          "name": "base",
+          "type": "PVOID",
+          "direction": "in",
+          "encoding": "none",
+          "capture": "formatter",
+          "length": null
+        },
+        {
+          "name": "offset",
+          "type": "ULONG64",
+          "direction": "in",
+          "encoding": "none",
+          "capture": "formatter",
+          "length": null
+        },
+        {
+          "name": "size",
+          "type": "SIZE_T",
+          "direction": "in",
+          "encoding": "none",
+          "capture": "formatter",
+          "length": null
+        },
+        {
+          "name": "allocation",
+          "type": "ULONG",
+          "direction": "in",
+          "encoding": "none",
+          "capture": "formatter",
+          "length": null
+        },
+        {
+          "name": "protection",
+          "type": "ULONG",
+          "direction": "in",
+          "encoding": "none",
+          "capture": "formatter",
+          "length": null
+        },
+        {
+          "name": "parameters",
+          "type": "MEM_EXTENDED_PARAMETER*",
+          "direction": "inout",
+          "encoding": "none",
+          "capture": "formatter",
+          "length": {
+            "parameter": "count",
+            "unit": "elements",
+            "indirect": false
+          }
+        },
+        {
+          "name": "count",
+          "type": "ULONG",
+          "direction": "in",
+          "encoding": "none",
+          "capture": "formatter",
+          "length": null
+        }
+      ],
+      "return": {
+        "success": "handle",
+        "error_source": "win32_last_error"
+      },
+      "binding": {
+        "type_alias": "MapViewOfFile3Fn",
+        "record": "g_mapViewOfFile3Hook",
+        "original": "g_mapViewOfFile3Original",
+        "hook": "HookedMapViewOfFile3",
+        "scope": "targets"
+      },
+      "wrapper": {
+        "kind": "generated",
+        "policy": "handle",
+        "capture_handler": "CaptureMapViewOfFile3"
+      }
+    },
+    {
+      "id": 621,
+      "module": "KernelBase.dll",
+      "export": "CreateFileMapping2",
+      "category": "File",
+      "architectures": [
+        "x64"
+      ],
+      "calling_convention": "WINAPI",
+      "return_type": "HANDLE",
+      "parameters": [
+        {
+          "name": "file",
+          "type": "HANDLE",
+          "direction": "in",
+          "encoding": "none",
+          "capture": "formatter",
+          "length": null
+        },
+        {
+          "name": "security",
+          "type": "LPSECURITY_ATTRIBUTES",
+          "direction": "in",
+          "encoding": "none",
+          "capture": "formatter",
+          "length": null
+        },
+        {
+          "name": "access",
+          "type": "ULONG",
+          "direction": "in",
+          "encoding": "none",
+          "capture": "formatter",
+          "length": null
+        },
+        {
+          "name": "protection",
+          "type": "ULONG",
+          "direction": "in",
+          "encoding": "none",
+          "capture": "formatter",
+          "length": null
+        },
+        {
+          "name": "allocation",
+          "type": "ULONG",
+          "direction": "in",
+          "encoding": "none",
+          "capture": "formatter",
+          "length": null
+        },
+        {
+          "name": "size",
+          "type": "ULONG64",
+          "direction": "in",
+          "encoding": "none",
+          "capture": "formatter",
+          "length": null
+        },
+        {
+          "name": "name",
+          "type": "PCWSTR",
+          "direction": "in",
+          "encoding": "utf16",
+          "capture": "utf16",
+          "length": null
+        },
+        {
+          "name": "parameters",
+          "type": "MEM_EXTENDED_PARAMETER*",
+          "direction": "inout",
+          "encoding": "none",
+          "capture": "formatter",
+          "length": {
+            "parameter": "count",
+            "unit": "elements",
+            "indirect": false
+          }
+        },
+        {
+          "name": "count",
+          "type": "ULONG",
+          "direction": "in",
+          "encoding": "none",
+          "capture": "formatter",
+          "length": null
+        }
+      ],
+      "return": {
+        "success": "handle",
+        "error_source": "win32_last_error"
+      },
+      "binding": {
+        "type_alias": "CreateFileMapping2Fn",
+        "record": "g_createFileMapping2Hook",
+        "original": "g_createFileMapping2Original",
+        "hook": "HookedCreateFileMapping2",
+        "scope": "targets"
+      },
+      "wrapper": {
+        "kind": "generated",
+        "policy": "handle",
+        "capture_handler": "CaptureCreateFileMapping2"
+      }
+    },
+    {
+      "id": 622,
+      "module": "KernelBase.dll",
+      "export": "QueueUserAPC2",
+      "category": "Process",
+      "architectures": [
+        "x64"
+      ],
+      "calling_convention": "WINAPI",
+      "return_type": "BOOL",
+      "parameters": [
+        {
+          "name": "callback",
+          "type": "PAPCFUNC",
+          "direction": "in",
+          "encoding": "none",
+          "capture": "formatter",
+          "length": null
+        },
+        {
+          "name": "thread",
+          "type": "HANDLE",
+          "direction": "in",
+          "encoding": "none",
+          "capture": "formatter",
+          "length": null
+        },
+        {
+          "name": "data",
+          "type": "ULONG_PTR",
+          "direction": "in",
+          "encoding": "none",
+          "capture": "formatter",
+          "length": null
+        },
+        {
+          "name": "flags",
+          "type": "QUEUE_USER_APC_FLAGS",
+          "direction": "in",
+          "encoding": "none",
+          "capture": "formatter",
+          "length": null
+        }
+      ],
+      "return": {
+        "success": "bool",
+        "error_source": "win32_last_error"
+      },
+      "binding": {
+        "type_alias": "QueueUserAPC2Fn",
+        "record": "g_queueUserAPC2Hook",
+        "original": "g_queueUserAPC2Original",
+        "hook": "HookedQueueUserAPC2",
+        "scope": "targets"
+      },
+      "wrapper": {
+        "kind": "generated",
+        "policy": "bool",
+        "capture_handler": "CaptureQueueUserAPC2"
+      }
+    },
+    {
+      "id": 623,
+      "module": "Ole32.dll",
+      "export": "CoGetObject",
+      "category": "Process",
+      "architectures": [
+        "x64"
+      ],
+      "calling_convention": "WINAPI",
+      "return_type": "HRESULT",
+      "parameters": [
+        {
+          "name": "name",
+          "type": "LPCWSTR",
+          "direction": "in",
+          "encoding": "utf16",
+          "capture": "utf16",
+          "length": null
+        },
+        {
+          "name": "options",
+          "type": "BIND_OPTS*",
+          "direction": "in",
+          "encoding": "none",
+          "capture": "formatter",
+          "length": null
+        },
+        {
+          "name": "interfaceId",
+          "type": "REFIID",
+          "direction": "in",
+          "encoding": "none",
+          "capture": "formatter",
+          "length": null
+        },
+        {
+          "name": "object",
+          "type": "void**",
+          "direction": "out",
+          "encoding": "none",
+          "capture": "formatter",
+          "length": null
+        }
+      ],
+      "return": {
+        "success": "hresult",
+        "error_source": "return_status"
+      },
+      "binding": {
+        "type_alias": "CoGetObjectFn",
+        "record": "g_coGetObjectHook",
+        "original": "g_coGetObjectOriginal",
+        "hook": "HookedCoGetObject",
+        "scope": "targets"
+      },
+      "wrapper": {
+        "kind": "generated",
+        "policy": "hresult",
+        "capture_handler": "CaptureCoGetObject"
+      }
     }
   ]
 }

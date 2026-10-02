@@ -1232,3 +1232,105 @@ void CaptureNtOpenSemaphore(wchar_t (&detailBuffer)[ks::winapi_monitor::kMaxDeta
 
 void CaptureNtReleaseSemaphore(wchar_t (&detailBuffer)[ks::winapi_monitor::kMaxDetailChars], HANDLE semaphoreHandle, LONG releaseCount, PLONG previousCountPointer, NTSTATUS statusValue)
 { AppendWideText(detailBuffer, L"semaphore="); AppendHexText(detailBuffer, reinterpret_cast<std::uint64_t>(semaphoreHandle)); AppendWideText(detailBuffer, L" release="); AppendUnsignedText(detailBuffer, static_cast<unsigned long long>(releaseCount < 0 ? 0 : releaseCount)); AppendWideText(detailBuffer, L" previous="); AppendUnsignedText(detailBuffer, previousCountPointer != nullptr ? static_cast<unsigned long long>(*previousCountPointer < 0 ? 0 : *previousCountPointer) : 0ULL); }
+
+// Modern x64 APIs. Opaque ALPC structures are captured by address only.
+void CaptureNtAlpcConnectPort(wchar_t (&detailBuffer)[ks::winapi_monitor::kMaxDetailChars], PHANDLE port, const UNICODE_STRING* name, POBJECT_ATTRIBUTES object, KS_ALPC_PORT_ATTRIBUTES* attributes, ULONG flags, PSID sid, KS_PORT_MESSAGE* message, PSIZE_T length, KS_ALPC_MESSAGE_ATTRIBUTES* outAttributes, KS_ALPC_MESSAGE_ATTRIBUTES* inAttributes, PLARGE_INTEGER timeout, NTSTATUS statusValue)
+{
+    AppendWideText(detailBuffer, L" port="); AppendHexText(detailBuffer, reinterpret_cast<std::uint64_t>(port));
+    AppendWideText(detailBuffer, L" name="); AppendUnicodeStringText(detailBuffer, name);
+    AppendWideText(detailBuffer, L" object="); AppendHexText(detailBuffer, reinterpret_cast<std::uint64_t>(object));
+    AppendWideText(detailBuffer, L" attributes="); AppendHexText(detailBuffer, reinterpret_cast<std::uint64_t>(attributes));
+    AppendWideText(detailBuffer, L" flags="); AppendHexText(detailBuffer, static_cast<std::uint64_t>(flags));
+    AppendWideText(detailBuffer, L" sid="); AppendHexText(detailBuffer, reinterpret_cast<std::uint64_t>(sid));
+    AppendWideText(detailBuffer, L" message="); AppendHexText(detailBuffer, reinterpret_cast<std::uint64_t>(message));
+    AppendWideText(detailBuffer, L" length="); AppendHexText(detailBuffer, reinterpret_cast<std::uint64_t>(length));
+    AppendWideText(detailBuffer, L" outAttributes="); AppendHexText(detailBuffer, reinterpret_cast<std::uint64_t>(outAttributes));
+    AppendWideText(detailBuffer, L" inAttributes="); AppendHexText(detailBuffer, reinterpret_cast<std::uint64_t>(inAttributes));
+    AppendWideText(detailBuffer, L" timeout="); AppendHexText(detailBuffer, reinterpret_cast<std::uint64_t>(timeout));
+    AppendWideText(detailBuffer, L" statusValue="); AppendHexText(detailBuffer, static_cast<std::uint64_t>(statusValue));
+}
+void CaptureNtAlpcSendWaitReceivePort(wchar_t (&detailBuffer)[ks::winapi_monitor::kMaxDetailChars], HANDLE port, ULONG flags, KS_PORT_MESSAGE* send, KS_ALPC_MESSAGE_ATTRIBUTES* sendAttributes, KS_PORT_MESSAGE* receive, PSIZE_T length, KS_ALPC_MESSAGE_ATTRIBUTES* receiveAttributes, PLARGE_INTEGER timeout, NTSTATUS statusValue)
+{
+    AppendWideText(detailBuffer, L" port="); AppendHexText(detailBuffer, reinterpret_cast<std::uint64_t>(port));
+    AppendWideText(detailBuffer, L" flags="); AppendHexText(detailBuffer, static_cast<std::uint64_t>(flags));
+    AppendWideText(detailBuffer, L" send="); AppendHexText(detailBuffer, reinterpret_cast<std::uint64_t>(send));
+    AppendWideText(detailBuffer, L" sendAttributes="); AppendHexText(detailBuffer, reinterpret_cast<std::uint64_t>(sendAttributes));
+    AppendWideText(detailBuffer, L" receive="); AppendHexText(detailBuffer, reinterpret_cast<std::uint64_t>(receive));
+    AppendWideText(detailBuffer, L" length="); AppendHexText(detailBuffer, reinterpret_cast<std::uint64_t>(length));
+    AppendWideText(detailBuffer, L" receiveAttributes="); AppendHexText(detailBuffer, reinterpret_cast<std::uint64_t>(receiveAttributes));
+    AppendWideText(detailBuffer, L" timeout="); AppendHexText(detailBuffer, reinterpret_cast<std::uint64_t>(timeout));
+    AppendWideText(detailBuffer, L" statusValue="); AppendHexText(detailBuffer, static_cast<std::uint64_t>(statusValue));
+}
+void CaptureNtQueryInformationThread(wchar_t (&detailBuffer)[ks::winapi_monitor::kMaxDetailChars], HANDLE thread, THREADINFOCLASS infoClass, PVOID information, ULONG length, PULONG returned, NTSTATUS statusValue)
+{
+    AppendWideText(detailBuffer, L" thread="); AppendHexText(detailBuffer, reinterpret_cast<std::uint64_t>(thread));
+    AppendWideText(detailBuffer, L" infoClass="); AppendHexText(detailBuffer, static_cast<std::uint64_t>(infoClass));
+    AppendWideText(detailBuffer, L" information="); AppendHexText(detailBuffer, reinterpret_cast<std::uint64_t>(information));
+    AppendWideText(detailBuffer, L" length="); AppendHexText(detailBuffer, static_cast<std::uint64_t>(length));
+    AppendWideText(detailBuffer, L" returned="); AppendHexText(detailBuffer, reinterpret_cast<std::uint64_t>(returned));
+    AppendWideText(detailBuffer, L" statusValue="); AppendHexText(detailBuffer, static_cast<std::uint64_t>(statusValue));
+}
+void CaptureVirtualAlloc2(wchar_t (&detailBuffer)[ks::winapi_monitor::kMaxDetailChars], HANDLE process, PVOID base, SIZE_T size, ULONG allocation, ULONG protection, MEM_EXTENDED_PARAMETER* parameters, ULONG count, PVOID resultHandle)
+{
+    AppendWideText(detailBuffer, L" process="); AppendHexText(detailBuffer, reinterpret_cast<std::uint64_t>(process));
+    AppendWideText(detailBuffer, L" base="); AppendHexText(detailBuffer, reinterpret_cast<std::uint64_t>(base));
+    AppendWideText(detailBuffer, L" size="); AppendHexText(detailBuffer, static_cast<std::uint64_t>(size));
+    AppendWideText(detailBuffer, L" allocation="); AppendHexText(detailBuffer, static_cast<std::uint64_t>(allocation));
+    AppendWideText(detailBuffer, L" protection="); AppendHexText(detailBuffer, static_cast<std::uint64_t>(protection));
+    AppendWideText(detailBuffer, L" parameters="); AppendHexText(detailBuffer, reinterpret_cast<std::uint64_t>(parameters));
+    AppendWideText(detailBuffer, L" count="); AppendHexText(detailBuffer, static_cast<std::uint64_t>(count));
+    AppendWideText(detailBuffer, L" resultHandle="); AppendHexText(detailBuffer, reinterpret_cast<std::uint64_t>(resultHandle));
+}
+void CaptureVirtualAlloc2FromApp(wchar_t (&detailBuffer)[ks::winapi_monitor::kMaxDetailChars], HANDLE process, PVOID base, SIZE_T size, ULONG allocation, ULONG protection, MEM_EXTENDED_PARAMETER* parameters, ULONG count, PVOID resultHandle)
+{
+    AppendWideText(detailBuffer, L" process="); AppendHexText(detailBuffer, reinterpret_cast<std::uint64_t>(process));
+    AppendWideText(detailBuffer, L" base="); AppendHexText(detailBuffer, reinterpret_cast<std::uint64_t>(base));
+    AppendWideText(detailBuffer, L" size="); AppendHexText(detailBuffer, static_cast<std::uint64_t>(size));
+    AppendWideText(detailBuffer, L" allocation="); AppendHexText(detailBuffer, static_cast<std::uint64_t>(allocation));
+    AppendWideText(detailBuffer, L" protection="); AppendHexText(detailBuffer, static_cast<std::uint64_t>(protection));
+    AppendWideText(detailBuffer, L" parameters="); AppendHexText(detailBuffer, reinterpret_cast<std::uint64_t>(parameters));
+    AppendWideText(detailBuffer, L" count="); AppendHexText(detailBuffer, static_cast<std::uint64_t>(count));
+    AppendWideText(detailBuffer, L" resultHandle="); AppendHexText(detailBuffer, reinterpret_cast<std::uint64_t>(resultHandle));
+}
+void CaptureMapViewOfFile3(wchar_t (&detailBuffer)[ks::winapi_monitor::kMaxDetailChars], HANDLE mapping, HANDLE process, PVOID base, ULONG64 offset, SIZE_T size, ULONG allocation, ULONG protection, MEM_EXTENDED_PARAMETER* parameters, ULONG count, PVOID resultHandle)
+{
+    AppendWideText(detailBuffer, L" mapping="); AppendHexText(detailBuffer, reinterpret_cast<std::uint64_t>(mapping));
+    AppendWideText(detailBuffer, L" process="); AppendHexText(detailBuffer, reinterpret_cast<std::uint64_t>(process));
+    AppendWideText(detailBuffer, L" base="); AppendHexText(detailBuffer, reinterpret_cast<std::uint64_t>(base));
+    AppendWideText(detailBuffer, L" offset="); AppendHexText(detailBuffer, static_cast<std::uint64_t>(offset));
+    AppendWideText(detailBuffer, L" size="); AppendHexText(detailBuffer, static_cast<std::uint64_t>(size));
+    AppendWideText(detailBuffer, L" allocation="); AppendHexText(detailBuffer, static_cast<std::uint64_t>(allocation));
+    AppendWideText(detailBuffer, L" protection="); AppendHexText(detailBuffer, static_cast<std::uint64_t>(protection));
+    AppendWideText(detailBuffer, L" parameters="); AppendHexText(detailBuffer, reinterpret_cast<std::uint64_t>(parameters));
+    AppendWideText(detailBuffer, L" count="); AppendHexText(detailBuffer, static_cast<std::uint64_t>(count));
+    AppendWideText(detailBuffer, L" resultHandle="); AppendHexText(detailBuffer, reinterpret_cast<std::uint64_t>(resultHandle));
+}
+void CaptureCreateFileMapping2(wchar_t (&detailBuffer)[ks::winapi_monitor::kMaxDetailChars], HANDLE file, LPSECURITY_ATTRIBUTES security, ULONG access, ULONG protection, ULONG allocation, ULONG64 size, PCWSTR name, MEM_EXTENDED_PARAMETER* parameters, ULONG count, HANDLE resultHandle)
+{
+    AppendWideText(detailBuffer, L" file="); AppendHexText(detailBuffer, reinterpret_cast<std::uint64_t>(file));
+    AppendWideText(detailBuffer, L" security="); AppendHexText(detailBuffer, reinterpret_cast<std::uint64_t>(security));
+    AppendWideText(detailBuffer, L" access="); AppendHexText(detailBuffer, static_cast<std::uint64_t>(access));
+    AppendWideText(detailBuffer, L" protection="); AppendHexText(detailBuffer, static_cast<std::uint64_t>(protection));
+    AppendWideText(detailBuffer, L" allocation="); AppendHexText(detailBuffer, static_cast<std::uint64_t>(allocation));
+    AppendWideText(detailBuffer, L" size="); AppendHexText(detailBuffer, static_cast<std::uint64_t>(size));
+    AppendWideText(detailBuffer, L" name="); AppendWideText(detailBuffer, name);
+    AppendWideText(detailBuffer, L" parameters="); AppendHexText(detailBuffer, reinterpret_cast<std::uint64_t>(parameters));
+    AppendWideText(detailBuffer, L" count="); AppendHexText(detailBuffer, static_cast<std::uint64_t>(count));
+    AppendWideText(detailBuffer, L" resultHandle="); AppendHexText(detailBuffer, reinterpret_cast<std::uint64_t>(resultHandle));
+}
+void CaptureQueueUserAPC2(wchar_t (&detailBuffer)[ks::winapi_monitor::kMaxDetailChars], PAPCFUNC callback, HANDLE thread, ULONG_PTR data, QUEUE_USER_APC_FLAGS flags, BOOL resultValue)
+{
+    AppendWideText(detailBuffer, L" callback="); AppendHexText(detailBuffer, reinterpret_cast<std::uint64_t>(callback));
+    AppendWideText(detailBuffer, L" thread="); AppendHexText(detailBuffer, reinterpret_cast<std::uint64_t>(thread));
+    AppendWideText(detailBuffer, L" data="); AppendHexText(detailBuffer, static_cast<std::uint64_t>(data));
+    AppendWideText(detailBuffer, L" flags="); AppendHexText(detailBuffer, static_cast<std::uint64_t>(flags));
+    AppendWideText(detailBuffer, L" resultValue="); AppendHexText(detailBuffer, static_cast<std::uint64_t>(resultValue));
+}
+void CaptureCoGetObject(wchar_t (&detailBuffer)[ks::winapi_monitor::kMaxDetailChars], LPCWSTR name, BIND_OPTS* options, REFIID interfaceId, void** object, HRESULT statusValue)
+{
+    AppendWideText(detailBuffer, L" name="); AppendWideText(detailBuffer, name);
+    AppendWideText(detailBuffer, L" options="); AppendHexText(detailBuffer, reinterpret_cast<std::uint64_t>(options));
+    AppendWideText(detailBuffer, L" interfaceId="); AppendHexText(detailBuffer, reinterpret_cast<std::uint64_t>(&interfaceId));
+    AppendWideText(detailBuffer, L" object="); AppendHexText(detailBuffer, reinterpret_cast<std::uint64_t>(object));
+    AppendWideText(detailBuffer, L" statusValue="); AppendHexText(detailBuffer, static_cast<std::uint64_t>(statusValue));
+}

@@ -80,6 +80,10 @@ typedef struct _KS_CLIENT_ID
     HANDLE UniqueThread;
 } KS_CLIENT_ID, *PKS_CLIENT_ID;
 
+struct KS_ALPC_PORT_ATTRIBUTES;
+struct KS_PORT_MESSAGE;
+struct KS_ALPC_MESSAGE_ATTRIBUTES;
+
 namespace apimon
 {
     namespace

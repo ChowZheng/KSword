@@ -151,8 +151,9 @@ class LiveFixture:
 
     def close(self):
         try:
-            self.stop.write_text("stop")
-            self.wait_for(lambda f: any(e.api == "HooksRemoved" for e in f.events), timeout=30)
+            if self.process.poll() is None:
+                self.stop.write_text("stop")
+                self.wait_for(lambda f: any(e.api == "HooksRemoved" for e in f.events), timeout=30)
         finally:
             if self.handle is not None and self.handle != INVALID:
                 kernel.CloseHandle(self.handle)
