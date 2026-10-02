@@ -34955,6 +34955,9 @@
     "断开连接": "断开连接",
     "映像": "映像",
     "结束": "结束",
-    "Kernel-UDPIP": "Kernel-UDPIP"
+    "Kernel-UDPIP": "Kernel-UDPIP",
+    "进程间通信": "进程间通信",
+    "调试": "调试",
+    "microsoft-windows-windows defender": "microsoft-windows-windows defender"
   }
 }

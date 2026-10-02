@@ -9,6 +9,7 @@ if vsdev is None:raise SystemExit('x64 MSVC build environment is required')
 import argparse, struct
 parser=argparse.ArgumentParser()
 parser.add_argument('--case', default='all')
+parser.add_argument('--catalog-output', type=Path, help='Audit installed preset manifests and save their raw names and current interpretation')
 args=parser.parse_args()
 payload=struct.pack('<QQIIIBBHQIIII',0xfffff8024ffb0000,0x16000,0,92554,2243701516,12,5,0,0,0,0,0,0)
 payload+=('\\SystemRoot\\System32\\drivers\\ndiscap.sys'+'\0').encode('utf-16le')
@@ -32,6 +33,7 @@ code=r'''
 #include <QJsonObject>
 #include <QJsonDocument>
 #include <QJsonParseError>
+#include <QFile>
 #include <algorithm>
 #include <vector>
 #include <unordered_map>
@@ -65,8 +67,56 @@ descriptor=s[s.index('    struct EtwFilterFieldDescriptor'):s.index('    constex
 identity='\n'.join(fun(x) for x in ['QString etwProviderDisplayName(', 'std::uint32_t etwRelatedProcessId(', 'std::uint32_t etwRelatedThreadId(', 'void etwUpdateRelatedIdentity('])
 filters=s[s.index('    const std::vector<EtwFilterFieldDescriptor>& etwFilterFieldDescriptorList()'):s.index('    // EtwSchemaPropertyEntry')]
 code=code.replace('DEPENDENCIES',fun('QString guidToText(')+identity+aliases+descriptor+filters)
+presets=s[s.index('    struct EtwPresetProviderDescriptor'):s.index('    constexpr GUID kKswordEtwKernelSessionGuid')]
+presets+='\n'+fun('const std::vector<EtwPresetProviderDescriptor>& etwPresetProviderDescriptorList(')+'\n'+fun('const EtwPresetProviderDescriptor* findEtwPresetProviderDescriptor(')+'\n'+fun('QString etwInferProviderCategory(')
+code=code.replace('PARSER',presets+'\nPARSER')
 code=code.replace('PARSER',s[s.index('    // EtwSchemaPropertyEntry'):s.index('    // 100ns 时间戳文本格式化')]).replace('SAMPLE_BYTES',','.join(str(x) for x in payload))
 tests={
+ 'provider_categories': r'''
+ for(const auto& preset:etwPresetProviderDescriptorList())if(etwInferProviderCategory(preset.providerNameText)!=preset.categoryText)return 110;
+ struct ResourceCase{const char* provider;const char* event;const char* resource;};
+ const ResourceCase cases[]={
+ {"Microsoft-Windows-TCPIP","Ndkpi_Deregister_Mr","网络"},{"Microsoft-Windows-DNS-Client","DnsRegistration","网络"},
+ {"Microsoft-Windows-Winsock-AFD","Deregister","网络"},{"Kernel-Profile","Profile","性能分析"},
+ {"Microsoft-Windows-Security-Auditing","Audit","安全审计"},{"Microsoft-Windows-Windows Defender","Detection","安全审计"},
+ {"Microsoft-Windows-PowerShell","ScriptBlock","脚本管理"},{"Microsoft-Windows-WMI-Activity","Operation","脚本管理"},
+ {"Microsoft-Windows-TaskScheduler","Task","脚本管理"},{"Kernel-PageFault","HardFault","内存"},
+ {"Kernel-DiskIO","Read","磁盘"},{"Kernel-ALPC","Send","进程间通信"},{"Kernel-DebugEvents","Debug","调试"},
+ {"Microsoft-Windows-Kernel-Process","ImageLoad","映像"},{"Vendor-Custom","RegisterProfile","通用"}};
+ for(const auto& c:cases)if(inferEtwResourceType(QString::fromUtf8(c.provider),QString::fromUtf8(c.event))!=QString::fromUtf8(c.resource)){printf("resource mismatch: %s %s\n",c.provider,c.event);return 111;}
+ ''',
+ 'catalog': r'''
+ ULONG providerBytes=0;auto status=TdhEnumerateProviders(nullptr,&providerBytes);if(status!=ERROR_INSUFFICIENT_BUFFER)return 100;
+ std::vector<unsigned char> providerBuffer(providerBytes);auto providers=reinterpret_cast<PROVIDER_ENUMERATION_INFO*>(providerBuffer.data());
+ if(TdhEnumerateProviders(providers,&providerBytes)!=ERROR_SUCCESS)return 101;
+ QJsonArray catalog;ULONG eventCount=0,availableProviders=0;
+ for(const auto& preset:etwPresetProviderDescriptorList()){
+   QJsonObject entry;entry.insert(QStringLiteral("provider"),preset.providerNameText);entry.insert(QStringLiteral("preset_category"),preset.categoryText);entry.insert(QStringLiteral("inferred_category"),etwInferProviderCategory(preset.providerNameText));
+   const TRACE_PROVIDER_INFO* found=nullptr;
+   for(ULONG i=0;i<providers->NumberOfProviders;++i){auto& p=providers->TraceProviderInfoArray[i];auto name=etwTextAtOffset(providerBuffer.data(),p.ProviderNameOffset);if(name.compare(preset.providerNameText,Qt::CaseInsensitive)==0){found=&p;break;}}
+   if(!found){entry.insert(QStringLiteral("available"),false);catalog.append(entry);continue;}
+   entry.insert(QStringLiteral("available"),true);entry.insert(QStringLiteral("guid"),guidToText(found->ProviderGuid));
+   auto guid=found->ProviderGuid;ULONG eventBytes=0;status=TdhEnumerateManifestProviderEvents(&guid,nullptr,&eventBytes);entry.insert(QStringLiteral("enumeration_status"),static_cast<int>(status));
+   if(status!=ERROR_INSUFFICIENT_BUFFER){catalog.append(entry);continue;}
+   std::vector<unsigned char> eventBuffer(eventBytes);auto events=reinterpret_cast<PROVIDER_EVENT_INFO*>(eventBuffer.data());
+   if(TdhEnumerateManifestProviderEvents(&guid,events,&eventBytes)!=ERROR_SUCCESS)return 102;
+   ++availableProviders;QJsonArray definitions;
+   for(ULONG i=0;i<events->NumberOfEvents;++i){auto descriptor=events->EventDescriptorsArray[i];ULONG bytes=0;
+     status=TdhGetManifestEventInformation(&guid,&descriptor,nullptr,&bytes);if(status!=ERROR_INSUFFICIENT_BUFFER)continue;
+     std::vector<unsigned char> buffer(bytes);auto info=reinterpret_cast<TRACE_EVENT_INFO*>(buffer.data());
+     if(TdhGetManifestEventInformation(&guid,&descriptor,info,&bytes)!=ERROR_SUCCESS)continue;
+     QString event=etwTextAtOffset(buffer.data(),info->EventNameOffset),task=etwTextAtOffset(buffer.data(),info->TaskNameOffset),opcode=etwTextAtOffset(buffer.data(),info->OpcodeNameOffset);
+     if(event.isEmpty())event=task;if(event.isEmpty())event=opcode;
+     QJsonObject definition;definition.insert(QStringLiteral("id"),descriptor.Id);definition.insert(QStringLiteral("version"),descriptor.Version);definition.insert(QStringLiteral("event"),event);definition.insert(QStringLiteral("task"),task);definition.insert(QStringLiteral("opcode"),opcode);definition.insert(QStringLiteral("opcode_value"),descriptor.Opcode);
+     definition.insert(QStringLiteral("resource"),inferEtwResourceType(preset.providerNameText,event));definition.insert(QStringLiteral("action"),inferEtwActionText(event,opcode));
+     QJsonArray fields;for(ULONG j=0;j<info->TopLevelPropertyCount;++j){const auto& property=info->EventPropertyInfoArray[j];QString name=etwTextAtOffset(buffer.data(),property.NameOffset);QJsonObject field;field.insert(QStringLiteral("name"),name);field.insert(QStringLiteral("meaning"),etwPropertyMeaningText(normalizeEtwPropertyName(name)));fields.append(field);}definition.insert(QStringLiteral("fields"),fields);
+     definitions.append(definition);++eventCount;
+   }
+   entry.insert(QStringLiteral("events"),definitions);catalog.append(entry);
+ }
+ QFile output(QString::fromLocal8Bit(qgetenv("KSWORD_ETW_CATALOG_OUTPUT")));if(!output.open(QIODevice::WriteOnly))return 103;
+ output.write(QJsonDocument(catalog).toJson(QJsonDocument::Indented));printf("CATALOG: preset manifests=%lu events=%lu\n",availableProviders,eventCount);
+ ''',
  'missing_identity': r'''
  record.EventHeader.EventDescriptor.Opcode=10;decoded.clear();auto missing=fill(guidToText(imageGuid),QStringLiteral("Image"),QStringLiteral("Load"));
  if(missing.securityPidValid||missing.securityTidValid||missing.pidTidText!=QStringLiteral("未知 / 未知"))return 90;
@@ -174,7 +224,10 @@ tests={
  if(json.value(QStringLiteral("meta")).toObject().value(QStringLiteral("header_pid")).toInt()!=3212)return 7;
  ''',
 }
-selected=list(tests) if args.case=='all' else [args.case]
+selected=[name for name in tests if name!='catalog'] if args.case=='all' else [args.case]
+if args.catalog_output:
+ args.catalog_output.parent.mkdir(parents=True,exist_ok=True)
+ selected.append('catalog')
 if any(name not in tests for name in selected):parser.error('Unknown case')
 reset='record.EventHeader.ProviderId=imageGuid;record.EventHeader.EventDescriptor.Opcode=3;run(installed,image,sizeof(image));row=fill(guidToText(imageGuid),QStringLiteral("Image"),QStringLiteral("DCStart"));'
 body='\n'.join('{'+reset+tests[name]+'}' for name in selected)
@@ -182,9 +235,11 @@ code=code.replace('TEST_BODY',body).replace('CASE_NAME',','.join(selected))
 
 with tempfile.TemporaryDirectory(prefix='ksword_etw_decode_') as temp:
  d=Path(temp);cpp=d/'audit.cpp';cpp.write_text(code,encoding='utf-8')
- args=['cl','/nologo','/permissive-','/EHsc','/std:c++17','/Zc:__cplusplus','/utf-8','/MD','/I'+str(qt/'include'),'/I'+str(qt/'include/QtCore'),str(cpp),'/Fe:'+str(d/'audit.exe'),'/Fo:'+str(d/'audit.obj'),'/link',str(qt/'lib/Qt6Core.lib'),'tdh.lib','advapi32.lib','ole32.lib']
- bat=d/'build.cmd';bat.write_text('@echo off\ncall "'+str(vsdev)+'" -arch=x64 -host_arch=x64 >nul\n'+subprocess.list2cmdline(args)+'\n',encoding='utf-8')
+ compiler_args=['cl','/nologo','/permissive-','/EHsc','/std:c++17','/Zc:__cplusplus','/utf-8','/MD','/I'+str(qt/'include'),'/I'+str(qt/'include/QtCore'),str(cpp),'/Fe:'+str(d/'audit.exe'),'/Fo:'+str(d/'audit.obj'),'/link',str(qt/'lib/Qt6Core.lib'),'tdh.lib','advapi32.lib','ole32.lib']
+ bat=d/'build.cmd';bat.write_text('@echo off\ncall "'+str(vsdev)+'" -arch=x64 -host_arch=x64 >nul\n'+subprocess.list2cmdline(compiler_args)+'\n',encoding='utf-8')
  r=subprocess.run(['cmd','/d','/c',str(bat)],cwd=temp,capture_output=True,text=True,encoding='utf-8',errors='replace');print(r.stdout);print(r.stderr)
  if r.returncode:raise SystemExit(r.returncode)
  subprocess.run([str(qt/'bin/windeployqt.exe'),'--release','--compiler-runtime','--no-opengl-sw',str(d/'audit.exe')],check=True,stdout=subprocess.DEVNULL)
- subprocess.run([str(d/'audit.exe')],check=True,timeout=30)
+ environment=os.environ.copy()
+ if args.catalog_output:environment['KSWORD_ETW_CATALOG_OUTPUT']=str(args.catalog_output.resolve())
+ subprocess.run([str(d/'audit.exe')],check=True,timeout=120 if args.catalog_output else 30,env=environment)

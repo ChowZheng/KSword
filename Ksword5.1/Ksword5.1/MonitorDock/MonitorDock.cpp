@@ -1569,6 +1569,8 @@ namespace
 
     QString etwInferProviderCategory(const QString& providerNameText)
     {
+        if (const auto* preset = findEtwPresetProviderDescriptor(providerNameText.trimmed()))
+            return preset->categoryText;
         const QString lower = providerNameText.toLower();
         if (lower.contains(QStringLiteral("kernel-process"))
             || lower.contains(QStringLiteral("kernel-thread"))
@@ -1590,6 +1592,7 @@ namespace
             || lower.contains(QStringLiteral("dns-client"))
             || lower.contains(QStringLiteral("winsock-afd"))
             || lower.contains(QStringLiteral("kernel-tcpip"))
+            || lower.contains(QStringLiteral("kernel-udpip"))
             || lower.contains(QStringLiteral("kernel-alpc")))
         {
             return QStringLiteral("网络通信");
@@ -3547,36 +3550,41 @@ namespace
     // - 调用：写入 JSON semantic.resourceType。
     QString inferEtwResourceType(const QString& providerNameText, const QString& eventNameText)
     {
-        const QString providerLower = providerNameText.toLower();
-        const QString eventLower = eventNameText.toLower();
-
-        if (providerLower.contains(QStringLiteral("kernel-image")) || eventLower == QStringLiteral("image")
-            || eventLower.startsWith(QStringLiteral("imageload")) || eventLower.startsWith(QStringLiteral("imageunload")))
+        const QString provider = etwProviderDisplayName(providerNameText, providerNameText).trimmed().toLower();
+        const QString event = normalizeEtwPropertyName(eventNameText);
+        auto isProvider = [&provider](std::initializer_list<const char*> names) {
+            return std::any_of(names.begin(), names.end(), [&provider](const char* name) {
+                return provider == QLatin1String(name);
+            });
+        };
+        // 资源归类由已知 Provider 决定，不能让 Register/Profile 等事件名抢占类别。
+        if (isProvider({"microsoft-windows-kernel-image", "image"})) return QStringLiteral("映像");
+        if (isProvider({"microsoft-windows-kernel-process", "kernel-process", "process"}))
         {
-            return QStringLiteral("映像");
-        }
-
-        if (providerLower.contains(QStringLiteral("registry")) || eventLower.contains(QStringLiteral("reg")))
-        {
-            return QStringLiteral("注册表");
-        }
-        if (providerLower.contains(QStringLiteral("file")) || providerLower.contains(QStringLiteral("ntfs"))
-            || eventLower.contains(QStringLiteral("file")) || eventLower.contains(QStringLiteral("createfile")))
-        {
-            return QStringLiteral("文件");
-        }
-        if (providerLower.contains(QStringLiteral("tcp")) || providerLower.contains(QStringLiteral("udp"))
-            || providerLower.contains(QStringLiteral("network")) || providerLower.contains(QStringLiteral("winsock"))
-            || eventLower.contains(QStringLiteral("connect")) || eventLower.contains(QStringLiteral("send"))
-            || eventLower.contains(QStringLiteral("recv")))
-        {
-            return QStringLiteral("网络");
-        }
-        if (providerLower.contains(QStringLiteral("process")) || providerLower.contains(QStringLiteral("thread"))
-            || eventLower.contains(QStringLiteral("process")) || eventLower.contains(QStringLiteral("thread")))
-        {
+            if (event.startsWith(QStringLiteral("imageload")) || event.startsWith(QStringLiteral("imageunload")))
+                return QStringLiteral("映像");
             return QStringLiteral("进程线程");
         }
+        if (isProvider({"microsoft-windows-kernel-thread", "thread", "kernel-processcounters", "kernel-job"}))
+            return QStringLiteral("进程线程");
+        if (isProvider({"microsoft-windows-kernel-registry", "kernel-registry", "registry"})) return QStringLiteral("注册表");
+        if (isProvider({"microsoft-windows-kernel-file", "kernel-fileio", "kernel-fileioinit", "fileio", "microsoft-windows-ntfs"}))
+            return QStringLiteral("文件");
+        if (isProvider({"kernel-diskio", "kernel-diskfileio", "kernel-diskioinit", "kernel-splitio", "diskio", "splitio"}))
+            return QStringLiteral("磁盘");
+        if (isProvider({"microsoft-windows-tcpip", "kernel-tcpip", "kernel-udpip", "tcpip", "udpip",
+            "microsoft-windows-dns-client", "microsoft-windows-winsock-afd", "microsoft-windows-kernel-network"}))
+            return QStringLiteral("网络");
+        if (isProvider({"kernel-alpc", "alpc"})) return QStringLiteral("进程间通信");
+        if (isProvider({"kernel-pagefault", "kernel-hardfault", "kernel-virtualalloc", "kernel-vamap", "memory"}))
+            return QStringLiteral("内存");
+        if (isProvider({"kernel-profile", "kernel-dpc", "kernel-interrupt", "kernel-systemcall", "kernel-cswitch", "kernel-dispatcher", "perfinfo"}))
+            return QStringLiteral("性能分析");
+        if (isProvider({"kernel-driver"})) return QStringLiteral("驱动");
+        if (isProvider({"microsoft-windows-security-auditing", "microsoft-windows-windows defender"})) return QStringLiteral("安全审计");
+        if (isProvider({"kernel-debugevents", "kernel-dbgprint", "dbgprint"})) return QStringLiteral("调试");
+        if (isProvider({"microsoft-windows-powershell", "microsoft-windows-wmi-activity", "microsoft-windows-taskscheduler"}))
+            return QStringLiteral("脚本管理");
         return QStringLiteral("通用");
     }
 
