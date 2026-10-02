@@ -1606,8 +1606,7 @@ namespace
         const QString lower = providerNameText.toLower();
         if (lower.contains(QStringLiteral("kernel-process"))
             || lower.contains(QStringLiteral("kernel-thread"))
-            || lower.contains(QStringLiteral("kernel-image"))
-            || lower.contains(QStringLiteral("windows kernel trace")))
+            || lower.contains(QStringLiteral("kernel-image")))
         {
             return QStringLiteral("进程线程");
         }
@@ -1670,6 +1669,10 @@ namespace
     QString etwTimelineTypeFromCapturedRow(const MonitorDock::EtwCapturedEventRow& rowData)
     {
         const QString providerNameText = rowData.providerName.trimmed();
+        // Kernel-Process 清单还包含 Thread/Image 事件，不能让 Provider 名覆盖已解码类别。
+        if (rowData.resourceTypeText == QStringLiteral("映像")) return QStringLiteral("镜像");
+        if (providerNameText.compare(QStringLiteral("Microsoft-Windows-Kernel-Process"), Qt::CaseInsensitive) == 0
+            && rowData.eventName.startsWith(QStringLiteral("Thread"), Qt::CaseInsensitive)) return QStringLiteral("线程");
         if (providerNameText == QStringLiteral("Kernel-CSwitch") || providerNameText == QStringLiteral("Kernel-Dispatcher"))
             return QStringLiteral("线程");
         if (providerNameText.contains(QStringLiteral("Kernel-Process"), Qt::CaseInsensitive))

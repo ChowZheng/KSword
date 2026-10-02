@@ -69,9 +69,17 @@ filters=s[s.index('    const std::vector<EtwFilterFieldDescriptor>& etwFilterFie
 code=code.replace('DEPENDENCIES',fun('QString guidToText(')+identity+aliases+descriptor+filters)
 presets=s[s.index('    struct EtwPresetProviderDescriptor'):s.index('    constexpr GUID kKswordEtwKernelSessionGuid')]
 presets+='\n'+fun('const std::vector<EtwPresetProviderDescriptor>& etwPresetProviderDescriptorList(')+'\n'+fun('const EtwPresetProviderDescriptor* findEtwPresetProviderDescriptor(')+'\n'+fun('QString etwInferProviderCategory(')
+presets+='\n'+fun('QString etwTimelineTypeFromCapturedRow(')
 code=code.replace('PARSER',presets+'\nPARSER')
 code=code.replace('PARSER',s[s.index('    // EtwSchemaPropertyEntry'):s.index('    // 100ns 时间戳文本格式化')]).replace('SAMPLE_BYTES',','.join(str(x) for x in payload))
 tests={
+ 'timeline_translation': r'''
+ MonitorDock::EtwCapturedEventRow point;point.providerName=QStringLiteral("Microsoft-Windows-Kernel-Process");point.providerCategory=QStringLiteral("进程线程");
+ point.resourceTypeText=QStringLiteral("映像");point.eventName=QStringLiteral("ImageLoad");if(etwTimelineTypeFromCapturedRow(point)!=QStringLiteral("镜像"))return 190;
+ point.resourceTypeText=QStringLiteral("进程线程");point.eventName=QStringLiteral("ThreadStart");if(etwTimelineTypeFromCapturedRow(point)!=QStringLiteral("线程"))return 191;
+ point.eventName=QStringLiteral("ProcessStart");if(etwTimelineTypeFromCapturedRow(point)!=QStringLiteral("进程"))return 192;
+ point.providerName=QStringLiteral("Windows Kernel Trace");point.providerCategory=etwInferProviderCategory(point.providerName);point.resourceTypeText=QStringLiteral("通用");point.eventName=QStringLiteral("Event_0");if(etwTimelineTypeFromCapturedRow(point)!=QStringLiteral("其他"))return 193;
+ ''',
  'field_translation': r'''
  if(!etwPropertyMeaningText(QStringLiteral("pid")).isEmpty()||!etwPropertyMeaningText(QStringLiteral("parentid")).isEmpty())return 180;
  if(etwPropertyMeaningText(QStringLiteral("pid"),QStringLiteral("网络"))!=QStringLiteral("进程ID"))return 181;
