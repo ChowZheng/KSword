@@ -84,6 +84,7 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="NativeLoader.cpp" />
+    <ClCompile Include="Provider.cpp" />
     <ClCompile Include="NativeSeam.cpp" />
     <ClCompile Include="Proxy.cpp" />
     <ClCompile Include="Control.cpp" />

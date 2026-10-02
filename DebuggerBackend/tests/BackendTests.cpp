@@ -746,6 +746,20 @@ int main()
             !backend.writeMemory(process.native(), reinterpret_cast<void*>(0x10040), codePatch, 3, &done) &&
             GetLastError() == ERROR_NOT_SUPPORTED && backend.policyStatus().fallbackCount == fallbackBefore + 1,
             "Strict data write silently fell back");
+        // Reproduce CE's protect(RWX) -> SetValue/freeze -> restore sequence:
+        // the page now looks executable, but the adapter verified it was data.
+        model.executableMemory = true;
+        require(!backend.writeMemory(process.native(), reinterpret_cast<void*>(0x10040), codePatch, 3, &done,
+            ksword::debugger::Backend::MemoryWriteKind::data) && GetLastError() == ERROR_NOT_SUPPORTED &&
+            done == 0 && model.shadowPages.empty(), "Strict temporary-RWX data write installed an execution patch");
+        shadowOptions.allowFallback = 1;
+        const auto windowBefore = model.windowTransfers;
+        require(backend.setOptions(shadowOptions) == ERROR_SUCCESS &&
+            backend.writeMemory(process.native(), reinterpret_cast<void*>(0x10040), codePatch, 3, &done,
+                ksword::debugger::Backend::MemoryWriteKind::data) && done == 3 &&
+            model.windowTransfers == windowBefore + 1 && model.shadowPages.empty() &&
+            backend.policyStatus().fallbackCount == fallbackBefore + 2,
+            "Verified temporary-RWX data did not use an explicit real data fallback");
         model.executableMemory = true; model.failShadowWrite = true;
         shadowOptions.allowFallback = 1;
         require(backend.setOptions(shadowOptions) == ERROR_SUCCESS &&

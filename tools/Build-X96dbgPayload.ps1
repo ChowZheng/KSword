@@ -65,13 +65,25 @@ $actualHead = & git -C $ReferenceRoot rev-parse HEAD
 if ($LASTEXITCODE -ne 0 -or $actualHead -ne $pins.x64dbg) { throw "Expected x64dbg source $($pins.x64dbg), found $actualHead" }
 $nativeHead = & git -C (Join-Path $ReferenceRoot 'src\third_party\TitanEngine') rev-parse HEAD
 if ($LASTEXITCODE -ne 0 -or $nativeHead -ne $pins.nativeTitanEngine) { throw 'Native TitanEngine submodule does not match the canonical ABI baseline.' }
+$replayHead = & git -C (Join-Path $ReferenceRoot 'src\third_party\DbgEng') rev-parse HEAD
+if ($LASTEXITCODE -ne 0 -or $replayHead -ne $pins.dbgEng) { throw 'DbgEng replay provider does not match the pinned PR baseline.' }
+$depsHead = & git -C (Join-Path $ReferenceRoot 'deps') rev-parse HEAD
+if ($LASTEXITCODE -ne 0 -or $depsHead -ne $pins.deps) { throw 'Runtime dependencies do not match the pinned PR baseline.' }
 if (-not (Test-Path -LiteralPath (Join-Path $Qt5Root 'lib\cmake\Qt5\Qt5Config.cmake'))) { throw 'Verified x64 Qt5 SDK is missing; use -PrepareDependencies.' }
 
 $patch = Join-Path $RepositoryRoot 'X96dbgIntegration\patches\x64dbg-ksword-engine.patch'
-& git -C $ReferenceRoot apply --reverse --check $patch 2>$null
+# Upstream marks C++ sources -text (CRLF), while our distributable patch is LF.
+# Ignore context whitespace so checkout line endings do not change applicability.
+& git -C $ReferenceRoot apply --ignore-whitespace --reverse --check $patch 2>$null
 if ($LASTEXITCODE -ne 0) {
-    Invoke-Checked git @('-C', $ReferenceRoot, 'apply', '--check', $patch)
-    Invoke-Checked git @('-C', $ReferenceRoot, 'apply', $patch)
+    Invoke-Checked git @('-C', $ReferenceRoot, 'apply', '--ignore-whitespace', '--check', $patch)
+    Invoke-Checked git @('-C', $ReferenceRoot, 'apply', '--ignore-whitespace', $patch)
+}
+$extensionHeader = Join-Path $ReferenceRoot 'src\bridge\ksword_engine.h'
+$extensionText = [IO.File]::ReadAllText($extensionHeader).Replace("`r`n", "`n")
+$canonicalText = [IO.File]::ReadAllText((Join-Path $RepositoryRoot 'DebuggerBackend\KswordDebuggerApi.h')).Replace("`r`n", "`n")
+if ($extensionText -cne $canonicalText) {
+    throw 'The frontend optional KSword extension differs from the canonical in-process API header.'
 }
 
 # These environment values also cover CMake's compiler-identification probes.
@@ -97,7 +109,9 @@ try {
     $env:PROCESSOR_ARCHITEW6432 = $savedArchitectureW6432
 }
 $outputRoot = Join-Path $ReferenceRoot 'bin\x64'
-foreach ($filename in @('x64dbg.exe', 'x64bridge.dll', 'x64dbg.dll', 'x64gui.dll', 'TitanEngine.dll', 'headless.exe')) {
+foreach ($filename in @('x64dbg.exe', 'x64bridge.dll', 'x64dbg.dll', 'x64gui.dll', 'TitanEngine.dll', 'headless.exe',
+    'DbgEng\TitanEngine.dll', 'DbgEng\dbgeng.dll', 'DbgEng\dbgcore.dll', 'DbgEng\dbgmodel.dll',
+    'DbgEng\TTDReplay.dll', 'DbgEng\TTDReplayCPU.dll')) {
     $artifact = Join-Path $outputRoot $filename
     if (-not (Test-Path -LiteralPath $artifact) -or (Get-Item -LiteralPath $artifact).Length -eq 0) { throw "Missing x64dbg artifact: $artifact" }
 }

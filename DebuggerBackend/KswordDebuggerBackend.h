@@ -35,10 +35,15 @@ namespace ksword::debugger
         HANDLE openProcess(DWORD access, BOOL inherit, DWORD pid);
         DWORD processId(HANDLE process);
         BOOL readMemory(HANDLE process, LPCVOID address, LPVOID data, SIZE_T bytes, SIZE_T* transferred);
-        BOOL writeMemory(HANDLE process, LPVOID address, LPCVOID data, SIZE_T bytes, SIZE_T* transferred);
+        // A frontend may temporarily add execute permission while editing data.
+        // Adapters must verify the pre-protection transaction before using data.
+        enum class MemoryWriteKind { byProtection, data };
+        BOOL writeMemory(HANDLE process, LPVOID address, LPCVOID data, SIZE_T bytes, SIZE_T* transferred,
+            MemoryWriteKind kind = MemoryWriteKind::byProtection);
         SIZE_T queryMemory(HANDLE process, LPCVOID address, PMEMORY_BASIC_INFORMATION info, SIZE_T bytes);
         BOOL protectMemory(HANDLE process, LPVOID address, SIZE_T bytes, DWORD protection, PDWORD previous);
         LPVOID allocateMemory(HANDLE process, LPVOID address, SIZE_T bytes, DWORD type, DWORD protection);
+        BOOL freeMemory(HANDLE process, LPVOID address, SIZE_T bytes, DWORD type);
         HANDLE createThread(HANDLE process, LPSECURITY_ATTRIBUTES attributes, SIZE_T stackBytes,
             LPTHREAD_START_ROUTINE start, LPVOID parameter, DWORD flags, LPDWORD tid);
         HANDLE openThread(DWORD access, BOOL inherit, DWORD tid);
@@ -68,6 +73,8 @@ namespace ksword::debugger
         // and cumulative 10/100/1000/... occurrences; preserve caller LastError.
         void logRepeated(const std::string& message);
         void overlayShadowBytes(DWORD pid, std::uint64_t address, void* data, SIZE_T bytes);
+        bool shadowPatchByte(DWORD pid, std::uint64_t address, unsigned char& byte);
+        DWORD nativeExecutionBreakpointPath(std::uint64_t address);
     private:
 #ifdef KSWORD_DEBUGGER_TESTING
         friend struct BackendTestPeer;
@@ -115,7 +122,7 @@ namespace ksword::debugger
         DWORD shadowWritePageCount() const;
         bool hasShadowViews() const;
         bool shadowMemoryWrite(DWORD pid, std::uint64_t address, const void* data,
-            SIZE_T bytes, SIZE_T& transferred, bool& handled);
+            SIZE_T bytes, SIZE_T& transferred, bool& handled, bool dataWrite);
         std::unordered_set<std::uint64_t> shadowInt3_;
         bool shadowPrepared_ = false;
         bool shadowRecoveryRequired_ = false;
@@ -159,7 +166,7 @@ namespace ksword::debugger
         DWORD breakpointRequest(KSWORD_ARK_HVM_DEBUG_REQUEST& request,
             KSWORD_ARK_HVM_DEBUG_RESPONSE& response);
         bool transfer(bool write, DWORD pid, std::uint64_t address, void* data,
-            SIZE_T bytes, SIZE_T& transferred);
+            SIZE_T bytes, SIZE_T& transferred, bool dataWrite = false);
     };
     Backend& backend();
 }

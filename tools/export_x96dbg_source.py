@@ -28,6 +28,7 @@ def main() -> None:
         "LICENSE", "docs/ksword-x64dbg-backend.md", "docs/ksword-x64dbg-validation.md",
         "tools/Build-X96dbgPayload.ps1", "tools/package_x96dbg_plugin.ps1",
         "tools/export_x96dbg_source.py", "docs/ksword-debugger-vm-validation.md",
+        "docs/ksword-x64dbg-api-review.md", "docs/ksword-x64dbg-pr3974-validation.md",
     ]
     if any(output.is_relative_to(root / name) for name in roots):
         parser.error("The source archive cannot replace or include its source inputs")
@@ -51,6 +52,7 @@ def main() -> None:
     upstream = [
         ("x64dbg", root / ".deps/x64dbg-reference", pins["x64dbg"]),
         ("TitanEngine", root / ".deps/x64dbg-reference/src/third_party/TitanEngine", pins["nativeTitanEngine"]),
+        ("DbgEng", root / ".deps/x64dbg-reference/src/third_party/DbgEng", pins["dbgEng"]),
     ]
     source_manifest = []
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -83,7 +85,7 @@ The shared protocol and current debugger/HVM driver sources are included under
 shared/ and KswordARKDriver/, with the original System Informer license retained.
 Building the driver additionally requires the matching Windows WDK.
 
-upstream/ contains unmodified pinned x64dbg and native TitanEngine source ZIPs.
+upstream/ contains unmodified pinned x64dbg, native TitanEngine and DbgEng source ZIPs.
 Apply X96dbgIntegration/patches/x64dbg-ksword-engine.patch to the x64dbg source.
 Submodule revisions are recorded in upstream/submodule-revisions.txt; repository
 URLs are retained in the original .gitmodules and CMake source.

@@ -110,14 +110,15 @@ function Get-Amd64Pe([string]$Path, [switch]$ExportNames) {
 if (!(Test-Path -LiteralPath $canonicalDef -PathType Leaf)) { throw "Canonical engine definition is missing: $canonicalDef" }
 $canonical = @(Get-Content -LiteralPath $canonicalDef | ForEach-Object { if ($_ -match '^\s+([A-Za-z][A-Za-z0-9_]*)\s*$') { $Matches[1] } })
 if ($canonical.Count -ne 64 -or @($canonical | Sort-Object -Unique).Count -ne 64) { throw 'The selected canonical engine ABI is not the audited 64-export interface. Re-audit it before packaging.' }
-foreach ($path in @($launcher, $ProxyDll, (Join-Path $runtimeRoot 'TitanEngine.dll'))) {
+foreach ($path in @($launcher, $ProxyDll, (Join-Path $runtimeRoot 'TitanEngine.dll'), (Join-Path $runtimeRoot 'DbgEng\TitanEngine.dll'))) {
     $pe = Get-Amd64Pe $path -ExportNames:($path -ne $launcher)
     if ($path -ne $launcher) {
         $missing = @($canonical | Where-Object { $_ -cnotin $pe.Exports })
         if ($missing.Count -ne 0) { throw "Engine DLL is incompatible: $path; missing exports: $($missing -join ', ')" }
     }
 }
-foreach ($file in @('x64dbg.exe', 'x64dbg.dll', 'x64bridge.dll', 'x64gui.dll', 'platforms\qwindows.dll')) {
+foreach ($file in @('x64dbg.exe', 'x64dbg.dll', 'x64bridge.dll', 'x64gui.dll', 'platforms\qwindows.dll',
+    'DbgEng\dbgeng.dll', 'DbgEng\dbgcore.dll', 'DbgEng\dbgmodel.dll', 'DbgEng\TTDReplay.dll', 'DbgEng\TTDReplayCPU.dll')) {
     $null = Get-Amd64Pe (Join-Path $runtimeRoot $file)
 }
 # The user-directory setting is read before engine initialization. Require the
@@ -193,7 +194,8 @@ foreach ($file in Get-ChildItem -LiteralPath $thirdPartyRoot -Recurse -File | Wh
     New-Item -ItemType Directory -Path ([IO.Path]::GetDirectoryName($destination)) -Force | Out-Null
     Copy-Item -LiteralPath $file.FullName -Destination $destination -Force
 }
-foreach ($relative in @('docs\ksword-x64dbg-backend.md', 'docs\ksword-x64dbg-validation.md', 'docs\ksword-debugger-vm-validation.md', 'X96dbgIntegration\patches\x64dbg-ksword-engine.patch')) {
+foreach ($relative in @('docs\ksword-x64dbg-backend.md', 'docs\ksword-x64dbg-validation.md', 'docs\ksword-debugger-vm-validation.md',
+    'docs\ksword-x64dbg-api-review.md', 'docs\ksword-x64dbg-pr3974-validation.md', 'X96dbgIntegration\patches\x64dbg-ksword-engine.patch')) {
     $path = Join-Path $repositoryRoot $relative
     if (Test-Path -LiteralPath $path -PathType Leaf) { Copy-Item -LiteralPath $path -Destination $pluginRoot -Force }
 }
@@ -207,6 +209,8 @@ $manifest = [ordered]@{
     format = 'ksword-x96dbg-payload/1'; architecture = 'x64'; source_commit = $sourceCommit
     canonical_export_count = $canonical.Count; canonical_exports = $canonical
     engine_selection = [ordered]@{ DebugEngine = 4; user_directory = 'sessions/UUID'; path = 'KSword/TitanEngine.dll' }
+    baseline_pins = (Get-Content -LiteralPath (Join-Path $repositoryRoot 'X96dbgIntegration\PINNED_BASELINES.json') -Raw | ConvertFrom-Json)
+    optional_engine_query_version = 1
     files = $manifestFiles
 }
 $manifest | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $pluginRoot 'payload-manifest.json') -Encoding utf8

@@ -1,6 +1,8 @@
 {
-  "x64dbg": "f107330b6563da3c38d60a3ad6e629057b7cf5d0",
+  "x64dbg": "de6fc34df7cb01edea28f40c8b5c49d37bc1c0fb",
   "nativeTitanEngine": "21ef77f31fd42d17f785802c36b2ca4ca44c43d7",
+  "dbgEng": "e452d24fa87754fea2fd6b5abbadc1929291ce72",
+  "deps": "b6b5684eac7698c81f93232a998a896cfff80d56",
   "canonicalExports": 64,
   "architecture": "AMD64",
   "engineSetting": 4,

@@ -9,8 +9,10 @@ debugger's window parent, fonts, colors or layout.
 
 | Component | Baseline |
 | --- | --- |
-| x64dbg engine ABI and frontend | `f107330b6563da3c38d60a3ad6e629057b7cf5d0` |
+| x64dbg engine ABI and frontend | `de6fc34df7cb01edea28f40c8b5c49d37bc1c0fb` |
 | Native TitanEngine | `21ef77f31fd42d17f785802c36b2ca4ca44c43d7` |
+| DbgEng replay provider | `e452d24fa87754fea2fd6b5abbadc1929291ce72` |
+| Runtime dependencies | `b6b5684eac7698c81f93232a998a896cfff80d56` |
 | Canonical engine exports | 64, exact typed declarations |
 | Qt SDK | Qt 5.12.12 msvc2017_64, archive SHA256 in `X96dbgIntegration/PINNED_BASELINES.json` |
 
@@ -32,6 +34,7 @@ x96dbg/
     x64gui.dll
     TitanEngine.dll          native engine, canonical pinned ABI
     KSword/TitanEngine.dll   KSword adapter
+    DbgEng/TitanEngine.dll   minidump/TTD provider and its runtime DLLs
     platforms/qwindows.dll
   licenses/
   KSword-x96dbg-source.zip
@@ -46,22 +49,31 @@ records the module handle. A missing driver does not prevent native debugging.
 
 ## Routing policy
 
-| API surface | Native mode | HVM mode |
-| --- | --- | --- |
-| Init, attach, Windows debug port, DebugLoop | Native TitanEngine | Native TitanEngine |
-| Software breakpoints | Native | Native loop; hidden INT3 when ShadowPage fallback is selected |
-| Generic memory breakpoints | Native | Native |
-| Hardware execute breakpoints | Native DR | KSword EPT execute; automatic ShadowPage INT3 fallback if unavailable |
-| Hardware write/read-write breakpoints | Native DR | Explicit `ERROR_NOT_SUPPORTED` |
-| GPR, flags, SIMD/XSTATE context | Native Windows context | Native Windows context with virtual DR overlay |
-| StepInto/StepOver and Run | Native callbacks and Windows transport | Same transport; owned EPT state validated before Continue |
-| Query/read/write/allocate/protect/free memory | Native | Native; successful free retires affected owned EPT bindings |
-| Thread/process handles, suspend/resume, termination | Native real handles | Native real handles; owned state retired on lifecycle transitions |
-| Session info and replay APIs | Exact native result/capabilities | Exact native result/capabilities |
-| Versioned `KSwordDebuggerCall` | Driver API, explicit readiness/error | Shared HVM control, memory, policy, view, events, nested and debug APIs |
+| API surface | Live, HVM off | Live, HVM on | Minidump / TTD |
+| --- | --- | --- | --- |
+| Init, attach, Windows debug port, DebugLoop | Native TitanEngine | Native TitanEngine and owned state lifecycle | Checked DbgEng provider, synthetic events and handles |
+| Software breakpoints | Native; stealth rejects visible patching | Native loop with Shadow variants in stealth | Provider logical code breakpoints where capability permits |
+| Generic memory breakpoints | Native PAGE_GUARD; stealth rejects | PAGE_GUARD only with explicit normal-mode fallback | Provider logical data breakpoints where capability permits |
+| Hardware execute breakpoints | Native DR | EPT execute or logged Shadow INT3 fallback; stealth prefers Shadow | Provider logical code breakpoint |
+| Hardware write/read-write breakpoints | Native DR | Explicit `ERROR_NOT_SUPPORTED`; page watch is a different operation | Provider logical data breakpoint |
+| GPR, flags, SIMD/XSTATE context | Native Windows context | Native Windows context with virtual DR overlay | Provider captured context; writes capability restricted |
+| StepInto/StepOver and Run | Native callbacks / Windows transport | Same transport; owned state validated before Continue | Provider execution; immutable dump rejects execution |
+| Query/allocate/protect/free memory | Native | Shared R0 backend; successful free retires affected bindings | Provider memory map; modifications capability restricted |
+| Public Safe/Unsafe read and WriteSafe | Native filtering / raw semantics | Strict private-window original-view read; policy-aware write | Captured provider memory; no live-driver access |
+| Open/close, paths, WOW64, thread IDs/priorities/times/cycles, remote creation/termination | Native real handles | Native real handles | Provider-owned synthetic identities and capability restrictions |
+| Suspend/resume thread | Native | Shared backend with explicit configured Windows fallback | Provider result; no live thread operation |
+| Session info and replay position/extent/seek/reverse operations | Native capabilities and unsupported reverse result | Same live capability boundary | Exact DbgEng session kind/capabilities and replay results |
+| Versioned `KSwordDebuggerCall` | Explicit readiness/error and policy | Shared HVM controls and installed-binding diagnostics | Session query available; changed live HVM policy rejected |
 
-The canonical export table has no optimistic success stubs. Replay capabilities
-are the underlying native engine's actual capabilities. HVM event history does
+The canonical export table has no optimistic success stubs. The PR's 27 added
+exports are included in the 64-export ABI. `Provider.cpp` maintains the selected
+dispatch table through debug-loop exit and frontend handle cleanup. Before
+`InitReplayW`, the late-loaded DbgEng provider receives the same
+`EngineCheckStructAlignment` startup handshake as a directly loaded engine.
+Live launch/attach switches back after retiring owned state. Engine variables
+and breakpoint defaults are propagated to both providers.
+
+Replay capabilities are the underlying DbgEng provider's actual capabilities. HVM event history does
 not become a replay timeline, a new live-stop event, or a substitute for a
 Windows debug event. Native mode retains its data hardware breakpoints.
 
@@ -69,6 +81,41 @@ EPT data monitoring is page based. Generic byte-range hardware write/read-write
 requests cannot be represented as exact stops, so HVM mode rejects them before
 changing the native callback table. Explicit Watch/diagnostic operations remain
 available through the versioned KSword API, with their actual page semantics.
+
+## KSword-only frontend menus
+
+The menu uses the engine loaded at startup. Changing the Settings selection does
+not change its identity until restart. Native TitanEngine, DbgEng, GleeBug and
+StaticEngine do not display KSword entries.
+
+- **KSword → Engine capabilities and mechanisms**: current provider/session,
+  capabilities, configured versus active HVM, owned binding/Shadow counts and
+  fallback state.
+- HVM, stealth preference, Shadow code patches, explicit data/native fallback,
+  Windows context/suspend fallback, Shadow page budget, and owned-write restore.
+  Menu checks read acknowledged state; policy mutation is disabled in replay,
+  while running, or when installed bindings prevent a change.
+- CPU **Breakpoint → KSword: installed mechanism**, plus the matching action in
+  the breakpoint list. The execution action explicitly uses KSword policy.
+- The breakpoint list **Type** column displays the installed mechanism: DR,
+  EPT execution, Shadow INT3/long INT3/UD2, original-page software variant,
+  PAGE_GUARD, or replay code/data. Upstream category and slot bookkeeping remain.
+
+Optional `KSwordDebuggerCall` commands 8/9 are defined in
+`DebuggerBackend/KswordDebuggerApi.h`, with version/size checked structures of
+160 bytes (engine), 24 bytes (breakpoint query) and 56 bytes (result).
+They add no required TitanEngine export or driver wire structure. A missing
+optional export reports unsupported. Other adapters, including CE, need not
+implement these Titan-specific queries.
+
+Breakpoint details come from successfully installed owned records. Disabled,
+failed or retired entries return `ERROR_NOT_FOUND`. Details report actual
+mechanism, requested/effective coverage, access, frontend slot and per-binding
+fallback error. Shadow byte arming is queried from tracked execution patches;
+temporary removal at a held hit keeps the logical binding installed. DR/EPT
+physical arming is not claimed when it was not queried. Ordinary reads retain
+the original view. EPT data diagnostics state their 4096-byte granularity and
+live diagnostics state that Windows debug transport remains present.
 
 ## Real stop and context transport
 
@@ -185,3 +232,5 @@ Install by copying the resulting `x96dbg` directory into KSword's `plugin/`
 directory. The supplied plugin ZIP has `plugin.json` at its root; extract it
 into `plugin/x96dbg/` beside KSword's executable. Live HVM acceptance and current
 verification limits are listed in `ksword-x64dbg-validation.md`.
+The PR #3974 migration, provider startup fix, menu UI evidence and TTD fixture
+boundary are recorded in `ksword-x64dbg-pr3974-validation.md`.

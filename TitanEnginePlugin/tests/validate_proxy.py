@@ -45,6 +45,27 @@ class Call(C.Structure):
                 ('error', W.DWORD), ('bytesReturned', W.DWORD)]
 
 
+class BackendStatus(C.Structure):
+    _fields_ = [(name, W.DWORD) for name in ['version', 'size', 'driverReady', 'useHvm',
+                'directWindow', 'resident', 'ownsResident', 'attachedPid', 'eptProtocol', 'lastError']]
+
+
+class EngineInfo(C.Structure):
+    _fields_ = [(name, W.DWORD) for name in ['version', 'size', 'provider', 'kind']] + [
+        ('capabilities', C.c_uint64)] + [(name, W.DWORD) for name in ['pid', 'configuredHvm', 'activeHvm',
+        'windowsTransport', 'hardwareSlots', 'eptGranularity']] + [('backend', BackendStatus), ('policy', Policy)]
+
+
+class BreakpointQuery(C.Structure):
+    _fields_ = [('version', W.DWORD), ('size', W.DWORD), ('address', C.c_uint64), ('type', W.DWORD), ('reserved', W.DWORD)]
+
+
+class BreakpointInfo(C.Structure):
+    _fields_ = [('version', W.DWORD), ('size', W.DWORD), ('address', C.c_uint64),
+               ('requestedBytes', C.c_uint64), ('effectiveBytes', C.c_uint64)] + [
+        (name, W.DWORD) for name in ['type', 'mechanism', 'access', 'slot', 'flags', 'fallbackError']]
+
+
 class ProcessInfo(C.Structure):
     _fields_ = [('process', W.HANDLE), ('thread', W.HANDLE), ('pid', W.DWORD), ('tid', W.DWORD)]
 
@@ -116,6 +137,14 @@ def exercise(stage: Path, missing: bool) -> None:
         assert result == packet.error and packet.bytesReturned == C.sizeof(output)
         return result
     original = Options(); assert C.sizeof(original) == 48 and C.sizeof(Policy) == 72 and dispatch(4, original) == 0
+    engine = EngineInfo(); assert C.sizeof(engine) == 160 and dispatch(8, engine) == 0
+    assert engine.version == 1 and engine.size == 160 and engine.provider == 0 and engine.kind == 0
+    assert engine.configuredHvm == 0 and engine.activeHvm == 0 and engine.hardwareSlots == 4 and engine.eptGranularity == 4096
+    assert not engine.backend.driverReady, 'engine information must not initialize/open the driver'
+    absent = BreakpointQuery(1, 24, 0x1234, 2, 0); binding = BreakpointInfo()
+    assert C.sizeof(binding) == 56 and dispatch(9, binding, absent) == 1168 and not (binding.flags & 1)
+    short = Call(1, 48, 8, 0, 0, C.addressof(engine), 0, 159, 0, 0)
+    assert call_api(C.byref(short)) == 122 and short.bytesReturned == 0
     expected = [1, 48, 0, 0, 1, 1, 1, 1, 32, 0, 0, 0]
     assert list(C.cast(C.byref(original), C.POINTER(W.DWORD * 12)).contents) == expected
     for field, value, error in [('mode', 2, 87), ('shadowMemoryWrites', 2, 87), ('allowFallback', 2, 87),
@@ -206,10 +235,15 @@ def exercise(stage: Path, missing: bool) -> None:
             assert write(process, address, stub, len(stub), C.byref(transferred))
             assert protect(process, address, 4096, 0x40, C.byref(old))
             assert set_bp(address, 0x10000000, callback); installed = True
+            query = BreakpointQuery(1, 24, address, 1, 0)
+            assert dispatch(9, binding, query) == 0 and binding.mechanism == 4 and binding.flags & 1
+            assert binding.requestedBytes == 1 and binding.effectiveBytes == 1 and binding.fallbackError == 0
+            assert dispatch(8, engine) == 0 and engine.policy.activeBreakpoints >= 1 and engine.windowsTransport == 1
             policy = Policy(); assert dispatch(6, policy) == 0 and policy.activeBreakpoints >= 1 and policy.canChangeOptions == 0
             assert dispatch(5, actual, stealth) == 170 and bytes(actual) == bytes(original), 'live native binding protects policy'
             assert dispatch(5, actual, original) == 0, 'identical options remain idempotent'
             assert delete_bp(address); installed = False
+            assert dispatch(9, binding, query) == 1168 and not (binding.flags & 1), 'deleted native binding must not be inferred from policy'
             assert dispatch(5, actual, stealth) == 0 and bytes(actual) == bytes(stealth)
             assert not set_bp(address, 0x10000000, callback) and C.get_last_error() == 21
             assert not set_hw(address, 0, 4, 7, callback) and C.get_last_error() == 21

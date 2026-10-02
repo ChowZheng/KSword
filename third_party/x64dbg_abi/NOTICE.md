@@ -2,8 +2,8 @@
 
 `TitanEngine.h`, `TitanEngine.def`, `check_titanengine_exports.py` and `LICENSE`
 are copied without semantic changes from x64dbg commit
-`f107330b6563da3c38d60a3ad6e629057b7cf5d0` (PR 3974).
-Upstream: https://github.com/x64dbg/x64dbg/tree/f107330b6563da3c38d60a3ad6e629057b7cf5d0
+`de6fc34df7cb01edea28f40c8b5c49d37bc1c0fb` (PR 3974).
+Upstream: https://github.com/x64dbg/x64dbg/tree/de6fc34df7cb01edea28f40c8b5c49d37bc1c0fb
 
 The manifest and signature inventory are supplied by the user's
 `KSword_x64dbg_agent_package.zip`; they describe the same 64 canonical exports.
