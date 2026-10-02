@@ -640,6 +640,8 @@ void WinAPIDock::flushPendingRows()
         const int removeCount = std::max(0, m_eventTable->rowCount() - 12000);
         if (removeCount > 0 && m_eventTable->model() != nullptr)
         {
+            for (int row = 0; row < removeCount; ++row)
+                if (!m_eventTable->isRowHidden(row)) --m_visibleEventCount;
             m_evictedRows += removeCount;
             m_eventTable->model()->removeRows(0, removeCount);
         }
@@ -726,4 +728,10 @@ void WinAPIDock::appendEventRow(const EventRow& rowValue)
     m_eventTable->setItem(row, EventColumnResult, resultItem);
     m_eventTable->setItem(row, EventColumnPidTid, pidTidItem);
     m_eventTable->setItem(row, EventColumnDetail, detailItem);
+    const QString searchText = QStringList{rowValue.time100nsText, rowValue.categoryText, rowValue.apiText,
+        rowValue.resultText, rowValue.pidTidText, rowValue.detailText}.join(QStringLiteral(" | "));
+    timeItem->setData(Qt::UserRole, searchText);
+    const bool visible = m_eventFilterKeyword.isEmpty() || searchText.contains(m_eventFilterKeyword, Qt::CaseInsensitive);
+    m_eventTable->setRowHidden(row, !visible);
+    if (visible) ++m_visibleEventCount;
 }

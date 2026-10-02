@@ -253,6 +253,7 @@ private:
     ks::winapi_monitor::SessionLease m_sessionLease;
     QString m_currentSessionId;                            // m_currentSessionId：每次启动唯一标识，防 stop/start 过快时遗漏停止标记。
     qint64 m_lastProcessRefreshMs = 0;                     // m_lastProcessRefreshMs：上次完成进程快照的时间戳（ms）。
-    bool m_eventFilterActive = false;                      // m_eventFilterActive：是否需要在事件到达时执行全表筛选。
+    QString m_eventFilterKeyword; // Existing rows are immutable; rescan only when the keyword changes.
+    int m_visibleEventCount = 0;
     bool m_hasActivatedOnce = false;                       // m_hasActivatedOnce：是否已经至少激活过一次页面。
 };

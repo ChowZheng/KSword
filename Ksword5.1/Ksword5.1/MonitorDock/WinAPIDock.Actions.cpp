@@ -415,6 +415,7 @@ void WinAPIDock::initializeConnections()
             {
                 m_eventTable->clearContents();
                 m_eventTable->setRowCount(0);
+        m_visibleEventCount = 0;
                 applyEventFilter();
                 updateActionState();
                 updateStatusLabel();
@@ -1262,6 +1263,7 @@ void WinAPIDock::startMonitoring()
     {
         m_eventTable->clearContents();
         m_eventTable->setRowCount(0);
+        m_visibleEventCount = 0;
     }
     {
         std::lock_guard<std::mutex> lock(m_pendingMutex);
@@ -1447,61 +1449,27 @@ void WinAPIDock::terminateHooksForSelectedProcess()
 
 void WinAPIDock::applyEventFilter()
 {
-    if (m_eventTable == nullptr)
+    if (m_eventTable == nullptr) return;
+    const QString keyword = m_eventFilterEdit != nullptr ? m_eventFilterEdit->text().trimmed() : QString();
+    if (keyword != m_eventFilterKeyword)
     {
-        return;
-    }
-
-    const QString keywordText = m_eventFilterEdit != nullptr ? m_eventFilterEdit->text().trimmed() : QString();
-    if (keywordText.isEmpty())
-    {
-        if (m_eventFilterActive)
+        m_eventFilterKeyword = keyword;
+        m_visibleEventCount = 0;
+        for (int row = 0; row < m_eventTable->rowCount(); ++row)
         {
-            for (int row = 0; row < m_eventTable->rowCount(); ++row)
-            {
-                m_eventTable->setRowHidden(row, false);
-            }
-        }
-        m_eventFilterActive = false;
-        if (m_eventFilterStatusLabel != nullptr)
-        {
-            m_eventFilterStatusLabel->setText(
-                QStringLiteral("筛选结果：%1 / %2")
-                    .arg(m_eventTable->rowCount())
-                    .arg(m_eventTable->rowCount()));
-            ks::ui::ApplyStatusRole(m_eventFilterStatusLabel,
-                m_eventTable->rowCount() > 0 ? ks::ui::StatusRole::Success : ks::ui::StatusRole::Idle);
-        }
-        return;
-    }
-
-    m_eventFilterActive = true;
-    int visibleCount = 0;
-
-    for (int row = 0; row < m_eventTable->rowCount(); ++row)
-    {
-        QStringList rowTextList;
-        for (int column = 0; column < EventColumnCount; ++column)
-        {
-            QTableWidgetItem* itemPointer = m_eventTable->item(row, column);
-            rowTextList << (itemPointer != nullptr ? itemPointer->text() : QString());
-        }
-
-        const QString mergedText = rowTextList.join(QStringLiteral(" | "));
-        const bool visible = keywordText.isEmpty() || mergedText.contains(keywordText, Qt::CaseInsensitive);
-        m_eventTable->setRowHidden(row, !visible);
-        if (visible)
-        {
-            ++visibleCount;
+            const auto* item = m_eventTable->item(row, EventColumnTime100ns);
+            const bool visible = keyword.isEmpty()
+                || (item && item->data(Qt::UserRole).toString().contains(keyword, Qt::CaseInsensitive));
+            m_eventTable->setRowHidden(row, !visible);
+            if (visible) ++m_visibleEventCount;
         }
     }
-
     if (m_eventFilterStatusLabel != nullptr)
     {
-        m_eventFilterStatusLabel->setText(
-            QStringLiteral("筛选结果：%1 / %2").arg(visibleCount).arg(m_eventTable->rowCount()));
+        m_eventFilterStatusLabel->setText(QStringLiteral("筛选结果：%1 / %2")
+            .arg(m_visibleEventCount).arg(m_eventTable->rowCount()));
         ks::ui::ApplyStatusRole(m_eventFilterStatusLabel,
-            visibleCount > 0 ? ks::ui::StatusRole::Success : ks::ui::StatusRole::Idle);
+            m_visibleEventCount > 0 ? ks::ui::StatusRole::Success : ks::ui::StatusRole::Idle);
     }
 }
 
