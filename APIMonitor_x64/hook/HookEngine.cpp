@@ -154,8 +154,7 @@ namespace apimon
                 }
                 if (prefixValue == 0xF0 || prefixValue == 0xF2 || prefixValue == 0xF3
                     || prefixValue == 0x2E || prefixValue == 0x36 || prefixValue == 0x3E
-                    || prefixValue == 0x26 || prefixValue == 0x64 || prefixValue == 0x65
-                    || prefixValue == 0x67)
+                    || prefixValue == 0x26 || prefixValue == 0x64 || prefixValue == 0x65)
                 {
                     ++offsetValue;
                     continue;
@@ -170,9 +169,7 @@ namespace apimon
 
             const unsigned char opcodeValue = codePointer[offsetValue++];
             if ((opcodeValue >= 0x50 && opcodeValue <= 0x5F)
-                || opcodeValue == 0x90
-                || opcodeValue == 0xC3
-                || opcodeValue == 0xCC)
+                || opcodeValue == 0x90)
             {
                 return offsetValue;
             }
@@ -182,7 +179,8 @@ namespace apimon
             }
             if (opcodeValue == 0x68)
             {
-                return offsetValue + 4 <= maxLength ? offsetValue + 4 : 0;
+                const std::size_t immediateLength = operandOverride ? 2 : 4;
+                return offsetValue + immediateLength <= maxLength ? offsetValue + immediateLength : 0;
             }
             if (opcodeValue == 0xE8 || opcodeValue == 0xE9 || opcodeValue == 0xEB)
             {
@@ -255,7 +253,6 @@ namespace apimon
             case 0x39:
             case 0x3B:
             case 0x63:
-            case 0x80:
             case 0x84:
             case 0x85:
             case 0x88:
@@ -266,7 +263,8 @@ namespace apimon
                 return appendModRmInstruction(0);
             case 0x81:
             case 0xC7:
-                return appendModRmInstruction(4);
+                return appendModRmInstruction(operandOverride && !rexW ? 2 : 4);
+            case 0x80:
             case 0x83:
             case 0xC6:
                 return appendModRmInstruction(1);
@@ -288,7 +286,7 @@ namespace apimon
                 const unsigned char modrmValue = codePointer[offsetValue];
                 const unsigned char regValue = static_cast<unsigned char>((modrmValue >> 3) & 0x7);
                 const std::size_t immediateLength = (regValue == 0 || regValue == 1)
-                    ? (opcodeValue == 0xF6 ? 1 : (operandOverride ? 2 : 4))
+                    ? (opcodeValue == 0xF6 ? 1 : (operandOverride && !rexW ? 2 : 4))
                     : 0;
                 return appendModRmInstruction(immediateLength);
             }
