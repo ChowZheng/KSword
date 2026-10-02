@@ -25,6 +25,7 @@
 #include <QClipboard>
 #include <QComboBox>
 #include <QCoreApplication>
+#include <QCryptographicHash>
 #include <QDateTime>
 #include <QEasingCurve>
 #include <QDataStream>
@@ -2676,7 +2677,7 @@ namespace
     };
 
     // EtwSchemaEntry：
-    // - 作用：缓存“Provider + EventId + Version + Task + Opcode”对应的事件元数据；
+    // - 作用：缓存事件布局，TraceLogging 同时按自描述元数据区分；
     // - 调用：ETW 回调里先查该缓存，命中后不再重复调用 TdhGetEventInformation。
     struct EtwSchemaEntry
     {
@@ -2923,7 +2924,7 @@ namespace
 
     // etwSchemaKeyFromRecord：
     // - 作用：生成事件类型缓存键；
-    // - 组成：ProviderGuid + EventId + Version + Task + Opcode。
+    // - TraceLogging 的 EventId 通常为 0，必须包含扩展数据里的事件 schema。
     std::string etwSchemaKeyFromRecord(const EVENT_RECORD* eventRecord)
     {
         if (eventRecord == nullptr)
@@ -2931,12 +2932,28 @@ namespace
             return std::string();
         }
 
-        const QString keyText = QStringLiteral("%1|%2|%3|%4|%5")
+        QString keyText = QStringLiteral("%1|%2|%3|%4|%5|%6|%7")
             .arg(guidToText(eventRecord->EventHeader.ProviderId))
             .arg(static_cast<int>(eventRecord->EventHeader.EventDescriptor.Id))
             .arg(static_cast<int>(eventRecord->EventHeader.EventDescriptor.Version))
             .arg(static_cast<int>(eventRecord->EventHeader.EventDescriptor.Task))
-            .arg(static_cast<int>(eventRecord->EventHeader.EventDescriptor.Opcode));
+            .arg(static_cast<int>(eventRecord->EventHeader.EventDescriptor.Opcode))
+            .arg(static_cast<int>(eventRecord->EventHeader.EventDescriptor.Channel))
+            .arg(static_cast<int>(eventRecord->EventHeader.Flags
+                & (EVENT_HEADER_FLAG_32_BIT_HEADER | EVENT_HEADER_FLAG_64_BIT_HEADER | EVENT_HEADER_FLAG_CLASSIC_HEADER)));
+        if (eventRecord->ExtendedData != nullptr)
+        {
+            for (USHORT index = 0; index < eventRecord->ExtendedDataCount; ++index)
+            {
+                const auto& item = eventRecord->ExtendedData[index];
+                if (item.ExtType == EVENT_HEADER_EXT_TYPE_EVENT_SCHEMA_TL && item.DataPtr != 0 && item.DataSize != 0)
+                {
+                    const QByteArray metadata(reinterpret_cast<const char*>(static_cast<ULONG_PTR>(item.DataPtr)), item.DataSize);
+                    keyText += QStringLiteral("|tl_schema=")
+                        + QString::fromLatin1(QCryptographicHash::hash(metadata, QCryptographicHash::Sha256).toHex());
+                }
+            }
+        }
         return keyText.toStdString();
     }
 
@@ -3068,6 +3085,8 @@ namespace
 
         {
             std::lock_guard<std::mutex> lock(g_etwSchemaCacheMutex);
+            // 自描述事件可以产生大量不同布局，避免本轮缓存无限增长。
+            if (g_etwSchemaCacheByKey.size() >= 4096) g_etwSchemaCacheByKey.clear();
             auto [iter, inserted] = g_etwSchemaCacheByKey.emplace(cacheKey, builtSchema);
             if (!inserted)
             {

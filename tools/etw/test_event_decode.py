@@ -27,6 +27,7 @@ code=r'''
 #include <QStringList>
 #include <QRegularExpression>
 #include <QByteArray>
+#include <QCryptographicHash>
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QJsonDocument>
@@ -66,6 +67,15 @@ filters=s[s.index('    const std::vector<EtwFilterFieldDescriptor>& etwFilterFie
 code=code.replace('DEPENDENCIES',fun('QString guidToText(')+identity+aliases+descriptor+filters)
 code=code.replace('PARSER',s[s.index('    // EtwSchemaPropertyEntry'):s.index('    // 100ns 时间戳文本格式化')]).replace('SAMPLE_BYTES',','.join(str(x) for x in payload))
 tests={
+ 'schema_cache': r'''
+ EVENT_RECORD tl{};tl.EventHeader=record.EventHeader;tl.EventHeader.EventDescriptor.Channel=11;tl.EventHeader.EventDescriptor.Id=0;
+ unsigned char one[]={5,0,'A',0,7},two[]={5,0,'B',0,8},copy[]={5,0,'A',0,7};
+ EVENT_HEADER_EXTENDED_DATA_ITEM metadata{};metadata.ExtType=EVENT_HEADER_EXT_TYPE_EVENT_SCHEMA_TL;metadata.DataSize=sizeof(one);metadata.DataPtr=reinterpret_cast<ULONG_PTR>(one);
+ tl.ExtendedData=&metadata;tl.ExtendedDataCount=1;auto first=etwSchemaKeyFromRecord(&tl);
+ metadata.DataPtr=reinterpret_cast<ULONG_PTR>(two);auto second=etwSchemaKeyFromRecord(&tl);if(first==second)return 80;
+ metadata.DataPtr=reinterpret_cast<ULONG_PTR>(copy);if(first!=etwSchemaKeyFromRecord(&tl))return 81;
+ metadata.DataPtr=reinterpret_cast<ULONG_PTR>(one);tl.EventHeader.Flags=EVENT_HEADER_FLAG_32_BIT_HEADER;if(first==etwSchemaKeyFromRecord(&tl))return 82;
+ ''',
  'id_bounds': r'''
  schema={};schema.propertyList={prop(0,"ProcessId",TDH_INTYPE_UINT64)};std::uint64_t oversized=0x100000001ULL;
  run(schema,&oversized,sizeof(oversized));std::uint32_t value=0;if(etwPropertyToUInt32(&decoded[0],&value))return 70;
