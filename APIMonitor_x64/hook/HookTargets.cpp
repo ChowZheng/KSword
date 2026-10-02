@@ -1206,8 +1206,12 @@ namespace apimon
 
             wchar_t hostBuffer[NI_MAXHOST] = {};
             wchar_t serviceBuffer[NI_MAXSERV] = {};
+            sockaddr_storage address{};
+            if (addressLength > sizeof(address)) { AppendWideText(detailBuffer, L"<unknown>"); return; }
+            __try { std::memcpy(&address, addressPointer, addressLength); }
+            __except (EXCEPTION_EXECUTE_HANDLER) { AppendWideText(detailBuffer, L"<unreadable>"); return; }
             const int resultValue = ::GetNameInfoW(
-                addressPointer,
+                reinterpret_cast<const sockaddr*>(&address),
                 addressLength,
                 hostBuffer,
                 NI_MAXHOST,

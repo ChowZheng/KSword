@@ -3,6 +3,14 @@
             __try { return value ? *value : fallback; }
             __except (EXCEPTION_EXECUTE_HANDLER) { return fallback; }
         }
+        void CaptureDatagramCompletion(const IoToken& operation, wchar_t* output, std::size_t capacity)
+        {
+            wchar_t detail[ks::winapi_monitor::kMaxDetailChars]{};
+            AppendWideText(detail, L"remote=");
+            AppendSocketAddress(detail, static_cast<const sockaddr*>(operation->captureAddress),
+                SafeIoValue(operation->captureAddressLength));
+            wcsncpy_s(output, capacity, detail, _TRUNCATE);
+        }
         struct IoCallbackContext
         {
             IoToken operation;
@@ -101,7 +109,7 @@
             const DWORD error = ::GetLastError();
             if (!guard.bypass()) {
                 const auto completed = SafeIoValue(ov);
-                if (completed) ObservePortCompletion(port, completed, result ? 0 : error, SafeIoValue(bytes));
+                if (completed) ObservePortCompletion(port, completed, result ? 0 : error, SafeIoValue(bytes), SafeIoValue(key));
                 if (ActiveConfig().enableFile) SendMonitorEventRaw(ks::winapi_monitor::EventCategory::File,L"KernelBase",L"GetQueuedCompletionStatus",result ? 0 : error,L"IOCP observation");
             }
             ::SetLastError(error); return result;
@@ -121,7 +129,7 @@
                 const ULONG count = result ? (std::min)((std::min)(SafeIoValue(removed), capacity), 8192UL) : 0;
                 for (ULONG index = 0; entries && index < count; ++index) {
                     const auto entry = SafeIoValue(entries + index);
-                    if (entry.lpOverlapped) ObservePortCompletion(port, entry.lpOverlapped, IoStatusError(entry.Internal), entry.dwNumberOfBytesTransferred);
+                    if (entry.lpOverlapped) ObservePortCompletion(port, entry.lpOverlapped, IoStatusError(entry.Internal), entry.dwNumberOfBytesTransferred, entry.lpCompletionKey);
                 }
                 if (ActiveConfig().enableFile) SendMonitorEventRaw(ks::winapi_monitor::EventCategory::File,L"KernelBase",L"GetQueuedCompletionStatusEx",result ? 0 : error,L"IOCP batch observation");
             }
@@ -133,7 +141,7 @@
             const HANDLE result = g_createIoCompletionPortOriginal(file, port, key, concurrency);
             const DWORD error = ::GetLastError();
             if (!guard.bypass()) {
-                if (result && file != INVALID_HANDLE_VALUE) BindIoPort(reinterpret_cast<std::uintptr_t>(file), result);
+                if (result && file != INVALID_HANDLE_VALUE) BindIoPort(reinterpret_cast<std::uintptr_t>(file), result, key);
                 if (ActiveConfig().enableFile) SendMonitorEventRaw(ks::winapi_monitor::EventCategory::File,L"KernelBase",L"CreateIoCompletionPort",result ? 0 : error,L"IOCP association");
             }
             ::SetLastError(error); return result;
@@ -200,7 +208,7 @@
             FinishIo(operation, resultValue == 0 || errorValue == WSA_IO_PENDING,
                 resultValue != 0 && errorValue == WSA_IO_PENDING, errorValue, SafeIoValue(bytesSentPointer));
             wchar_t detailBuffer[ks::winapi_monitor::kMaxDetailChars] = {};
-            BuildSocketDetail(detailBuffer, L"datagram", socketValue, requestLength, SafeIoValue(bytesSentPointer), flagsValue);
+            BuildSocketDetail(detailBuffer, L"sendto", socketValue, requestLength, SafeIoValue(bytesSentPointer), flagsValue, toPointer, toLength);
             SendMonitorEventRaw(ks::winapi_monitor::EventCategory::Network,L"Ws2_32",L"WSASendTo",errorValue,detailBuffer);
             ::WSASetLastError(savedWsa); ::SetLastError(savedWin32);
             return resultValue;
@@ -214,6 +222,10 @@
             const std::uint64_t requestLength = SumWsaBufferLength(buffersPointer, bufferCount);
             auto operation = BeginIo(socketValue, overlappedPointer, L"Ws2_32", L"WSARecvFrom",
                 ks::winapi_monitor::EventCategory::Network, requestLength, completionRoutinePointer != nullptr);
+            if (operation) {
+                operation->captureAddress = fromPointer; operation->captureAddressLength = fromLengthPointer;
+                operation->completionDetail = &CaptureDatagramCompletion;
+            }
             auto replacement = reinterpret_cast<LPWSAOVERLAPPED_COMPLETION_ROUTINE>(PrepareIoCallback(operation, nullptr, completionRoutinePointer));
             if (completionRoutinePointer && !replacement) operation.reset();
             ::WSASetLastError(incomingWsa); ::SetLastError(incomingWin32);
@@ -224,7 +236,8 @@
             FinishIo(operation, resultValue == 0 || errorValue == WSA_IO_PENDING,
                 resultValue != 0 && errorValue == WSA_IO_PENDING, errorValue, SafeIoValue(bytesReceivedPointer));
             wchar_t detailBuffer[ks::winapi_monitor::kMaxDetailChars] = {};
-            BuildSocketDetail(detailBuffer, L"datagram", socketValue, requestLength, SafeIoValue(bytesReceivedPointer), SafeIoValue(flagsPointer));
+            BuildSocketDetail(detailBuffer, L"recvfrom", socketValue, requestLength, SafeIoValue(bytesReceivedPointer), SafeIoValue(flagsPointer),
+                resultValue == 0 ? fromPointer : nullptr, resultValue == 0 ? SafeIoValue(fromLengthPointer) : 0);
             SendMonitorEventRaw(ks::winapi_monitor::EventCategory::Network,L"Ws2_32",L"WSARecvFrom",errorValue,detailBuffer);
             ::WSASetLastError(savedWsa); ::SetLastError(savedWin32);
             return resultValue;

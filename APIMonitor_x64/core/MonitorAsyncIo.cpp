@@ -11,7 +11,7 @@ namespace apimon
     namespace
     {
         constexpr std::size_t kCapacity = 8192;
-        struct Resource { std::uint64_t session = 0, identity = 0; HANDLE port = nullptr; UCHAR mode = 0; };
+        struct Resource { std::uint64_t session = 0, identity = 0; HANDLE port = nullptr; ULONG_PTR completionKey = 0; UCHAR mode = 0; };
         auto& g_mutex = *new std::mutex;
         auto& g_operations = *new std::array<IoToken, kCapacity>;
         auto& g_resources = *new std::unordered_map<std::uintptr_t, Resource>;
@@ -31,10 +31,14 @@ namespace apimon
         {
             if (!EventCurrent(op)) return;
             wchar_t detail[ks::winapi_monitor::kMaxDetailChars]{};
+            wchar_t output[ks::winapi_monitor::kMaxDetailChars]{};
+            if (kind == ks::winapi_monitor::EventKind::IoComplete && op->completionDetail)
+                op->completionDetail(op, output, std::size(output));
             _snwprintf_s(detail, _TRUNCATE,
-                L"resource=0x%llX resourceIdentity=%llu overlapped=0x%llX requested=%llu bytes=%lu %s",
+                L"resource=0x%llX resourceIdentity=%llu overlapped=0x%llX completionKey=0x%llX requested=%llu bytes=%lu %s %s",
                 static_cast<unsigned long long>(op->resource), op->resourceIdentity,
-                reinterpret_cast<unsigned long long>(op->overlapped), op->requested, bytes, observation);
+                reinterpret_cast<unsigned long long>(op->overlapped), static_cast<unsigned long long>(op->completionKey),
+                op->requested, bytes, observation, output);
             SendMonitorEventRaw(op->category, op->module, op->api, static_cast<std::int32_t>(error), detail,
                 ks::winapi_monitor::EventResultKind::StatusCode, kind, op->id, op->apiId);
         }
@@ -94,6 +98,7 @@ namespace apimon
                     auto op = std::make_shared<IoOperation>();
                     op->id = ++g_nextOperation; op->session = session; op->resource = resource;
                     op->resourceIdentity = identity.identity; op->overlapped = ov; op->port = identity.port;
+                    op->completionKey = identity.completionKey;
                     op->module = module; op->api = api; op->category = category; op->requested = requested;
                     op->apiId = RuntimeApiId(module, api); op->callbackExpected = callbackExpected;
                     op->issuingThread = ::GetCurrentThreadId();
@@ -148,12 +153,13 @@ namespace apimon
         }
         catch (...) {}
     }
-    void ObservePortCompletion(HANDLE port, LPOVERLAPPED ov, DWORD error, DWORD bytes) noexcept
+    void ObservePortCompletion(HANDLE port, LPOVERLAPPED ov, DWORD error, DWORD bytes, ULONG_PTR completionKey) noexcept
     {
         try { ScopedInlineHookInternalBypass bypass; IoToken oldest; bool notify = false;
             { std::lock_guard lock(g_mutex);
             for (const auto& op : g_operations)
-                if (op && op->overlapped == ov && !op->lookupAmbiguous && op->port == port && op->portExpected && !op->portConsumed
+                if (op && op->overlapped == ov && !op->lookupAmbiguous && op->port == port && op->completionKey == completionKey
+                    && op->portExpected && !op->portConsumed
                     && (!oldest || op->id < oldest->id)) oldest = op;
             if (oldest) { oldest->portConsumed = true; notify = CompleteLocked(oldest, error, bytes); } }
             if (notify) NotifyCompletion(oldest);
@@ -172,8 +178,11 @@ namespace apimon
                     SendIo(op, ks::winapi_monitor::EventKind::IoCancel, error, 0, L"cancellation=request; completion recorded separately"); }
         catch (...) {}
     }
-    void BindIoPort(std::uintptr_t resource, HANDLE port) noexcept
-    { try { ScopedInlineHookInternalBypass bypass; std::lock_guard lock(g_mutex); ResourceFor(resource, CurrentMonitorSessionIdentity()).port = port; } catch (...) {} }
+    void BindIoPort(std::uintptr_t resource, HANDLE port, ULONG_PTR completionKey) noexcept
+    { try { ScopedInlineHookInternalBypass bypass; std::lock_guard lock(g_mutex);
+        auto& identity = ResourceFor(resource, CurrentMonitorSessionIdentity());
+        identity.port = port; identity.completionKey = completionKey;
+    } catch (...) {} }
     void SetIoNotificationMode(std::uintptr_t resource, UCHAR flags) noexcept
     { try { ScopedInlineHookInternalBypass bypass; std::lock_guard lock(g_mutex); ResourceFor(resource, CurrentMonitorSessionIdentity()).mode = flags; } catch (...) {} }
     void RetireIoResource(std::uintptr_t resource) noexcept

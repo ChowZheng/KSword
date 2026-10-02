@@ -15,6 +15,9 @@ int Run(){WSADATA wsa{};if(WSAStartup(MAKEWORD(2,2),&wsa))return 10;
  SOCKET receiver=accept(listener,nullptr,nullptr);HANDLE port=CreateIoCompletionPort(reinterpret_cast<HANDLE>(receiver),nullptr,123,0);if(!port)return 13;
  char buffer[8]{};WSABUF input{8,buffer};OVERLAPPED ov{};DWORD bytes=0,flags=0;
  if(WSARecv(receiver,&input,1,&bytes,&flags,&ov,nullptr)!=SOCKET_ERROR||WSAGetLastError()!=WSA_IO_PENDING)return 14;
+ if(!PostQueuedCompletionStatus(port,0,999,&ov))return 17;
+ ULONG_PTR notificationKey=0;OVERLAPPED* notification=nullptr;
+ if(!GetQueuedCompletionStatus(port,&bytes,&notificationKey,&notification,5000)||notificationKey!=999||notification!=&ov)return 18;
  if(send(sender,"fixture",8,0)!=8)return 15;
  ULONG_PTR key=0;OVERLAPPED* completed=nullptr;
  if(!GetQueuedCompletionStatus(port,&bytes,&key,&completed,5000)||bytes!=8||completed!=&ov||key!=123||memcmp(buffer,"fixture",8))return 16;
@@ -30,4 +33,6 @@ with LiveFixture(source, {"enable_file": 0, "enable_network": 1}) as fixture:
     assert all(e.category != 1 for e in fixture.events)
     completion = next(e for e in fixture.events if e.api == "WSARecv" and e.kind == 3)
     assert completion.result == 0 and completion.operation and "bytes=8" in completion.detail
+    assert "completionKey=0x7B" in completion.detail
+    assert len([e for e in fixture.events if e.api == "WSARecv" and e.kind == 3]) == 1
 print("PASS: network-only IOCP correlation with file category disabled")

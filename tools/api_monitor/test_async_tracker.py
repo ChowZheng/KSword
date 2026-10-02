@@ -55,6 +55,9 @@ int main(){
  session=3;BindIoPort(60,reinterpret_cast<HANDLE>(70));auto newPort=Start(60,&ov);FinishIo(newPort,true,true,0,0);
  count=events.size();ObservePortCompletion(reinterpret_cast<HANDLE>(70),&ov,0,42);CHECK(events.size()==count&&Completions(newPort->id)==0);
  ObservePortCompletion(reinterpret_cast<HANDLE>(70),&ov,0,42);CHECK(Completions(newPort->id)==1);
+ BindIoPort(90,reinterpret_cast<HANDLE>(91),123);auto keyed=Start(90,&ov);FinishIo(keyed,true,true,0,0);
+ ObservePortCompletion(reinterpret_cast<HANDLE>(91),&ov,0,42,999);CHECK(Completions(keyed->id)==0);
+ ObservePortCompletion(reinterpret_cast<HANDLE>(91),&ov,0,42,123);CHECK(Completions(keyed->id)==1);
  auto ambiguous=Start(80,&ov,true);FinishIo(ambiguous,true,true,0,0);CHECK(!Start(80,&ov));
  ObserveIoResult(80,&ov,true,0,42);CHECK(Completions(ambiguous->id)==0);
  CompleteIo(ambiguous,0,42);CHECK(Completions(ambiguous->id)==1);

@@ -5,7 +5,7 @@ import tempfile
 import generate_definitions
 
 root = Path(__file__).resolve().parents[2]
-safe = (root / "APIMonitor_x64/hook/AsyncIoHandlers.inc").read_text().split("        struct IoCallbackContext")[0]
+safe = (root / "APIMonitor_x64/hook/AsyncIoHandlers.inc").read_text().split("        void CaptureDatagramCompletion")[0]
 code = r'''
 #include <cstdio>
 #include "pch.h"
