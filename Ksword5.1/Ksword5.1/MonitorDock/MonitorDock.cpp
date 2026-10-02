@@ -2664,13 +2664,15 @@ namespace
         USHORT inType = TDH_INTYPE_NULL;       // inType：TDH 输入类型。
         USHORT outType = TDH_OUTTYPE_NULL;     // outType：TDH 输出类型。
         USHORT fixedLength = 0;                // fixedLength：属性固定长度（若有）。
-        USHORT fixedCount = 0;                 // fixedCount：属性固定数组数量（若有）。
+        USHORT fixedCount = 1;                 // fixedCount：标量为 1，数组允许 0 个元素。
         ULONG flags = 0;                       // flags：PropertyFlags 位集合。
         bool isStruct = false;                 // isStruct：是否结构体属性。
         bool useLengthProperty = false;        // useLengthProperty：长度是否来自前置属性。
         bool useCountProperty = false;         // useCountProperty：计数是否来自前置属性。
         ULONG lengthPropertyIndex = 0;         // lengthPropertyIndex：长度来源属性索引。
         ULONG countPropertyIndex = 0;          // countPropertyIndex：数量来源属性索引。
+        ULONG structStartIndex = 0;
+        ULONG structMemberCount = 0;
     };
 
     // EtwSchemaEntry：
@@ -2682,7 +2684,9 @@ namespace
         QString eventNameText;                              // eventNameText：事件名。
         QString taskNameText;                               // taskNameText：任务名。
         QString opcodeNameText;                             // opcodeNameText：操作码名。
-        std::vector<EtwSchemaPropertyEntry> propertyList;   // propertyList：顶层属性布局与语义缓存。
+        std::vector<EtwSchemaPropertyEntry> propertyList;   // 包含顶层属性及结构体成员。
+        ULONG topLevelPropertyCount = 0;
+        std::shared_ptr<std::vector<unsigned char>> eventInfoBuffer;
     };
 
     // EtwDecodedPropertyEntry：
@@ -2987,8 +2991,9 @@ namespace
         localSchema.taskNameText = etwTextAtOffset(rawInfoBuffer, eventInfo->TaskNameOffset);
         localSchema.opcodeNameText = etwTextAtOffset(rawInfoBuffer, eventInfo->OpcodeNameOffset);
 
-        localSchema.propertyList.reserve(eventInfo->TopLevelPropertyCount);
-        for (ULONG propertyIndex = 0; propertyIndex < eventInfo->TopLevelPropertyCount; ++propertyIndex)
+        localSchema.topLevelPropertyCount = eventInfo->TopLevelPropertyCount;
+        localSchema.propertyList.reserve(eventInfo->PropertyCount);
+        for (ULONG propertyIndex = 0; propertyIndex < eventInfo->PropertyCount; ++propertyIndex)
         {
             const EVENT_PROPERTY_INFO& propertyInfo = eventInfo->EventPropertyInfoArray[propertyIndex];
 
@@ -3003,28 +3008,28 @@ namespace
             propertyEntry.meaningText = etwPropertyMeaningText(propertyEntry.normalizedNameText);
             propertyEntry.flags = static_cast<ULONG>(propertyInfo.Flags);
             propertyEntry.isStruct = (propertyInfo.Flags & PropertyStruct) != 0;
+            propertyEntry.fixedLength = propertyInfo.length;
+            propertyEntry.fixedCount = propertyInfo.count;
+            propertyEntry.useLengthProperty = (propertyInfo.Flags & PropertyParamLength) != 0;
+            propertyEntry.useCountProperty = (propertyInfo.Flags & PropertyParamCount) != 0;
+            propertyEntry.lengthPropertyIndex = propertyInfo.lengthPropertyIndex;
+            propertyEntry.countPropertyIndex = propertyInfo.countPropertyIndex;
 
-            if (!propertyEntry.isStruct)
+            if (propertyEntry.isStruct)
+            {
+                propertyEntry.structStartIndex = propertyInfo.structType.StructStartIndex;
+                propertyEntry.structMemberCount = propertyInfo.structType.NumOfStructMembers;
+            }
+            else
             {
                 propertyEntry.inType = propertyInfo.nonStructType.InType;
                 propertyEntry.outType = propertyInfo.nonStructType.OutType;
-                propertyEntry.fixedLength = propertyInfo.length;
-                propertyEntry.fixedCount = propertyInfo.count;
-                propertyEntry.useLengthProperty = (propertyInfo.Flags & PropertyParamLength) != 0;
-                propertyEntry.useCountProperty = (propertyInfo.Flags & PropertyParamCount) != 0;
-                if (propertyEntry.useLengthProperty)
-                {
-                    propertyEntry.lengthPropertyIndex = propertyInfo.lengthPropertyIndex;
-                }
-                if (propertyEntry.useCountProperty)
-                {
-                    propertyEntry.countPropertyIndex = propertyInfo.countPropertyIndex;
-                }
             }
 
             localSchema.propertyList.push_back(std::move(propertyEntry));
         }
 
+        localSchema.eventInfoBuffer = std::make_shared<std::vector<unsigned char>>(std::move(infoBuffer));
         *schemaOut = std::move(localSchema);
         return true;
     }
@@ -3312,9 +3317,7 @@ namespace
         return true;
     }
 
-    // decodeEtwPropertiesBySchema：
-    // - 作用：按缓存 schema 顺序解析 UserData，并记录每个字段偏移；
-    // - 要点：长度/数量引用属性从前面数值字段读取，不再逐字段调用 TDH 查询。
+    // 按完整 TDH 布局递归展开结构体与数组；失败时停在最后可信偏移，保留原始尾部。
     bool decodeEtwPropertiesBySchema(
         const EVENT_RECORD* eventRecord,
         const EtwSchemaEntry& schemaEntry,
@@ -3326,457 +3329,159 @@ namespace
         {
             return false;
         }
-
         decodedPropertyListOut->clear();
         *parsedBytesOut = 0;
-        if (unparsedTailHexOut != nullptr)
-        {
-            unparsedTailHexOut->clear();
-        }
+        if (unparsedTailHexOut != nullptr) unparsedTailHexOut->clear();
+        if (eventRecord == nullptr) return false;
+        const auto* userData = static_cast<const unsigned char*>(eventRecord->UserData);
+        const ULONG dataLength = eventRecord->UserDataLength;
+        if (userData == nullptr && dataLength != 0) return false;
 
-        if (eventRecord == nullptr)
-        {
-            return false;
-        }
-
-        const unsigned char* userDataPointer = reinterpret_cast<const unsigned char*>(eventRecord->UserData);
-        const ULONG userDataLength = eventRecord->UserDataLength;
-        if (userDataPointer == nullptr || userDataLength == 0)
-        {
-            return true;
-        }
-
+        TRACE_EVENT_INFO emptyInfo{};
+        auto* eventInfo = schemaEntry.eventInfoBuffer
+            ? reinterpret_cast<TRACE_EVENT_INFO*>(schemaEntry.eventInfoBuffer->data()) : &emptyInfo;
         const ULONG pointerSize = etwPointerSizeByHeader(eventRecord);
-        ULONG cursorOffset = 0;
-        std::unordered_map<ULONG, std::uint64_t> numericValueMap;
+        ULONG cursor = 0;
+        ULONG remainingSteps = 65536; // 有界工作量，防止畸形计数/递归布局无限展开。
+        std::unordered_map<ULONG, std::uint64_t> numericValues;
+        std::vector<wchar_t> textBuffer(256);
         decodedPropertyListOut->reserve(schemaEntry.propertyList.size());
 
-        for (const EtwSchemaPropertyEntry& propertySchema : schemaEntry.propertyList)
-        {
-            EtwDecodedPropertyEntry decodedEntry;
-            decodedEntry.propertyNameText = propertySchema.propertyNameText;
-            decodedEntry.normalizedNameText = propertySchema.normalizedNameText;
-            decodedEntry.meaningText = propertySchema.meaningText;
-            decodedEntry.inTypeText = etwTypeText(propertySchema.inType);
-            decodedEntry.beginOffset = cursorOffset;
-
-            if (cursorOffset >= userDataLength)
+        auto walk = [&](auto&& self, ULONG index, const QString& prefix, ULONG depth) -> bool {
+            if (depth > 32 || remainingSteps == 0 || index >= schemaEntry.propertyList.size()) return false;
+            --remainingSteps;
+            const EtwSchemaPropertyEntry& property = schemaEntry.propertyList[index];
+            EtwDecodedPropertyEntry result;
+            result.propertyNameText = prefix + property.propertyNameText;
+            // 嵌套成员保留路径，避免把任意结构中的 ProcessId 当成事件的关联进程。
+            result.normalizedNameText = prefix.isEmpty() ? property.normalizedNameText
+                : normalizeEtwPropertyName(result.propertyNameText);
+            result.meaningText = property.meaningText;
+            result.inTypeText = etwTypeText(property.inType);
+            result.beginOffset = cursor;
+            auto fail = [&]() {
+                result.parseFallback = true;
+                result.numericAvailable = false;
+                result.valueText = QStringLiteral("<未识别类型，已按十六进制保留>");
+                result.endOffset = cursor;
+                if (cursor < dataLength) result.hexPreviewText = etwHexPreview(userData + cursor, dataLength - cursor);
+                decodedPropertyListOut->push_back(std::move(result));
+                return false;
+            };
+            auto resolve = [&](bool dynamic, ULONG reference, ULONG fixed, ULONG* out) {
+                if (!dynamic) { *out = fixed; return true; }
+                const auto found = numericValues.find(reference);
+                if (found == numericValues.end() || found->second > 65535) return false;
+                *out = static_cast<ULONG>(found->second);
+                return true;
+            };
+            ULONG count = 0, length = 0;
+            if (!resolve(property.useCountProperty, property.countPropertyIndex, property.fixedCount, &count)
+                || !resolve(property.useLengthProperty, property.lengthPropertyIndex, property.fixedLength, &length)
+                || count > remainingSteps) return fail();
+            const bool isArray = count != 1 || property.useCountProperty
+                || (property.flags & PropertyParamFixedCount) != 0;
+            numericValues.erase(property.propertyIndex);
+            if (property.isStruct)
             {
-                decodedEntry.valueText = QStringLiteral("<无更多数据>");
-                decodedEntry.parseFallback = true;
-                decodedEntry.endOffset = cursorOffset;
-                decodedPropertyListOut->push_back(std::move(decodedEntry));
-                continue;
+                if (property.structMemberCount == 0
+                    || property.structStartIndex >= schemaEntry.propertyList.size()
+                    || property.structMemberCount > schemaEntry.propertyList.size() - property.structStartIndex)
+                    return fail();
+                for (ULONG element = 0; element < count; ++element)
+                {
+                    const QString memberPrefix = result.propertyNameText
+                        + (isArray ? QStringLiteral("[%1]").arg(element) : QString()) + QLatin1Char('.');
+                    for (ULONG member = 0; member < property.structMemberCount; ++member)
+                        if (!self(self, property.structStartIndex + member, memberPrefix, depth + 1)) return false;
+                }
+                return true;
             }
 
-            const ULONG availableBytes = userDataLength - cursorOffset;
-            const unsigned char* fieldDataPointer = userDataPointer + cursorOffset;
-
-            ULONG resolvedLength = propertySchema.fixedLength;
-            ULONG resolvedCount = propertySchema.fixedCount == 0 ? 1UL : static_cast<ULONG>(propertySchema.fixedCount);
-            if (propertySchema.useLengthProperty)
+            const ULONG fixedSize = etwFixedTypeSize(property.inType, pointerSize);
+            if (length == 0 && !property.useLengthProperty && (property.flags & PropertyParamFixedLength) == 0)
             {
-                const auto found = numericValueMap.find(propertySchema.lengthPropertyIndex);
-                if (found != numericValueMap.end())
-                {
-                    resolvedLength = static_cast<ULONG>(std::min<std::uint64_t>(found->second, 0xFFFFFFFFULL));
-                }
+                if (property.inType == TDH_INTYPE_BINARY && property.outType == TDH_OUTTYPE_IPV6) length = 16;
+                else length = fixedSize;
             }
-            if (propertySchema.useCountProperty)
+            const bool emptyString = length == 0
+                && (property.useLengthProperty || (property.flags & PropertyParamFixedLength) != 0)
+                && (property.inType == TDH_INTYPE_UNICODESTRING || property.inType == TDH_INTYPE_ANSISTRING
+                    || property.inType == TDH_INTYPE_NONNULLTERMINATEDSTRING
+                    || property.inType == TDH_INTYPE_NONNULLTERMINATEDANSISTRING);
+            QStringList elements;
+            for (ULONG element = 0; element < count; ++element)
             {
-                const auto found = numericValueMap.find(propertySchema.countPropertyIndex);
-                if (found != numericValueMap.end())
+                if (remainingSteps == 0) return fail();
+                --remainingSteps;
+                const ULONG available = dataLength - cursor;
+                if (emptyString || (property.inType == TDH_INTYPE_NULL && length == 0))
                 {
-                    resolvedCount = static_cast<ULONG>(std::max<std::uint64_t>(1ULL, found->second));
+                    elements.push_back(QString());
+                    continue;
                 }
+                if (available == 0 || length > available || (fixedSize > 0 && fixedSize > available)) return fail();
+                // TDH 负责字符串计数前缀、SID、指针位宽以及 PORT/IP 等输出类型。
+                USHORT consumed = 0;
+                ULONG bufferBytes = static_cast<ULONG>(textBuffer.size() * sizeof(wchar_t));
+                ULONG status = ::TdhFormatProperty(eventInfo, nullptr, pointerSize,
+                    property.inType, property.outType, static_cast<USHORT>(length),
+                    static_cast<USHORT>(available), const_cast<unsigned char*>(userData + cursor),
+                    &bufferBytes, textBuffer.data(), &consumed);
+                if (status == ERROR_INSUFFICIENT_BUFFER && bufferBytes > 0 && bufferBytes <= 1048576)
+                {
+                    textBuffer.resize((bufferBytes + sizeof(wchar_t) - 1) / sizeof(wchar_t));
+                    status = ::TdhFormatProperty(eventInfo, nullptr, pointerSize,
+                        property.inType, property.outType, static_cast<USHORT>(length),
+                        static_cast<USHORT>(available), const_cast<unsigned char*>(userData + cursor),
+                        &bufferBytes, textBuffer.data(), &consumed);
+                }
+                if (status != ERROR_SUCCESS || consumed == 0 || consumed > available) return fail();
+                elements.push_back(QString::fromWCharArray(textBuffer.data()));
+                if (!isArray)
+                {
+                    ULONG integerSize = 0;
+                    switch (property.inType)
+                    {
+                    case TDH_INTYPE_INT8: case TDH_INTYPE_UINT8: integerSize = 1; break;
+                    case TDH_INTYPE_INT16: case TDH_INTYPE_UINT16: integerSize = 2; break;
+                    case TDH_INTYPE_INT32: case TDH_INTYPE_UINT32: case TDH_INTYPE_HEXINT32:
+                    case TDH_INTYPE_BOOLEAN: integerSize = 4; break;
+                    case TDH_INTYPE_INT64: case TDH_INTYPE_UINT64: case TDH_INTYPE_HEXINT64:
+                        integerSize = 8; break;
+                    case TDH_INTYPE_POINTER: integerSize = pointerSize; break;
+                    default: break;
+                    }
+                    if (integerSize > 0 && consumed >= integerSize)
+                    {
+                        std::uint64_t value = 0;
+                        std::memcpy(&value, userData + cursor, integerSize);
+                        numericValues[property.propertyIndex] = value;
+                        if (property.outType == TDH_OUTTYPE_PORT && integerSize == 2)
+                            value = ((value >> 8) | (value << 8)) & 0xFFFF;
+                        result.numericAvailable = true;
+                        result.numericValue = value;
+                    }
+                }
+                cursor += consumed;
             }
-
-            ULONG consumeBytes = 0;
-            bool parsedAsKnownType = true;
-
-            if (propertySchema.isStruct)
-            {
-                // 结构体字段存在嵌套与动态布局，这里保留十六进制预览。
-                decodedEntry.valueText = QStringLiteral("<Struct: 当前版本未展开，已保留十六进制预览>");
-                consumeBytes = std::min<ULONG>(availableBytes, resolvedLength > 0 ? resolvedLength : 32UL);
-                decodedEntry.parseFallback = true;
-            }
-            else
-            {
-                const ULONG fixedTypeSize = etwFixedTypeSize(propertySchema.inType, pointerSize);
-                ULONG expectedBytes = 0;
-                if (resolvedLength > 0)
-                {
-                    expectedBytes = resolvedLength * std::max<ULONG>(1, resolvedCount);
-                }
-                else if (fixedTypeSize > 0)
-                {
-                    expectedBytes = fixedTypeSize * std::max<ULONG>(1, resolvedCount);
-                }
-
-                switch (propertySchema.inType)
-                {
-                case TDH_INTYPE_UNICODESTRING:
-                {
-                    QString textValue;
-                    if (tryConsumeUnicodeString(fieldDataPointer, availableBytes, expectedBytes, &textValue, &consumeBytes))
-                    {
-                        decodedEntry.valueText = textValue;
-                    }
-                    else
-                    {
-                        parsedAsKnownType = false;
-                    }
-                    break;
-                }
-                case TDH_INTYPE_ANSISTRING:
-                {
-                    QString textValue;
-                    if (tryConsumeAnsiString(fieldDataPointer, availableBytes, expectedBytes, &textValue, &consumeBytes))
-                    {
-                        decodedEntry.valueText = textValue;
-                    }
-                    else
-                    {
-                        parsedAsKnownType = false;
-                    }
-                    break;
-                }
-                case TDH_INTYPE_GUID:
-                {
-                    GUID guidValue{};
-                    consumeBytes = std::min<ULONG>(availableBytes, 16);
-                    if (etwReadScalar(fieldDataPointer, availableBytes, &guidValue))
-                    {
-                        decodedEntry.valueText = guidToText(guidValue);
-                    }
-                    else
-                    {
-                        parsedAsKnownType = false;
-                    }
-                    break;
-                }
-                case TDH_INTYPE_INT8:
-                {
-                    std::int8_t value = 0;
-                    consumeBytes = 1;
-                    if (etwReadScalar(fieldDataPointer, availableBytes, &value))
-                    {
-                        decodedEntry.numericAvailable = true;
-                        decodedEntry.numericValue = static_cast<std::uint64_t>(value);
-                        decodedEntry.valueText = QString::number(value);
-                    }
-                    else
-                    {
-                        parsedAsKnownType = false;
-                    }
-                    break;
-                }
-                case TDH_INTYPE_UINT8:
-                {
-                    std::uint8_t value = 0;
-                    consumeBytes = 1;
-                    if (etwReadScalar(fieldDataPointer, availableBytes, &value))
-                    {
-                        decodedEntry.numericAvailable = true;
-                        decodedEntry.numericValue = value;
-                        decodedEntry.valueText = QString::number(value);
-                    }
-                    else
-                    {
-                        parsedAsKnownType = false;
-                    }
-                    break;
-                }
-                case TDH_INTYPE_BOOLEAN:
-                {
-                    const ULONG boolBytes = expectedBytes > 0 ? std::min(expectedBytes, availableBytes) : 4UL;
-                    consumeBytes = std::max<ULONG>(1, boolBytes);
-
-                    std::uint32_t value32 = 0;
-                    if (consumeBytes >= 4 && etwReadScalar(fieldDataPointer, availableBytes, &value32))
-                    {
-                        decodedEntry.numericAvailable = true;
-                        decodedEntry.numericValue = value32;
-                        decodedEntry.valueText = value32 == 0 ? QStringLiteral("false") : QStringLiteral("true");
-                    }
-                    else
-                    {
-                        std::uint8_t value8 = 0;
-                        if (etwReadScalar(fieldDataPointer, availableBytes, &value8))
-                        {
-                            decodedEntry.numericAvailable = true;
-                            decodedEntry.numericValue = value8;
-                            decodedEntry.valueText = value8 == 0 ? QStringLiteral("false") : QStringLiteral("true");
-                        }
-                        else
-                        {
-                            parsedAsKnownType = false;
-                        }
-                    }
-                    break;
-                }
-                case TDH_INTYPE_INT16:
-                {
-                    std::int16_t value = 0;
-                    consumeBytes = 2;
-                    if (etwReadScalar(fieldDataPointer, availableBytes, &value))
-                    {
-                        decodedEntry.numericAvailable = true;
-                        decodedEntry.numericValue = static_cast<std::uint64_t>(value);
-                        decodedEntry.valueText = QString::number(value);
-                    }
-                    else
-                    {
-                        parsedAsKnownType = false;
-                    }
-                    break;
-                }
-                case TDH_INTYPE_UINT16:
-                {
-                    std::uint16_t value = 0;
-                    consumeBytes = 2;
-                    if (etwReadScalar(fieldDataPointer, availableBytes, &value))
-                    {
-                        // TDH 的端口输出类型使用网络字节序，原始 UINT16 不能直接显示。
-                        if (propertySchema.outType == TDH_OUTTYPE_PORT)
-                        {
-                            value = static_cast<std::uint16_t>((value >> 8) | (value << 8));
-                        }
-                        decodedEntry.numericAvailable = true;
-                        decodedEntry.numericValue = value;
-                        decodedEntry.valueText = QString::number(value);
-                    }
-                    else
-                    {
-                        parsedAsKnownType = false;
-                    }
-                    break;
-                }
-                case TDH_INTYPE_INT32:
-                {
-                    std::int32_t value = 0;
-                    consumeBytes = 4;
-                    if (etwReadScalar(fieldDataPointer, availableBytes, &value))
-                    {
-                        decodedEntry.numericAvailable = true;
-                        decodedEntry.numericValue = static_cast<std::uint64_t>(value);
-                        decodedEntry.valueText = QString::number(value);
-                    }
-                    else
-                    {
-                        parsedAsKnownType = false;
-                    }
-                    break;
-                }
-                case TDH_INTYPE_UINT32:
-                case TDH_INTYPE_HEXINT32:
-                {
-                    std::uint32_t value = 0;
-                    consumeBytes = 4;
-                    if (etwReadScalar(fieldDataPointer, availableBytes, &value))
-                    {
-                        decodedEntry.numericAvailable = true;
-                        decodedEntry.numericValue = value;
-                        decodedEntry.valueText = propertySchema.inType == TDH_INTYPE_HEXINT32
-                            ? QStringLiteral("0x%1").arg(value, 8, 16, QChar(u'0')).toUpper()
-                            : QString::number(value);
-                    }
-                    else
-                    {
-                        parsedAsKnownType = false;
-                    }
-                    break;
-                }
-                case TDH_INTYPE_INT64:
-                {
-                    std::int64_t value = 0;
-                    consumeBytes = 8;
-                    if (etwReadScalar(fieldDataPointer, availableBytes, &value))
-                    {
-                        decodedEntry.numericAvailable = true;
-                        decodedEntry.numericValue = static_cast<std::uint64_t>(value);
-                        decodedEntry.valueText = QString::number(static_cast<qlonglong>(value));
-                    }
-                    else
-                    {
-                        parsedAsKnownType = false;
-                    }
-                    break;
-                }
-                case TDH_INTYPE_FLOAT:
-                {
-                    float value = 0.0f;
-                    consumeBytes = 4;
-                    if (etwReadScalar(fieldDataPointer, availableBytes, &value))
-                    {
-                        decodedEntry.valueText = QString::number(value, 'f', 6);
-                    }
-                    else
-                    {
-                        parsedAsKnownType = false;
-                    }
-                    break;
-                }
-                case TDH_INTYPE_DOUBLE:
-                {
-                    double value = 0.0;
-                    consumeBytes = 8;
-                    if (etwReadScalar(fieldDataPointer, availableBytes, &value))
-                    {
-                        decodedEntry.valueText = QString::number(value, 'f', 6);
-                    }
-                    else
-                    {
-                        parsedAsKnownType = false;
-                    }
-                    break;
-                }
-                case TDH_INTYPE_UINT64:
-                case TDH_INTYPE_HEXINT64:
-                case TDH_INTYPE_POINTER:
-                case TDH_INTYPE_FILETIME:
-                {
-                    std::uint64_t value = 0;
-                    consumeBytes = propertySchema.inType == TDH_INTYPE_POINTER ? pointerSize : 8;
-                    if (consumeBytes == 4)
-                    {
-                        std::uint32_t value32 = 0;
-                        if (etwReadScalar(fieldDataPointer, availableBytes, &value32))
-                        {
-                            value = value32;
-                        }
-                    }
-                    else
-                    {
-                        etwReadScalar(fieldDataPointer, availableBytes, &value);
-                    }
-
-                    if (value == 0 && availableBytes < consumeBytes)
-                    {
-                        parsedAsKnownType = false;
-                        break;
-                    }
-
-                    decodedEntry.numericAvailable = true;
-                    decodedEntry.numericValue = value;
-                    if (propertySchema.inType == TDH_INTYPE_POINTER
-                        || propertySchema.inType == TDH_INTYPE_HEXINT64)
-                    {
-                        decodedEntry.valueText = QStringLiteral("0x%1")
-                            .arg(static_cast<qulonglong>(value), consumeBytes * 2, 16, QChar(u'0'))
-                            .toUpper();
-                    }
-                    else
-                    {
-                        decodedEntry.valueText = QString::number(static_cast<qulonglong>(value));
-                    }
-                    break;
-                }
-                case TDH_INTYPE_SID:
-                {
-                    PSID sidPointer = reinterpret_cast<PSID>(const_cast<unsigned char*>(fieldDataPointer));
-                    if (sidPointer != nullptr && ::IsValidSid(sidPointer) != FALSE)
-                    {
-                        consumeBytes = ::GetLengthSid(sidPointer);
-                        consumeBytes = std::min(consumeBytes, availableBytes);
-                        LPWSTR sidTextPointer = nullptr;
-                        if (::ConvertSidToStringSidW(sidPointer, &sidTextPointer) != FALSE && sidTextPointer != nullptr)
-                        {
-                            decodedEntry.valueText = QString::fromWCharArray(sidTextPointer);
-                            ::LocalFree(sidTextPointer);
-                        }
-                        else
-                        {
-                            decodedEntry.valueText = QStringLiteral("<SID转换失败>");
-                            decodedEntry.parseFallback = true;
-                        }
-                    }
-                    else
-                    {
-                        parsedAsKnownType = false;
-                    }
-                    break;
-                }
-                case TDH_INTYPE_SYSTEMTIME:
-                {
-                    SYSTEMTIME systemTimeValue{};
-                    consumeBytes = static_cast<ULONG>(sizeof(SYSTEMTIME));
-                    if (etwReadScalar(fieldDataPointer, availableBytes, &systemTimeValue))
-                    {
-                        decodedEntry.valueText = QStringLiteral("%1-%2-%3 %4:%5:%6.%7")
-                            .arg(systemTimeValue.wYear, 4, 10, QChar(u'0'))
-                            .arg(systemTimeValue.wMonth, 2, 10, QChar(u'0'))
-                            .arg(systemTimeValue.wDay, 2, 10, QChar(u'0'))
-                            .arg(systemTimeValue.wHour, 2, 10, QChar(u'0'))
-                            .arg(systemTimeValue.wMinute, 2, 10, QChar(u'0'))
-                            .arg(systemTimeValue.wSecond, 2, 10, QChar(u'0'))
-                            .arg(systemTimeValue.wMilliseconds, 3, 10, QChar(u'0'));
-                    }
-                    else
-                    {
-                        parsedAsKnownType = false;
-                    }
-                    break;
-                }
-                case TDH_INTYPE_BINARY:
-                case TDH_INTYPE_HEXDUMP:
-                {
-                    consumeBytes = expectedBytes > 0
-                        ? std::min(expectedBytes, availableBytes)
-                        : std::min<ULONG>(availableBytes, 64);
-                    decodedEntry.valueText = QStringLiteral("<二进制数据>");
-                    decodedEntry.parseFallback = true;
-                    break;
-                }
-                default:
-                    parsedAsKnownType = false;
-                    break;
-                }
-            }
-
-            if (!parsedAsKnownType)
-            {
-                // 无法确定类型时，用“长度策略 > 剩余全部”的顺序兜底。
-                ULONG fallbackBytes = 0;
-                if (resolvedLength > 0)
-                {
-                    fallbackBytes = std::min<ULONG>(availableBytes, resolvedLength * std::max<ULONG>(1, resolvedCount));
-                }
-                else if (propertySchema.fixedLength > 0)
-                {
-                    fallbackBytes = std::min<ULONG>(availableBytes, propertySchema.fixedLength);
-                }
-                else
-                {
-                    fallbackBytes = std::min<ULONG>(availableBytes, 32);
-                }
-
-                consumeBytes = std::max<ULONG>(1, fallbackBytes);
-                decodedEntry.valueText = QStringLiteral("<未识别类型，已按十六进制保留>");
-                decodedEntry.parseFallback = true;
-            }
-
-            consumeBytes = std::min(consumeBytes, availableBytes);
-            decodedEntry.endOffset = cursorOffset + consumeBytes;
-            decodedEntry.hexPreviewText = etwHexPreview(fieldDataPointer, consumeBytes);
-
-            if (decodedEntry.numericAvailable)
-            {
-                numericValueMap[propertySchema.propertyIndex] = decodedEntry.numericValue;
-            }
-
-            decodedPropertyListOut->push_back(std::move(decodedEntry));
-            cursorOffset += consumeBytes;
-        }
-
-        *parsedBytesOut = cursorOffset;
-        if (cursorOffset < userDataLength && unparsedTailHexOut != nullptr)
-        {
-            const unsigned char* tailPointer = userDataPointer + cursorOffset;
-            *unparsedTailHexOut = etwHexDump(tailPointer, userDataLength - cursorOffset);
-        }
-        return true;
+            result.valueText = isArray ? QLatin1Char('[') + elements.join(QStringLiteral(", ")) + QLatin1Char(']')
+                : elements.value(0);
+            result.endOffset = cursor;
+            if (cursor > result.beginOffset)
+                result.hexPreviewText = etwHexPreview(userData + result.beginOffset, cursor - result.beginOffset);
+            decodedPropertyListOut->push_back(std::move(result));
+            return true;
+        };
+        bool complete = true;
+        const ULONG topCount = schemaEntry.topLevelPropertyCount != 0 ? schemaEntry.topLevelPropertyCount
+            : static_cast<ULONG>(schemaEntry.propertyList.size());
+        for (ULONG index = 0; index < topCount; ++index)
+            if (!walk(walk, index, QString(), 0)) { complete = false; break; }
+        *parsedBytesOut = cursor;
+        if (cursor < dataLength && unparsedTailHexOut != nullptr)
+            *unparsedTailHexOut = etwHexDump(userData + cursor, dataLength - cursor);
+        return complete && cursor == dataLength;
     }
 
     // etwPropertyValueMeaningful：
@@ -3803,6 +3508,7 @@ namespace
             for (const EtwDecodedPropertyEntry& property : propertyList)
             {
                 if (property.normalizedNameText == normalizedName
+                    && !property.parseFallback
                     && etwPropertyValueMeaningful(property.valueText))
                 {
                     return &property;
@@ -4362,7 +4068,8 @@ namespace
         const EtwSemanticSummary& semanticSummary,
         const std::vector<EtwDecodedPropertyEntry>& propertyList,
         const ULONG parsedBytes,
-        const QString& unparsedTailHexText)
+        const QString& unparsedTailHexText,
+        const bool decodeComplete = true)
     {
         QJsonObject rootObject;
 
@@ -4403,6 +4110,7 @@ namespace
         metaObject.insert(QStringLiteral("version"), static_cast<int>(eventRecord->EventHeader.EventDescriptor.Version));
         metaObject.insert(QStringLiteral("userDataLength"), static_cast<int>(eventRecord->UserDataLength));
         metaObject.insert(QStringLiteral("parsedBytes"), static_cast<int>(parsedBytes));
+        metaObject.insert(QStringLiteral("decode_complete"), decodeComplete);
         rootObject.insert(QStringLiteral("meta"), metaObject);
 
         QJsonObject semanticObject;
@@ -4454,7 +4162,7 @@ namespace
 
     bool etwPropertyToUInt32(const EtwDecodedPropertyEntry* propertyPointer, std::uint32_t* valueOut)
     {
-        if (propertyPointer == nullptr || valueOut == nullptr)
+        if (propertyPointer == nullptr || valueOut == nullptr || propertyPointer->parseFallback)
         {
             return false;
         }
@@ -12291,7 +11999,7 @@ void MonitorDock::enqueueEtwEventFromRecord(const struct _EVENT_RECORD* eventRec
 
         if (schemaReady)
         {
-            decodeEtwPropertiesBySchema(
+            const bool decodeComplete = decodeEtwPropertiesBySchema(
                 eventRecord,
                 schemaEntry,
                 &decodedPropertyList,
@@ -12311,7 +12019,8 @@ void MonitorDock::enqueueEtwEventFromRecord(const struct _EVENT_RECORD* eventRec
                 semanticSummary,
                 decodedPropertyList,
                 parsedBytes,
-                unparsedTailHexText);
+                unparsedTailHexText,
+                decodeComplete);
             fillEtwCapturedRowDecodedFields(
                 &rowData,
                 providerNameText,
@@ -12337,6 +12046,9 @@ void MonitorDock::enqueueEtwEventFromRecord(const struct _EVENT_RECORD* eventRec
             }
 
             QJsonObject fallbackMeta;
+            fallbackMeta.insert(QStringLiteral("header_pid"), static_cast<qint64>(rowData.headerPid));
+            fallbackMeta.insert(QStringLiteral("header_tid"), static_cast<qint64>(rowData.headerTid));
+            fallbackMeta.insert(QStringLiteral("decode_complete"), false);
             fallbackMeta.insert(QStringLiteral("providerGuid"), providerGuidText);
             fallbackMeta.insert(QStringLiteral("providerName"), providerNameText);
             fallbackMeta.insert(QStringLiteral("eventId"), rowData.eventId);

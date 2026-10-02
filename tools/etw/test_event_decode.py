@@ -35,6 +35,7 @@ code=r'''
 #include <vector>
 #include <unordered_map>
 #include <mutex>
+#include <memory>
 #include <limits>
 #include <cstdint>
 #include <cstring>
@@ -47,7 +48,7 @@ EtwSchemaPropertyEntry prop(ULONG i,const char* name,USHORT type,USHORT count=1)
 int main(){
  std::vector<EtwDecodedPropertyEntry> decoded;ULONG parsed=0;QString tail;EtwSchemaEntry schema;EVENT_RECORD record{};
  record.EventHeader.Flags=EVENT_HEADER_FLAG_64_BIT_HEADER;record.EventHeader.ProcessId=3212;record.EventHeader.ThreadId=62272;
- auto run=[&](EtwSchemaEntry in,void* raw,USHORT len){record.UserData=raw;record.UserDataLength=len;decodeEtwPropertiesBySchema(&record,in,&decoded,&parsed,&tail);};
+ auto run=[&](EtwSchemaEntry in,void* raw,USHORT len){record.UserData=raw;record.UserDataLength=len;return decodeEtwPropertiesBySchema(&record,in,&decoded,&parsed,&tail);};
  auto fill=[&](QString provider,QString event,QString opcode){MonitorDock::EtwCapturedEventRow row;row.headerPid=record.EventHeader.ProcessId;row.headerTid=record.EventHeader.ThreadId;row.providerGuid=guidToText(record.EventHeader.ProviderId);row.opcode=record.EventHeader.EventDescriptor.Opcode;auto semantic=inferEtwSemanticSummary(provider,event,opcode,decoded);fillEtwCapturedRowDecodedFields(&row,provider,event,semantic,decoded);return row;};
  unsigned char image[]={SAMPLE_BYTES};GUID imageGuid={0x2cb15d1d,0x5fc1,0x11d2,{0xab,0xe1,0x00,0xa0,0xc9,0x11,0xf5,0x18}};
  record.EventHeader.ProviderId=imageGuid;record.EventHeader.Flags|=EVENT_HEADER_FLAG_CLASSIC_HEADER;record.EventHeader.EventDescriptor.Version=3;record.EventHeader.EventDescriptor.Opcode=3;record.UserData=image;record.UserDataLength=sizeof(image);
@@ -65,6 +66,39 @@ filters=s[s.index('    const std::vector<EtwFilterFieldDescriptor>& etwFilterFie
 code=code.replace('DEPENDENCIES',fun('QString guidToText(')+identity+aliases+descriptor+filters)
 code=code.replace('PARSER',s[s.index('    // EtwSchemaPropertyEntry'):s.index('    // 100ns 时间戳文本格式化')]).replace('SAMPLE_BYTES',','.join(str(x) for x in payload))
 tests={
+ 'layout': r'''
+ std::uint32_t array[]={11,22,333};schema={};schema.propertyList={prop(0,"Values",TDH_INTYPE_UINT32,2),prop(1,"ProcessId",TDH_INTYPE_UINT32)};
+ if(!run(schema,array,sizeof(array))||parsed!=12||!decoded[1].numericAvailable||decoded[1].numericValue!=333||decoded[0].numericAvailable)return 50;
+ std::uint32_t zero[]={0,444};schema.propertyList={prop(0,"Count",TDH_INTYPE_UINT32),prop(1,"Values",TDH_INTYPE_UINT32),prop(2,"ProcessId",TDH_INTYPE_UINT32)};
+ schema.propertyList[1].useCountProperty=true;schema.propertyList[1].countPropertyIndex=0;
+ if(!run(schema,zero,sizeof(zero))||parsed!=8||decoded[2].numericValue!=444||decoded[1].beginOffset!=decoded[1].endOffset)return 51;
+ std::uint32_t structure[]={11,22,555};schema.propertyList={prop(0,"Envelope",TDH_INTYPE_NULL),prop(1,"ProcessId",TDH_INTYPE_UINT32),prop(2,"ProcessId",TDH_INTYPE_UINT32),prop(3,"B",TDH_INTYPE_UINT32)};
+ schema.topLevelPropertyCount=2;schema.propertyList[0].isStruct=true;schema.propertyList[0].structStartIndex=2;schema.propertyList[0].structMemberCount=2;
+ if(!run(schema,structure,sizeof(structure))||parsed!=12||decoded.size()!=3||decoded[2].numericValue!=555)return 52;
+ auto pid=findFirstEtwProperty(decoded,QStringList{QStringLiteral("processid")});if(!pid||pid->numericValue!=555)return 53;
+ schema.propertyList[0].structMemberCount=0;
+ if(run(schema,structure,sizeof(structure))||parsed!=0||tail.isEmpty()||findFirstEtwProperty(decoded,QStringList{QStringLiteral("processid")}))return 54;
+ schema={};schema.propertyList={prop(0,"Counted",TDH_INTYPE_COUNTEDSTRING),prop(1,"ProcessId",TDH_INTYPE_UINT32)};
+ unsigned char counted[]={4,0,'A',0,'B',0,0x9a,2,0,0};
+ if(!run(schema,counted,sizeof(counted))||parsed!=10||decoded[1].numericValue!=666||decoded[0].valueText!=QStringLiteral("AB"))return 55;
+ unsigned char truncated[]={100,0,'A',0,0,0};
+ if(run(schema,truncated,sizeof(truncated))||parsed!=0||tail.isEmpty()||decoded.size()!=1)return 56;
+ schema.propertyList={prop(0,"Length",TDH_INTYPE_UINT32),prop(1,"Name",TDH_INTYPE_UNICODESTRING),prop(2,"ProcessId",TDH_INTYPE_UINT32)};
+ schema.propertyList[1].useLengthProperty=true;schema.propertyList[1].lengthPropertyIndex=0;
+ if(!run(schema,zero,sizeof(zero))||parsed!=8||decoded[2].numericValue!=444)return 57;
+ schema.propertyList={prop(0,"Names",TDH_INTYPE_UNICODESTRING,2),prop(1,"ProcessId",TDH_INTYPE_UINT32)};
+ unsigned char names[]={'A',0,0,0,'B',0,0,0,0x9a,2,0,0};
+ if(!run(schema,names,sizeof(names))||parsed!=12||decoded[1].numericValue!=666)return 58;
+ schema.propertyList={prop(0,"Sid",TDH_INTYPE_SID),prop(1,"ProcessId",TDH_INTYPE_UINT32)};
+ unsigned char sid[]={1,15,0,0,0,0,0,5,0,0,0,0};
+ if(run(schema,sid,sizeof(sid))||parsed!=0||decoded.size()!=1)return 59;
+ schema.propertyList={prop(0,"Unknown",0xffff),prop(1,"ProcessId",TDH_INTYPE_UINT32)};
+ if(run(schema,array,sizeof(array))||parsed!=0||decoded.size()!=1||tail.isEmpty())return 61;
+ schema.propertyList={prop(0,"Length",TDH_INTYPE_UINT32),prop(1,"Name",TDH_INTYPE_UNICODESTRING),prop(2,"ProcessId",TDH_INTYPE_UINT32)};
+ schema.propertyList[1].useLengthProperty=true;schema.propertyList[1].lengthPropertyIndex=0;
+ unsigned char fixed[]={2,0,0,0,'A',0,'B',0,0x9a,2,0,0};
+ auto ok=run(schema,fixed,sizeof(fixed));if(!ok||parsed!=12||decoded.size()<3||decoded[2].numericValue!=666||decoded[1].valueText!=QStringLiteral("AB")){printf("fixed string ok=%d parsed=%lu size=%zu text=%s\n",ok,parsed,decoded.size(),qPrintable(decoded[1].valueText));return 62;}
+ ''',
  'ports': r'''
  unsigned char ports[]={0x01,0xbb,0x00,0x50};schema.propertyList={prop(0,"sport",TDH_INTYPE_UINT16),prop(1,"dport",TDH_INTYPE_UINT16)};
  for(auto& p:schema.propertyList)p.outType=TDH_OUTTYPE_PORT;
