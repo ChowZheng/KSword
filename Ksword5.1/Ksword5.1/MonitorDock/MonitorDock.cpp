@@ -107,6 +107,31 @@
 
 namespace
 {
+    std::uint32_t etwRelatedProcessId(const MonitorDock::EtwCapturedEventRow& row)
+    {
+        return row.targetPidValid ? row.targetPid : row.headerPid;
+    }
+
+    std::uint32_t etwRelatedThreadId(const MonitorDock::EtwCapturedEventRow& row)
+    {
+        if (row.targetTidValid)
+        {
+            return row.targetTid;
+        }
+        // Rundown describes existing objects, not the thread performing the enumeration.
+        return row.opcode == EVENT_TRACE_TYPE_DC_START || row.opcode == EVENT_TRACE_TYPE_DC_END
+            || (row.targetPidValid && (row.targetPid != row.headerPid || row.targetPid == 0))
+            ? 0U : row.headerTid;
+    }
+
+    void etwUpdateRelatedIdentity(MonitorDock::EtwCapturedEventRow* row)
+    {
+        const std::uint32_t tid = etwRelatedThreadId(*row);
+        row->pidTidText = QStringLiteral("%1 / %2")
+            .arg(etwRelatedProcessId(*row))
+            .arg(tid == 0 ? QStringLiteral("未知") : QString::number(tid));
+    }
+
     constexpr char kEtwArchiveMagic[] = "KSWETW1";
     constexpr std::uint32_t kEtwArchiveLegacyFileVersion = 1;
     constexpr std::uint32_t kEtwArchiveFileVersion = 2;
@@ -267,6 +292,7 @@ namespace
         row.securityPid = static_cast<std::uint32_t>(securityPid);
         row.securityTid = static_cast<std::uint32_t>(securityTid);
         row.detailJson = QString::fromUtf8(detailJsonUtf8);
+        etwUpdateRelatedIdentity(&row);
         row.detailVisibleText = QStringLiteral("%1 %2 %3 %4 %5 %6 %7")
             .arg(row.timestampText)
             .arg(row.providerName)
@@ -2429,13 +2455,7 @@ namespace
         {
             return true;
         }
-        if (etwNumericInRanges(rowData.headerPid, simpleFilter.pidRangeList))
-        {
-            return true;
-        }
-        return (rowData.targetPidValid && etwNumericInRanges(rowData.targetPid, simpleFilter.pidRangeList))
-            || (rowData.parentPidValid && etwNumericInRanges(rowData.parentPid, simpleFilter.pidRangeList))
-            || (rowData.securityPidValid && etwNumericInRanges(rowData.securityPid, simpleFilter.pidRangeList));
+        return etwNumericInRanges(etwRelatedProcessId(rowData), simpleFilter.pidRangeList);
     }
 
     bool etwSimpleFilterMatchesHeaderFields(
@@ -2466,8 +2486,7 @@ namespace
         }
 
         bool decodedPayloadRequired = false;
-        if (!simpleFilter.pidRangeList.empty()
-            && !etwNumericInRanges(rowData.headerPid, simpleFilter.pidRangeList))
+        if (!simpleFilter.pidRangeList.empty())
         {
             decodedPayloadRequired = true;
         }
@@ -4298,6 +4317,8 @@ namespace
 
         metaObject.insert(QStringLiteral("providerGuid"), providerGuidText);
         metaObject.insert(QStringLiteral("providerName"), providerNameText);
+        metaObject.insert(QStringLiteral("header_pid"), static_cast<qint64>(eventRecord->EventHeader.ProcessId));
+        metaObject.insert(QStringLiteral("header_tid"), static_cast<qint64>(eventRecord->EventHeader.ThreadId));
         metaObject.insert(QStringLiteral("eventId"), static_cast<int>(eventRecord->EventHeader.EventDescriptor.Id));
         metaObject.insert(QStringLiteral("eventName"), eventNameText);
         metaObject.insert(QStringLiteral("task"), static_cast<int>(eventRecord->EventHeader.EventDescriptor.Task));
@@ -4514,7 +4535,8 @@ namespace
 
         const EtwDecodedPropertyEntry* targetPidProperty = findFirstEtwProperty(
             propertyList,
-            QStringList{ QStringLiteral("targetprocessid"), QStringLiteral("processid"), QStringLiteral("pid") });
+            QStringList{ QStringLiteral("targetprocessid"), QStringLiteral("newprocessid"),
+                QStringLiteral("processid"), QStringLiteral("pid") });
         rowOut->targetPidValid = etwPropertyToUInt32(targetPidProperty, &rowOut->targetPid);
 
         const EtwDecodedPropertyEntry* parentPidProperty = findFirstEtwProperty(
@@ -4696,6 +4718,7 @@ namespace
             QStringList{ QStringLiteral("namespace"), QStringLiteral("wminamespace") }));
 
         rowOut->decodedReady = true;
+        etwUpdateRelatedIdentity(rowOut);
     }
 
     // 100ns 时间戳文本格式化：直接输出 FILETIME 基准整数，满足计划要求。
@@ -6372,7 +6395,7 @@ void MonitorDock::initializeEtwTab()
         QStringLiteral("Provider"),
         QStringLiteral("事件ID"),
         QStringLiteral("事件名称"),
-        QStringLiteral("PID/TID"),
+        QStringLiteral("关联PID/TID"),
         QStringLiteral("事件摘要"),
         QStringLiteral("ActivityId")
     });
@@ -6493,7 +6516,7 @@ QWidget* MonitorDock::createEtwSimpleFilterPanel(const EtwFilterStage stage, QWi
         ++fieldIndex;
     };
 
-    addTextField(QStringLiteral("PID"), QStringLiteral("多个PID用逗号或分号分隔"), uiState.pidEdit);
+    addTextField(QStringLiteral("关联PID"), QStringLiteral("多个PID用逗号或分号分隔"), uiState.pidEdit);
     addTextField(QStringLiteral("进程名"), QStringLiteral("不区分大小写，包含匹配"), uiState.processNameEdit);
     addTextField(QStringLiteral("文件路径"), QStringLiteral("当前/旧/新路径，允许空格"), uiState.filePathEdit);
     addTextField(QStringLiteral("事件ID"), QStringLiteral("多个ID用逗号或分号分隔"), uiState.eventIdEdit);
@@ -12213,18 +12236,18 @@ void MonitorDock::enqueueEtwEventFromRecord(const struct _EVENT_RECORD* eventRec
                 decodedPropertyList,
                 parsedBytes,
                 unparsedTailHexText);
-            rowData.detailSummary = buildEtwSummaryText(
-                providerNameText,
-                rowData.eventName,
-                rowData.opcodeName,
-                rowData.headerPid,
-                rowData.headerTid,
-                semanticSummary,
-                decodedPropertyList);
             fillEtwCapturedRowDecodedFields(
                 &rowData,
                 providerNameText,
                 rowData.eventName,
+                semanticSummary,
+                decodedPropertyList);
+            rowData.detailSummary = buildEtwSummaryText(
+                providerNameText,
+                rowData.eventName,
+                rowData.opcodeName,
+                etwRelatedProcessId(rowData),
+                etwRelatedThreadId(rowData),
                 semanticSummary,
                 decodedPropertyList);
         }
@@ -12283,6 +12306,7 @@ void MonitorDock::enqueueEtwEventFromRecord(const struct _EVENT_RECORD* eventRec
                 .arg(rowData.headerTid);
         }
 
+        etwUpdateRelatedIdentity(&rowData);
         rowData.detailVisibleText = QStringLiteral("%1 %2 %3 %4 %5 %6 %7")
             .arg(rowData.timestampText)
             .arg(rowData.providerName)
@@ -13735,7 +13759,7 @@ void MonitorDock::exportEtwRowsToTsv(const bool visibleOnly)
         {
             header = QStringList{
                 QStringLiteral("时间"), QStringLiteral("Provider"), QStringLiteral("事件ID"),
-                QStringLiteral("事件名称"), QStringLiteral("PID/TID"), QStringLiteral("详情"),
+                QStringLiteral("事件名称"), QStringLiteral("关联PID/TID"), QStringLiteral("详情"),
                 QStringLiteral("ActivityId")
             };
         }
@@ -14125,6 +14149,10 @@ void MonitorDock::showEtwEventContextMenu(const QPoint& position)
     QAction* copyRowAction = menu.addAction(QIcon(":/Icon/log_clipboard.svg"), QStringLiteral("复制整行"));
     menu.addSeparator();
     QAction* gotoProcessAction = menu.addAction(QIcon(":/Icon/process_details.svg"), QStringLiteral("转到进程详细信息"));
+    std::uint32_t relatedPid = 0;
+    QTableWidgetItem* relatedPidItem = m_etwEventTable->item(row, 4);
+    gotoProcessAction->setEnabled(relatedPidItem != nullptr
+        && parsePid(relatedPidItem->text(), relatedPid) && relatedPid != 0);
     ks::online_scan::addVirusTotalSandboxMenu(
         &menu,
         this,
@@ -14136,7 +14164,8 @@ void MonitorDock::showEtwEventContextMenu(const QPoint& position)
                 ? m_etwEventTable->item(row, 4)
                 : nullptr;
             std::uint32_t pidValue = 0;
-            if (pidItem == nullptr || !ks::online_scan::tryParsePidFromText(pidItem->text(), &pidValue))
+            if (pidItem == nullptr || !ks::online_scan::tryParsePidFromText(pidItem->text(), &pidValue)
+                || pidValue == 0)
             {
                 return {
                     QString(),
