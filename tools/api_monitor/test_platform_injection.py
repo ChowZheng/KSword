@@ -25,6 +25,14 @@ int wmain(int argc,wchar_t** argv) {
  if(argc!=4)return 1;DWORD pid=wcstoul(argv[1],nullptr,10);
  std::wstring path,error;USHORT machine=0;
  if(!queryProcessMachine(pid,&machine,&error))return 2;
+#ifdef _WIN64
+ HANDLE target=OpenProcess(PROCESS_QUERY_INFORMATION|PROCESS_VM_READ,FALSE,pid);
+ auto concrete=findRemoteExport(target,pid,machine,L"KernelBase.dll","LoadLibraryW");
+ auto forwarded=findRemoteExport(target,pid,machine,L"kernel32.dll","LoadLibraryW");
+ if(!concrete||!forwarded||findRemoteExport(target,pid,machine,L"KernelBase.dll","KswordMissingExport")
+   ||findRemoteExport(target,pid,machine,L"KernelBase.dll","LoadLibraryW",8))return 9;
+ CloseHandle(target);
+#endif
  if(!resolveAgentPath(pid,argv[2],&path,&error)){fwprintf(stderr,L"%s\n",error.c_str());return 3;}
  if(path.find(agentFileName(machine))==std::wstring::npos)return 4;
  // An explicit nonstandard DLL must be validated rather than silently replaced.
@@ -44,6 +52,7 @@ with tempfile.TemporaryDirectory(prefix="ksword 跨位数注入 ") as temporary:
     folder=Path(temporary);release=ROOT/"Ksword5.1/x64/Release"
     for arch in ("x86","x64"):
         for name in (f"APIMonitor_{arch}.dll",f"APIMonitorInject_{arch}.exe"):
+            if ARCHITECTURE=="x64" and name.endswith(".exe"):continue
             shutil.copy2(release/name,folder/name)
     # Copy x64 CRT alongside the copied Agent if the machine lacks the redistributable.
     for name in ("MSVCP140.dll","VCRUNTIME140.dll","VCRUNTIME140_1.dll"):

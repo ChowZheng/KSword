@@ -1,6 +1,7 @@
 #pragma once
 #include "ApiMonitorPlatform.h"
 #include <TlHelp32.h>
+#include "ApiMonitorRemoteExports.h"
 
 namespace ks::winapi_monitor
 {
@@ -64,18 +65,31 @@ namespace ks::winapi_monitor
         if (!result) platformFailure(error, L"target loader image unavailable", ERROR_MOD_NOT_FOUND);
         return result;
     }
-    inline bool injectAgentNative(DWORD pid, const std::wstring& path, std::wstring* error, std::uint64_t expectedCreation = 0)
+    inline bool injectAgentNative(DWORD pid, const std::wstring& path, std::wstring* error,
+        std::uint64_t expectedCreation = 0, HANDLE cancelEvent = nullptr)
     {
         if (error) error->clear();
         HANDLE process = ::OpenProcess(PROCESS_CREATE_THREAD | PROCESS_QUERY_INFORMATION | PROCESS_VM_OPERATION | PROCESS_VM_WRITE | PROCESS_VM_READ, FALSE, pid);
         if (!process) return platformFailure(error, L"OpenProcess Agent injection", ::GetLastError());
         USHORT machine = 0, image = 0;
         bool valid = queryProcessMachine(process, &machine, error) && queryImageMachine(path, &image, error);
-        if (valid && (machine != currentMachine() || machine != image))
+        if (valid && (machine != image
+#ifndef _WIN64
+            || machine != currentMachine()
+#endif
+            ))
             valid = platformFailure(error, L"native injector architecture mismatch", ERROR_BAD_EXE_FORMAT);
         if (valid && expectedCreation && processCreationIdentity(process) != expectedCreation)
             valid = platformFailure(error, L"target process identity changed", ERROR_INVALID_PARAMETER);
-        const auto loader = valid ? remoteLoaderAddress(pid, error) : 0;
+        std::uintptr_t loader = 0;
+        if (valid && machine == currentMachine()) loader = remoteLoaderAddress(pid, error);
+#ifdef _WIN64
+        else if (valid) {
+            loader = findRemoteExport(process, pid, machine, L"KernelBase.dll", "LoadLibraryW");
+            if (!loader) loader = findRemoteExport(process, pid, machine, L"kernel32.dll", "LoadLibraryW");
+            if (!loader) platformFailure(error, L"resolve target LoadLibraryW export", ERROR_PROC_NOT_FOUND);
+        }
+#endif
         if (!loader) { const auto code = ::GetLastError(); ::CloseHandle(process); ::SetLastError(code); return false; }
         const SIZE_T bytes = (path.size() + 1) * sizeof(wchar_t);
         void* remote = ::VirtualAllocEx(process, nullptr, bytes, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
@@ -89,11 +103,13 @@ namespace ks::winapi_monitor
             const auto code = ::GetLastError(); ::VirtualFreeEx(process, remote, 0, MEM_RELEASE); ::CloseHandle(process);
             return platformFailure(error, L"CreateRemoteThread Agent loader", code);
         }
-        const DWORD wait = ::WaitForSingleObject(thread, 10000);
+        HANDLE waits[] = {thread, cancelEvent};
+        const DWORD wait = cancelEvent ? ::WaitForMultipleObjects(2, waits, FALSE, 10000) : ::WaitForSingleObject(thread, 10000);
         // GetExitCodeThread truncates a 64-bit HMODULE to DWORD. Verify the target's
         // module list instead; an exception exit code must not count as a load.
         const bool loaded = wait == WAIT_OBJECT_0 && remoteImageLoaded(pid, path);
-        const DWORD failure = wait == WAIT_TIMEOUT ? ERROR_TIMEOUT : wait == WAIT_FAILED ? ::GetLastError() : ERROR_DLL_INIT_FAILED;
+        const DWORD failure = wait == WAIT_OBJECT_0 + 1 ? ERROR_OPERATION_ABORTED
+            : wait == WAIT_TIMEOUT ? ERROR_TIMEOUT : wait == WAIT_FAILED ? ::GetLastError() : ERROR_DLL_INIT_FAILED;
         // Timed-out remote LoadLibraryW may still read the path. Keep it until target exit.
         if (wait == WAIT_OBJECT_0) ::VirtualFreeEx(process, remote, 0, MEM_RELEASE);
         ::CloseHandle(thread); ::CloseHandle(process);
@@ -111,7 +127,11 @@ namespace ks::winapi_monitor
         const DWORD saved = ::GetLastError(); ::CloseHandle(process);
         if (!valid) { ::SetLastError(saved); return false; }
         if (image != machine) return platformFailure(error, L"Agent DLL does not match target architecture", ERROR_BAD_EXE_FORMAT);
-        if (machine == currentMachine()) return injectAgentNative(pid, path, error, creation);
+        if (machine == currentMachine()
+#ifdef _WIN64
+            || machine == IMAGE_FILE_MACHINE_I386
+#endif
+            ) return injectAgentNative(pid, path, error, creation);
         const std::wstring helper = platformDirectory(path) + (machine == IMAGE_FILE_MACHINE_I386
             ? L"\\APIMonitorInject_x86.exe" : L"\\APIMonitorInject_x64.exe");
         USHORT helperMachine = 0;

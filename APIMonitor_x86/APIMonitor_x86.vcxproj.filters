@@ -22,4 +22,5 @@
     <None Include="..\APIMonitor_x64\hook\ApiHandlers.json" />
   </ItemGroup>
   <ItemGroup><ClInclude Include="..\shared\ApiMonitorPlatform.h" /><ClInclude Include="..\shared\ApiMonitorInjection.h" /></ItemGroup>
+  <ItemGroup><ClInclude Include="..\shared\ApiMonitorRemoteExports.h" /></ItemGroup>
 </Project>

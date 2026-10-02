@@ -83,11 +83,18 @@ class LiveFixture:
         self.events = []
         self.snapshots = []
         self.pending_snapshot = None
-        if injector is None:
-            self.command("L")
-        else:
-            injector(self.pid, self.agent)
-        self.connect()
+        try:
+            if injector is None:
+                self.command("L")
+            else:
+                injector(self.pid, self.agent)
+            self.connect()
+        except BaseException:
+            if self.handle not in (None, INVALID):kernel.CloseHandle(self.handle)
+            self.process.kill();self.process.wait(timeout=5)
+            self.config.unlink(missing_ok=True);self.stop.unlink(missing_ok=True)
+            self.temporary.cleanup()
+            raise
 
     def connect(self):
         deadline = time.monotonic() + 20
