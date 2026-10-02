@@ -34949,6 +34949,12 @@
     "请点击目标窗口": "Click the target window",
     "置顶窗口不可跟随": "Topmost windows cannot be followed",
     "关联PID/TID": "Related PID/TID",
-    "关联PID": "Related PID"
+    "关联PID": "Related PID",
+    "枚举开始": "Rundown start",
+    "枚举结束": "Rundown end",
+    "断开连接": "Disconnect",
+    "映像": "Image",
+    "结束": "End",
+    "Kernel-UDPIP": "Kernel-UDPIP"
   }
 }

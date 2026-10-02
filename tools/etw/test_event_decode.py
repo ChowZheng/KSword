@@ -60,11 +60,20 @@ int main(){
 code=code.replace('BLOCKS',h[h.index('    enum class EtwFilterStage'):h.index('\npublic:',h.index('    struct EtwCapturedEventRow'))])
 aliases='using EtwFilterFieldId=MonitorDock::EtwFilterFieldId;using EtwFilterFieldType=MonitorDock::EtwFilterFieldType;using EtwStringMatchMode=MonitorDock::EtwStringMatchMode;using EtwFilterStage=MonitorDock::EtwFilterStage;'
 descriptor=s[s.index('    struct EtwFilterFieldDescriptor'):s.index('    constexpr const char* kEtwFilterConfigRelativePath')]
-identity='\n'.join(fun(x) for x in ['std::uint32_t etwRelatedProcessId(', 'std::uint32_t etwRelatedThreadId(', 'void etwUpdateRelatedIdentity('])
+identity='\n'.join(fun(x) for x in ['QString etwProviderDisplayName(', 'std::uint32_t etwRelatedProcessId(', 'std::uint32_t etwRelatedThreadId(', 'void etwUpdateRelatedIdentity('])
 filters=s[s.index('    const std::vector<EtwFilterFieldDescriptor>& etwFilterFieldDescriptorList()'):s.index('    // EtwSchemaPropertyEntry')]
 code=code.replace('DEPENDENCIES',fun('QString guidToText(')+identity+aliases+descriptor+filters)
 code=code.replace('PARSER',s[s.index('    // EtwSchemaPropertyEntry'):s.index('    // 100ns 时间戳文本格式化')]).replace('SAMPLE_BYTES',','.join(str(x) for x in payload))
 tests={
+ 'semantics': r'''
+ if(row.resourceTypeText!=QStringLiteral("映像")||row.actionText!=QStringLiteral("枚举开始")||row.imagePathText.isEmpty())return 20;
+ if(etwProviderDisplayName(guidToText(imageGuid),QString())!=QStringLiteral("Microsoft-Windows-Kernel-Image"))return 21;
+ if(inferEtwActionText(QStringLiteral("Thread"),QStringLiteral("End"))!=QStringLiteral("结束"))return 22;
+ if(inferEtwActionText(QStringLiteral("Thread"),QStringLiteral("DCStart"))!=QStringLiteral("枚举开始"))return 23;
+ if(inferEtwActionText(QStringLiteral("Image"),QStringLiteral("Unload"))!=QStringLiteral("卸载"))return 24;
+ if(inferEtwActionText(QStringLiteral("DisconnectIPV4"),QString())!=QStringLiteral("断开连接"))return 25;
+ if(inferEtwActionText(QStringLiteral("FileIoRead"),QString())!=QStringLiteral("读取/查询"))return 26;
+ ''',
  'identity': r'''
  if(!row.targetPidValid||row.targetPid!=0||row.headerPid!=3212||parsed!=138){printf("identity failure valid=%d pid=%u header=%u parsed=%u size=%zu\n",row.targetPidValid,row.targetPid,row.headerPid,parsed,sizeof(image));return 1;}
  if(row.pidTidText!=QStringLiteral("0 / 未知")||etwRelatedProcessId(row)!=0)return 2;

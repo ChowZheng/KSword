@@ -107,6 +107,27 @@
 
 namespace
 {
+    QString etwProviderDisplayName(const QString& providerGuid, const QString& fallback)
+    {
+        static const std::pair<const char*, const char*> names[]{
+            { "{2CB15D1D-5FC1-11D2-ABE1-00A0C911F518}", "Microsoft-Windows-Kernel-Image" },
+            { "{3D6FA8D0-FE05-11D0-9DDA-00C04FD7BA7C}", "Kernel-Process" },
+            { "{3D6FA8D1-FE05-11D0-9DDA-00C04FD7BA7C}", "Microsoft-Windows-Kernel-Thread" },
+            { "{9A280AC0-C8E0-11D1-84E2-00C04FB998A2}", "Kernel-TCPIP" },
+            { "{BF3A50C5-A9C9-4988-A005-2DF0B7C80F80}", "Kernel-UDPIP" },
+            { "{90CBDC39-4A3E-11D1-84F4-0000F80464E3}", "Kernel-FileIO" },
+            { "{AE53722E-C863-11D2-8659-00C04FA321A1}", "Kernel-Registry" }
+        };
+        for (const auto& entry : names)
+        {
+            if (providerGuid.compare(QString::fromLatin1(entry.first), Qt::CaseInsensitive) == 0)
+            {
+                return QString::fromLatin1(entry.second);
+            }
+        }
+        return fallback;
+    }
+
     std::uint32_t etwRelatedProcessId(const MonitorDock::EtwCapturedEventRow& row)
     {
         return row.targetPidValid ? row.targetPid : row.headerPid;
@@ -3773,6 +3794,12 @@ namespace
         const QString providerLower = providerNameText.toLower();
         const QString eventLower = eventNameText.toLower();
 
+        if (providerLower.contains(QStringLiteral("kernel-image")) || eventLower == QStringLiteral("image")
+            || eventLower.startsWith(QStringLiteral("imageload")) || eventLower.startsWith(QStringLiteral("imageunload")))
+        {
+            return QStringLiteral("映像");
+        }
+
         if (providerLower.contains(QStringLiteral("registry")) || eventLower.contains(QStringLiteral("reg")))
         {
             return QStringLiteral("注册表");
@@ -3802,7 +3829,18 @@ namespace
     // - 调用：写入 JSON semantic.action。
     QString inferEtwActionText(const QString& eventNameText, const QString& opcodeNameText)
     {
-        const QString actionProbe = (eventNameText + QLatin1Char(' ') + opcodeNameText).toLower();
+        // Rundown is a snapshot; it must precede Start/End and substring heuristics.
+        const QString opcode = opcodeNameText.trimmed().toLower();
+        if (opcode == QStringLiteral("dcstart")) return QStringLiteral("枚举开始");
+        if (opcode == QStringLiteral("dcend") || opcode == QStringLiteral("dcstop")) return QStringLiteral("枚举结束");
+        if (opcode == QStringLiteral("unload")) return QStringLiteral("卸载");
+        if (opcode == QStringLiteral("load")) return QStringLiteral("加载");
+        if (opcode == QStringLiteral("end") || opcode == QStringLiteral("stop")) return QStringLiteral("结束");
+        QString actionProbe = (eventNameText + QLatin1Char(' ') + opcodeNameText).toLower();
+        actionProbe.replace(QStringLiteral("thread"), QString());
+        if (actionProbe.contains(QStringLiteral("disconnect"))) return QStringLiteral("断开连接");
+        if (actionProbe.contains(QStringLiteral("unload"))) return QStringLiteral("卸载");
+        if (actionProbe.contains(QStringLiteral("imageload"))) return QStringLiteral("加载");
 
         if (actionProbe.contains(QStringLiteral("create")) || actionProbe.contains(QStringLiteral("start")))
         {
@@ -4555,6 +4593,14 @@ namespace
         rowOut->imagePathText = etwPropertySingleLineValue(findFirstEtwProperty(
             propertyList,
             QStringList{ QStringLiteral("imagename"), QStringLiteral("imagefilename"), QStringLiteral("path") }));
+        if (rowOut->resourceTypeText == QStringLiteral("映像"))
+        {
+            rowOut->imagePathText = etwPropertySingleLineValue(findFirstEtwProperty(
+                propertyList, QStringList{ QStringLiteral("filename"), QStringLiteral("imageloaded"),
+                    QStringLiteral("imagename"), QStringLiteral("imagefilename") }));
+            rowOut->processNameText = etwPropertySingleLineValue(findFirstEtwProperty(
+                propertyList, QStringList{ QStringLiteral("processname") }));
+        }
         rowOut->commandLineText = etwPropertySingleLineValue(findFirstEtwProperty(
             propertyList,
             QStringList{ QStringLiteral("commandline"), QStringLiteral("scriptblocktext") }));
@@ -12150,7 +12196,7 @@ void MonitorDock::enqueueEtwEventFromRecord(const struct _EVENT_RECORD* eventRec
     }
 
     const QString providerGuidText = guidToText(eventRecord->EventHeader.ProviderId);
-    QString providerNameText = providerGuidText;
+    QString providerNameText = etwProviderDisplayName(providerGuidText, providerGuidText);
     const auto providerNameIt = m_etwCaptureProviderNames.constFind(providerGuidText);
     if (providerNameIt != m_etwCaptureProviderNames.cend())
     {
