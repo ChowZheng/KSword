@@ -46,9 +46,11 @@
                 const auto name = AnsiToWide(binding.procName);
                 const auto* fake = FindFakeSuccessRule(binding.moduleName, binding.procName);
                 const auto state = fake ? CoverageState::RuleExcluded : StateForHook(*binding.hookRecord,
-                    binding.moduleName, binding.procName, CategoryEnabled(binding.categoryValue));
+                    binding.moduleName, binding.procName, CategoryEnabled(binding.categoryValue) || NetworkCompletionObserver(binding));
                 rows.push_back(MakeCoverageRow(binding.moduleName, name.c_str(), HookKind::Strong, state,
-                    fake ? L"configured Fake handler replaces Strong handler" : binding.hookRecord->lastFailure.c_str(), binding.hookRecord));
+                    fake ? L"configured Fake handler replaces Strong handler"
+                        : binding.hookRecord->installed && !CategoryEnabled(binding.categoryValue) && NetworkCompletionObserver(binding)
+                            ? L"Network completion observer; File events disabled" : binding.hookRecord->lastFailure.c_str(), binding.hookRecord));
             }
             std::unordered_set<std::wstring> actualRawKeys;
             for (const auto& binding : RawBindings()) if (binding)
@@ -70,6 +72,7 @@
                 rows.push_back(MakeCoverageRow(rule->installModuleName.c_str(), rule->apiName.c_str(), HookKind::Fake,
                     state, eligible ? rule->hookRecord.lastFailure.c_str() : L"Raw Fake rule is not enabled", &rule->hookRecord));
             }
+            AppendExtensionCoverage(rows);
             rows.insert(rows.end(), g_removedCoverageRows.begin(), g_removedCoverageRows.end());
             std::sort(rows.begin(), rows.end(), [](const CoveragePacket& a, const CoveragePacket& b) {
                 if (a.hookKind != b.hookKind) return a.hookKind < b.hookKind;

@@ -120,4 +120,5 @@
     <ClInclude Include="hook\AsyncIoHandlers.inc" />
     <ClInclude Include="hook\ContextThunk.h" />
   </ItemGroup>
+  <ItemGroup><ClInclude Include="hook\WinsockExtensionHandlers.inc" /></ItemGroup>
 </Project>

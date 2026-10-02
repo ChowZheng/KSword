@@ -26,6 +26,8 @@ mutations = [
     lambda c: c["apis"][0]["wrapper"].update(handler="UnknownHandler"),
     lambda c: c["apis"][0]["parameters"][0].update(length={"parameter": "missing", "unit": "bytes"}),
     lambda c: c["apis"][0]["parameters"][0].update(length={"parameter": c["apis"][0]["parameters"][0]["name"], "unit": "bytes"}),
+    lambda c: c["apis"][-1].update(extension_guid="invalid-guid"),
+    lambda c: c["apis"][-1].update(extension_guid=c["apis"][-2]["extension_guid"]),
 ]
 for change in mutations:
     invalid = copy.deepcopy(catalog)

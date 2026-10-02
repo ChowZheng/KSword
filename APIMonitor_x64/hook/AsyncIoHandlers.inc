@@ -77,7 +77,7 @@
             if (!guard.bypass()) {
                 ObserveIoResult(reinterpret_cast<std::uintptr_t>(file), ov,
                     result || (error != ERROR_IO_INCOMPLETE && error != ERROR_IO_PENDING), result ? 0 : error, SafeIoValue(bytes));
-                SendMonitorEventRaw(ks::winapi_monitor::EventCategory::File,L"KernelBase",L"GetOverlappedResult",result ? 0 : error,L"completion observation");
+                if (ActiveConfig().enableFile) SendMonitorEventRaw(ks::winapi_monitor::EventCategory::File,L"KernelBase",L"GetOverlappedResult",result ? 0 : error,L"completion observation");
             }
             ::SetLastError(error); return result;
         }
@@ -90,7 +90,7 @@
                 ObserveIoResult(reinterpret_cast<std::uintptr_t>(file), ov,
                     result || (error != ERROR_IO_INCOMPLETE && error != ERROR_IO_PENDING && error != WAIT_TIMEOUT && error != WAIT_IO_COMPLETION),
                     result ? 0 : error, SafeIoValue(bytes));
-                SendMonitorEventRaw(ks::winapi_monitor::EventCategory::File,L"KernelBase",L"GetOverlappedResultEx",result ? 0 : error,L"completion observation");
+                if (ActiveConfig().enableFile) SendMonitorEventRaw(ks::winapi_monitor::EventCategory::File,L"KernelBase",L"GetOverlappedResultEx",result ? 0 : error,L"completion observation");
             }
             ::SetLastError(error); return result;
         }
@@ -102,7 +102,7 @@
             if (!guard.bypass()) {
                 const auto completed = SafeIoValue(ov);
                 if (completed) ObservePortCompletion(port, completed, result ? 0 : error, SafeIoValue(bytes));
-                SendMonitorEventRaw(ks::winapi_monitor::EventCategory::File,L"KernelBase",L"GetQueuedCompletionStatus",result ? 0 : error,L"IOCP observation");
+                if (ActiveConfig().enableFile) SendMonitorEventRaw(ks::winapi_monitor::EventCategory::File,L"KernelBase",L"GetQueuedCompletionStatus",result ? 0 : error,L"IOCP observation");
             }
             ::SetLastError(error); return result;
         }
@@ -123,7 +123,7 @@
                     const auto entry = SafeIoValue(entries + index);
                     if (entry.lpOverlapped) ObservePortCompletion(port, entry.lpOverlapped, IoStatusError(entry.Internal), entry.dwNumberOfBytesTransferred);
                 }
-                SendMonitorEventRaw(ks::winapi_monitor::EventCategory::File,L"KernelBase",L"GetQueuedCompletionStatusEx",result ? 0 : error,L"IOCP batch observation");
+                if (ActiveConfig().enableFile) SendMonitorEventRaw(ks::winapi_monitor::EventCategory::File,L"KernelBase",L"GetQueuedCompletionStatusEx",result ? 0 : error,L"IOCP batch observation");
             }
             ::SetLastError(error); return result;
         }
@@ -134,7 +134,7 @@
             const DWORD error = ::GetLastError();
             if (!guard.bypass()) {
                 if (result && file != INVALID_HANDLE_VALUE) BindIoPort(reinterpret_cast<std::uintptr_t>(file), result);
-                SendMonitorEventRaw(ks::winapi_monitor::EventCategory::File,L"KernelBase",L"CreateIoCompletionPort",result ? 0 : error,L"IOCP association");
+                if (ActiveConfig().enableFile) SendMonitorEventRaw(ks::winapi_monitor::EventCategory::File,L"KernelBase",L"CreateIoCompletionPort",result ? 0 : error,L"IOCP association");
             }
             ::SetLastError(error); return result;
         }
@@ -145,7 +145,7 @@
             const DWORD error = ::GetLastError();
             if (!guard.bypass()) {
                 if (result) SetIoNotificationMode(reinterpret_cast<std::uintptr_t>(file), flags);
-                SendMonitorEventRaw(ks::winapi_monitor::EventCategory::File,L"KernelBase",L"SetFileCompletionNotificationModes",result ? 0 : error,L"completion notification modes");
+                if (ActiveConfig().enableFile) SendMonitorEventRaw(ks::winapi_monitor::EventCategory::File,L"KernelBase",L"SetFileCompletionNotificationModes",result ? 0 : error,L"completion notification modes");
             }
             ::SetLastError(error); return result;
         }
@@ -166,7 +166,7 @@
             const BOOL result = g_cancelIoOriginal(file); const DWORD error = ::GetLastError();
             if (!guard.bypass()) {
                 ObserveIoCancellation(reinterpret_cast<std::uintptr_t>(file), nullptr, result ? 0 : error, true);
-                SendMonitorEventRaw(ks::winapi_monitor::EventCategory::File,L"KernelBase",L"CancelIo",result ? 0 : error,L"cancellation request");
+                if (ActiveConfig().enableFile) SendMonitorEventRaw(ks::winapi_monitor::EventCategory::File,L"KernelBase",L"CancelIo",result ? 0 : error,L"cancellation request");
             }
             ::SetLastError(error); return result;
         }
@@ -176,7 +176,7 @@
             const BOOL result = g_cancelIoExOriginal(file, ov); const DWORD error = ::GetLastError();
             if (!guard.bypass()) {
                 ObserveIoCancellation(reinterpret_cast<std::uintptr_t>(file), ov, result ? 0 : error);
-                SendMonitorEventRaw(ks::winapi_monitor::EventCategory::File,L"KernelBase",L"CancelIoEx",result ? 0 : error,L"cancellation request");
+                if (ActiveConfig().enableFile) SendMonitorEventRaw(ks::winapi_monitor::EventCategory::File,L"KernelBase",L"CancelIoEx",result ? 0 : error,L"cancellation request");
             }
             ::SetLastError(error); return result;
         }

@@ -25,6 +25,7 @@
 #include <windns.h>
 #include <winhttp.h>
 #include <winioctl.h>
+#include <mswsock.h>
 #include <wininet.h>
 #include <winsvc.h>
 #include <winternl.h>
@@ -92,6 +93,7 @@ namespace apimon
     {
         using KsIoApcRoutine = VOID(NTAPI*)(PVOID, PIO_STATUS_BLOCK, ULONG);
         using HostEntPtr = hostent*;
+        struct ExtensionContext;
 #include "ApiMonitorDeclarations.inc"
 
 
@@ -1342,6 +1344,7 @@ namespace apimon
             const ks::winapi_monitor::EventResultKind resultKind = ks::winapi_monitor::EventResultKind::StatusCode,
             const std::uint32_t apiId = 0)
         {
+            if (categoryValue == ks::winapi_monitor::EventCategory::File && !ActiveConfig().enableFile) return false;
             return SendMonitorEventRaw(
                 categoryValue,
                 moduleName,
@@ -1863,6 +1866,17 @@ namespace apimon
             }
         }
 
+        bool NetworkCompletionObserver(const HookBinding& binding)
+        {
+            if (!ActiveConfig().enableNetwork) return false;
+            const char* name = binding.procName;
+            return strcmp(name, "CloseHandle") == 0 || strcmp(name, "CreateIoCompletionPort") == 0
+                || strcmp(name, "GetOverlappedResult") == 0 || strcmp(name, "GetOverlappedResultEx") == 0
+                || strcmp(name, "GetQueuedCompletionStatus") == 0 || strcmp(name, "GetQueuedCompletionStatusEx") == 0
+                || strcmp(name, "SetFileCompletionNotificationModes") == 0
+                || strcmp(name, "CancelIo") == 0 || strcmp(name, "CancelIoEx") == 0;
+        }
+
         bool TryInstallBinding(HookBinding& bindingValue, std::wstring* detailTextOut)
         {
             FakeSuccessRuntimeRule* const fakeRule = FindFakeSuccessRule(bindingValue.moduleName, bindingValue.procName);
@@ -1878,7 +1892,7 @@ namespace apimon
                  || std::strcmp(bindingValue.procName, "CreateProcessAsUserW") == 0
                  || std::strcmp(bindingValue.procName, "CreateProcessWithTokenW") == 0
                  || std::strcmp(bindingValue.procName, "CreateProcessWithLogonW") == 0);
-            if ((!CategoryEnabled(bindingValue.categoryValue) && !childCreation)
+            if ((!CategoryEnabled(bindingValue.categoryValue) && !childCreation && !NetworkCompletionObserver(bindingValue))
                 || bindingValue.hookRecord->installed
                 || bindingValue.hookRecord->permanentlyDisabled)
             {
@@ -2440,6 +2454,7 @@ namespace apimon
         }
 
         #include "AsyncIoHandlers.inc"
+        #include "WinsockExtensionHandlers.inc"
 
         BOOL WINAPI HookedReadFile(HANDLE fileHandle, LPVOID bufferPointer, DWORD bytesToRead, LPDWORD bytesReadPointer, LPOVERLAPPED overlappedPointer)
         {
@@ -6824,6 +6839,7 @@ namespace apimon
             }
             (void)InstallFakeSuccessHooks(nullptr);
             (void)InstallRawFallbackHooks();
+            RetryExtensionHooks();
             PublishConfiguredCoverage();
         }
 
@@ -6905,6 +6921,7 @@ namespace apimon
         bool removed = true;
         for (HookBinding& binding : g_bindings)
             removed = UninstallInlineHook(binding.hookRecord) && removed;
+        removed = UninstallExtensionHooks() && removed;
         removed = UninstallRawFallbackHooks() && removed;
         removed = UninstallFakeSuccessHooks() && removed;
         removed = UninstallAllClipboardWin32uHooks() && removed;

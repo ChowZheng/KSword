@@ -45,13 +45,17 @@ namespace apimon
             _snwprintf_s(detail, _TRUNCATE, L"untracked=%llu capacity=8192; original call/callback retained", count);
             SendMonitorEventRaw(ks::winapi_monitor::EventCategory::Internal, L"Agent", L"IoUntracked", 0, detail);
         }
-        void CompleteLocked(const IoToken& op, DWORD error, DWORD bytes)
+        bool CompleteLocked(const IoToken& op, DWORD error, DWORD bytes)
         {
-            if (!op || op->completed) return;
-            if (!op->submitted) { op->earlyCompletion = true; op->completionError = error; op->completionBytes = bytes; return; }
+            if (!op || op->completed) return false;
+            if (!op->submitted) { op->earlyCompletion = true; op->completionError = error; op->completionBytes = bytes; return false; }
             op->completed = true;
+            op->completionError = error; op->completionBytes = bytes;
             SendIo(op, ks::winapi_monitor::EventKind::IoComplete, error, bytes);
+            return true;
         }
+        void NotifyCompletion(const IoToken& op)
+        { if (EventCurrent(op) && op->completionObserver) op->completionObserver(op, op->completionError); }
         IoToken FindLocked(std::uintptr_t resource, LPOVERLAPPED ov)
         {
             const auto identity = g_resources.find(resource);
@@ -59,7 +63,8 @@ namespace apimon
             IoToken latest;
             for (const auto& op : g_operations)
                 if (op && op->resource == resource && op->resourceIdentity == identity->second.identity
-                    && op->overlapped == ov && op->session == identity->second.session && (!latest || latest->id < op->id)) latest = op;
+                    && op->overlapped == ov && !op->lookupAmbiguous
+                    && op->session == identity->second.session && (!latest || latest->id < op->id)) latest = op;
             return latest;
         }
         bool EventSuppressed(LPOVERLAPPED ov)
@@ -81,7 +86,7 @@ namespace apimon
             // Outstanding reuse is ambiguous. Never attach a new request to an older operation.
             for (const auto& op : g_operations)
                 if (op && op->overlapped == ov && op->resourceIdentity == identity.identity && !op->completed)
-                { NotTracked(); return {}; }
+                { op->lookupAmbiguous = true; NotTracked(); return {}; }
             for (auto& slot : g_operations)
                 if (!slot || (slot->completed && (!slot->portExpected || slot->portConsumed))
                     || (slot->session != session && !slot->callbackExpected && (!slot->portExpected || slot->portConsumed)))
@@ -106,6 +111,8 @@ namespace apimon
         {
             if (!op) return;
             ScopedInlineHookInternalBypass bypass;
+            bool notify = false;
+            {
             std::lock_guard lock(g_mutex);
             op->submitted = true;
             SendIo(op, ks::winapi_monitor::EventKind::IoSubmit, error, bytes,
@@ -114,9 +121,11 @@ namespace apimon
             const auto resource = g_resources.find(op->resource);
             if (!pending && resource != g_resources.end() && (resource->second.mode & FILE_SKIP_COMPLETION_PORT_ON_SUCCESS))
                 op->portExpected = false;
-            if (op->earlyCompletion) CompleteLocked(op, op->completionError, op->completionBytes);
-            else if (!pending && !op->callbackExpected) CompleteLocked(op, 0, bytes);
+            if (op->earlyCompletion) notify = CompleteLocked(op, op->completionError, op->completionBytes);
+            else if (!pending && !op->callbackExpected) notify = CompleteLocked(op, 0, bytes);
             else SendIo(op, ks::winapi_monitor::EventKind::IoWait, 0, bytes, L"completion=pending");
+            }
+            if (notify) NotifyCompletion(op);
         }
         catch (...) {}
     }
@@ -126,20 +135,29 @@ namespace apimon
         catch (...) {}
     }
     void CompleteIo(const IoToken& op, DWORD error, DWORD bytes) noexcept
-    { try { ScopedInlineHookInternalBypass bypass; std::lock_guard lock(g_mutex); CompleteLocked(op, error, bytes); } catch (...) {} }
+    { try { ScopedInlineHookInternalBypass bypass; bool notify = false;
+        { std::lock_guard lock(g_mutex); notify = CompleteLocked(op, error, bytes); }
+        if (notify) NotifyCompletion(op);
+    } catch (...) {} }
     void ObserveIoResult(std::uintptr_t resource, LPOVERLAPPED ov, bool completed, DWORD error, DWORD bytes) noexcept
     {
-        try { ScopedInlineHookInternalBypass bypass; std::lock_guard lock(g_mutex); auto op = FindLocked(resource, ov);
-            if (completed) CompleteLocked(op, error, bytes); else SendIo(op, ks::winapi_monitor::EventKind::IoWait, error, bytes); }
+        try { ScopedInlineHookInternalBypass bypass; bool notify = false; IoToken op;
+            { std::lock_guard lock(g_mutex); op = FindLocked(resource, ov);
+            if (completed) notify = CompleteLocked(op, error, bytes); else SendIo(op, ks::winapi_monitor::EventKind::IoWait, error, bytes); }
+            if (notify) NotifyCompletion(op);
+        }
         catch (...) {}
     }
     void ObservePortCompletion(HANDLE port, LPOVERLAPPED ov, DWORD error, DWORD bytes) noexcept
     {
-        try { ScopedInlineHookInternalBypass bypass; std::lock_guard lock(g_mutex); IoToken oldest;
+        try { ScopedInlineHookInternalBypass bypass; IoToken oldest; bool notify = false;
+            { std::lock_guard lock(g_mutex);
             for (const auto& op : g_operations)
-                if (op && op->overlapped == ov && op->port == port && op->portExpected && !op->portConsumed
+                if (op && op->overlapped == ov && !op->lookupAmbiguous && op->port == port && op->portExpected && !op->portConsumed
                     && (!oldest || op->id < oldest->id)) oldest = op;
-            if (oldest) { oldest->portConsumed = true; CompleteLocked(oldest, error, bytes); } }
+            if (oldest) { oldest->portConsumed = true; notify = CompleteLocked(oldest, error, bytes); } }
+            if (notify) NotifyCompletion(oldest);
+        }
         catch (...) {}
     }
     void ObserveIoCancellation(std::uintptr_t resource, LPOVERLAPPED ov, DWORD error, bool issuingThreadOnly) noexcept

@@ -29,14 +29,16 @@ std::size_t Completions(std::uint64_t id){return std::count_if(events.begin(),ev
 std::uint64_t WINAPI Dispatcher(void* context,std::uint64_t a,std::uint64_t b,std::uint64_t c,std::uint64_t d,std::uint64_t e,std::uint64_t f,std::uint64_t g,std::uint64_t h)
  {return reinterpret_cast<std::uintptr_t>(context)+a+2*b+3*c+4*d+5*e+6*f+7*g+8*h;}
 void WINAPI Throwing(void*){throw std::runtime_error("owned callback exception");}
+bool observerCalled=false;
+void Observer(const IoToken&,DWORD){observerCalled=true;ObserveIoResult(999,nullptr,false,0,0);}
 int main(){
  auto thunk=BuildContextThunk(reinterpret_cast<void*>(100),reinterpret_cast<void*>(&Dispatcher),8);CHECK(thunk);
  using Function=std::uint64_t(WINAPI*)(std::uint64_t,std::uint64_t,std::uint64_t,std::uint64_t,std::uint64_t,std::uint64_t,std::uint64_t,std::uint64_t);
  CHECK(reinterpret_cast<Function>(thunk)(1,2,3,4,5,6,7,8)==304);
  auto throwing=BuildContextThunk(nullptr,reinterpret_cast<void*>(&Throwing),0);CHECK(throwing);
  bool unwound=false;try{reinterpret_cast<void(WINAPI*)()>(throwing)();}catch(const std::runtime_error&){unwound=true;}CHECK(unwound);
- OVERLAPPED ov{};auto first=Start(10,&ov,true);CHECK(first);
- CompleteIo(first,0,42);CHECK(Completions(first->id)==0);FinishIo(first,true,true,0,0);CHECK(Completions(first->id)==1);
+ OVERLAPPED ov{};auto first=Start(10,&ov,true);CHECK(first);first->completionObserver=&Observer;
+ CompleteIo(first,0,42);CHECK(Completions(first->id)==0);FinishIo(first,true,true,0,0);CHECK(Completions(first->id)==1&&observerCalled);
  CompleteIo(first,0,42);CHECK(Completions(first->id)==1);
  BindIoPort(10,reinterpret_cast<HANDLE>(20));auto sync=Start(10,&ov);FinishIo(sync,true,false,0,42);CHECK(Completions(sync->id)==1);
  auto pending=Start(10,&ov);FinishIo(pending,true,true,ERROR_IO_PENDING,0);
@@ -53,9 +55,12 @@ int main(){
  session=3;BindIoPort(60,reinterpret_cast<HANDLE>(70));auto newPort=Start(60,&ov);FinishIo(newPort,true,true,0,0);
  count=events.size();ObservePortCompletion(reinterpret_cast<HANDLE>(70),&ov,0,42);CHECK(events.size()==count&&Completions(newPort->id)==0);
  ObservePortCompletion(reinterpret_cast<HANDLE>(70),&ov,0,42);CHECK(Completions(newPort->id)==1);
+ auto ambiguous=Start(80,&ov,true);FinishIo(ambiguous,true,true,0,0);CHECK(!Start(80,&ov));
+ ObserveIoResult(80,&ov,true,0,42);CHECK(Completions(ambiguous->id)==0);
+ CompleteIo(ambiguous,0,42);CHECK(Completions(ambiguous->id)==1);
  std::array<OVERLAPPED,8192> many{};std::vector<IoToken> tokens;
  for(auto& item:many){auto token=Start(50,&item);CHECK(token);FinishIo(token,true,true,0,0);tokens.push_back(token);}
- OVERLAPPED excess{};CHECK(!Start(50,&excess)&&UntrackedIoCount()==1);
+ OVERLAPPED excess{};CHECK(!Start(50,&excess)&&UntrackedIoCount()==2);
  CompleteIo(tokens[0],0,42);CHECK(Start(50,&excess));
  printf("PASS: thunk register/stack ABI and unwind, 8192 capacity, early/duplicate completion, IOCP ordering, cancellation, handle reuse and session isolation\n");
 }

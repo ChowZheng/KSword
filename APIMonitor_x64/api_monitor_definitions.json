@@ -20033,10 +20033,8 @@
         "scope": "targets"
       },
       "wrapper": {
-        "kind": "generated",
-        "capture_handler": "CaptureWSAIoctl",
-        "policy": "wsa_int",
-        "success": "zero"
+        "kind": "special",
+        "handler": "HookedWSAIoctl"
       }
     },
     {
@@ -39450,6 +39448,593 @@
       "wrapper": {
         "kind": "special",
         "handler": "HookedCancelIoEx"
+      }
+    },
+    {
+      "id": 635,
+      "module": "Mswsock.dll",
+      "export": "AcceptEx",
+      "extension_guid": "b5367df1-cbac-11cf-95ca-00805f48a192",
+      "category": "Network",
+      "architectures": [
+        "x64"
+      ],
+      "calling_convention": "WSAAPI",
+      "return_type": "BOOL",
+      "parameters": [
+        {
+          "type": "SOCKET",
+          "name": "listener",
+          "direction": "in",
+          "encoding": "none",
+          "capture": "handler",
+          "length": null
+        },
+        {
+          "type": "SOCKET",
+          "name": "accepted",
+          "direction": "in",
+          "encoding": "none",
+          "capture": "handler",
+          "length": null
+        },
+        {
+          "type": "PVOID",
+          "name": "buffer",
+          "direction": "out",
+          "encoding": "none",
+          "capture": "handler",
+          "length": null
+        },
+        {
+          "type": "DWORD",
+          "name": "receiveLength",
+          "direction": "in",
+          "encoding": "none",
+          "capture": "handler",
+          "length": null
+        },
+        {
+          "type": "DWORD",
+          "name": "localLength",
+          "direction": "in",
+          "encoding": "none",
+          "capture": "handler",
+          "length": null
+        },
+        {
+          "type": "DWORD",
+          "name": "remoteLength",
+          "direction": "in",
+          "encoding": "none",
+          "capture": "handler",
+          "length": null
+        },
+        {
+          "type": "LPDWORD",
+          "name": "bytes",
+          "direction": "out",
+          "encoding": "none",
+          "capture": "handler",
+          "length": null
+        },
+        {
+          "type": "LPOVERLAPPED",
+          "name": "ov",
+          "direction": "inout",
+          "encoding": "none",
+          "capture": "handler",
+          "length": null
+        }
+      ],
+      "return": {
+        "success": "bool",
+        "error_source": "wsa_last_error"
+      },
+      "binding": {
+        "type_alias": "AcceptExFn",
+        "record": "g_extensionAcceptExHook",
+        "original": "g_extensionAcceptExOriginal",
+        "hook": "DispatchAcceptEx",
+        "scope": "extension"
+      },
+      "wrapper": {
+        "kind": "special",
+        "handler": "DispatchAcceptEx"
+      }
+    },
+    {
+      "id": 636,
+      "module": "Mswsock.dll",
+      "export": "ConnectEx",
+      "extension_guid": "25a207b9-ddf3-4660-8ee9-76e58c74063e",
+      "category": "Network",
+      "architectures": [
+        "x64"
+      ],
+      "calling_convention": "WSAAPI",
+      "return_type": "BOOL",
+      "parameters": [
+        {
+          "type": "SOCKET",
+          "name": "socket",
+          "direction": "in",
+          "encoding": "none",
+          "capture": "handler",
+          "length": null
+        },
+        {
+          "type": "const sockaddr*",
+          "name": "address",
+          "direction": "in",
+          "encoding": "none",
+          "capture": "handler",
+          "length": null
+        },
+        {
+          "type": "int",
+          "name": "addressLength",
+          "direction": "in",
+          "encoding": "none",
+          "capture": "handler",
+          "length": null
+        },
+        {
+          "type": "PVOID",
+          "name": "buffer",
+          "direction": "in",
+          "encoding": "bytes",
+          "capture": "handler",
+          "length": {
+            "parameter": "length",
+            "unit": "bytes",
+            "indirect": false
+          }
+        },
+        {
+          "type": "DWORD",
+          "name": "length",
+          "direction": "in",
+          "encoding": "none",
+          "capture": "handler",
+          "length": null
+        },
+        {
+          "type": "LPDWORD",
+          "name": "bytes",
+          "direction": "out",
+          "encoding": "none",
+          "capture": "handler",
+          "length": null
+        },
+        {
+          "type": "LPOVERLAPPED",
+          "name": "ov",
+          "direction": "inout",
+          "encoding": "none",
+          "capture": "handler",
+          "length": null
+        }
+      ],
+      "return": {
+        "success": "bool",
+        "error_source": "wsa_last_error"
+      },
+      "binding": {
+        "type_alias": "ConnectExFn",
+        "record": "g_extensionConnectExHook",
+        "original": "g_extensionConnectExOriginal",
+        "hook": "DispatchConnectEx",
+        "scope": "extension"
+      },
+      "wrapper": {
+        "kind": "special",
+        "handler": "DispatchConnectEx"
+      }
+    },
+    {
+      "id": 637,
+      "module": "Mswsock.dll",
+      "export": "WSARecvMsg",
+      "extension_guid": "f689d7c8-6f1f-436b-8a53-e54fe351c322",
+      "category": "Network",
+      "architectures": [
+        "x64"
+      ],
+      "calling_convention": "WSAAPI",
+      "return_type": "int",
+      "parameters": [
+        {
+          "type": "SOCKET",
+          "name": "socket",
+          "direction": "in",
+          "encoding": "none",
+          "capture": "handler",
+          "length": null
+        },
+        {
+          "type": "LPWSAMSG",
+          "name": "message",
+          "direction": "inout",
+          "encoding": "none",
+          "capture": "handler",
+          "length": null
+        },
+        {
+          "type": "LPDWORD",
+          "name": "bytes",
+          "direction": "out",
+          "encoding": "none",
+          "capture": "handler",
+          "length": null
+        },
+        {
+          "type": "LPWSAOVERLAPPED",
+          "name": "ov",
+          "direction": "inout",
+          "encoding": "none",
+          "capture": "handler",
+          "length": null
+        },
+        {
+          "type": "LPWSAOVERLAPPED_COMPLETION_ROUTINE",
+          "name": "callback",
+          "direction": "in",
+          "encoding": "none",
+          "capture": "handler",
+          "length": null
+        }
+      ],
+      "return": {
+        "success": "zero",
+        "error_source": "wsa_last_error"
+      },
+      "binding": {
+        "type_alias": "WSARecvMsgFn",
+        "record": "g_extensionWSARecvMsgHook",
+        "original": "g_extensionWSARecvMsgOriginal",
+        "hook": "DispatchWSARecvMsg",
+        "scope": "extension"
+      },
+      "wrapper": {
+        "kind": "special",
+        "handler": "DispatchWSARecvMsg"
+      }
+    },
+    {
+      "id": 638,
+      "module": "Mswsock.dll",
+      "export": "WSASendMsg",
+      "extension_guid": "a441e712-754f-43ca-84a7-0dee44cf606d",
+      "category": "Network",
+      "architectures": [
+        "x64"
+      ],
+      "calling_convention": "WSAAPI",
+      "return_type": "int",
+      "parameters": [
+        {
+          "type": "SOCKET",
+          "name": "socket",
+          "direction": "in",
+          "encoding": "none",
+          "capture": "handler",
+          "length": null
+        },
+        {
+          "type": "LPWSAMSG",
+          "name": "message",
+          "direction": "in",
+          "encoding": "none",
+          "capture": "handler",
+          "length": null
+        },
+        {
+          "type": "DWORD",
+          "name": "flags",
+          "direction": "in",
+          "encoding": "none",
+          "capture": "handler",
+          "length": null
+        },
+        {
+          "type": "LPDWORD",
+          "name": "bytes",
+          "direction": "out",
+          "encoding": "none",
+          "capture": "handler",
+          "length": null
+        },
+        {
+          "type": "LPWSAOVERLAPPED",
+          "name": "ov",
+          "direction": "inout",
+          "encoding": "none",
+          "capture": "handler",
+          "length": null
+        },
+        {
+          "type": "LPWSAOVERLAPPED_COMPLETION_ROUTINE",
+          "name": "callback",
+          "direction": "in",
+          "encoding": "none",
+          "capture": "handler",
+          "length": null
+        }
+      ],
+      "return": {
+        "success": "zero",
+        "error_source": "wsa_last_error"
+      },
+      "binding": {
+        "type_alias": "WSASendMsgFn",
+        "record": "g_extensionWSASendMsgHook",
+        "original": "g_extensionWSASendMsgOriginal",
+        "hook": "DispatchWSASendMsg",
+        "scope": "extension"
+      },
+      "wrapper": {
+        "kind": "special",
+        "handler": "DispatchWSASendMsg"
+      }
+    },
+    {
+      "id": 639,
+      "module": "Mswsock.dll",
+      "export": "TransmitFile",
+      "extension_guid": "b5367df0-cbac-11cf-95ca-00805f48a192",
+      "category": "Network",
+      "architectures": [
+        "x64"
+      ],
+      "calling_convention": "WSAAPI",
+      "return_type": "BOOL",
+      "parameters": [
+        {
+          "type": "SOCKET",
+          "name": "socket",
+          "direction": "in",
+          "encoding": "none",
+          "capture": "handler",
+          "length": null
+        },
+        {
+          "type": "HANDLE",
+          "name": "file",
+          "direction": "in",
+          "encoding": "none",
+          "capture": "handler",
+          "length": null
+        },
+        {
+          "type": "DWORD",
+          "name": "length",
+          "direction": "in",
+          "encoding": "none",
+          "capture": "handler",
+          "length": null
+        },
+        {
+          "type": "DWORD",
+          "name": "perSend",
+          "direction": "in",
+          "encoding": "none",
+          "capture": "handler",
+          "length": null
+        },
+        {
+          "type": "LPOVERLAPPED",
+          "name": "ov",
+          "direction": "inout",
+          "encoding": "none",
+          "capture": "handler",
+          "length": null
+        },
+        {
+          "type": "LPTRANSMIT_FILE_BUFFERS",
+          "name": "buffers",
+          "direction": "in",
+          "encoding": "none",
+          "capture": "handler",
+          "length": null
+        },
+        {
+          "type": "DWORD",
+          "name": "flags",
+          "direction": "in",
+          "encoding": "none",
+          "capture": "handler",
+          "length": null
+        }
+      ],
+      "return": {
+        "success": "bool",
+        "error_source": "wsa_last_error"
+      },
+      "binding": {
+        "type_alias": "TransmitFileFn",
+        "record": "g_extensionTransmitFileHook",
+        "original": "g_extensionTransmitFileOriginal",
+        "hook": "DispatchTransmitFile",
+        "scope": "extension"
+      },
+      "wrapper": {
+        "kind": "special",
+        "handler": "DispatchTransmitFile"
+      }
+    },
+    {
+      "id": 640,
+      "module": "Mswsock.dll",
+      "export": "TransmitPackets",
+      "extension_guid": "d9689da0-1f90-11d3-9971-00c04f68c876",
+      "category": "Network",
+      "architectures": [
+        "x64"
+      ],
+      "calling_convention": "WSAAPI",
+      "return_type": "BOOL",
+      "parameters": [
+        {
+          "type": "SOCKET",
+          "name": "socket",
+          "direction": "in",
+          "encoding": "none",
+          "capture": "handler",
+          "length": null
+        },
+        {
+          "type": "LPTRANSMIT_PACKETS_ELEMENT",
+          "name": "packets",
+          "direction": "in",
+          "encoding": "none",
+          "capture": "handler",
+          "length": {
+            "parameter": "count",
+            "unit": "elements",
+            "indirect": false
+          }
+        },
+        {
+          "type": "DWORD",
+          "name": "count",
+          "direction": "in",
+          "encoding": "none",
+          "capture": "handler",
+          "length": null
+        },
+        {
+          "type": "DWORD",
+          "name": "sendSize",
+          "direction": "in",
+          "encoding": "none",
+          "capture": "handler",
+          "length": null
+        },
+        {
+          "type": "LPOVERLAPPED",
+          "name": "ov",
+          "direction": "inout",
+          "encoding": "none",
+          "capture": "handler",
+          "length": null
+        },
+        {
+          "type": "DWORD",
+          "name": "flags",
+          "direction": "in",
+          "encoding": "none",
+          "capture": "handler",
+          "length": null
+        }
+      ],
+      "return": {
+        "success": "bool",
+        "error_source": "wsa_last_error"
+      },
+      "binding": {
+        "type_alias": "TransmitPacketsFn",
+        "record": "g_extensionTransmitPacketsHook",
+        "original": "g_extensionTransmitPacketsOriginal",
+        "hook": "DispatchTransmitPackets",
+        "scope": "extension"
+      },
+      "wrapper": {
+        "kind": "special",
+        "handler": "DispatchTransmitPackets"
+      }
+    },
+    {
+      "id": 641,
+      "module": "Mswsock.dll",
+      "export": "GetAcceptExSockaddrs",
+      "extension_guid": "b5367df2-cbac-11cf-95ca-00805f48a192",
+      "category": "Network",
+      "architectures": [
+        "x64"
+      ],
+      "calling_convention": "WSAAPI",
+      "return_type": "VOID",
+      "parameters": [
+        {
+          "type": "PVOID",
+          "name": "buffer",
+          "direction": "in",
+          "encoding": "none",
+          "capture": "handler",
+          "length": null
+        },
+        {
+          "type": "DWORD",
+          "name": "receiveLength",
+          "direction": "in",
+          "encoding": "none",
+          "capture": "handler",
+          "length": null
+        },
+        {
+          "type": "DWORD",
+          "name": "localLength",
+          "direction": "in",
+          "encoding": "none",
+          "capture": "handler",
+          "length": null
+        },
+        {
+          "type": "DWORD",
+          "name": "remoteLength",
+          "direction": "in",
+          "encoding": "none",
+          "capture": "handler",
+          "length": null
+        },
+        {
+          "type": "sockaddr**",
+          "name": "local",
+          "direction": "out",
+          "encoding": "none",
+          "capture": "handler",
+          "length": null
+        },
+        {
+          "type": "LPINT",
+          "name": "localSize",
+          "direction": "out",
+          "encoding": "none",
+          "capture": "handler",
+          "length": null
+        },
+        {
+          "type": "sockaddr**",
+          "name": "remote",
+          "direction": "out",
+          "encoding": "none",
+          "capture": "handler",
+          "length": null
+        },
+        {
+          "type": "LPINT",
+          "name": "remoteSize",
+          "direction": "out",
+          "encoding": "none",
+          "capture": "handler",
+          "length": null
+        }
+      ],
+      "return": {
+        "success": "void",
+        "error_source": "wsa_last_error"
+      },
+      "binding": {
+        "type_alias": "GetAcceptExSockaddrsFn",
+        "record": "g_extensionGetAcceptExSockaddrsHook",
+        "original": "g_extensionGetAcceptExSockaddrsOriginal",
+        "hook": "DispatchGetAcceptExSockaddrs",
+        "scope": "extension"
+      },
+      "wrapper": {
+        "kind": "special",
+        "handler": "DispatchGetAcceptExSockaddrs"
       }
     }
   ]

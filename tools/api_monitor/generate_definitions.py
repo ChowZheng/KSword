@@ -8,10 +8,12 @@ import hashlib
 import json
 from pathlib import Path
 import re
+import uuid
 
 SUPPORTED_TYPES = set(['ACCESS_MASK', 'ALG_ID', 'BCRYPT_ALG_HANDLE', 'BCRYPT_ALG_HANDLE*', 'BCRYPT_HASH_HANDLE', 'BCRYPT_HASH_HANDLE*', 'BCRYPT_KEY_HANDLE', 'BCRYPT_KEY_HANDLE*', 'BOOL', 'BOOLEAN', 'BYTE*', 'COSERVERINFO*', 'CRYPTPROTECT_PROMPTSTRUCT*', 'DATA_BLOB*', 'DLL_DIRECTORY_COOKIE', 'DNS_STATUS', 'DWORD', 'DWORD*', 'DWORD_PTR', 'FARPROC', 'FILE_INFO_BY_HANDLE_CLASS', 'FINDEX_INFO_LEVELS', 'FINDEX_SEARCH_OPS', 'GET_FILEEX_INFO_LEVELS', 'GROUP', 'GUID*', 'HANDLE', 'HANDLE*', 'HBITMAP', 'HCERTCHAINENGINE', 'HCERTSTORE', 'HCERTSTORE*', 'HCRYPTHASH', 'HCRYPTHASH*', 'HCRYPTKEY', 'HCRYPTKEY*', 'HCRYPTMSG*', 'HCRYPTPROV', 'HCRYPTPROV*', 'HCRYPTPROV_LEGACY', 'HDC', 'HGDIOBJ', 'HHOOK', 'HINSTANCE', 'HINTERNET', 'HKEY', 'HMODULE', 'HMODULE*', 'HOOKPROC', 'HRESULT', 'HWND', 'HostEntPtr', 'IDataObject*', 'IDataObject**', 'INT', 'INTERNET_PORT', 'IUnknown*', 'JOBOBJECTINFOCLASS', 'KS_FILE_INFORMATION_CLASS', 'KS_KEY_INFORMATION_CLASS', 'KS_KEY_VALUE_INFORMATION_CLASS', 'KsIoApcRoutine', 'LARGE_INTEGER', 'LONG', 'LPARAM', 'LPBINDSTATUSCALLBACK', 'LPBOOL', 'LPBYTE', 'LPBYTE*', 'LPCGUID', 'LPCONTEXT', 'LPCREATEFILE2_EXTENDED_PARAMETERS', 'LPCSTR', 'LPCSTR*', 'LPCVOID', 'LPCWSTR', 'LPCWSTR*', 'LPDWORD', 'LPFILETIME', 'LPHANDLE', 'LPHEAPENTRY32', 'LPHEAPLIST32', 'LPINT', 'LPLONG', 'LPMODULEENTRY32W', 'LPOVERLAPPED', 'LPPROCESS_INFORMATION', 'LPPROC_THREAD_ATTRIBUTE_LIST', 'LPPROGRESS_ROUTINE', 'LPQOS', 'LPQUERY_SERVICE_CONFIGA', 'LPQUERY_SERVICE_CONFIGW', 'LPSECURITY_ATTRIBUTES', 'LPSERVICE_STATUS', 'LPSTARTUPINFOA', 'LPSTARTUPINFOW', 'LPSTR', 'LPSTR*', 'LPTHREADENTRY32', 'LPTHREAD_START_ROUTINE', 'LPUNKNOWN', 'LPURL_COMPONENTS', 'LPURL_COMPONENTSA', 'LPURL_COMPONENTSW', 'LPVOID', 'LPVOID*', 'LPWSABUF', 'LPWSADATA', 'LPWSAOVERLAPPED', 'LPWSAOVERLAPPED_COMPLETION_ROUTINE', 'LPWSAPROTOCOL_INFOA', 'LPWSAPROTOCOL_INFOW', 'LPWSTR', 'LPWSTR*', 'LSTATUS', 'MULTI_QI*', 'NCRYPT_HANDLE', 'NCRYPT_KEY_HANDLE', 'NCRYPT_KEY_HANDLE*', 'NCRYPT_PROV_HANDLE', 'NCRYPT_PROV_HANDLE*', 'NTSTATUS', 'PADDRINFOA*', 'PADDRINFOW*', 'PANSI_STRING', 'PAPCFUNC', 'PBOOL', 'PBYTE', 'PCCERT_CHAIN_CONTEXT', 'PCCERT_CHAIN_CONTEXT*', 'PCCERT_CONTEXT', 'PCERT_CHAIN_PARA', 'PCERT_CHAIN_POLICY_PARA', 'PCERT_CHAIN_POLICY_STATUS', 'PCEVENT_DESCRIPTOR', 'PCHAR', 'PCONTEXT', 'PCSTR', 'PCWSTR', 'PDNS_RECORDA*', 'PDNS_RECORDW*', 'PDWORD', 'PDWORD_PTR', 'PENABLECALLBACK', 'PEVENT_DATA_DESCRIPTOR', 'PEVENT_TRACE_LOGFILEA', 'PEVENT_TRACE_LOGFILEW', 'PEVENT_TRACE_PROPERTIES', 'PFILETIME', 'PHANDLE', 'PHKEY', 'PIO_STATUS_BLOCK', 'PKS_CLIENT_ID', 'PLARGE_INTEGER', 'PLONG', 'PLUID', 'PLUID_AND_ATTRIBUTES', 'POBJECT_ATTRIBUTES', 'PREGHANDLE', 'PROCESSENTRY32W*', 'PSECURITY_DESCRIPTOR', 'PSID', 'PSID_AND_ATTRIBUTES', 'PSIZE_T', 'PTOKEN_PRIVILEGES', 'PTRACEHANDLE', 'PUCHAR', 'PULONG', 'PUNICODE_STRING', 'PVOID', 'PVOID*', 'PWCHAR', 'PWSTR', 'REFCLSID', 'REFIID', 'REGHANDLE', 'REGSAM', 'RPC_BINDING_HANDLE', 'RPC_BINDING_HANDLE*', 'RPC_CSTR', 'RPC_CSTR*', 'RPC_EP_INQ_HANDLE', 'RPC_EP_INQ_HANDLE*', 'RPC_IF_ID*', 'RPC_STATUS', 'RPC_WSTR', 'RPC_WSTR*', 'SC_ENUM_TYPE', 'SC_HANDLE', 'SC_STATUS_TYPE', 'SECURITY_IMPERSONATION_LEVEL', 'SECURITY_STATUS', 'SHELLEXECUTEINFOA*', 'SHELLEXECUTEINFOW*', 'SIZE_T', 'SIZE_T*', 'SOCKET', 'SOLE_AUTHENTICATION_SERVICE*', 'TOKEN_INFORMATION_CLASS', 'TOKEN_TYPE', 'TRACEHANDLE', 'UCHAR', 'UINT', 'UINT*', 'ULONG', 'ULONG*', 'ULONG64', 'ULONGLONG', 'ULONG_PTR', 'USHORT', 'USHORT*', 'UUID*', 'VOID', 'VOID*', 'WNDENUMPROC', 'WORD', 'WSAEVENT', 'char*', 'const ADDRINFOA*', 'const ADDRINFOW*', 'const BYTE*', 'const CONTEXT*', 'const HANDLE*', 'const LPSECURITY_ATTRIBUTES', 'const char*', 'const sockaddr*', 'const timeval*', 'const void*', 'const void**', 'fd_set*', 'int', 'int*', 'long', 'sockaddr*', 'tagMODULEENTRY32*', 'tagPROCESSENTRY32*', 'u_long*', 'unsigned int', 'unsigned long', 'void', 'void*'])
 SUPPORTED_TYPES.update(['BIND_OPTS*', 'KS_ALPC_MESSAGE_ATTRIBUTES*', 'KS_ALPC_PORT_ATTRIBUTES*', 'KS_PORT_MESSAGE*', 'MEM_EXTENDED_PARAMETER*', 'QUEUE_USER_APC_FLAGS', 'THREADINFOCLASS', 'const UNICODE_STRING*', 'void**'])
 SUPPORTED_TYPES.update(["LPOVERLAPPED_COMPLETION_ROUTINE", "PULONG_PTR", "LPOVERLAPPED*", "LPOVERLAPPED_ENTRY"])
+SUPPORTED_TYPES.update(["LPWSAMSG", "LPTRANSMIT_FILE_BUFFERS", "LPTRANSMIT_PACKETS_ELEMENT", "sockaddr**"])
 IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z_0-9]*$")
 POLICIES = {"bool", "handle", "dword_nonzero", "uint_nonzero", "int_positive",
             "ulong_status", "long_status", "security_status", "rpc_status",
@@ -25,7 +27,7 @@ def require(condition, message):
 
 def validate(catalog, handlers):
     require(catalog.get("schema_version") == 1, "unsupported schema_version")
-    ids, exports, symbols = set(), set(), set()
+    ids, exports, symbols, extension_guids = set(), set(), set(), set()
     for api in catalog["apis"]:
         name = api["export"]
         require(IDENTIFIER.fullmatch(name), f"invalid export: {name}")
@@ -42,7 +44,13 @@ def validate(catalog, handlers):
         require(api["calling_convention"] in {"WINAPI", "NTAPI", "WSAAPI", "RPC_ENTRY"}, f"bad convention: {name}")
         require(api["return_type"] in SUPPORTED_TYPES, f"invalid return type: {name}")
         binding = api["binding"]
-        require(binding["scope"] in {"targets", "clipboard"}, f"invalid scope: {name}")
+        require(binding["scope"] in {"targets", "clipboard", "extension"}, f"invalid scope: {name}")
+        if binding["scope"] == "extension":
+            guid = api.get("extension_guid")
+            require(isinstance(guid, str) and str(uuid.UUID(guid)) == guid and guid not in extension_guids,
+                    f"invalid/duplicate extension GUID: {name}")
+            extension_guids.add(guid)
+            require(api["wrapper"]["kind"] == "special", f"extensions require a named handler: {name}")
         for field in ("type_alias", "record", "original", "hook"):
             symbol = binding[field]
             require(IDENTIFIER.fullmatch(symbol) and symbol not in symbols, f"duplicate/invalid symbol: {symbol}")
@@ -147,17 +155,35 @@ def generate(source, output):
     output.mkdir(parents=True, exist_ok=True)
     header = "// Generated from api_monitor_definitions.json. Do not edit.\n"
     apis = catalog["apis"]
-    write_changed(output / "ApiMonitorDeclarations.inc", header + "\n".join(declaration(a) for a in apis if a["binding"]["scope"] == "targets"))
+    declarations = header + "\n".join(declaration(a) for a in apis if a["binding"]["scope"] == "targets")
+    extensions = [a for a in apis if a["binding"]["scope"] == "extension"]
+    extension_declarations = header
+    for a in extensions:
+        types = ", ".join(p["type"] for p in a["parameters"])
+        extension_declarations += f"\nusing {a['binding']['type_alias']} = {a['return_type']}({a['calling_convention']}*)({types});\n"
+        extension_declarations += f"{a['return_type']} {a['calling_convention']} {a['wrapper']['handler']}(ExtensionContext* context, {signature(a)});\n"
+    declarations += '\n#include "ApiMonitorExtensionDeclarations.inc"\n'
+    write_changed(output / "ApiMonitorExtensionDeclarations.inc", extension_declarations)
+    write_changed(output / "ApiMonitorDeclarations.inc", declarations)
     clip = [a for a in apis if a["binding"]["scope"] == "clipboard"]
     write_changed(output / "ApiMonitorClipboardDeclarations.inc", header + "\n".join(declaration(a, True) for a in clip))
     write_changed(output / "ApiMonitorClipboardDefinitions.inc", header + "\n".join(f"InlineHookRecord {a['binding']['record']}{{}};\n{a['binding']['type_alias']} {a['binding']['original']} = nullptr;" for a in clip))
     write_changed(output / "ApiMonitorWrappers.inc", header + "\n".join(wrapper(a) for a in apis if a["wrapper"]["kind"] == "generated"))
     table = "HookBinding g_bindings[] = {\n"
     for a in apis:
+        if a["binding"]["scope"] == "extension":
+            continue
         b = a["binding"]
         table += f"    {{ L\"{a['module']}\", \"{a['export']}\", ks::winapi_monitor::EventCategory::{a['category']}, &{b['record']}, reinterpret_cast<void*>(&{b['hook']}), reinterpret_cast<void**>(&{b['original']}) }},\n"
     table += "};\n"
     write_changed(output / "ApiMonitorBindings.inc", header + table)
+    extension_table = header + "const ExtensionDefinition kExtensionDefinitions[] = {\n"
+    for a in extensions:
+        guid = uuid.UUID(a["extension_guid"])
+        tail = ", ".join(f"0x{x:02X}" for x in guid.bytes[8:])
+        literal = f"{{0x{guid.time_low:08X}, 0x{guid.time_mid:04X}, 0x{guid.time_hi_version:04X}, {{{tail}}}}}"
+        extension_table += f"{{ {a['id']}, L\"{a['export']}\", {literal}, reinterpret_cast<void*>(&{a['wrapper']['handler']}), {len(a['parameters'])} }},\n"
+    write_changed(output / "ApiMonitorExtensions.inc", extension_table + "};\n")
     digest = hashlib.sha256(raw).hexdigest()
     write_changed(output / "ApiMonitorDefinitionIdentity.h", header + f'#pragma once\nnamespace apimon {{ inline constexpr char kDefinitionSha256[] = "{digest}"; inline constexpr unsigned kDefinitionCount = {len(apis)}; }}\n')
     metadata = header + '#pragma once\n#include "ApiMonitorDefinitionIdentity.h"\nnamespace apimon {\n'

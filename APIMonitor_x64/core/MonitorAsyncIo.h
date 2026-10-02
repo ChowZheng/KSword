@@ -20,7 +20,10 @@ namespace apimon
         // Fields below are protected by the tracker mutex.
         bool submitted = false, completed = false, callbackExpected = false;
         bool portExpected = false, portConsumed = false, earlyCompletion = false;
+        bool lookupAmbiguous = false;
         DWORD completionError = 0, completionBytes = 0;
+        void (*completionObserver)(const std::shared_ptr<IoOperation>&, DWORD) = nullptr;
+        void* observerContext = nullptr;
     };
     using IoToken = std::shared_ptr<IoOperation>;
     IoToken BeginIo(std::uintptr_t resource, LPOVERLAPPED overlapped,
