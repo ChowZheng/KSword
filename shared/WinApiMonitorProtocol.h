@@ -9,6 +9,7 @@
 // ============================================================
 
 #include <cstdint>
+#include <atomic>
 #include <iterator>
 #include <string>
 #include <type_traits>
@@ -147,6 +148,27 @@ namespace ks::winapi_monitor
     static_assert(
         std::is_trivially_copyable_v<ApiMonitorEventPacket>,
         "ApiMonitorEventPacket 必须可平凡复制，便于直接通过管道收发。");
+
+    // Byte pipes have no message boundaries. Read only available bytes, so an idle
+    // reader can observe stop even if cancellation races with starting its next read.
+    inline bool readEventPacket(HANDLE pipe, ApiMonitorEventPacket* packet, const std::atomic_bool& stop)
+    {
+        if (!packet) return false;
+        DWORD offset = 0;
+        while (offset < sizeof(*packet) && !stop.load())
+        {
+            DWORD available = 0;
+            if (!::PeekNamedPipe(pipe, nullptr, 0, nullptr, &available, nullptr)) return false;
+            if (available == 0) { ::Sleep(10); continue; }
+            const DWORD remaining = static_cast<DWORD>(sizeof(*packet)) - offset;
+            const DWORD requested = available < remaining ? available : remaining;
+            DWORD received = 0;
+            if (!::ReadFile(pipe, reinterpret_cast<unsigned char*>(packet) + offset, requested, &received, nullptr)
+                || received == 0) return false;
+            offset += received;
+        }
+        return offset == sizeof(*packet);
+    }
 
     // trimTrailingSlash：
     // - 作用：把目录尾部多余的 '\\' 或 '/' 去掉；

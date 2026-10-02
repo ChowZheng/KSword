@@ -258,19 +258,11 @@ void WinAPIDock::startPipeReadThread()
         while (!guardThis->m_pipeStopFlag.load())
         {
             ks::winapi_monitor::ApiMonitorEventPacket packetValue{};
-            DWORD bytesRead = 0;
-            const BOOL readOk = ::ReadFile(
-                pipeHandle,
-                &packetValue,
-                kApiMonitorPacketSize,
-                &bytesRead,
-                nullptr);
-            if (readOk == FALSE || bytesRead == 0)
+            if (!ks::winapi_monitor::readEventPacket(pipeHandle, &packetValue, guardThis->m_pipeStopFlag))
             {
                 break;
             }
-            if (bytesRead < sizeof(packetValue)
-                || packetValue.size != sizeof(packetValue)
+            if (packetValue.size != sizeof(packetValue)
                 || packetValue.version != ks::winapi_monitor::kProtocolVersion)
             {
                 continue;
@@ -436,19 +428,11 @@ void WinAPIDock::startChildPipeReadThread(const std::uint32_t childPidValue)
         while (!guardThis->m_pipeStopFlag.load())
         {
             ks::winapi_monitor::ApiMonitorEventPacket packetValue{};
-            DWORD bytesRead = 0;
-            const BOOL readOk = ::ReadFile(
-                pipeHandle,
-                &packetValue,
-                kApiMonitorPacketSize,
-                &bytesRead,
-                nullptr);
-            if (readOk == FALSE || bytesRead == 0)
+            if (!ks::winapi_monitor::readEventPacket(pipeHandle, &packetValue, guardThis->m_pipeStopFlag))
             {
                 break;
             }
-            if (bytesRead < sizeof(packetValue)
-                || packetValue.size != sizeof(packetValue)
+            if (packetValue.size != sizeof(packetValue)
                 || packetValue.version != ks::winapi_monitor::kProtocolVersion)
             {
                 continue;

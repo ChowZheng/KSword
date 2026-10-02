@@ -537,20 +537,7 @@ namespace ks::misc
             while (!sessionRawPointer->stopFlag.load())
             {
                 ks::winapi_monitor::ApiMonitorEventPacket packetValue{};
-                DWORD packetBytesRead = 0;
-                while (packetBytesRead < kPacketSize && !sessionRawPointer->stopFlag.load())
-                {
-                    DWORD bytesRead = 0;
-                    const BOOL readOk = ::ReadFile(pipeHandle,
-                        reinterpret_cast<unsigned char*>(&packetValue) + packetBytesRead,
-                        kPacketSize - packetBytesRead, &bytesRead, nullptr);
-                    if (readOk == FALSE || bytesRead == 0)
-                    {
-                        break;
-                    }
-                    packetBytesRead += bytesRead;
-                }
-                if (packetBytesRead != kPacketSize)
+                if (!ks::winapi_monitor::readEventPacket(pipeHandle, &packetValue, sessionRawPointer->stopFlag))
                 {
                     break;
                 }
