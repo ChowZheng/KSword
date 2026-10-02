@@ -301,8 +301,8 @@ struct ProcessViewState {
     HIMAGELIST imageList = nullptr;
     ProcessModel model;
     // activeColumns 用途：当前运行期实际展示的逻辑列；关闭页面后不持久化。
-    std::vector<ProcessColumnId> activeColumns = DefaultProcessColumns(ProcessViewPreset::Monitor);
-    ProcessViewPreset preset = ProcessViewPreset::Monitor;
+    std::vector<ProcessColumnId> activeColumns = DefaultProcessColumns(ProcessViewPreset::Detail);
+    ProcessViewPreset preset = ProcessViewPreset::Detail;
     bool pickingWindow = false;
     bool refreshPaused = false;
     UINT refreshIntervalSeconds = 2;
@@ -2658,7 +2658,7 @@ void CreateChildControls(ProcessViewState& state) {
             const LRESULT item = ::SendMessageW(state.presetCombo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(ProcessViewPresetTitle(preset)));
             ::SendMessageW(state.presetCombo, CB_SETITEMDATA, item, static_cast<LPARAM>(preset));
         }
-        ::SendMessageW(state.presetCombo, CB_SETCURSEL, 0, 0);
+        UpdateToolbarTexts(state);
     }
     state.columnsButton = Ksword::Ui::CreateButton(state.hwnd, kColumnsButtonId, L"列", 0, 0, 0, 0);
     state.pickerButton = Ksword::Ui::CreateButton(state.hwnd, kPickerButtonId, L"拖动选中进程", 0, 0, 0, 0);
