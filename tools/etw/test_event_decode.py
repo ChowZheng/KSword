@@ -52,7 +52,7 @@ int main(){
  std::vector<EtwDecodedPropertyEntry> decoded;ULONG parsed=0;QString tail;EtwSchemaEntry schema;EVENT_RECORD record{};
  record.EventHeader.Flags=EVENT_HEADER_FLAG_64_BIT_HEADER;record.EventHeader.ProcessId=3212;record.EventHeader.ThreadId=62272;
  auto run=[&](EtwSchemaEntry in,void* raw,USHORT len){record.UserData=raw;record.UserDataLength=len;return decodeEtwPropertiesBySchema(&record,in,&decoded,&parsed,&tail);};
- auto fill=[&](QString provider,QString event,QString opcode){MonitorDock::EtwCapturedEventRow row;row.headerPid=record.EventHeader.ProcessId;row.headerTid=record.EventHeader.ThreadId;row.providerGuid=guidToText(record.EventHeader.ProviderId);row.opcode=record.EventHeader.EventDescriptor.Opcode;auto semantic=inferEtwSemanticSummary(provider,event,opcode,decoded);fillEtwCapturedRowDecodedFields(&row,provider,event,semantic,decoded);return row;};
+ auto fill=[&](QString provider,QString event,QString opcode){MonitorDock::EtwCapturedEventRow row;row.headerPid=record.EventHeader.ProcessId;row.headerTid=record.EventHeader.ThreadId;row.providerGuid=guidToText(record.EventHeader.ProviderId);row.opcode=record.EventHeader.EventDescriptor.Opcode;auto semantic=inferEtwSemanticSummary(provider,event,opcode,decoded,record.EventHeader.EventDescriptor.Opcode);fillEtwCapturedRowDecodedFields(&row,provider,event,semantic,decoded);return row;};
  unsigned char image[]={SAMPLE_BYTES};GUID imageGuid={0x2cb15d1d,0x5fc1,0x11d2,{0xab,0xe1,0x00,0xa0,0xc9,0x11,0xf5,0x18}};
  record.EventHeader.ProviderId=imageGuid;record.EventHeader.Flags|=EVENT_HEADER_FLAG_CLASSIC_HEADER;record.EventHeader.EventDescriptor.Version=3;record.EventHeader.EventDescriptor.Opcode=3;record.UserData=image;record.UserDataLength=sizeof(image);
  EtwSchemaEntry installed;if(!tryBuildEtwSchemaByTdh(&record,&installed)){printf("FAIL installed ImageV3 TDH schema unavailable\n");return 99;}
@@ -72,6 +72,23 @@ presets+='\n'+fun('const std::vector<EtwPresetProviderDescriptor>& etwPresetProv
 code=code.replace('PARSER',presets+'\nPARSER')
 code=code.replace('PARSER',s[s.index('    // EtwSchemaPropertyEntry'):s.index('    // 100ns 时间戳文本格式化')]).replace('SAMPLE_BYTES',','.join(str(x) for x in payload))
 tests={
+ 'action_translation': r'''
+ struct ActionCase{const char* provider;const char* event;const char* opcode;int value;const char* expected;};
+ const ActionCase cases[]={
+ {"Microsoft-Windows-Kernel-Process","ProcessStart","开始",1,"创建/启动"},
+ {"Microsoft-Windows-Kernel-Process","ProcessStop","停止",2,"结束"},
+ {"Microsoft-Windows-Kernel-Process","ProcessFreeze","停止",2,"结束"},
+ {"Microsoft-Windows-Kernel-Registry","HiveMount","开始",1,"开始"},
+ {"Microsoft-Windows-Kernel-Registry","EnumerateValueKey","EnumerateValueKey",40,"枚举"},
+ {"Kernel-FileIO","FileIoRead","Read",67,"读取/查询"},
+ {"Vendor-Custom","Offset","",0,"Offset"},{"Vendor-Custom","Setup","",0,"Setup"},
+ {"Vendor-Custom","Reset","",0,"重置"},
+ {"Microsoft-Windows-TCPIP","TcpFastopenStateChange","信息",0,"TcpFastopenStateChange"},
+ {"Microsoft-Windows-TCPIP","TcpConnectTcbTimeout","信息",0,"TcpConnectTcbTimeout"},
+ {"Microsoft-Windows-TCPIP","TcpCreateEndpointAfFailure","信息",0,"TcpCreateEndpointAfFailure"},
+ {"Microsoft-Windows-Kernel-Image","Image","卸载",2,"卸载"}};
+ for(const auto& c:cases){auto got=inferEtwActionText(QString::fromUtf8(c.event),QString::fromUtf8(c.opcode),QString::fromUtf8(c.provider),c.value);if(got!=QString::fromUtf8(c.expected)){printf("action mismatch: %s got=%s\n",c.event,qPrintable(got));return 120;}}
+ ''',
  'provider_categories': r'''
  for(const auto& preset:etwPresetProviderDescriptorList())if(etwInferProviderCategory(preset.providerNameText)!=preset.categoryText)return 110;
  struct ResourceCase{const char* provider;const char* event;const char* resource;};
@@ -108,7 +125,7 @@ tests={
      QString event=etwTextAtOffset(buffer.data(),info->EventNameOffset),task=etwTextAtOffset(buffer.data(),info->TaskNameOffset),opcode=etwTextAtOffset(buffer.data(),info->OpcodeNameOffset);
      if(event.isEmpty())event=task;if(event.isEmpty())event=opcode;
      QJsonObject definition;definition.insert(QStringLiteral("id"),descriptor.Id);definition.insert(QStringLiteral("version"),descriptor.Version);definition.insert(QStringLiteral("event"),event);definition.insert(QStringLiteral("task"),task);definition.insert(QStringLiteral("opcode"),opcode);definition.insert(QStringLiteral("opcode_value"),descriptor.Opcode);
-     definition.insert(QStringLiteral("resource"),inferEtwResourceType(preset.providerNameText,event));definition.insert(QStringLiteral("action"),inferEtwActionText(event,opcode));
+     definition.insert(QStringLiteral("resource"),inferEtwResourceType(preset.providerNameText,event));definition.insert(QStringLiteral("action"),inferEtwActionText(event,opcode,preset.providerNameText,descriptor.Opcode));
      QJsonArray fields;for(ULONG j=0;j<info->TopLevelPropertyCount;++j){const auto& property=info->EventPropertyInfoArray[j];QString name=etwTextAtOffset(buffer.data(),property.NameOffset);QJsonObject field;field.insert(QStringLiteral("name"),name);field.insert(QStringLiteral("meaning"),etwPropertyMeaningText(normalizeEtwPropertyName(name)));fields.append(field);}definition.insert(QStringLiteral("fields"),fields);
      definitions.append(definition);++eventCount;
    }

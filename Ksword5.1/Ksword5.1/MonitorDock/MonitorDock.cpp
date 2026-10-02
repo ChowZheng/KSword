@@ -1541,7 +1541,10 @@ namespace
             QStringLiteral("重命名"),
             QStringLiteral("连接"),
             QStringLiteral("发送"),
-            QStringLiteral("接收")
+            QStringLiteral("接收"),
+            QStringLiteral("开始"), QStringLiteral("结束"), QStringLiteral("加载"), QStringLiteral("卸载"),
+            QStringLiteral("枚举开始"), QStringLiteral("枚举结束"), QStringLiteral("枚举"),
+            QStringLiteral("断开连接"), QStringLiteral("刷新"), QStringLiteral("重置")
         };
         return kActionList;
     }
@@ -3588,72 +3591,73 @@ namespace
         return QStringLiteral("通用");
     }
 
-    // inferEtwActionText：
-    // - 作用：根据事件名和操作码名提取动作语义；
-    // - 调用：写入 JSON semantic.action。
-    QString inferEtwActionText(const QString& eventNameText, const QString& opcodeNameText)
+    // 动作仅按明确操作名和标准操作码翻译；复杂诊断事件保留原文，不能丢失失败/超时语义。
+    QString inferEtwActionText(const QString& eventNameText, const QString& opcodeNameText,
+        const QString& providerNameText = QString(), const int opcodeValue = -1)
     {
-        // Rundown is a snapshot; it must precede Start/End and substring heuristics.
-        const QString opcode = opcodeNameText.trimmed().toLower();
-        if (opcode == QStringLiteral("dcstart")) return QStringLiteral("枚举开始");
-        if (opcode == QStringLiteral("dcend") || opcode == QStringLiteral("dcstop")) return QStringLiteral("枚举结束");
-        if (opcode == QStringLiteral("unload")) return QStringLiteral("卸载");
-        if (opcode == QStringLiteral("load")) return QStringLiteral("加载");
-        if (opcode == QStringLiteral("end") || opcode == QStringLiteral("stop")) return QStringLiteral("结束");
-        QString actionProbe = (eventNameText + QLatin1Char(' ') + opcodeNameText).toLower();
-        actionProbe.replace(QStringLiteral("thread"), QString());
-        if (actionProbe.contains(QStringLiteral("disconnect"))) return QStringLiteral("断开连接");
-        if (actionProbe.contains(QStringLiteral("unload"))) return QStringLiteral("卸载");
-        if (actionProbe.contains(QStringLiteral("imageload"))) return QStringLiteral("加载");
-
-        if (actionProbe.contains(QStringLiteral("create")) || actionProbe.contains(QStringLiteral("start")))
+        const QString event = normalizeEtwPropertyName(eventNameText);
+        const QString opcode = normalizeEtwPropertyName(opcodeNameText);
+        const QString resource = inferEtwResourceType(providerNameText, eventNameText);
+        const bool isClassicImage = resource == QStringLiteral("映像")
+            && etwProviderDisplayName(providerNameText, providerNameText).compare(
+                QStringLiteral("Microsoft-Windows-Kernel-Process"), Qt::CaseInsensitive) != 0;
+        if (opcodeValue == EVENT_TRACE_TYPE_DC_START || opcode == QStringLiteral("dcstart")) return QStringLiteral("枚举开始");
+        if (opcodeValue == EVENT_TRACE_TYPE_DC_END || opcode == QStringLiteral("dcend") || opcode == QStringLiteral("dcstop"))
+            return QStringLiteral("枚举结束");
+        if (isClassicImage && opcodeValue == EVENT_TRACE_TYPE_LOAD) return QStringLiteral("加载");
+        if (isClassicImage && opcodeValue == EVENT_TRACE_TYPE_END) return QStringLiteral("卸载");
+        if (opcodeValue == EVENT_TRACE_TYPE_END) return QStringLiteral("结束");
+        if (opcodeValue == EVENT_TRACE_TYPE_START)
         {
-            return QStringLiteral("创建/启动");
+            return event == QStringLiteral("processstart") || event == QStringLiteral("threadstart") || event == QStringLiteral("jobstart")
+                || event == QStringLiteral("process") || event == QStringLiteral("thread")
+                ? QStringLiteral("创建/启动") : QStringLiteral("开始");
         }
-        if (actionProbe.contains(QStringLiteral("open")))
+        static const std::unordered_map<std::string, QString> actions{
+            {"create", QStringLiteral("创建/启动")}, {"start", QStringLiteral("创建/启动")},
+            {"begin", QStringLiteral("开始")}, {"end", QStringLiteral("结束")}, {"stop", QStringLiteral("结束")},
+            {"terminate", QStringLiteral("结束")}, {"open", QStringLiteral("打开")}, {"close", QStringLiteral("关闭")},
+            {"cleanup", QStringLiteral("关闭")}, {"read", QStringLiteral("读取/查询")}, {"query", QStringLiteral("读取/查询")},
+            {"queryinformation", QStringLiteral("读取/查询")}, {"querykey", QStringLiteral("读取/查询")},
+            {"queryvalue", QStringLiteral("读取/查询")}, {"queryvaluekey", QStringLiteral("读取/查询")},
+            {"querymultiplevalue", QStringLiteral("读取/查询")}, {"querymultiplevaluekey", QStringLiteral("读取/查询")},
+            {"querysecurity", QStringLiteral("读取/查询")}, {"querysecuritykey", QStringLiteral("读取/查询")}, {"queryea", QStringLiteral("读取/查询")},
+            {"write", QStringLiteral("写入/设置")}, {"setvalue", QStringLiteral("写入/设置")}, {"setvaluekey", QStringLiteral("写入/设置")},
+            {"setinformation", QStringLiteral("写入/设置")}, {"setinformationkey", QStringLiteral("写入/设置")},
+            {"setsecurity", QStringLiteral("写入/设置")}, {"setsecuritykey", QStringLiteral("写入/设置")}, {"setea", QStringLiteral("写入/设置")},
+            {"delete", QStringLiteral("删除")}, {"remove", QStringLiteral("删除")}, {"deletekey", QStringLiteral("删除")},
+            {"deletevalue", QStringLiteral("删除")}, {"deletevaluekey", QStringLiteral("删除")}, {"deletepath", QStringLiteral("删除")},
+            {"rename", QStringLiteral("重命名")}, {"renamepath", QStringLiteral("重命名")},
+            {"connect", QStringLiteral("连接")}, {"disconnect", QStringLiteral("断开连接")},
+            {"send", QStringLiteral("发送")}, {"recv", QStringLiteral("接收")}, {"receive", QStringLiteral("接收")},
+            {"load", QStringLiteral("加载")}, {"unload", QStringLiteral("卸载")},
+            {"createkey", QStringLiteral("创建/启动")}, {"openkey", QStringLiteral("打开")}, {"closekey", QStringLiteral("关闭")},
+            {"enum", QStringLiteral("枚举")}, {"direnum", QStringLiteral("枚举")}, {"enumeratekey", QStringLiteral("枚举")},
+            {"enumeratevaluekey", QStringLiteral("枚举")}, {"rundown", QStringLiteral("枚举")},
+            {"flush", QStringLiteral("刷新")}, {"flushkey", QStringLiteral("刷新")}, {"reset", QStringLiteral("重置")}
+        };
+        auto translate = [](const QString& name) -> QString {
+            const auto found = actions.find(name.toStdString());
+            return found == actions.end() ? QString() : found->second;
+        };
+        // TDH 的操作码名称可能已本地化；数值路径优先，英文明确操作名作为兜底。
+        QString action = translate(opcode);
+        if (!action.isEmpty()) return action;
+        action = translate(event);
+        if (!action.isEmpty()) return action;
+        const QStringList prefixes{QStringLiteral("fileio"), QStringLiteral("registry"), QStringLiteral("tcpip"),
+            QStringLiteral("udpip"), QStringLiteral("process"), QStringLiteral("thread"), QStringLiteral("image")};
+        for (const QString& prefix : prefixes)
         {
-            return QStringLiteral("打开");
+            if (!event.startsWith(prefix)) continue;
+            QString operation = event.mid(prefix.size());
+            if (operation.endsWith(QStringLiteral("ipv4")) || operation.endsWith(QStringLiteral("ipv6"))) operation.chop(4);
+            action = translate(operation);
+            if (!action.isEmpty()) return action;
         }
-        if (actionProbe.contains(QStringLiteral("close")) || actionProbe.contains(QStringLiteral("cleanup")))
-        {
-            return QStringLiteral("关闭");
-        }
-        if (actionProbe.contains(QStringLiteral("read")) || actionProbe.contains(QStringLiteral("query")))
-        {
-            return QStringLiteral("读取/查询");
-        }
-        if (actionProbe.contains(QStringLiteral("write")) || actionProbe.contains(QStringLiteral("set")))
-        {
-            return QStringLiteral("写入/设置");
-        }
-        if (actionProbe.contains(QStringLiteral("delete")) || actionProbe.contains(QStringLiteral("remove")))
-        {
-            return QStringLiteral("删除");
-        }
-        if (actionProbe.contains(QStringLiteral("rename")))
-        {
-            return QStringLiteral("重命名");
-        }
-        if (actionProbe.contains(QStringLiteral("connect")))
-        {
-            return QStringLiteral("连接");
-        }
-        if (actionProbe.contains(QStringLiteral("send")))
-        {
-            return QStringLiteral("发送");
-        }
-        if (actionProbe.contains(QStringLiteral("recv")) || actionProbe.contains(QStringLiteral("receive")))
-        {
-            return QStringLiteral("接收");
-        }
-        if (!eventNameText.trimmed().isEmpty())
-        {
-            return eventNameText.trimmed();
-        }
-        if (!opcodeNameText.trimmed().isEmpty())
-        {
-            return opcodeNameText.trimmed();
-        }
+        if (event == QStringLiteral("disconnectipv4") || event == QStringLiteral("disconnectipv6")) return QStringLiteral("断开连接");
+        if (!eventNameText.trimmed().isEmpty()) return eventNameText.trimmed();
+        if (!opcodeNameText.trimmed().isEmpty()) return opcodeNameText.trimmed();
         return QStringLiteral("未知动作");
     }
 
@@ -3698,11 +3702,12 @@ namespace
         const QString& providerNameText,
         const QString& eventNameText,
         const QString& opcodeNameText,
-        const std::vector<EtwDecodedPropertyEntry>& propertyList)
+        const std::vector<EtwDecodedPropertyEntry>& propertyList,
+        const int opcodeValue = -1)
     {
         EtwSemanticSummary summary;
         summary.resourceTypeText = inferEtwResourceType(providerNameText, eventNameText);
-        summary.actionText = inferEtwActionText(eventNameText, opcodeNameText);
+        summary.actionText = inferEtwActionText(eventNameText, opcodeNameText, providerNameText, opcodeValue);
 
         const EtwDecodedPropertyEntry* filePathProperty = findFirstEtwProperty(
             propertyList,
@@ -12034,7 +12039,8 @@ void MonitorDock::enqueueEtwEventFromRecord(const struct _EVENT_RECORD* eventRec
                 providerNameText,
                 rowData.eventName,
                 rowData.opcodeName,
-                decodedPropertyList);
+                decodedPropertyList,
+                rowData.opcode);
             rowData.detailJson = buildEtwDetailJson(
                 eventRecord,
                 providerGuidText,
@@ -12086,7 +12092,7 @@ void MonitorDock::enqueueEtwEventFromRecord(const struct _EVENT_RECORD* eventRec
 
             QJsonObject fallbackSemantic;
             fallbackSemantic.insert(QStringLiteral("resourceType"), inferEtwResourceType(providerNameText, rowData.eventName));
-            fallbackSemantic.insert(QStringLiteral("action"), inferEtwActionText(rowData.eventName, rowData.opcodeName));
+            fallbackSemantic.insert(QStringLiteral("action"), inferEtwActionText(rowData.eventName, rowData.opcodeName, providerNameText, rowData.opcode));
             fallbackSemantic.insert(QStringLiteral("target"), QString());
             fallbackSemantic.insert(QStringLiteral("status"), QString());
 
