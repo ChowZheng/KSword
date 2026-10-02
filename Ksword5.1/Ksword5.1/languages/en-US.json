@@ -5933,6 +5933,13 @@
     "notification.copy.log_template": "%1\n%2\n%3\nFile: %4\nFunction: %5\nGUID: %6"
   },
   "source_translations": {
+    "32 位栈清理字节数必须留空，或填写 0 到 65532 的 4 的倍数。": "32-bit stack cleanup bytes must be empty or a multiple of 4 from 0 to 65532.",
+    "仅用于 32 位 Fake：留空时使用已知 API 签名；未知导出必须填写。stdcall 填写参数占用的栈字节数，cdecl 填 0；不支持 fastcall 或浮点/结构返回。": "32-bit Fake only: leave empty for a known API signature; unknown exports require a value. For stdcall enter the parameter stack bytes; for cdecl enter 0. Fastcall and floating-point/structure returns are unsupported.",
+    "留空：已知签名自动计算": "Empty: calculate from known signature",
+    "32 位栈清理字节": "32-bit stack cleanup bytes",
+    "启用 Fake Raw 兜底（未强类型导出仅伪造标量返回值）": "Enable Fake Raw fallback (unknown exports return scalar values only)",
+    "模板只影响展示和结果码语义；只伪造标量返回值，不写 out 参数。Fake 路径会先上报事件，再跳过原 API 并返回指定值。": "Templates affect display and result-code semantics. Only scalar return values are faked; output parameters are not written. The event is reported before skipping the original API and returning the configured value.",
+    "关闭时，仅强类型表覆盖的 API 可 Fake Success；开启后，未强类型覆盖的 module!api 也可伪造标量返回值，32 位未知导出必须填写栈清理字节数。": "When disabled, Fake Success supports only known API signatures. When enabled, unknown module!api exports may return fake scalar values. Unknown 32-bit exports require stack cleanup bytes.",
     "无法选择匹配目标进程位数的 Agent DLL：%1": "Cannot select an Agent DLL matching the target architecture: %1",
     "选择 API 监控 DLL": "Select API monitor DLL",
     "Agent DLL 路径；安装监控时根据目标进程位数自动选择同目录下的 APIMonitor_x86.dll 或 APIMonitor_x64.dll。": "Agent DLL path. Installation selects APIMonitor_x86.dll or APIMonitor_x64.dll in the same directory for the target architecture.",

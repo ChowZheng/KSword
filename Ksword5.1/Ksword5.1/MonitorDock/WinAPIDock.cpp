@@ -270,6 +270,7 @@ void WinAPIDock::updateActionState()
     {
         m_fakeLastErrorValueEdit->setEnabled(!running);
     }
+    if (m_fakeX86StackBytesEdit != nullptr) m_fakeX86StackBytesEdit->setEnabled(!running);
     if (m_fakeRawFallbackCheck != nullptr)
     {
         m_fakeRawFallbackCheck->setEnabled(!running);

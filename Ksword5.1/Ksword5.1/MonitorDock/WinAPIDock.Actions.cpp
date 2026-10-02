@@ -822,7 +822,7 @@ QString WinAPIDock::fakeSuccessRulesIniText() const
 {
     // fakeSuccessRulesIniText:
     // - Input: the current Fake Success rule table.
-    // - Processing: serializes each exact rule as module|api|returnType|returnValue|lastErrorKind|lastErrorValue.
+    // - Processing: serializes each exact rule as module|api|returnType|returnValue|lastErrorKind|lastErrorValue|x86StackBytes.
     // - Return: a single INI-safe line; empty means Fake Success is disabled for the session.
     if (m_fakeRuleTable == nullptr || m_fakeRuleTable->rowCount() == 0)
     {
@@ -848,7 +848,8 @@ QString WinAPIDock::fakeSuccessRulesIniText() const
             cellToken(row, FakeRuleColumnReturnType),
             cellToken(row, FakeRuleColumnReturnValue),
             cellToken(row, FakeRuleColumnLastErrorKind),
-            cellToken(row, FakeRuleColumnLastErrorValue)
+            cellToken(row, FakeRuleColumnLastErrorValue),
+            cellToken(row, FakeRuleColumnX86StackBytes)
         }.join('|');
     }
     return serializedRuleList.join(QStringLiteral(";;"));
@@ -888,6 +889,7 @@ bool WinAPIDock::validateFakeSuccessRules(QString* errorTextOut) const
         const QString returnValueText = tableCellText(m_fakeRuleTable, row, FakeRuleColumnReturnValue);
         const QString lastErrorKindText = tableCellText(m_fakeRuleTable, row, FakeRuleColumnLastErrorKind);
         const QString lastErrorValueText = tableCellText(m_fakeRuleTable, row, FakeRuleColumnLastErrorValue);
+        const QString stackBytesText = tableCellText(m_fakeRuleTable, row, FakeRuleColumnX86StackBytes);
 
         if (moduleText.isEmpty() || apiText.isEmpty() || returnTypeText.isEmpty()
             || returnValueText.isEmpty() || lastErrorKindText.isEmpty() || lastErrorValueText.isEmpty())
@@ -932,6 +934,13 @@ bool WinAPIDock::validateFakeSuccessRules(QString* errorTextOut) const
             return false;
         }
 
+        quint64 parsedStackBytes = 0;
+        if (!stackBytesText.isEmpty() && (!parseFakeUnsigned64(stackBytesText, &parsedStackBytes)
+                || parsedStackBytes > 65532 || parsedStackBytes % 4 != 0))
+        {
+            if (errorTextOut) *errorTextOut = QStringLiteral("32 位栈清理字节数必须留空，或填写 0 到 65532 的 4 的倍数。");
+            return false;
+        }
         const QString ruleKey = normalizedKey(moduleText, apiText);
         if (seenRuleKeys.contains(ruleKey))
         {
@@ -969,6 +978,7 @@ void WinAPIDock::addFakeSuccessRuleFromInputs()
         ? m_fakeLastErrorKindCombo->currentText().trimmed()
         : lastErrorKindToken;
     const QString lastErrorValueText = m_fakeLastErrorValueEdit != nullptr ? m_fakeLastErrorValueEdit->text().trimmed() : QStringLiteral("0");
+    const QString stackBytesText = m_fakeX86StackBytesEdit != nullptr ? m_fakeX86StackBytesEdit->text().trimmed() : QString();
 
     if (moduleText.isEmpty() || apiText.isEmpty())
     {
@@ -992,6 +1002,14 @@ void WinAPIDock::addFakeSuccessRuleFromInputs()
     if (!parseFakeUnsigned64(lastErrorValueText, &parsedLastErrorValue) || parsedLastErrorValue > 0xFFFFFFFFULL)
     {
         QMessageBox::warning(this, QStringLiteral("Fake Success"), QStringLiteral("错误码必须是 0 到 0xFFFFFFFF。"));
+        return;
+    }
+
+    quint64 parsedStackBytes = 0;
+    if (!stackBytesText.isEmpty() && (!parseFakeUnsigned64(stackBytesText, &parsedStackBytes)
+            || parsedStackBytes > 65532 || parsedStackBytes % 4 != 0))
+    {
+        QMessageBox::warning(this, QStringLiteral("Fake Success"), QStringLiteral("32 位栈清理字节数必须留空，或填写 0 到 65532 的 4 的倍数。"));
         return;
     }
 
@@ -1037,6 +1055,8 @@ void WinAPIDock::addFakeSuccessRuleFromInputs()
     m_fakeRuleTable->setItem(row, FakeRuleColumnReturnValue, returnValueItem);
     m_fakeRuleTable->setItem(row, FakeRuleColumnLastErrorKind, lastErrorKindItem);
     m_fakeRuleTable->setItem(row, FakeRuleColumnLastErrorValue, lastErrorValueItem);
+    m_fakeRuleTable->setItem(row, FakeRuleColumnX86StackBytes,
+        createReadOnlyItem(stackBytesText.isEmpty() ? QString() : QString::number(parsedStackBytes)));
     m_fakeRuleTable->selectRow(row);
 
     if (m_fakeRuleStatusLabel != nullptr)

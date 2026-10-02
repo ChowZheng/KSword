@@ -84,6 +84,7 @@ public:
         FakeRuleColumnReturnValue,
         FakeRuleColumnLastErrorKind,
         FakeRuleColumnLastErrorValue,
+        FakeRuleColumnX86StackBytes,
         FakeRuleColumnCount
     };
 
@@ -210,9 +211,10 @@ private:
     QLineEdit* m_fakeModuleEdit = nullptr;             // m_fakeModuleEdit：Fake Success 精确匹配模块名。
     QLineEdit* m_fakeApiEdit = nullptr;                // m_fakeApiEdit：Fake Success 精确匹配导出 API 名。
     QComboBox* m_fakeReturnTypeCombo = nullptr;        // m_fakeReturnTypeCombo：Fake Success 返回值模板。
-    QLineEdit* m_fakeReturnValueEdit = nullptr;        // m_fakeReturnValueEdit：Fake Success 写入 RAX 的返回值。
+    QLineEdit* m_fakeReturnValueEdit = nullptr;        // m_fakeReturnValueEdit：Fake Success 标量返回值。
     QComboBox* m_fakeLastErrorKindCombo = nullptr;     // m_fakeLastErrorKindCombo：Fake Success 是否设置 LastError/WSAError。
     QLineEdit* m_fakeLastErrorValueEdit = nullptr;     // m_fakeLastErrorValueEdit：Fake Success 错误码数值。
+    QLineEdit* m_fakeX86StackBytesEdit = nullptr;      // x86 Fake 的可选 ret N 字节数。
     QCheckBox* m_fakeRawFallbackCheck = nullptr;       // m_fakeRawFallbackCheck：是否允许 Fake Success 对未强类型 API 使用 Raw 标量返回桩。
     QPushButton* m_fakeAddRuleButton = nullptr;        // m_fakeAddRuleButton：把输入区内容应用到规则表。
     QPushButton* m_fakeRemoveRuleButton = nullptr;     // m_fakeRemoveRuleButton：删除规则表当前选中行。

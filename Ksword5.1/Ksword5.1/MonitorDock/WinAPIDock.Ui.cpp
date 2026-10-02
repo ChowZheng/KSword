@@ -374,9 +374,10 @@ void WinAPIDock::initializeUi()
     m_fakeApiEdit = new QLineEdit(fakeSuccessPanel);
     m_fakeReturnValueEdit = new QLineEdit(fakeSuccessPanel);
     m_fakeLastErrorValueEdit = new QLineEdit(fakeSuccessPanel);
+    m_fakeX86StackBytesEdit = new QLineEdit(fakeSuccessPanel);
     m_fakeReturnTypeCombo = new QComboBox(fakeSuccessPanel);
     m_fakeLastErrorKindCombo = new QComboBox(fakeSuccessPanel);
-    m_fakeRawFallbackCheck = new QCheckBox(QStringLiteral("启用 Fake Raw 兜底（未强类型导出仅伪造 RAX）"), fakeSuccessPanel);
+    m_fakeRawFallbackCheck = new QCheckBox(QStringLiteral("启用 Fake Raw 兜底（未强类型导出仅伪造标量返回值）"), fakeSuccessPanel);
 
     m_fakeModuleEdit->setPlaceholderText(QStringLiteral("KernelBase.dll"));
     m_fakeApiEdit->setPlaceholderText(QStringLiteral("CreateFileW"));
@@ -391,6 +392,9 @@ void WinAPIDock::initializeUi()
     m_fakeApiEdit->setStyleSheet(blueInputStyle());
     m_fakeReturnValueEdit->setStyleSheet(blueInputStyle());
     m_fakeLastErrorValueEdit->setStyleSheet(blueInputStyle());
+    m_fakeX86StackBytesEdit->setStyleSheet(blueInputStyle());
+    m_fakeX86StackBytesEdit->setPlaceholderText(QStringLiteral("留空：已知签名自动计算"));
+    m_fakeX86StackBytesEdit->setToolTip(QStringLiteral("仅用于 32 位 Fake：留空时使用已知 API 签名；未知导出必须填写。stdcall 填写参数占用的栈字节数，cdecl 填 0；不支持 fastcall 或浮点/结构返回。"));
 
     m_fakeReturnTypeCombo->addItem(QStringLiteral("Scalar / RAX"), QStringLiteral("scalar"));
     m_fakeReturnTypeCombo->addItem(QStringLiteral("BOOL"), QStringLiteral("bool"));
@@ -400,7 +404,7 @@ void WinAPIDock::initializeUi()
     m_fakeReturnTypeCombo->addItem(QStringLiteral("HRESULT"), QStringLiteral("hresult"));
     m_fakeReturnTypeCombo->addItem(QStringLiteral("LSTATUS"), QStringLiteral("lstatus"));
     m_fakeReturnTypeCombo->addItem(QStringLiteral("SOCKET / int (WSA)"), QStringLiteral("socket"));
-    m_fakeReturnTypeCombo->setToolTip(QStringLiteral("模板只影响展示和结果码语义；v1 只伪造标量返回值，不写 out 参数。Fake 路径会先上报事件，再跳过原 API 并返回指定 RAX。"));
+    m_fakeReturnTypeCombo->setToolTip(QStringLiteral("模板只影响展示和结果码语义；只伪造标量返回值，不写 out 参数。Fake 路径会先上报事件，再跳过原 API 并返回指定值。"));
     m_fakeReturnTypeCombo->setStyleSheet(blueInputStyle());
 
     m_fakeLastErrorKindCombo->addItem(QStringLiteral("不修改 LastError"), QStringLiteral("none"));
@@ -409,7 +413,7 @@ void WinAPIDock::initializeUi()
     m_fakeLastErrorKindCombo->setToolTip(QStringLiteral("可选：Fake 返回前后设置 Win32 LastError 或 WSAError。"));
     m_fakeLastErrorKindCombo->setStyleSheet(blueInputStyle());
     m_fakeRawFallbackCheck->setChecked(false);
-    m_fakeRawFallbackCheck->setToolTip(QStringLiteral("关闭时，仅强类型表覆盖的 API 可 Fake Success；开启后，规则表里未强类型覆盖的 module!api 也会用通用 x64 RAX stub 直接返回。"));
+    m_fakeRawFallbackCheck->setToolTip(QStringLiteral("关闭时，仅强类型表覆盖的 API 可 Fake Success；开启后，未强类型覆盖的 module!api 也可伪造标量返回值，32 位未知导出必须填写栈清理字节数。"));
 
     fakeFormLayout->addRow(QStringLiteral("模块"), m_fakeModuleEdit);
     fakeFormLayout->addRow(QStringLiteral("API"), m_fakeApiEdit);
@@ -417,6 +421,7 @@ void WinAPIDock::initializeUi()
     fakeFormLayout->addRow(QStringLiteral("返回值"), m_fakeReturnValueEdit);
     fakeFormLayout->addRow(QStringLiteral("错误码类型"), m_fakeLastErrorKindCombo);
     fakeFormLayout->addRow(QStringLiteral("错误码值"), m_fakeLastErrorValueEdit);
+    fakeFormLayout->addRow(QStringLiteral("32 位栈清理字节"), m_fakeX86StackBytesEdit);
     fakeSuccessLayout->addLayout(fakeFormLayout);
     fakeSuccessLayout->addWidget(m_fakeRawFallbackCheck, 0);
 
@@ -455,7 +460,8 @@ void WinAPIDock::initializeUi()
             QStringLiteral("返回模板"),
             QStringLiteral("返回值"),
             QStringLiteral("错误类型"),
-            QStringLiteral("错误值")
+            QStringLiteral("错误值"),
+            QStringLiteral("32 位栈清理字节")
         });
     m_fakeRuleTable->horizontalHeader()->setStyleSheet(blueHeaderStyle());
     m_fakeRuleTable->horizontalHeader()->setSectionResizeMode(FakeRuleColumnModule, QHeaderView::ResizeToContents);
@@ -463,7 +469,8 @@ void WinAPIDock::initializeUi()
     m_fakeRuleTable->horizontalHeader()->setSectionResizeMode(FakeRuleColumnReturnType, QHeaderView::ResizeToContents);
     m_fakeRuleTable->horizontalHeader()->setSectionResizeMode(FakeRuleColumnReturnValue, QHeaderView::ResizeToContents);
     m_fakeRuleTable->horizontalHeader()->setSectionResizeMode(FakeRuleColumnLastErrorKind, QHeaderView::ResizeToContents);
-    m_fakeRuleTable->horizontalHeader()->setSectionResizeMode(FakeRuleColumnLastErrorValue, QHeaderView::Stretch);
+    m_fakeRuleTable->horizontalHeader()->setSectionResizeMode(FakeRuleColumnLastErrorValue, QHeaderView::ResizeToContents);
+    m_fakeRuleTable->horizontalHeader()->setSectionResizeMode(FakeRuleColumnX86StackBytes, QHeaderView::Stretch);
     m_fakeRuleTable->setStyleSheet(blueInputStyle());
     m_fakeRuleTable->setMaximumHeight(170);
     fakeSuccessLayout->addWidget(m_fakeRuleTable, 0);
