@@ -18,6 +18,9 @@ IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z_0-9]*$")
 POLICIES = {"bool", "handle", "dword_nonzero", "uint_nonzero", "int_positive",
             "ulong_status", "long_status", "security_status", "rpc_status",
             "void", "lstatus", "ntstatus", "wsa_int", "hresult"}
+SIZE_TYPES = {"DWORD", "ULONG", "SIZE_T", "UINT", "int", "ULONG_PTR", "ULONGLONG", "ULONG64",
+              "INT", "LONG", "WORD", "USHORT", "long", "unsigned int", "unsigned long", "DWORD_PTR"}
+SIZE_POINTER_TYPES = {"LPDWORD", "PULONG", "PSIZE_T", "int*", "DWORD*", "ULONG*", "UINT*", "LPINT", "LPLONG"}
 
 
 def require(condition, message):
@@ -66,21 +69,35 @@ def validate(catalog, handlers):
         for param in api["parameters"]:
             length = param["length"]
             if length is not None:
+                require("*" in param["type"] or param["type"].startswith(("P", "LP")), f"length on non-buffer parameter: {name}")
                 require(isinstance(length, dict) and length.get("parameter") in names
                         and length["parameter"] != param["name"]
                         and length.get("unit") in {"bytes", "elements"}
                         and isinstance(length.get("indirect", False), bool), f"bad length reference: {name}")
                 source = next(p for p in api["parameters"] if p["name"] == length["parameter"])
-                require(source["encoding"] == "none" and source["type"] in {
-                    "DWORD", "ULONG", "SIZE_T", "UINT", "int", "ULONG_PTR", "ULONGLONG", "LPDWORD", "PULONG", "PSIZE_T", "int*"}, f"non-size length source: {name}")
+                require(source["encoding"] == "none" and source["type"] in SIZE_TYPES | SIZE_POINTER_TYPES,
+                        f"non-size length source: {name}")
+                require(length.get("indirect", False) == (source["type"] in SIZE_POINTER_TYPES),
+                        f"length indirection/type mismatch: {name}")
+        edges = {p["name"]: p["length"]["parameter"] for p in api["parameters"] if p["length"]}
+        for origin in edges:
+            seen, cursor = set(), origin
+            while cursor in edges:
+                require(cursor not in seen, f"cyclic length relationships: {name}")
+                seen.add(cursor)
+                cursor = edges[cursor]
         wrapper = api["wrapper"]
         require(wrapper["kind"] in {"special", "generated"}, f"bad wrapper: {name}")
         handler = wrapper.get("handler") if wrapper["kind"] == "special" else wrapper.get("capture_handler")
         require(handler in handlers, f"unknown C++ handler: {name}: {handler}")
         if wrapper["kind"] == "generated":
             require(wrapper["policy"] in POLICIES, f"unknown return policy: {name}")
+            if wrapper["policy"] == "handle":
+                require(api["return"]["success"] in {"handle", "not_invalid_handle"}, f"bad handle success condition: {name}")
             if wrapper["policy"] == "wsa_int":
                 require(wrapper["success"] in {"zero", "not_socket_error"}, f"bad WSA success rule: {name}")
+        else:
+            require(handler == binding["hook"], f"special handler/binding mismatch: {name}")
         require(api["return"]["error_source"] in {"handler", "wsa_last_error", "return_status", "win32_last_error"}, f"bad error source: {name}")
         require(api["return"]["success"] in POLICIES | {"handler", "zero", "not_socket_error", "not_invalid_handle", "nonnegative"}, f"bad success rule: {name}")
 
@@ -105,6 +122,7 @@ def wrapper(api):
     params, ret = signature(api), api["return_type"]
     args = ", ".join(p["name"] for p in api["parameters"])
     policy = w["policy"]
+    uses_wsa_error = policy == "wsa_int" or api["return"]["error_source"] == "wsa_last_error"
     result = "resultHandle" if policy == "handle" else "statusValue" if policy in {
         "ulong_status", "long_status", "security_status", "rpc_status", "lstatus", "ntstatus", "hresult"} else "resultValue"
     capture_args = "detailBuffer" + (", " + args if args else "") + (", " + result if ret != "void" else "")
@@ -118,19 +136,21 @@ def wrapper(api):
     code += f"    if (guardValue.bypass()) {{ {'return ' if ret != 'void' else ''}{call};{' return;' if ret == 'void' else ''} }}\n"
     code += f"    {'' if ret == 'void' else f'const {ret} {result} = '}{call};\n"
     code += "    const DWORD savedError = ::GetLastError();\n"
-    if policy == "wsa_int":
+    if uses_wsa_error:
         code += "    const int savedWsaError = ::WSAGetLastError();\n"
     code += "    wchar_t detailBuffer[ks::winapi_monitor::kMaxDetailChars] = {};\n"
     code += f"    {w['capture_handler']}Checked({capture_args});\n"
     success = {"bool": f"{result} != FALSE", "handle": f"{result} != nullptr",
                "dword_nonzero": f"{result} != 0", "uint_nonzero": f"{result} != 0",
                "int_positive": f"{result} > 0"}.get(policy)
+    if policy == "handle" and api["return"]["success"] == "not_invalid_handle":
+        success = f"{result} != nullptr && {result} != INVALID_HANDLE_VALUE"
     if policy == "wsa_int":
         success = f"{result} == 0" if w["success"] == "zero" else f"{result} != SOCKET_ERROR"
-    status = "0" if ret == "void" else f"({success}) ? 0 : {'savedWsaError' if policy == 'wsa_int' else 'savedError'}" if success else f"static_cast<std::int32_t>({result})"
+    status = "0" if ret == "void" else f"({success}) ? 0 : {'savedWsaError' if uses_wsa_error else 'savedError'}" if success else f"static_cast<std::int32_t>({result})"
     module = api["module"][:-4]
     code += f"    SendRawEventWithStatus(ks::winapi_monitor::EventCategory::{api['category']}, L\"{module}\", L\"{api['export']}\", {status}, detailBuffer);\n"
-    if policy == "wsa_int":
+    if uses_wsa_error:
         code += "    ::WSASetLastError(savedWsaError);\n"
     code += "    ::SetLastError(savedError);\n"
     if ret != "void":

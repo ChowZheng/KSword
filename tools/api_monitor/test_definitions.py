@@ -28,7 +28,14 @@ mutations = [
     lambda c: c["apis"][0]["parameters"][0].update(length={"parameter": c["apis"][0]["parameters"][0]["name"], "unit": "bytes"}),
     lambda c: c["apis"][-1].update(extension_guid="invalid-guid"),
     lambda c: c["apis"][-1].update(extension_guid=c["apis"][-2]["extension_guid"]),
+    lambda c: c["apis"][0]["parameters"][0].update(length={"parameter": "desiredAccess", "unit": "bytes", "indirect": True}),
 ]
+def cyclic_lengths(c):
+    first, second = c["apis"][0]["parameters"][1:3]
+    for param, other in [(first, second), (second, first)]:
+        param["type"] = "LPDWORD"
+        param["length"] = {"parameter": other["name"], "unit": "elements", "indirect": True}
+mutations.append(cyclic_lengths)
 for change in mutations:
     invalid = copy.deepcopy(catalog)
     change(invalid)
