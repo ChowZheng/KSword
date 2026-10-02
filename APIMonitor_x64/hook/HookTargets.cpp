@@ -7,6 +7,8 @@
 #include "../MonitorAgent.h"
 #include "../core/MonitorPipe.h"
 #include "../core/MonitorCoverage.h"
+#include "../core/MonitorAsyncIo.h"
+#include "ContextThunk.h"
 
 #include <WinReg.h>
 #include <bcrypt.h>
@@ -1177,18 +1179,11 @@ namespace apimon
         // - 输入：Winsock WSABUF 数组和元素数量；
         // - 处理：累加 len 字段并防止空指针访问；
         // - 返回：总请求字节数，超过 uint64 时自然截断到 uint64 范围。
-        std::uint64_t SumWsaBufferLength(const WSABUF* const bufferPointer, const DWORD bufferCount)
+        std::uint64_t SumWsaBufferLength(const WSABUF* bufferPointer, DWORD bufferCount)
         {
             std::uint64_t totalLength = 0;
-            if (bufferPointer == nullptr)
-            {
-                return totalLength;
-            }
-
-            for (DWORD indexValue = 0; indexValue < bufferCount; ++indexValue)
-            {
-                totalLength += static_cast<std::uint64_t>(bufferPointer[indexValue].len);
-            }
+            __try { for (DWORD i = 0; bufferPointer && i < (std::min)(bufferCount, 1024UL); ++i) totalLength += bufferPointer[i].len; }
+            __except (EXCEPTION_EXECUTE_HANDLER) { return 0; }
             return totalLength;
         }
 
@@ -2444,6 +2439,8 @@ namespace apimon
             return resultHandle;
         }
 
+        #include "AsyncIoHandlers.inc"
+
         BOOL WINAPI HookedReadFile(HANDLE fileHandle, LPVOID bufferPointer, DWORD bytesToRead, LPDWORD bytesReadPointer, LPOVERLAPPED overlappedPointer)
         {
             if (IsMonitorPipeHandle(fileHandle))
@@ -2456,10 +2453,16 @@ namespace apimon
                 return g_readFileOriginal(fileHandle, bufferPointer, bytesToRead, bytesReadPointer, overlappedPointer);
             }
 
+            const DWORD incomingError = ::GetLastError();
+            auto operation = BeginIo(reinterpret_cast<std::uintptr_t>(fileHandle), overlappedPointer,
+                L"KernelBase", L"ReadFile", ks::winapi_monitor::EventCategory::File, bytesToRead);
+            ::SetLastError(incomingError);
             const BOOL resultValue = g_readFileOriginal(fileHandle, bufferPointer, bytesToRead, bytesReadPointer, overlappedPointer);
             const DWORD lastError = ::GetLastError();
+            FinishIo(operation, resultValue || lastError == ERROR_IO_PENDING,
+                !resultValue && lastError == ERROR_IO_PENDING, resultValue ? 0 : lastError, SafeIoValue(bytesReadPointer));
             wchar_t detailBuffer[ks::winapi_monitor::kMaxDetailChars] = {};
-            BuildHandleTransferDetail(detailBuffer, fileHandle, bytesToRead, bytesReadPointer != nullptr ? *bytesReadPointer : 0, nullptr);
+            BuildHandleTransferDetail(detailBuffer, fileHandle, bytesToRead, SafeIoValue(bytesReadPointer), nullptr);
             SendRawEventWithStatus(ks::winapi_monitor::EventCategory::File, L"KernelBase", L"ReadFile", resultValue != FALSE ? 0 : lastError, detailBuffer);
             ::SetLastError(lastError);
             return resultValue;
@@ -2477,10 +2480,16 @@ namespace apimon
                 return g_writeFileOriginal(fileHandle, bufferPointer, bytesToWrite, bytesWrittenPointer, overlappedPointer);
             }
 
+            const DWORD incomingError = ::GetLastError();
+            auto operation = BeginIo(reinterpret_cast<std::uintptr_t>(fileHandle), overlappedPointer,
+                L"KernelBase", L"WriteFile", ks::winapi_monitor::EventCategory::File, bytesToWrite);
+            ::SetLastError(incomingError);
             const BOOL resultValue = g_writeFileOriginal(fileHandle, bufferPointer, bytesToWrite, bytesWrittenPointer, overlappedPointer);
             const DWORD lastError = ::GetLastError();
+            FinishIo(operation, resultValue || lastError == ERROR_IO_PENDING,
+                !resultValue && lastError == ERROR_IO_PENDING, resultValue ? 0 : lastError, SafeIoValue(bytesWrittenPointer));
             wchar_t detailBuffer[ks::winapi_monitor::kMaxDetailChars] = {};
-            BuildHandleTransferDetail(detailBuffer, fileHandle, bytesToWrite, bytesWrittenPointer != nullptr ? *bytesWrittenPointer : 0, nullptr);
+            BuildHandleTransferDetail(detailBuffer, fileHandle, bytesToWrite, SafeIoValue(bytesWrittenPointer), nullptr);
             SendRawEventWithStatus(ks::winapi_monitor::EventCategory::File, L"KernelBase", L"WriteFile", resultValue != FALSE ? 0 : lastError, detailBuffer);
             ::SetLastError(lastError);
             return resultValue;
@@ -2506,8 +2515,14 @@ namespace apimon
                 return g_deviceIoControlOriginal(deviceHandle, ioControlCode, inBufferPointer, inBufferSize, outBufferPointer, outBufferSize, bytesReturnedPointer, overlappedPointer);
             }
 
+            const DWORD incomingError = ::GetLastError();
+            auto operation = BeginIo(reinterpret_cast<std::uintptr_t>(deviceHandle), overlappedPointer,
+                L"KernelBase", L"DeviceIoControl", ks::winapi_monitor::EventCategory::File, outBufferSize);
+            ::SetLastError(incomingError);
             const BOOL resultValue = g_deviceIoControlOriginal(deviceHandle, ioControlCode, inBufferPointer, inBufferSize, outBufferPointer, outBufferSize, bytesReturnedPointer, overlappedPointer);
             const DWORD lastError = ::GetLastError();
+            FinishIo(operation, resultValue || lastError == ERROR_IO_PENDING,
+                !resultValue && lastError == ERROR_IO_PENDING, resultValue ? 0 : lastError, SafeIoValue(bytesReturnedPointer));
             wchar_t detailBuffer[ks::winapi_monitor::kMaxDetailChars] = {};
             AppendWideText(detailBuffer, L"handle=");
             AppendHexText(detailBuffer, reinterpret_cast<std::uint64_t>(deviceHandle));
@@ -2518,7 +2533,7 @@ namespace apimon
             AppendWideText(detailBuffer, L" out=");
             AppendUnsignedText(detailBuffer, outBufferSize);
             AppendWideText(detailBuffer, L" returned=");
-            AppendUnsignedText(detailBuffer, bytesReturnedPointer != nullptr ? *bytesReturnedPointer : 0);
+            AppendUnsignedText(detailBuffer, SafeIoValue(bytesReturnedPointer));
             SendRawEventWithStatus(ks::winapi_monitor::EventCategory::File, L"KernelBase", L"DeviceIoControl", resultValue != FALSE ? 0 : lastError, detailBuffer);
             ::SetLastError(lastError);
             return resultValue;
@@ -4915,12 +4930,15 @@ namespace apimon
             ScopedHookGuard guardValue;
             if (guardValue.bypass()) { return g_closeSocketOriginal(socketValue); }
             const int resultValue = g_closeSocketOriginal(socketValue);
-            const int errorValue = resultValue == 0 ? 0 : ::WSAGetLastError();
+            const int savedWsa = ::WSAGetLastError();
+            const DWORD savedWin32 = ::GetLastError();
+            const int errorValue = resultValue == 0 ? 0 : savedWsa;
+            if (resultValue == 0) RetireIoResource(socketValue);
             wchar_t detailBuffer[ks::winapi_monitor::kMaxDetailChars] = {};
             AppendWideText(detailBuffer, L"socket=");
             AppendHexText(detailBuffer, static_cast<std::uint64_t>(socketValue));
             SendMonitorEventRaw(ks::winapi_monitor::EventCategory::Network, L"Ws2_32", L"closesocket", errorValue, detailBuffer);
-            if (resultValue != 0) { ::WSASetLastError(errorValue); }
+            ::WSASetLastError(savedWsa); ::SetLastError(savedWin32);
             return resultValue;
         }
 
@@ -5032,10 +5050,21 @@ namespace apimon
                 return g_wsaSendOriginal(socketValue, buffersPointer, bufferCount, bytesSentPointer, flagsValue, overlappedPointer, completionRoutinePointer);
             }
 
+            const DWORD incomingWin32 = ::GetLastError();
+            const int incomingWsa = ::WSAGetLastError();
             const std::uint64_t requestLength = SumWsaBufferLength(buffersPointer, bufferCount);
-            const int resultValue = g_wsaSendOriginal(socketValue, buffersPointer, bufferCount, bytesSentPointer, flagsValue, overlappedPointer, completionRoutinePointer);
-            const int errorValue = resultValue == 0 ? 0 : ::WSAGetLastError();
-            const DWORD sentValue = bytesSentPointer != nullptr ? *bytesSentPointer : 0;
+            auto operation = BeginIo(socketValue, overlappedPointer, L"Ws2_32", L"WSASend",
+                ks::winapi_monitor::EventCategory::Network, requestLength, completionRoutinePointer != nullptr);
+            auto replacement = reinterpret_cast<LPWSAOVERLAPPED_COMPLETION_ROUTINE>(PrepareIoCallback(operation, nullptr, completionRoutinePointer));
+            if (completionRoutinePointer && !replacement) operation.reset();
+            ::WSASetLastError(incomingWsa); ::SetLastError(incomingWin32);
+            const int resultValue = g_wsaSendOriginal(socketValue, buffersPointer, bufferCount, bytesSentPointer, flagsValue, overlappedPointer, replacement ? replacement : completionRoutinePointer);
+            const int savedWsa = ::WSAGetLastError();
+            const DWORD savedWin32 = ::GetLastError();
+            const int errorValue = resultValue == 0 ? 0 : savedWsa;
+            const DWORD sentValue = SafeIoValue(bytesSentPointer);
+            FinishIo(operation, resultValue == 0 || errorValue == WSA_IO_PENDING,
+                resultValue != 0 && errorValue == WSA_IO_PENDING, errorValue, SafeIoValue(bytesSentPointer));
             wchar_t detailBuffer[ks::winapi_monitor::kMaxDetailChars] = {};
             BuildSocketDetail(detailBuffer, L"send", socketValue, requestLength, sentValue, flagsValue);
             SendMonitorEventRaw(
@@ -5044,10 +5073,7 @@ namespace apimon
                 L"WSASend",
                 errorValue,
                 detailBuffer);
-            if (resultValue != 0)
-            {
-                ::WSASetLastError(errorValue);
-            }
+            ::WSASetLastError(savedWsa); ::SetLastError(savedWin32);
             return resultValue;
         }
 
@@ -5111,11 +5137,22 @@ namespace apimon
                 return g_wsaRecvOriginal(socketValue, buffersPointer, bufferCount, bytesReceivedPointer, flagsPointer, overlappedPointer, completionRoutinePointer);
             }
 
+            const DWORD incomingWin32 = ::GetLastError();
+            const int incomingWsa = ::WSAGetLastError();
             const std::uint64_t requestLength = SumWsaBufferLength(buffersPointer, bufferCount);
-            const int resultValue = g_wsaRecvOriginal(socketValue, buffersPointer, bufferCount, bytesReceivedPointer, flagsPointer, overlappedPointer, completionRoutinePointer);
-            const int errorValue = resultValue == 0 ? 0 : ::WSAGetLastError();
-            const DWORD receivedValue = bytesReceivedPointer != nullptr ? *bytesReceivedPointer : 0;
-            const DWORD flagsValue = flagsPointer != nullptr ? *flagsPointer : 0;
+            auto operation = BeginIo(socketValue, overlappedPointer, L"Ws2_32", L"WSARecv",
+                ks::winapi_monitor::EventCategory::Network, requestLength, completionRoutinePointer != nullptr);
+            auto replacement = reinterpret_cast<LPWSAOVERLAPPED_COMPLETION_ROUTINE>(PrepareIoCallback(operation, nullptr, completionRoutinePointer));
+            if (completionRoutinePointer && !replacement) operation.reset();
+            ::WSASetLastError(incomingWsa); ::SetLastError(incomingWin32);
+            const int resultValue = g_wsaRecvOriginal(socketValue, buffersPointer, bufferCount, bytesReceivedPointer, flagsPointer, overlappedPointer, replacement ? replacement : completionRoutinePointer);
+            const int savedWsa = ::WSAGetLastError();
+            const DWORD savedWin32 = ::GetLastError();
+            const int errorValue = resultValue == 0 ? 0 : savedWsa;
+            const DWORD receivedValue = SafeIoValue(bytesReceivedPointer);
+            const DWORD flagsValue = SafeIoValue(flagsPointer);
+            FinishIo(operation, resultValue == 0 || errorValue == WSA_IO_PENDING,
+                resultValue != 0 && errorValue == WSA_IO_PENDING, errorValue, SafeIoValue(bytesReceivedPointer));
             wchar_t detailBuffer[ks::winapi_monitor::kMaxDetailChars] = {};
             BuildSocketDetail(detailBuffer, L"recv", socketValue, requestLength, receivedValue, flagsValue);
             SendMonitorEventRaw(
@@ -5124,10 +5161,7 @@ namespace apimon
                 L"WSARecv",
                 errorValue,
                 detailBuffer);
-            if (resultValue != 0)
-            {
-                ::WSASetLastError(errorValue);
-            }
+            ::WSASetLastError(savedWsa); ::SetLastError(savedWin32);
             return resultValue;
         }
 

@@ -20135,10 +20135,8 @@
         "scope": "targets"
       },
       "wrapper": {
-        "kind": "generated",
-        "capture_handler": "CaptureWSASendTo",
-        "policy": "wsa_int",
-        "success": "zero"
+        "kind": "special",
+        "handler": "HookedWSASendTo"
       }
     },
     {
@@ -20237,10 +20235,8 @@
         "scope": "targets"
       },
       "wrapper": {
-        "kind": "generated",
-        "capture_handler": "CaptureWSARecvFrom",
-        "policy": "wsa_int",
-        "success": "zero"
+        "kind": "special",
+        "handler": "HookedWSARecvFrom"
       }
     },
     {
@@ -38782,6 +38778,678 @@
         "kind": "generated",
         "policy": "hresult",
         "capture_handler": "CaptureCoGetObject"
+      }
+    },
+    {
+      "id": 624,
+      "module": "KernelBase.dll",
+      "export": "ReadFileEx",
+      "category": "File",
+      "architectures": [
+        "x64"
+      ],
+      "calling_convention": "WINAPI",
+      "return_type": "BOOL",
+      "parameters": [
+        {
+          "type": "HANDLE",
+          "name": "file",
+          "direction": "in",
+          "encoding": "none",
+          "capture": "handler",
+          "length": null
+        },
+        {
+          "type": "LPVOID",
+          "name": "buffer",
+          "direction": "out",
+          "encoding": "bytes",
+          "capture": "handler",
+          "length": {
+            "parameter": "length",
+            "unit": "bytes",
+            "indirect": false
+          }
+        },
+        {
+          "type": "DWORD",
+          "name": "length",
+          "direction": "in",
+          "encoding": "none",
+          "capture": "handler",
+          "length": null
+        },
+        {
+          "type": "LPOVERLAPPED",
+          "name": "ov",
+          "direction": "inout",
+          "encoding": "none",
+          "capture": "handler",
+          "length": null
+        },
+        {
+          "type": "LPOVERLAPPED_COMPLETION_ROUTINE",
+          "name": "callback",
+          "direction": "in",
+          "encoding": "none",
+          "capture": "handler",
+          "length": null
+        }
+      ],
+      "return": {
+        "success": "bool",
+        "error_source": "win32_last_error"
+      },
+      "binding": {
+        "type_alias": "ReadFileExFn",
+        "record": "g_readFileExHook",
+        "original": "g_readFileExOriginal",
+        "hook": "HookedReadFileEx",
+        "scope": "targets"
+      },
+      "wrapper": {
+        "kind": "special",
+        "handler": "HookedReadFileEx"
+      }
+    },
+    {
+      "id": 625,
+      "module": "KernelBase.dll",
+      "export": "WriteFileEx",
+      "category": "File",
+      "architectures": [
+        "x64"
+      ],
+      "calling_convention": "WINAPI",
+      "return_type": "BOOL",
+      "parameters": [
+        {
+          "type": "HANDLE",
+          "name": "file",
+          "direction": "in",
+          "encoding": "none",
+          "capture": "handler",
+          "length": null
+        },
+        {
+          "type": "LPCVOID",
+          "name": "buffer",
+          "direction": "in",
+          "encoding": "bytes",
+          "capture": "handler",
+          "length": {
+            "parameter": "length",
+            "unit": "bytes",
+            "indirect": false
+          }
+        },
+        {
+          "type": "DWORD",
+          "name": "length",
+          "direction": "in",
+          "encoding": "none",
+          "capture": "handler",
+          "length": null
+        },
+        {
+          "type": "LPOVERLAPPED",
+          "name": "ov",
+          "direction": "inout",
+          "encoding": "none",
+          "capture": "handler",
+          "length": null
+        },
+        {
+          "type": "LPOVERLAPPED_COMPLETION_ROUTINE",
+          "name": "callback",
+          "direction": "in",
+          "encoding": "none",
+          "capture": "handler",
+          "length": null
+        }
+      ],
+      "return": {
+        "success": "bool",
+        "error_source": "win32_last_error"
+      },
+      "binding": {
+        "type_alias": "WriteFileExFn",
+        "record": "g_writeFileExHook",
+        "original": "g_writeFileExOriginal",
+        "hook": "HookedWriteFileEx",
+        "scope": "targets"
+      },
+      "wrapper": {
+        "kind": "special",
+        "handler": "HookedWriteFileEx"
+      }
+    },
+    {
+      "id": 626,
+      "module": "KernelBase.dll",
+      "export": "GetOverlappedResult",
+      "category": "File",
+      "architectures": [
+        "x64"
+      ],
+      "calling_convention": "WINAPI",
+      "return_type": "BOOL",
+      "parameters": [
+        {
+          "type": "HANDLE",
+          "name": "file",
+          "direction": "in",
+          "encoding": "none",
+          "capture": "handler",
+          "length": null
+        },
+        {
+          "type": "LPOVERLAPPED",
+          "name": "ov",
+          "direction": "inout",
+          "encoding": "none",
+          "capture": "handler",
+          "length": null
+        },
+        {
+          "type": "LPDWORD",
+          "name": "bytes",
+          "direction": "out",
+          "encoding": "none",
+          "capture": "handler",
+          "length": null
+        },
+        {
+          "type": "BOOL",
+          "name": "wait",
+          "direction": "in",
+          "encoding": "none",
+          "capture": "handler",
+          "length": null
+        }
+      ],
+      "return": {
+        "success": "bool",
+        "error_source": "win32_last_error"
+      },
+      "binding": {
+        "type_alias": "GetOverlappedResultFn",
+        "record": "g_getOverlappedResultHook",
+        "original": "g_getOverlappedResultOriginal",
+        "hook": "HookedGetOverlappedResult",
+        "scope": "targets"
+      },
+      "wrapper": {
+        "kind": "special",
+        "handler": "HookedGetOverlappedResult"
+      }
+    },
+    {
+      "id": 627,
+      "module": "KernelBase.dll",
+      "export": "GetOverlappedResultEx",
+      "category": "File",
+      "architectures": [
+        "x64"
+      ],
+      "calling_convention": "WINAPI",
+      "return_type": "BOOL",
+      "parameters": [
+        {
+          "type": "HANDLE",
+          "name": "file",
+          "direction": "in",
+          "encoding": "none",
+          "capture": "handler",
+          "length": null
+        },
+        {
+          "type": "LPOVERLAPPED",
+          "name": "ov",
+          "direction": "inout",
+          "encoding": "none",
+          "capture": "handler",
+          "length": null
+        },
+        {
+          "type": "LPDWORD",
+          "name": "bytes",
+          "direction": "out",
+          "encoding": "none",
+          "capture": "handler",
+          "length": null
+        },
+        {
+          "type": "DWORD",
+          "name": "milliseconds",
+          "direction": "in",
+          "encoding": "none",
+          "capture": "handler",
+          "length": null
+        },
+        {
+          "type": "BOOL",
+          "name": "alertable",
+          "direction": "in",
+          "encoding": "none",
+          "capture": "handler",
+          "length": null
+        }
+      ],
+      "return": {
+        "success": "bool",
+        "error_source": "win32_last_error"
+      },
+      "binding": {
+        "type_alias": "GetOverlappedResultExFn",
+        "record": "g_getOverlappedResultExHook",
+        "original": "g_getOverlappedResultExOriginal",
+        "hook": "HookedGetOverlappedResultEx",
+        "scope": "targets"
+      },
+      "wrapper": {
+        "kind": "special",
+        "handler": "HookedGetOverlappedResultEx"
+      }
+    },
+    {
+      "id": 628,
+      "module": "KernelBase.dll",
+      "export": "GetQueuedCompletionStatus",
+      "category": "File",
+      "architectures": [
+        "x64"
+      ],
+      "calling_convention": "WINAPI",
+      "return_type": "BOOL",
+      "parameters": [
+        {
+          "type": "HANDLE",
+          "name": "port",
+          "direction": "in",
+          "encoding": "none",
+          "capture": "handler",
+          "length": null
+        },
+        {
+          "type": "LPDWORD",
+          "name": "bytes",
+          "direction": "out",
+          "encoding": "none",
+          "capture": "handler",
+          "length": null
+        },
+        {
+          "type": "PULONG_PTR",
+          "name": "key",
+          "direction": "out",
+          "encoding": "none",
+          "capture": "handler",
+          "length": null
+        },
+        {
+          "type": "LPOVERLAPPED*",
+          "name": "ov",
+          "direction": "out",
+          "encoding": "none",
+          "capture": "handler",
+          "length": null
+        },
+        {
+          "type": "DWORD",
+          "name": "timeout",
+          "direction": "in",
+          "encoding": "none",
+          "capture": "handler",
+          "length": null
+        }
+      ],
+      "return": {
+        "success": "bool",
+        "error_source": "win32_last_error"
+      },
+      "binding": {
+        "type_alias": "GetQueuedCompletionStatusFn",
+        "record": "g_getQueuedCompletionStatusHook",
+        "original": "g_getQueuedCompletionStatusOriginal",
+        "hook": "HookedGetQueuedCompletionStatus",
+        "scope": "targets"
+      },
+      "wrapper": {
+        "kind": "special",
+        "handler": "HookedGetQueuedCompletionStatus"
+      }
+    },
+    {
+      "id": 629,
+      "module": "KernelBase.dll",
+      "export": "GetQueuedCompletionStatusEx",
+      "category": "File",
+      "architectures": [
+        "x64"
+      ],
+      "calling_convention": "WINAPI",
+      "return_type": "BOOL",
+      "parameters": [
+        {
+          "type": "HANDLE",
+          "name": "port",
+          "direction": "in",
+          "encoding": "none",
+          "capture": "handler",
+          "length": null
+        },
+        {
+          "type": "LPOVERLAPPED_ENTRY",
+          "name": "entries",
+          "direction": "out",
+          "encoding": "none",
+          "capture": "handler",
+          "length": {
+            "parameter": "capacity",
+            "unit": "elements",
+            "indirect": false
+          }
+        },
+        {
+          "type": "ULONG",
+          "name": "capacity",
+          "direction": "in",
+          "encoding": "none",
+          "capture": "handler",
+          "length": null
+        },
+        {
+          "type": "PULONG",
+          "name": "removed",
+          "direction": "out",
+          "encoding": "none",
+          "capture": "handler",
+          "length": null
+        },
+        {
+          "type": "DWORD",
+          "name": "timeout",
+          "direction": "in",
+          "encoding": "none",
+          "capture": "handler",
+          "length": null
+        },
+        {
+          "type": "BOOL",
+          "name": "alertable",
+          "direction": "in",
+          "encoding": "none",
+          "capture": "handler",
+          "length": null
+        }
+      ],
+      "return": {
+        "success": "bool",
+        "error_source": "win32_last_error"
+      },
+      "binding": {
+        "type_alias": "GetQueuedCompletionStatusExFn",
+        "record": "g_getQueuedCompletionStatusExHook",
+        "original": "g_getQueuedCompletionStatusExOriginal",
+        "hook": "HookedGetQueuedCompletionStatusEx",
+        "scope": "targets"
+      },
+      "wrapper": {
+        "kind": "special",
+        "handler": "HookedGetQueuedCompletionStatusEx"
+      }
+    },
+    {
+      "id": 630,
+      "module": "KernelBase.dll",
+      "export": "CreateIoCompletionPort",
+      "category": "File",
+      "architectures": [
+        "x64"
+      ],
+      "calling_convention": "WINAPI",
+      "return_type": "HANDLE",
+      "parameters": [
+        {
+          "type": "HANDLE",
+          "name": "file",
+          "direction": "in",
+          "encoding": "none",
+          "capture": "handler",
+          "length": null
+        },
+        {
+          "type": "HANDLE",
+          "name": "port",
+          "direction": "in",
+          "encoding": "none",
+          "capture": "handler",
+          "length": null
+        },
+        {
+          "type": "ULONG_PTR",
+          "name": "key",
+          "direction": "in",
+          "encoding": "none",
+          "capture": "handler",
+          "length": null
+        },
+        {
+          "type": "DWORD",
+          "name": "concurrency",
+          "direction": "in",
+          "encoding": "none",
+          "capture": "handler",
+          "length": null
+        }
+      ],
+      "return": {
+        "success": "handle",
+        "error_source": "win32_last_error"
+      },
+      "binding": {
+        "type_alias": "CreateIoCompletionPortFn",
+        "record": "g_createIoCompletionPortHook",
+        "original": "g_createIoCompletionPortOriginal",
+        "hook": "HookedCreateIoCompletionPort",
+        "scope": "targets"
+      },
+      "wrapper": {
+        "kind": "special",
+        "handler": "HookedCreateIoCompletionPort"
+      }
+    },
+    {
+      "id": 631,
+      "module": "KernelBase.dll",
+      "export": "SetFileCompletionNotificationModes",
+      "category": "File",
+      "architectures": [
+        "x64"
+      ],
+      "calling_convention": "WINAPI",
+      "return_type": "BOOL",
+      "parameters": [
+        {
+          "type": "HANDLE",
+          "name": "file",
+          "direction": "in",
+          "encoding": "none",
+          "capture": "handler",
+          "length": null
+        },
+        {
+          "type": "UCHAR",
+          "name": "flags",
+          "direction": "in",
+          "encoding": "none",
+          "capture": "handler",
+          "length": null
+        }
+      ],
+      "return": {
+        "success": "bool",
+        "error_source": "win32_last_error"
+      },
+      "binding": {
+        "type_alias": "SetFileCompletionNotificationModesFn",
+        "record": "g_setFileCompletionNotificationModesHook",
+        "original": "g_setFileCompletionNotificationModesOriginal",
+        "hook": "HookedSetFileCompletionNotificationModes",
+        "scope": "targets"
+      },
+      "wrapper": {
+        "kind": "special",
+        "handler": "HookedSetFileCompletionNotificationModes"
+      }
+    },
+    {
+      "id": 632,
+      "module": "Ws2_32.dll",
+      "export": "WSAGetOverlappedResult",
+      "category": "Network",
+      "architectures": [
+        "x64"
+      ],
+      "calling_convention": "WSAAPI",
+      "return_type": "BOOL",
+      "parameters": [
+        {
+          "type": "SOCKET",
+          "name": "socket",
+          "direction": "in",
+          "encoding": "none",
+          "capture": "handler",
+          "length": null
+        },
+        {
+          "type": "LPWSAOVERLAPPED",
+          "name": "ov",
+          "direction": "inout",
+          "encoding": "none",
+          "capture": "handler",
+          "length": null
+        },
+        {
+          "type": "LPDWORD",
+          "name": "bytes",
+          "direction": "out",
+          "encoding": "none",
+          "capture": "handler",
+          "length": null
+        },
+        {
+          "type": "BOOL",
+          "name": "wait",
+          "direction": "in",
+          "encoding": "none",
+          "capture": "handler",
+          "length": null
+        },
+        {
+          "type": "LPDWORD",
+          "name": "flags",
+          "direction": "inout",
+          "encoding": "none",
+          "capture": "handler",
+          "length": null
+        }
+      ],
+      "return": {
+        "success": "bool",
+        "error_source": "wsa_last_error"
+      },
+      "binding": {
+        "type_alias": "WSAGetOverlappedResultFn",
+        "record": "g_wSAGetOverlappedResultHook",
+        "original": "g_wSAGetOverlappedResultOriginal",
+        "hook": "HookedWSAGetOverlappedResult",
+        "scope": "targets"
+      },
+      "wrapper": {
+        "kind": "special",
+        "handler": "HookedWSAGetOverlappedResult"
+      }
+    },
+    {
+      "id": 633,
+      "module": "KernelBase.dll",
+      "export": "CancelIo",
+      "category": "File",
+      "architectures": [
+        "x64"
+      ],
+      "calling_convention": "WINAPI",
+      "return_type": "BOOL",
+      "parameters": [
+        {
+          "type": "HANDLE",
+          "name": "file",
+          "direction": "in",
+          "encoding": "none",
+          "capture": "handler",
+          "length": null
+        }
+      ],
+      "return": {
+        "success": "bool",
+        "error_source": "win32_last_error"
+      },
+      "binding": {
+        "type_alias": "CancelIoFn",
+        "record": "g_cancelIoHook",
+        "original": "g_cancelIoOriginal",
+        "hook": "HookedCancelIo",
+        "scope": "targets"
+      },
+      "wrapper": {
+        "kind": "special",
+        "handler": "HookedCancelIo"
+      }
+    },
+    {
+      "id": 634,
+      "module": "KernelBase.dll",
+      "export": "CancelIoEx",
+      "category": "File",
+      "architectures": [
+        "x64"
+      ],
+      "calling_convention": "WINAPI",
+      "return_type": "BOOL",
+      "parameters": [
+        {
+          "type": "HANDLE",
+          "name": "file",
+          "direction": "in",
+          "encoding": "none",
+          "capture": "handler",
+          "length": null
+        },
+        {
+          "type": "LPOVERLAPPED",
+          "name": "ov",
+          "direction": "in",
+          "encoding": "none",
+          "capture": "handler",
+          "length": null
+        }
+      ],
+      "return": {
+        "success": "bool",
+        "error_source": "win32_last_error"
+      },
+      "binding": {
+        "type_alias": "CancelIoExFn",
+        "record": "g_cancelIoExHook",
+        "original": "g_cancelIoExOriginal",
+        "hook": "HookedCancelIoEx",
+        "scope": "targets"
+      },
+      "wrapper": {
+        "kind": "special",
+        "handler": "HookedCancelIoEx"
       }
     }
   ]

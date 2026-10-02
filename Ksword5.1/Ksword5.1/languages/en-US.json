@@ -5921,6 +5921,9 @@
     "notification.copy.log_template": "%1\n%2\n%3\nFile: %4\nFunction: %5\nGUID: %6"
   },
   "source_translations": {
+    "提交": "Submission",
+    "等待完成": "Awaiting completion",
+    "取消结果": "Cancellation result",
     "API 事件": "API events",
     "API 覆盖": "API coverage",
     "选择覆盖快照的进程 PID": "Select the process PID for API coverage",

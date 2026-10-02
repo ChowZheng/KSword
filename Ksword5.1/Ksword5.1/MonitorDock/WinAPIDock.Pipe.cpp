@@ -111,6 +111,15 @@ namespace
         rowValue.resultText = rowValue.resultKnown ? packetResultCodeText(packetValue.resultCode) : QStringLiteral("未采集");
         rowValue.pidTidText = QStringLiteral("%1 / %2").arg(packetValue.pid).arg(packetValue.tid);
         rowValue.detailText = packetWideText(packetValue.detailText);
+        QString phase;
+        switch (static_cast<ks::winapi_monitor::EventKind>(packetValue.eventKind)) {
+        case ks::winapi_monitor::EventKind::IoSubmit: phase = QObject::tr("提交"); break;
+        case ks::winapi_monitor::EventKind::IoWait: phase = QObject::tr("等待完成"); break;
+        case ks::winapi_monitor::EventKind::IoComplete: phase = QObject::tr("完成"); break;
+        case ks::winapi_monitor::EventKind::IoCancel: phase = QObject::tr("取消结果"); break;
+        default: break;
+        }
+        if (!phase.isEmpty()) rowValue.detailText.prepend(QStringLiteral("[%1 #%2] ").arg(phase).arg(packetValue.operationId));
         rowValue.sourcePid = packetValue.pid;
         if (packetValue.category == static_cast<std::uint32_t>(ks::winapi_monitor::EventCategory::Internal)
             && moduleNameText == QStringLiteral("Agent")) rowValue.agentStatus = apiNameText;

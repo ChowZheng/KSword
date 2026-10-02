@@ -114,4 +114,10 @@
     <ClCompile Include="core\MonitorCoverage.cpp" />
   </ItemGroup>
   <ItemGroup><ClInclude Include="hook\ApiCoverageReporting.inc" /></ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="core\MonitorAsyncIo.h" />
+    <ClCompile Include="core\MonitorAsyncIo.cpp" />
+    <ClInclude Include="hook\AsyncIoHandlers.inc" />
+    <ClInclude Include="hook\ContextThunk.h" />
+  </ItemGroup>
 </Project>
