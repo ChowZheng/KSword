@@ -1,7 +1,8 @@
 #include "KvmHookWizard.h"
+#include "../../../shared/evidence/MemoryAddressInput.h"
 
 #include "HexEditorWidget.h"
-#include "KernelDisassemblyDialog.h"
+#include "MemoryEditorWidget.h"
 #include "KvmControl.h"
 #include "ThemeStatusRole.h"
 #include "../Internationalization/LanguageManager.h"
@@ -36,8 +37,10 @@
 // 这一整个文件存在的理由只有一句：HOOK 的影子页是**被执行的那一份**（驱动侧翻转态
 // secondary 叶 = 影子页 | EXECUTE，hvm_ept_view.c:186-190）。所以影子页的默认状态必须
 // 与目标页逐字节相同——用户什么都不做也不能把一段内核代码变成 0x00。为此这里把
-// HexEditorWidget 的缓冲区当作唯一真值：打开即装入基线整页，成品页永远是「编辑器现值」，
-// 补丁永远是「编辑器现值与基线的现算差异」。
+// 统一 MemoryEditorWidget 的缓冲区当作唯一真值：读取后装入基线整页，成品页永远是
+// 「编辑器现值」，补丁永远是「编辑器现值与基线的现算差异」。HexEditorWidget 只保留
+// 给既有模板代码的缓冲区别名，批量修改后必须刷新统一编辑器的历史和各个视图。
+// 已知 VA 时显示和汇编编码使用虚拟页基址；物理页地址仅用于计划和驱动 IOCTL。
 //
 // 为什么不维护一份平行的 diff 列表：撤销、整页粘贴、跳转模板回写三条路径都会改缓冲区，
 // 平行列表在其中任何一条上都会与缓冲区分叉，而分叉出来的那一份正好会被拿去构造影子页。
@@ -53,16 +56,11 @@ namespace
     constexpr const char* kPasteEditName = "KvmHookWizardPatchPasteEdit";
     constexpr const char* kPasteButtonName = "KvmHookWizardPatchPasteButton";
     constexpr const char* kPasteBodyName = "KvmHookWizardPatchPasteBody";
-    constexpr const char* kDisassemblyHeadName = "KvmHookWizardPatchDisassemblyHead";
 
     // 已修改字节清单的行数上限。整页粘贴之后差异可能是 4096 行，把它们全部塞进表格
     // 只会让界面卡住，而看第 4097 行与看第 200 行得到的是同一个结论。
     constexpr int kModifiedRowLimit = 256;
 
-    // 反汇编面板只渲染补丁附近的一段。解码仍然固定从页首 offset 0 单向线性做，
-    // 这里裁的只是**显示**，不是解码起点——从别的偏移起解会得到另一套指令边界。
-    constexpr quint64 kDisassemblyContextBytes = 64;
-    constexpr int kDisassemblyRowLimit = 200;
 
     // hexByteText：一个字节的两位十六进制。
     QString hexByteText(const quint8 value)
@@ -75,23 +73,10 @@ namespace
     // parseHexUnsigned：解析一个可带 0x 前缀的十六进制无符号数。
     quint64 parseHexUnsigned(const QString& text, bool* const okOut)
     {
-        QString compact = text.trimmed();
-        if (compact.startsWith(QStringLiteral("0x"), Qt::CaseInsensitive))
-        {
-            compact = compact.mid(2);
-        }
-        compact.remove(QLatin1Char('`'));
-        compact.remove(QLatin1Char('_'));
-        if (compact.isEmpty())
-        {
-            if (okOut != nullptr)
-            {
-                *okOut = false;
-            }
-            return 0;
-        }
-        bool converted = false;
-        const quint64 value = compact.toULongLong(&converted, 16);
+        const QByteArray compact = text.trimmed().toLatin1();
+        std::uint64_t value = 0;
+        const bool converted = Ksword::Evidence::ParseHexAddress(
+            std::string_view(compact.constData(), static_cast<std::size_t>(compact.size())), value);
         if (okOut != nullptr)
         {
             *okOut = converted;
@@ -297,6 +282,7 @@ namespace ks::ui
     {
         QWidget* const page = new QWidget(this);
         QVBoxLayout* const rootLayout = new QVBoxLayout(page);
+        rootLayout->setSizeConstraint(QLayout::SetNoConstraint);
 
         QLabel* const hintLabel = new QLabel(
             ks::i18n::sourceText(QStringLiteral("影子页是被执行的那一份：翻转态下处理器取指走影子页，所以它必须是「目标页原字节 + 你的补丁」完整的一页。下面的编辑器已经装入目标页当前的 4096 字节，默认与目标页逐字节相同——你只改关心的那几个字节即可。")),
@@ -329,11 +315,13 @@ namespace ks::ui
 
         QSplitter* const splitter = new QSplitter(Qt::Horizontal, page);
 
-        // ---- 左：十六进制编辑器（唯一真值）----
-        m_shadowEditor = new HexEditorWidget(splitter);
+        // 共用快照编辑器；别名只保留给现有补丁几何与模板代码。
+        m_patchEditor = new MemoryEditorWidget(splitter);
+        m_patchEditor->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Expanding);
+        m_shadowEditor = m_patchEditor->hexEditor();
         m_shadowEditor->setObjectName(QStringLiteral("KvmHookWizardShadowEditor"));
-        m_shadowEditor->setEditable(true);
-        splitter->addWidget(m_shadowEditor);
+        m_patchEditor->setEditable(false);
+        splitter->addWidget(m_patchEditor);
 
         // ---- 右：已修改字节 / 跳转模板 / 反汇编 ----
         QWidget* const sideWidget = new QWidget(splitter);
@@ -412,32 +400,12 @@ namespace ks::ui
         m_patchSummaryLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
         rootLayout->addWidget(m_patchSummaryLabel);
 
-        // ---- 反汇编（参考，不是判据）----
-        QGroupBox* const disassemblyGroup = new QGroupBox(
-            ks::i18n::sourceText(QStringLiteral("反汇编参考（不是判据）")),
-            page);
-        QVBoxLayout* const disassemblyLayout = new QVBoxLayout(disassemblyGroup);
-
-        // 这一行是诚实性要求，不许删：仓库里的 InstructionDecoder 只有正向线性解码，
-        // 没有反向能力，从任意偏移起解只能是启发式自同步。做出来的「指令边界判定」
-        // 会是一个假判据，所以这里明确不做，只把这句话摆在面板上方。
+        // 起点由共享编辑器显式选择；反汇编不证明目标本来就是指令边界。
         QLabel* const honestyLabel = new QLabel(
-            ks::i18n::sourceText(QStringLiteral("线性反汇编从页首开始，落在数据区或对齐填充上会给出错误的指令边界 —— 请自行确认补丁点是指令边界。")),
-            disassemblyGroup);
+            ks::i18n::sourceText(QStringLiteral("反汇编从编辑器选定的地址开始；数据或指令中间也可能解码成功，请自行确认补丁点是指令边界。")),
+            page);
         honestyLabel->setWordWrap(true);
-        disassemblyLayout->addWidget(honestyLabel);
-
-        QLabel* const headLabel = new QLabel(disassemblyGroup);
-        headLabel->setObjectName(QString::fromLatin1(kDisassemblyHeadName));
-        headLabel->setWordWrap(true);
-        disassemblyLayout->addWidget(headLabel);
-
-        m_patchDisassemblyView = new QPlainTextEdit(disassemblyGroup);
-        m_patchDisassemblyView->setReadOnly(true);
-        m_patchDisassemblyView->setLineWrapMode(QPlainTextEdit::NoWrap);
-        m_patchDisassemblyView->setFont(monospaceFont());
-        disassemblyLayout->addWidget(m_patchDisassemblyView);
-        rootLayout->addWidget(disassemblyGroup, 1);
+        rootLayout->addWidget(honestyLabel);
 
         // ---- 整页粘贴（专家入口，默认折叠）----
         QGroupBox* const pasteGroup = new QGroupBox(
@@ -480,21 +448,22 @@ namespace ks::ui
 
         // ---- 连线 ----
         connect(
-            m_shadowEditor,
-            &HexEditorWidget::byteEdited,
-            this,
-            &KvmHookWizard::onShadowByteEdited);
+            m_patchEditor, &MemoryEditorWidget::bytesChanged, this, [this]() {
+                recomputePatchFromEditor();
+                updatePatchSummary();
+                updatePatchEnabledState();
+            });
         connect(
-            m_shadowEditor,
-            &HexEditorWidget::currentAddressChanged,
+            m_patchEditor,
+            &MemoryEditorWidget::currentAddressChanged,
             this,
             [this, jumpOffsetEdit](const std::uint64_t absoluteAddress) {
                 // 选中的那个字节就是写入点：让用户在编辑器里点一下即可，不必心算偏移。
-                if (absoluteAddress < m_plan.pageBasePhysical)
+                if (absoluteAddress < m_patchEditor->baseAddress())
                 {
                     return;
                 }
-                const quint64 offset = absoluteAddress - m_plan.pageBasePhysical;
+                const quint64 offset = absoluteAddress - m_patchEditor->baseAddress();
                 if (offset >= Ksword::Evidence::kPatchPageBytes)
                 {
                     return;
@@ -581,8 +550,8 @@ namespace ks::ui
                     ApplyStatusRole(m_patchStatusLabel, StatusRole::Error);
                     return;
                 }
-                m_shadowEditor->setByteArray(pasted, m_plan.pageBasePhysical);
-                m_shadowEditor->setEditable(!m_busy);
+                m_shadowEditor->setByteArray(pasted, m_patchEditor->baseAddress());
+                m_patchEditor->setEditable(!m_busy);
                 recomputePatchFromEditor();
                 updatePatchSummary();
                 refreshPatchDisassembly();
@@ -680,7 +649,7 @@ namespace ks::ui
         {
             m_plan.baselinePage.clear();
             m_plan.patchBytes.clear();
-            m_shadowEditor->setByteArray(QByteArray(), m_plan.pageBasePhysical);
+            m_patchEditor->clear();
             if (m_patchStatusLabel != nullptr)
             {
                 m_patchStatusLabel->setText(failure.isEmpty()
@@ -700,11 +669,17 @@ namespace ks::ui
         m_plan.baselinePage = page;
         m_plan.patchBytes.clear();
         // 默认状态与目标页逐字节相同：用户什么都不做也不会把内核代码变成 0x00。
-        m_shadowEditor->setByteArray(page, m_plan.pageBasePhysical);
-        m_shadowEditor->setEditable(true);
+        const quint64 displayBase = m_plan.hasVirtualAddress()
+            ? (m_plan.virtualAddress & ~0xFFFULL) : m_plan.pageBasePhysical;
+        const QString sourceIdentity = QStringLiteral("kvm_hook/%1/%2/%3/%4")
+            .arg(static_cast<int>(m_plan.targetSource)).arg(m_plan.pageBasePhysical, 0, 16)
+            .arg(m_plan.virtualAddress, 0, 16).arg(m_targetResolveSequence);
+        m_patchEditor->setSnapshot(page, displayBase, m_patchEditor->currentArchitecture(),
+            displayBase + (m_plan.fullPhysicalAddress & 0xFFFULL), sourceIdentity);
+        m_patchEditor->setEditable(true);
         // 用户关心的是那几个字节，不是页首。
         m_shadowEditor->jumpToAbsoluteAddress(
-            m_plan.pageBasePhysical + m_plan.pageOffset);
+            displayBase + m_plan.pageOffset);
 
         recomputePatchFromEditor();
         updatePatchSummary();
@@ -726,30 +701,6 @@ namespace ks::ui
     // -----------------------------------------------------------------
     // 编辑与补丁重算
     // -----------------------------------------------------------------
-
-    void KvmHookWizard::onShadowByteEdited(
-        const std::uint64_t absoluteAddress,
-        const std::uint8_t oldValue,
-        const std::uint8_t newValue)
-    {
-        recomputePatchFromEditor();
-        updatePatchSummary();
-        refreshPatchDisassembly();
-        updatePatchEnabledState();
-
-        if (m_patchStatusLabel != nullptr)
-        {
-            const quint64 offset = absoluteAddress >= m_plan.pageBasePhysical
-                ? absoluteAddress - m_plan.pageBasePhysical
-                : 0ULL;
-            m_patchStatusLabel->setText(ks::i18n::sourceText(
-                QStringLiteral("已改写页内偏移 0x%1：原值 %2 改成 %3。"))
-                .arg(offset, 0, 16)
-                .arg(hexByteText(oldValue))
-                .arg(hexByteText(newValue)));
-            ApplyStatusRole(m_patchStatusLabel, StatusRole::Info);
-        }
-    }
 
     void KvmHookWizard::recomputePatchFromEditor()
     {
@@ -906,103 +857,10 @@ namespace ks::ui
 
     void KvmHookWizard::refreshPatchDisassembly()
     {
-        if (m_patchDisassemblyView == nullptr)
+        if (m_patchEditor != nullptr)
         {
-            return;
+            m_patchEditor->refreshFromHexEditor();
         }
-        QLabel* const headLabel =
-            findChild<QLabel*>(QString::fromLatin1(kDisassemblyHeadName));
-
-        if (m_shadowEditor == nullptr || !m_plan.baselineIsComplete())
-        {
-            m_patchDisassemblyView->setPlainText(ks::i18n::sourceText(
-                QStringLiteral("基线页尚未就位，没有可解码的字节。")));
-            if (headLabel != nullptr)
-            {
-                headLabel->clear();
-            }
-            return;
-        }
-
-        const QByteArray current = m_shadowEditor->data();
-        if (current.isEmpty())
-        {
-            m_patchDisassemblyView->clear();
-            return;
-        }
-
-        // 基址固定取页基址，解码固定从页首 offset 0 单向线性做。
-        // 有虚拟地址时用虚拟页基址，因为那才是这一页真正被执行时的地址，
-        // 相对跳转的目标才对得上；只有物理地址的入口退回物理页基址。
-        const bool haveVirtual = m_plan.hasVirtualAddress();
-        const quint64 decodeBase = haveVirtual
-            ? (m_plan.virtualAddress & ~0xFFFULL)
-            : m_plan.pageBasePhysical;
-
-        const DisassemblyResult result = InstructionDecoder::decode(
-            current,
-            decodeBase,
-            DisassemblyArchitecture::X64,
-            static_cast<std::uint32_t>(Ksword::Evidence::kPatchPageBytes));
-
-        if (headLabel != nullptr)
-        {
-            headLabel->setText(haveVirtual
-                ? ks::i18n::sourceText(QStringLiteral("解码基址取虚拟页基址 0x%1，后端：%2。带 * 的行与补丁区间有重叠。"))
-                    .arg(decodeBase, 0, 16)
-                    .arg(result.backendName)
-                : ks::i18n::sourceText(QStringLiteral("这条入口没有虚拟地址，解码基址退回物理页基址 0x%1，后端：%2。带 * 的行与补丁区间有重叠。"))
-                    .arg(decodeBase, 0, 16)
-                    .arg(result.backendName));
-        }
-
-        // 显示窗口只裁**渲染**，不改解码起点：整页 1500 行塞进文本框，
-        // 每敲一个字节就重排一次，界面会卡；而看窗口外那几百行得不到别的结论。
-        const quint64 patchStart = static_cast<quint64>(m_plan.pageOffset);
-        const quint64 patchEnd = m_plan.patchIsEmpty()
-            ? patchStart + 1
-            : m_plan.patchEndOffset();
-        const quint64 windowStart = patchStart > kDisassemblyContextBytes
-            ? patchStart - kDisassemblyContextBytes
-            : 0ULL;
-        const quint64 windowEnd = patchEnd + kDisassemblyContextBytes;
-
-        QStringList lines;
-        for (const DisassemblyRow& row : result.rows)
-        {
-            const quint64 rowStart = static_cast<quint64>(row.byteOffset);
-            const quint64 rowEnd = rowStart
-                + static_cast<quint64>(std::max<qsizetype>(row.bytes.size(), 1));
-            if (rowEnd <= windowStart || rowStart >= windowEnd)
-            {
-                continue;
-            }
-            if (lines.size() >= kDisassemblyRowLimit)
-            {
-                lines << ks::i18n::sourceText(QStringLiteral("（后面的行已省略）"));
-                break;
-            }
-
-            const bool touchesPatch =
-                !m_plan.patchIsEmpty() && rowStart < patchEnd && rowEnd > patchStart;
-            lines << QStringLiteral("%1 %2  %3  %4 %5")
-                .arg(touchesPatch ? QStringLiteral("*") : QStringLiteral(" "))
-                .arg(row.address, 16, 16, QLatin1Char('0'))
-                .arg(QString::fromLatin1(row.bytes.toHex(' ')).toUpper(), -32)
-                .arg(row.mnemonic)
-                .arg(row.operands);
-        }
-
-        if (lines.isEmpty())
-        {
-            lines << ks::i18n::sourceText(QStringLiteral("补丁附近没有解码出任何指令。"));
-        }
-        if (!result.diagnosticText.isEmpty())
-        {
-            lines << QString();
-            lines << result.diagnosticText;
-        }
-        m_patchDisassemblyView->setPlainText(lines.join(QStringLiteral("\n")));
     }
 
     // -----------------------------------------------------------------
@@ -1105,7 +963,7 @@ namespace ks::ui
         for (qsizetype index = 0; index < encoded.size(); ++index)
         {
             const quint64 address =
-                m_plan.pageBasePhysical + writeOffset + static_cast<quint64>(index);
+                m_patchEditor->baseAddress() + writeOffset + static_cast<quint64>(index);
             // setByteAtAbsoluteAddress 不发 byteEdited（HexEditorWidget.cpp:377 起），
             // 所以下面必须自己重算一次补丁。
             m_shadowEditor->setByteAtAbsoluteAddress(
@@ -1143,12 +1001,28 @@ namespace ks::ui
             return;
         }
 
-        m_shadowEditor->setByteArray(m_plan.baselinePage, m_plan.pageBasePhysical);
-        m_shadowEditor->setEditable(!m_busy);
+        const quint64 displayBase = m_plan.hasVirtualAddress()
+            ? (m_plan.virtualAddress & ~0xFFFULL) : m_plan.pageBasePhysical;
+        if (m_patchEditor->originalBytes() == m_plan.baselinePage &&
+            m_patchEditor->baseAddress() == displayBase)
+        {
+            m_patchEditor->discardChanges();
+        }
+        else
+        {
+            // 安装前重读发现变化时，调用者把实际新读数交给这里作为新基线。
+            const QString sourceIdentity = QStringLiteral("kvm_hook/%1/%2/%3/%4")
+                .arg(static_cast<int>(m_plan.targetSource)).arg(m_plan.pageBasePhysical, 0, 16)
+                .arg(m_plan.virtualAddress, 0, 16).arg(m_targetResolveSequence);
+            m_patchEditor->setSnapshot(m_plan.baselinePage, displayBase,
+                m_patchEditor->currentArchitecture(),
+                displayBase + (m_plan.fullPhysicalAddress & 0xFFFULL), sourceIdentity);
+        }
+        m_patchEditor->setEditable(!m_busy);
         m_plan.patchBytes.clear();
         m_plan.pageOffset = static_cast<quint32>(m_plan.fullPhysicalAddress & 0xFFFULL);
         m_shadowEditor->jumpToAbsoluteAddress(
-            m_plan.pageBasePhysical + m_plan.pageOffset);
+            displayBase + m_plan.pageOffset);
 
         recomputePatchFromEditor();
         updatePatchSummary();
@@ -1171,7 +1045,8 @@ namespace ks::ui
 
         if (m_shadowEditor != nullptr)
         {
-            m_shadowEditor->setEditable(baselineReady && idle);
+            m_patchEditor->setEnabled(idle);
+            m_patchEditor->setEditable(baselineReady && idle);
         }
         if (m_recaptureBaselineButton != nullptr)
         {

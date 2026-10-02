@@ -8,9 +8,12 @@
 
 #include "KvmControl.h"
 #include "ThemeStatusRole.h"
+#include "UI_All.h"
+#include "MemoryEditorWidget.h"
 #include "../Framework/DestructiveActionConfirmation.h"
 #include "../Internationalization/LanguageManager.h"
 #include "../KernelDock/KernelThreadAuditTab.h"
+#include "../../../shared/evidence/MemoryAddressInput.h"
 
 #include <QComboBox>
 #include <QFontDatabase>
@@ -66,18 +69,10 @@ namespace
     // 空串不算错，只是「还没填」，所以由调用方先自己判空。
     bool parseHexQuint64(const QString& text, quint64* const valueOut)
     {
-        QString compact = text.trimmed();
-        if (compact.startsWith(QStringLiteral("0x"), Qt::CaseInsensitive))
-        {
-            compact = compact.mid(2);
-        }
-        if (compact.isEmpty())
-        {
-            return false;
-        }
-        bool converted = false;
-        const qulonglong value = compact.toULongLong(&converted, 16);
-        if (!converted)
+        const QByteArray compact = text.trimmed().toLatin1();
+        std::uint64_t value = 0;
+        if (!Ksword::Evidence::ParseHexAddress(
+                std::string_view(compact.constData(), static_cast<std::size_t>(compact.size())), value))
         {
             return false;
         }
@@ -189,6 +184,7 @@ namespace ks::ui
     void KvmHookWizard::buildUi()
     {
         QVBoxLayout* const rootLayout = new QVBoxLayout(this);
+        rootLayout->setSizeConstraint(QLayout::SetNoConstraint);
 
         m_stepTitleLabel = new QLabel(QString(), this);
         m_stepTitleLabel->setWordWrap(true);
@@ -199,6 +195,8 @@ namespace ks::ui
         rootLayout->addWidget(m_stepHintLabel);
 
         m_pageStack = new QStackedWidget(this);
+        m_pageStack->setMinimumSize(0, 0);
+        m_pageStack->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Ignored);
         // 五页按 Step 顺序塞进去，下标与 Step 一一对应；第 2 步的控件由
         // KvmHookWizard.Patch.cpp 建，第 3/5 步的由 KvmHookWizard.Verify.cpp 建。
         m_pageStack->addWidget(buildTargetPage());
@@ -254,7 +252,7 @@ namespace ks::ui
             close();
         });
 
-        resize(940, 720);
+        applyResponsiveWindowGeometry(this, parentWidget(), QSize(1120, 820), QSize(640, 480));
     }
 
     void KvmHookWizard::goToStep(const Step step)
@@ -833,6 +831,10 @@ namespace ks::ui
         // 基线与补丁是上一个目标那一页的字节，换了目标就不再是任何东西的基线。
         m_plan.baselinePage.clear();
         m_plan.patchBytes.clear();
+        if (m_patchEditor != nullptr)
+        {
+            m_patchEditor->clear();
+        }
         // 序号在这里就要作废：换入口之后到防抖到点之前有一段空窗，上一个入口那次
         // 翻译要是正好在这段空窗里飞回来，序号还相等，就会把旧入口的页几何写进
         // 新入口的计划里。
@@ -1045,17 +1047,25 @@ namespace ks::ui
         }
 
         const quint64 previousPageBase = m_plan.pageBasePhysical;
+        const quint64 previousDisplayBase = m_plan.hasVirtualAddress()
+            ? (m_plan.virtualAddress & ~0xFFFULL) : previousPageBase;
         m_plan.virtualAddress = resolution.virtualAddress;
         m_plan.fullPhysicalAddress = resolution.fullPhysicalAddress;
         m_plan.pageBasePhysical = resolution.pageBasePhysical;
         m_plan.pageOffset = resolution.pageOffset;
         m_plan.resolved = resolution.ok;
-        if (m_plan.pageBasePhysical != previousPageBase)
+        const quint64 displayBase = m_plan.hasVirtualAddress()
+            ? (m_plan.virtualAddress & ~0xFFFULL) : m_plan.pageBasePhysical;
+        if (m_plan.pageBasePhysical != previousPageBase || displayBase != previousDisplayBase)
         {
             // 换了页就换了基线。留着上一页的字节，第 2 步会拿它当底稿去拼影子页，
             // 而那一页正是被处理器执行的那一份。
             m_plan.baselinePage.clear();
             m_plan.patchBytes.clear();
+            if (m_patchEditor != nullptr)
+            {
+                m_patchEditor->clear();
+            }
         }
 
         updateTargetReadout();

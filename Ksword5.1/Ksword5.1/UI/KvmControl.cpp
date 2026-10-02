@@ -1019,6 +1019,11 @@ namespace ksword::kvm
             QString reason;
             switch (result.response.status)
             {
+            case KSWORD_ARK_HVM_MEMORY_STATUS_INVALID_REQUEST:
+                reason = ks::i18n::sourceText(QStringLiteral(
+                    "参数或传输长度无效，单次传输上限 %1 字节"))
+                    .arg(KSWORD_ARK_HVM_MEMORY_MAX_BYTES);
+                break;
             case KSWORD_ARK_HVM_MEMORY_STATUS_CONFIRMATION_REQUIRED:
                 reason = ks::i18n::sourceText(QStringLiteral("需要显式确认"));
                 break;
@@ -1032,6 +1037,10 @@ namespace ksword::kvm
             case KSWORD_ARK_HVM_MEMORY_STATUS_TRANSLATION_FAILED:
                 reason = ks::i18n::sourceText(
                     QStringLiteral("该地址在目标页表中未映射"));
+                break;
+            case KSWORD_ARK_HVM_MEMORY_STATUS_PROCESS_LOOKUP_FAILED:
+                reason = ks::i18n::sourceText(
+                    QStringLiteral("目标进程不存在、已退出或无法访问"));
                 break;
             case KSWORD_ARK_HVM_MEMORY_STATUS_ACCESS_FAILED:
                 reason = ks::i18n::sourceText(QStringLiteral("访问该物理页失败"));
@@ -1128,7 +1137,8 @@ namespace ksword::kvm
     KvmMemoryResult readVirtual(
         const unsigned long long directoryBase,
         const unsigned long long virtualAddress,
-        const unsigned long length)
+        const unsigned long length,
+        const unsigned long processId)
     {
         ksword::ark::DriverClient client;
         const auto result = client.hvmMemory(
@@ -1138,7 +1148,8 @@ namespace ksword::kvm
             length,
             nullptr,
             false,
-            true);
+            true,
+            directoryBase != 0ULL ? 0UL : processId);
         return toMemoryResult(
             result,
             ks::i18n::sourceText(QStringLiteral("R-1 读取虚拟内存")),
@@ -1148,7 +1159,8 @@ namespace ksword::kvm
     KvmMemoryResult writeVirtual(
         const unsigned long long directoryBase,
         const unsigned long long virtualAddress,
-        const QByteArray& payload)
+        const QByteArray& payload,
+        const unsigned long processId)
     {
         const QString actionName =
             ks::i18n::sourceText(QStringLiteral("R-1 写入虚拟内存"));
@@ -1164,13 +1176,15 @@ namespace ksword::kvm
             static_cast<unsigned long>(payload.size()),
             reinterpret_cast<const unsigned char*>(payload.constData()),
             true,
-            true);
+            true,
+            directoryBase != 0ULL ? 0UL : processId);
         return toMemoryResult(result, actionName, false);
     }
 
     KvmMemoryResult translate(
         const unsigned long long directoryBase,
-        const unsigned long long virtualAddress)
+        const unsigned long long virtualAddress,
+        const unsigned long processId)
     {
         ksword::ark::DriverClient client;
         const auto result = client.hvmMemory(
@@ -1180,7 +1194,8 @@ namespace ksword::kvm
             0,
             nullptr,
             false,
-            true);
+            true,
+            directoryBase != 0ULL ? 0UL : processId);
         return toMemoryResult(
             result,
             ks::i18n::sourceText(QStringLiteral("R-1 地址翻译")),

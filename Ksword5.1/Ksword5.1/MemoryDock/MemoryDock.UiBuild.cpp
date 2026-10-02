@@ -598,7 +598,14 @@ void MemoryDock::refreshBackendSelectors()
 
     syncOne(m_searchBackendCombo, m_searchBackendHintLabel);
     syncOne(m_viewerBackendCombo, m_viewerBackendHintLabel);
+    syncOne(m_bookmarkBackendCombo, m_bookmarkBackendHintLabel);
     syncOne(m_driverMemoryBackendCombo, m_driverMemoryBackendHintLabel);
+
+    // 包括 QSignalBlocker 下的 DDMA 自动回退和会话变化，立即失效旧书签值。
+    if (m_bookmarkTable != nullptr && !m_bookmarkCache.empty())
+    {
+        refreshBookmarkValues();
+    }
 
     // 系统内存审计页没有后端下拉，只有一个"DDMA 复核"按钮，但它同样要跟着
     // 会话可用性开关，否则会留下一个点下去必然失败的按钮。
@@ -658,6 +665,11 @@ ksword::memory_backend::MemoryAccessBackend MemoryDock::currentSearchBackend() c
 ksword::memory_backend::MemoryAccessBackend MemoryDock::currentViewerBackend() const
 {
     return backendFromComboIndex(m_viewerBackendCombo);
+}
+
+ksword::memory_backend::MemoryAccessBackend MemoryDock::currentBookmarkBackend() const
+{
+    return backendFromComboIndex(m_bookmarkBackendCombo);
 }
 
 ksword::memory_backend::MemoryAccessBackend MemoryDock::currentDriverMemoryBackend() const
@@ -1066,10 +1078,20 @@ void MemoryDock::initializeMemoryViewerTab()
     // 统一十六进制编辑器组件：
     // - 后续内存/文件/网络全部复用该控件；
     // - Tab4 在这里配置成 16 字节每行，默认只读。
-    m_hexEditorWidget = new HexEditorWidget(m_tabViewer);
-    m_hexEditorWidget->setBytesPerRow(16);
-    m_hexEditorWidget->setEditable(false);
-    tabLayout->addWidget(m_hexEditorWidget, 1);
+    QHBoxLayout* editActions = new QHBoxLayout();
+    m_viewerApplyButton = new QPushButton(QStringLiteral("应用差异到真实内存"), m_tabViewer);
+    m_viewerDiscardButton = new QPushButton(QStringLiteral("丢弃改动"), m_tabViewer);
+    m_viewerApplyButton->setEnabled(false);
+    m_viewerDiscardButton->setEnabled(false);
+    editActions->addWidget(m_viewerApplyButton);
+    editActions->addWidget(m_viewerDiscardButton);
+    editActions->addStretch(1);
+    tabLayout->addLayout(editActions);
+
+    m_viewerMemoryEditor = new ks::ui::MemoryEditorWidget(m_tabViewer);
+    m_hexEditorWidget = m_viewerMemoryEditor->hexEditor();
+    m_viewerMemoryEditor->setEditable(false);
+    tabLayout->addWidget(m_viewerMemoryEditor, 1);
 
     m_viewerStatusLabel = new QLabel("未附加进程。", m_tabViewer);
     tabLayout->addWidget(m_viewerStatusLabel);
@@ -1136,6 +1158,9 @@ void MemoryDock::initializeBreakpointBookmarkTab()
     bookmarkLayout->setContentsMargins(0, 0, 0, 0);
     bookmarkLayout->setSpacing(4);
 
+    bookmarkLayout->addWidget(createBackendSelector(
+        bookmarkPanel, m_bookmarkBackendCombo, m_bookmarkBackendHintLabel));
+
     QHBoxLayout* bmButtonLayout = new QHBoxLayout();
     bmButtonLayout->setContentsMargins(0, 0, 0, 0);
     bmButtonLayout->setSpacing(6);
@@ -1145,7 +1170,7 @@ void MemoryDock::initializeBreakpointBookmarkTab()
     m_jumpBookmarkButton = new QPushButton(QIcon(":/Icon/codeeditor_goto.svg"), "跳转", bookmarkPanel);
     m_addBookmarkButton->setToolTip("把当前地址收藏为书签，便于之后快速回到该位置");
     m_removeBookmarkButton->setToolTip("删除选中的书签");
-    m_refreshBookmarkButton->setToolTip("重新读取所有书签地址处的当前值");
+    m_refreshBookmarkButton->setToolTip("使用所选后端在后台读取每个书签的 8 字节当前值；失败或读取不完整时显示状态。");
     m_jumpBookmarkButton->setToolTip("在内存查看器中跳转到选中书签的地址");
     m_addBookmarkButton->setStyleSheet(buttonStyle);
     m_removeBookmarkButton->setStyleSheet(buttonStyle);
@@ -1323,108 +1348,13 @@ void MemoryDock::initializeDriverMemoryRwTab()
     actionLayout->addStretch(1);
     tabLayout->addLayout(actionLayout);
 
-    // ========================================================
-    // 视图工具条：三视图切换 + 文本编码 + 当前范围
-    // ========================================================
-
-    QHBoxLayout* viewBarLayout = new QHBoxLayout();
-    viewBarLayout->setContentsMargins(0, 0, 0, 0);
-    viewBarLayout->setSpacing(4);
-
-    // 三个分段按钮互斥，等价于 OpenArk 那组 HexDump / Disassembly / TextView 单选。
-    const auto makeViewButton = [this](const QString& iconAlias,
-                                       const QString& labelText,
-                                       const QString& tipText) {
-        QToolButton* viewButton = new QToolButton(m_tabDriverMemoryRw);
-        viewButton->setIcon(QIcon(iconAlias));
-        viewButton->setText(labelText);
-        viewButton->setToolTip(tipText);
-        viewButton->setCheckable(true);
-        viewButton->setAutoExclusive(true);
-        viewButton->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
-        return viewButton;
-    };
-    m_driverMemoryHexViewButton = makeViewButton(
-        QStringLiteral(":/Icon/process_list.svg"), "十六进制",
-        "以十六进制与 ASCII 对照展示，可直接编辑字节");
-    m_driverMemoryDisasmViewButton = makeViewButton(
-        QStringLiteral(":/Icon/log_track.svg"), "反汇编",
-        "把当前缓存按目标位数解码成指令，只读展示");
-    m_driverMemoryTextViewButton = makeViewButton(
-        QStringLiteral(":/Icon/codeeditor_wrap.svg"), "文本",
-        "按选定编码把缓存渲染成可打印文本，只读展示");
-    m_driverMemoryHexViewButton->setChecked(true);
-
-    m_driverMemoryTextEncodingCombo = new QComboBox(m_tabDriverMemoryRw);
-    m_driverMemoryTextEncodingCombo->addItem("单字节");
-    m_driverMemoryTextEncodingCombo->addItem("UTF-16LE");
-    m_driverMemoryTextEncodingCombo->setToolTip("文本视图使用的解码方式");
-
-    // 竖线分隔符把视图切换与其它控件在视觉上分开。
-    QFrame* viewBarSeparator = new QFrame(m_tabDriverMemoryRw);
-    viewBarSeparator->setFrameShape(QFrame::VLine);
-    viewBarSeparator->setFrameShadow(QFrame::Sunken);
-
     m_driverMemoryRangeLabel = new QLabel("范围: 未读取", m_tabDriverMemoryRw);
     m_driverMemoryRangeLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
-
-    viewBarLayout->addWidget(m_driverMemoryHexViewButton);
-    viewBarLayout->addWidget(m_driverMemoryDisasmViewButton);
-    viewBarLayout->addWidget(m_driverMemoryTextViewButton);
-    viewBarLayout->addWidget(viewBarSeparator);
-    viewBarLayout->addWidget(new QLabel("文本编码", m_tabDriverMemoryRw));
-    viewBarLayout->addWidget(m_driverMemoryTextEncodingCombo);
-    viewBarLayout->addWidget(m_driverMemoryRangeLabel, 1);
-    tabLayout->addLayout(viewBarLayout);
-
-    // ========================================================
-    // 视图堆栈：压栈顺序必须与 DriverMemoryViewMode 一致
-    // ========================================================
-
-    m_driverMemoryViewStack = new QStackedWidget(m_tabDriverMemoryRw);
-
-    // HexEditor 在本页允许编辑，但 byteEdited 只更新 R3 缓存，不直接写目标进程。
-    m_driverMemoryHexEditor = new HexEditorWidget(m_driverMemoryViewStack);
-    m_driverMemoryHexEditor->setBytesPerRow(16);
-    m_driverMemoryHexEditor->setEditable(true);
-    m_driverMemoryViewStack->addWidget(m_driverMemoryHexEditor);
-
-    // 反汇编页：顶部一行后端说明，下面是指令表。
-    QWidget* disasmPage = new QWidget(m_driverMemoryViewStack);
-    QVBoxLayout* disasmLayout = new QVBoxLayout(disasmPage);
-    disasmLayout->setContentsMargins(0, 0, 0, 0);
-    disasmLayout->setSpacing(4);
-    m_driverMemoryDisasmBackendLabel = new QLabel(
-        "尚未读取内存，先在上方设置目标并点击“R0 读取”。", disasmPage);
-    m_driverMemoryDisasmBackendLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
-    m_driverMemoryDisasmBackendLabel->setWordWrap(true);
-    disasmLayout->addWidget(m_driverMemoryDisasmBackendLabel);
-
-    // 用 VisibleTableWidget 而不是裸 QTableWidget，才能拿到全局操作条与冻结行列。
-    m_driverMemoryDisasmTable = new ks::ui::VisibleTableWidget(disasmPage);
-    m_driverMemoryDisasmTable->setColumnCount(5);
-    m_driverMemoryDisasmTable->setHorizontalHeaderLabels(
-        QStringList{ "地址", "偏移", "原始字节", "助记符", "操作数" });
-    m_driverMemoryDisasmTable->setAlternatingRowColors(true);
-    m_driverMemoryDisasmTable->setSelectionBehavior(QAbstractItemView::SelectRows);
-    m_driverMemoryDisasmTable->setSelectionMode(QAbstractItemView::SingleSelection);
-    m_driverMemoryDisasmTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
-    m_driverMemoryDisasmTable->setSortingEnabled(true);
-    m_driverMemoryDisasmTable->setContextMenuPolicy(Qt::CustomContextMenu);
-    m_driverMemoryDisasmTable->verticalHeader()->setVisible(false);
-    m_driverMemoryDisasmTable->verticalHeader()->setDefaultSectionSize(22);
-    disasmLayout->addWidget(m_driverMemoryDisasmTable, 1);
-    m_driverMemoryViewStack->addWidget(disasmPage);
-
-    // 文本页：只读代码编辑器，内容一律用 setRawText 写入，不参与语言包翻译。
-    m_driverMemoryTextView = new CodeEditorWidget(m_driverMemoryViewStack);
-    m_driverMemoryTextView->setReadOnly(true);
-    m_driverMemoryTextView->setRawText(
-        QStringLiteral("尚未读取内存，先在上方设置目标并点击“R0 读取”。"));
-    m_driverMemoryViewStack->addWidget(m_driverMemoryTextView);
-
-    m_driverMemoryViewStack->setCurrentIndex(static_cast<int>(DriverMemoryViewMode::Hex));
-    tabLayout->addWidget(m_driverMemoryViewStack, 1);
+    tabLayout->addWidget(m_driverMemoryRangeLabel);
+    m_driverMemoryEditor = new ks::ui::MemoryEditorWidget(m_tabDriverMemoryRw);
+    m_driverMemoryHexEditor = m_driverMemoryEditor->hexEditor();
+    m_driverMemoryEditor->setEditable(false);
+    tabLayout->addWidget(m_driverMemoryEditor, 1);
 
     m_driverMemoryStatusLabel = new QLabel("等待读取。", m_tabDriverMemoryRw);
     m_driverMemoryStatusLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);

@@ -1,22 +1,20 @@
 #include "KernelDisassemblyDialog.h"
+#include "MemoryEditorWidget.h"
+#include "UI_All.h"
 
 #include "../ArkDriverClient/ArkDriverClient.h"
 #include "../theme.h"
 /* 统一入口：这一页不需要知道 GPA、EPT 叶或 ruleId。 */
 #include "KvmWatchDialog.h"
-#include "VisibleTableWidget.h"
 
 #include <QAbstractItemView>
 #include <QAction>
 #include <QApplication>
 #include <QClipboard>
 #include <QDialogButtonBox>
-#include <QHeaderView>
 #include <QLabel>
 #include <QMenu>
 #include <QMessageBox>
-#include <QPlainTextEdit>
-#include <QRegularExpression>
 #include <QStringList>
 #include <QTableWidget>
 #include <QTableWidgetItem>
@@ -71,68 +69,6 @@ namespace
             .toUpper();
     }
 
-    bool parseHexBytes(
-        const QString& text,
-        QByteArray& bytesOut,
-        QString& errorTextOut)
-    {
-        bytesOut.clear();
-        errorTextOut.clear();
-        QString normalized = text.trimmed();
-        normalized.replace(QChar(','), QChar(' '));
-        normalized.replace(QChar(';'), QChar(' '));
-        normalized.replace(QChar('-'), QChar(' '));
-        const QStringList tokens = normalized.split(
-            QRegularExpression(QStringLiteral("\\s+")),
-            Qt::SkipEmptyParts);
-        for (QString token : tokens)
-        {
-            if (token.startsWith(
-                    QStringLiteral("0x"),
-                    Qt::CaseInsensitive))
-            {
-                token.remove(0, 2);
-            }
-            if (token.isEmpty() || (token.size() % 2) != 0)
-            {
-                errorTextOut = QStringLiteral(
-                    "十六进制字节必须由完整的两位数构成。");
-                return false;
-            }
-            for (qsizetype index = 0; index < token.size(); index += 2)
-            {
-                bool ok = false;
-                const unsigned int value =
-                    token.mid(index, 2).toUInt(&ok, 16);
-                if (!ok || value > 0xFFU)
-                {
-                    errorTextOut = QStringLiteral(
-                        "输入包含无效十六进制字节。");
-                    bytesOut.clear();
-                    return false;
-                }
-                bytesOut.append(static_cast<char>(value));
-                if (bytesOut.size()
-                    > static_cast<qsizetype>(
-                        KSWORD_ARK_MUTATION_MAX_BYTES))
-                {
-                    errorTextOut = QStringLiteral(
-                        "单次事务最多修改 %1 字节。")
-                        .arg(KSWORD_ARK_MUTATION_MAX_BYTES);
-                    bytesOut.clear();
-                    return false;
-                }
-            }
-        }
-        if (bytesOut.isEmpty())
-        {
-            errorTextOut = QStringLiteral(
-                "请输入至少一个十六进制字节。");
-            return false;
-        }
-        return true;
-    }
-
     std::vector<std::uint8_t> byteVector(
         const QByteArray& bytes)
     {
@@ -183,13 +119,6 @@ namespace
                 16,
                 QChar('0'))
             .arg(QString::fromStdString(response.io.message));
-    }
-
-    QTableWidgetItem* readOnlyItem(const QString& text)
-    {
-        auto* item = new QTableWidgetItem(text);
-        item->setFlags(item->flags() & ~Qt::ItemIsEditable);
-        return item;
     }
 
     ks::ui::DisassemblyRow fallbackDecodeOne(
@@ -753,7 +682,7 @@ namespace ks::ui
         : QDialog(parent)
     {
         setWindowTitle(QStringLiteral("指令视图"));
-        resize(980, 640);
+        applyResponsiveWindowGeometry(this, parent, QSize(980, 640), QSize(520, 360));
         auto* layout = new QVBoxLayout(this);
         m_sourceLabel = new QLabel(this);
         m_sourceLabel->setWordWrap(true);
@@ -778,25 +707,12 @@ namespace ks::ui
             Qt::TextSelectableByMouse);
         m_mutationStatusLabel->hide();
         layout->addWidget(m_mutationStatusLabel);
-        m_table = new ks::ui::VisibleTableWidget(this);
-        m_table->setColumnCount(5);
-        m_table->setHorizontalHeaderLabels({
-            QStringLiteral("地址"),
-            QStringLiteral("偏移"),
-            QStringLiteral("原始字节"),
-            QStringLiteral("助记符"),
-            QStringLiteral("操作数")
-        });
-        m_table->setSelectionBehavior(
-            QAbstractItemView::SelectRows);
-        m_table->setSelectionMode(
-            QAbstractItemView::SingleSelection);
-        m_table->setEditTriggers(
-            QAbstractItemView::NoEditTriggers);
-        m_table->setContextMenuPolicy(
-            Qt::CustomContextMenu);
-        m_table->horizontalHeader()->setStretchLastSection(true);
-        layout->addWidget(m_table, 1);
+        m_editor = new MemoryEditorWidget(this);
+        m_editor->setEditable(false);
+        m_table = m_editor->instructionTable();
+        // Keep the kernel evidence actions and transaction gate in this owner.
+        disconnect(m_table, &QTableWidget::customContextMenuRequested, m_editor, nullptr);
+        layout->addWidget(m_editor, 1);
         auto* buttons = new QDialogButtonBox(
             QDialogButtonBox::Close,
             this);
@@ -840,6 +756,7 @@ namespace ks::ui
                 {
                     return;
                 }
+                const auto revision = m_snapshotRevision;
                 QMenu menu(this);
                 menu.setStyleSheet(
                     KswordTheme::ContextMenuStyle());
@@ -880,7 +797,7 @@ namespace ks::ui
                     QApplication::clipboard()->setText(
                         bytesText(selection->originalBytes));
                 }
-                else if (selected == watchExecute)
+                else if (selected == watchExecute && revision == m_snapshotRevision)
                 {
                     HvmWatchRequest request;
                     request.virtualAddress = true;
@@ -901,9 +818,9 @@ namespace ks::ui
                     openHvmWatch(this, request);
                 }
                 else if (modify != nullptr
-                    && selected == modify)
+                    && selected == modify && revision == m_snapshotRevision && m_kernelMutationEnabled)
                 {
-                    emitModifyRequest();
+                    emit requestModifyBytes(selection->address, selection->originalBytes);
                 }
             });
     }
@@ -981,6 +898,8 @@ namespace ks::ui
         const QString& sourceDescription)
     {
         m_originalBytes = bytes;
+        m_sourceDescription = sourceDescription;
+        ++m_snapshotRevision;
         m_baseAddress = baseAddress;
         m_architecture = architecture;
         m_sourceLabel->setText(
@@ -1000,6 +919,7 @@ namespace ks::ui
     void KernelDisassemblyDialog::setKernelMutationEnabled(
         const bool enabled)
     {
+        if (m_kernelMutationEnabled != enabled) ++m_snapshotRevision;
         m_kernelMutationEnabled = enabled;
         m_mutationRiskLabel->setVisible(enabled);
         m_mutationStatusLabel->setVisible(enabled);
@@ -1035,22 +955,7 @@ namespace ks::ui
     std::optional<DisassemblySelection>
     KernelDisassemblyDialog::selectedByteRange() const
     {
-        if (m_table == nullptr)
-        {
-            return std::nullopt;
-        }
-        const int rowIndex = m_table->currentRow();
-        if (rowIndex < 0
-            || rowIndex >= static_cast<int>(m_rows.size()))
-        {
-            return std::nullopt;
-        }
-        const DisassemblyRow& row = m_rows.at(rowIndex);
-        DisassemblySelection selection;
-        selection.address = row.address;
-        selection.byteOffset = row.byteOffset;
-        selection.originalBytes = row.bytes;
-        return selection;
+        return m_editor == nullptr ? std::nullopt : m_editor->selectedInstruction();
     }
 
     void KernelDisassemblyDialog::rebuildRows()
@@ -1069,52 +974,9 @@ namespace ks::ui
                         ? QString()
                         : QStringLiteral("\n%1")
                             .arg(result.diagnosticText)));
-        m_table->setRowCount(
-            static_cast<int>(m_rows.size()));
-        for (qsizetype index = 0; index < m_rows.size(); ++index)
-        {
-            const DisassemblyRow& row = m_rows.at(index);
-            m_table->setItem(
-                static_cast<int>(index),
-                0,
-                readOnlyItem(addressText(row.address)));
-            m_table->setItem(
-                static_cast<int>(index),
-                1,
-                readOnlyItem(
-                    QStringLiteral("0x%1")
-                        .arg(
-                            row.byteOffset,
-                            8,
-                            16,
-                            QChar('0'))
-                        .toUpper()));
-            m_table->setItem(
-                static_cast<int>(index),
-                2,
-                readOnlyItem(bytesText(row.bytes)));
-            m_table->setItem(
-                static_cast<int>(index),
-                3,
-                readOnlyItem(row.mnemonic));
-            m_table->setItem(
-                static_cast<int>(index),
-                4,
-                readOnlyItem(row.operands));
-        }
-        m_table->resizeColumnsToContents();
-    }
-
-    void KernelDisassemblyDialog::emitModifyRequest()
-    {
-        const auto selection = selectedByteRange();
-        if (!selection.has_value())
-        {
-            return;
-        }
-        emit requestModifyBytes(
-            selection->address,
-            selection->originalBytes);
+        m_editor->setSnapshot(m_originalBytes, m_baseAddress, m_architecture, m_baseAddress,
+            m_sourceDescription);
+        m_editor->showDisassemblyAt(m_baseAddress);
     }
 
     void KernelDisassemblyDialog::executeKernelMutation(
@@ -1132,7 +994,7 @@ namespace ks::ui
 
         QDialog editor(this);
         editor.setWindowTitle(QStringLiteral("内核字节事务"));
-        editor.resize(680, 360);
+        applyResponsiveWindowGeometry(&editor, this, QSize(860, 640), QSize(520, 380));
         auto* layout = new QVBoxLayout(&editor);
         auto* risk = new QLabel(
             QStringLiteral(
@@ -1153,14 +1015,19 @@ namespace ks::ui
         layout->addWidget(risk);
         auto* inputHint = new QLabel(
             QStringLiteral(
-                "输入与原始快照等长的十六进制字节；"
-                "可使用空格、逗号或连续十六进制。"),
+                "在统一编辑器中暂存字节或汇编修改；确认后沿用内核事务的"
+                "原始字节核对、dry-run、写后校验与回滚。"),
             &editor);
         inputHint->setWordWrap(true);
         layout->addWidget(inputHint);
-        auto* input = new QPlainTextEdit(&editor);
-        input->setPlainText(bytesText(originalBytes));
-        input->selectAll();
+        const auto evidence = m_originalBytes;
+        const auto evidenceBase = m_baseAddress;
+        const auto evidenceArchitecture = m_editor->currentArchitecture();
+        const auto evidenceRevision = m_snapshotRevision;
+        auto* input = new MemoryEditorWidget(&editor);
+        input->setSnapshot(originalBytes, address, evidenceArchitecture, address);
+        input->setEditable(true);
+        input->showDisassemblyAt(address);
         layout->addWidget(input, 1);
         auto* buttons = new QDialogButtonBox(
             QDialogButtonBox::Ok | QDialogButtonBox::Cancel,
@@ -1181,19 +1048,17 @@ namespace ks::ui
             return;
         }
 
-        QByteArray replacementBytes;
-        QString parseError;
-        if (!parseHexBytes(
-                input->toPlainText(),
-                replacementBytes,
-                parseError))
+        if (!m_kernelMutationEnabled || evidence != m_originalBytes
+            || evidenceBase != m_baseAddress || evidenceArchitecture != m_editor->currentArchitecture()
+            || evidenceRevision != m_snapshotRevision)
         {
             QMessageBox::warning(
                 this,
                 QStringLiteral("内核字节事务"),
-                parseError);
+                QStringLiteral("内核证据快照已变化，请重新选择字节后编辑。"));
             return;
         }
+        const QByteArray replacementBytes = input->data();
         if (replacementBytes.size() != originalBytes.size())
         {
             QMessageBox::warning(
@@ -1233,6 +1098,8 @@ namespace ks::ui
                 QStringLiteral("事务后端：用户取消。"));
             return;
         }
+        if (!m_kernelMutationEnabled || evidenceRevision != m_snapshotRevision
+            || evidenceArchitecture != m_editor->currentArchitecture()) return;
 
         const ksword::ark::DriverClient client;
         const unsigned long finalFlags =

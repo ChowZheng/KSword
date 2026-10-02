@@ -177,8 +177,9 @@ namespace ksword::memory_backend
     // readVirtual：
     // - 输入：后端、DDMA 会话、目标 PID（0 表示内核地址空间）、虚拟地址与长度；
     // - 处理：标准后端直接调 R0 虚拟读；DDMA 后端逐页走 VA → PA 翻译再 DMA，
-    //   翻译不出物理页的页按不可读处理并零填充，同时置 partial；
-    // - 返回：AccessOutcome，data 长度等于请求长度（不可读页为零）。
+    //   翻译不出物理页时停止并返回失败，不用零值伪造不可读内容；
+    // - 返回：AccessOutcome，DDMA 失败时 data 仅保留真实读取的前缀，
+    //   bytesDone 表示完成数量，partial 表示已完成部分。
     AccessOutcome readVirtual(
         MemoryAccessBackend backend,
         const DdmaSession& session,

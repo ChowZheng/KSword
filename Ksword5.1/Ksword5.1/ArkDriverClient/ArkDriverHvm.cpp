@@ -410,6 +410,14 @@ namespace ksword::ark
         DriverHandle* const existingHandle) const
     {
         HvmMemoryResult result{};
+        // 超长请求必须拒绝；静默裁剪会让部分写入看起来完整成功。
+        if (length > KSWORD_ARK_HVM_MEMORY_MAX_BYTES)
+        {
+            result.io.win32Error = ERROR_INVALID_PARAMETER;
+            result.io.message = "HVM memory request exceeds the per-call transfer limit.";
+            result.response.status = KSWORD_ARK_HVM_MEMORY_STATUS_INVALID_REQUEST;
+            return result;
+        }
         KSWORD_ARK_HVM_MEMORY_REQUEST request{};
         request.version = KSWORD_ARK_HVM_MEMORY_PROTOCOL_VERSION;
         request.size = sizeof(request);
@@ -417,10 +425,7 @@ namespace ksword::ark
         request.address = address;
         request.directoryBase = directoryBase;
         request.processId = processId;
-        // 驱动会拒绝超长请求，这里先夹住，避免把越界长度写进 payload 拷贝。
-        request.length = length > KSWORD_ARK_HVM_MEMORY_MAX_BYTES
-            ? KSWORD_ARK_HVM_MEMORY_MAX_BYTES
-            : length;
+        request.length = length;
         if (uiConfirmed)
         {
             request.flags |= KSWORD_ARK_HVM_MEMORY_FLAG_UI_CONFIRMED;

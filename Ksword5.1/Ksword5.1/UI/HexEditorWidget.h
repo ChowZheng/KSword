@@ -72,6 +72,7 @@ protected:
     // 入参 event：事件对象。
     // 返回：true 表示事件已处理，false 交给基类继续处理。
     bool eventFilter(QObject* watched, QEvent* event) override;
+    void changeEvent(QEvent* event) override;
 
 public:
 
@@ -90,6 +91,14 @@ public:
     // - bytes：输入字节数据；
     // - baseAddress：逻辑起始地址。
     void setByteArray(const QByteArray& bytes, std::uint64_t baseAddress = 0);
+
+    // Optional references for memory editing. Missing/mismatched references do
+    // not highlight. Pending edits and changes since the previous read use
+    // separate colors; selection and search highlighting retain priority.
+    void setChangeBaseline(const QByteArray& original);
+    void setRecentChangeMask(const QByteArray& changedMask);
+    void setChangeReferences(const QByteArray& original, const QByteArray& previousRead = QByteArray());
+    void clearChangeHighlights();
 
     // clearData：
     // - 作用：清空组件中的字节数据与查找高亮。
@@ -310,6 +319,8 @@ private:
     // updateRowHighlightByRow：
     // - 作用：根据查找命中掩码刷新指定行背景色。
     void updateRowHighlightByRow(int rowIndex);
+    void applyChangeHighlight(QTableWidgetItem* byteItem, std::uint64_t offset);
+    void refreshChangeHighlights();
 
     // updateSelectionHighlightRange：
     // - 作用：按“旧选区 + 新选区”的并集刷新受影响行；
@@ -592,6 +603,9 @@ private:
 
     // m_buffer：当前显示的数据副本。
     QByteArray m_buffer;
+    QByteArray m_changeBaseline;
+    QByteArray m_previousRead;
+    QByteArray m_recentChangeMask;
 
     // m_baseAddress：当前数据基址。
     std::uint64_t m_baseAddress = 0;

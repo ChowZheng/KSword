@@ -4,6 +4,7 @@
 #include "../ArkDriverClient/ArkDriverClient.h"
 // isNestedDispatchEnabled：嵌套派发开关的权威来源，与虚拟化菜单同一处。
 #include "../UI/KvmControl.h"
+#include "../../../shared/evidence/MemoryAddressInput.h"
 
 #include <QInputDialog>
 #include <QLabel>
@@ -26,21 +27,9 @@ namespace
         const QString& text,
         std::uint64_t& value)
     {
-        QString normalized = text.trimmed();
-        bool ok = false;
-
-        if (normalized.startsWith(
-                QStringLiteral("0x"),
-                Qt::CaseInsensitive))
-        {
-            normalized.remove(0, 2);
-            value = normalized.toULongLong(&ok, 16);
-        }
-        else
-        {
-            value = normalized.toULongLong(&ok, 16);
-        }
-        return ok && (value & 0xFFFULL) == 0ULL;
+        const QByteArray normalized = text.trimmed().toLatin1();
+        return Ksword::Evidence::ParseHexAddress(
+            std::string_view(normalized.constData(), static_cast<std::size_t>(normalized.size())), value);
     }
 
     QString eventTypeText(const unsigned long type)
@@ -223,7 +212,7 @@ void KernelHvmTab::addEptRule()
             QStringLiteral("添加 EPT 物理页规则")),
         kernelText(
             "kernel.hvm.ept.address.prompt",
-            QStringLiteral("物理起始地址（十六进制，必须 4 KiB 对齐）：")),
+            QStringLiteral("物理起始地址（十六进制，自动取所在 4 KiB 页）：")),
         QLineEdit::Normal,
         QStringLiteral("0x0"),
         &accepted);
@@ -233,7 +222,8 @@ void KernelHvmTab::addEptRule()
     }
 
     std::uint64_t physicalAddress = 0;
-    if (!parsePhysicalAddress(addressText, physicalAddress))
+    constexpr std::uint64_t maxMappedPhysical = 0x400000000000ULL;
+    if (!parsePhysicalAddress(addressText, physicalAddress) || physicalAddress >= maxMappedPhysical)
     {
         QMessageBox::critical(
             this,
@@ -242,9 +232,11 @@ void KernelHvmTab::addEptRule()
                 QStringLiteral("添加 EPT 物理页规则")),
             kernelText(
                 "kernel.hvm.ept.address.invalid",
-                QStringLiteral("地址必须是有效十六进制数并按 4 KiB 对齐。")));
+                QStringLiteral("地址必须是小于 64 TiB 的有效十六进制数。")));
         return;
     }
+    const std::uint64_t requestedAddress = physicalAddress;
+    physicalAddress &= ~0xFFFULL;
 
     const int pageCount = QInputDialog::getInt(
         this,
@@ -253,7 +245,7 @@ void KernelHvmTab::addEptRule()
             QStringLiteral("EPT 范围")),
         kernelText(
             "kernel.hvm.ept.pages.prompt",
-            QStringLiteral("连续 4 KiB 页数：")),
+            QStringLiteral("从地址所在页开始的连续 4 KiB 页数：")),
         1,
         1,
         1048576,
@@ -261,6 +253,14 @@ void KernelHvmTab::addEptRule()
         &accepted);
     if (!accepted)
     {
+        return;
+    }
+
+    if (static_cast<std::uint64_t>(pageCount) > (maxMappedPhysical - physicalAddress) / 0x1000ULL)
+    {
+        QMessageBox::critical(this,
+            kernelText("kernel.hvm.ept.add.title", QStringLiteral("添加 EPT 物理页规则")),
+            ks::i18n::sourceText(QStringLiteral("规则范围超出 64 TiB 映射上界。")));
         return;
     }
 
@@ -350,7 +350,11 @@ void KernelHvmTab::addEptRule()
     }
     const bool allowOnce = behaviorChoice == behaviorChoices[1];
 
-    const QString warning = kernelText(
+    const QString warning = ks::i18n::sourceText(QStringLiteral(
+        "输入地址 0x%1，规则将覆盖物理页范围 [0x%2, 0x%3)，共 %4 页。\n\n"))
+        .arg(requestedAddress, 0, 16).arg(physicalAddress, 0, 16)
+        .arg(physicalAddress + static_cast<std::uint64_t>(pageCount) * 0x1000ULL, 0, 16)
+        .arg(pageCount) + kernelText(
         "kernel.hvm.ept.add.warning",
         QStringLiteral(
             "该操作会把指定物理页对应的 2 MiB EPT 大页拆成 4 KiB 叶并移除"

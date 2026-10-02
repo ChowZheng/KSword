@@ -288,6 +288,45 @@ void MemoryDock::driverReadPhysicalMemoryFromUi()
     // DDMA 后端直接按物理地址走磁盘 DMA，不需要 VA → PA 翻译，是这条通道上
     // 最直接的用法。响应模型与标准物理读不同，因此单独分支后直接返回。
     const ksword::memory_backend::MemoryAccessBackend backend = currentDriverMemoryBackend();
+    if (backend == ksword::memory_backend::MemoryAccessBackend::UserMode
+        || backend == ksword::memory_backend::MemoryAccessBackend::Hvm)
+    {
+        const auto outcome = ksword::memory_backend::readPhysical(
+            backend, currentDdmaSession(), baseAddress, totalBytes);
+        if (!outcome.ok || outcome.data.isEmpty())
+        {
+            resetDriverMemoryRwState();
+            m_driverMemoryStatusLabel->setText(outcome.failureText);
+            QMessageBox::warning(this, QStringLiteral("驱动内存读写"), outcome.failureText);
+            return;
+        }
+        m_driverMemoryBaseAddress = baseAddress;
+        m_driverMemoryOffsetBase = 0;
+        m_driverMemoryCenterAddress = physicalAddress;
+        m_driverMemorySnapshotPid = 0;
+        m_driverMemorySnapshotProcessName = QStringLiteral("物理内存");
+        m_driverMemorySnapshotIsPhysical = true;
+        m_driverMemoryOriginalBytes = outcome.data;
+        m_driverMemoryEditedBytes = outcome.data;
+        m_driverMemoryHasSnapshot = true;
+        loadDriverMemoryEditorSnapshot();
+        m_driverMemoryApplyButton->setEnabled(false);
+        m_driverMemoryRangeLabel->setText(
+            QStringLiteral("物理范围: 0x%1 - 0x%2 | 已读取 %3 字节")
+                .arg(formatAddress(m_driverMemoryBaseAddress))
+                .arg(formatAddress(m_driverMemoryBaseAddress
+                    + static_cast<std::uint64_t>(outcome.data.size()) - 1ULL))
+                .arg(outcome.data.size()));
+        m_driverMemoryStatusLabel->setText(QStringLiteral("%1 读取完成：%2 字节%3")
+            .arg(ksword::memory_backend::backendDisplayName(backend))
+            .arg(outcome.data.size())
+            .arg(outcome.partial ? QStringLiteral("；部分内容不可读。") : QStringLiteral("。")));
+        if (!outcome.failureText.isEmpty())
+            m_driverMemoryStatusLabel->setText(m_driverMemoryStatusLabel->text()
+                + QStringLiteral(" ") + outcome.failureText);
+        return;
+    }
+
     if (backend == ksword::memory_backend::MemoryAccessBackend::Ddma)
     {
         if (m_driverMemoryStatusLabel != nullptr)
@@ -321,13 +360,7 @@ void MemoryDock::driverReadPhysicalMemoryFromUi()
         m_driverMemoryEditedBytes = m_driverMemoryOriginalBytes;
         m_driverMemoryHasSnapshot = true;
 
-        if (m_driverMemoryHexEditor != nullptr)
-        {
-            m_driverMemoryHexEditor->setEditable(true);
-            m_driverMemoryHexEditor->setByteArray(
-                m_driverMemoryEditedBytes, m_driverMemoryBaseAddress);
-        }
-        refreshDriverMemoryViewsFromSnapshot();
+        loadDriverMemoryEditorSnapshot();
 
         if (m_driverMemoryApplyButton != nullptr)
         {
@@ -418,13 +451,7 @@ void MemoryDock::driverReadPhysicalMemoryFromUi()
     m_driverMemoryEditedBytes = m_driverMemoryOriginalBytes;
     m_driverMemoryHasSnapshot = true;
 
-    // 刷新十六进制视图与派生视图，让三个视图看到同一份快照。
-    if (m_driverMemoryHexEditor != nullptr)
-    {
-        m_driverMemoryHexEditor->setEditable(true);
-        m_driverMemoryHexEditor->setByteArray(m_driverMemoryEditedBytes, m_driverMemoryBaseAddress);
-    }
-    refreshDriverMemoryViewsFromSnapshot();
+    loadDriverMemoryEditorSnapshot();
 
     if (m_driverMemoryApplyButton != nullptr)
     {
@@ -476,6 +503,26 @@ bool MemoryDock::applyDriverMemoryPhysicalDiff(
     std::uint64_t writtenBytesTotal = 0ULL;
     const ksword::ark::DriverClient driverClient;
 
+    if (m_driverMemorySnapshotBackend == ksword::memory_backend::MemoryAccessBackend::Hvm)
+    {
+        for (const auto& block : diffBlocks)
+        {
+            const auto outcome = ksword::memory_backend::writePhysical(m_driverMemorySnapshotBackend,
+                currentDdmaSession(), block.address, block.bytes, false);
+            writtenBytesTotal += outcome.bytesDone;
+            const auto verified = ksword::memory_backend::readPhysical(m_driverMemorySnapshotBackend,
+                currentDdmaSession(), block.address, static_cast<std::uint64_t>(block.bytes.size()));
+            if (!outcome.ok || !verified.ok || verified.partial || verified.data != block.bytes)
+            {
+                failureTextOut = QStringLiteral("应用未完成：已写入 %1 字节。%2")
+                    .arg(static_cast<qulonglong>(writtenBytesTotal))
+                    .arg(outcome.ok ? QStringLiteral("写入后的回读结果与编辑缓存不一致。") : outcome.failureText);
+                return false;
+            }
+        }
+        return true;
+    }
+
     // DDMA 后端按页切片走磁盘 DMA，切片规则、状态码与告警位都在后端门面里，
     // 这里只负责 force 确认与文案。
     if (currentDriverMemoryBackend() == ksword::memory_backend::MemoryAccessBackend::Ddma)
@@ -498,7 +545,7 @@ bool MemoryDock::applyDriverMemoryPhysicalDiff(
                 if (!confirmForceDriverMemoryWrite(
                         diffBlock.address,
                         static_cast<std::uint32_t>(diffBlock.bytes.size()),
-                        blockOutcome.failureText))
+                        blockOutcome.failureText, m_driverMemorySnapshotPid))
                 {
                     failureTextOut = QStringLiteral("用户取消了 DDMA 强制写入。");
                     return false;
@@ -584,7 +631,7 @@ bool MemoryDock::applyDriverMemoryPhysicalDiff(
                 if (!confirmForceDriverMemoryWrite(
                         chunkAddress,
                         static_cast<std::uint32_t>(chunkBytes.size()),
-                        QStringLiteral("驱动要求对物理内存写入附加强制标志。")))
+                        QStringLiteral("驱动要求对物理内存写入附加强制标志。"), m_driverMemorySnapshotPid))
                 {
                     failureTextOut = QStringLiteral("用户取消了物理内存强制写入。");
                     return false;

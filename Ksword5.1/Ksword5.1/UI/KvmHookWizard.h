@@ -85,6 +85,7 @@ class HexEditorWidget;
 
 namespace ks::ui
 {
+    class MemoryEditorWidget;
     // readTargetPage：把 pageBasePhysical 那一页 4096 字节读回来。            [P]
     //
     // R-1 通道单次上限 1024 字节，所以固定切成 4 片顺序读。任何一片失败都返回空
@@ -310,8 +311,8 @@ namespace ks::ui
         // =============================================================
 
         // buildPatchPage：建第 2 步的控件树，返回页容器。                      [P]
-        // 中间是 HexEditorWidget（setEditable(true)），基址传 pageBasePhysical，
-        // 这样十六进制视图里的地址列直接就是物理地址，不用心算。
+        // 中间是统一 MemoryEditorWidget；已知 VA 时以虚拟页基址显示和编码，
+        // 否则显示物理页。计划和 IOCTL 仍使用 pageBasePhysical。
         QWidget* buildPatchPage();
 
         // startBaselineCapture：后台抓一次基线页（readTargetPage）。            [P]
@@ -319,18 +320,11 @@ namespace ks::ui
         void startBaselineCapture();
 
         // applyBaselineCapture：落地基线页。                                    [P]
-        // 成功后把整页装进 m_shadowEditor，并 jumpToAbsoluteAddress 到
-        // pageBasePhysical + pageOffset —— 用户关心的是那几个字节，不是页首。
+        // 成功后建立统一编辑器快照，以可用虚拟页基址显示地址并定位目标偏移。
         void applyBaselineCapture(
             quint64 sequence,
             const QByteArray& page,
             const QString& failure);
-
-        // onShadowByteEdited：用户改了一个字节之后重算补丁。                    [P]
-        void onShadowByteEdited(
-            std::uint64_t absoluteAddress,
-            std::uint8_t oldValue,
-            std::uint8_t newValue);
 
         // recomputePatchFromEditor：把编辑器现值与基线页逐字节比对，            [P]
         // 取出「第一个不同字节 .. 最后一个不同字节」这一段作为 patchBytes，
@@ -344,8 +338,7 @@ namespace ks::ui
         // updatePatchSummary：刷新补丁摘要（起点、长度、跨页结论、非空结论）。  [P]
         void updatePatchSummary();
 
-        // refreshPatchDisassembly：把补丁区间前后一段反汇编出来给人看。         [P]
-        // 走 ks::ui::InstructionDecoder::decode(bytes, base, X64)。
+        // refreshPatchDisassembly：程序修改 Hex 缓冲区后同步统一编辑器。        [P]
         //
         // 【它不回答"补丁有没有切断一条指令"】x86 是变长指令，从一个任意偏移向前
         // 线性解码只能是启发式，仓库里的 InstructionDecoder 也只有正向能力。
@@ -622,6 +615,7 @@ namespace ks::ui
         QLabel* m_targetStatusLabel = nullptr;
 
         // ---- 第 2 步（[P] 创建）----
+        MemoryEditorWidget* m_patchEditor = nullptr;
         HexEditorWidget* m_shadowEditor = nullptr;
         QPushButton* m_recaptureBaselineButton = nullptr;
         QPushButton* m_revertPatchButton = nullptr;
@@ -629,7 +623,6 @@ namespace ks::ui
         QLineEdit* m_jumpTargetEdit = nullptr;
         QPushButton* m_applyJumpButton = nullptr;
         QLabel* m_patchSummaryLabel = nullptr;
-        QPlainTextEdit* m_patchDisassemblyView = nullptr;
         QLabel* m_patchStatusLabel = nullptr;
 
         // ---- 第 3 步（[V] 创建）----

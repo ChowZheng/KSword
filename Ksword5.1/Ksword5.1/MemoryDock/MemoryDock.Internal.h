@@ -14,6 +14,7 @@
 #include "../ArkDriverClient/ArkDriverClient.h"
 #include "../UI/CodeEditorWidget.h"
 #include "../UI/HexEditorWidget.h"
+#include "../UI/MemoryEditorWidget.h"
 #include "../UI/VisibleTableWidget.h" // ks::ui::VisibleTableWidget：反汇编表等长表格的统一基类。
 
 #include <QAbstractItemView>

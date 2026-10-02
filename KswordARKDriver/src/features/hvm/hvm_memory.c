@@ -716,6 +716,8 @@ KswordARKHvmMemoryExecute(
 {
     KSW_HVM_MEMORY_WINDOW* window = &g_KswordHvmMemory;
     ULONGLONG physicalAddress = 0ULL;
+    /* Keep one resolved hierarchy for every virtual page in this request. */
+    ULONGLONG directoryBase = 0ULL;
     ULONG transferred = 0UL;
     BOOLEAN usedWindow = FALSE;
     BOOLEAN isWrite = FALSE;
@@ -804,9 +806,19 @@ KswordARKHvmMemoryExecute(
         /* Return the complete protocol-level rejection. */
         return STATUS_SUCCESS;
     }
+    /* Reject empty transfers and virtual spans that wrap before any access. */
+    if (Request->operation != KSWORD_ARK_HVM_MEMORY_OP_TRANSLATE &&
+        (Request->length == 0UL ||
+         (isVirtual && Request->address >
+             ~0ULL - ((ULONGLONG)Request->length - 1ULL)))) {
+        /* Publish the stable address-invalid protocol status. */
+        Response->status = KSWORD_ARK_HVM_MEMORY_STATUS_ADDRESS_INVALID;
+        /* Preserve the exact range failure. */
+        Response->ntStatus = STATUS_INVALID_PARAMETER;
+        /* Return without translating or touching a wrapped span. */
+        return STATUS_SUCCESS;
+    }
     if (isVirtual) {
-        ULONGLONG directoryBase = 0ULL;
-
         if (Request->processId != 0UL) {
             /*
              * A named process wins over an explicit base.  Callers that know a
@@ -867,9 +879,8 @@ KswordARKHvmMemoryExecute(
         /* Publish the address the access will use. */
         Response->physicalAddress = physicalAddress;
     }
-    /* Reject a span the architecture cannot encode. */
-    if (Request->length == 0UL ||
-        !KswordARKHvmMemoryIsPhysicalRangeValid(
+    /* Only physical requests require the entire span to be contiguous. */
+    if (!isVirtual && !KswordARKHvmMemoryIsPhysicalRangeValid(
             physicalAddress,
             Request->length)) {
         /* Publish the stable address-invalid protocol status. */
@@ -882,14 +893,59 @@ KswordARKHvmMemoryExecute(
         /* Stage caller bytes in the response buffer before publishing them. */
         RtlCopyMemory(Response->data, Request->data, Request->length);
     }
-    /* Perform the page-split transfer in the requested direction. */
-    status = KswordARKHvmMemoryCopyRange(
-        physicalAddress,
-        Response->data,
-        Request->length,
-        isWrite,
-        &transferred,
-        &usedWindow);
+    if (isVirtual) {
+        /* Adjacent virtual pages need not occupy adjacent physical frames. */
+        while (transferred < Request->length) {
+            /* Split at the next virtual boundary, including an unaligned start. */
+            const ULONGLONG current = Request->address + transferred;
+            /* Limit this physical copy to the mapping just resolved. */
+            const ULONG pageRemainder = (ULONG)(
+                KSW_HVM_MEMORY_PAGE_BYTES - (current & 0xFFFULL));
+            /* Bound the fragment by both the page and the remaining request. */
+            const ULONG chunk = (Request->length - transferred) < pageRemainder
+                ? (Request->length - transferred) : pageRemainder;
+            /* Retain fragment accounting even when a later fragment fails. */
+            ULONG copied = 0UL;
+            /* Accumulate the actual path used by every fragment. */
+            BOOLEAN chunkUsedWindow = FALSE;
+
+            if (transferred != 0UL) {
+                /* Rewalk each next virtual page instead of incrementing its PA. */
+                status = KswordARKHvmMemoryTranslate(
+                    directoryBase, current, &physicalAddress, NULL);
+                /* Preserve completed bytes and the exact failing walk status. */
+                if (!NT_SUCCESS(status)) {
+                    /* Stop before accessing an unmapped virtual page. */
+                    break;
+                }
+            }
+            /* Validate each resolved physical fragment independently. */
+            if (!KswordARKHvmMemoryIsPhysicalRangeValid(physicalAddress, chunk)) {
+                /* Preserve the exact invalid-fragment status. */
+                status = STATUS_INVALID_PARAMETER;
+                /* Stop before accessing an unencodable physical range. */
+                break;
+            }
+            /* Copy only this virtual page's resolved physical fragment. */
+            status = KswordARKHvmMemoryCopyRange(
+                physicalAddress, Response->data + transferred, chunk,
+                isWrite, &copied, &chunkUsedWindow);
+            /* Publish every fully completed fragment, including partial requests. */
+            transferred += copied;
+            /* Keep the private-window evidence from preceding fragments. */
+            usedWindow = usedWindow || chunkUsedWindow;
+            /* Stop at the first physical access failure. */
+            if (!NT_SUCCESS(status)) {
+                /* Leave later virtual pages untouched. */
+                break;
+            }
+        }
+    } else {
+        /* Physical requests retain their existing contiguous page-split path. */
+        status = KswordARKHvmMemoryCopyRange(
+            physicalAddress, Response->data, Request->length,
+            isWrite, &transferred, &usedWindow);
+    }
     /* Publish exactly how many bytes moved. */
     Response->bytesTransferred = transferred;
     /* Publish whether the hook-free path carried the access. */

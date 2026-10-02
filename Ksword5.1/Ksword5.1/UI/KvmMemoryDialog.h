@@ -2,22 +2,26 @@
 
 // KvmMemoryDialog：KVM（R-1 层）内存操作面板。
 //
-// 由标题栏 KVM 按钮的右键菜单打开。它做的事只有一件：把 R-1 内存通道
-// （私有页表窗口）暴露成可以手工驱动的读、写、翻译三个动作，并且如实显示
-// 这一次访问到底走的是私有窗口还是退化后的 MmCopyMemory 路径——
-// 后者仍能读到数据，但不再规避内核层 Hook，这个差别必须让人看得见。
+// R-1 读写复用普通内存页的十六进制/汇编编辑器。修改先暂存，只有显式应用
+// 才会写回成功读取时绑定的地址、模式、PID 和 CR3；写入前比较原字节，写后回读。
 //
 // 所有 IOCTL 都在后台线程执行；写入额外受 KvmControl 的写权限门约束。
 
 #include <QDialog>
 
-class QCheckBox;
+#include <atomic>
+#include <memory>
+
 class QComboBox;
 class QLabel;
 class QLineEdit;
-class QPlainTextEdit;
 class QPushButton;
 class QSpinBox;
+
+namespace ks::ui
+{
+    class MemoryEditorWidget;
+}
 
 class KvmMemoryDialog final : public QDialog
 {
@@ -25,6 +29,8 @@ class KvmMemoryDialog final : public QDialog
 
 public:
     explicit KvmMemoryDialog(QWidget* parent = nullptr);
+    ~KvmMemoryDialog() override;
+    void done(int result) override;
 
 private:
     // buildUi：构造控件树与信号连接。
@@ -38,23 +44,37 @@ private:
     // parseAddress：解析十六进制地址输入；失败时返回 false 并写状态行。
     bool parseAddress(const QLineEdit* field, unsigned long long* valueOut,
         const QString& fieldName);
+    // 虚拟地址默认按目标 PID 自动获取 CR3；非零自定义 CR3 优先且不传 PID。
+    bool parseVirtualContext(unsigned long long* directoryBaseOut,
+        unsigned long* processIdOut);
     // setBusy：进入或退出忙碌态，忙碌期间禁用全部动作按钮。
     void setBusy(bool busy);
-    // showHexDump：把读回的字节渲染成带偏移的十六进制视图。
-    void showHexDump(unsigned long long baseAddress, const QByteArray& data);
+    // 请求参数变更时清除缓存，禁止把旧编辑写向新的目标。
+    void invalidateSnapshot();
+    // 每个后台操作拥有独立取消令牌和序号，关闭窗口后丢弃旧回调。
+    unsigned long long beginOperation();
+    void cancelPendingOperation();
     // isVirtualMode：当前是否为虚拟地址模式。
     bool isVirtualMode() const;
 
     QComboBox* m_modeBox = nullptr;
     QLineEdit* m_addressEdit = nullptr;
+    QLineEdit* m_processIdEdit = nullptr;
     QLineEdit* m_directoryBaseEdit = nullptr;
     QSpinBox* m_lengthBox = nullptr;
-    QPlainTextEdit* m_dataView = nullptr;
-    QLineEdit* m_writeEdit = nullptr;
+    ks::ui::MemoryEditorWidget* m_editor = nullptr;
     QPushButton* m_readButton = nullptr;
     QPushButton* m_writeButton = nullptr;
+    QPushButton* m_discardButton = nullptr;
     QPushButton* m_translateButton = nullptr;
     QLabel* m_statusLabel = nullptr;
     QLabel* m_windowLabel = nullptr;
     bool m_busy = false;
+    bool m_hasSnapshot = false;
+    bool m_snapshotVirtualMode = false;
+    unsigned long long m_snapshotAddress = 0;
+    unsigned long long m_snapshotDirectoryBase = 0;
+    unsigned long m_snapshotProcessId = 0;
+    unsigned long long m_operationSerial = 0;
+    std::shared_ptr<std::atomic_bool> m_cancelled;
 };

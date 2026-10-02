@@ -50,6 +50,7 @@ class CodeEditorWidget;
 namespace ks::ui
 {
     class VisibleTableWidget;
+    class MemoryEditorWidget;
 }
 
 class DdmaPage final : public QWidget
@@ -197,6 +198,8 @@ private:
 
     // readPhysicalFromUi：按界面参数用 DDMA 读取物理内存并填充十六进制视图。
     void readPhysicalFromUi();
+    void resetAccessSnapshot();
+    void refreshAccessEditorState();
 
     // writePhysicalFromUi：把十六进制视图里改动过的字节用 DDMA 写回物理内存。
     void writePhysicalFromUi();
@@ -235,6 +238,8 @@ private:
     QByteArray m_editedBytes;       // 编辑缓存，写回时只提交差异部分。
     std::uint64_t m_snapshotAddress = 0; // 快照起始物理地址。
     bool m_hasSnapshot = false;     // 是否已有有效快照。
+    ksword::memory_backend::DdmaSession m_snapshotSession; // 快照绑定的磁盘与暂存区。
+    std::uint64_t m_snapshotSessionGeneration = 0;
 
     // ========================================================
     // 控件
@@ -259,7 +264,8 @@ private:
     QSpinBox* m_accessLengthSpin = nullptr;         // 读取长度。
     QPushButton* m_accessReadButton = nullptr;      // DDMA 读取按钮。
     QPushButton* m_accessWriteButton = nullptr;     // DDMA 写回按钮。
-    HexEditorWidget* m_accessHexEditor = nullptr;   // 十六进制编辑视图。
+    ks::ui::MemoryEditorWidget* m_accessMemoryEditor = nullptr; // 多视图暂存编辑器。
+    HexEditorWidget* m_accessHexEditor = nullptr;   // 十六进制视图别名。
     QLabel* m_accessStatusLabel = nullptr;          // 读写状态文本。
 
     QLineEdit* m_compareAddressEdit = nullptr;      // 复核物理地址输入。

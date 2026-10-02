@@ -233,8 +233,8 @@ void MinidumpDock::buildUi()
     m_threadPage = createStructuredTablePage(m_threadTable, 13);
     m_memoryPage = createStructuredTablePage(m_memoryTable, 6);
     m_handlePage = createStructuredTablePage(m_handleTable, 7);
-    m_rawMemoryEditor = new CodeEditorWidget(m_resultTabs);
-    m_rawMemoryEditor->setReadOnly(true);
+    m_rawMemoryTabs = new QTabWidget(m_resultTabs);
+    m_rawMemoryTabs->setDocumentMode(true);
     m_memoryView = new DumpMemoryView(m_resultTabs);
     m_reportEditor = new CodeEditorWidget(m_resultTabs);
     m_reportEditor->setReadOnly(true);
@@ -256,7 +256,7 @@ void MinidumpDock::buildUi()
             static_cast<QWidget*>(m_poolTagTable),
             static_cast<QWidget*>(m_crashHistoryTable),
             m_stackPage, m_modulePage, m_threadPage, m_memoryPage, m_handlePage,
-            static_cast<QWidget*>(m_rawMemoryEditor),
+            static_cast<QWidget*>(m_rawMemoryTabs),
             static_cast<QWidget*>(m_memoryView),
             static_cast<QWidget*>(m_reportEditor) })
     {

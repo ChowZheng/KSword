@@ -13,6 +13,7 @@ class QTableWidget;
 
 namespace ks::ui
 {
+    class MemoryEditorWidget;
     enum class DisassemblyArchitecture : int
     {
         X86 = 0,
@@ -86,7 +87,6 @@ namespace ks::ui
 
     private:
         void rebuildRows();
-        void emitModifyRequest();
         void executeKernelMutation(
             std::uint64_t address,
             const QByteArray& originalBytes);
@@ -95,12 +95,15 @@ namespace ks::ui
         std::uint64_t m_baseAddress = 0U;
         DisassemblyArchitecture m_architecture =
             DisassemblyArchitecture::X64;
+        QString m_sourceDescription;
+        std::uint64_t m_snapshotRevision = 0;
         QVector<DisassemblyRow> m_rows;
         QLabel* m_sourceLabel = nullptr;
         QLabel* m_backendLabel = nullptr;
         QLabel* m_mutationRiskLabel = nullptr;
         QLabel* m_mutationStatusLabel = nullptr;
         QTableWidget* m_table = nullptr;
+        MemoryEditorWidget* m_editor = nullptr;
         bool m_kernelMutationEnabled = false;
     };
 }

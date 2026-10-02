@@ -1,5 +1,6 @@
 #include "MemoryDock.Internal.h"
 #include "../UI/TableInteractionSupport.h"
+#include "../Internationalization/LanguageManager.h"
 
 #include <memory>
 
@@ -356,6 +357,16 @@ void MemoryDock::startNextScan()
     const ksword::memory_backend::MemoryAccessBackend scanBackend = currentSearchBackend();
     const ksword::memory_backend::DdmaSession scanDdmaSession = currentDdmaSession();
     const std::uint32_t scanTargetPid = m_attachedPid;
+    const QString scanBackendName = ks::i18n::sourceText(
+        ksword::memory_backend::backendDisplayName(scanBackend));
+    const QString finishedMessage = ks::i18n::sourceText(QStringLiteral(
+        "再次扫描完成（%1）：保留 %2 项，耗时 %3 ms；跳过 %4 字节（%5 个条目）。"));
+    const QString cancelledMessage = ks::i18n::sourceText(QStringLiteral(
+        "再次扫描已取消（%1）：保留上一轮 %2 项，耗时 %3 ms；跳过 %4 字节（%5 个条目）。"));
+    const QString readProblemMessage = ks::i18n::sourceText(QStringLiteral(
+        "首个读取问题：%1"));
+    const QString incompleteMessage = ks::i18n::sourceText(QStringLiteral(
+        "读取结果不完整，已跳过该范围。"));
 
     // 再次扫描也统一使用“扫描中”状态，确保取消按钮和顶部按钮行为一致。
     m_scanInProgress.store(true);
@@ -388,7 +399,12 @@ void MemoryDock::startNextScan()
         bytesToDouble,
         scanBackend,
         scanDdmaSession,
-        scanTargetPid]() mutable
+        scanTargetPid,
+        scanBackendName,
+        finishedMessage,
+        cancelledMessage,
+        readProblemMessage,
+        incompleteMessage]() mutable
     {
         const auto finishScanTask = [taskState]()
         {
@@ -415,6 +431,9 @@ void MemoryDock::startNextScan()
         nextResultCache.reserve(previousResultCache.size());
         int processedCount = 0;
         bool cancelled = false;
+        std::uint64_t skippedBytes = 0;
+        std::size_t skippedEntries = 0;
+        QString firstReadFailure;
 
         for (const SearchResultEntry& oldEntry : previousResultCache)
         {
@@ -427,36 +446,29 @@ void MemoryDock::startNextScan()
             const std::size_t readLength = std::max<std::size_t>(
                 1,
                 static_cast<std::size_t>(oldEntry.currentValueBytes.size()));
-            QByteArray currentBytes(static_cast<int>(readLength), '\0');
-            SIZE_T bytesRead = 0;
-            bool readSucceeded = false;
-
-            if (scanBackend == ksword::memory_backend::MemoryAccessBackend::Ddma)
+            const auto readOutcome = ksword::memory_backend::readVirtual(
+                scanBackend, scanDdmaSession, scanTargetPid, oldEntry.address,
+                static_cast<std::uint64_t>(readLength));
+            const bool readSucceeded = readOutcome.ok && !readOutcome.partial &&
+                static_cast<std::size_t>(readOutcome.data.size()) == readLength;
+            QByteArray currentBytes;
+            if (readSucceeded)
             {
-                const ksword::memory_backend::AccessOutcome ddmaOutcome =
-                    ksword::memory_backend::readVirtual(
-                        ksword::memory_backend::MemoryAccessBackend::Ddma,
-                        scanDdmaSession,
-                        scanTargetPid,
-                        oldEntry.address,
-                        static_cast<std::uint64_t>(readLength));
-                if (ddmaOutcome.ok &&
-                    static_cast<std::size_t>(ddmaOutcome.data.size()) == readLength)
+                currentBytes = readOutcome.data;
+                if (firstReadFailure.isEmpty() && !readOutcome.failureText.isEmpty())
                 {
-                    currentBytes = ddmaOutcome.data;
-                    bytesRead = static_cast<SIZE_T>(readLength);
-                    readSucceeded = true;
+                    firstReadFailure = readOutcome.failureText;
                 }
             }
             else
             {
-                const BOOL readOk = ::ReadProcessMemory(
-                    processHandle,
-                    reinterpret_cast<LPCVOID>(static_cast<std::uintptr_t>(oldEntry.address)),
-                    currentBytes.data(),
-                    static_cast<SIZE_T>(readLength),
-                    &bytesRead);
-                readSucceeded = (readOk != FALSE && bytesRead == readLength);
+                skippedBytes += static_cast<std::uint64_t>(readLength);
+                ++skippedEntries;
+                if (firstReadFailure.isEmpty())
+                {
+                    firstReadFailure = readOutcome.failureText.isEmpty()
+                        ? incompleteMessage : readOutcome.failureText;
+                }
             }
 
             bool keepThisEntry = false;
@@ -572,6 +584,13 @@ void MemoryDock::startNextScan()
         QMetaObject::invokeMethod(selfGuard.data(), [selfGuard,
             cancelled,
             elapsedMs,
+            skippedBytes,
+            skippedEntries,
+            firstReadFailure,
+            scanBackendName,
+            finishedMessage,
+            cancelledMessage,
+            readProblemMessage,
             nextResultCache = std::move(nextResultCache)]() mutable
         {
             if (selfGuard == nullptr)
@@ -581,7 +600,9 @@ void MemoryDock::startNextScan()
 
             auto resultsSnapshot =
                 std::make_shared<std::vector<SearchResultEntry>>(std::move(nextResultCache));
-            auto commitSnapshot = [selfGuard, cancelled, elapsedMs, resultsSnapshot]() mutable
+            auto commitSnapshot = [selfGuard, cancelled, elapsedMs, resultsSnapshot,
+                skippedBytes, skippedEntries, firstReadFailure, scanBackendName,
+                finishedMessage, cancelledMessage, readProblemMessage]() mutable
             {
                 if (selfGuard == nullptr)
                 {
@@ -604,18 +625,13 @@ void MemoryDock::startNextScan()
                 }
 
                 selfGuard->m_nextScanButton->setEnabled(!selfGuard->m_searchResultCache.empty());
-                QString finishText;
-                if (effectiveCancelled)
+                QString finishText = (effectiveCancelled ? cancelledMessage : finishedMessage)
+                    .arg(scanBackendName).arg(selfGuard->m_searchResultCache.size())
+                    .arg(elapsedMs).arg(skippedBytes).arg(skippedEntries);
+                if (!firstReadFailure.isEmpty())
                 {
-                    finishText = QString("再次扫描已取消：保留上一轮 %1 项，耗时 %2 ms")
-                        .arg(selfGuard->m_searchResultCache.size())
-                        .arg(elapsedMs);
-                }
-                else
-                {
-                    finishText = QString("再次扫描完成：保留 %1 项，耗时 %2 ms")
-                        .arg(selfGuard->m_searchResultCache.size())
-                        .arg(elapsedMs);
+                    finishText += QLatin1Char(' ') + readProblemMessage.arg(
+                        ks::i18n::sourceText(firstReadFailure));
                 }
                 if (selfGuard->m_searchResultCache.size() > selfGuard->m_searchResultVisibleCount)
                 {
@@ -803,7 +819,10 @@ void MemoryDock::scanMemoryRegionsInBackground(
     const std::vector<RegionEntry> regions = scanRegions;
     const ParsedSearchPattern scanPattern = pattern;
     const std::uint32_t threadCount = std::max<std::uint32_t>(1, m_scanThreadCount);
-    const std::size_t chunkSize = static_cast<std::size_t>(std::max<std::uint32_t>(64, m_scanChunkSizeKB) * 1024u);
+    // 所有后端使用协议允许的完整分片，避免 R0 因扫描配置超出单次上限而全程跳过。
+    const std::size_t chunkSize = static_cast<std::size_t>(
+        (std::min)(static_cast<std::uint64_t>((std::max)(64U, m_scanChunkSizeKB)) * 1024ULL,
+            static_cast<std::uint64_t>(KSWORD_ARK_MEMORY_READ_MAX_BYTES)));
     const auto startTime = std::chrono::steady_clock::now();
     const std::shared_ptr<MemoryScanTaskState> taskState = m_scanTaskState;
 
@@ -812,6 +831,16 @@ void MemoryDock::scanMemoryRegionsInBackground(
     const ksword::memory_backend::MemoryAccessBackend scanBackend = currentSearchBackend();
     const ksword::memory_backend::DdmaSession scanDdmaSession = currentDdmaSession();
     const std::uint32_t scanTargetPid = m_attachedPid;
+    const QString scanBackendName = ks::i18n::sourceText(
+        ksword::memory_backend::backendDisplayName(scanBackend));
+    const QString finishedMessage = ks::i18n::sourceText(QStringLiteral(
+        "首次扫描完成（%1）：命中 %2 项，耗时 %3 ms；跳过 %4 字节（%5 个读取请求）。"));
+    const QString cancelledMessage = ks::i18n::sourceText(QStringLiteral(
+        "扫描已取消（%1）；跳过 %2 字节（%3 个读取请求）。"));
+    const QString readProblemMessage = ks::i18n::sourceText(QStringLiteral(
+        "首个读取问题：%1"));
+    const QString incompleteMessage = ks::i18n::sourceText(QStringLiteral(
+        "读取结果不完整，已跳过该范围。"));
 
     // 外层协调线程会等待其内部 worker，因此登记这一层即可覆盖整轮首次扫描。
     {
@@ -821,7 +850,8 @@ void MemoryDock::scanMemoryRegionsInBackground(
 
     // 后台主线程只负责拉起 worker 并汇总结果，不直接操作 UI 控件。
     std::thread([selfGuard, taskState, processHandle, regions, scanPattern, threadCount, chunkSize, startTime,
-                 scanBackend, scanDdmaSession, scanTargetPid]() {
+                 scanBackend, scanDdmaSession, scanTargetPid, scanBackendName,
+                 finishedMessage, cancelledMessage, readProblemMessage, incompleteMessage]() {
         const auto finishScanTask = [taskState]()
         {
             std::lock_guard<std::mutex> lock(taskState->mutex);
@@ -849,6 +879,9 @@ void MemoryDock::scanMemoryRegionsInBackground(
         mergedResults.reserve(1024);
         std::mutex resultMutex;
         std::atomic<std::size_t> finishedRegionCount{ 0 };
+        std::atomic<std::uint64_t> skippedBytes{ 0 };
+        std::atomic<std::size_t> skippedRequests{ 0 };
+        QString firstReadFailure;
 
         const std::size_t patternLength = static_cast<std::size_t>(scanPattern.exactBytes.size());
         if (patternLength == 0)
@@ -917,51 +950,40 @@ void MemoryDock::scanMemoryRegionsInBackground(
                 {
                     const std::size_t requestSize = static_cast<std::size_t>(
                         std::min<std::uint64_t>(remainBytes, static_cast<std::uint64_t>(chunkSize)));
-                    QByteArray readBuffer(static_cast<int>(requestSize), '\0');
-                    SIZE_T bytesRead = 0;
-
-                    if (scanBackend == ksword::memory_backend::MemoryAccessBackend::Ddma)
+                    const auto readOutcome = ksword::memory_backend::readVirtual(
+                        scanBackend, scanDdmaSession, scanTargetPid, cursor,
+                        static_cast<std::uint64_t>(requestSize));
+                    if (!readOutcome.ok || readOutcome.partial ||
+                        static_cast<std::size_t>(readOutcome.data.size()) != requestSize)
                     {
-                        // DDMA 通道：逐页翻译 + 磁盘 DMA。比 ReadProcessMemory 慢
-                        // 几个数量级，但能扫到被 SLAT 重定向的内容。
-                        const ksword::memory_backend::AccessOutcome ddmaOutcome =
-                            ksword::memory_backend::readVirtual(
-                                ksword::memory_backend::MemoryAccessBackend::Ddma,
-                                scanDdmaSession,
-                                scanTargetPid,
-                                cursor,
-                                static_cast<std::uint64_t>(requestSize));
-                        if (!ddmaOutcome.ok || ddmaOutcome.data.isEmpty())
+                        // 未完整读取的区域不参与匹配，尤其不能把 R0/DDMA 补零当作真值。
+                        skippedBytes.fetch_add(static_cast<std::uint64_t>(requestSize),
+                            std::memory_order_relaxed);
+                        skippedRequests.fetch_add(1, std::memory_order_relaxed);
                         {
-                            cursor += requestSize;
-                            remainBytes -= requestSize;
-                            carryBytes.clear();
-                            continue;
+                            std::lock_guard<std::mutex> lock(resultMutex);
+                            if (firstReadFailure.isEmpty())
+                            {
+                                firstReadFailure = readOutcome.failureText.isEmpty()
+                                    ? incompleteMessage : readOutcome.failureText;
+                            }
                         }
-                        readBuffer = ddmaOutcome.data;
-                        bytesRead = static_cast<SIZE_T>(ddmaOutcome.data.size());
+                        cursor += requestSize;
+                        remainBytes -= requestSize;
+                        carryBytes.clear();
+                        continue;
                     }
-                    else
+                    if (!readOutcome.failureText.isEmpty())
                     {
-                        const BOOL readOk = ::ReadProcessMemory(
-                            processHandle,
-                            reinterpret_cast<LPCVOID>(static_cast<std::uintptr_t>(cursor)),
-                            readBuffer.data(),
-                            static_cast<SIZE_T>(requestSize),
-                            &bytesRead);
-                        if (readOk == FALSE || bytesRead == 0)
+                        std::lock_guard<std::mutex> lock(resultMutex);
+                        if (firstReadFailure.isEmpty())
                         {
-                            // 某块读取失败时跳过该块继续扫描，保证任务具备容错能力。
-                            cursor += requestSize;
-                            remainBytes -= requestSize;
-                            carryBytes.clear();
-                            continue;
+                            firstReadFailure = readOutcome.failureText;
                         }
                     }
 
                     // 合并“上一块尾巴 + 当前块”处理边界命中，避免漏掉跨块模式。
-                    const int validReadLength = static_cast<int>(bytesRead);
-                    QByteArray mergedBuffer = carryBytes + readBuffer.left(validReadLength);
+                    QByteArray mergedBuffer = carryBytes + readOutcome.data;
                     const std::size_t carryLength = static_cast<std::size_t>(carryBytes.size());
                     const std::uint64_t mergedBaseAddress = cursor - carryLength;
 
@@ -1083,7 +1105,11 @@ void MemoryDock::scanMemoryRegionsInBackground(
             << eol;
 
         // 所有 UI 修改统一切回主线程执行。
-        QMetaObject::invokeMethod(selfGuard.data(), [selfGuard, cancelled, elapsedMs, finalResults = std::move(mergedResults)]() mutable {
+        QMetaObject::invokeMethod(selfGuard.data(), [selfGuard, cancelled, elapsedMs,
+            skippedByteCount = skippedBytes.load(std::memory_order_relaxed),
+            skippedRequestCount = skippedRequests.load(std::memory_order_relaxed),
+            firstReadFailure, scanBackendName, finishedMessage, cancelledMessage,
+            readProblemMessage, finalResults = std::move(mergedResults)]() mutable {
             if (selfGuard == nullptr)
             {
                 return;
@@ -1091,7 +1117,9 @@ void MemoryDock::scanMemoryRegionsInBackground(
 
             auto resultsSnapshot =
                 std::make_shared<std::vector<SearchResultEntry>>(std::move(finalResults));
-            auto commitSnapshot = [selfGuard, cancelled, elapsedMs, resultsSnapshot]() mutable
+            auto commitSnapshot = [selfGuard, cancelled, elapsedMs, resultsSnapshot,
+                skippedByteCount, skippedRequestCount, firstReadFailure, scanBackendName,
+                finishedMessage, cancelledMessage, readProblemMessage]() mutable
             {
                 if (selfGuard == nullptr)
                 {
@@ -1109,7 +1137,14 @@ void MemoryDock::scanMemoryRegionsInBackground(
 
                 if (effectiveCancelled)
                 {
-                    selfGuard->m_scanStatusLabel->setText("扫描已取消。");
+                    QString cancelledText = cancelledMessage.arg(scanBackendName)
+                        .arg(skippedByteCount).arg(skippedRequestCount);
+                    if (!firstReadFailure.isEmpty())
+                    {
+                        cancelledText += QLatin1Char(' ') + readProblemMessage.arg(
+                            ks::i18n::sourceText(firstReadFailure));
+                    }
+                    selfGuard->m_scanStatusLabel->setText(cancelledText);
                     kLogEvent scanBackgroundCancelledUiEvent;
                     warn << scanBackgroundCancelledUiEvent
                         << "[MemoryDock] scanMemoryRegionsInBackground: 主线程收到取消结果。"
@@ -1120,9 +1155,14 @@ void MemoryDock::scanMemoryRegionsInBackground(
                 selfGuard->m_scanProgressBar->setValue(100);
                 selfGuard->m_searchResultCache = std::move(*resultsSnapshot);
                 selfGuard->rebuildSearchResultTable();
-                QString finishText = QString("首次扫描完成：命中 %1 项，耗时 %2 ms")
-                    .arg(selfGuard->m_searchResultCache.size())
-                    .arg(elapsedMs);
+                QString finishText = finishedMessage.arg(scanBackendName)
+                    .arg(selfGuard->m_searchResultCache.size()).arg(elapsedMs)
+                    .arg(skippedByteCount).arg(skippedRequestCount);
+                if (!firstReadFailure.isEmpty())
+                {
+                    finishText += QLatin1Char(' ') + readProblemMessage.arg(
+                        ks::i18n::sourceText(firstReadFailure));
+                }
                 if (selfGuard->m_searchResultCache.size() > selfGuard->m_searchResultVisibleCount)
                 {
                     finishText += QString("（仅显示前 %1 项）").arg(selfGuard->m_searchResultVisibleCount);

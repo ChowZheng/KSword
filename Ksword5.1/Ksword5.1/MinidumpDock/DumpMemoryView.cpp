@@ -8,6 +8,7 @@
 #include "Internationalization/LanguageManager.h"
 #include "MinidumpFormat.h"
 #include "UI/HexEditorWidget.h"
+#include "UI/MemoryEditorWidget.h"
 #include "theme.h"
 
 #include <QApplication>
@@ -177,10 +178,10 @@ DumpMemoryView::DumpMemoryView(QWidget* parent)
         });
     rootLayout->addWidget(m_messageView);
 
-    m_hexEditor = new HexEditorWidget(this);
-    m_hexEditor->setEditable(false);
-    m_hexEditor->setBytesPerRow(16);
-    rootLayout->addWidget(m_hexEditor, 1);
+    m_memoryEditor = new ks::ui::MemoryEditorWidget(this);
+    m_memoryEditor->setEditable(false);
+    m_hexEditor = m_memoryEditor->hexEditor();
+    rootLayout->addWidget(m_memoryEditor, 1);
 
     connect(m_readButton, &QPushButton::clicked, this, [this]() { loadCurrentInput(); });
     connect(m_addressEdit, &QLineEdit::returnPressed, this, [this]() { loadCurrentInput(); });
@@ -199,6 +200,9 @@ DumpMemoryView::DumpMemoryView(QWidget* parent)
 
 void DumpMemoryView::setDumpData(const ks::minidump::DumpParseResult& result)
 {
+    m_pointerSize = result.pointerSize;
+    m_architectureInitialized = false;
+    m_memoryEditor->clear();
     m_filePath = result.filePath;
     m_expectedFileSize = result.fileSize;
     m_expectedFileLastModifiedUtcMs = result.fileLastModifiedUtcMs;
@@ -212,7 +216,7 @@ void DumpMemoryView::setDumpData(const ks::minidump::DumpParseResult& result)
 
     if (m_ranges.empty())
     {
-        m_hexEditor->clearData();
+        m_memoryEditor->clear();
         setMessage(ks::i18n::text(
             QStringLiteral("minidump.memory_view.status.no_ranges"),
             QStringLiteral("转储中没有可直接读取的虚拟内存范围。")));
@@ -231,6 +235,8 @@ void DumpMemoryView::setDumpData(const ks::minidump::DumpParseResult& result)
 
 void DumpMemoryView::clearData()
 {
+    m_pointerSize = 8;
+    m_architectureInitialized = false;
     m_filePath.clear();
     m_expectedFileSize = 0;
     m_expectedFileLastModifiedUtcMs = -1;
@@ -240,9 +246,9 @@ void DumpMemoryView::clearData()
     m_currentAddress = 0;
     m_currentReadBytes = 0;
     m_currentRangeIndex = -1;
-    if (m_hexEditor != nullptr)
+    if (m_memoryEditor != nullptr)
     {
-        m_hexEditor->clearData();
+        m_memoryEditor->clear();
     }
     if (m_addressEdit != nullptr)
     {
@@ -407,7 +413,7 @@ void DumpMemoryView::loadCurrentInput()
     std::uint64_t address = 0;
     if (!readAddressText(m_addressEdit->text(), &address))
     {
-        m_hexEditor->clearData();
+        m_memoryEditor->clear();
         setMessage(ks::i18n::text(
             QStringLiteral("minidump.memory_view.status.invalid_address"),
             QStringLiteral("请输入有效的虚拟地址，或“模块名+偏移”。")));
@@ -421,7 +427,7 @@ bool DumpMemoryView::loadAddress(const std::uint64_t address)
     const int rangeIndex = findRangeIndex(address);
     if (rangeIndex < 0)
     {
-        m_hexEditor->clearData();
+        m_memoryEditor->clear();
         setMessage(ks::i18n::text(
             QStringLiteral("minidump.memory_view.status.not_captured"),
             QStringLiteral("地址 %1 不在当前转储捕获的虚拟内存范围内。"))
@@ -430,7 +436,7 @@ bool DumpMemoryView::loadAddress(const std::uint64_t address)
     }
     if (m_filePath.isEmpty())
     {
-        m_hexEditor->clearData();
+        m_memoryEditor->clear();
         setMessage(ks::i18n::text(
             QStringLiteral("minidump.memory_view.status.no_file"),
             QStringLiteral("没有与当前内存范围关联的转储文件。")));
@@ -445,7 +451,7 @@ bool DumpMemoryView::loadAddress(const std::uint64_t address)
                 m_expectedFileLastModifiedUtcMs);
     if (changed)
     {
-        m_hexEditor->clearData();
+        m_memoryEditor->clear();
         setMessage(ks::i18n::text(
             QStringLiteral("minidump.memory_view.status.file_changed"),
             QStringLiteral("转储文件已变更，请重新解析后再读取内存。")));
@@ -459,7 +465,7 @@ bool DumpMemoryView::loadAddress(const std::uint64_t address)
     const std::uint64_t requestedBytes = std::min(remaining, selectedReadBytes());
     if (requestedBytes == 0 || range.fileOffset > std::numeric_limits<std::uint64_t>::max() - offsetInRange)
     {
-        m_hexEditor->clearData();
+        m_memoryEditor->clear();
         setMessage(ks::i18n::text(
             QStringLiteral("minidump.memory_view.status.offset_invalid"),
             QStringLiteral("文件偏移超出可读取范围。")));
@@ -470,7 +476,7 @@ bool DumpMemoryView::loadAddress(const std::uint64_t address)
         requestedBytes > static_cast<std::uint64_t>(std::numeric_limits<qint64>::max()) ||
         fileOffset > m_expectedFileSize || requestedBytes > m_expectedFileSize - fileOffset)
     {
-        m_hexEditor->clearData();
+        m_memoryEditor->clear();
         setMessage(ks::i18n::text(
             QStringLiteral("minidump.memory_view.status.offset_invalid"),
             QStringLiteral("文件偏移超出可读取范围。")));
@@ -480,7 +486,7 @@ bool DumpMemoryView::loadAddress(const std::uint64_t address)
     QFile dumpFile(m_filePath);
     if (!dumpFile.open(QIODevice::ReadOnly))
     {
-        m_hexEditor->clearData();
+        m_memoryEditor->clear();
         setMessage(ks::i18n::text(
             QStringLiteral("minidump.memory_view.status.open_failed"),
             QStringLiteral("无法打开转储文件：%1"))
@@ -489,7 +495,7 @@ bool DumpMemoryView::loadAddress(const std::uint64_t address)
     }
     if (!dumpFile.seek(static_cast<qint64>(fileOffset)))
     {
-        m_hexEditor->clearData();
+        m_memoryEditor->clear();
         setMessage(ks::i18n::text(
             QStringLiteral("minidump.memory_view.status.read_failed"),
             QStringLiteral("读取失败或文件内容不足。")));
@@ -498,7 +504,7 @@ bool DumpMemoryView::loadAddress(const std::uint64_t address)
     const QByteArray bytes = dumpFile.read(static_cast<qint64>(requestedBytes));
     if (bytes.size() != static_cast<qsizetype>(requestedBytes))
     {
-        m_hexEditor->clearData();
+        m_memoryEditor->clear();
         setMessage(ks::i18n::text(
             QStringLiteral("minidump.memory_view.status.read_failed"),
             QStringLiteral("读取失败或文件内容不足。")));
@@ -509,7 +515,15 @@ bool DumpMemoryView::loadAddress(const std::uint64_t address)
     m_currentReadBytes = requestedBytes;
     m_currentRangeIndex = rangeIndex;
     m_addressEdit->setText(formatHex(address));
-    m_hexEditor->setByteArray(bytes, address);
+    const auto architecture = m_architectureInitialized
+        ? m_memoryEditor->currentArchitecture()
+        : (m_pointerSize == 4 ? ks::ui::DisassemblyArchitecture::X86
+                              : ks::ui::DisassemblyArchitecture::X64);
+    const QString sourceIdentity = QStringLiteral("dump:%1:%2:%3")
+        .arg(m_filePath).arg(m_expectedFileSize).arg(m_expectedFileLastModifiedUtcMs);
+    m_memoryEditor->setSnapshot(bytes, address, architecture, address, sourceIdentity);
+    m_memoryEditor->setEditable(false);
+    m_architectureInitialized = true;
 
     QStringList details;
     details.append(ks::i18n::text(

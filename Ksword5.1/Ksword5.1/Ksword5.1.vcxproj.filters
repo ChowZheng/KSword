@@ -920,6 +920,18 @@
     <ClCompile Include="UI\KernelDisassemblyDialog.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="UI\MemoryAssembly.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\MemoryAssembly.Core.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\MemoryEditHistory.Core.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\MemoryEditorWidget.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="..\..\third_party\zydis\Zydis.c">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -1783,6 +1795,9 @@
     <ClInclude Include="..\..\shared\evidence\HookPatchCompose.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="..\..\shared\evidence\MemoryAddressInput.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="UI\KvmEptLeafProbe.h">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -1805,6 +1820,18 @@
       <Filter>Header Files</Filter>
     </QtMoc>
     <QtMoc Include="UI\KernelDisassemblyDialog.h">
+      <Filter>Header Files</Filter>
+    </QtMoc>
+    <ClInclude Include="UI\MemoryAssembly.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="UI\MemoryAssembly.Core.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="UI\MemoryEditHistory.Core.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <QtMoc Include="UI\MemoryEditorWidget.h">
       <Filter>Header Files</Filter>
     </QtMoc>
     <QtMoc Include="WelcomeDock\WelcomeDock.h">

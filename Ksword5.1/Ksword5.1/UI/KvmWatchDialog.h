@@ -94,6 +94,7 @@ class KvmWatchAddDialog final : public QDialog
 
 public:
     explicit KvmWatchAddDialog(QWidget* parent = nullptr);
+    void accept() override;
 
     // prefill：由统一入口预填目标。label 非空时在顶部显示"正在监视：<label>"，
     // 并把地址栏设为只读——调用方已经算好了地址，让用户在这里改它只会让
@@ -105,6 +106,7 @@ public:
 
 private:
     void updateGranularity();
+    bool parseLength(unsigned long long* valueOut) const;
 
     QLabel* m_targetLabel = nullptr;
     QComboBox* m_addressKind = nullptr;

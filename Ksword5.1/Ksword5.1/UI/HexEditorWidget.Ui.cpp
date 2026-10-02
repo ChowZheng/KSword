@@ -1,5 +1,6 @@
 #include "HexEditorWidget.Internal.h"
 #include "VisibleTableWidget.h"
+#include <QSignalBlocker>
 
 // 说明：由原聚合式实现迁移为独立 .cpp，成员函数实现保持原样。
 using namespace ksword::ui::hex_editor_internal;
@@ -676,6 +677,8 @@ void HexEditorWidget::rebuildTable()
                 const bool printable = (byteValue >= 32 && byteValue <= 126);
                 asciiText.push_back(printable ? QChar(byteValue) : QChar('.'));
 
+                applyChangeHighlight(byteItem, byteOffset);
+
                 // 普通命中高亮。
                 if (byteOffset < static_cast<std::uint64_t>(m_matchMask.size()) && m_matchMask.at(static_cast<int>(byteOffset)) != 0)
                 {
@@ -840,6 +843,7 @@ void HexEditorWidget::updateRowHighlightByRow(const int rowIndex)
     {
         return;
     }
+    const QSignalBlocker blocker(m_hexTable);
 
     const std::uint64_t rowOffset = static_cast<std::uint64_t>(rowIndex) * static_cast<std::uint64_t>(m_bytesPerRow);
     const QColor matchColor = buildMatchColor();
@@ -860,6 +864,8 @@ void HexEditorWidget::updateRowHighlightByRow(const int rowIndex)
         {
             continue;
         }
+
+        applyChangeHighlight(byteItem, byteOffset);
 
         if (!m_selectionVisualAsciiColumn &&
             m_selectionRangeValid &&

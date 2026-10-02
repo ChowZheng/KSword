@@ -3,6 +3,7 @@
 #include "KvmControl.h"
 #include "../Internationalization/LanguageManager.h"
 #include "../theme.h"
+#include "../../../shared/evidence/MemoryAddressInput.h"
 
 #include <QApplication>
 #include <QCheckBox>
@@ -30,21 +31,11 @@ namespace
     /* 解析可带 0x 前缀的十六进制。 */
     bool parseHex(const QString& input, unsigned long long* valueOut)
     {
-        QString compact = input.trimmed();
-        if (compact.startsWith(QStringLiteral("0x"), Qt::CaseInsensitive))
-        {
-            compact = compact.mid(2);
-        }
-        // 允许分隔用的反引号：调试器和本程序自己都用它显示 64 位地址，
-        // 用户从别处复制过来的地址十有八九带着它。
-        compact.remove(QLatin1Char('`'));
-        if (compact.isEmpty())
-        {
-            return false;
-        }
-        bool converted = false;
-        const unsigned long long value = compact.toULongLong(&converted, 16);
-        if (!converted)
+        const QByteArray compact = input.trimmed().toLatin1();
+        std::uint64_t value = 0;
+        if (!Ksword::Evidence::ParseHexAddress(
+                std::string_view(compact.constData(),
+                    static_cast<std::size_t>(compact.size())), value))
         {
             return false;
         }
@@ -107,7 +98,7 @@ KvmWatchAddDialog::KvmWatchAddDialog(QWidget* const parent)
         QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this);
     buttons->button(QDialogButtonBox::Ok)->setText(text(QStringLiteral("武装")));
     rootLayout->addWidget(buttons);
-    connect(buttons, &QDialogButtonBox::accepted, this, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::accepted, this, &KvmWatchAddDialog::accept);
     connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
     connect(m_length, &QLineEdit::textChanged, this, [this](const QString&) {
         updateGranularity();
@@ -155,11 +146,14 @@ void KvmWatchAddDialog::prefill(const ks::ui::HvmWatchRequest& request)
 
 void KvmWatchAddDialog::updateGranularity()
 {
-    bool converted = false;
-    const unsigned long long length =
-        m_length->text().trimmed().toULongLong(&converted, 10);
-    const unsigned long long requested =
-        converted && length != 0ULL ? length : 4096ULL;
+    unsigned long long length = 0;
+    if (!parseLength(&length))
+    {
+        m_granularity->setText(text(QStringLiteral(
+            "关心的长度必须是十进制无符号整数，或留空表示整页。")));
+        return;
+    }
+    const unsigned long long requested = length != 0ULL ? length : 4096ULL;
     QString note = text(QStringLiteral("EPT 的监视单位是页：你请求 %1 字节，实际装到硬件上的是它所在的整个 4096 字节页。命中后如果 CPU 报告了有效的客户线性地址，界面会另外告诉你这次访问是否落在你请求的那一段里。"))
         .arg(requested);
     if (m_read->isChecked())
@@ -172,6 +166,44 @@ void KvmWatchAddDialog::updateGranularity()
     m_granularity->setText(note);
 }
 
+bool KvmWatchAddDialog::parseLength(unsigned long long* const valueOut) const
+{
+    const QString input = m_length->text().trimmed();
+    if (input.isEmpty())
+    {
+        *valueOut = 0;
+        return true;
+    }
+    for (const QChar character : input)
+    {
+        if (character < QLatin1Char('0') || character > QLatin1Char('9'))
+        {
+            return false;
+        }
+    }
+    bool converted = false;
+    const unsigned long long length = input.toULongLong(&converted, 10);
+    if (!converted)
+    {
+        return false;
+    }
+    *valueOut = length;
+    return true;
+}
+
+void KvmWatchAddDialog::accept()
+{
+    unsigned long long length = 0;
+    if (!parseLength(&length))
+    {
+        QMessageBox::warning(this, text(QStringLiteral("添加内存监视")),
+            text(QStringLiteral("关心的长度必须是十进制无符号整数，或留空表示整页。")));
+        m_length->setFocus();
+        return;
+    }
+    QDialog::accept();
+}
+
 ksword::kvm::KvmWatchTarget KvmWatchAddDialog::target() const
 {
     ksword::kvm::KvmWatchTarget result;
@@ -181,10 +213,11 @@ ksword::kvm::KvmWatchTarget KvmWatchAddDialog::target() const
     {
         result.address = address;
     }
-    bool converted = false;
-    const unsigned long long length =
-        m_length->text().trimmed().toULongLong(&converted, 10);
-    result.length = converted ? length : 0ULL;
+    if (!parseLength(&result.length))
+    {
+        // 即使调用方未通过 accept，也不能把非法输入变成整页监视；access=0 拒绝安装。
+        return result;
+    }
     result.access =
         (m_read->isChecked() ? KSWORD_ARK_HVM_EPT_ACCESS_READ : 0UL) |
         (m_write->isChecked() ? KSWORD_ARK_HVM_EPT_ACCESS_WRITE : 0UL) |

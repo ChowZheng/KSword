@@ -467,6 +467,10 @@
     <ClCompile Include="UI\DetailLayoutRegistry.cpp" />
     <ClCompile Include="UI\ReportStructuredView.cpp" />
     <ClCompile Include="UI\KernelDisassemblyDialog.cpp" />
+    <ClCompile Include="UI\MemoryAssembly.cpp" />
+    <ClCompile Include="UI\MemoryAssembly.Core.cpp" />
+    <ClCompile Include="UI\MemoryEditHistory.Core.cpp" />
+    <ClCompile Include="UI\MemoryEditorWidget.cpp" />
     <ClCompile Include="..\..\third_party\zydis\Zydis.c">
       <CompileAs>CompileAsC</CompileAs>
     </ClCompile>
@@ -719,6 +723,7 @@
     <ClInclude Include="UI\DockTabInteraction.h" />
     <ClInclude Include="UI\FlowLayout.h" />
     <ClInclude Include="..\..\shared\evidence\HookPatchCompose.h" />
+    <ClInclude Include="..\..\shared\evidence\MemoryAddressInput.h" />
     <ClInclude Include="UI\KvmEptLeafProbe.h" />
     <ClInclude Include="UI\KvmWriteAccessGate.h" />
     <ClInclude Include="UI\KvmHookPlan.h" />
@@ -878,6 +883,10 @@
     <QtMoc Include="UI\CodeEditorWidget.h" />
     <QtMoc Include="UI\WindowPickerButton.h" />
     <QtMoc Include="UI\KernelDisassemblyDialog.h" />
+    <ClInclude Include="UI\MemoryAssembly.h" />
+    <ClInclude Include="UI\MemoryAssembly.Core.h" />
+    <ClInclude Include="UI\MemoryEditHistory.Core.h" />
+    <QtMoc Include="UI\MemoryEditorWidget.h" />
     <ClInclude Include="UI\GlobalDialogTheme.h" />
     <ClInclude Include="UI\GlobalUiBaseStyle.h" />
     <ClInclude Include="UI\GlobalRefreshShortcut.h" />

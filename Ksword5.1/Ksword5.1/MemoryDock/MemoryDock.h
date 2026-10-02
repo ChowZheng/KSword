@@ -59,6 +59,7 @@ class DdmaPage;
 namespace ks::ui
 {
     class VisibleTableWidget;
+    class MemoryEditorWidget;
 }
 
 // Windows 句柄类型前置声明。
@@ -224,14 +225,21 @@ private:
         QString description;            // 断点描述文本。
     };
 
+    enum class BookmarkValueState { Pending, Ready, Failed, Partial, NoProcess };
+
     // BookmarkEntry：
     // - 作用：保存用户书签信息。
     struct BookmarkEntry
     {
+        std::uint64_t id = 0;           // 唯一标识：删除后重加同地址也不会接收旧任务结果。
         std::uint64_t address = 0;      // 书签地址。
         QString noteText;               // 备注文本。
         QString addTimeText;            // 添加时间文本。
-        QByteArray lastValueBytes;      // 上次刷新值（用于变化观察）。
+        QByteArray lastValueBytes;      // 当前上下文中完整读回的值；失败时清空。
+        BookmarkValueState valueState = BookmarkValueState::Pending;
+        QString readDetail;             // 读取错误或后端告警。
+        QString readTimeText;           // 最近一次读取完成时间。
+        bool scratchDirty = false;      // DDMA 暂存扇区还原失败，必须可见。
     };
 
 public:
@@ -280,16 +288,6 @@ public:
         ProcessVirtual = 0, // 目标进程的用户态虚拟内存。
         KernelVirtual,      // 内核虚拟地址空间。
         Physical            // 物理内存。
-    };
-
-    // DriverMemoryViewMode：
-    // - 作用：标识驱动读写页当前展示的视图；
-    // - 说明：枚举值顺序必须与视图堆栈的压栈顺序一致，界面直接按索引切页。
-    enum class DriverMemoryViewMode : int
-    {
-        Hex = 0,        // 十六进制编辑视图。
-        Disassembly,    // 反汇编指令视图。
-        Text            // 可打印文本视图。
     };
 
 private:
@@ -414,16 +412,17 @@ private:
         QLabel*& hintOut);
 
     // refreshBackendSelectors：
-    // - 作用：DDMA 会话变化后刷新三个下拉框的可用性与提示文本；
+    // - 作用：DDMA 会话变化后刷新各页下拉框的可用性与提示文本；
     // - 说明：DDMA 不可用时不禁用下拉项，而是保留选项并在提示里说明缺哪一步，
     //   否则用户只会看到一个灰掉的选项，不知道要去哪里补配置。
     void refreshBackendSelectors();
 
-    // currentSearchBackend / currentViewerBackend / currentDriverMemoryBackend：
+    // currentSearchBackend / currentViewerBackend / currentBookmarkBackend / currentDriverMemoryBackend：
     // - 作用：读取各页面当前选中的访问后端；
-    // - 返回：控件缺失时一律回落到标准驱动通道。
+    // - 返回：控件缺失时一律使用 R3。
     ksword::memory_backend::MemoryAccessBackend currentSearchBackend() const;
     ksword::memory_backend::MemoryAccessBackend currentViewerBackend() const;
+    ksword::memory_backend::MemoryAccessBackend currentBookmarkBackend() const;
     ksword::memory_backend::MemoryAccessBackend currentDriverMemoryBackend() const;
 
     // currentDdmaSession：
@@ -670,16 +669,13 @@ private:
     // - 返回：无。
     void reloadMemoryViewerPage();
 
-    // writeSingleByteAtViewer：
-    // - 作用：修改当前视图中的一个字节。
-    // - 参数 absoluteAddress：目标地址。
-    // - 参数 value：要写入的字节值。
-    // - 参数 errorTextOut：失败时输出错误文本。
-    // - 返回：true 写入成功；false 写入失败。
-    bool writeSingleByteAtViewer(
-        std::uint64_t absoluteAddress,
-        std::uint8_t value,
-        QString& errorTextOut);
+    void applyMemoryViewerChanges();
+    void discardMemoryViewerChanges();
+    void updateMemoryViewerEditState();
+    void loadMemoryViewerSnapshot(bool editable, bool preserveArchitecture = false);
+    void clearMemoryViewerSnapshot();
+    bool confirmDiscardMemoryViewerChanges();
+    bool confirmDiscardMemoryEditsForProcessChange();
 
 private:
     // ========================================================
@@ -695,6 +691,7 @@ private:
     // - 作用：比较当前编辑缓存与原始备份，只把差异块提交给 R0。
     // - 返回：无。
     void driverApplyMemoryDiffFromUi();
+    bool verifyDriverMemoryWrittenBlocks(const std::vector<DriverDiffBlock>& blocks, QString& failureText);
 
     // resetDriverMemoryRwState：
     // - 作用：清空驱动读写页缓存和状态。
@@ -833,7 +830,8 @@ private:
     bool confirmForceDriverMemoryWrite(
         std::uint64_t blockAddress,
         std::uint32_t requestedBytes,
-        const QString& failureText);
+        const QString& failureText,
+        std::uint32_t targetPid);
 
 private:
     // ========================================================
@@ -895,27 +893,11 @@ private:
     // - 返回：x86 或 x64 架构枚举；查询失败时保守返回 x64。
     ks::ui::DisassemblyArchitecture currentDriverMemoryArchitecture() const;
 
-    // applyDriverMemoryViewMode：
-    // - 作用：切换十六进制 / 反汇编 / 文本三个视图并同步分段按钮状态。
-    // - 参数 viewMode：目标视图。
-    // - 返回：无；切到派生视图时会顺带触发一次重建。
-    void applyDriverMemoryViewMode(DriverMemoryViewMode viewMode);
-
     // refreshDriverMemoryViewsFromSnapshot：
     // - 作用：快照或编辑缓存变化后刷新当前可见的派生视图。
     // - 返回：无；停留在十六进制视图时只清空另外两个视图的陈旧内容。
     void refreshDriverMemoryViewsFromSnapshot();
-
-    // rebuildDriverMemoryDisassemblyView：
-    // - 作用：用 Zydis 解码当前编辑缓存并重建反汇编表格。
-    // - 处理：超过 64KB 的快照按预算截断，未成功解码的行以次要色标出。
-    // - 返回：无。
-    void rebuildDriverMemoryDisassemblyView();
-
-    // rebuildDriverMemoryTextView：
-    // - 作用：按当前编码设置把编辑缓存渲染成逐行可打印文本。
-    // - 返回：无；使用 setRawText 保证目标内存内容不被语言包翻译。
-    void rebuildDriverMemoryTextView();
+    void loadDriverMemoryEditorSnapshot();
 
     // dumpDriverMemorySnapshotToFile：
     // - 作用：把当前编辑缓存转存到磁盘文件。
@@ -928,12 +910,6 @@ private:
     // - 处理：越界一律拒绝；只改本地缓存，真正写回仍走“应用差异”。
     // - 返回：无。
     void writeStringIntoDriverMemoryBuffer();
-
-    // showDriverMemoryDisassemblyContextMenu：
-    // - 作用：为反汇编表格提供复制与跳转右键菜单。
-    // - 参数 localPosition：右键点击处的表格视口坐标。
-    // - 返回：无。
-    void showDriverMemoryDisassemblyContextMenu(const QPoint& localPosition);
 
 private:
     // ========================================================
@@ -1139,6 +1115,9 @@ private:
     QPushButton* m_viewJumpButton = nullptr;  // 跳转按钮。
     QLabel* m_viewProtectLabel = nullptr;     // 当前地址保护属性标签。
     HexEditorWidget* m_hexEditorWidget = nullptr; // 统一十六进制编辑器组件。
+    ks::ui::MemoryEditorWidget* m_viewerMemoryEditor = nullptr;
+    QPushButton* m_viewerApplyButton = nullptr;
+    QPushButton* m_viewerDiscardButton = nullptr;
     QLabel* m_viewerStatusLabel = nullptr;    // 查看器状态文本。
 
     // ========================================================
@@ -1173,20 +1152,12 @@ private:
     QLabel* m_driverMemoryRangeLabel = nullptr;       // 当前缓存范围标签。
     QLabel* m_driverMemoryStatusLabel = nullptr;      // R0 读写状态标签。
     HexEditorWidget* m_driverMemoryHexEditor = nullptr; // 可编辑缓存视图。
+    ks::ui::MemoryEditorWidget* m_driverMemoryEditor = nullptr;
 
     QComboBox* m_driverMemorySourceCombo = nullptr;   // 目标来源下拉：进程 / 内核 / 物理内存。
     QPushButton* m_driverMemoryKernelModuleRefreshButton = nullptr; // 刷新已加载内核模块列表。
     QPushButton* m_driverMemoryDumpButton = nullptr;  // 把当前快照转存到文件。
     QPushButton* m_driverMemoryWriteStringButton = nullptr; // 打开字符串写入对话框。
-    QToolButton* m_driverMemoryHexViewButton = nullptr;    // 视图分段按钮：十六进制。
-    QToolButton* m_driverMemoryDisasmViewButton = nullptr; // 视图分段按钮：反汇编。
-    QToolButton* m_driverMemoryTextViewButton = nullptr;   // 视图分段按钮：文本。
-    QComboBox* m_driverMemoryTextEncodingCombo = nullptr;  // 文本视图编码选择：单字节 / UTF-16LE。
-    QStackedWidget* m_driverMemoryViewStack = nullptr;     // 三个视图的堆栈容器。
-    ks::ui::VisibleTableWidget* m_driverMemoryDisasmTable = nullptr; // 反汇编指令表。
-    QLabel* m_driverMemoryDisasmBackendLabel = nullptr;    // 反汇编后端与截断说明标签。
-    CodeEditorWidget* m_driverMemoryTextView = nullptr;    // 只读文本视图。
-
     // ========================================================
     // Tab7：内核可执行页扫描
     // ========================================================
@@ -1257,13 +1228,15 @@ private:
     DdmaPage* m_ddmaPage = nullptr;           // DDMA 通道配置与自检页面。
     ksword::memory_dock::TamperDetectionPage* m_tamperDetectionPage = nullptr; // 多路径交叉篡改检测页。
 
-    // 三个"访问后端"下拉分别挂在搜索、查看器与驱动读写页上。
+    // 搜索、查看器、书签与驱动读写页分别选择访问后端。
     // 它们共享 m_ddmaPage 里的同一份会话配置，切换互不影响。
     QComboBox* m_searchBackendCombo = nullptr;        // Tab3 访问后端。
     QComboBox* m_viewerBackendCombo = nullptr;        // Tab4 访问后端。
+    QComboBox* m_bookmarkBackendCombo = nullptr;      // Tab5 书签访问后端。
     QComboBox* m_driverMemoryBackendCombo = nullptr;  // Tab6 访问后端。
     QLabel* m_searchBackendHintLabel = nullptr;       // Tab3 后端状态提示。
     QLabel* m_viewerBackendHintLabel = nullptr;       // Tab4 后端状态提示。
+    QLabel* m_bookmarkBackendHintLabel = nullptr;     // Tab5 后端状态提示。
     QLabel* m_driverMemoryBackendHintLabel = nullptr; // Tab6 后端状态提示。
 
 private:
@@ -1306,6 +1279,14 @@ private:
 
     std::uint64_t m_currentViewerAddress = 0;          // Tab4 当前起始地址。
     QByteArray m_currentViewerPageBytes;               // Tab4 当前页原始字节缓存。
+    std::uint32_t m_viewerSnapshotPid = 0;
+    std::uint64_t m_viewerSnapshotAttachmentGeneration = 0;
+    ksword::memory_backend::MemoryAccessBackend m_viewerSnapshotBackend =
+        ksword::memory_backend::MemoryAccessBackend::UserMode;
+    ksword::memory_backend::DdmaSession m_viewerSnapshotDdmaSession;
+    ksword::memory_backend::MemoryAccessBackend m_driverMemorySnapshotBackend =
+        ksword::memory_backend::MemoryAccessBackend::StandardDriver;
+    std::uint64_t m_driverMemorySnapshotDdmaGeneration = 0;
 
     std::uint64_t m_driverMemoryBaseAddress = 0;       // Tab6 当前缓存基址。
     std::uint64_t m_driverMemoryOffsetBase = 0;        // Tab6 本次读取使用的可选偏移基址。
@@ -1316,8 +1297,6 @@ private:
     QByteArray m_driverMemoryEditedBytes;              // Tab6 当前编辑缓存。
     bool m_driverMemoryHasSnapshot = false;            // Tab6 是否存在可写快照。
     bool m_driverMemorySnapshotIsPhysical = false;     // Tab6 当前快照是否来自物理内存通道。
-    DriverMemoryViewMode m_driverMemoryViewMode = DriverMemoryViewMode::Hex; // Tab6 当前视图。
-    QVector<ks::ui::DisassemblyRow> m_driverMemoryDisasmRows; // Tab6 反汇编解码结果缓存。
 
     std::vector<KernelModuleEntry> m_kernelModuleCache;  // 已加载内核模块缓存（Tab6 目标下拉与表达式解析）。
     std::atomic<bool> m_kernelModuleRefreshInProgress{ false }; // 内核模块列表是否正在刷新。
@@ -1346,4 +1325,15 @@ private:
     std::vector<BreakpointEntry> m_breakpointCache;    // 断点缓存（Tab5）。
     std::vector<BookmarkEntry> m_bookmarkCache;        // 书签缓存（Tab5）。
     QTimer* m_bookmarkRefreshTimer = nullptr;          // 书签刷新定时器。
+    std::uint64_t m_nextBookmarkId = 0;               // 仅在 UI 线程分配书签 ID。
+    bool m_bookmarkRefreshInProgress = false;         // 单任务在途，防止定时器堆积读取。
+    bool m_bookmarkRefreshPending = false;            // 在途期间的上下文变化或新增书签需补刷新。
+    std::uint64_t m_bookmarkContextTicket = 0;         // 后端切走再切回也拒绝旧任务。
+    std::uint64_t m_bookmarkContextGeneration = 0;
+    std::uint32_t m_bookmarkContextPid = 0;
+    ksword::memory_backend::MemoryAccessBackend m_bookmarkContextBackend =
+        ksword::memory_backend::MemoryAccessBackend::UserMode;
+    std::uint64_t m_bookmarkContextDdmaGeneration = 0;
+    bool m_bookmarkDdmaReadBlocked = false;           // 暂存还原失败后停止该 DDMA 会话的书签读取。
+    std::uint64_t m_bookmarkDdmaFaultGeneration = 0;
 };

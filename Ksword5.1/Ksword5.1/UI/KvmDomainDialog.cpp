@@ -1,6 +1,7 @@
 #include "KvmDomainDialog.h"
 
 #include "KvmControl.h"
+#include "../../../shared/evidence/MemoryAddressInput.h"
 #include "../Internationalization/LanguageManager.h"
 
 #include <QCheckBox>
@@ -22,18 +23,10 @@ namespace
     // parseHex：解析可选带 0x 前缀的十六进制数。
     bool parseHex(const QString& text, unsigned long long* valueOut)
     {
-        QString compact = text.trimmed();
-        if (compact.startsWith(QStringLiteral("0x"), Qt::CaseInsensitive))
-        {
-            compact = compact.mid(2);
-        }
-        if (compact.isEmpty())
-        {
-            return false;
-        }
-        bool converted = false;
-        const unsigned long long value = compact.toULongLong(&converted, 16);
-        if (!converted)
+        const QByteArray compact = text.trimmed().toLatin1();
+        std::uint64_t value = 0;
+        if (!Ksword::Evidence::ParseHexAddress(
+                std::string_view(compact.constData(), static_cast<std::size_t>(compact.size())), value))
         {
             return false;
         }
