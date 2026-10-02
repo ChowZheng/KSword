@@ -62,7 +62,7 @@ with tempfile.TemporaryDirectory(prefix="ksword 跨位数注入 ") as temporary:
                          compiler_environment=environments[target],injector=inject) as fixture:
             fixture.wait_for(lambda f:bool(f.snapshots) and any(e.api=="HooksInstalled" for e in f.events))
             ids={r.api_id for r in fixture.snapshots[-1][1] if r.api_id}
-            assert set(range(1,635)).issubset(ids), sorted(set(range(1,635))-ids)
+            assert set(range(1,642)).issubset(ids), sorted(set(range(1,642))-ids)
             assert {r.api for r in fixture.snapshots[-1][1] if r.hook_kind==3} == {
                 "AcceptEx","ConnectEx","WSARecvMsg","WSASendMsg","TransmitFile","TransmitPackets","GetAcceptExSockaddrs"}
 print(f"PASS: {ARCHITECTURE} controller injects both Release Agents; quoted Unicode paths, custom PE mismatch, PID identity, full coverage and stop")

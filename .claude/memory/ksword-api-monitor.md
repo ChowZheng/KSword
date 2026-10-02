@@ -1,4 +1,4 @@
-# API Monitor 定义、x64 引擎、覆盖与异步采集
+# API Monitor 定义、x86/x64 引擎、覆盖与异步采集
 
 ## 分层和会话
 
@@ -28,13 +28,13 @@
 - UI 保留 24000 个待显示事件与 12000 行表格，分别记录 UI 丢失、移出表格和待显示数量。Agent 丢失按 PID 汇总。TSV 只导出当前可见行，包含覆盖范围与计数说明；它不是完整调用轨迹。
 - 筛选文本缓存于时间列 UserRole；已有行不可变，仅筛选条件变化时全表扫描。新行单独筛选，淘汰旧行时同步可见计数。
 - 协议版本 `0x20261003`，Windows 包大小1000字节。包包含 EventKind、API ID、操作 ID、会话身份、快照修订/状态/种类/地址及定义 SHA256。resultKind 为 StatusCode 或 EntryOnly，Raw 结果显示“未采集”，不能因 resultCode=0 标成 OK 或错误。剪贴板分类码为7。
-- 升级必须同时部署新主程序与 APIMonitor_x64.dll；旧协议组合不兼容。已加载旧 Agent 的目标进程需要重启后再监控。剪贴板保护的读端也使用共享包布局与版本检查。
+- 升级必须同时部署新主程序、APIMonitor_x64.dll、APIMonitor_x86.dll 和两个注入助手；旧协议组合不兼容。已加载旧 Agent 的目标进程需要重启后再监控。剪贴板保护的读端也使用共享包布局与版本检查。
 
 ## 回归验证与边界
 
-在 x64 MSVC 开发环境运行 `python tools/api_monitor/run_regressions.py` 顺序执行22个脚本。原始614项冻结身份、确定性生成/非法定义、元数据/返回契约、可执行机器码重定位、共享冲突/卸载失败/退役 trampoline、租约、管道分片、覆盖快照/中断/会话切换、晚加载、丢失统计、Qt状态/筛选和真实自有 x64 文件/IOCP/APC/取消/TCP/UDP/七个扩展路径均已通过。
+在 x64 MSVC 开发环境运行 `python tools/api_monitor/run_regressions.py` 顺序执行27个脚本（包括4项 offscreen Qt）。原始614项冻结身份、确定性生成/非法定义、元数据/返回契约、可执行机器码重定位、共享冲突/卸载失败/退役 trampoline、租约、管道分片、覆盖快照/中断/会话切换、晚加载、丢失统计、Qt状态/筛选和真实自有 x64 文件/IOCP/APC/取消/TCP/UDP/七个扩展路径均已通过。
 
-这些测试编译生产代码或生产函数，覆盖指令边界、恢复失败、在途 detour、跨线程租约、字节管道分片、子配置继承、溢出计数与 Qt 状态/增量筛选。UI 测试使用 offscreen Qt Widgets，不替代实际目标程序的注入、长期压力、多系统版本、CFG/CET 或受保护进程验证。主程序构建使用 `tools/Invoke-KSwordBuildCheck.ps1`；Agent 使用 x64 MSBuild。修改用户可见字符串时定点更新双语包，并通过 i18n 审计。
+这些测试编译生产代码或生产函数，覆盖指令边界、恢复失败、在途 detour、跨线程租约、字节管道分片、子配置继承、溢出计数与 Qt 状态/增量筛选。UI 测试使用 offscreen Qt Widgets，不替代实际目标程序的注入、长期压力、多系统版本、CFG/CET 或受保护进程验证。主程序构建使用 `tools/Invoke-KSwordBuildCheck.ps1`；两个 Agent 使用 x64 MSBuild 和 HostX64，分别编译 x64/Win32 目标。修改用户可见字符串时定点更新双语包，并通过 i18n 审计。
 
 ## JSON 定义与构建（2026-10-02）
 
@@ -42,7 +42,7 @@
 - `tools/api_monitor/generate_definitions.py` 仅用 Python 标准库，编译前校验/生成至 `$(IntDir)generated`，只更新变化内容。绑定表、原函数指针声明、普通包装、扩展发现元数据由 JSON 生成，专用正文保留 C++ 并在 `hook/ApiHandlers.json` 注册。禁止 JSON 函数正文和任意表达式。
 - 定义包括 ABI/方向/编码/采集方式/长度/成功条件/错误来源；复杂行为以具名 handler 解释。重复身份/符号、未知类型/处理器、错误长度引用/间接类型/引用环都会失败。
 - Release 成功后原样复制至 `Ksword5.1/x64/Release/profiles/api_monitor_definitions.json`，不压缩。主程序有 Agent 非链接依赖；发布副本仅查看/核对，不运行时加载。源定义改后必须重建。
-- 生成的定义 SHA256 出现在 Agent 事件/覆盖快照，UI 比较发布 JSON 并提示缺失/不匹配。已验证源与发布副本字节一致，SHA256=`9a371177e144fce6f5939ec7c648e77c95d89acb4e490cd282e8f1c97d6e153c`。
+- 生成的定义 SHA256 出现在 Agent 事件/覆盖快照，UI 比较发布 JSON 并提示缺失/不匹配。已验证源与发布副本字节一致，SHA256=`7ce4774f1fd93dc2fd723024ed5e89675407bbc94719fa66d625a9eac5565b10`。
 - 基于 SDK 10.0.26100.0 与可选 phnt 原生声明只读核对2592个带方向注解的参数，差异0，定义有217项简单长度关系。`tools/api_monitor/audit_definition_metadata.py --headers ...` 可重复审计；原生声明不作为构建依赖，没有第三方 Hook/解码实现接入。
 - Agent x64 Release 增量/干净 Rebuild 均通过。主程序最后检查日志 `.codex-build-logs/ksword-build-check-20261002-134416.raw.log`：BUILD_RESULT=SUCCESS、EXIT_CODE=0、exe=20259840字节、I18N_AUDIT_PASSED=True。每阶段回归和 Release 编译后分别提交。
 
@@ -68,3 +68,16 @@
 - 启动前 IOCP 关联无法补推；同键同 OVERLAPPED 的手动投递无法完全区分真实内核完成。不同键手动通知不会错误完成操作，已通过回归。
 - 系统缺失导出、保守解码器拒绝入口按不可用/失败报告，Raw 不绕过同一入口失败。
 - 保留到进程退出的退役代码/回调上下文随重复会话/回调增长。8192限制跟踪槽位，不限制所有退役内存；当前没有安全回收算法。
+
+## 独立 x86 工程与跨位数安装（2026-10-02）
+
+- `APIMonitor_x86/APIMonitor_x86.vcxproj` 仅提供 Debug/Release Win32，链接共享采集源码及唯一 JSON，641项定义与 x64 一致。生成器 `--architecture x86` 输出至本工程 `obj/$(Configuration)/generated`，不能复用64位生成目录。32位项目详情见 `APIMonitor_x86/README.md`。
+- `hook/HookEngineX86.cpp` 包含共享引擎 x86 分支；`InstructionDecoder.inc` 是32位保守解码器，支持绝对地址、相对调用/分支、内部目标、ENDBR32、FF25绝对跳转桩。rel32使用32位回绕，线程检查使用EIP；区间冲突、退役原始指针和恢复失败策略保持一致。
+- `ContextThunk.h` 的32位实现保持 stdcall 参数和清栈，现有异步回调及全部七个 Winsock 扩展复用；停止后保留回调语义。`EntryStubs.h` 的 Raw 保存标志/寄存器/x87/MMX/XMM 后尾跳原调用，Fake 使用 ret N 与 EAX/EDX:EAX；已知 API 清栈值由目标 `sizeof` 生成，未知 Fake 必须显式提供第七字段 `x86StackBytes`，不猜 ABI。
+- WinAPIDock 增加32位栈清理输入/表列，序列化保留空字段并兼容旧六字段配置。32位未知 Fake 仅支持 cdecl/stdcall 的标量/整数返回；不支持 fastcall、浮点/结构返回，不填 out 参数。Native剪贴板阻止桩按真实 HANDLE/BOOL 契约返回NULL/FALSE并设置拒绝错误，32位清栈分别为8/12/0。
+- `shared/ApiMonitorPlatform.h` 查询进程/PE架构。WinAPI和剪贴板保护安装时自动切换同目录的标准 Agent 文件名；自定义 DLL 先校验位数。`ApiMonitorInjection.h` 原生注入按远程目标模块基址解析LoadLibraryW，按模块列表确认加载成功，避免64位HMODULE被DWORD截断；跨位数启动对应助手并验证目标创建时间，超时不释放仍可能使用的远程路径。
+- `APIMonitor_x86/Injector.vcxproj` 同源编译 `APIMonitorInject_x86.exe` 与 `APIMonitorInject_x64.exe`。两个Agent分别依赖对应助手，主程序以非链接依赖构建两套Agent，显式映射 x86 为Win32；解决方案登记新工程。统一发布到 `Ksword5.1/x64/Release`，打包时必须同时带两个DLL、两个助手及profiles JSON。
+- x86 DLL和两个助手使用静态CRT，避免32位运行库覆盖64位主程序目录。x64 DLL仍使用64位动态CRT。自动子进程按实际位数重新选择Agent，子配置记录选择结果，继承会话/根停止路径，32→64和64→32均已验证。
+- x86 Release干净Rebuild及24项回归通过，证据 `.codex-build-logs/apimon-x86-final-regressions.log`。包括真实异步文件/IOCP/APC/取消、TCP/UDP、全部7扩展、Raw/Fake与本机双向注入、跨位数子进程根停止。x64完整回归27项（含Qt规则与生产解析器往返）证据 `.codex-build-logs/apimon-x64-final-regressions.log`。
+- 主程序Release检查 `.codex-build-logs/ksword-build-check-20261002-163225.raw.log`：BUILD_RESULT=SUCCESS、EXIT_CODE=0、exe=20301824字节、I18N_AUDIT_PASSED=True。每阶段先编译/测试后分别中文提交；其他工作区修改未纳入。
+- 所有已有覆盖边界继续适用，尤其未知入口拒绝、任意COM/直接系统调用、未发现扩展、跨用户TEMP目录、退役代码内存增长。多Windows版本、严格CFG/CET、长期压力与受保护进程不属于本机回归的证明范围。

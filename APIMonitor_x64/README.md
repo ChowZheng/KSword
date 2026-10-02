@@ -1,7 +1,7 @@
-# x64 API Monitor
+# API Monitor 共享采集与 x64 引擎
 
 `api_monitor_definitions.json` 是强类型 API 定义的唯一来源。当前有 641 项；原有 614 项的 ID、模块和导出名保持稳定。
-已发布的 ID 不得重编号或复用删除项的 ID。
+已发布的 ID 不得重编号或复用删除项的 ID。全部定义同时支持 x86/x64；独立32位工程与 ABI 说明见 `../APIMonitor_x86/README.md`。
 
 | ID | 定义范围 | 数量 |
 | --- | --- | --- |
@@ -35,9 +35,9 @@ python tools/api_monitor/generate_definitions.py --definitions APIMonitor_x64/ap
 & $msbuild APIMonitor_x64/APIMonitor_x64.vcxproj /t:Build /p:Configuration=Release /p:Platform=x64 /p:PreferredToolArchitecture=x64 /p:PROCESSOR_ARCHITECTURE=AMD64 /p:PROCESSOR_ARCHITEW6432=AMD64 /m:1 /v:minimal
 ```
 
-主程序通过非链接项目依赖构建 Agent，主程序检查使用 `tools/Invoke-KSwordBuildCheck.ps1`。可通过 `/p:ApiMonitorPython=...` 指定 Python。
+主程序通过非链接项目依赖构建 x64、x86 Agent 及对应注入助手，主程序检查使用 `tools/Invoke-KSwordBuildCheck.ps1`。可通过 `/p:ApiMonitorPython=...` 指定 Python。
 
-发布 JSON 用于查看/核对，Agent 不从中动态加载 Hook；改定义必须重建。生成代码记录定义 SHA256，事件与快照携带该身份，UI 与发布副本核对并提示缺失/不匹配。更新时同时部署主程序和 Agent；已加载旧 DLL 的进程需要重启。
+发布 JSON 用于查看/核对，Agent 不从中动态加载 Hook；改定义必须重建。生成代码记录定义 SHA256，事件与快照携带该身份，UI 与发布副本核对并提示缺失/不匹配。更新时同时部署主程序、两个 Agent 及两个注入助手；已加载旧 DLL 的进程需要重启。
 
 ## 自研引擎与覆盖
 
@@ -65,7 +65,7 @@ API 覆盖标签页按 PID 展示 Strong、Raw、Fake、Dynamic 的已安装、�
 python tools/api_monitor/run_regressions.py
 ```
 
-22 个脚本覆盖原始 614 项冻结身份、确定性生成/非法定义、元数据/返回契约、可执行机器码重定位、共享/冲突/卸载失败/退役 trampoline、租约、管道分片、丢失计数、覆盖快照/会话切换、Qt 状态/筛选及真实自有 x64 文件、IOCP、APC、取消、TCP/UDP 与全部七个扩展路径。UI 使用 offscreen Qt。
+27 个 x64 回归脚本覆盖原始 614 项冻结身份、确定性生成/非法定义、元数据/返回契约、可执行机器码重定位、共享/冲突/卸载失败/退役 trampoline、租约、管道分片、丢失计数、覆盖快照/会话切换、Qt 状态/筛选及真实自有 x64 文件、IOCP、APC、取消、TCP/UDP 与全部七个扩展路径。UI 使用 offscreen Qt。另在 HostX64/x86 环境执行 `python tools/api_monitor/run_regressions.py --architecture x86`，24项回归覆盖对应32位行为、Raw/Fake ABI及双向跨位数注入/子进程。
 
 可选元数据审计只读本机 SDK 头文件，允许追加原生声明目录：
 
