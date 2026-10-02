@@ -1688,6 +1688,7 @@
     "process.table.cell.admin_yes": "■ Yes",
     "process.table.cell.admin_no": "■ No",
     "process.table.cell.protection_source_tooltip": "Protection field source: %1",
+    "process.table.cell.handle_table_source_tooltip": "Handle table field source: %1",
     "process.menu.copy_cell": "Copy cell",
     "process.menu.copy_row": "Copy row",
     "process.menu.terminate": "End process",
@@ -5934,6 +5935,7 @@
     "notification.copy.log_template": "%1\n%2\n%3\nFile: %4\nFunction: %5\nGUID: %6"
   },
   "source_translations": {
+    "句柄表字段来源：%1": "Handle table field source: %1",
     "WinTCB": "WinTCB",
     "%1(0x%2)": "%1(0x%2)",
     "保护字段来源：%1": "Protection field source: %1",

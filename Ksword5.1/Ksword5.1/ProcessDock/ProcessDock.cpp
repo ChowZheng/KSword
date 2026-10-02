@@ -10095,6 +10095,13 @@ QVariant ProcessDock::processTableData(const ProcessTableRow& tableRow, const in
             QStringLiteral("保护字段来源：%1"))
             .arg(processFieldSourceText(processRecord.r0ProtectionSource));
     }
+    if (role == Qt::ToolTipRole && tableColumn == TableColumn::HandleTable)
+    {
+        return processContextText(
+            "process.table.cell.handle_table_source_tooltip",
+            QStringLiteral("句柄表字段来源：%1"))
+            .arg(processFieldSourceText(processRecord.r0ObjectTableSource));
+    }
     if (role == Qt::ToolTipRole && tableColumn == TableColumn::Name)
     {
         if (tableRow.activitySnapshotActive)
@@ -13438,10 +13445,13 @@ QString ProcessDock::formatColumnText(const ks::process::ProcessRecord& processR
     case TableColumn::HandleCount:
         return QString::number(processRecord.handleCount);
     case TableColumn::HandleTable:
-        return pointerAvailabilityText(
-            (processRecord.r0FieldFlags & KSWORD_ARK_PROCESS_FIELD_OBJECT_TABLE_AVAILABLE) != 0U,
-            processRecord.r0ObjectTableAddress,
-            processRecord.r0ObjectTableSource);
+        if ((processRecord.r0FieldFlags & KSWORD_ARK_PROCESS_FIELD_OBJECT_TABLE_AVAILABLE) == 0U)
+        {
+            return pointerAvailabilityText(false, processRecord.r0ObjectTableAddress, processRecord.r0ObjectTableSource);
+        }
+        return processRecord.r0ObjectTableAddress == 0U
+            ? QStringLiteral("null")
+            : QStringLiteral("0x%1").arg(QString::number(processRecord.r0ObjectTableAddress, 16).toUpper());
     case TableColumn::SectionObject:
         return pointerAvailabilityText(
             (processRecord.r0FieldFlags & KSWORD_ARK_PROCESS_FIELD_SECTION_OBJECT_AVAILABLE) != 0U,
