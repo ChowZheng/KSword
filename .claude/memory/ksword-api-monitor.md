@@ -32,7 +32,7 @@
 
 ## 回归验证与边界
 
-在 x64 MSVC 开发环境运行 `python tools/api_monitor/run_regressions.py` 顺序执行29个脚本（包括5项 offscreen Qt）。原始614项冻结身份、确定性生成/非法定义、元数据/返回契约、可执行机器码重定位、共享冲突/卸载失败/退役 trampoline、租约、管道分片、覆盖快照/中断/会话切换、晚加载、丢失统计、Qt状态/筛选和真实自有 x64 文件/IOCP/APC/取消/TCP/UDP/七个扩展路径均已通过。
+在 x64 MSVC 开发环境运行 `python tools/api_monitor/run_regressions.py` 顺序执行33个脚本（包括5项 offscreen Qt）；`--architecture x86` 执行29项。原始614项冻结身份、确定性生成/非法定义、元数据/返回契约、可执行机器码重定位、共享冲突/卸载失败/退役 trampoline、租约、管道分片、覆盖快照/中断/会话切换、晚加载、丢失统计、Qt状态/筛选和真实自有 x64 文件/IOCP/APC/取消/TCP/UDP/七个扩展路径均已通过。全选分类/默认 Raw、TLS 生命周期、加载器标记参数及256 KiB小栈另有回归。
 
 这些测试编译生产代码或生产函数，覆盖指令边界、恢复失败、在途 detour、跨线程租约、字节管道分片、子配置继承、溢出计数与 Qt 状态/增量筛选。UI 测试使用 offscreen Qt Widgets，不替代实际目标程序的注入、长期压力、多系统版本、CFG/CET 或受保护进程验证。主程序构建使用 `tools/Invoke-KSwordBuildCheck.ps1`；两个 Agent 使用 x64 MSBuild 和 HostX64，分别编译 x64/Win32 目标。修改用户可见字符串时定点更新双语包，并通过 i18n 审计。
 
@@ -93,3 +93,14 @@
 - Release中的两套旧助手EXE/PDB/ILK共6文件已移出到本地忽略目录 `.codex-build-logs/retired-apimon-helpers`。重新构建不会生成；源工程和项目依赖均无助手引用。Agent DLL/PDB和profiles JSON保留。
 - 主程序Release构建证据 `.codex-build-logs/ksword-build-check-20261002-180835.raw.log`：BUILD_RESULT=SUCCESS、EXIT_CODE=0、exe=20337152字节、I18N_AUDIT_PASSED=True。会话服务、无助手双位数注入、32→64/64→32真实子进程及根停止回归通过；完整回归证据见上述25/29项日志。
 - 跨用户TEMP目录与ACL、受保护进程、严格CFG/CET及多系统矩阵仍需单独验收；显式改写父进程属性的CreateProcess请求若父子身份不匹配，会拒绝自动注入。更新已驻留旧Agent的进程仍需要重启。
+
+## 全选监控崩溃排查与修复（2026-10-02晚）
+
+- 用户导出的 TSV 是排队后送达 UI 的事件，无法证明最后一个 Hook 或采集动作没有异常。JC 自有崩溃日志显示 x86 Agent +0x6b7fb / +0x2be47，原版 PDB 对应 `AppendWideText` / `HookedLdrLoadDll`；搜索参数为 `0x1`。直接 `LdrLoadDll` 标记参数的对照调用在未监控时成功、旧采集路径崩溃。
+- 加载器低地址搜索参数记录为 `search=tagged:0x1`，不解引用；保留原 NTSTATUS 和 LastError。宽/窄字符串采集按详情容量和源长度限制，逐页检查可读性，不读取 guard/no-access 页；UNICODE_STRING 结构有安全读取及长度校验，无法采集标记 `<unreadable>`。此修复不表示所有专用处理器已完成任意输入/系统版本审计。
+- 自有全分类/默认 Raw 并发进程第一次访问冲突落在 `RawHookEnter` 的静态 TLS 读取：`gdi32!EngAcquireSemaphore` 实际进入 ntdll 同步函数，线程清理时 TLS 向量已空。Raw 安全策略必须同时检查解析转发及跳转后的实际模块；不能仅检查配置模块和导出名黑名单。排除的别名在覆盖快照标为 RuleExcluded。
+- HookEngine 在读取静态 TLS 前直接检查 TEB 的 TLS 向量及本模块槽位（x86 FS:0x2C、x64 GS:0x58），不调用监控 API。TLS 未初始化/已清理时直接旁路，强类型重入检查先判断引擎旁路再访问自身 TLS。测试主动移除向量和模块槽位，复原后验证嵌套保护仍正常。
+- 新启动的 SysWOW64 记事本暴露另一项 `0xC00000FD`：发送线程内联了256×1000字节的栈批次，但宿主默认栈只有256 KiB。批次移为静态缓冲；`g_pipeLock` 从取队列之前持有至发送结束，防止并发 flush 复用缓冲。保留批次上限、队列溢出统计与独立覆盖快照。`test_small_stack.py` 以 `/STACK:262144,4096` 运行真实 Release DLL 验证。
+- 完整回归证据：`.codex-build-logs/apimon-crash-final-x86-regressions.log`（29项）、`apimon-crash-final-x64-regressions.log`（33项）。每处修改分别编译两个 Release Agent 后提交；新增全分类真实并发回归 `test_live_all_targets.py`。
+- 通过生产64位注入器与会话 broker 对新启动的三个 x86 应用全选分类+默认 Raw+自动子进程测试，最终均正常安装、持续记录并收到 HooksRemoved：JC PID59824，Raw7992、189824事件、3043条标记搜索参数加载；SysWOW64 notepad PID34064，Raw6397、12194事件；SysWOW64 cmd PID8392，Raw4756、307事件。证据 `.codex-build-logs/x86-real-app-probe.log`、`x86-real-app-results.json`；每次活动观察15秒，退出本轮自有进程，不代表长期压力证明。
+- 另查到较早的 x64 notepad 转储，加载的是 `Ksword-nice` 目录中的9月23日旧 DLL，不应与当前 Release 产物混同。当前 DLL 定义641项及发布 JSON SHA256保持一致；未重新引入注入助手。工作区其他功能修改保持原样。

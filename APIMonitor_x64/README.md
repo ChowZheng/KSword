@@ -65,7 +65,7 @@ API 覆盖标签页按 PID 展示 Strong、Raw、Fake、Dynamic 的已安装、�
 python tools/api_monitor/run_regressions.py
 ```
 
-29 个 x64 回归脚本覆盖原始 614 项冻结身份、确定性生成/非法定义、元数据/返回契约、可执行机器码重定位、共享/冲突/卸载失败/退役 trampoline、租约、管道分片、丢失计数、覆盖快照/会话切换、Qt 状态/筛选及真实自有 x64 文件、IOCP、APC、取消、TCP/UDP 与全部七个扩展路径。UI 使用 offscreen Qt。另在 HostX64/x86 环境执行 `python tools/api_monitor/run_regressions.py --architecture x86`，25项回归覆盖对应32位行为、Raw/Fake ABI及双向跨位数注入/子进程。
+33 个 x64 回归脚本覆盖原始 614 项冻结身份、确定性生成/非法定义、元数据/返回契约、可执行机器码重定位、共享/冲突/卸载失败/退役 trampoline、租约、管道分片、丢失计数、覆盖快照/会话切换、Qt 状态/筛选及真实自有 x64 文件、IOCP、APC、取消、TCP/UDP 与全部七个扩展路径。UI 使用 offscreen Qt。另在 HostX64/x86 环境执行 `python tools/api_monitor/run_regressions.py --architecture x86`，29项回归覆盖对应32位行为、Raw/Fake ABI及双向跨位数注入/子进程。新增回归覆盖全部分类与默认 Raw 并发、TLS 清理后的旁路、加载器标记参数/不可读页，以及默认栈只有256 KiB的目标进程。
 
 可选元数据审计只读本机 SDK 头文件，允许追加原生声明目录：
 
