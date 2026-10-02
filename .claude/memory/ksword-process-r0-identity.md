@@ -26,6 +26,12 @@ metadata:
 
 ## 约束
 
+- 2026-10-02：按评估要求，常规 R0 进程结束与普通线程结束中的低 PID（0–4）及
+  `PsInitialSystemProcess` 拒绝代码已注释保留；中央 safety 的 Idle/System 判断仅对
+  `PROCESS_TERMINATE` 豁免。创建时间、线程归属、请求结构与确认策略仍须校验。
+  通用 `KswordARKValidateUserPid` 供其他动作使用，不能全局关闭；HVM 的 PID 0/4
+  保护按用户要求保留。取消驱动特判不代表内核终止必然成功，尤其 PID 0 仍可能无法解析。
+
 - 新增按 PID/CID 定位的 R0 危险动作时，优先把期望创建时间放入 `shared/driver/` 请求结构，
   并在驱动解析出的对象上校验。
 - 不要把 kernel-only 行的合成 identity 时间传给驱动。合成值只用于 UI 缓存键。

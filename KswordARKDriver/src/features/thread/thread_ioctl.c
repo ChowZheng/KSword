@@ -251,8 +251,10 @@ Return Value:
 
     // 已验证长度的输入包可以安全转换为请求结构。
     terminateRequest = (KSWORD_ARK_TERMINATE_THREAD_REQUEST*)inputBuffer;
-    status = KswordARKValidateUserPid((ULONG)terminateRequest->processId);
-    if (!NT_SUCCESS(status) || terminateRequest->threadId == 0UL) {
+    // 评估要求：普通线程结束不按所属 PID 数值拒绝目标，空 TID 校验仍保留。
+    // status = KswordARKValidateUserPid((ULONG)terminateRequest->processId);
+    // if (!NT_SUCCESS(status) || terminateRequest->threadId == 0UL) {
+    if (terminateRequest->threadId == 0UL) { // 仅拒绝空线程身份。
         KswordARKThreadIoctlLog(
             Device,
             "Warn",

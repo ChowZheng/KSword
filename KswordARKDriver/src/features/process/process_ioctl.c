@@ -141,11 +141,12 @@ Return Value:
         &terminateRequestValue,
         terminateRequest,
         min(actualInputLength, sizeof(terminateRequestValue)));
-    status = KswordARKValidateUserPid((ULONG)terminateRequestValue.processId);
-    if (!NT_SUCCESS(status)) {
-        KswordARKProcessIoctlLog(Device, "Warn", "R0 terminate ioctl: pid=%lu rejected.", (unsigned long)terminateRequestValue.processId);
-        return status;
-    }
+    // 评估要求：结束操作不按 PID 数值拒绝目标；保留旧保护代码供恢复。
+    // status = KswordARKValidateUserPid((ULONG)terminateRequestValue.processId);
+    // if (!NT_SUCCESS(status)) {
+    //     KswordARKProcessIoctlLog(Device, "Warn", "R0 terminate ioctl: pid=%lu rejected.", (unsigned long)terminateRequestValue.processId);
+    //     return status;
+    // }
     {
         KSWORD_ARK_SAFETY_CONTEXT safetyContext;
         RtlZeroMemory(&safetyContext, sizeof(safetyContext));

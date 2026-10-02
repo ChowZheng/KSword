@@ -1466,14 +1466,15 @@ Return Value:
 
     RtlZeroMemory(&target, sizeof(target));
 
-    if (processId == 0U || processId <= 4U) {
-        KswordARKDriverLogTerminateMessage(
-            device,
-            "Warn",
-            "R0 terminate rejected: pid=%lu.",
-            (unsigned long)processId);
-        return STATUS_INVALID_PARAMETER;
-    }
+    // 评估要求：取消低 PID 的终止保护，原代码注释保留。
+    // if (processId == 0U || processId <= 4U) {
+    //     KswordARKDriverLogTerminateMessage(
+    //         device,
+    //         "Warn",
+    //         "R0 terminate rejected: pid=%lu.",
+    //         (unsigned long)processId);
+    //     return STATUS_INVALID_PARAMETER;
+    // }
 
     status = KswordARKDriverResolveTerminateTarget(device, processId, &target);
     if (!NT_SUCCESS(status)) {
@@ -1503,18 +1504,19 @@ Return Value:
         goto Exit;
     }
 
-    if (target.CidProcessId <= 4UL || target.ProcessObject == PsInitialSystemProcess) {
-        KswordARKDriverLogTerminateMessage(
-            device,
-            "Warn",
-            "R0 terminate rejected after resolve: requestPid=%lu, cid=%lu, unique=%lu, process=%p.",
-            (unsigned long)target.RequestedProcessId,
-            (unsigned long)target.CidProcessId,
-            (unsigned long)target.UniqueProcessId,
-            target.ProcessObject);
-        finalStatus = STATUS_INVALID_PARAMETER;
-        goto Exit;
-    }
+    // 评估要求：解析后不再特判低 CID 或 System 对象；对象身份校验仍保留。
+    // if (target.CidProcessId <= 4UL || target.ProcessObject == PsInitialSystemProcess) {
+    //     KswordARKDriverLogTerminateMessage(
+    //         device,
+    //         "Warn",
+    //         "R0 terminate rejected after resolve: requestPid=%lu, cid=%lu, unique=%lu, process=%p.",
+    //         (unsigned long)target.RequestedProcessId,
+    //         (unsigned long)target.CidProcessId,
+    //         (unsigned long)target.UniqueProcessId,
+    //         target.ProcessObject);
+    //     finalStatus = STATUS_INVALID_PARAMETER;
+    //     goto Exit;
+    // }
 
     if (device != NULL && target.CidProcessId != target.RequestedProcessId) {
         KSWORD_ARK_SAFETY_CONTEXT resolvedSafetyContext;
@@ -1851,8 +1853,9 @@ Return Value:
     // 目标对象仅由 R0 解析，先清零以便所有退出路径可安全释放。
     RtlZeroMemory(&target, sizeof(target));
 
-    // 禁止请求 Idle、System、保留低 PID 或空 TID。
-    if (processId == 0UL || processId <= 4UL || threadId == 0UL) {
+    // 评估要求：取消 Idle/System 与低 PID 的线程终止保护，空 TID 仍拒绝。
+    // if (processId == 0UL || processId <= 4UL || threadId == 0UL) {
+    if (threadId == 0UL) { // 仅拒绝空线程身份。
         KswordARKDriverLogTerminateMessage(
             device,
             "Warn",
@@ -1875,20 +1878,20 @@ Return Value:
         return status;
     }
 
-    // 解析后的真实对象仍必须排除 System 进程。
-    if (target.CidProcessId <= 4UL || target.ProcessObject == PsInitialSystemProcess) {
-        KswordARKDriverLogTerminateMessage(
-            device,
-            "Warn",
-            "R0 terminate-thread rejected after resolve: requestPid=%lu, tid=%lu, cid=%lu, unique=%lu, process=%p.",
-            (unsigned long)target.RequestedProcessId,
-            (unsigned long)threadId,
-            (unsigned long)target.CidProcessId,
-            (unsigned long)target.UniqueProcessId,
-            target.ProcessObject);
-        status = STATUS_INVALID_PARAMETER;
-        goto Exit;
-    }
+    // 评估要求：取消解析后的 System 对象保护，原代码注释保留。
+    // if (target.CidProcessId <= 4UL || target.ProcessObject == PsInitialSystemProcess) {
+    //     KswordARKDriverLogTerminateMessage(
+    //         device,
+    //         "Warn",
+    //         "R0 terminate-thread rejected after resolve: requestPid=%lu, tid=%lu, cid=%lu, unique=%lu, process=%p.",
+    //         (unsigned long)target.RequestedProcessId,
+    //         (unsigned long)threadId,
+    //         (unsigned long)target.CidProcessId,
+    //         (unsigned long)target.UniqueProcessId,
+    //         target.ProcessObject);
+    //     status = STATUS_INVALID_PARAMETER;
+    //     goto Exit;
+    // }
 
     // 按 TID 引用 ETHREAD，再验证它仍属于请求 PID 的已解析 EPROCESS。
     status = PsLookupThreadByThreadId(ULongToHandle(threadId), &threadObject);

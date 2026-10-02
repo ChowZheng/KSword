@@ -198,18 +198,20 @@ Return Value:
 
 static BOOLEAN
 KswordARKSafetyIsCriticalProcessId(
-    _In_ ULONG ProcessId
+    _In_ ULONG ProcessId,
+    _In_ ULONG Operation // 操作类别用于将评估豁免限定在常规终止操作。
     )
 /*++
 
 Routine Description:
 
     判断目标 PID 是否属于默认禁止的关键范围。中文说明：第一版采用稳定的
-    系统 PID 保护，避免误杀 Idle/System/会话管理等核心进程。
+    系统 PID 保护；评估要求对终止操作取消 Idle/System 特判，其余操作保留。
 
 Arguments:
 
     ProcessId - 目标 PID。
+    Operation - 当前安全策略操作类别。
 
 Return Value:
 
@@ -218,7 +220,9 @@ Return Value:
 --*/
 {
     if (ProcessId == 0UL || ProcessId == 4UL) {
-        return TRUE;
+        // 评估要求：结束进程不再因 Idle/System PID 被中央策略拒绝。
+        // return TRUE;
+        return Operation != KSWORD_ARK_SAFETY_OPERATION_PROCESS_TERMINATE; // 其余操作保留原保护。
     }
     if (ProcessId > KSWORD_ARK_SAFETY_MAX_USER_PID) {
         return TRUE;
@@ -411,7 +415,7 @@ Return Value:
     }
     else if ((policyFlags & KSWORD_ARK_SAFETY_POLICY_FLAG_DENY_CRITICAL_PROCESS) != 0UL &&
         Context->TargetProcessId != 0UL &&
-        KswordARKSafetyIsCriticalProcessId(Context->TargetProcessId)) {
+        KswordARKSafetyIsCriticalProcessId(Context->TargetProcessId, Context->Operation)) { // 仅终止操作豁免 Idle/System。
         decision = KSWORD_ARK_SAFETY_DECISION_DENY;
         reason = KSWORD_ARK_SAFETY_REASON_CRITICAL_PROCESS_DENIED;
         status = STATUS_ACCESS_DENIED;
