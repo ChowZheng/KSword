@@ -38,4 +38,9 @@ with LiveFixture(source, configuration) as fixture:
                      any(row.module.lower() == "winhttp.dll" and row.state in (0, 1) for row in snapshot)
                      for revision, snapshot in f.snapshots))
     assert any(event.api == "HooksInstalled" for event in fixture.events)
-print("PASS: real Release Agent, 614 legacy definitions, installed/disabled/waiting/missing states, hash and late module installation")
+    fixture.restart({"enable_file": 0, "enable_registry": 1, "enable_network": 0})
+    fixture.wait_for(lambda f: bool(f.snapshots) and any(e.api == "HooksInstalled" for e in f.events))
+    rows = fixture.snapshots[-1][1]
+    assert all(row.state == 2 for row in rows if row.api in {"ReadFile", "WriteFile", "WinHttpOpen"})
+    assert any(row.module.lower() == "win32u.dll" and row.hook_kind == 2 and row.state == 2 for row in rows)
+print("PASS: real Release Agent, legacy coverage, late modules, win32u policy rows and fresh category states after same-process session switch")

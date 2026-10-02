@@ -15,8 +15,8 @@
             const char* api, bool enabled)
         {
             if (record.installed) return record.sharedEntry ? CoverageState::SharedEntry : CoverageState::Installed;
-            if (record.targetAddress && !record.installed) return CoverageState::Removed;
             if (!enabled) return CoverageState::CategoryDisabled;
+            if (g_coverageRemovalInProgress && record.targetAddress && !record.installed) return CoverageState::Removed;
             const auto image = ::GetModuleHandleW(module);
             if (!image) return CoverageState::WaitingModule;
             if (!::GetProcAddress(image, api)) return CoverageState::ExportMissing;
@@ -73,6 +73,7 @@
                     state, eligible ? rule->hookRecord.lastFailure.c_str() : L"Raw Fake rule is not enabled", &rule->hookRecord));
             }
             AppendExtensionCoverage(rows);
+            AppendWin32uClipboardCoverage(rows, g_coverageRemovalInProgress);
             rows.insert(rows.end(), g_removedCoverageRows.begin(), g_removedCoverageRows.end());
             std::sort(rows.begin(), rows.end(), [](const CoveragePacket& a, const CoveragePacket& b) {
                 if (a.hookKind != b.hookKind) return a.hookKind < b.hookKind;

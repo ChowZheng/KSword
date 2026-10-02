@@ -113,17 +113,17 @@ namespace apimon
             ScopedInlineHookInternalBypass bypass;
             bool notify = false;
             {
-            std::lock_guard lock(g_mutex);
-            op->submitted = true;
-            SendIo(op, ks::winapi_monitor::EventKind::IoSubmit, error, bytes,
-                accepted ? (pending ? L"asynchronous=pending" : L"synchronous=completed") : L"submission=rejected");
-            if (!accepted) { op->completed = true; op->portExpected = false; op->callbackExpected = false; return; }
-            const auto resource = g_resources.find(op->resource);
-            if (!pending && resource != g_resources.end() && (resource->second.mode & FILE_SKIP_COMPLETION_PORT_ON_SUCCESS))
-                op->portExpected = false;
-            if (op->earlyCompletion) notify = CompleteLocked(op, op->completionError, op->completionBytes);
-            else if (!pending && !op->callbackExpected) notify = CompleteLocked(op, 0, bytes);
-            else SendIo(op, ks::winapi_monitor::EventKind::IoWait, 0, bytes, L"completion=pending");
+                std::lock_guard lock(g_mutex);
+                op->submitted = true;
+                SendIo(op, ks::winapi_monitor::EventKind::IoSubmit, error, bytes,
+                    accepted ? (pending ? L"asynchronous=pending" : L"synchronous=completed") : L"submission=rejected");
+                if (!accepted) { op->completed = true; op->portExpected = false; op->callbackExpected = false; return; }
+                const auto resource = g_resources.find(op->resource);
+                if (!pending && resource != g_resources.end() && (resource->second.mode & FILE_SKIP_COMPLETION_PORT_ON_SUCCESS))
+                    op->portExpected = false;
+                if (op->earlyCompletion) notify = CompleteLocked(op, op->completionError, op->completionBytes);
+                else if (!pending && !op->callbackExpected) notify = CompleteLocked(op, 0, bytes);
+                else SendIo(op, ks::winapi_monitor::EventKind::IoWait, 0, bytes, L"completion=pending");
             }
             if (notify) NotifyCompletion(op);
         }

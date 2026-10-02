@@ -121,4 +121,5 @@
     <ClInclude Include="hook\ContextThunk.h" />
   </ItemGroup>
   <ItemGroup><ClInclude Include="hook\WinsockExtensionHandlers.inc" /></ItemGroup>
+  <ItemGroup><ClInclude Include="hook\ExportCatalog.h" /></ItemGroup>
 </Project>

@@ -79,6 +79,9 @@ class LiveFixture:
         self.snapshots = []
         self.pending_snapshot = None
         self.command("L")
+        self.connect()
+
+    def connect(self):
         deadline = time.monotonic() + 20
         while time.monotonic() < deadline:
             self.handle = kernel.CreateFileW(f"\\\\.\\pipe\\KswordApiMon_{self.pid}", 0x80000000,
@@ -90,6 +93,21 @@ class LiveFixture:
             time.sleep(0.02)
         else:
             raise TimeoutError("Agent pipe did not appear")
+
+    def restart(self, configuration):
+        self.stop.write_text("stop")
+        self.wait_for(lambda f: any(e.api == "HooksRemoved" for e in f.events), timeout=30)
+        kernel.CloseHandle(self.handle)
+        self.handle = None
+        self.session_text = "fixture-" + uuid.uuid4().hex
+        self.session = session_identity(self.session_text)
+        self.bytes.clear()
+        self.events.clear()
+        self.snapshots.clear()
+        self.pending_snapshot = None
+        self.write_config(configuration)
+        self.stop.unlink()
+        self.connect()
 
     def write_config(self, overrides):
         values = {"pid": self.pid, "pipe_name": f"\\\\.\\pipe\\KswordApiMon_{self.pid}",

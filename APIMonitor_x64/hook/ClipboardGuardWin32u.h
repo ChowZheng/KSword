@@ -15,6 +15,7 @@
 // ============================================================
 
 #include "pch.h"
+#include "../../shared/WinApiMonitorProtocol.h"
 
 namespace apimon
 {
@@ -30,4 +31,5 @@ namespace apimon
     // UninstallAllClipboardWin32uHooks 作用：卸载所有已安装的 tier2 hook，
     // 会话结束（UninstallConfiguredHooks）时调用。
     bool UninstallAllClipboardWin32uHooks();
+    void AppendWin32uClipboardCoverage(std::vector<ks::winapi_monitor::ApiMonitorEventPacket>& rows, bool removing);
 }

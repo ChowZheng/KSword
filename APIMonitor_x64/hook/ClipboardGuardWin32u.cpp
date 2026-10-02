@@ -2,6 +2,8 @@
 #include "ClipboardGuardWin32u.h"
 #include "ClipboardGuardCommon.h"
 #include "HookEngine.h"
+#include "../core/MonitorCoverage.h"
+#include "../MonitorAgent.h"
 
 namespace apimon
 {
@@ -25,6 +27,7 @@ namespace apimon
             Win32uBlockContext context{};
         };
 
+        auto& g_win32uMutex = *new std::mutex;
         Win32uHookState g_win32uGetClipboardDataHook;
         Win32uHookState g_win32uSetClipboardDataHook;
         Win32uHookState g_win32uEmptyClipboardHook;
@@ -126,7 +129,7 @@ namespace apimon
         // 单个目标的安装/卸载，供 SyncClipboardWin32uHooks 按策略调用。
         void InstallOneWin32uTarget(const Win32uClipboardTarget& target, const HMODULE win32uModule)
         {
-            if (target.state->installed)
+            if (target.state->installed || target.state->hookRecord.permanentlyDisabled)
             {
                 return;
             }
@@ -178,6 +181,7 @@ namespace apimon
 
     void SyncClipboardWin32uHooks()
     {
+        std::lock_guard lock(g_win32uMutex);
         const HMODULE win32uModule = ::GetModuleHandleW(L"win32u.dll");
         if (win32uModule == nullptr)
         {
@@ -202,9 +206,37 @@ namespace apimon
 
     bool UninstallAllClipboardWin32uHooks()
     {
+        std::lock_guard lock(g_win32uMutex);
         bool removed = true;
         for (const Win32uClipboardTarget& target : g_win32uTargets)
             removed = UninstallOneWin32uTarget(target) && removed;
         return removed;
+    }
+    void AppendWin32uClipboardCoverage(std::vector<ks::winapi_monitor::ApiMonitorEventPacket>& rows, bool removing)
+    {
+        using namespace ks::winapi_monitor;
+        std::lock_guard lock(g_win32uMutex);
+        const auto module = ::GetModuleHandleW(L"win32u.dll");
+        for (const auto& target : g_win32uTargets)
+        {
+            const auto& record = target.state->hookRecord;
+            const bool blocked = ResolveClipboardAction(target.kind) == ClipboardPolicyAction::Block;
+            const auto state = record.installed ? (record.sharedEntry ? CoverageState::SharedEntry : CoverageState::Installed)
+                : removing && record.targetAddress ? CoverageState::Removed
+                : !ActiveConfig().enableClipboard ? CoverageState::CategoryDisabled
+                : !blocked ? CoverageState::RuleExcluded
+                : !module ? CoverageState::WaitingModule
+                : !::GetProcAddress(module, target.exportNameAnsi) ? CoverageState::ExportMissing
+                : record.permanentlyDisabled ? CoverageState::Unsupported : CoverageState::RetryableFailure;
+            ApiMonitorEventPacket row{};
+            row.apiId = RuntimeApiId(L"win32u.dll", target.exportNameWide);
+            row.hookKind = static_cast<std::uint32_t>(HookKind::Fake);
+            row.coverageState = static_cast<std::uint32_t>(state);
+            row.hookAddress = reinterpret_cast<std::uintptr_t>(record.targetAddress);
+            wcscpy_s(row.moduleName, L"win32u.dll"); wcscpy_s(row.apiName, target.exportNameWide);
+            wcsncpy_s(row.detailText, record.lastFailure.empty()
+                ? L"clipboard tier2 policy handler; installed only for Block policy" : record.lastFailure.c_str(), _TRUNCATE);
+            rows.push_back(row);
+        }
     }
 }

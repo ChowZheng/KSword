@@ -9,6 +9,7 @@
 #include "../core/MonitorCoverage.h"
 #include "../core/MonitorAsyncIo.h"
 #include "ContextThunk.h"
+#include "ExportCatalog.h"
 
 #include <WinReg.h>
 #include <bcrypt.h>
@@ -107,6 +108,7 @@ namespace apimon
         // 剪贴板相关的 InlineHookRecord 已迁移到 hook/ClipboardGuardHook.cpp。
 
         std::mutex g_hookOperationMutex;
+        bool g_coverageRemovalInProgress = false;
 
         const wchar_t* FsctlCodeToText(const ULONG fsControlCode)
         {
@@ -6560,73 +6562,7 @@ namespace apimon
             return ks::winapi_monitor::EventCategory::Process;
         }
 
-        bool EnumerateNamedExports(HMODULE moduleHandle, std::vector<std::string>* exportNamesOut)
-        {
-            if (moduleHandle == nullptr || exportNamesOut == nullptr)
-            {
-                return false;
-            }
-            exportNamesOut->clear();
 
-            const auto* const basePointer = reinterpret_cast<const unsigned char*>(moduleHandle);
-            const auto* const dosHeader = reinterpret_cast<const IMAGE_DOS_HEADER*>(basePointer);
-            if (dosHeader->e_magic != IMAGE_DOS_SIGNATURE || dosHeader->e_lfanew <= 0)
-            {
-                return false;
-            }
-
-            const auto* const ntHeader = reinterpret_cast<const IMAGE_NT_HEADERS64*>(basePointer + dosHeader->e_lfanew);
-            if (ntHeader->Signature != IMAGE_NT_SIGNATURE)
-            {
-                return false;
-            }
-
-            const IMAGE_DATA_DIRECTORY& exportDirectory =
-                ntHeader->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT];
-            if (exportDirectory.VirtualAddress == 0 || exportDirectory.Size < sizeof(IMAGE_EXPORT_DIRECTORY))
-            {
-                return false;
-            }
-
-            const DWORD imageSize = ntHeader->OptionalHeader.SizeOfImage;
-            const auto rvaToPointer = [basePointer, imageSize](const DWORD rvaValue) -> const void* {
-                if (rvaValue == 0 || rvaValue >= imageSize)
-                {
-                    return nullptr;
-                }
-                return basePointer + rvaValue;
-            };
-
-            const auto* const exportTable = static_cast<const IMAGE_EXPORT_DIRECTORY*>(
-                rvaToPointer(exportDirectory.VirtualAddress));
-            if (exportTable == nullptr || exportTable->NumberOfNames == 0 || exportTable->AddressOfNames == 0)
-            {
-                return false;
-            }
-
-            const auto* const nameRvaList = static_cast<const DWORD*>(rvaToPointer(exportTable->AddressOfNames));
-            if (nameRvaList == nullptr)
-            {
-                return false;
-            }
-
-            exportNamesOut->reserve(exportTable->NumberOfNames);
-            for (DWORD indexValue = 0; indexValue < exportTable->NumberOfNames; ++indexValue)
-            {
-                const char* const namePointer = static_cast<const char*>(rvaToPointer(nameRvaList[indexValue]));
-                if (namePointer == nullptr || namePointer[0] == '\0')
-                {
-                    continue;
-                }
-                exportNamesOut->push_back(namePointer);
-            }
-
-            std::sort(exportNamesOut->begin(), exportNamesOut->end());
-            exportNamesOut->erase(
-                std::unique(exportNamesOut->begin(), exportNamesOut->end()),
-                exportNamesOut->end());
-            return !exportNamesOut->empty();
-        }
 
         bool TryInstallRawHookBinding(RawHookBinding& bindingValue)
         {
@@ -6871,6 +6807,7 @@ namespace apimon
         bool hasEnabledCategory = false;
         bool installedAny = false;
         std::wstring failureText;
+        g_coverageRemovalInProgress = false;
         g_removedCoverageRows.clear();
         g_rawCoverageObservations.clear();
         BuildFakeSuccessRuleIndex();
@@ -6918,6 +6855,7 @@ namespace apimon
     {
         const std::lock_guard<std::mutex> lock(g_hookOperationMutex);
         ScopedInlineHookInternalBypass hookOperationBypassScope;
+        g_coverageRemovalInProgress = true;
         bool removed = true;
         for (HookBinding& binding : g_bindings)
             removed = UninstallInlineHook(binding.hookRecord) && removed;
