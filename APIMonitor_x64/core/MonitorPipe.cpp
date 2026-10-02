@@ -23,8 +23,10 @@ namespace apimon
         std::atomic_uintptr_t g_pipeHandleValue{ 0 };
         SRWLOCK g_queueLock = SRWLOCK_INIT;             // g_queueLock：保护待发送事件队列。
         constexpr std::size_t kMaxPendingPacketCount = 4096; // kMaxPendingPacketCount：固定环形队列容量，避免 Hook 热路径动态分配。
-        constexpr std::uint32_t kMaxFlushBatchCount = 256;   // kMaxFlushBatchCount：单次写管道最多搬运的事件数，控制栈缓冲大小。
+        constexpr std::uint32_t kMaxFlushBatchCount = 256;   // 单次发送上限；缓冲不占用目标程序继承的小线程栈。
         std::array<ks::winapi_monitor::ApiMonitorEventPacket, kMaxPendingPacketCount> g_pendingPacketRing{}; // 固定事件环形缓冲。
+        // g_pipeLock covers both the copy and the send, including concurrent explicit drains.
+        std::array<ks::winapi_monitor::ApiMonitorEventPacket, kMaxFlushBatchCount> g_flushPacketBatch{};
         std::atomic_uint64_t g_droppedPacketCount{0};
         std::uint64_t g_reportedDroppedPacketCount = 0; // sender thread only
         constexpr std::size_t kControlPacketReserve = 64;
@@ -585,9 +587,10 @@ namespace apimon
             return 0;
         }
 
-        std::array<ks::winapi_monitor::ApiMonitorEventPacket, kMaxFlushBatchCount> packetBatch{};
+        auto& packetBatch = g_flushPacketBatch;
         std::size_t flushCount = 0;
 
+        ::AcquireSRWLockExclusive(&g_pipeLock);
         ::AcquireSRWLockExclusive(&g_queueLock);
         flushCount = std::min<std::size_t>(
             std::min<std::size_t>(maxPacketsToFlush, kMaxFlushBatchCount),
@@ -600,7 +603,6 @@ namespace apimon
         }
         ::ReleaseSRWLockExclusive(&g_queueLock);
 
-        ::AcquireSRWLockExclusive(&g_pipeLock);
         if (g_pipeHandle == INVALID_HANDLE_VALUE)
         {
             g_droppedPacketCount.fetch_add(flushCount);

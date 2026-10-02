@@ -54,7 +54,7 @@ def session_identity(text):
 
 
 class LiveFixture:
-    def __init__(self, source, configuration=None, *, agent=AGENT, compiler_environment=None, injector=None):
+    def __init__(self, source, configuration=None, *, agent=AGENT, compiler_environment=None, injector=None, link_arguments=()):
         self.agent = Path(agent)
         if not self.agent.exists():
             raise RuntimeError(f"build {ARCHITECTURE} Release Agent first")
@@ -65,7 +65,7 @@ class LiveFixture:
         compiler = shutil.which("cl", path=compiler_environment["PATH"]) if compiler_environment else "cl"
         subprocess.run([compiler, "/nologo", "/EHsc", "/std:c++17", "/utf-8", "/MT",
                         str(cpp), "/Fe:" + str(self.directory / "fixture.exe"),
-                        "/Fo:" + str(self.directory / "fixture.obj"), "/link", "Ws2_32.lib", "Ole32.lib"], check=True,
+                        "/Fo:" + str(self.directory / "fixture.obj"), "/link", "Ws2_32.lib", "Ole32.lib", *link_arguments], check=True,
                        env=compiler_environment)
         self.process = subprocess.Popen([str(self.directory / "fixture.exe"), str(self.agent)],
                                         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
