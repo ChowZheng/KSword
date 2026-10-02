@@ -3,7 +3,6 @@
 #include "MinidumpDock/DumpAutoCheck.h"
 #include <QMenu>
 #include <QAction>
-#include <QEasingCurve>
 #include <QAbstractScrollArea>
 #include <QAbstractItemView>
 #include <QAbstractItemModel>
@@ -47,7 +46,6 @@
 #include <QPointer>
 #include <QProgressBar>
 #include <QPushButton>
-#include <QPropertyAnimation>
 #include <QRectF>
 #include <QResizeEvent>
 #include <QSizePolicy>
@@ -74,7 +72,6 @@
 #include <QEvent>
 #include <QEventLoop>
 #include <QVariant>
-#include <QWheelEvent>
 #pragma warning(disable: 4996)
 #include "UI/UI.css/UI_css.h"
 #include "Framework.h"
@@ -1913,12 +1910,6 @@ namespace
                 return QObject::eventFilter(watchedObject, eventObject);
             }
 
-            QWheelEvent* wheelEvent = static_cast<QWheelEvent*>(eventObject);
-            if (trySmoothScroll(watchedObject, wheelEvent))
-            {
-                return true;
-            }
-
             QApplication* appInstance = qobject_cast<QApplication*>(QCoreApplication::instance());
             const bool sliderWheelAdjustEnabled = appInstance != nullptr
                 && appInstance->property("ksword_slider_wheel_adjust_enabled").toBool();
@@ -1942,164 +1933,6 @@ namespace
             return true;
         }
 
-    private:
-        bool trySmoothScroll(QObject* watchedObject, QWheelEvent* wheelEvent)
-        {
-            if (wheelEvent == nullptr || wheelEvent->modifiers().testFlag(Qt::ControlModifier))
-            {
-                return false;
-            }
-
-            if (isItemViewWheelEvent(watchedObject))
-            {
-                return false;
-            }
-
-            if (isSmoothScrollDisabled(watchedObject))
-            {
-                return false;
-            }
-
-            QScrollBar* targetScrollBar = findTargetScrollBar(watchedObject, wheelEvent);
-            if (targetScrollBar == nullptr || targetScrollBar->minimum() == targetScrollBar->maximum())
-            {
-                return false;
-            }
-
-            const int wheelDelta = !wheelEvent->pixelDelta().isNull()
-                ? wheelEvent->pixelDelta().y()
-                : wheelEvent->angleDelta().y() / 8;
-            if (wheelDelta == 0)
-            {
-                return false;
-            }
-
-            // 动画步长保持克制：让滚轮有平滑过渡，但不拖慢大量表格的快速浏览。
-            const int lineStep = std::max(18, targetScrollBar->singleStep() * 3);
-            const int targetValue = std::clamp(
-                targetScrollBar->value() - wheelDelta * lineStep / 15,
-                targetScrollBar->minimum(),
-                targetScrollBar->maximum());
-            animateScrollBar(targetScrollBar, targetValue);
-            wheelEvent->accept();
-            return true;
-        }
-
-        bool isItemViewWheelEvent(QObject* watchedObject) const
-        {
-            // isItemViewWheelEvent 作用：
-            // - 判断滚轮事件是否来自 QTableView/QTableWidget/QTreeView/QListView 等 item view 或其 viewport/滚动条子控件；
-            // - item view 的滚动条 value 往往是“行号/项号”，不是像素，不能用全局像素平滑算法放大处理；
-            // - 返回 true 时交回 Qt 默认 wheelEvent，让表格/树/列表按自身 singleStep/pageStep 正常滚动。
-            // 参数 watchedObject：QApplication 全局事件过滤器收到的事件源。
-            // 返回值：true=应跳过全局 smooth-scroll；false=可以继续尝试全局 smooth-scroll。
-            QObject* currentObject = watchedObject;
-            while (currentObject != nullptr)
-            {
-                if (qobject_cast<QAbstractItemView*>(currentObject) != nullptr)
-                {
-                    return true;
-                }
-
-                QWidget* currentWidget = qobject_cast<QWidget*>(currentObject);
-                currentObject = currentWidget != nullptr
-                    ? currentWidget->parentWidget()
-                    : currentObject->parent();
-            }
-            return false;
-        }
-
-        bool isSmoothScrollDisabled(QObject* watchedObject) const
-        {
-            // isSmoothScrollDisabled 作用：
-            // - 允许高频表格局部关闭全局滚轮动画，恢复 Qt 默认滚动；
-            // - 输入为 QApplication 事件过滤器收到的 watchedObject；
-            // - 处理时沿 QWidget 父链查找属性，兼容 viewport、表格本体和滚动条三类命中点；
-            // - 返回 true 表示不接管滚轮事件，不创建 QPropertyAnimation。
-            QObject* currentObject = watchedObject;
-            while (currentObject != nullptr)
-            {
-                if (currentObject->property("ksword_disable_smooth_scroll").toBool())
-                {
-                    return true;
-                }
-
-                QWidget* currentWidget = qobject_cast<QWidget*>(currentObject);
-                currentObject = currentWidget != nullptr
-                    ? currentWidget->parentWidget()
-                    : currentObject->parent();
-            }
-            return false;
-        }
-
-        QScrollBar* findTargetScrollBar(QObject* watchedObject, QWheelEvent* wheelEvent) const
-        {
-            if (qobject_cast<QAbstractSlider*>(watchedObject) != nullptr
-                && qobject_cast<QScrollBar*>(watchedObject) == nullptr)
-            {
-                return nullptr;
-            }
-
-            QScrollBar* directScrollBar = qobject_cast<QScrollBar*>(watchedObject);
-            if (directScrollBar != nullptr)
-            {
-                return directScrollBar;
-            }
-
-            QWidget* sourceWidget = qobject_cast<QWidget*>(watchedObject);
-            QWidget* currentWidget = sourceWidget;
-            while (currentWidget != nullptr)
-            {
-                QAbstractScrollArea* scrollArea = qobject_cast<QAbstractScrollArea*>(currentWidget);
-                if (scrollArea != nullptr)
-                {
-                    return chooseScrollBar(scrollArea, wheelEvent);
-                }
-                currentWidget = currentWidget->parentWidget();
-            }
-            return nullptr;
-        }
-
-        QScrollBar* chooseScrollBar(QAbstractScrollArea* scrollArea, QWheelEvent* wheelEvent) const
-        {
-            if (scrollArea == nullptr || wheelEvent == nullptr)
-            {
-                return nullptr;
-            }
-
-            if (std::abs(wheelEvent->angleDelta().x()) > std::abs(wheelEvent->angleDelta().y()))
-            {
-                QScrollBar* horizontalScrollBar = scrollArea->horizontalScrollBar();
-                if (horizontalScrollBar != nullptr && horizontalScrollBar->minimum() != horizontalScrollBar->maximum())
-                {
-                    return horizontalScrollBar;
-                }
-            }
-            return scrollArea->verticalScrollBar();
-        }
-
-        void animateScrollBar(QScrollBar* targetScrollBar, const int targetValue)
-        {
-            if (targetScrollBar == nullptr)
-            {
-                return;
-            }
-
-            QPointer<QPropertyAnimation>& animationRef = m_scrollAnimationByBar[targetScrollBar];
-            if (animationRef == nullptr)
-            {
-                animationRef = new QPropertyAnimation(targetScrollBar, "value", targetScrollBar);
-                animationRef->setDuration(110);
-                animationRef->setEasingCurve(QEasingCurve::OutCubic);
-            }
-
-            animationRef->stop();
-            animationRef->setStartValue(targetScrollBar->value());
-            animationRef->setEndValue(targetValue);
-            animationRef->start();
-        }
-
-        std::unordered_map<QScrollBar*, QPointer<QPropertyAnimation>> m_scrollAnimationByBar;
     };
 
     // TableSelectionOutlineDelegate 作用：

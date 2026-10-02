@@ -6,9 +6,12 @@
 #include <QEasingCurve>
 #include <QEvent>
 #include <QHash>
+#include <QPlainTextEdit>
 #include <QPointer>
 #include <QPropertyAnimation>
 #include <QScrollBar>
+#include <QTextBlock>
+#include <QTextLayout>
 #include <QVariant>
 #include <QWheelEvent>
 
@@ -84,18 +87,30 @@ namespace
                 if (QAbstractScrollArea* scrollArea =
                     qobject_cast<QAbstractScrollArea*>(watchedObject))
                 {
-                    configureScrollArea(scrollArea, enabled());
+                    configureScrollArea(scrollArea,
+                        enabled() && !isSmoothScrollDisabled(scrollArea));
                 }
             }
 
-            if (eventObject->type() != QEvent::Wheel || !enabled())
+            if (eventObject->type() == QEvent::Resize)
+            {
+                if (QAbstractScrollArea* scrollArea = scrollAreaForEventObject(watchedObject))
+                {
+                    // 缩小视口后，旧动画的终点可能超过新的可见范围。
+                    stopAnimation(scrollArea->verticalScrollBar());
+                    stopAnimation(scrollArea->horizontalScrollBar());
+                }
+            }
+
+            if (eventObject->type() != QEvent::Wheel)
             {
                 return QObject::eventFilter(watchedObject, eventObject);
             }
 
             QAbstractScrollArea* scrollArea = scrollAreaForEventObject(watchedObject);
             if (scrollArea == nullptr ||
-                scrollArea->property(kFrozenPaneAuxiliaryProperty).toBool())
+                scrollArea->property(kFrozenPaneAuxiliaryProperty).toBool() ||
+                isSmoothScrollDisabled(scrollArea))
             {
                 return QObject::eventFilter(watchedObject, eventObject);
             }
@@ -110,10 +125,38 @@ namespace
 
             const QPoint pixelDelta = wheelEvent->pixelDelta();
             const QPoint angleDelta = wheelEvent->angleDelta();
-            const bool horizontal =
-                wheelEvent->modifiers().testFlag(Qt::ShiftModifier) ||
-                std::abs(pixelDelta.x()) > std::abs(pixelDelta.y()) ||
-                std::abs(angleDelta.x()) > std::abs(angleDelta.y());
+            const QScrollBar* directScrollBar = qobject_cast<QScrollBar*>(watchedObject);
+            const bool horizontal = directScrollBar != nullptr
+                ? directScrollBar->orientation() == Qt::Horizontal
+                : (wheelEvent->modifiers().testFlag(Qt::ShiftModifier) ||
+                    std::abs(pixelDelta.x()) > std::abs(pixelDelta.y()) ||
+                    std::abs(angleDelta.x()) > std::abs(angleDelta.y()));
+
+            const QRect visibleRect = scrollArea->viewport()->visibleRegion().boundingRect();
+            // QPlainTextEdit 纵向 value/pageStep 是视觉行，不是像素；通常沿用 Qt
+            // 对换行、触控板增量和一页上限的处理，禁止对行号做像素动画。
+            if (!horizontal)
+            {
+                if (QPlainTextEdit* plainEdit = qobject_cast<QPlainTextEdit*>(scrollArea))
+                {
+                    // 结构报告中的固定高度代码块可能被外层滚动区裁切。Qt 的 pageStep
+                    // 仍按代码块完整视口计算，此时额外以真正露出的视觉行数限幅。
+                    return scrollClippedPlainText(plainEdit, visibleRect, wheelEvent);
+                }
+            }
+            if (!enabled())
+            {
+                return QObject::eventFilter(watchedObject, eventObject);
+            }
+            if (QAbstractItemView* itemView = qobject_cast<QAbstractItemView*>(scrollArea))
+            {
+                const auto mode = horizontal
+                    ? itemView->horizontalScrollMode() : itemView->verticalScrollMode();
+                if (mode != QAbstractItemView::ScrollPerPixel)
+                {
+                    return QObject::eventFilter(watchedObject, eventObject);
+                }
+            }
             QScrollBar* scrollBar = horizontal
                 ? scrollArea->horizontalScrollBar()
                 : scrollArea->verticalScrollBar();
@@ -134,41 +177,56 @@ namespace
             }
 
             const int directionMultiplier = wheelEvent->inverted() ? -1 : 1;
-            int distance = 0;
+            const int visibleExtent = horizontal ? visibleRect.width() : visibleRect.height();
+            if (visibleExtent <= 0 || scrollBar->pageStep() <= 0)
+            {
+                return QObject::eventFilter(watchedObject, eventObject);
+            }
+            const int pageExtent = std::min(visibleExtent, scrollBar->pageStep());
+            const int overlap = std::min(scrollArea->fontMetrics().lineSpacing(), pageExtent / 2);
+            const int maximumDistance = std::max(1, pageExtent - overlap);
+            double requestedDistance = 0.0;
             int durationMs = kWheelAnimationDurationMs;
             if (rawPixelDelta != 0)
             {
-                distance = -rawPixelDelta * directionMultiplier;
+                requestedDistance = -static_cast<double>(rawPixelDelta) * directionMultiplier;
                 durationMs = kPixelAnimationDurationMs;
             }
             else
             {
                 const double wheelSteps =
-                    static_cast<double>(rawAngleDelta * directionMultiplier) / 120.0;
-                const int pixelsPerStep = std::clamp(
-                    scrollBar->singleStep() * 3,
-                    48,
-                    120);
-                distance = static_cast<int>(std::lround(-wheelSteps * pixelsPerStep));
+                    static_cast<double>(rawAngleDelta) * directionMultiplier / 120.0;
+                const double pixelsPerStep = std::clamp(
+                    static_cast<double>(scrollBar->singleStep()) * 3.0,
+                    48.0,
+                    120.0);
+                requestedDistance = -wheelSteps * pixelsPerStep;
             }
+            const int distance = static_cast<int>(std::lround(std::clamp(
+                requestedDistance, -static_cast<double>(maximumDistance),
+                static_cast<double>(maximumDistance))));
             if (distance == 0)
             {
                 return QObject::eventFilter(watchedObject, eventObject);
             }
 
             QPropertyAnimation* animation = animationForScrollBar(scrollBar);
-            const int accumulatedStart =
-                animation->state() == QAbstractAnimation::Running
-                ? animation->endValue().toInt()
-                : scrollBar->value();
-            const int targetValue = std::clamp(
+            const qint64 currentValue = scrollBar->value();
+            const qint64 pendingTarget = animation->state() == QAbstractAnimation::Running
+                ? animation->endValue().toInt() : currentValue;
+            // 反向滚动立即从当前位置反向；连续事件的待滚距离也不能超过一屏。
+            const bool sameDirection = distance > 0
+                ? pendingTarget > currentValue : pendingTarget < currentValue;
+            const qint64 accumulatedStart = sameDirection
+                ? pendingTarget : currentValue;
+            const int targetValue = static_cast<int>(std::clamp(
                 accumulatedStart + distance,
-                scrollBar->minimum(),
-                scrollBar->maximum());
-            if (targetValue == scrollBar->value() &&
-                animation->state() != QAbstractAnimation::Running)
+                std::max<qint64>(scrollBar->minimum(), currentValue - maximumDistance),
+                std::min<qint64>(scrollBar->maximum(), currentValue + maximumDistance)));
+            if (targetValue == scrollBar->value())
             {
                 // 到达边界时让未消费的滚轮事件继续向父滚动区域传播。
+                animation->stop();
                 return QObject::eventFilter(watchedObject, eventObject);
             }
 
@@ -183,6 +241,75 @@ namespace
         }
 
     private:
+        bool scrollClippedPlainText(QPlainTextEdit* edit, const QRect& visibleRect,
+            QWheelEvent* event)
+        {
+            if (visibleRect.isEmpty() || visibleRect.height() >= edit->viewport()->height())
+            {
+                return false;
+            }
+            QScrollBar* bar = edit->verticalScrollBar();
+            const int direction = event->inverted() ? -1 : 1;
+            const int pixelDelta = event->pixelDelta().y();
+            const double requested = pixelDelta != 0
+                ? -static_cast<double>(pixelDelta) * direction /
+                    std::max(1, edit->fontMetrics().lineSpacing())
+                : -static_cast<double>(event->angleDelta().y()) * direction / 120.0 *
+                    QApplication::wheelScrollLines() * bar->singleStep();
+            if (requested == 0.0 ||
+                (requested < 0 && bar->value() == bar->minimum()) ||
+                (requested > 0 && bar->value() == bar->maximum()))
+            {
+                bar->setProperty("ksword_clipped_scroll_remainder", 0.0);
+                return false;
+            }
+
+            const auto visualLineAt = [edit](const QPoint& point)
+            {
+                const QTextCursor cursor = edit->cursorForPosition(point);
+                const QTextBlock block = cursor.block();
+                const QTextLine line = block.layout()->lineForTextPosition(cursor.positionInBlock());
+                return block.firstLineNumber() + std::max(0, line.lineNumber());
+            };
+            const int visibleLines = visualLineAt(visibleRect.bottomLeft()) -
+                visualLineAt(visibleRect.topLeft());
+            const int maximumDistance = std::max(1, visibleLines - 1);
+            double remainder = bar->property("ksword_clipped_scroll_remainder").toDouble();
+            if (remainder * requested < 0)
+            {
+                remainder = 0.0;
+            }
+            const double bounded = std::clamp(remainder + requested,
+                -static_cast<double>(maximumDistance), static_cast<double>(maximumDistance));
+            const int distance = static_cast<int>(bounded);
+            bar->setProperty("ksword_clipped_scroll_remainder", bounded - distance);
+            bar->setValue(static_cast<int>(std::clamp<qint64>(
+                static_cast<qint64>(bar->value()) + distance, bar->minimum(), bar->maximum())));
+            event->accept();
+            return true;
+        }
+
+        bool isSmoothScrollDisabled(const QWidget* widget) const
+        {
+            for (const QWidget* current = widget; current != nullptr;
+                current = current->parentWidget())
+            {
+                if (current->property("ksword_disable_smooth_scroll").toBool())
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        void stopAnimation(QScrollBar* scrollBar)
+        {
+            if (QPropertyAnimation* animation = m_animations.value(scrollBar, nullptr))
+            {
+                animation->stop();
+            }
+        }
+
         bool enabled() const
         {
             QApplication* appInstance =
@@ -197,6 +324,20 @@ namespace
                 qobject_cast<QAbstractScrollArea*>(watchedObject))
             {
                 return directArea;
+            }
+            if (QScrollBar* scrollBar = qobject_cast<QScrollBar*>(watchedObject))
+            {
+                for (QWidget* parent = scrollBar->parentWidget(); parent != nullptr;
+                    parent = parent->parentWidget())
+                {
+                    if (QAbstractScrollArea* area = qobject_cast<QAbstractScrollArea*>(parent))
+                    {
+                        return scrollBar == area->verticalScrollBar() ||
+                            scrollBar == area->horizontalScrollBar()
+                            ? area : nullptr;
+                    }
+                }
+                return nullptr;
             }
             QAbstractScrollArea* parentArea = qobject_cast<QAbstractScrollArea*>(
                 watchedObject != nullptr ? watchedObject->parent() : nullptr);
@@ -221,7 +362,7 @@ namespace
                 return;
             }
 
-            if (enabledState)
+            if (enabledState && !isSmoothScrollDisabled(scrollArea))
             {
                 if (!itemView->property(kOriginalVerticalModeProperty).isValid())
                 {

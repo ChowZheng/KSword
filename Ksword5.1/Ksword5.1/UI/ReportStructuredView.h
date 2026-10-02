@@ -66,6 +66,9 @@ namespace ks::ui
         // - 用途：宿主把悬浮控件贴到右上角时需要避开滚动条，否则拖动条容易误点。
         int verticalScrollBarWidth() const;
 
+        // 复制当前结构控件的选区；没有选区时复制完整报告，避免复制隐藏文本框的旧选区。
+        void copySelectionOrReport() const;
+
     protected:
         // changeEvent：主题调色板变化时按新前景色重建块，保证状态色跟随主题。
         void changeEvent(QEvent* event) override;

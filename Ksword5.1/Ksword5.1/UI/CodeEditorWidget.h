@@ -211,6 +211,12 @@ private:
     // - 根据只读状态更新按钮可用性和面板可见性。
     void refreshReadOnlyUiState();
 
+    // 同步撤销/重做、选区、剪贴板与换行状态，避免图标可点但动作无效。
+    void refreshActionButtonState();
+
+    // 查找、跳转和换行针对原始文本，执行前切到用户能看见的文本页。
+    void activateTextView();
+
     // resetFileSessionMetadata：
     // - 重置当前文件会话元数据（编码/BOM/换行）。
     void resetFileSessionMetadata();

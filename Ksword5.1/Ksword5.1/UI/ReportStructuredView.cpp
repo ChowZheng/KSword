@@ -892,6 +892,58 @@ namespace ks::ui
         return m_hasStructure;
     }
 
+    void ReportStructuredView::copySelectionOrReport() const
+    {
+        QString copiedText;
+        QWidget* focusedWidget = QApplication::focusWidget();
+        if (focusedWidget != nullptr && isAncestorOf(focusedWidget))
+        {
+            if (QPlainTextEdit* codeView = qobject_cast<QPlainTextEdit*>(focusedWidget))
+            {
+                if (codeView->textCursor().hasSelection())
+                {
+                    codeView->copy();
+                    return;
+                }
+            }
+            else if (QLabel* label = qobject_cast<QLabel*>(focusedWidget))
+            {
+                copiedText = label->selectedText();
+            }
+            else
+            {
+                QAbstractItemView* itemView = qobject_cast<QAbstractItemView*>(focusedWidget);
+                if (itemView == nullptr)
+                {
+                    itemView = qobject_cast<QAbstractItemView*>(focusedWidget->parentWidget());
+                }
+                if (itemView != nullptr && itemView->selectionModel() != nullptr)
+                {
+                    QStringList copiedRows;
+                    const QModelIndexList selectedRows = itemView->selectionModel()->selectedRows();
+                    for (const QModelIndex& row : selectedRows)
+                    {
+                        QStringList columns;
+                        const int columnCount = itemView->model()->columnCount(row.parent());
+                        for (int column = 0; column < columnCount; ++column)
+                        {
+                            const QString value = row.siblingAtColumn(column).data().toString();
+                            if (!value.isEmpty()) columns.append(value);
+                        }
+                        copiedRows.append(columnCount == 2 && columns.size() == 2
+                            ? QStringLiteral("%1: %2").arg(columns.at(0), columns.at(1))
+                            : columns.join(QLatin1Char('\t')));
+                    }
+                    copiedText = copiedRows.join(QLatin1Char('\n'));
+                }
+            }
+        }
+        if (QClipboard* clipboard = QApplication::clipboard())
+        {
+            clipboard->setText(copiedText.isEmpty() ? m_reportText : copiedText);
+        }
+    }
+
     int ReportStructuredView::verticalScrollBarWidth() const
     {
         if (m_scrollArea == nullptr || m_scrollArea->verticalScrollBar() == nullptr)

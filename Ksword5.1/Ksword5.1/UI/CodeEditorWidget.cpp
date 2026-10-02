@@ -13,6 +13,8 @@
 #include "../Internationalization/LanguageManager.h"
 
 #include <QBuffer>
+#include <QApplication>
+#include <QClipboard>
 #include <QComboBox>
 #include <QSignalBlocker>
 #include <QStackedWidget>
@@ -26,6 +28,7 @@
 #include <QJsonParseError>
 #include <QLabel>
 #include <QLineEdit>
+#include <QMimeData>
 #include <QPaintEvent>
 #include <QPainter>
 #include <QPlainTextEdit>
@@ -186,6 +189,10 @@ namespace
             "QToolButton:pressed{"
             "  background:%3;"
             "  color:%4;"
+            "}"
+            "QToolButton:checked{"
+            "  background:%2;"
+            "  color:%4;"
             "}")
             .arg(KswordTheme::TextPrimaryHex())
             .arg(KswordTheme::PrimaryBlueHex)
@@ -240,8 +247,9 @@ namespace
 
     // buildToolbarSvgIcon：
     // - 从 SVG 资源生成工具栏图标；
-    // - 统一用主题蓝着色，避免深色模式下图标发黑看不清。
-    QIcon buildToolbarSvgIcon(const QString& resourcePath, const QSize& iconSize = QSize(22, 22))
+    // - 分别生成普通、悬停、禁用和选中配色，避免图标与强调背景同色。
+    QIcon buildToolbarSvgIcon(const QString& resourcePath, const QPalette& palette,
+        const QSize& iconSize = QSize(22, 22))
     {
         QSvgRenderer renderer(resourcePath);
         if (!renderer.isValid())
@@ -255,11 +263,26 @@ namespace
         QPainter painter(&iconPixmap);
         painter.setRenderHint(QPainter::Antialiasing, true);
         renderer.render(&painter, QRectF(0, 0, iconSize.width(), iconSize.height()));
-        painter.setCompositionMode(QPainter::CompositionMode_SourceIn);
-        painter.fillRect(iconPixmap.rect(), KswordTheme::PrimaryBlueColor);
         painter.end();
 
-        return QIcon(iconPixmap);
+        QIcon icon;
+        const auto addColoredPixmap = [&](const QColor& color, QIcon::Mode mode, QIcon::State state)
+        {
+            QPixmap coloredPixmap = iconPixmap;
+            QPainter colorPainter(&coloredPixmap);
+            colorPainter.setCompositionMode(QPainter::CompositionMode_SourceIn);
+            colorPainter.fillRect(coloredPixmap.rect(), color);
+            colorPainter.end();
+            icon.addPixmap(coloredPixmap, mode, state);
+        };
+        for (QIcon::State state : { QIcon::Off, QIcon::On })
+        {
+            addColoredPixmap(palette.color(state == QIcon::On
+                ? QPalette::HighlightedText : QPalette::Highlight), QIcon::Normal, state);
+            addColoredPixmap(palette.color(QPalette::HighlightedText), QIcon::Active, state);
+            addColoredPixmap(palette.color(QPalette::Disabled, QPalette::Text), QIcon::Disabled, state);
+        }
+        return icon;
     }
 
     // isOpenBracket：
@@ -1086,6 +1109,11 @@ void CodeEditorWidget::setLocalizedTextWithRawSuffix(
 void CodeEditorWidget::changeEvent(QEvent* event)
 {
     QWidget::changeEvent(event);
+    if (!m_destroying && m_editor != nullptr && event != nullptr &&
+        (event->type() == QEvent::PaletteChange || event->type() == QEvent::ApplicationPaletteChange))
+    {
+        applyThemeStyle();
+    }
     if (event == nullptr || event->type() != QEvent::LanguageChange ||
         !m_localizedTextActive || m_editor == nullptr)
     {
@@ -1185,10 +1213,12 @@ void CodeEditorWidget::initializeUi()
     auto buildButton = [this](const QString& iconPath, const QString& tip) -> QToolButton*
         {
             QToolButton* button = new QToolButton(m_toolbarWidget);
-            button->setIcon(buildToolbarSvgIcon(iconPath));
+            button->setProperty("ksword_editor_icon_path", iconPath);
+            button->setIcon(buildToolbarSvgIcon(iconPath, button->palette()));
             button->setIconSize(QSize(22, 22));
             button->setToolTip(tip);
             button->setAutoRaise(true);
+            button->setFocusPolicy(Qt::NoFocus);
             button->setFixedSize(24, 24);
             return button;
         };
@@ -1208,6 +1238,7 @@ void CodeEditorWidget::initializeUi()
     m_replaceButton = buildButton(QStringLiteral(":/Icon/codeeditor_replace.svg"), QStringLiteral("替换 Ctrl+H"));
     m_gotoButton = buildButton(QStringLiteral(":/Icon/codeeditor_goto.svg"), QStringLiteral("跳转行 Ctrl+G"));
     m_wrapButton = buildButton(QStringLiteral(":/Icon/codeeditor_wrap.svg"), QStringLiteral("切换自动换行"));
+    m_wrapButton->setCheckable(true);
 
     m_toolbarLayout->addWidget(m_newButton);
     m_toolbarLayout->addWidget(m_openButton);
@@ -1322,6 +1353,9 @@ void CodeEditorWidget::initializeConnections()
             {
                 return;
             }
+            m_localizedSourceText.clear();
+            m_localizedRawSuffix.clear();
+            m_localizedTextActive = false;
             m_editor->clear();
             m_currentFilePath.clear();
             resetFileSessionMetadata();
@@ -1346,7 +1380,13 @@ void CodeEditorWidget::initializeConnections()
     connect(m_undoButton, &QToolButton::clicked, m_editor, &QPlainTextEdit::undo);
     connect(m_redoButton, &QToolButton::clicked, m_editor, &QPlainTextEdit::redo);
     connect(m_cutButton, &QToolButton::clicked, m_editor, &QPlainTextEdit::cut);
-    connect(m_copyButton, &QToolButton::clicked, m_editor, &QPlainTextEdit::copy);
+    connect(m_copyButton, &QToolButton::clicked, this, [this]()
+        {
+            if (m_viewStack->currentWidget() == m_structuredView)
+                m_structuredView->copySelectionOrReport();
+            else
+                m_editor->copy();
+        });
     connect(m_pasteButton, &QToolButton::clicked, m_editor, &QPlainTextEdit::paste);
 
     connect(m_findButton, &QToolButton::clicked, this, [this]()
@@ -1366,8 +1406,10 @@ void CodeEditorWidget::initializeConnections()
 
     connect(m_wrapButton, &QToolButton::clicked, this, [this]()
         {
+            activateTextView();
             const bool enableWrap = (m_editor->lineWrapMode() == QPlainTextEdit::NoWrap);
             m_editor->setLineWrapMode(enableWrap ? QPlainTextEdit::WidgetWidth : QPlainTextEdit::NoWrap);
+            refreshActionButtonState();
         });
 
     connect(m_findPrevButton, &QToolButton::clicked, this, [this]()
@@ -1428,6 +1470,11 @@ void CodeEditorWidget::initializeConnections()
             emit contentChanged(text());
         });
 
+    connect(m_editor, &QPlainTextEdit::undoAvailable, this, [this](bool) { refreshActionButtonState(); });
+    connect(m_editor, &QPlainTextEdit::redoAvailable, this, [this](bool) { refreshActionButtonState(); });
+    connect(m_editor, &QPlainTextEdit::copyAvailable, this, [this](bool) { refreshActionButtonState(); });
+    connect(QApplication::clipboard(), &QClipboard::dataChanged, this, [this]() { refreshActionButtonState(); });
+
     connect(m_structuredCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
         [this](const int selectedIndex)
         {
@@ -1442,6 +1489,8 @@ void CodeEditorWidget::initializeConnections()
             m_viewStack->setCurrentWidget(structuredSelected
                 ? static_cast<QWidget*>(m_structuredView)
                 : static_cast<QWidget*>(m_editor));
+            if (structuredSelected) closeInlinePanels();
+            refreshActionButtonState();
             // 换页后滚动条可能出现或消失，右边距要重算。
             positionStructuredSwitch();
         });
@@ -1485,6 +1534,14 @@ void CodeEditorWidget::initializeConnections()
         {
             m_newButton->click();
         });
+
+    new QShortcut(QKeySequence::SaveAs, this, [this]() { m_saveAsButton->click(); });
+    new QShortcut(QKeySequence::Copy, this, [this]() { m_copyButton->click(); });
+    // 每个 Dock 可能有多个编辑器；窗口级快捷键会冲突，必须限定到当前编辑器。
+    for (QShortcut* shortcut : findChildren<QShortcut*>(QString(), Qt::FindDirectChildrenOnly))
+    {
+        shortcut->setContext(Qt::WidgetWithChildrenShortcut);
+    }
 }
 
 void CodeEditorWidget::applyThemeStyle()
@@ -1502,6 +1559,8 @@ void CodeEditorWidget::applyThemeStyle()
         if (button != nullptr)
         {
             button->setStyleSheet(toolStyle);
+            const QString iconPath = button->property("ksword_editor_icon_path").toString();
+            if (!iconPath.isEmpty()) button->setIcon(buildToolbarSvgIcon(iconPath, palette()));
         }
     }
 
@@ -1528,10 +1587,6 @@ void CodeEditorWidget::refreshReadOnlyUiState()
     if (m_openButton != nullptr) m_openButton->setEnabled(!m_readOnlyMode);
     if (m_saveButton != nullptr) m_saveButton->setEnabled(!m_readOnlyMode);
     if (m_saveAsButton != nullptr) m_saveAsButton->setEnabled(!m_readOnlyMode);
-    if (m_undoButton != nullptr) m_undoButton->setEnabled(!m_readOnlyMode);
-    if (m_redoButton != nullptr) m_redoButton->setEnabled(!m_readOnlyMode);
-    if (m_cutButton != nullptr) m_cutButton->setEnabled(!m_readOnlyMode);
-    if (m_pasteButton != nullptr) m_pasteButton->setEnabled(!m_readOnlyMode);
     if (m_replaceButton != nullptr) m_replaceButton->setEnabled(!m_readOnlyMode);
     if (m_replaceOneButton != nullptr) m_replaceOneButton->setEnabled(!m_readOnlyMode);
     if (m_replaceAllButton != nullptr) m_replaceAllButton->setEnabled(!m_readOnlyMode);
@@ -1546,6 +1601,28 @@ void CodeEditorWidget::refreshReadOnlyUiState()
 
     // 页面常在写完文本之后才置只读，这里补一次判定，避免结构视图入口被漏掉。
     updateStructuredReportView();
+}
+
+void CodeEditorWidget::refreshActionButtonState()
+{
+    if (m_destroying || m_editor == nullptr) return;
+    const bool editable = !m_readOnlyMode;
+    const bool selected = m_editor->textCursor().hasSelection();
+    m_undoButton->setEnabled(editable && m_editor->document()->isUndoAvailable());
+    m_redoButton->setEnabled(editable && m_editor->document()->isRedoAvailable());
+    m_cutButton->setEnabled(editable && selected);
+    m_copyButton->setEnabled(m_viewStack->currentWidget() == m_structuredView || selected);
+    const QMimeData* clipboardData = QApplication::clipboard()->mimeData();
+    m_pasteButton->setEnabled(editable && clipboardData != nullptr && clipboardData->hasText());
+    m_wrapButton->setChecked(m_editor->lineWrapMode() != QPlainTextEdit::NoWrap);
+}
+
+void CodeEditorWidget::activateTextView()
+{
+    if (m_viewStack->currentWidget() == m_structuredView)
+    {
+        m_structuredCombo->setCurrentIndex(1);
+    }
 }
 
 bool CodeEditorWidget::eventFilter(QObject* watchedObject, QEvent* eventObject)
@@ -1611,6 +1688,7 @@ void CodeEditorWidget::updateStructuredReportView()
     if (!structured)
     {
         m_viewStack->setCurrentWidget(m_editor);
+        refreshActionButtonState();
         return;
     }
 
@@ -1621,10 +1699,12 @@ void CodeEditorWidget::updateStructuredReportView()
         ? static_cast<QWidget*>(m_structuredView)
         : static_cast<QWidget*>(m_editor));
     positionStructuredSwitch();
+    refreshActionButtonState();
 }
 
 void CodeEditorWidget::openFindReplacePanel(const bool replaceEnabled)
 {
+    activateTextView();
     const bool effectiveReplaceEnabled = replaceEnabled && !m_readOnlyMode;
     m_replaceEnabled = effectiveReplaceEnabled;
     m_findPanel->setVisible(true);
@@ -1638,6 +1718,7 @@ void CodeEditorWidget::openFindReplacePanel(const bool replaceEnabled)
 
 void CodeEditorWidget::openGotoPanel()
 {
+    activateTextView();
     m_findPanel->setVisible(false);
     m_gotoPanel->setVisible(true);
     m_gotoLineEdit->setFocus(Qt::ShortcutFocusReason);
@@ -1674,6 +1755,7 @@ void CodeEditorWidget::updateStatusText()
 
 bool CodeEditorWidget::findByDirection(const bool forward)
 {
+    activateTextView();
     const QString keyText = m_findEdit->text();
     if (keyText.isEmpty())
     {
@@ -1749,12 +1831,14 @@ int CodeEditorWidget::replaceAllMatches()
     m_editor->setTextCursor(headCursor);
 
     int hitCount = 0;
+    headCursor.beginEditBlock();
     while (m_editor->find(findText))
     {
         QTextCursor hitCursor = m_editor->textCursor();
         hitCursor.insertText(replaceText);
         ++hitCount;
     }
+    headCursor.endEditBlock();
 
     m_editor->setTextCursor(backupCursor);
     return hitCount;
@@ -1835,6 +1919,9 @@ bool CodeEditorWidget::loadLocalFile(
 
     QString detectedKind;
     const QString displayText = applyStructuredAutoFormatIfNeeded(decodeResult.text, &detectedKind);
+    m_localizedSourceText.clear();
+    m_localizedRawSuffix.clear();
+    m_localizedTextActive = false;
     m_editor->setPlainText(displayText);
 
     m_currentFilePath = normalizedPath;
