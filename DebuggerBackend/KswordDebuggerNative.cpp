@@ -1,6 +1,7 @@
 #include "KswordDebuggerBackend.h"
 
 #include <cstring>
+#include <cstdio>
 
 namespace ksword::debugger
 {
@@ -22,6 +23,32 @@ namespace ksword::debugger
             if (point >= address && point - address < bytes)
                 static_cast<unsigned char*>(data)[static_cast<SIZE_T>(point - address)] = 0xcc;
     }
+    bool Backend::shadowPatchByte(DWORD pid, std::uint64_t address, unsigned char& byte)
+    {
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
+        if (pid == attachedPid_ && shadowInt3_.count(address) != 0) { byte = 0xcc; return true; }
+        const auto target = shadowWrites_.find(pid);
+        if (target == shadowWrites_.end()) return false;
+        const auto page = target->second.pages.find(address & ~0xfffULL);
+        const auto offset = static_cast<SIZE_T>(address & 0xfffULL);
+        if (page == target->second.pages.end() || !page->second.mask.test(offset)) return false;
+        byte = page->second.bytes[offset]; return true;
+    }
+
+    DWORD Backend::nativeExecutionBreakpointPath(std::uint64_t address)
+    {
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
+        for (const auto& pair : breakpoints_)
+        {
+            const auto& context = pair.second.requested;
+            const std::array<std::uint64_t, 4> addresses{context.Dr0, context.Dr1, context.Dr2, context.Dr3};
+            for (SIZE_T i = 0; i < addresses.size(); ++i)
+                if (addresses[i] == address && pair.second.ids[i] != 0)
+                    return pair.second.shadow ? KSWORD_DEBUGGER_PATH_SHADOW : KSWORD_DEBUGGER_PATH_EPT;
+        }
+        return KSWORD_DEBUGGER_PATH_NATIVE;
+    }
+
     bool Backend::nativeDataOnlyRecord(const ThreadBreakpoints& record)
     {
         if (!record.shadow) return false;
@@ -85,7 +112,19 @@ namespace ksword::debugger
         request.flags = KSWORD_ARK_DEBUGGER_FLAG_CONFIRMED;
         request.processId = attachedPid_; request.address = address; request.bytes = 1;
         const DWORD error = nativeRequest(request, response);
-        if (error == ERROR_SUCCESS || error == ERROR_NOT_FOUND) { shadowInt3_.erase(address); return ERROR_SUCCESS; }
+        if (error == ERROR_SUCCESS || error == ERROR_NOT_FOUND)
+        {
+            const bool tracked = shadowInt3_.erase(address) != 0;
+            if (tracked)
+            {
+                char message[192]{};
+                std::snprintf(message, sizeof(message),
+                    "ShadowPage INT3 removed: pid=%lu va=0x%llX; physical execution view removed, native engine may retain a logical breakpoint",
+                    attachedPid_, static_cast<unsigned long long>(address));
+                log(message);
+            }
+            return ERROR_SUCCESS;
+        }
         return error;
     }
 
@@ -103,7 +142,17 @@ namespace ksword::debugger
         request.operation = KSWORD_ARK_DEBUGGER_SHADOW_ADD; request.flags = KSWORD_ARK_DEBUGGER_FLAG_CONFIRMED;
         request.processId = attachedPid_; request.address = address; request.bytes = 1;
         const DWORD error = nativeRequest(request, response);
-        if (error == ERROR_SUCCESS) shadowInt3_.insert(address);
+        if (error == ERROR_SUCCESS)
+        {
+            shadowInt3_.insert(address);
+            char message[192]{};
+            std::snprintf(message, sizeof(message),
+                "ShadowPage INT3 installed: pid=%lu va=0x%llX original-pa=0x%llX view-id=%llu; execution byte=CC, original code unchanged",
+                attachedPid_, static_cast<unsigned long long>(address),
+                static_cast<unsigned long long>(response.address),
+                static_cast<unsigned long long>(response.reserved0));
+            log(message);
+        }
         return error;
     }
 

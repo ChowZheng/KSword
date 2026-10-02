@@ -2,6 +2,7 @@
 <Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003" ToolsVersion="4.0">
   <ItemGroup>
     <ClCompile Include="NativeLoader.cpp" />
+    <ClCompile Include="Provider.cpp" />
     <ClCompile Include="NativeSeam.cpp" />
     <ClCompile Include="Proxy.cpp" />
     <ClCompile Include="Control.cpp" />

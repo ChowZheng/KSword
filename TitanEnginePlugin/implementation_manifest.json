@@ -1,5 +1,5 @@
 {
-  "canonical_commit": "f107330b6563da3c38d60a3ad6e629057b7cf5d0",
+  "canonical_commit": "de6fc34df7cb01edea28f40c8b5c49d37bc1c0fb",
   "native_commit": "21ef77f31fd42d17f785802c36b2ca4ca44c43d7",
   "architecture": "amd64",
   "canonical_exports": 64,
@@ -9,459 +9,532 @@
     "KSwordTitanControl"
   ],
   "actual_counts": {
-    "F": 26,
-    "R": 32,
-    "U": 6
+    "R": 45,
+    "F": 19,
+    "U": 0
   },
-  "notes": "R includes native DLL import adaptation and owned execution-breakpoint/lifecycle handling. Live native and ShadowPage fallback validation passed in KSword-HVM-Target; the original MTF-dependent EPT debug lane is unavailable in that VM. See docs/ksword-debugger-vm-validation.md.",
+  "notes": "64 canonical exports on PR3974 de6fc34; live native transport with shared HVM adaptation; checked DbgEng for minidump/TTD. Capability bits are provider-specific. No byte-range DR equivalence is claimed for EPT page watches. Validation scopes and hashes are recorded separately.",
   "exports": [
     {
       "name": "MemoryReadSafe",
       "signature": "bool MemoryReadSafe(HANDLE hProcess, LPVOID lpBaseAddress, LPVOID lpBuffer, SIZE_T nSize, SIZE_T* lpNumberOfBytesRead);",
       "classification": "R",
       "native_mode": "native forwarding",
-      "hvm_mode": "native transport with owned ShadowPage/EPT execution adaptation"
+      "hvm_mode": "strict HVM private-window read; original view",
+      "replay_mode": "checked pinned DbgEng provider; synthetic handles and read-only/TTD capability restrictions retained"
     },
     {
       "name": "MemoryReadUnsafe",
       "signature": "bool MemoryReadUnsafe(HANDLE hProcess, LPCVOID lpBaseAddress, LPVOID lpBuffer, SIZE_T nSize, SIZE_T* lpNumberOfBytesRead);",
       "classification": "R",
       "native_mode": "native forwarding",
-      "hvm_mode": "native transport with owned ShadowPage/EPT execution adaptation"
+      "hvm_mode": "strict HVM private-window read; original view",
+      "replay_mode": "checked pinned DbgEng provider; synthetic handles and read-only/TTD capability restrictions retained"
     },
     {
       "name": "MemoryWriteSafe",
       "signature": "bool MemoryWriteSafe(HANDLE hProcess, LPVOID lpBaseAddress, LPCVOID lpBuffer, SIZE_T nSize, SIZE_T* lpNumberOfBytesWritten);",
       "classification": "R",
       "native_mode": "native forwarding with original-protection policy classification when configured",
-      "hvm_mode": "common memory policy; hidden code patches and explicitly logged data fallback"
+      "hvm_mode": "common memory policy; hidden code patches and explicitly logged data fallback",
+      "replay_mode": "checked pinned DbgEng provider; synthetic handles and read-only/TTD capability restrictions retained"
     },
     {
       "name": "MemoryQuerySafe",
       "signature": "SIZE_T MemoryQuerySafe(HANDLE hProcess, LPCVOID lpAddress, PMEMORY_BASIC_INFORMATION lpBuffer, SIZE_T dwLength);",
-      "classification": "F",
+      "classification": "R",
       "native_mode": "native forwarding",
-      "hvm_mode": "native forwarding"
+      "hvm_mode": "shared R0 memory query",
+      "replay_mode": "checked pinned DbgEng provider; synthetic handles and read-only/TTD capability restrictions retained"
     },
     {
       "name": "MemoryAllocSafe",
       "signature": "LPVOID MemoryAllocSafe(HANDLE hProcess, LPVOID lpAddress, SIZE_T dwSize, DWORD flAllocationType, DWORD flProtect);",
-      "classification": "F",
+      "classification": "R",
       "native_mode": "native forwarding",
-      "hvm_mode": "native forwarding"
+      "hvm_mode": "shared R0 confirmed allocation",
+      "replay_mode": "checked pinned DbgEng provider; synthetic handles and read-only/TTD capability restrictions retained"
     },
     {
       "name": "MemoryFreeSafe",
       "signature": "bool MemoryFreeSafe(HANDLE hProcess, LPVOID lpAddress, SIZE_T dwSize, DWORD dwFreeType);",
       "classification": "R",
       "native_mode": "native forwarding",
-      "hvm_mode": "native transport/lifecycle plus owned EPT bookkeeping"
+      "hvm_mode": "shared R0 confirmed free and owned execution-binding retirement",
+      "replay_mode": "checked pinned DbgEng provider; synthetic handles and read-only/TTD capability restrictions retained"
     },
     {
       "name": "MemoryProtectSafe",
       "signature": "bool MemoryProtectSafe(HANDLE hProcess, LPVOID lpAddress, SIZE_T dwSize, DWORD flNewProtect, PDWORD lpflOldProtect);",
-      "classification": "F",
+      "classification": "R",
       "native_mode": "native forwarding",
-      "hvm_mode": "native forwarding"
+      "hvm_mode": "shared R0 confirmed protection",
+      "replay_mode": "checked pinned DbgEng provider; synthetic handles and read-only/TTD capability restrictions retained"
     },
     {
       "name": "GetPEBLocation",
       "signature": "ULONG_PTR GetPEBLocation(HANDLE hProcess);",
       "classification": "F",
       "native_mode": "native forwarding",
-      "hvm_mode": "native forwarding"
+      "hvm_mode": "native forwarding",
+      "replay_mode": "checked pinned DbgEng provider; synthetic handles and read-only/TTD capability restrictions retained"
     },
     {
       "name": "GetTEBLocation",
       "signature": "ULONG_PTR GetTEBLocation(HANDLE hThread);",
       "classification": "F",
       "native_mode": "native forwarding",
-      "hvm_mode": "native forwarding"
+      "hvm_mode": "native forwarding",
+      "replay_mode": "checked pinned DbgEng provider; synthetic handles and read-only/TTD capability restrictions retained"
     },
     {
       "name": "InitDebugW",
       "signature": "PROCESS_INFORMATION* InitDebugW(const wchar_t* szFileName, const wchar_t* szCommandLine, const wchar_t* szCurrentFolder);",
       "classification": "R",
       "native_mode": "native forwarding",
-      "hvm_mode": "native transport/lifecycle plus owned EPT bookkeeping"
+      "hvm_mode": "native transport/lifecycle plus owned EPT bookkeeping",
+      "replay_mode": "checked pinned DbgEng provider; synthetic handles and read-only/TTD capability restrictions retained"
     },
     {
       "name": "InitReplayW",
       "signature": "PROCESS_INFORMATION* InitReplayW(const wchar_t* szArtifactPath, TitanSessionKind ExpectedKind);",
-      "classification": "U",
-      "native_mode": "native forwarding",
-      "hvm_mode": "native unsupported replay stub"
+      "classification": "R",
+      "native_mode": "live sessions reject unsupported replay operations; InitReplayW selects DbgEng for dump/TTD",
+      "hvm_mode": "replay delegates to DbgEng; never sends synthetic identities to the live driver",
+      "replay_mode": "checked pinned DbgEng provider; synthetic handles and read-only/TTD capability restrictions retained"
     },
     {
       "name": "GetSessionInfo",
       "signature": "bool GetSessionInfo(TITAN_SESSION_INFO* SessionInfo);",
-      "classification": "F",
+      "classification": "R",
       "native_mode": "native forwarding",
-      "hvm_mode": "native forwarding"
+      "hvm_mode": "current provider session/capabilities; extension reports actual HVM and mechanism detail",
+      "replay_mode": "checked pinned DbgEng provider; synthetic handles and read-only/TTD capability restrictions retained"
     },
     {
       "name": "ReplayGetPosition",
       "signature": "bool ReplayGetPosition(TITAN_REPLAY_POSITION* Position);",
-      "classification": "U",
-      "native_mode": "native forwarding",
-      "hvm_mode": "native unsupported replay stub"
+      "classification": "R",
+      "native_mode": "live sessions reject unsupported replay operations; InitReplayW selects DbgEng for dump/TTD",
+      "hvm_mode": "replay delegates to DbgEng; never sends synthetic identities to the live driver",
+      "replay_mode": "checked pinned DbgEng provider; synthetic handles and read-only/TTD capability restrictions retained"
     },
     {
       "name": "ReplayGetExtent",
       "signature": "bool ReplayGetExtent(TITAN_REPLAY_POSITION* First, TITAN_REPLAY_POSITION* Last);",
-      "classification": "U",
-      "native_mode": "native forwarding",
-      "hvm_mode": "native unsupported replay stub"
+      "classification": "R",
+      "native_mode": "live sessions reject unsupported replay operations; InitReplayW selects DbgEng for dump/TTD",
+      "hvm_mode": "replay delegates to DbgEng; never sends synthetic identities to the live driver",
+      "replay_mode": "checked pinned DbgEng provider; synthetic handles and read-only/TTD capability restrictions retained"
     },
     {
       "name": "ReplaySetPosition",
       "signature": "bool ReplaySetPosition(const TITAN_REPLAY_POSITION* Position);",
-      "classification": "U",
-      "native_mode": "native forwarding",
-      "hvm_mode": "native unsupported replay stub"
+      "classification": "R",
+      "native_mode": "live sessions reject unsupported replay operations; InitReplayW selects DbgEng for dump/TTD",
+      "hvm_mode": "replay delegates to DbgEng; never sends synthetic identities to the live driver",
+      "replay_mode": "checked pinned DbgEng provider; synthetic handles and read-only/TTD capability restrictions retained"
     },
     {
       "name": "ReplayRunBack",
       "signature": "bool ReplayRunBack();",
-      "classification": "U",
-      "native_mode": "native forwarding",
-      "hvm_mode": "native unsupported replay stub"
+      "classification": "R",
+      "native_mode": "live sessions reject unsupported replay operations; InitReplayW selects DbgEng for dump/TTD",
+      "hvm_mode": "replay delegates to DbgEng; never sends synthetic identities to the live driver",
+      "replay_mode": "checked pinned DbgEng provider; synthetic handles and read-only/TTD capability restrictions retained"
     },
     {
       "name": "ReplayStepBack",
       "signature": "bool ReplayStepBack(TITANCBSTEP StepCallBack);",
-      "classification": "U",
-      "native_mode": "native forwarding",
-      "hvm_mode": "native unsupported replay stub"
+      "classification": "R",
+      "native_mode": "live sessions reject unsupported replay operations; InitReplayW selects DbgEng for dump/TTD",
+      "hvm_mode": "replay delegates to DbgEng; never sends synthetic identities to the live driver",
+      "replay_mode": "checked pinned DbgEng provider; synthetic handles and read-only/TTD capability restrictions retained"
     },
     {
       "name": "StopDebug",
       "signature": "bool StopDebug();",
       "classification": "R",
       "native_mode": "native forwarding",
-      "hvm_mode": "native transport/lifecycle plus owned EPT bookkeeping"
+      "hvm_mode": "native transport/lifecycle plus owned EPT bookkeeping",
+      "replay_mode": "checked pinned DbgEng provider; synthetic handles and read-only/TTD capability restrictions retained"
     },
     {
       "name": "SetBPXOptions",
       "signature": "void SetBPXOptions(TitanBreakpointType DefaultBreakPointType);",
       "classification": "R",
       "native_mode": "native options forwarding with exact callback exception-offset tracking",
-      "hvm_mode": "native options forwarding with exact callback exception-offset tracking"
+      "hvm_mode": "native options forwarding with exact callback exception-offset tracking",
+      "replay_mode": "checked pinned DbgEng provider; synthetic handles and read-only/TTD capability restrictions retained"
     },
     {
       "name": "IsBPXEnabled",
       "signature": "bool IsBPXEnabled(ULONG_PTR bpxAddress);",
       "classification": "R",
       "native_mode": "native forwarding",
-      "hvm_mode": "native transport with owned ShadowPage/EPT execution adaptation"
+      "hvm_mode": "native transport with owned ShadowPage/EPT execution adaptation",
+      "replay_mode": "checked pinned DbgEng provider; synthetic handles and read-only/TTD capability restrictions retained"
     },
     {
       "name": "SetBPX",
       "signature": "bool SetBPX(ULONG_PTR bpxAddress, DWORD bpxType, TITANCBSOFTBP bpxCallBack);",
       "classification": "R",
       "native_mode": "native forwarding",
-      "hvm_mode": "native transport with owned ShadowPage/EPT execution adaptation"
+      "hvm_mode": "native transport with owned ShadowPage/EPT execution adaptation",
+      "replay_mode": "checked pinned DbgEng provider; synthetic handles and read-only/TTD capability restrictions retained"
     },
     {
       "name": "DeleteBPX",
       "signature": "bool DeleteBPX(ULONG_PTR bpxAddress);",
       "classification": "R",
       "native_mode": "native forwarding",
-      "hvm_mode": "native transport with owned ShadowPage/EPT execution adaptation"
+      "hvm_mode": "native transport with owned ShadowPage/EPT execution adaptation",
+      "replay_mode": "checked pinned DbgEng provider; synthetic handles and read-only/TTD capability restrictions retained"
     },
     {
       "name": "SetMemoryBPXEx",
       "signature": "bool SetMemoryBPXEx(ULONG_PTR MemoryStart, SIZE_T SizeOfMemory, TitanMemoryBreakpointType BreakPointType, bool RestoreOnHit, TITANCBMEMBP bpxCallBack);",
       "classification": "R",
       "native_mode": "native callback forwarding with owned policy guard",
-      "hvm_mode": "normal explicit logged native guard fallback; stealth rejected"
+      "hvm_mode": "normal explicit logged native guard fallback; stealth rejected",
+      "replay_mode": "checked pinned DbgEng provider; synthetic handles and read-only/TTD capability restrictions retained"
     },
     {
       "name": "RemoveMemoryBPX",
       "signature": "bool RemoveMemoryBPX(ULONG_PTR MemoryStart, SIZE_T SizeOfMemory);",
       "classification": "R",
       "native_mode": "native forwarding and binding retirement",
-      "hvm_mode": "native forwarding and binding retirement"
+      "hvm_mode": "native forwarding and binding retirement",
+      "replay_mode": "checked pinned DbgEng provider; synthetic handles and read-only/TTD capability restrictions retained"
     },
     {
       "name": "GetFullContextDataEx",
       "signature": "bool GetFullContextDataEx(HANDLE hActiveThread, TITAN_ENGINE_CONTEXT_t* titcontext);",
       "classification": "R",
       "native_mode": "native forwarding",
-      "hvm_mode": "native held-context plus debug-register import seam"
+      "hvm_mode": "native held-context plus debug-register import seam",
+      "replay_mode": "checked pinned DbgEng provider; synthetic handles and read-only/TTD capability restrictions retained"
     },
     {
       "name": "SetFullContextDataEx",
       "signature": "bool SetFullContextDataEx(HANDLE hActiveThread, TITAN_ENGINE_CONTEXT_t* titcontext);",
       "classification": "R",
       "native_mode": "native forwarding",
-      "hvm_mode": "native held-context plus debug-register import seam"
+      "hvm_mode": "native held-context plus debug-register import seam",
+      "replay_mode": "checked pinned DbgEng provider; synthetic handles and read-only/TTD capability restrictions retained"
     },
     {
       "name": "GetContextDataEx",
       "signature": "ULONG_PTR GetContextDataEx(HANDLE hActiveThread, TitanRegister IndexOfRegister);",
       "classification": "R",
       "native_mode": "native forwarding",
-      "hvm_mode": "native held-context plus debug-register import seam"
+      "hvm_mode": "native held-context plus debug-register import seam",
+      "replay_mode": "checked pinned DbgEng provider; synthetic handles and read-only/TTD capability restrictions retained"
     },
     {
       "name": "SetContextDataEx",
       "signature": "bool SetContextDataEx(HANDLE hActiveThread, TitanRegister IndexOfRegister, ULONG_PTR NewRegisterValue);",
       "classification": "R",
       "native_mode": "native forwarding",
-      "hvm_mode": "native held-context plus debug-register import seam"
+      "hvm_mode": "native held-context plus debug-register import seam",
+      "replay_mode": "checked pinned DbgEng provider; synthetic handles and read-only/TTD capability restrictions retained"
     },
     {
       "name": "GetAVXContext",
       "signature": "bool GetAVXContext(HANDLE hActiveThread, TITAN_ENGINE_CONTEXT_t* titcontext);",
       "classification": "R",
       "native_mode": "native forwarding",
-      "hvm_mode": "native held-context plus debug-register import seam"
+      "hvm_mode": "native held-context plus debug-register import seam",
+      "replay_mode": "checked pinned DbgEng provider; synthetic handles and read-only/TTD capability restrictions retained"
     },
     {
       "name": "SetAVXContext",
       "signature": "bool SetAVXContext(HANDLE hActiveThread, TITAN_ENGINE_CONTEXT_t* titcontext);",
       "classification": "R",
       "native_mode": "native forwarding",
-      "hvm_mode": "native held-context plus debug-register import seam"
+      "hvm_mode": "native held-context plus debug-register import seam",
+      "replay_mode": "checked pinned DbgEng provider; synthetic handles and read-only/TTD capability restrictions retained"
     },
     {
       "name": "GetAVX512Context",
       "signature": "bool GetAVX512Context(HANDLE hActiveThread, TITAN_ENGINE_CONTEXT_AVX512_t* titcontext);",
       "classification": "R",
       "native_mode": "native forwarding",
-      "hvm_mode": "native held-context plus debug-register import seam"
+      "hvm_mode": "native held-context plus debug-register import seam",
+      "replay_mode": "checked pinned DbgEng provider; synthetic handles and read-only/TTD capability restrictions retained"
     },
     {
       "name": "SetAVX512Context",
       "signature": "bool SetAVX512Context(HANDLE hActiveThread, TITAN_ENGINE_CONTEXT_AVX512_t* titcontext);",
       "classification": "R",
       "native_mode": "native forwarding",
-      "hvm_mode": "native held-context plus debug-register import seam"
+      "hvm_mode": "native held-context plus debug-register import seam",
+      "replay_mode": "checked pinned DbgEng provider; synthetic handles and read-only/TTD capability restrictions retained"
     },
     {
       "name": "GetDebugData",
       "signature": "const DEBUG_EVENT* GetDebugData();",
       "classification": "F",
       "native_mode": "native forwarding",
-      "hvm_mode": "native forwarding"
+      "hvm_mode": "native forwarding",
+      "replay_mode": "checked pinned DbgEng provider; synthetic handles and read-only/TTD capability restrictions retained"
     },
     {
       "name": "SetCustomHandler",
       "signature": "void SetCustomHandler(TitanCustomHandler ExceptionId, TITANCALLBACKARG CallBack);",
       "classification": "F",
       "native_mode": "native forwarding",
-      "hvm_mode": "native forwarding"
+      "hvm_mode": "native forwarding",
+      "replay_mode": "checked pinned DbgEng provider; synthetic handles and read-only/TTD capability restrictions retained"
     },
     {
       "name": "StepInto",
       "signature": "void StepInto(TITANCBSTEP traceCallBack);",
       "classification": "R",
       "native_mode": "native forwarding",
-      "hvm_mode": "native transport with owned ShadowPage/EPT execution adaptation"
+      "hvm_mode": "native transport with owned ShadowPage/EPT execution adaptation",
+      "replay_mode": "checked pinned DbgEng provider; synthetic handles and read-only/TTD capability restrictions retained"
     },
     {
       "name": "StepOver",
       "signature": "void StepOver(TITANCBSTEP traceCallBack);",
       "classification": "R",
       "native_mode": "native forwarding",
-      "hvm_mode": "native transport with owned ShadowPage/EPT execution adaptation"
+      "hvm_mode": "native transport with owned ShadowPage/EPT execution adaptation",
+      "replay_mode": "checked pinned DbgEng provider; synthetic handles and read-only/TTD capability restrictions retained"
     },
     {
       "name": "GetUnusedHardwareBreakPointRegister",
       "signature": "bool GetUnusedHardwareBreakPointRegister(LPDWORD RegisterIndex);",
       "classification": "R",
       "native_mode": "native forwarding",
-      "hvm_mode": "native transport with owned ShadowPage/EPT execution adaptation"
+      "hvm_mode": "native transport with owned ShadowPage/EPT execution adaptation",
+      "replay_mode": "checked pinned DbgEng provider; synthetic handles and read-only/TTD capability restrictions retained"
     },
     {
       "name": "SetHardwareBreakPoint",
       "signature": "bool SetHardwareBreakPoint(ULONG_PTR bpxAddress, DWORD IndexOfRegister, TitanHardwareBreakpointType bpxType, TitanHardwareBreakpointSize bpxSize, TITANCBHWBP bpxCallBack);",
       "classification": "R",
       "native_mode": "native forwarding",
-      "hvm_mode": "hardware EXECUTE via shared EPT backend; data types rejected"
+      "hvm_mode": "hardware EXECUTE via shared EPT backend; data types rejected",
+      "replay_mode": "checked pinned DbgEng provider; synthetic handles and read-only/TTD capability restrictions retained"
     },
     {
       "name": "DeleteHardwareBreakPoint",
       "signature": "bool DeleteHardwareBreakPoint(DWORD IndexOfRegister);",
       "classification": "R",
       "native_mode": "native forwarding",
-      "hvm_mode": "native transport/lifecycle plus owned EPT bookkeeping"
+      "hvm_mode": "native transport/lifecycle plus owned EPT bookkeeping",
+      "replay_mode": "checked pinned DbgEng provider; synthetic handles and read-only/TTD capability restrictions retained"
     },
     {
       "name": "RemoveAllBreakPoints",
       "signature": "bool RemoveAllBreakPoints(TitanBreakpointRemoveOption RemoveOption);",
       "classification": "R",
       "native_mode": "native forwarding",
-      "hvm_mode": "native transport/lifecycle plus owned EPT bookkeeping"
+      "hvm_mode": "native transport/lifecycle plus owned EPT bookkeeping",
+      "replay_mode": "checked pinned DbgEng provider; synthetic handles and read-only/TTD capability restrictions retained"
     },
     {
       "name": "DebugLoop",
       "signature": "void DebugLoop();",
       "classification": "R",
       "native_mode": "native forwarding",
-      "hvm_mode": "native transport/lifecycle plus owned EPT bookkeeping"
+      "hvm_mode": "native transport/lifecycle plus owned EPT bookkeeping",
+      "replay_mode": "checked pinned DbgEng provider; synthetic handles and read-only/TTD capability restrictions retained"
     },
     {
       "name": "SetNextDbgContinueStatus",
       "signature": "void SetNextDbgContinueStatus(DWORD SetDbgCode);",
       "classification": "F",
       "native_mode": "native forwarding",
-      "hvm_mode": "native forwarding"
+      "hvm_mode": "native forwarding",
+      "replay_mode": "checked pinned DbgEng provider; synthetic handles and read-only/TTD capability restrictions retained"
     },
     {
       "name": "AttachDebugger",
       "signature": "bool AttachDebugger(DWORD ProcessId, bool KillOnExit, LPVOID DebugInfo, TITANCALLBACK CallBack);",
       "classification": "R",
       "native_mode": "native forwarding",
-      "hvm_mode": "native transport/lifecycle plus owned EPT bookkeeping"
+      "hvm_mode": "native transport/lifecycle plus owned EPT bookkeeping",
+      "replay_mode": "checked pinned DbgEng provider; synthetic handles and read-only/TTD capability restrictions retained"
     },
     {
       "name": "DetachDebuggerEx",
       "signature": "bool DetachDebuggerEx(DWORD ProcessId);",
       "classification": "R",
       "native_mode": "native forwarding",
-      "hvm_mode": "native transport/lifecycle plus owned EPT bookkeeping"
+      "hvm_mode": "native transport/lifecycle plus owned EPT bookkeeping",
+      "replay_mode": "checked pinned DbgEng provider; synthetic handles and read-only/TTD capability restrictions retained"
     },
     {
       "name": "IsFileBeingDebugged",
       "signature": "bool IsFileBeingDebugged();",
       "classification": "F",
       "native_mode": "native forwarding",
-      "hvm_mode": "native forwarding"
+      "hvm_mode": "native forwarding",
+      "replay_mode": "checked pinned DbgEng provider; synthetic handles and read-only/TTD capability restrictions retained"
     },
     {
       "name": "TitanOpenProcess",
       "signature": "HANDLE TitanOpenProcess(DWORD dwDesiredAccess, bool bInheritHandle, DWORD dwProcessId);",
       "classification": "F",
       "native_mode": "native forwarding",
-      "hvm_mode": "native forwarding"
+      "hvm_mode": "native forwarding",
+      "replay_mode": "checked pinned DbgEng provider; synthetic handles and read-only/TTD capability restrictions retained"
     },
     {
       "name": "TitanOpenThread",
       "signature": "HANDLE TitanOpenThread(DWORD dwDesiredAccess, bool bInheritHandle, DWORD dwThreadId);",
       "classification": "F",
       "native_mode": "native forwarding",
-      "hvm_mode": "native forwarding"
+      "hvm_mode": "native forwarding",
+      "replay_mode": "checked pinned DbgEng provider; synthetic handles and read-only/TTD capability restrictions retained"
     },
     {
       "name": "TitanGetProcessImagePathW",
       "signature": "bool TitanGetProcessImagePathW(HANDLE hProcess, LPWSTR szPath, SIZE_T cchPath);",
       "classification": "F",
       "native_mode": "native forwarding",
-      "hvm_mode": "native forwarding"
+      "hvm_mode": "native forwarding",
+      "replay_mode": "checked pinned DbgEng provider; synthetic handles and read-only/TTD capability restrictions retained"
     },
     {
       "name": "TitanGetModulePathW",
       "signature": "bool TitanGetModulePathW(HANDLE hProcess, ULONG_PTR ModuleBase, LPWSTR szPath, SIZE_T cchPath);",
       "classification": "F",
       "native_mode": "native forwarding",
-      "hvm_mode": "native forwarding"
+      "hvm_mode": "native forwarding",
+      "replay_mode": "checked pinned DbgEng provider; synthetic handles and read-only/TTD capability restrictions retained"
     },
     {
       "name": "TitanCloseHandle",
       "signature": "bool TitanCloseHandle(HANDLE hEngineHandle);",
       "classification": "F",
       "native_mode": "native forwarding",
-      "hvm_mode": "native forwarding"
+      "hvm_mode": "native forwarding",
+      "replay_mode": "checked pinned DbgEng provider; synthetic handles and read-only/TTD capability restrictions retained"
     },
     {
       "name": "ProcessIsWow64",
       "signature": "bool ProcessIsWow64(HANDLE hProcess, PBOOL isWow64);",
       "classification": "F",
       "native_mode": "native forwarding",
-      "hvm_mode": "native forwarding"
+      "hvm_mode": "native forwarding",
+      "replay_mode": "checked pinned DbgEng provider; synthetic handles and read-only/TTD capability restrictions retained"
     },
     {
       "name": "TitanTerminateProcess",
       "signature": "bool TitanTerminateProcess(HANDLE hProcess, DWORD exitCode);",
       "classification": "R",
       "native_mode": "native forwarding",
-      "hvm_mode": "native transport/lifecycle plus owned EPT bookkeeping"
+      "hvm_mode": "native transport/lifecycle plus owned EPT bookkeeping",
+      "replay_mode": "checked pinned DbgEng provider; synthetic handles and read-only/TTD capability restrictions retained"
     },
     {
       "name": "RequestPause",
       "signature": "bool RequestPause(TitanPausePolicy MaximumPolicy, TITANCBPAUSE PauseCallback);",
       "classification": "F",
       "native_mode": "native forwarding",
-      "hvm_mode": "native forwarding"
+      "hvm_mode": "native forwarding",
+      "replay_mode": "checked pinned DbgEng provider; synthetic handles and read-only/TTD capability restrictions retained"
     },
     {
       "name": "TitanCreateRemoteThread",
       "signature": "HANDLE TitanCreateRemoteThread(HANDLE hProcess, LPTHREAD_START_ROUTINE start, LPVOID argument, DWORD creationFlags, LPDWORD threadId);",
       "classification": "F",
       "native_mode": "native forwarding",
-      "hvm_mode": "native forwarding"
+      "hvm_mode": "native forwarding",
+      "replay_mode": "checked pinned DbgEng provider; synthetic handles and read-only/TTD capability restrictions retained"
     },
     {
       "name": "TitanSuspendThread",
       "signature": "DWORD TitanSuspendThread(HANDLE hThread);",
-      "classification": "F",
+      "classification": "R",
       "native_mode": "native forwarding",
-      "hvm_mode": "native forwarding"
+      "hvm_mode": "R0 suspend count; explicit allowed Windows fallback",
+      "replay_mode": "checked pinned DbgEng provider; synthetic handles and read-only/TTD capability restrictions retained"
     },
     {
       "name": "TitanResumeThread",
       "signature": "DWORD TitanResumeThread(HANDLE hThread);",
-      "classification": "F",
+      "classification": "R",
       "native_mode": "native forwarding",
-      "hvm_mode": "native forwarding"
+      "hvm_mode": "R0 resume count; explicit allowed Windows fallback",
+      "replay_mode": "checked pinned DbgEng provider; synthetic handles and read-only/TTD capability restrictions retained"
     },
     {
       "name": "TitanTerminateThread",
       "signature": "bool TitanTerminateThread(HANDLE hThread, DWORD exitCode);",
       "classification": "R",
       "native_mode": "native forwarding",
-      "hvm_mode": "native transport/lifecycle plus owned EPT bookkeeping"
+      "hvm_mode": "native transport/lifecycle plus owned EPT bookkeeping",
+      "replay_mode": "checked pinned DbgEng provider; synthetic handles and read-only/TTD capability restrictions retained"
     },
     {
       "name": "TitanGetThreadId",
       "signature": "DWORD TitanGetThreadId(HANDLE hThread);",
       "classification": "F",
       "native_mode": "native forwarding",
-      "hvm_mode": "native forwarding"
+      "hvm_mode": "native forwarding",
+      "replay_mode": "checked pinned DbgEng provider; synthetic handles and read-only/TTD capability restrictions retained"
     },
     {
       "name": "TitanGetThreadPriority",
       "signature": "int TitanGetThreadPriority(HANDLE hThread);",
       "classification": "F",
       "native_mode": "native forwarding",
-      "hvm_mode": "native forwarding"
+      "hvm_mode": "native forwarding",
+      "replay_mode": "checked pinned DbgEng provider; synthetic handles and read-only/TTD capability restrictions retained"
     },
     {
       "name": "TitanSetThreadPriority",
       "signature": "bool TitanSetThreadPriority(HANDLE hThread, int priority);",
       "classification": "F",
       "native_mode": "native forwarding",
-      "hvm_mode": "native forwarding"
+      "hvm_mode": "native forwarding",
+      "replay_mode": "checked pinned DbgEng provider; synthetic handles and read-only/TTD capability restrictions retained"
     },
     {
       "name": "TitanGetThreadTimes",
       "signature": "bool TitanGetThreadTimes(HANDLE hThread, LPFILETIME creation, LPFILETIME exit, LPFILETIME kernel, LPFILETIME user);",
       "classification": "F",
       "native_mode": "native forwarding",
-      "hvm_mode": "native forwarding"
+      "hvm_mode": "native forwarding",
+      "replay_mode": "checked pinned DbgEng provider; synthetic handles and read-only/TTD capability restrictions retained"
     },
     {
       "name": "TitanQueryThreadCycleTime",
       "signature": "bool TitanQueryThreadCycleTime(HANDLE hThread, PULONG64 cycleTime);",
       "classification": "F",
       "native_mode": "native forwarding",
-      "hvm_mode": "native forwarding"
+      "hvm_mode": "native forwarding",
+      "replay_mode": "checked pinned DbgEng provider; synthetic handles and read-only/TTD capability restrictions retained"
     },
     {
       "name": "SetEngineVariable",
       "signature": "void SetEngineVariable(TitanEngineVariable VariableId, bool VariableSet);",
-      "classification": "F",
+      "classification": "R",
       "native_mode": "native forwarding",
-      "hvm_mode": "native forwarding"
+      "hvm_mode": "provider option propagation",
+      "replay_mode": "checked pinned DbgEng provider; synthetic handles and read-only/TTD capability restrictions retained"
     },
     {
       "name": "EngineCheckStructAlignment",
       "signature": "bool EngineCheckStructAlignment(TitanStructureType StructureType, ULONG_PTR StructureSize);",
       "classification": "R",
       "native_mode": "native forwarding",
-      "hvm_mode": "native transport/lifecycle plus owned EPT bookkeeping"
+      "hvm_mode": "native transport/lifecycle plus owned EPT bookkeeping",
+      "replay_mode": "checked pinned DbgEng provider; synthetic handles and read-only/TTD capability restrictions retained"
     }
-  ]
+  ],
+  "replay_commit": "e452d24fa87754fea2fd6b5abbadc1929291ce72",
+  "optional_extension": {
+    "version": 1,
+    "commands": {
+      "8": "engine/session/policy information",
+      "9": "installed breakpoint mechanism/coverage/per-binding fallback"
+    },
+    "abi_header": "DebuggerBackend/KswordDebuggerApi.h"
+  }
 }

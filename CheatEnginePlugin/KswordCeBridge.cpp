@@ -2,6 +2,7 @@
 #include "../DebuggerBackend/KswordDebuggerBackend.h"
 
 #include <mutex>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -16,6 +17,29 @@ namespace ksword::ce
         ExportedFunctions* g_functions = nullptr;
         int g_pluginId = -1;
         int g_registrationId = -1;
+
+        struct DataProtection
+        {
+            ark::DriverHandle identity;
+            DWORD pid = 0;
+            std::uintptr_t address = 0;
+            SIZE_T bytes = 0;
+            MEMORY_BASIC_INFORMATION original{};
+        };
+        // CE SetValue / freeze temporarily asks for RWX even for ordinary data.
+        // Retain one same-thread, one-write transaction, never a global PID hint.
+        thread_local DataProtection g_dataProtection;
+
+        bool contains(std::uintptr_t base, SIZE_T length, std::uintptr_t address, SIZE_T bytes)
+        {
+            return bytes != 0 && length <= (std::numeric_limits<std::uintptr_t>::max)() - base &&
+                address >= base && address <= base + length && bytes <= base + length - address;
+        }
+
+        bool executable(DWORD protection)
+        {
+            return (protection & (PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY)) != 0;
+        }
 
         template<typename T, typename Action> T boundary(Action action, T failure) noexcept
         {
@@ -35,9 +59,30 @@ namespace ksword::ce
         }, FALSE); }
         BOOL WINAPI writeMemory(HANDLE process, LPVOID address, LPCVOID data, SIZE_T bytes, SIZE_T* transferred)
         { return boundary([&] {
+            auto transaction = std::move(g_dataProtection);
+            g_dataProtection = {};
             if (GetProcessId(process) == GetCurrentProcessId())
                 return ::WriteProcessMemory(process, address, data, bytes, transferred);
-            return debugger::backend().writeMemory(process, address, data, bytes, transferred);
+            auto kind = debugger::Backend::MemoryWriteKind::byProtection;
+            if (transaction.pid != 0 && debugger::backend().processId(process) == transaction.pid &&
+                contains(transaction.address, transaction.bytes, reinterpret_cast<std::uintptr_t>(address), bytes))
+            {
+                MEMORY_BASIC_INFORMATION current{};
+                if (!transaction.identity.isValid() || WaitForSingleObject(transaction.identity.native(), 0) != WAIT_TIMEOUT ||
+                    GetProcessId(transaction.identity.native()) != transaction.pid ||
+                    debugger::backend().queryMemory(process, address, &current, sizeof(current)) == 0 ||
+                    current.State != MEM_COMMIT || current.Protect != PAGE_EXECUTE_READWRITE ||
+                    current.AllocationBase != transaction.original.AllocationBase || current.Type != transaction.original.Type ||
+                    !contains(reinterpret_cast<std::uintptr_t>(current.BaseAddress), current.RegionSize,
+                        reinterpret_cast<std::uintptr_t>(address), bytes))
+                {
+                    if (transferred != nullptr) *transferred = 0;
+                    debugger::backend().log("CE data write refused: temporary-protection transaction could not be verified");
+                    SetLastError(ERROR_INVALID_STATE); return FALSE;
+                }
+                kind = debugger::Backend::MemoryWriteKind::data;
+            }
+            return debugger::backend().writeMemory(process, address, data, bytes, transferred, kind);
         }, FALSE); }
         SIZE_T WINAPI queryMemory(HANDLE process, LPCVOID address, PMEMORY_BASIC_INFORMATION info, SIZE_T bytes)
         { return boundary([&] { return debugger::backend().queryMemory(process, address, info, bytes); }, static_cast<SIZE_T>(0)); }
@@ -56,7 +101,29 @@ namespace ksword::ce
         BOOL WINAPI attach(DWORD pid)
         { return boundary([&] { return debugger::backend().attach(pid); }, FALSE); }
         BOOL WINAPI protectMemory(HANDLE process, LPVOID address, SIZE_T bytes, DWORD protection, PDWORD previous)
-        { return boundary([&] { return debugger::backend().protectMemory(process, address, bytes, protection, previous); }, FALSE); }
+        { return boundary([&] {
+            g_dataProtection = {};
+            MEMORY_BASIC_INFORMATION original{};
+            const auto requested = reinterpret_cast<std::uintptr_t>(address);
+            const bool data = protection == PAGE_EXECUTE_READWRITE &&
+                debugger::backend().queryMemory(process, address, &original, sizeof(original)) != 0 &&
+                original.State == MEM_COMMIT && !executable(original.Protect) &&
+                (original.Protect & (PAGE_GUARD | PAGE_NOACCESS)) == 0 &&
+                contains(reinterpret_cast<std::uintptr_t>(original.BaseAddress), original.RegionSize, requested, bytes);
+            const BOOL ok = debugger::backend().protectMemory(process, address, bytes, protection, previous);
+            const DWORD error = GetLastError();
+            if (ok && data && previous != nullptr && *previous == original.Protect)
+            {
+                g_dataProtection.pid = debugger::backend().processId(process);
+                g_dataProtection.address = requested; g_dataProtection.bytes = bytes;
+                g_dataProtection.original = original;
+                HANDLE identity = nullptr;
+                if (DuplicateHandle(GetCurrentProcess(), process, GetCurrentProcess(), &identity,
+                    0, FALSE, DUPLICATE_SAME_ACCESS))
+                    g_dataProtection.identity = ark::DriverHandle(identity);
+            }
+            SetLastError(error); return ok;
+        }, FALSE); }
         LPVOID WINAPI allocateMemory(HANDLE process, LPVOID address, SIZE_T bytes, DWORD type, DWORD protection)
         { return boundary([&] { return debugger::backend().allocateMemory(process, address, bytes, type, protection); }, static_cast<LPVOID>(nullptr)); }
         HANDLE WINAPI createThread(HANDLE process, LPSECURITY_ATTRIBUTES attributes, SIZE_T stackBytes,

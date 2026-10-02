@@ -53,6 +53,11 @@ namespace ksword::titan
                     std::to_string(status.activePath) + "; pause the debugger and remove active breakpoint/Shadow write bindings");
                 return ERROR_BUSY;
             }
+            if (replayProvider() && ((enabled != 0) != (state.useHvm != 0) || !control::same(options, original)))
+            {
+                log("HVM policy change refused: replay provider owns synthetic memory/handles; stop replay before changing the next live-session policy");
+                return ERROR_NOT_SUPPORTED;
+            }
             const bool selectionChanged = (enabled != 0) != (state.useHvm != 0);
             if (!selectionChanged && control::same(options, original)) return ERROR_SUCCESS;
             DWORD error = backend.setOptions(options);
@@ -157,6 +162,30 @@ extern "C" unsigned long __stdcall KSwordDebuggerCall(KSWORD_DEBUGGER_CALL* call
     const DWORD error = ensureNative(); if (error != ERROR_SUCCESS) return error;
     KSWORD_DEBUGGER_CALL snapshot{};
     if (!safeCopy(&snapshot, call, sizeof(snapshot))) return ERROR_NOACCESS;
+    if (snapshot.command == KSWORD_DEBUGGER_QUERY_ENGINE || snapshot.command == KSWORD_DEBUGGER_QUERY_BREAKPOINT)
+    {
+        snapshot.bytesReturned = 0;
+        const SIZE_T outputBytes = snapshot.command == KSWORD_DEBUGGER_QUERY_ENGINE ? sizeof(KSWORD_DEBUGGER_ENGINE_INFO) : sizeof(KSWORD_DEBUGGER_BREAKPOINT_INFO);
+        const SIZE_T inputBytes = snapshot.command == KSWORD_DEBUGGER_QUERY_ENGINE ? 0 : sizeof(KSWORD_DEBUGGER_BREAKPOINT_QUERY);
+        if (snapshot.version != KSWORD_DEBUGGER_API_VERSION || snapshot.size != sizeof(snapshot) || snapshot.reserved != 0) snapshot.error = ERROR_REVISION_MISMATCH;
+        else if (snapshot.inputBytes != inputBytes) snapshot.error = ERROR_INVALID_PARAMETER;
+        else if (snapshot.outputBytes < outputBytes) snapshot.error = ERROR_INSUFFICIENT_BUFFER;
+        else
+        {
+            KSWORD_DEBUGGER_ENGINE_INFO engine{}; KSWORD_DEBUGGER_BREAKPOINT_INFO breakpoint{};
+            KSWORD_DEBUGGER_BREAKPOINT_QUERY query{};
+            if (snapshot.command == KSWORD_DEBUGGER_QUERY_ENGINE) snapshot.error = queryEngineInfo(engine);
+            else if (!safeCopy(&query, reinterpret_cast<const void*>(static_cast<std::uintptr_t>(snapshot.input)), sizeof(query))) snapshot.error = ERROR_NOACCESS;
+            else snapshot.error = queryBreakpoint(query, breakpoint);
+            const void* data = snapshot.command == KSWORD_DEBUGGER_QUERY_ENGINE ? static_cast<const void*>(&engine) : static_cast<const void*>(&breakpoint);
+            if (snapshot.error == ERROR_SUCCESS || snapshot.error == ERROR_NOT_FOUND)
+            {
+                if (!safeCopy(reinterpret_cast<void*>(static_cast<std::uintptr_t>(snapshot.output)), data, outputBytes)) snapshot.error = ERROR_NOACCESS;
+                else snapshot.bytesReturned = static_cast<DWORD>(outputBytes);
+            }
+        }
+        return safeCopy(call, &snapshot, sizeof(snapshot)) ? snapshot.error : ERROR_NOACCESS;
+    }
     if (snapshot.command == KSWORD_DEBUGGER_USE_HVM || snapshot.command == KSWORD_DEBUGGER_SET_OPTIONS || snapshot.command == KSWORD_DEBUGGER_QUERY_POLICY)
     {
         snapshot.bytesReturned = 0;

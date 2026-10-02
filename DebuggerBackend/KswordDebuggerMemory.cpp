@@ -51,7 +51,7 @@ namespace ksword::debugger
     }
 
     bool Backend::transfer(bool write, DWORD pid, std::uint64_t address, void* data,
-        SIZE_T bytes, SIZE_T& transferred)
+        SIZE_T bytes, SIZE_T& transferred, bool dataWrite)
     {
         transferred = 0;
         ordinaryDataFallback_ = false;
@@ -59,7 +59,7 @@ namespace ksword::debugger
             bytes > (std::numeric_limits<std::uint64_t>::max)() - address)
         { SetLastError(ERROR_INVALID_PARAMETER); return false; }
         if (!driver_.isValid()) { SetLastError(ERROR_DEVICE_NOT_CONNECTED); return false; }
-        if (write && useHvm_)
+        if (write && useHvm_ && !dataWrite)
         {
             bool handled = false;
             const bool completed = shadowWrite(pid, address, data, bytes, transferred, handled);
@@ -68,7 +68,7 @@ namespace ksword::debugger
         if (write && bytes != 0 && (options_.shadowMemoryWrites != 0 || options_.mode == KSWORD_DEBUGGER_MODE_STEALTH))
         {
             bool handled = false;
-            const bool completed = shadowMemoryWrite(pid, address, data, bytes, transferred, handled);
+            const bool completed = shadowMemoryWrite(pid, address, data, bytes, transferred, handled, dataWrite);
             if (handled) return completed;
         }
         while (transferred < bytes)
@@ -82,7 +82,17 @@ namespace ksword::debugger
                 const auto result = client_.hvmMemory(write ? KSWORD_ARK_HVM_MEMORY_OP_WRITE_VIRTUAL : KSWORD_ARK_HVM_MEMORY_OP_READ_VIRTUAL,
                     address + transferred, 0, count, write ? part : nullptr, true, true, pid, &driver_);
                 if (!result.io.ok || result.response.status != KSWORD_ARK_HVM_MEMORY_STATUS_OK || result.response.usedDirectWindow == 0)
-                { SetLastError(result.io.ok ? ERROR_PARTIAL_COPY : result.io.win32Error); return false; }
+                {
+                    const DWORD error = result.io.ok ? ERROR_PARTIAL_COPY : result.io.win32Error;
+                    SetLastError(error);
+                    logRepeated(std::string("HVM ") + (write ? "write" : "read") +
+                        " refused: pid=" + std::to_string(pid) + " address=" + std::to_string(address + transferred) +
+                        " status=" + std::to_string(result.response.status) + " ntStatus=" +
+                        std::to_string(static_cast<ULONG>(result.response.ntStatus)) + " directWindow=" +
+                        std::to_string(result.response.usedDirectWindow) + " error=" + std::to_string(error) +
+                        "; strict private-window access has no ordinary-memory fallback");
+                    return false;
+                }
                 const DWORD done = result.response.bytesTransferred;
                 if (done > count) { SetLastError(ERROR_INVALID_DATA); return false; }
                 if (!write) std::memcpy(part, result.response.data, done);
@@ -116,7 +126,7 @@ namespace ksword::debugger
     }
 
     bool Backend::shadowMemoryWrite(DWORD pid, std::uint64_t address, const void* data,
-        SIZE_T bytes, SIZE_T& transferred, bool& handled)
+        SIZE_T bytes, SIZE_T& transferred, bool& handled, bool dataWrite)
     {
         handled = true;
         if (shadowRecoveryRequired_)
@@ -134,7 +144,7 @@ namespace ksword::debugger
                 log("Shadow write refused: cannot classify committed target pages, error " + std::to_string(error));
                 SetLastError(error); return false;
             }
-            const bool executable = (region.protect & (PAGE_EXECUTE | PAGE_EXECUTE_READ |
+            const bool executable = !dataWrite && (region.protect & (PAGE_EXECUTE | PAGE_EXECUTE_READ |
                 PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY)) != 0;
             if (executable && region.type != MEM_PRIVATE && region.type != MEM_IMAGE && region.type != MEM_MAPPED)
             {
@@ -153,7 +163,9 @@ namespace ksword::debugger
                 SetLastError(ERROR_NOT_SUPPORTED); return false;
             }
             recordFallback("Shadow Page memory write", useHvm_ ? "HVM ordinary data write" : "R0 ordinary data write",
-                ERROR_NOT_SUPPORTED, "non-executable data requires a real data write/freeze; original data bytes will change");
+                ERROR_NOT_SUPPORTED, dataWrite ?
+                "frontend temporarily made data RWX; use the verified original data classification; original data bytes will change" :
+                "non-executable data requires a real data write/freeze; original data bytes will change");
             ordinaryDataFallback_ = true;
             handled = false; return false;
         }
@@ -360,11 +372,13 @@ namespace ksword::debugger
         return ok ? TRUE : FALSE;
     }
 
-    BOOL Backend::writeMemory(HANDLE process, LPVOID address, LPCVOID data, SIZE_T bytes, SIZE_T* transferred)
+    BOOL Backend::writeMemory(HANDLE process, LPVOID address, LPCVOID data, SIZE_T bytes, SIZE_T* transferred,
+        MemoryWriteKind kind)
     {
         std::lock_guard<std::recursive_mutex> lock(mutex_);
         SIZE_T done = 0;
-        const bool ok = transfer(true, processId(process), reinterpret_cast<std::uintptr_t>(address), const_cast<void*>(data), bytes, done);
+        const bool ok = transfer(true, processId(process), reinterpret_cast<std::uintptr_t>(address), const_cast<void*>(data), bytes, done,
+            kind == MemoryWriteKind::data);
         const DWORD error = GetLastError();
         if (ordinaryDataFallback_)
             log(std::string("Ordinary data fallback ") + (ok ? "completed" : "failed") +
@@ -424,6 +438,18 @@ namespace ksword::debugger
         const DWORD error = nativeRequest(request, response);
         SetLastError(error);
         return error == ERROR_SUCCESS ? reinterpret_cast<void*>(static_cast<std::uintptr_t>(response.address)) : nullptr;
+    }
+
+    BOOL Backend::freeMemory(HANDLE process, LPVOID address, SIZE_T bytes, DWORD type)
+    {
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
+        KSWORD_ARK_DEBUGGER_REQUEST request{};
+        KSWORD_ARK_DEBUGGER_RESPONSE response{};
+        request.operation = KSWORD_ARK_DEBUGGER_FREE; request.flags = KSWORD_ARK_DEBUGGER_FLAG_CONFIRMED;
+        request.processId = processId(process); request.address = reinterpret_cast<std::uintptr_t>(address);
+        request.bytes = bytes; request.allocationType = type;
+        const DWORD error = nativeRequest(request, response);
+        SetLastError(error); return error == ERROR_SUCCESS ? TRUE : FALSE;
     }
 
     HANDLE Backend::createThread(HANDLE process, LPSECURITY_ATTRIBUTES attributes, SIZE_T stackBytes,

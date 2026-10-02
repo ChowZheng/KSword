@@ -41,6 +41,26 @@ namespace ksword::titan
 
         BOOL WINAPI writeMemory(HANDLE process, LPVOID address, LPCVOID data, SIZE_T bytes, SIZE_T* transferred)
         {
+            // Titan can restore a temporarily removed breakpoint again during
+            // stepping. An already matching logical byte is not a user code
+            // patch and must not allocate a persistent Shadow write page.
+            const DWORD pid = GetProcessId(process);
+            if (nativeLogicalRead && hvmSelected.load() && bytes == 1 && data != nullptr &&
+                *static_cast<const BYTE*>(data) != 0xcc &&
+                isShadowBreakpointAddress(pid, reinterpret_cast<ULONG_PTR>(address)))
+            {
+                BYTE logical = 0; SIZE_T read = 0;
+                if (::ReadProcessMemory(process, address, &logical, 1, &read) && read == 1)
+                {
+                    debugger::backend().overlayShadowBytes(pid, reinterpret_cast<ULONG_PTR>(address), &logical, 1);
+                    if (logical == *static_cast<const BYTE*>(data))
+                    {
+                        if (transferred != nullptr) *transferred = 1;
+                        log("Titan breakpoint restore: logical byte already matches; no Shadow code patch created");
+                        SetLastError(ERROR_SUCCESS); return TRUE;
+                    }
+                }
+            }
             const auto options = debugger::backend().options();
             if (options.shadowMemoryWrites != 0 || options.mode == KSWORD_DEBUGGER_MODE_STEALTH)
                 return debugger::backend().writeMemory(process, address, data, bytes, transferred);

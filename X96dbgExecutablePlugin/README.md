@@ -46,6 +46,14 @@ adds `DebugEngineKSword=4` and resolves it through the existing checked loader
 to `KSword/TitanEngine.dll`. An unpatched debugger cannot use this package.
 `-p PID` is x64dbg's existing attach option.
 
+The frontend is pinned to PR #3974's `dbgeng` branch. Its File/Open accepts
+minidump and TTD artifacts through the bundled DbgEng provider, while live
+launch/attach uses native TitanEngine with optional KSword HVM routing. Only
+the loaded KSword engine shows the KSword menu and installed-breakpoint details.
+The Type column reports the real DR/EPT/Shadow/software/PAGE_GUARD/replay
+mechanism rather than inferring it from the frontend hardware category.
+HVM preferences are inactive in replay and preserved for the next live session.
+
 ## Control protocol
 
 The child debugger receives:

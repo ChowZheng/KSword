@@ -2,164 +2,132 @@
 #include "Proxy.h"
 using namespace ksword::titan;
 extern "C" {
-SIZE_T MemoryQuerySafe(HANDLE hProcess, LPCVOID lpAddress, PMEMORY_BASIC_INFORMATION lpBuffer, SIZE_T dwLength) {
-    if (ensureNative() != ERROR_SUCCESS) { return {}; }
-    return nativeApi.MemoryQuerySafe(hProcess, lpAddress, lpBuffer, dwLength);
-}
-LPVOID MemoryAllocSafe(HANDLE hProcess, LPVOID lpAddress, SIZE_T dwSize, DWORD flAllocationType, DWORD flProtect) {
-    if (ensureNative() != ERROR_SUCCESS) { return {}; }
-    return nativeApi.MemoryAllocSafe(hProcess, lpAddress, dwSize, flAllocationType, flProtect);
-}
-bool MemoryProtectSafe(HANDLE hProcess, LPVOID lpAddress, SIZE_T dwSize, DWORD flNewProtect, PDWORD lpflOldProtect) {
-    if (ensureNative() != ERROR_SUCCESS) { return {}; }
-    return nativeApi.MemoryProtectSafe(hProcess, lpAddress, dwSize, flNewProtect, lpflOldProtect);
-}
 ULONG_PTR GetPEBLocation(HANDLE hProcess) {
     if (ensureNative() != ERROR_SUCCESS) { return {}; }
-    return nativeApi.GetPEBLocation(hProcess);
+    return activeApi().GetPEBLocation(hProcess);
 }
 ULONG_PTR GetTEBLocation(HANDLE hThread) {
     if (ensureNative() != ERROR_SUCCESS) { return {}; }
-    return nativeApi.GetTEBLocation(hThread);
-}
-PROCESS_INFORMATION* InitReplayW(const wchar_t* szArtifactPath, TitanSessionKind ExpectedKind) {
-    if (ensureNative() != ERROR_SUCCESS) { return {}; }
-    return nativeApi.InitReplayW(szArtifactPath, ExpectedKind);
-}
-bool GetSessionInfo(TITAN_SESSION_INFO* SessionInfo) {
-    if (ensureNative() != ERROR_SUCCESS) { return {}; }
-    return nativeApi.GetSessionInfo(SessionInfo);
+    return activeApi().GetTEBLocation(hThread);
 }
 bool ReplayGetPosition(TITAN_REPLAY_POSITION* Position) {
     if (ensureNative() != ERROR_SUCCESS) { return {}; }
-    return nativeApi.ReplayGetPosition(Position);
+    return activeApi().ReplayGetPosition(Position);
 }
 bool ReplayGetExtent(TITAN_REPLAY_POSITION* First, TITAN_REPLAY_POSITION* Last) {
     if (ensureNative() != ERROR_SUCCESS) { return {}; }
-    return nativeApi.ReplayGetExtent(First, Last);
+    return activeApi().ReplayGetExtent(First, Last);
 }
 bool ReplaySetPosition(const TITAN_REPLAY_POSITION* Position) {
     if (ensureNative() != ERROR_SUCCESS) { return {}; }
-    return nativeApi.ReplaySetPosition(Position);
+    return activeApi().ReplaySetPosition(Position);
 }
 bool ReplayRunBack() {
     if (ensureNative() != ERROR_SUCCESS) { return {}; }
-    return nativeApi.ReplayRunBack();
+    return activeApi().ReplayRunBack();
 }
 bool ReplayStepBack(TITANCBSTEP StepCallBack) {
     if (ensureNative() != ERROR_SUCCESS) { return {}; }
-    return nativeApi.ReplayStepBack(StepCallBack);
+    return activeApi().ReplayStepBack(StepCallBack);
 }
 bool GetFullContextDataEx(HANDLE hActiveThread, TITAN_ENGINE_CONTEXT_t* titcontext) {
     if (ensureNative() != ERROR_SUCCESS) { return {}; }
-    return nativeApi.GetFullContextDataEx(hActiveThread, titcontext);
+    return activeApi().GetFullContextDataEx(hActiveThread, titcontext);
 }
 bool SetFullContextDataEx(HANDLE hActiveThread, TITAN_ENGINE_CONTEXT_t* titcontext) {
     if (ensureNative() != ERROR_SUCCESS) { return {}; }
-    return nativeApi.SetFullContextDataEx(hActiveThread, titcontext);
+    return activeApi().SetFullContextDataEx(hActiveThread, titcontext);
 }
 ULONG_PTR GetContextDataEx(HANDLE hActiveThread, TitanRegister IndexOfRegister) {
     if (ensureNative() != ERROR_SUCCESS) { return {}; }
-    return nativeApi.GetContextDataEx(hActiveThread, IndexOfRegister);
+    return activeApi().GetContextDataEx(hActiveThread, IndexOfRegister);
 }
 bool SetContextDataEx(HANDLE hActiveThread, TitanRegister IndexOfRegister, ULONG_PTR NewRegisterValue) {
     if (ensureNative() != ERROR_SUCCESS) { return {}; }
-    return nativeApi.SetContextDataEx(hActiveThread, IndexOfRegister, NewRegisterValue);
+    return activeApi().SetContextDataEx(hActiveThread, IndexOfRegister, NewRegisterValue);
 }
 bool GetAVXContext(HANDLE hActiveThread, TITAN_ENGINE_CONTEXT_t* titcontext) {
     if (ensureNative() != ERROR_SUCCESS) { return {}; }
-    return nativeApi.GetAVXContext(hActiveThread, titcontext);
+    return activeApi().GetAVXContext(hActiveThread, titcontext);
 }
 bool SetAVXContext(HANDLE hActiveThread, TITAN_ENGINE_CONTEXT_t* titcontext) {
     if (ensureNative() != ERROR_SUCCESS) { return {}; }
-    return nativeApi.SetAVXContext(hActiveThread, titcontext);
+    return activeApi().SetAVXContext(hActiveThread, titcontext);
 }
 bool GetAVX512Context(HANDLE hActiveThread, TITAN_ENGINE_CONTEXT_AVX512_t* titcontext) {
     if (ensureNative() != ERROR_SUCCESS) { return {}; }
-    return nativeApi.GetAVX512Context(hActiveThread, titcontext);
+    return activeApi().GetAVX512Context(hActiveThread, titcontext);
 }
 bool SetAVX512Context(HANDLE hActiveThread, TITAN_ENGINE_CONTEXT_AVX512_t* titcontext) {
     if (ensureNative() != ERROR_SUCCESS) { return {}; }
-    return nativeApi.SetAVX512Context(hActiveThread, titcontext);
+    return activeApi().SetAVX512Context(hActiveThread, titcontext);
 }
 const DEBUG_EVENT* GetDebugData() {
     if (ensureNative() != ERROR_SUCCESS) { return {}; }
-    return nativeApi.GetDebugData();
+    return activeApi().GetDebugData();
 }
 void SetCustomHandler(TitanCustomHandler ExceptionId, TITANCALLBACKARG CallBack) {
     if (ensureNative() != ERROR_SUCCESS) { return; }
-    nativeApi.SetCustomHandler(ExceptionId, CallBack);
+    activeApi().SetCustomHandler(ExceptionId, CallBack);
 }
 void SetNextDbgContinueStatus(DWORD SetDbgCode) {
     if (ensureNative() != ERROR_SUCCESS) { return; }
-    nativeApi.SetNextDbgContinueStatus(SetDbgCode);
+    activeApi().SetNextDbgContinueStatus(SetDbgCode);
 }
 bool IsFileBeingDebugged() {
     if (ensureNative() != ERROR_SUCCESS) { return {}; }
-    return nativeApi.IsFileBeingDebugged();
+    return activeApi().IsFileBeingDebugged();
 }
 HANDLE TitanOpenProcess(DWORD dwDesiredAccess, bool bInheritHandle, DWORD dwProcessId) {
     if (ensureNative() != ERROR_SUCCESS) { return {}; }
-    return nativeApi.TitanOpenProcess(dwDesiredAccess, bInheritHandle, dwProcessId);
+    return activeApi().TitanOpenProcess(dwDesiredAccess, bInheritHandle, dwProcessId);
 }
 HANDLE TitanOpenThread(DWORD dwDesiredAccess, bool bInheritHandle, DWORD dwThreadId) {
     if (ensureNative() != ERROR_SUCCESS) { return {}; }
-    return nativeApi.TitanOpenThread(dwDesiredAccess, bInheritHandle, dwThreadId);
+    return activeApi().TitanOpenThread(dwDesiredAccess, bInheritHandle, dwThreadId);
 }
 bool TitanGetProcessImagePathW(HANDLE hProcess, LPWSTR szPath, SIZE_T cchPath) {
     if (ensureNative() != ERROR_SUCCESS) { return {}; }
-    return nativeApi.TitanGetProcessImagePathW(hProcess, szPath, cchPath);
+    return activeApi().TitanGetProcessImagePathW(hProcess, szPath, cchPath);
 }
 bool TitanGetModulePathW(HANDLE hProcess, ULONG_PTR ModuleBase, LPWSTR szPath, SIZE_T cchPath) {
     if (ensureNative() != ERROR_SUCCESS) { return {}; }
-    return nativeApi.TitanGetModulePathW(hProcess, ModuleBase, szPath, cchPath);
+    return activeApi().TitanGetModulePathW(hProcess, ModuleBase, szPath, cchPath);
 }
 bool TitanCloseHandle(HANDLE hEngineHandle) {
     if (ensureNative() != ERROR_SUCCESS) { return {}; }
-    return nativeApi.TitanCloseHandle(hEngineHandle);
+    return activeApi().TitanCloseHandle(hEngineHandle);
 }
 bool ProcessIsWow64(HANDLE hProcess, PBOOL isWow64) {
     if (ensureNative() != ERROR_SUCCESS) { return {}; }
-    return nativeApi.ProcessIsWow64(hProcess, isWow64);
+    return activeApi().ProcessIsWow64(hProcess, isWow64);
 }
 bool RequestPause(TitanPausePolicy MaximumPolicy, TITANCBPAUSE PauseCallback) {
     if (ensureNative() != ERROR_SUCCESS) { return {}; }
-    return nativeApi.RequestPause(MaximumPolicy, PauseCallback);
+    return activeApi().RequestPause(MaximumPolicy, PauseCallback);
 }
 HANDLE TitanCreateRemoteThread(HANDLE hProcess, LPTHREAD_START_ROUTINE start, LPVOID argument, DWORD creationFlags, LPDWORD threadId) {
     if (ensureNative() != ERROR_SUCCESS) { return {}; }
-    return nativeApi.TitanCreateRemoteThread(hProcess, start, argument, creationFlags, threadId);
-}
-DWORD TitanSuspendThread(HANDLE hThread) {
-    if (ensureNative() != ERROR_SUCCESS) { return MAXDWORD; }
-    return nativeApi.TitanSuspendThread(hThread);
-}
-DWORD TitanResumeThread(HANDLE hThread) {
-    if (ensureNative() != ERROR_SUCCESS) { return MAXDWORD; }
-    return nativeApi.TitanResumeThread(hThread);
+    return activeApi().TitanCreateRemoteThread(hProcess, start, argument, creationFlags, threadId);
 }
 DWORD TitanGetThreadId(HANDLE hThread) {
     if (ensureNative() != ERROR_SUCCESS) { return {}; }
-    return nativeApi.TitanGetThreadId(hThread);
+    return activeApi().TitanGetThreadId(hThread);
 }
 int TitanGetThreadPriority(HANDLE hThread) {
     if (ensureNative() != ERROR_SUCCESS) { return THREAD_PRIORITY_ERROR_RETURN; }
-    return nativeApi.TitanGetThreadPriority(hThread);
+    return activeApi().TitanGetThreadPriority(hThread);
 }
 bool TitanSetThreadPriority(HANDLE hThread, int priority) {
     if (ensureNative() != ERROR_SUCCESS) { return {}; }
-    return nativeApi.TitanSetThreadPriority(hThread, priority);
+    return activeApi().TitanSetThreadPriority(hThread, priority);
 }
 bool TitanGetThreadTimes(HANDLE hThread, LPFILETIME creation, LPFILETIME exit, LPFILETIME kernel, LPFILETIME user) {
     if (ensureNative() != ERROR_SUCCESS) { return {}; }
-    return nativeApi.TitanGetThreadTimes(hThread, creation, exit, kernel, user);
+    return activeApi().TitanGetThreadTimes(hThread, creation, exit, kernel, user);
 }
 bool TitanQueryThreadCycleTime(HANDLE hThread, PULONG64 cycleTime) {
     if (ensureNative() != ERROR_SUCCESS) { return {}; }
-    return nativeApi.TitanQueryThreadCycleTime(hThread, cycleTime);
-}
-void SetEngineVariable(TitanEngineVariable VariableId, bool VariableSet) {
-    if (ensureNative() != ERROR_SUCCESS) { return; }
-    nativeApi.SetEngineVariable(VariableId, VariableSet);
+    return activeApi().TitanQueryThreadCycleTime(hThread, cycleTime);
 }
 }

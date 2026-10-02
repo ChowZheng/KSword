@@ -5,15 +5,25 @@ pinned x64dbg PR 3974 ABI. Its forwarding dependency is the original, matching
 `TitanEngine.dll` in the parent directory. Module identity, AMD64 format and all
 64 exports are checked before dispatch; a KSword proxy cannot be its own native
 dependency. The host checked loader is retained where x64dbg provides it.
-Both DLLs stay pinned while callbacks or the log control worker can execute.
+The native and replay DLLs stay pinned while callbacks or the log control worker can execute.
 `DllMain` only records the module handle.
 
 The default is native forwarding. Starting x64dbg, querying its session and
 using ordinary debugging requires no KSword driver. Default memory Safe/Unsafe retain
 native filtering/raw semantics; allocation, protection, pause, stepping,
-software and memory breakpoints retain native behavior. Replay exports retain
-the native unsupported result; no HVM or reverse-execution capability bits are
-invented.
+software and memory breakpoints retain native behavior. Minidump and TTD sessions
+select the checked pinned `DbgEng/TitanEngine.dll`. The provider receives the
+upstream structure-alignment startup handshake before `InitReplayW`; that
+handshake initializes its COM/debug worker. Session capabilities, synthetic
+handles and read-only restrictions remain the provider's results. All wrappers
+dispatch to the selected provider through teardown and handle closure. A new
+live launch/attach switches back to native TitanEngine after owned state is
+released. HVM preferences are retained, but are inactive in replay.
+
+The PR's 27 added exports are implemented within the existing 64-export ABI.
+HVM query/allocate/protect/free and thread suspend/resume use the shared backend;
+real-handle process/thread operations retain native semantics. Replay operations
+and synthetic identities never enter the live driver or native IAT seam.
 
 ## HVM execution breakpoints
 
@@ -106,6 +116,14 @@ breakpoints on unmapped/replaced pages must be reinstalled.
 - `KSwordDebuggerCall(KSWORD_DEBUGGER_CALL*)` exposes the common versioned ABI,
   including all existing HVM protocol commands and their ownership guards.
 
+Optional in-process commands 8 and 9 query the engine/session/policy and an
+installed breakpoint's actual mechanism, coverage, slot and fallback. These
+commands are implemented by this adapter; they add no required TitanEngine
+export and no R0 wire structure. Failed, disabled or retired records return
+`ERROR_NOT_FOUND`. Shadow binding information distinguishes temporary byte
+restoration at a held hit from deletion. Ordinary reads still show original
+code. The frontend shows these diagnostics only when KSword was actually loaded.
+
 The standalone launcher sets `KSWORD_DEBUGGER_LOG_FILE`,
 `KSWORD_DEBUGGER_CONTROL_FILE`, `KSWORD_DEBUGGER_STATE_FILE` and
 `KSWORD_DEBUGGER_SESSION_ID`. The idle worker consumes
@@ -138,7 +156,9 @@ The headless test covers actual native ABI/session/context-size, handles,
 memory, protection, success/failure LastError, unsupported replay, idle control
 acknowledgments, v1/v2 options, validation, failure rollback, real native software
 binding protection, stealth visible-breakpoint rejection, and rejection of an
-incomplete native export table. `tests/LifetimeTests.vcxproj` also builds the pure
+incomplete native export table. Separate upstream-provider tests and VM UI
+acceptance for PR #3974 are recorded in `docs/ksword-x64dbg-pr3974-validation.md`;
+TTD navigation needs an external valid recording. `tests/LifetimeTests.vcxproj` also builds the pure
 headless `ControlProtocolTests.cpp` cases, requiring neither GUI nor driver. These checks do
 not activate HVM or prove live EPT hits. The VM's full native regressions, real
 ShadowPage fallback stops and actual control/log Tabs are recorded in

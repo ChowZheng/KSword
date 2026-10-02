@@ -2,7 +2,7 @@
   "scope": "static source review and proposed hybrid adapter checklist; not a runtime certification",
   "base_commit": "b189da406fb48ad64283eb60ba25c25e99f3e311",
   "pr": 3974,
-  "pr_head": "f107330b6563da3c38d60a3ad6e629057b7cf5d0",
+  "pr_head": "de6fc34df7cb01edea28f40c8b5c49d37bc1c0fb",
   "native_titan_commit": "21ef77f31fd42d17f785802c36b2ca4ca44c43d7",
   "ksword_reference_commit": "699d1a93e3b0a0c97a0022d5ab81a188e8f16e21",
   "canonical_exports": 64,
