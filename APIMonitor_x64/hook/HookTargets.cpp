@@ -152,7 +152,7 @@ namespace apimon
         public:
             ScopedHookGuard()
             {
-                m_bypass = g_hookReentryGuard || IsInlineHookInternalBypassActive();
+                m_bypass = IsInlineHookInternalBypassActive() || g_hookReentryGuard;
                 if (!m_bypass)
                 {
                     g_hookReentryGuard = true;
@@ -6600,6 +6600,12 @@ namespace apimon
                         g_rawCoverageObservations[observationKey] = MakeCoverageRow(moduleName.c_str(), observationApi.c_str(),
                             HookKind::Raw, CoverageState::RuleExcluded,
                             IsStrongTypedExport(moduleName, exportName) ? L"Strong definition owns this export; see its actual installation state" : L"export excluded by Raw/Fake rules");
+                        continue;
+                    }
+                    if (IsNativeRuntimeHookTarget(reinterpret_cast<void*>(::GetProcAddress(moduleHandle, exportName.c_str()))))
+                    {
+                        g_rawCoverageObservations[observationKey] = MakeCoverageRow(moduleName.c_str(), observationApi.c_str(),
+                            HookKind::Raw, CoverageState::RuleExcluded, L"Raw target resolves into excluded native runtime (ntdll)");
                         continue;
                     }
                     if (acceptedCount >= kMaxRawExportsPerModule)

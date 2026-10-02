@@ -18,6 +18,9 @@ namespace apimon
     // - 返回：true 表示 HookedXXX wrapper 应直接调用原始 trampoline，避免安装阶段自触发递归。
     bool IsInlineHookInternalBypassActive();
 
+    // Raw policy follows forwarders and jump stubs so aliases cannot bypass the ntdll exclusion.
+    bool IsNativeRuntimeHookTarget(void* exportAddress);
+
     class ScopedInlineHookInternalBypass final
     {
     public:

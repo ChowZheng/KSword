@@ -2,6 +2,9 @@
 #include "HookEngine.h"
 
 #include <TlHelp32.h>
+#include <intrin.h>
+
+extern "C" unsigned long _tls_index;
 
 namespace apimon
 {
@@ -15,6 +18,20 @@ namespace apimon
         constexpr char kLandingPad[] = "\xF3\x0F\x1E\xFA";
 #endif
         thread_local std::uint32_t g_inlineHookInternalBypassDepth = 0; // g_inlineHookInternalBypassDepth：HookEngine 内部操作重入屏蔽深度。
+
+        // Loader callbacks can still enter patched APIs after this thread's static TLS is freed.
+        // Do not call a TLS getter or another monitored API while checking its availability.
+        bool HookThreadStorageAvailable() noexcept
+        {
+#ifdef _M_IX86
+            auto** slots = reinterpret_cast<void**>(__readfsdword(0x2C));
+#else
+            auto** slots = reinterpret_cast<void**>(__readgsqword(0x58));
+#endif
+            if (!slots) return false;
+            __try { return slots[_tls_index] != nullptr; }
+            __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+        }
 
         // Allocate the handle list before suspension: a suspended thread may own the heap lock.
         class ScopedOtherThreadsSuspender
@@ -451,7 +468,7 @@ namespace apimon
         // - 输入：无；
         // - 处理：读取当前线程 HookEngine 内部操作深度；
         // - 返回：深度大于 0 返回 true。
-        return g_inlineHookInternalBypassDepth != 0;
+        return !HookThreadStorageAvailable() || g_inlineHookInternalBypassDepth != 0;
     }
 
     ScopedInlineHookInternalBypass::ScopedInlineHookInternalBypass()
@@ -460,8 +477,11 @@ namespace apimon
         // - 输入：无；
         // - 处理：当前线程进入 HookEngine 内部区间，HookedXXX wrapper 将直接旁路；
         // - 返回：无返回值。
-        ++g_inlineHookInternalBypassDepth;
-        m_entered = true;
+        if (HookThreadStorageAvailable())
+        {
+            ++g_inlineHookInternalBypassDepth;
+            m_entered = true;
+        }
     }
 
     ScopedInlineHookInternalBypass::~ScopedInlineHookInternalBypass()
@@ -470,10 +490,22 @@ namespace apimon
         // - 输入：无；
         // - 处理：当前线程退出 HookEngine 内部区间，防止安装/卸载结束后继续旁路用户调用；
         // - 返回：无返回值。
-        if (m_entered && g_inlineHookInternalBypassDepth != 0)
+        if (m_entered && HookThreadStorageAvailable() && g_inlineHookInternalBypassDepth != 0)
         {
             --g_inlineHookInternalBypassDepth;
         }
+    }
+
+    bool IsNativeRuntimeHookTarget(void* exportAddress)
+    {
+        ScopedInlineHookInternalBypass bypass;
+        const std::lock_guard<std::mutex> lock(g_engineMutex);
+        std::size_t offset = 0;
+        const wchar_t* reason = nullptr;
+        void* target = ResolveJumpStub(exportAddress, &offset, &reason);
+        HMODULE owner = nullptr;
+        return target && ::GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+            reinterpret_cast<LPCWSTR>(target), &owner) && owner == ::GetModuleHandleW(L"ntdll.dll");
     }
 
     InlineHookInstallResult InstallInlineHookAtAddress(void* exportAddress, void* detourAddress,
