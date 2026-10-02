@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 // ============================================================
 // hook/HookEngine.h
@@ -54,6 +54,10 @@ namespace apimon
         void* trampolineAddress = nullptr;                   // trampolineAddress：原始指令跳板地址。
         std::array<unsigned char, 32> originalBytes = {};   // originalBytes：被覆盖前的原始字节。
         std::size_t patchSize = 0;                          // patchSize：当前覆盖的前导字节数。
+        void* sharedPatchContext = nullptr;
+        bool sharedEntry = false;
+        std::size_t failureOffset = 0;
+        std::wstring lastFailure;
         bool installed = false;                             // installed：当前 Hook 是否已生效。
         bool permanentlyDisabled = false;                   // permanentlyDisabled：是否因不可安全安装而永久禁用。
     };
@@ -65,6 +69,9 @@ namespace apimon
         InlineHookRecord* hookOut,
         void** originalOut,
         std::wstring* errorTextOut);
+
+    InlineHookInstallResult InstallInlineHookAtAddress(void* address, void* detour,
+        InlineHookRecord* hookOut, void** originalOut, std::wstring* errorTextOut);
 
     bool UninstallInlineHook(InlineHookRecord* hookValue);
 }

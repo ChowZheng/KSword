@@ -1,4 +1,4 @@
-#include "pch.h"
+﻿#include "pch.h"
 #include "HookEngine.h"
 
 #include <TlHelp32.h>
@@ -75,228 +75,229 @@ namespace apimon
             bool m_ready = false;
         };
 
-        std::size_t ModRmLength(
-            const unsigned char* codePointer,
-            const std::size_t maxLength,
-            bool* usesRipRelativeOut)
+        enum class ControlFlow { Linear, Call, Jump, Conditional, LandingPad, Terminal };
+        struct InstructionDescription
         {
-            if (codePointer == nullptr || maxLength < 1)
-            {
-                return 0;
-            }
-            if (usesRipRelativeOut != nullptr)
-            {
-                *usesRipRelativeOut = false;
-            }
+            std::size_t length = 0;
+            std::size_t displacementOffset = 0;
+            unsigned displacementSize = 0;
+            bool ripRelative = false;
+            ControlFlow flow = ControlFlow::Linear;
+            unsigned condition = 0;
+            std::int64_t relativeDisplacement = 0;
+        };
 
-            std::size_t totalLength = 1;
-            const unsigned char modrmValue = codePointer[0];
-            const unsigned char modValue = static_cast<unsigned char>((modrmValue >> 6) & 0x3);
-            const unsigned char rmValue = static_cast<unsigned char>(modrmValue & 0x7);
-
-            if (modValue != 3 && rmValue == 4)
+        InstructionDescription DecodeInstruction(const unsigned char* code, std::size_t size)
+        {
+            InstructionDescription d;
+            if (!code || !size) return d;
+            size = (std::min)(size, std::size_t(15));
+            if (size >= 4 && code[0] == 0xF3 && code[1] == 0x0F && code[2] == 0x1E && code[3] == 0xFA)
+            { d.length = 4; d.flow = ControlFlow::LandingPad; return d; }
+            std::size_t offset = 0;
+            bool operand16 = false, rexW = false, seenRex = false;
+            while (offset < size)
             {
-                if (maxLength < totalLength + 1)
+                const unsigned char p = code[offset];
+                if (p == 0x66) { if (seenRex) return {}; operand16 = true; ++offset; }
+                else if (p >= 0x40 && p <= 0x4F) { if (seenRex) return {}; seenRex = true; rexW = (p & 8) != 0; ++offset; }
+                else if (p == 0x2E || p == 0x36 || p == 0x3E || p == 0x26 || p == 0x64 || p == 0x65) { if (seenRex) return {}; ++offset; }
+                else break;
+            }
+            if (offset >= size) return {};
+            const unsigned char op = code[offset++];
+            // Address override, vector encodings, lock/rep outside ENDBR, and undocumented opcodes are rejected.
+            if (op == 0x67 || op == 0xF0 || op == 0xF2 || op == 0xF3) return {};
+            auto finish = [&](std::size_t immediate) -> InstructionDescription {
+                if (offset + immediate > size) return {};
+                d.length = offset + immediate; return d;
+            };
+            auto relative = [&](ControlFlow flow, unsigned width, unsigned condition = 0) -> InstructionDescription {
+                if (offset + width > size || offset != (op == 0x0F ? 2u : 1u)) return {};
+                d.flow = flow; d.condition = condition; d.displacementOffset = offset;
+                d.displacementSize = width;
+                if (width == 1) d.relativeDisplacement = static_cast<std::int8_t>(code[offset]);
+                else { std::int32_t value; std::memcpy(&value, code + offset, 4); d.relativeDisplacement = value; }
+                return finish(width);
+            };
+            if ((op >= 0x50 && op <= 0x5F) || op == 0x90) return finish(0);
+            if (op == 0xC3 || op == 0xC2 || op == 0xCC) { d.flow = ControlFlow::Terminal; return finish(op == 0xC2 ? 2 : 0); }
+            if (op == 0x6A) return finish(1);
+            if (op == 0x68) return finish(operand16 ? 2 : 4);
+            if (op >= 0xB8 && op <= 0xBF) return finish(rexW ? 8 : operand16 ? 2 : 4);
+            if (op == 0xE8 || op == 0xE9) return relative(op == 0xE8 ? ControlFlow::Call : ControlFlow::Jump, 4);
+            if (op == 0xEB) return relative(ControlFlow::Jump, 1);
+            if (op >= 0x70 && op <= 0x7F) return relative(ControlFlow::Conditional, 1, op & 15);
+            unsigned char second = 0;
+            if (op == 0x0F)
+            {
+                if (offset >= size) return {};
+                second = code[offset++];
+                if (second >= 0x80 && second <= 0x8F) return relative(ControlFlow::Conditional, 4, second & 15);
+                // Only NOP, register/memory extensions and conditional moves with known ModRM layout.
+                if (second != 0x1F && second != 0xB6 && second != 0xB7 && second != 0xBE && second != 0xBF
+                    && !(second >= 0x40 && second <= 0x4F)) return {};
+            }
+            std::size_t immediate = 0;
+            if (op != 0x0F)
+            {
+                switch (op)
                 {
-                    return 0;
+                case 0x01: case 0x03: case 0x09: case 0x0B: case 0x21: case 0x23: case 0x29: case 0x2B:
+                case 0x31: case 0x33: case 0x39: case 0x3B: case 0x63: case 0x84: case 0x85:
+                case 0x88: case 0x89: case 0x8A: case 0x8B: case 0x8D: break;
+                case 0x81: case 0xC7: immediate = operand16 && !rexW ? 2 : 4; break;
+                case 0x80: case 0x83: case 0xC6: immediate = 1; break;
+                case 0xF6: case 0xF7:
+                    if (offset >= size) return {};
+                    if (((code[offset] >> 3) & 7) == 1) return {};
+                    if (((code[offset] >> 3) & 7) == 0) immediate = op == 0xF6 ? 1 : operand16 && !rexW ? 2 : 4;
+                    break;
+                // Indirect CALL/JMP remains a boundary; entry FF25 stubs are resolved separately.
+                default: return {};
                 }
-                const unsigned char sibValue = codePointer[totalLength++];
-                const unsigned char baseValue = static_cast<unsigned char>(sibValue & 0x7);
-                if (modValue == 0 && baseValue == 5)
-                {
-                    totalLength += 4;
-                }
             }
-
-            if (modValue == 0 && rmValue == 5)
+            if (offset >= size) return {};
+            const unsigned char modrm = code[offset++];
+            const unsigned mod = modrm >> 6, rm = modrm & 7, group = (modrm >> 3) & 7;
+            if ((op == 0xC6 || op == 0xC7 || (op == 0x0F && second == 0x1F)) && group != 0) return {};
+            if (op == 0x8D && mod == 3) return {};
+            unsigned displacement = 0;
+            if (mod != 3 && rm == 4)
             {
-                if (usesRipRelativeOut != nullptr)
-                {
-                    *usesRipRelativeOut = true;
-                }
-                totalLength += 4;
+                if (offset >= size) return {};
+                const unsigned base = code[offset++] & 7;
+                if (mod == 0 && base == 5) displacement = 4;
             }
-            else if (modValue == 1)
+            if (mod == 0 && rm == 5) { displacement = 4; d.ripRelative = true; }
+            if (mod == 1) displacement = 1;
+            if (mod == 2) displacement = 4;
+            if (displacement)
             {
-                totalLength += 1;
+                d.displacementOffset = offset; d.displacementSize = displacement;
+                if (offset + displacement > size) return {};
+                if (d.ripRelative) { std::int32_t value; std::memcpy(&value, code + offset, 4); d.relativeDisplacement = value; }
+                offset += displacement;
             }
-            else if (modValue == 2)
-            {
-                totalLength += 4;
-            }
-
-            return totalLength <= maxLength ? totalLength : 0;
+            return finish(immediate);
         }
 
-        std::size_t DecodeInstructionLength(const unsigned char* codePointer, const std::size_t maxLength)
+        bool SafeRead(const void* source, void* destination, std::size_t size)
         {
-            if (codePointer == nullptr || maxLength == 0)
+            const auto begin = reinterpret_cast<std::uintptr_t>(source);
+            if (!begin || size > UINTPTR_MAX - begin) return false;
+            auto position = begin;
+            while (position < begin + size)
             {
-                return 0;
+                MEMORY_BASIC_INFORMATION info{};
+                if (!::VirtualQuery(reinterpret_cast<void*>(position), &info, sizeof(info)) || info.State != MEM_COMMIT
+                    || (info.Protect & (PAGE_NOACCESS | PAGE_GUARD))) return false;
+                const auto end = reinterpret_cast<std::uintptr_t>(info.BaseAddress) + info.RegionSize;
+                if (end <= position) return false;
+                position = (std::min)(end, begin + size);
             }
+            __try { std::memcpy(destination, source, size); return true; }
+            __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+        }
 
-            std::size_t offsetValue = 0;
-            bool operandOverride = false;
-            bool rexW = false;
+        std::size_t ReadCode(const void* source, unsigned char* destination, std::size_t capacity)
+        {
+            // Bytewise copy stops at the first unreadable byte and never probes an inaccessible suffix unnecessarily.
+            std::size_t size = 0;
+            for (; size < capacity; ++size)
+            {
+                MEMORY_BASIC_INFORMATION info{};
+                if (!::VirtualQuery(static_cast<const unsigned char*>(source) + size, &info, sizeof(info))
+                    || info.State != MEM_COMMIT || (info.Protect & (PAGE_NOACCESS | PAGE_GUARD))
+                    || !(info.Protect & (PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY))
+                    || !SafeRead(static_cast<const unsigned char*>(source) + size, destination + size, 1)) break;
+            }
+            return size;
+        }
 
-            while (offsetValue < maxLength)
-            {
-                const unsigned char prefixValue = codePointer[offsetValue];
-                if (prefixValue == 0x66)
-                {
-                    operandOverride = true;
-                    ++offsetValue;
-                    continue;
-                }
-                if ((prefixValue >= 0x40 && prefixValue <= 0x4F))
-                {
-                    rexW = (prefixValue & 0x08) != 0;
-                    ++offsetValue;
-                    continue;
-                }
-                if (prefixValue == 0xF0 || prefixValue == 0xF2 || prefixValue == 0xF3
-                    || prefixValue == 0x2E || prefixValue == 0x36 || prefixValue == 0x3E
-                    || prefixValue == 0x26 || prefixValue == 0x64 || prefixValue == 0x65)
-                {
-                    ++offsetValue;
-                    continue;
-                }
-                break;
-            }
+        bool FitsRel32(std::int64_t value)
+        { return value >= INT32_MIN && value <= INT32_MAX; }
 
-            if (offsetValue >= maxLength)
-            {
-                return 0;
-            }
+        std::size_t RelocatedSize(const InstructionDescription& instruction)
+        {
+            if (instruction.flow == ControlFlow::Conditional) return 6;
+            if (instruction.flow == ControlFlow::Call || instruction.flow == ControlFlow::Jump) return 5;
+            return instruction.length;
+        }
 
-            const unsigned char opcodeValue = codePointer[offsetValue++];
-            if ((opcodeValue >= 0x50 && opcodeValue <= 0x5F)
-                || opcodeValue == 0x90)
+        bool BuildRelocatedCode(const unsigned char* original, std::uintptr_t source,
+            std::size_t patchSize, unsigned char* output, std::uintptr_t destination,
+            const std::vector<InstructionDescription>& instructions, std::size_t* outputSize,
+            std::size_t* failureOffset, const wchar_t** reason)
+        {
+            std::array<std::size_t, 33> oldOffsets{}, newOffsets{};
+            std::size_t oldOffset = 0, newOffset = 0;
+            for (std::size_t i = 0; i < instructions.size(); ++i)
+            { oldOffsets[i] = oldOffset; newOffsets[i] = newOffset; oldOffset += instructions[i].length; newOffset += RelocatedSize(instructions[i]); }
+            for (std::size_t i = 0; i < instructions.size(); ++i)
             {
-                return offsetValue;
-            }
-            if (opcodeValue == 0x6A)
-            {
-                return offsetValue + 1 <= maxLength ? offsetValue + 1 : 0;
-            }
-            if (opcodeValue == 0x68)
-            {
-                const std::size_t immediateLength = operandOverride ? 2 : 4;
-                return offsetValue + immediateLength <= maxLength ? offsetValue + immediateLength : 0;
-            }
-            if (opcodeValue == 0xE8 || opcodeValue == 0xE9 || opcodeValue == 0xEB)
-            {
-                // 相对控制流在复制到 trampoline 后会改写语义，这里直接视为不可安全 Hook。
-                return 0;
-            }
-            if (opcodeValue >= 0xB8 && opcodeValue <= 0xBF)
-            {
-                const std::size_t immLength = rexW ? 8 : (operandOverride ? 2 : 4);
-                return offsetValue + immLength <= maxLength ? offsetValue + immLength : 0;
-            }
-            if (opcodeValue == 0x0F)
-            {
-                if (offsetValue >= maxLength)
+                const auto& instruction = instructions[i];
+                const std::size_t from = oldOffsets[i], to = newOffsets[i], emitted = RelocatedSize(instruction);
+                *failureOffset = from;
+                if (instruction.flow == ControlFlow::Call || instruction.flow == ControlFlow::Jump || instruction.flow == ControlFlow::Conditional)
                 {
-                    return 0;
-                }
-
-                const unsigned char secondOpcode = codePointer[offsetValue++];
-                if (secondOpcode >= 0x80 && secondOpcode <= 0x8F)
-                {
-                    return 0;
-                }
-                if (secondOpcode == 0x1F)
-                {
-                    bool usesRipRelative = false;
-                    const std::size_t modrmLength = ModRmLength(
-                        codePointer + offsetValue,
-                        maxLength - offsetValue,
-                        &usesRipRelative);
-                    if (usesRipRelative)
+                    std::uintptr_t target = source + from + instruction.length + instruction.relativeDisplacement;
+                    if (target >= source && target < source + patchSize)
                     {
-                        return 0;
+                        const auto end = oldOffsets.begin() + instructions.size();
+                        const auto found = std::find(oldOffsets.begin(), end, target - source);
+                        if (found == end) { *reason = L"branch enters the middle of an overwritten instruction"; return false; }
+                        target = destination + newOffsets[found - oldOffsets.begin()];
                     }
-                    return modrmLength == 0 ? 0 : offsetValue + modrmLength;
+                    const auto delta = static_cast<std::int64_t>(target) - static_cast<std::int64_t>(destination + to + emitted);
+                    if (!FitsRel32(delta)) { *reason = L"relative control-flow target exceeds rel32 range"; return false; }
+                    if (instruction.flow == ControlFlow::Conditional)
+                    { output[to] = 0x0F; output[to + 1] = static_cast<unsigned char>(0x80 | instruction.condition); }
+                    else output[to] = instruction.flow == ControlFlow::Call ? 0xE8 : 0xE9;
+                    const std::int32_t displacement = static_cast<std::int32_t>(delta);
+                    std::memcpy(output + to + emitted - 4, &displacement, 4);
                 }
-                return 0;
+                else
+                {
+                    std::memcpy(output + to, original + from, instruction.length);
+                    if (instruction.ripRelative)
+                    {
+                        const auto target = source + from + instruction.length + instruction.relativeDisplacement;
+                        if (target >= source && target < source + patchSize)
+                        { *reason = L"RIP-relative data overlaps the entry patch"; return false; }
+                        const auto delta = static_cast<std::int64_t>(target) - static_cast<std::int64_t>(destination + to + instruction.length);
+                        if (!FitsRel32(delta)) { *reason = L"RIP-relative operand exceeds disp32 range"; return false; }
+                        const std::int32_t displacement = static_cast<std::int32_t>(delta);
+                        std::memcpy(output + to + instruction.displacementOffset, &displacement, 4);
+                    }
+                }
             }
+            *outputSize = newOffset;
+            return true;
+        }
 
-            const auto appendModRmInstruction = [&](const std::size_t immediateLength) -> std::size_t {
-                bool usesRipRelative = false;
-                const std::size_t modrmLength = ModRmLength(
-                    codePointer + offsetValue,
-                    maxLength - offsetValue,
-                    &usesRipRelative);
-                if (modrmLength == 0)
-                {
-                    return 0;
-                }
-                if (usesRipRelative)
-                {
-                    return 0;
-                }
-                const std::size_t totalLength = offsetValue + modrmLength + immediateLength;
-                return totalLength <= maxLength ? totalLength : 0;
-            };
-
-            switch (opcodeValue)
+        unsigned char* AllocateNear(const void* target)
+        {
+            SYSTEM_INFO info{}; ::GetSystemInfo(&info);
+            const auto granularity = static_cast<std::uintptr_t>(info.dwAllocationGranularity);
+            const auto center = reinterpret_cast<std::uintptr_t>(target) & ~(granularity - 1);
+            const auto minimum = reinterpret_cast<std::uintptr_t>(info.lpMinimumApplicationAddress);
+            const auto maximum = reinterpret_cast<std::uintptr_t>(info.lpMaximumApplicationAddress);
+            // Start close to the entry; use VirtualQuery to skip occupied regions in allocation-sized strides.
+            for (std::uintptr_t distance = granularity; distance < 0x7FFF0000; distance += granularity)
             {
-            case 0x01:
-            case 0x03:
-            case 0x09:
-            case 0x0B:
-            case 0x21:
-            case 0x23:
-            case 0x29:
-            case 0x2B:
-            case 0x31:
-            case 0x33:
-            case 0x39:
-            case 0x3B:
-            case 0x63:
-            case 0x84:
-            case 0x85:
-            case 0x88:
-            case 0x89:
-            case 0x8A:
-            case 0x8B:
-            case 0x8D:
-                return appendModRmInstruction(0);
-            case 0x81:
-            case 0xC7:
-                return appendModRmInstruction(operandOverride && !rexW ? 2 : 4);
-            case 0x80:
-            case 0x83:
-            case 0xC6:
-                return appendModRmInstruction(1);
-            case 0xFF:
-                // 0xFF 同时覆盖 call/jmp/push 等多种语义，这里统一保守拒绝。
-                return 0;
-            case 0xF6:
-            case 0xF7:
-            {
-                // Nt* syscall stub 在现代 x64 ntdll 中常见形态包含：
-                //   F6 04 25 08 03 FE 7F 01    test byte ptr [KUSER_SHARED_DATA+0x308], 1
-                // 旧解码器不认识 F6，导致 Nt* 导出桩无法安装 inline hook。
-                // 这里只复制不会改变相对控制流的 F6/F7 ModRM 指令；TEST /0,/1 带立即数，其它一元操作不带立即数。
-                if (offsetValue >= maxLength)
+                for (int direction : {1, -1})
                 {
-                    return 0;
+                    if (direction < 0 && center < distance) continue;
+                    const auto candidate = direction > 0 ? center + distance : center - distance;
+                    if (candidate < minimum || candidate > maximum - 4096) continue;
+                    MEMORY_BASIC_INFORMATION region{};
+                    if (!::VirtualQuery(reinterpret_cast<void*>(candidate), &region, sizeof(region)) || region.State != MEM_FREE) continue;
+                    auto* allocation = static_cast<unsigned char*>(::VirtualAlloc(reinterpret_cast<void*>(candidate), 4096, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
+                    if (allocation) return allocation;
                 }
-
-                const unsigned char modrmValue = codePointer[offsetValue];
-                const unsigned char regValue = static_cast<unsigned char>((modrmValue >> 3) & 0x7);
-                const std::size_t immediateLength = (regValue == 0 || regValue == 1)
-                    ? (opcodeValue == 0xF6 ? 1 : (operandOverride && !rexW ? 2 : 4))
-                    : 0;
-                return appendModRmInstruction(immediateLength);
             }
-            default:
-                break;
-            }
-
-            return 0;
+            return nullptr;
         }
 
         // BuildAbsoluteJump 作用：
@@ -314,56 +315,86 @@ namespace apimon
             std::memcpy(targetBuffer + 6, &destinationAddress, sizeof(destinationAddress));
         }
 
-        void* ResolveJumpStub(void* addressValue)
+        struct EntryPatch
         {
-            unsigned char* currentPointer = static_cast<unsigned char*>(addressValue);
-            for (int depth = 0; depth < 8 && currentPointer != nullptr; ++depth)
+            unsigned char* target = nullptr;
+            void* detour = nullptr;
+            unsigned char* trampoline = nullptr;
+            std::size_t size = 0;
+            std::array<unsigned char, 32> original{}, patched{};
+            unsigned references = 0;
+            bool active = false;
+        };
+        auto& g_engineMutex = *new std::mutex;
+        // Stable contexts and published executable code are retained through process exit.
+        auto& g_entryPatches = *new std::vector<std::unique_ptr<EntryPatch>>;
+
+        void* ResolveJumpStub(void* entry, std::size_t* failureOffset, const wchar_t** reason)
+        {
+            std::array<void*, 16> visited{};
+            auto* current = static_cast<unsigned char*>(entry);
+            for (std::size_t depth = 0; depth < visited.size(); ++depth)
             {
-                if (currentPointer[0] == 0xE9)
+                *failureOffset = 0;
+                if (!current) { *reason = L"null jump-stub target"; return nullptr; }
+                if (std::find(visited.begin(), visited.begin() + depth, current) != visited.begin() + depth)
+                { *reason = L"jump-stub cycle"; return nullptr; }
+                visited[depth] = current;
+                for (const auto& patch : g_entryPatches)
+                    if (patch->active && current >= patch->target && current < patch->target + patch->size) return current;
+                unsigned char bytes[32]{};
+                const auto readable = ReadCode(current, bytes, sizeof(bytes));
+                if (!readable) { *reason = L"unreadable or non-executable entry"; return nullptr; }
+                // Keep the exported ENDBR entry intact; relocation starts after it.
+                if (readable >= 4 && std::memcmp(bytes, "\xF3\x0F\x1E\xFA", 4) == 0) return current;
+                if (bytes[0] == 0xE9 || bytes[0] == 0xEB)
                 {
-                    const std::int32_t relativeOffset = *reinterpret_cast<std::int32_t*>(currentPointer + 1);
-                    currentPointer = currentPointer + 5 + relativeOffset;
+                    const auto d = DecodeInstruction(bytes, readable);
+                    if (!d.length) { *reason = L"truncated entry jump"; return nullptr; }
+                    current = reinterpret_cast<unsigned char*>(reinterpret_cast<std::uintptr_t>(current) + d.length + d.relativeDisplacement);
                     continue;
                 }
-                if (currentPointer[0] == 0xEB)
+                const bool rexIndirect = readable >= 3 && bytes[0] == 0x48 && bytes[1] == 0xFF && bytes[2] == 0x25;
+                if ((readable >= 2 && bytes[0] == 0xFF && bytes[1] == 0x25) || rexIndirect)
                 {
-                    const std::int8_t relativeOffset = *reinterpret_cast<std::int8_t*>(currentPointer + 1);
-                    currentPointer = currentPointer + 2 + relativeOffset;
+                    const std::size_t prefix = rexIndirect ? 1 : 0;
+                    if (readable < prefix + 6) { *reason = L"truncated indirect entry jump"; return nullptr; }
+                    std::int32_t displacement{};
+                    std::memcpy(&displacement, bytes + prefix + 2, 4);
+                    void* next = nullptr;
+                    const auto slot = reinterpret_cast<std::uintptr_t>(current) + prefix + 6 + displacement;
+                    if (!SafeRead(reinterpret_cast<void*>(slot), &next, sizeof(next)))
+                    { *reason = L"unreadable jump-stub pointer"; return nullptr; }
+                    current = static_cast<unsigned char*>(next);
                     continue;
                 }
-                if (currentPointer[0] == 0xFF && currentPointer[1] == 0x25)
-                {
-                    const std::int32_t relativeOffset = *reinterpret_cast<std::int32_t*>(currentPointer + 2);
-                    void** indirectPointer = reinterpret_cast<void**>(currentPointer + 6 + relativeOffset);
-                    currentPointer = static_cast<unsigned char*>(*indirectPointer);
-                    continue;
-                }
-                if (currentPointer[0] == 0x48 && currentPointer[1] == 0xFF && currentPointer[2] == 0x25)
-                {
-                    const std::int32_t relativeOffset = *reinterpret_cast<std::int32_t*>(currentPointer + 3);
-                    void** indirectPointer = reinterpret_cast<void**>(currentPointer + 7 + relativeOffset);
-                    currentPointer = static_cast<unsigned char*>(*indirectPointer);
-                    continue;
-                }
-                break;
+                return current;
             }
-            return currentPointer;
+            *reason = L"jump-stub depth limit exceeded";
+            return nullptr;
         }
 
-        std::size_t CalculatePatchSize(const unsigned char* codePointer)
+        std::size_t CalculatePatchSize(const unsigned char* bytes, std::size_t readable,
+            std::size_t required, std::vector<InstructionDescription>* instructions,
+            std::size_t* failureOffset, const wchar_t** reason)
         {
-            std::size_t patchSize = 0;
-            while (patchSize < kAbsoluteJumpSize && patchSize < 24)
+            std::size_t offset = 0;
+            while (offset < required)
             {
-                const std::size_t instructionLength = DecodeInstructionLength(codePointer + patchSize, 24 - patchSize);
-                if (instructionLength == 0)
-                {
-                    return 0;
-                }
-                patchSize += instructionLength;
+                *failureOffset = offset;
+                const auto d = DecodeInstruction(bytes + offset, readable - offset);
+                if (!d.length) { *reason = L"unsupported or truncated instruction (including address override)"; return 0; }
+                if (d.flow == ControlFlow::Terminal) { *reason = L"entry ends before a complete patch fits"; return 0; }
+                if (offset + d.length > 32) { *reason = L"entry patch exceeds saved-byte capacity"; return 0; }
+                instructions->push_back(d);
+                offset += d.length;
+                if (d.flow == ControlFlow::Jump && offset < required)
+                { *reason = L"terminal jump before enough patch bytes"; return 0; }
+                if (offset >= readable && offset < required) { *reason = L"unreadable entry suffix"; return 0; }
             }
-            return patchSize >= kAbsoluteJumpSize ? patchSize : 0;
+            return offset;
         }
+
     }
 
     bool IsInlineHookInternalBypassActive()
@@ -397,162 +428,193 @@ namespace apimon
         }
     }
 
-    InlineHookInstallResult InstallInlineHook(
-        const wchar_t* moduleName,
-        const char* procName,
-        void* detourAddress,
-        InlineHookRecord* hookOut,
-        void** originalOut,
-        std::wstring* errorTextOut)
+    InlineHookInstallResult InstallInlineHookAtAddress(void* exportAddress, void* detourAddress,
+        InlineHookRecord* hookOut, void** originalOut, std::wstring* errorTextOut)
     {
-        if (errorTextOut != nullptr)
+        ScopedInlineHookInternalBypass bypass;
+        const std::lock_guard<std::mutex> lock(g_engineMutex);
+        if (errorTextOut) errorTextOut->clear();
+        auto fail = [&](const wchar_t* reason, void* address, std::size_t offset, bool permanent) {
+            wchar_t diagnostic[384]{};
+            swprintf_s(diagnostic, L"address=%p offset=%zu: %s", address, offset, reason);
+            if (errorTextOut) *errorTextOut = diagnostic;
+            if (hookOut) { hookOut->lastFailure = diagnostic; hookOut->failureOffset = offset;
+                hookOut->permanentlyDisabled = permanent; }
+            return permanent ? InlineHookInstallResult::PermanentFailure : InlineHookInstallResult::RetryableFailure;
+        };
+        if (!exportAddress || !detourAddress || !hookOut || !originalOut)
+            return fail(L"invalid hook argument", exportAddress, 0, true);
+        if (hookOut->installed) { *originalOut = hookOut->trampolineAddress; return InlineHookInstallResult::Installed; }
+        if (hookOut->permanentlyDisabled) return fail(L"previous unsafe installation rejected", exportAddress, hookOut->failureOffset, true);
+        std::size_t failureOffset = 0;
+        const wchar_t* reason = nullptr;
+        auto* entry = static_cast<unsigned char*>(ResolveJumpStub(exportAddress, &failureOffset, &reason));
+        if (!entry) return fail(reason, exportAddress, failureOffset, true);
+        unsigned char saved[32]{};
+        auto readable = ReadCode(entry, saved, sizeof(saved));
+        if (!readable) return fail(L"unreadable entry", entry, 0, true);
+        const bool endbr = readable >= 4 && std::memcmp(saved, "\xF3\x0F\x1E\xFA", 4) == 0;
+        auto* target = entry + (endbr ? 4 : 0);
+        // Check already-patched addresses before decoding or following the installed detour.
+        for (const auto& candidate : g_entryPatches)
         {
-            errorTextOut->clear();
+            auto* p = candidate.get();
+            if (!p->active) continue;
+            const auto address = reinterpret_cast<std::uintptr_t>(target);
+            const auto first = reinterpret_cast<std::uintptr_t>(p->target);
+            if (address < first || address >= first + p->size) continue;
+            if (target != p->target || detourAddress != p->detour)
+                return fail(L"patch interval conflicts with an incompatible handler", target, 0, true);
+            ++p->references;
+            hookOut->targetAddress = target; hookOut->detourAddress = detourAddress;
+            hookOut->trampolineAddress = p->trampoline; hookOut->patchSize = p->size;
+            hookOut->originalBytes = p->original; hookOut->sharedPatchContext = p;
+            hookOut->installed = true; hookOut->sharedEntry = true; hookOut->lastFailure.clear();
+            *originalOut = p->trampoline;
+            return InlineHookInstallResult::Installed;
         }
-
-        ScopedInlineHookInternalBypass hookBypassScope;
-        if (moduleName == nullptr || procName == nullptr || detourAddress == nullptr || hookOut == nullptr || originalOut == nullptr)
+        unsigned char* allocation = AllocateNear(target);
+        const bool usesNearRelay = allocation != nullptr;
+        if (!allocation) allocation = static_cast<unsigned char*>(::VirtualAlloc(nullptr, 4096, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
+        if (!allocation) return fail(L"trampoline allocation failed", target, 0, false);
+        const std::size_t prefix = endbr ? 4 : 0;
+        std::memmove(saved, saved + prefix, readable - prefix); readable -= prefix;
+        std::vector<InstructionDescription> instructions;
+        instructions.reserve(32);
+        const std::size_t required = usesNearRelay ? 5 : kAbsoluteJumpSize;
+        const auto patchSize = CalculatePatchSize(saved, readable, required, &instructions, &failureOffset, &reason);
+        if (!patchSize)
+        { ::VirtualFree(allocation, 0, MEM_RELEASE); return fail(reason, target, failureOffset, true); }
+        for (const auto& candidate : g_entryPatches)
         {
-            if (errorTextOut != nullptr)
-            {
-                *errorTextOut = L"InstallInlineHook received invalid argument.";
-            }
-            return InlineHookInstallResult::PermanentFailure;
+            const auto first = reinterpret_cast<std::uintptr_t>(candidate->target), address = reinterpret_cast<std::uintptr_t>(target);
+            if (candidate->active && address < first + candidate->size && first < address + patchSize)
+            { ::VirtualFree(allocation, 0, MEM_RELEASE); return fail(L"overlapping patch interval", target, 0, true); }
         }
-        if (hookOut->permanentlyDisabled)
+        if (endbr) std::memcpy(allocation, "\xF3\x0F\x1E\xFA", 4);
+        std::size_t emitted = 0;
+        if (!BuildRelocatedCode(saved, reinterpret_cast<std::uintptr_t>(target), patchSize,
+            allocation + prefix, reinterpret_cast<std::uintptr_t>(allocation + prefix), instructions,
+            &emitted, &failureOffset, &reason))
+        { ::VirtualFree(allocation, 0, MEM_RELEASE); return fail(reason, target, failureOffset, true); }
+        // Prefer direct return control flow when usesNearRelay; no register is clobbered.
+        auto* tail = allocation + prefix + emitted;
+        const auto returnDelta = reinterpret_cast<std::intptr_t>(target + patchSize) - reinterpret_cast<std::intptr_t>(tail + 5);
+        if (FitsRel32(returnDelta))
+        { tail[0] = 0xE9; const std::int32_t delta = static_cast<std::int32_t>(returnDelta); std::memcpy(tail + 1, &delta, 4); }
+        else BuildAbsoluteJump(tail, target + patchSize);
+        constexpr std::size_t relayOffset = 1024;
+        BuildAbsoluteJump(allocation + relayOffset, detourAddress);
+        auto state = std::make_unique<EntryPatch>();
+        state->target = target; state->detour = detourAddress; state->trampoline = allocation; state->size = patchSize;
+        std::memcpy(state->original.data(), saved, patchSize);
+        std::memset(state->patched.data(), 0x90, patchSize);
+        if (usesNearRelay)
         {
-            if (errorTextOut != nullptr)
-            {
-                *errorTextOut = L"Hook has been permanently disabled after a previous unsafe install attempt.";
-            }
-            return InlineHookInstallResult::PermanentFailure;
+            const auto delta = reinterpret_cast<std::intptr_t>(allocation + relayOffset) - reinterpret_cast<std::intptr_t>(target + 5);
+            if (!FitsRel32(delta)) { ::VirtualFree(allocation, 0, MEM_RELEASE); return fail(L"usesNearRelay relay exceeds rel32 range", target, 0, false); }
+            state->patched[0] = 0xE9; const auto relative = static_cast<std::int32_t>(delta);
+            std::memcpy(state->patched.data() + 1, &relative, 4);
         }
-
-        HMODULE moduleHandle = ::GetModuleHandleW(moduleName);
-        if (moduleHandle == nullptr)
+        else BuildAbsoluteJump(state->patched.data(), detourAddress);
+        MEMORY_BASIC_INFORMATION image{};
+        if (!::VirtualQuery(target, &image, sizeof(image)))
+        { ::VirtualFree(allocation, 0, MEM_RELEASE); return fail(L"could not verify target allocation", target, 0, false); }
+        if (image.Type == MEM_IMAGE)
         {
-            if (errorTextOut != nullptr)
-            {
-                *errorTextOut = std::wstring(L"Module not loaded: ") + moduleName;
-            }
-            return InlineHookInstallResult::RetryableFailure;
+            HMODULE pinned = nullptr;
+            if (!::GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN,
+                reinterpret_cast<LPCWSTR>(target), &pinned))
+            { ::VirtualFree(allocation, 0, MEM_RELEASE); return fail(L"could not pin target image", target, 0, false); }
         }
-
-        void* exportAddress = reinterpret_cast<void*>(::GetProcAddress(moduleHandle, procName));
-        if (exportAddress == nullptr)
-        {
-            if (errorTextOut != nullptr)
-            {
-                *errorTextOut = L"GetProcAddress failed.";
-            }
-            hookOut->permanentlyDisabled = true;
-            return InlineHookInstallResult::PermanentFailure;
-        }
-
-        unsigned char* targetPointer = static_cast<unsigned char*>(ResolveJumpStub(exportAddress));
-        const std::size_t patchSize = CalculatePatchSize(targetPointer);
-        if (patchSize == 0 || patchSize > hookOut->originalBytes.size())
-        {
-            if (errorTextOut != nullptr)
-            {
-                *errorTextOut = L"Unsupported or relocation-unsafe prologue for inline hook.";
-            }
-            hookOut->permanentlyDisabled = true;
-            return InlineHookInstallResult::PermanentFailure;
-        }
-
-        unsigned char* trampolinePointer = static_cast<unsigned char*>(::VirtualAlloc(
-            nullptr,
-            patchSize + kAbsoluteJumpSize,
-            MEM_COMMIT | MEM_RESERVE,
-            PAGE_EXECUTE_READWRITE));
-        if (trampolinePointer == nullptr)
-        {
-            if (errorTextOut != nullptr)
-            {
-                *errorTextOut = L"VirtualAlloc for trampoline failed.";
-            }
-            hookOut->permanentlyDisabled = true;
-            return InlineHookInstallResult::PermanentFailure;
-        }
-
-        // Keep the underlying image resident while an old trampoline may still execute.
-        HMODULE pinnedModule = nullptr;
-        if (!::GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN,
-                reinterpret_cast<LPCWSTR>(targetPointer), &pinnedModule))
-        {
-            ::VirtualFree(trampolinePointer, 0, MEM_RELEASE);
-            if (errorTextOut) *errorTextOut = L"Could not pin the hook target module.";
-            return InlineHookInstallResult::RetryableFailure;
-        }
-        std::memcpy(trampolinePointer, targetPointer, patchSize);
-        BuildAbsoluteJump(trampolinePointer + patchSize, targetPointer + patchSize);
-
+        DWORD ignored = 0;
+        if (!::VirtualProtect(allocation, 4096, PAGE_EXECUTE_READ, &ignored))
+        { ::VirtualFree(allocation, 0, MEM_RELEASE); return fail(L"could not seal executable trampoline", target, 0, false); }
+        ::FlushInstructionCache(::GetCurrentProcess(), allocation, 4096);
+        g_entryPatches.reserve(g_entryPatches.size() + 1);
         DWORD oldProtect = 0;
-        if (::VirtualProtect(targetPointer, patchSize, PAGE_EXECUTE_READWRITE, &oldProtect) == FALSE)
+        if (!::VirtualProtect(target, patchSize, PAGE_EXECUTE_READWRITE, &oldProtect))
+        { ::VirtualFree(allocation, 0, MEM_RELEASE); return fail(L"target protection failed", target, 0, false); }
+        ScopedOtherThreadsSuspender suspended;
+        unsigned char currentBytes[32]{};
+        if (!suspended.CanPatch(target, patchSize) || !SafeRead(target, currentBytes, patchSize)
+            || std::memcmp(currentBytes, saved, patchSize) != 0)
         {
-            ::VirtualFree(trampolinePointer, 0, MEM_RELEASE);
-            if (errorTextOut != nullptr)
-            {
-                *errorTextOut = L"VirtualProtect for target patch failed.";
-            }
-            hookOut->permanentlyDisabled = true;
-            return InlineHookInstallResult::PermanentFailure;
+            suspended.Resume();
+            ::VirtualProtect(target, patchSize, oldProtect, &ignored);
+            ::VirtualFree(allocation, 0, MEM_RELEASE);
+            return fail(L"entry changed, active patch-region thread, or unverifiable thread context", target, 0, false);
         }
-
-        ScopedOtherThreadsSuspender suspendOtherThreadsScope;
-        if (!suspendOtherThreadsScope.CanPatch(targetPointer, patchSize))
-        {
-            suspendOtherThreadsScope.Resume();
-            DWORD ignored = 0;
-            ::VirtualProtect(targetPointer, patchSize, oldProtect, &ignored);
-            ::VirtualFree(trampolinePointer, 0, MEM_RELEASE);
-            if (errorTextOut) *errorTextOut = L"A thread is executing the patch region, or cannot be suspended safely.";
-            return InlineHookInstallResult::RetryableFailure;
-        }
-        hookOut->targetAddress = targetPointer;
-        hookOut->detourAddress = detourAddress;
-        hookOut->trampolineAddress = trampolinePointer;
-        hookOut->patchSize = patchSize;
-        hookOut->permanentlyDisabled = false;
-        *originalOut = trampolinePointer;
-        std::memcpy(hookOut->originalBytes.data(), targetPointer, patchSize);
-
-        unsigned char patchBuffer[32] = {};
-        BuildAbsoluteJump(patchBuffer, detourAddress);
-        std::memset(patchBuffer + kAbsoluteJumpSize, 0x90, patchSize - kAbsoluteJumpSize);
-        std::memcpy(targetPointer, patchBuffer, patchSize);
-        ::FlushInstructionCache(::GetCurrentProcess(), targetPointer, patchSize);
-
-        DWORD unusedProtect = 0;
-        ::VirtualProtect(targetPointer, patchSize, oldProtect, &unusedProtect);
-        hookOut->installed = true;
+        hookOut->targetAddress = target; hookOut->detourAddress = detourAddress;
+        hookOut->trampolineAddress = allocation; hookOut->patchSize = patchSize;
+        hookOut->originalBytes = state->original; hookOut->sharedPatchContext = state.get();
+        hookOut->sharedEntry = false; *originalOut = allocation;
+        std::memcpy(target, state->patched.data(), patchSize);
+        ::FlushInstructionCache(::GetCurrentProcess(), target, patchSize);
+        ::VirtualProtect(target, patchSize, oldProtect, &ignored);
+        hookOut->installed = true; state->references = 1; state->active = true;
+        g_entryPatches.push_back(std::move(state)); // reserved before suspension
+        suspended.Resume();
+        hookOut->lastFailure.clear();
         return InlineHookInstallResult::Installed;
     }
 
-    bool UninstallInlineHook(InlineHookRecord* hookValue)
+    InlineHookInstallResult InstallInlineHook(const wchar_t* moduleName, const char* procName,
+        void* detourAddress, InlineHookRecord* hookOut, void** originalOut, std::wstring* errorTextOut)
     {
-        ScopedInlineHookInternalBypass hookBypassScope;
-        if (hookValue == nullptr || !hookValue->installed) return true;
-        if (hookValue->targetAddress == nullptr) return false;
-
-        DWORD oldProtect = 0;
-        if (!::VirtualProtect(hookValue->targetAddress, hookValue->patchSize, PAGE_EXECUTE_READWRITE, &oldProtect))
-            return false;
-        ScopedOtherThreadsSuspender suspended;
-        DWORD ignored = 0;
-        if (!suspended.CanPatch(hookValue->targetAddress, hookValue->patchSize))
+        ScopedInlineHookInternalBypass bypass;
+        if (!moduleName || !procName || !hookOut || !originalOut || !detourAddress)
         {
-            ::VirtualProtect(hookValue->targetAddress, hookValue->patchSize, oldProtect, &ignored);
+            if (errorTextOut) *errorTextOut = L"invalid hook argument";
+            return InlineHookInstallResult::PermanentFailure;
+        }
+        if (hookOut->installed) return InlineHookInstallResult::Installed;
+        const auto module = ::GetModuleHandleW(moduleName);
+        if (!module)
+        {
+            hookOut->lastFailure = std::wstring(L"module not loaded: ") + moduleName;
+            if (errorTextOut) *errorTextOut = hookOut->lastFailure;
+            return InlineHookInstallResult::RetryableFailure;
+        }
+        auto* entry = reinterpret_cast<void*>(::GetProcAddress(module, procName));
+        if (!entry)
+        {
+            hookOut->permanentlyDisabled = true;
+            hookOut->lastFailure = L"export unavailable";
+            if (errorTextOut) *errorTextOut = hookOut->lastFailure;
+            return InlineHookInstallResult::PermanentFailure;
+        }
+        return InstallInlineHookAtAddress(entry, detourAddress, hookOut, originalOut, errorTextOut);
+    }
+
+    bool UninstallInlineHook(InlineHookRecord* hook)
+    {
+        ScopedInlineHookInternalBypass bypass;
+        const std::lock_guard<std::mutex> lock(g_engineMutex);
+        if (!hook || !hook->installed) return true;
+        auto* state = static_cast<EntryPatch*>(hook->sharedPatchContext);
+        if (!state || !state->active || !state->references) return false;
+        if (state->references > 1) { --state->references; hook->installed = false; return true; }
+        DWORD oldProtect = 0, ignored = 0;
+        if (!::VirtualProtect(state->target, state->size, PAGE_EXECUTE_READWRITE, &oldProtect))
+        { hook->lastFailure = L"target protection failed during removal; retry required"; return false; }
+        ScopedOtherThreadsSuspender suspended;
+        unsigned char currentBytes[32]{};
+        if (!suspended.CanPatch(state->target, state->size) || !SafeRead(state->target, currentBytes, state->size)
+            || std::memcmp(currentBytes, state->patched.data(), state->size) != 0)
+        {
+            suspended.Resume();
+            ::VirtualProtect(state->target, state->size, oldProtect, &ignored);
+            hook->lastFailure = L"entry modified or thread context unsafe during removal; retry required";
             return false;
         }
-        std::memcpy(hookValue->targetAddress, hookValue->originalBytes.data(), hookValue->patchSize);
-        ::FlushInstructionCache(::GetCurrentProcess(), hookValue->targetAddress, hookValue->patchSize);
-        ::VirtualProtect(hookValue->targetAddress, hookValue->patchSize, oldProtect, &ignored);
-        hookValue->installed = false;
-        // Calls can be inside the detour, trampoline, or the original function (with a return
-        // address into the trampoline). Retire executable code until process exit; never clear
-        // its original pointer. The target and Agent images are pinned for that lifetime.
+        std::memcpy(state->target, state->original.data(), state->size);
+        ::FlushInstructionCache(::GetCurrentProcess(), state->target, state->size);
+        ::VirtualProtect(state->target, state->size, oldProtect, &ignored);
+        hook->installed = false; state->references = 0; state->active = false;
+        suspended.Resume();
+        hook->lastFailure.clear();
+        // The immutable executable allocation, original pointers and registry context remain live.
         return true;
     }
 }
