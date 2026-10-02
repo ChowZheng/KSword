@@ -70,6 +70,8 @@ namespace
             return QStringLiteral("进程");
         case ks::winapi_monitor::EventCategory::Loader:
             return QStringLiteral("加载器");
+        case ks::winapi_monitor::EventCategory::Clipboard:
+            return QStringLiteral("剪贴板");
         case ks::winapi_monitor::EventCategory::Internal:
             return QStringLiteral("内部");
         default:
@@ -104,7 +106,8 @@ namespace
         rowValue.apiText = moduleNameText.trimmed().isEmpty()
             ? apiNameText
             : QStringLiteral("%1!%2").arg(moduleNameText, apiNameText);
-        rowValue.resultText = packetResultCodeText(packetValue.resultCode);
+        rowValue.resultKnown = packetValue.resultKind == static_cast<std::uint32_t>(ks::winapi_monitor::EventResultKind::StatusCode);
+        rowValue.resultText = rowValue.resultKnown ? packetResultCodeText(packetValue.resultCode) : QStringLiteral("未采集");
         rowValue.pidTidText = QStringLiteral("%1 / %2").arg(packetValue.pid).arg(packetValue.tid);
         rowValue.detailText = packetWideText(packetValue.detailText);
         rowValue.sourcePid = packetValue.pid;
@@ -716,7 +719,7 @@ void WinAPIDock::appendEventRow(const EventRow& rowValue)
         categoryItem->setForeground(internalBrush);
         apiItem->setForeground(internalBrush);
     }
-    else if (rowValue.resultText != QStringLiteral("OK"))
+    else if (rowValue.resultKnown && rowValue.resultText != QStringLiteral("OK"))
     {
         const QBrush errorBrush(KswordTheme::ErrorColor());
         resultItem->setForeground(errorBrush);

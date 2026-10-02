@@ -12,6 +12,7 @@ actions=(folder/"WinAPIDock.Actions.cpp").read_text(encoding="utf-8-sig")
 filtermethod=actions[actions.index("void WinAPIDock::applyEventFilter()"):actions.index("void WinAPIDock::clearEventFilter()")]
 pipe=(folder/"WinAPIDock.Pipe.cpp").read_text(encoding="utf-8-sig")
 append=pipe[pipe.index("void WinAPIDock::appendEventRow("):]
+packetparser=pipe[pipe.index("    // packetWideText："):pipe.index("    // tryExtractAutoInjectChildPid：")]
 trim=pipe[pipe.index("        const int removeCount"):pipe.index("        m_eventTable->setUpdatesEnabled(updatesEnabled);")]
 code=r'''
 #include <QApplication>
@@ -20,6 +21,7 @@ code=r'''
 #include <QTableWidget>
 #include <QColor>
 #include <cstdio>
+#include "PROTOCOL_PATH"
 namespace ks::ui {enum class StatusRole {Success,Idle};void ApplyStatusRole(QLabel*,StatusRole){}}
 namespace KswordTheme {QColor InfoColor(){return Qt::blue;}QColor ErrorColor(){return Qt::red;}}
 struct Progress {template<class... A> void set(A...){}} kPro;
@@ -34,6 +36,7 @@ ROW_DECL
  void applyEventFilter();void appendEventRow(const EventRow&);
  void trimRows(){TRIM_BODY}
 };
+PACKET_PARSER
 FILTER_METHOD
 APPEND_METHOD
 int main(int argc,char** argv){
@@ -52,9 +55,18 @@ int main(int argc,char** argv){
  if(dock.m_visibleEventCount!=6080||dock.m_evictedRows!=160||table.rowCount()!=12000)return 4;
  table.hideCalls=0;dock.applyEventFilter();if(table.hideCalls!=0)return 5;
  input.clear();dock.applyEventFilter();if(dock.m_visibleEventCount!=12000||table.hideCalls!=12000)return 6;
+ ks::winapi_monitor::ApiMonitorEventPacket packet{};
+ packet.category=static_cast<uint32_t>(ks::winapi_monitor::EventCategory::Clipboard);
+ packet.resultKind=static_cast<uint32_t>(ks::winapi_monitor::EventResultKind::EntryOnly);
+ row=packetToEventRow(packet);
+ if(row.resultKnown||row.resultText!=QStringLiteral("未采集")||row.categoryText!=QStringLiteral("剪贴板"))return 7;
+ dock.appendEventRow(row);
+ if(table.item(table.rowCount()-1,WinAPIDock::EventColumnResult)->foreground().color()==Qt::red)return 8;
+ packet.resultKind=static_cast<uint32_t>(ks::winapi_monitor::EventResultKind::StatusCode);
+ row=packetToEventRow(packet);if(!row.resultKnown||row.resultText!=QStringLiteral("OK"))return 9;
  printf("PASS: 12,000 rows, keyword rescan once, 160 new-row checks, eviction counts and clearing\n");
 }
-'''.replace("ENUM_DECL",enum).replace("ROW_DECL",row).replace("FILTER_METHOD",filtermethod).replace("APPEND_METHOD",append).replace("TRIM_BODY",trim)
+'''.replace("PROTOCOL_PATH",(root/"shared/WinApiMonitorProtocol.h").as_posix()).replace("PACKET_PARSER",packetparser).replace("ENUM_DECL",enum).replace("ROW_DECL",row).replace("FILTER_METHOD",filtermethod).replace("APPEND_METHOD",append).replace("TRIM_BODY",trim)
 with tempfile.TemporaryDirectory(prefix="ksword_filter_") as temp:
  folder=Path(temp);cpp=folder/"fixture.cpp";cpp.write_text(code,encoding="utf-8")
  includes=["/I"+str(qt/"include"/name) for name in ["","QtCore","QtGui","QtWidgets"]]

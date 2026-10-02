@@ -3127,14 +3127,15 @@ namespace apimon
             const wchar_t* const moduleName,
             const wchar_t* const apiName,
             const long statusValue,
-            const wchar_t* const detailText)
+            const wchar_t* const detailText,
+            const ks::winapi_monitor::EventResultKind resultKind = ks::winapi_monitor::EventResultKind::StatusCode)
         {
             return SendMonitorEventRaw(
                 categoryValue,
                 moduleName,
                 apiName,
                 static_cast<std::int32_t>(statusValue),
-                detailText);
+                detailText, resultKind);
         }
 
         ks::winapi_monitor::EventCategory InferRawHookCategory(const std::wstring& moduleName, const std::string& procName);
@@ -3520,7 +3521,7 @@ namespace apimon
                 bindingValue->moduleName.c_str(),
                 bindingValue->procNameWide.c_str(),
                 0,
-                detailBuffer);
+                detailBuffer, ks::winapi_monitor::EventResultKind::EntryOnly);
         }
 
         // EmitRawStubByte/EmitRawStubU32/EmitRawStubU64 作用：

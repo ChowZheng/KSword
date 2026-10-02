@@ -68,7 +68,7 @@ namespace ks::winapi_monitor
     // kProtocolVersion：
     // - 作用：协议版本号；
     // - 调用：UI 和 Agent 在收发事件包时都可用于快速校验结构兼容性。
-    inline constexpr std::uint32_t kProtocolVersion = 0x20260405U;
+    inline constexpr std::uint32_t kProtocolVersion = 0x20261002U;
 
     // kMaxModuleNameChars / kMaxApiNameChars / kMaxDetailChars：
     // - 作用：定义固定长度宽字符缓冲大小；
@@ -128,6 +128,8 @@ namespace ks::winapi_monitor
         Clipboard = 7
     };
 
+    enum class EventResultKind : std::uint32_t { StatusCode = 0, EntryOnly = 1 };
+
     // ApiMonitorEventPacket：
     // - 作用：命名管道中传输的固定长度事件包；
     // - 调用：Agent 填充后整包 WriteFile，UI 整包 ReadFile 后直接解析。
@@ -143,7 +145,10 @@ namespace ks::winapi_monitor
         wchar_t moduleName[kMaxModuleNameChars] = {};           // moduleName：API 所属模块名。
         wchar_t apiName[kMaxApiNameChars] = {};                 // apiName：API 名称。
         wchar_t detailText[kMaxDetailChars] = {};               // detailText：压缩后的详情文本。
+        std::uint32_t resultKind = static_cast<std::uint32_t>(EventResultKind::StatusCode);
     };
+
+    static_assert(sizeof(ApiMonitorEventPacket) == 872, "Windows event packet ABI mismatch");
 
     static_assert(
         std::is_trivially_copyable_v<ApiMonitorEventPacket>,

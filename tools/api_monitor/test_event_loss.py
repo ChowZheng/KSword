@@ -36,6 +36,8 @@ int main(){
  for(int i=0;i<2;++i)if(!ReadFile(client,&notice,sizeof(notice),&read,nullptr)||read!=sizeof(notice))return 11;
  StopMonitorPipeServer();CloseHandle(client);CloseHandle(g_senderStopEvent);g_senderStopEvent=nullptr;
  if(g_droppedPacketCount.load()!=0||g_pendingPacketCount!=0)return 12;
+ if(!SendMonitorEventRaw(EventCategory::Unknown,L"Raw",L"entry",0,L"",EventResultKind::EntryOnly))return 13;
+ if(g_pendingPacketRing[g_pendingPacketHead].resultKind!=static_cast<uint32_t>(EventResultKind::EntryOnly))return 14;
  printf("PASS: bounded overflow, internal reserve, unsent accounting, loss notice and reset\n");
 }
 '''.replace("SOURCE_PATH",(root/"APIMonitor_x64/core/MonitorPipe.cpp").as_posix())

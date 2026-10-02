@@ -26,7 +26,8 @@ namespace apimon
         const wchar_t* moduleName,
         const wchar_t* apiName,
         std::int32_t resultCode,
-        const wchar_t* detailText);
+        const wchar_t* detailText,
+        ks::winapi_monitor::EventResultKind resultKind = ks::winapi_monitor::EventResultKind::StatusCode);
     std::uint32_t FlushPendingMonitorEvents(std::uint32_t maxPacketsToFlush);
     bool IsMonitorPipeHandle(HANDLE handleValue);
 }

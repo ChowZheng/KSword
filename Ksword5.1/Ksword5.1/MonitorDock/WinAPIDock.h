@@ -99,6 +99,7 @@ public:
         QString detailText;
         QString agentStatus;
         std::uint32_t sourcePid = 0;
+        bool resultKnown = true;
         bool internalEvent = false;
     };
 

@@ -451,7 +451,8 @@ namespace apimon
         const wchar_t* moduleName,
         const wchar_t* apiName,
         const std::int32_t resultCode,
-        const wchar_t* detailText)
+        const wchar_t* detailText,
+        const ks::winapi_monitor::EventResultKind resultKind)
     {
         ks::winapi_monitor::ApiMonitorEventPacket packetValue{};
         packetValue.pid = static_cast<std::uint32_t>(::GetCurrentProcessId());
@@ -459,6 +460,7 @@ namespace apimon
         packetValue.timestamp100ns = QueryNow100ns();
         packetValue.category = static_cast<std::uint32_t>(categoryValue);
         packetValue.resultCode = resultCode;
+        packetValue.resultKind = static_cast<std::uint32_t>(resultKind);
 
         const std::size_t detailLimit = std::min<std::size_t>(
             ActiveConfig().detailLimitChars,
