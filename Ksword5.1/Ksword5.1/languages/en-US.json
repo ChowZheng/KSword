@@ -34994,6 +34994,24 @@
     "目标文件名/路径": "Target file name/path",
     "源文件名/路径": "Source file name/path",
     "新文件名/路径": "New file name/path",
-    "注册表配置单元": "Registry hive"
+    "注册表配置单元": "Registry hive",
+    "常用哈希算法：MD5、SHA-1、SHA-224、SHA-256、SHA-384、SHA-512、SHA3-256、BLAKE2b-512。\n": "Common hashes: MD5, SHA-1, SHA-224, SHA-256, SHA-384, SHA-512, SHA3-256, BLAKE2b-512.\n",
+    "所有算法共享一次流式读取；取消或读取失败时不展示未完成的摘要。\n": "All algorithms share one streaming read; incomplete hashes are hidden after cancellation or read errors.\n",
+    "可用 PowerShell Get-FileHash 对比 MD5、SHA1、SHA256、SHA384、SHA512。\n": "Compare MD5, SHA1, SHA256, SHA384 and SHA512 using PowerShell Get-FileHash.\n",
+    "MD5": "MD5",
+    "SHA-1": "SHA-1",
+    "SHA-224": "SHA-224",
+    "SHA-256": "SHA-256",
+    "SHA-384": "SHA-384",
+    "SHA-512": "SHA-512",
+    "SHA3-256": "SHA3-256",
+    "BLAKE2b-512": "BLAKE2b-512",
+    "算法不可用": "Algorithm unavailable",
+    "正在计算常用哈希，请等待...\n目标: %1": "Calculating common hashes, please wait...\nTarget: %1",
+    "算法: %1\n": "Algorithms: %1\n",
+    "批量计算哈希": "Calculate batch hashes",
+    "计算常用哈希": "Calculate common hashes",
+    "● 正在后台计算批量哈希...": "● Calculating batch hashes in the background...",
+    "常用哈希算法：MD5、SHA-1、SHA-224、SHA-256、SHA-384、SHA-512、SHA3-256、BLAKE2b-512。\n所有算法共享一次流式读取；取消或读取失败时不展示未完成的摘要。\n可用 PowerShell Get-FileHash 对比 MD5、SHA1、SHA256、SHA384、SHA512。\n": "Common hashes: MD5, SHA-1, SHA-224, SHA-256, SHA-384, SHA-512, SHA3-256, BLAKE2b-512.\nAll algorithms share one streaming read; incomplete hashes are hidden after cancellation or read errors.\nCompare MD5, SHA1, SHA256, SHA384 and SHA512 using PowerShell Get-FileHash.\n"
   }
 }

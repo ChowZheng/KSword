@@ -5600,8 +5600,50 @@ namespace
             qint64 totalBytes = 0;     // totalBytes：文件总大小。
             qint64 readBytes = 0;      // readBytes：实际读取字节数。
             qint64 elapsedMs = 0;      // elapsedMs：耗时毫秒。
-            QString sha256Text;        // sha256Text：十六进制 SHA256。
+            QStringList hashValues;     // hashValues：按 commonHashNames 顺序排列的摘要。
             QFileDevice::FileError fileError = QFileDevice::NoError; // fileError：稳定、与系统 UI 语言无关的错误码。
+        };
+
+        // 所有算法共享同一轮分块读取；单文件与批量页面使用同一组算法。
+        static QStringList commonHashNames()
+        {
+            return {QStringLiteral("MD5"), QStringLiteral("SHA-1"),
+                QStringLiteral("SHA-224"), QStringLiteral("SHA-256"),
+                QStringLiteral("SHA-384"), QStringLiteral("SHA-512"),
+                QStringLiteral("SHA3-256"), QStringLiteral("BLAKE2b-512")};
+        }
+
+        struct CommonFileHashes
+        {
+            std::vector<std::unique_ptr<QCryptographicHash>> hashes;
+
+            CommonFileHashes()
+            {
+                constexpr std::array<QCryptographicHash::Algorithm, 8> algorithms{
+                    QCryptographicHash::Md5, QCryptographicHash::Sha1,
+                    QCryptographicHash::Sha224, QCryptographicHash::Sha256,
+                    QCryptographicHash::Sha384, QCryptographicHash::Sha512,
+                    QCryptographicHash::RealSha3_256, QCryptographicHash::Blake2b_512};
+                for (const auto algorithm : algorithms)
+                    hashes.push_back(QCryptographicHash::supportsAlgorithm(algorithm)
+                        ? std::make_unique<QCryptographicHash>(algorithm) : nullptr);
+            }
+
+            void addData(const QByteArray& bytes)
+            {
+                for (const auto& hash : hashes)
+                    if (hash != nullptr) hash->addData(bytes);
+            }
+
+            QStringList results() const
+            {
+                QStringList values;
+                for (const auto& hash : hashes)
+                    values.append(hash != nullptr
+                        ? QString::fromLatin1(hash->result().toHex())
+                        : ks::i18n::sourceText(QStringLiteral("算法不可用")));
+                return values;
+            }
         };
 
         struct PrintableStringsPreview
@@ -6674,7 +6716,7 @@ namespace
             QPushButton* startButton,
             QPushButton* cancelButton)
         {
-            // 用途：启动 SHA256 后台流式计算。
+            // 用途：启动多算法后台流式计算。
             // 处理：每块读取后检查取消标记并异步更新进度。
             // 返回：无；结果通过 QueuedConnection 回填 UI。
             if (textEditorWidget == nullptr || progressBar == nullptr ||
@@ -6693,7 +6735,7 @@ namespace
             cancelButton->setEnabled(true);
             cancelButton->setText(QStringLiteral("取消"));
             progressBar->setValue(0);
-            textEditorWidget->setLocalizedText(QStringLiteral("正在计算 SHA256，请等待...\n目标: %1")
+            textEditorWidget->setLocalizedText(QStringLiteral("正在计算常用哈希，请等待...\n目标: %1")
                 .arg(QDir::toNativeSeparators(m_filePath)));
 
             const QString filePathSnapshot = m_filePath;
@@ -6718,7 +6760,7 @@ namespace
                     else
                     {
                         result.openOk = true;
-                        QCryptographicHash sha256(QCryptographicHash::Sha256);
+                        CommonFileHashes hashes;
                         constexpr qint64 chunkBytes = 1024 * 1024;
                         auto lastProgressTime = std::chrono::steady_clock::now();
 
@@ -6740,7 +6782,7 @@ namespace
                                 break;
                             }
 
-                            sha256.addData(chunk);
+                            hashes.addData(chunk);
                             result.readBytes += chunk.size();
 
                             const auto nowTime = std::chrono::steady_clock::now();
@@ -6772,7 +6814,7 @@ namespace
 
                         if (!result.cancelled && result.fileError == QFileDevice::NoError)
                         {
-                            result.sha256Text = QString::fromLatin1(sha256.result().toHex());
+                            result.hashValues = hashes.results();
                         }
                         file.close();
                     }
@@ -6809,7 +6851,7 @@ namespace
                             const double speedMiB = (static_cast<double>(result.readBytes) / (1024.0 * 1024.0)) / elapsedSeconds;
 
                             QString content;
-                            content += QStringLiteral("算法: SHA256\n");
+                            content += ks::i18n::sourceText(QStringLiteral("算法: %1\n")).arg(commonHashNames().join(QStringLiteral(", ")));
                             content += QStringLiteral("来源: 用户态流式读取(QCryptographicHash)\n");
                             content += QStringLiteral("文件: %1\n").arg(QDir::toNativeSeparators(guardThis->m_filePath));
                             content += QStringLiteral("总大小: %1 字节\n").arg(result.totalBytes);
@@ -6822,10 +6864,10 @@ namespace
                                 content += QStringLiteral("QFile错误码: %1\n")
                                     .arg(static_cast<int>(result.fileError));
                             }
-                            if (!result.sha256Text.isEmpty())
-                            {
-                                content += QStringLiteral("SHA256: %1\n").arg(result.sha256Text);
-                            }
+                            const QStringList names = commonHashNames();
+                            for (qsizetype index = 0; index < result.hashValues.size(); ++index)
+                                content += names.at(index) + QStringLiteral(": ")
+                                    + result.hashValues.at(index) + QLatin1Char('\n');
                             editorGuard->setLocalizedText(content);
                         },
                         Qt::QueuedConnection);
@@ -10747,7 +10789,7 @@ namespace
                 QWidget* page = new QWidget(this);
                 QVBoxLayout* layout = new QVBoxLayout(page);
                 QHBoxLayout* toolbar = new QHBoxLayout();
-                QPushButton* startButton = new QPushButton(QStringLiteral("批量计算 SHA256"), page);
+                QPushButton* startButton = new QPushButton(QStringLiteral("批量计算哈希"), page);
                 QPushButton* cancelButton = new QPushButton(QStringLiteral("取消"), page);
                 cancelButton->setEnabled(false);
                 QLabel* statusLabel = new QLabel(QStringLiteral("● 等待开始批量哈希"), page);
@@ -10760,10 +10802,11 @@ namespace
                 progress->setValue(0);
                 layout->addWidget(progress);
                 QTableWidget* table = new ks::ui::VisibleTableWidget(page);
-                table->setColumnCount(4);
+                const QStringList algorithms = commonHashNames();
+                table->setColumnCount(algorithms.size() + 3);
                 table->setHorizontalHeaderLabels(QStringList{
-                    QStringLiteral("目标"), QStringLiteral("状态"),
-                    QStringLiteral("SHA256"), QStringLiteral("错误") });
+                    QStringLiteral("目标"), QStringLiteral("状态") }
+                    + algorithms + QStringList{QStringLiteral("错误")});
                 table->setRowCount(m_filePaths.size());
                 table->setSelectionBehavior(QAbstractItemView::SelectRows);
                 table->setSelectionMode(QAbstractItemView::ExtendedSelection);
@@ -10775,8 +10818,8 @@ namespace
                         new QTableWidgetItem(QDir::toNativeSeparators(m_filePaths.at(row))));
                     table->setItem(static_cast<int>(row), 1,
                         new QTableWidgetItem(QStringLiteral("等待")));
-                    table->setItem(static_cast<int>(row), 2, new QTableWidgetItem());
-                    table->setItem(static_cast<int>(row), 3, new QTableWidgetItem());
+                    for (int column = 2; column < table->columnCount(); ++column)
+                        table->setItem(static_cast<int>(row), column, new QTableWidgetItem());
                 }
                 installFileTableCopyMenu(table);
                 if (table->horizontalHeader() != nullptr)
@@ -10797,7 +10840,7 @@ namespace
                         startButton->setEnabled(false);
                         cancelButton->setEnabled(true);
                         progress->setValue(0);
-                        statusLabel->setText(QStringLiteral("● 正在后台计算批量 SHA256..."));
+                        statusLabel->setText(QStringLiteral("● 正在后台计算批量哈希..."));
                         QPointer<QTableWidget> tableGuard(table);
                         QPointer<QProgressBar> progressGuard(progress);
                         QPointer<QLabel> statusGuard(statusLabel);
@@ -10812,7 +10855,7 @@ namespace
                                 {
                                     if (cancelRequested->load()) break;
                                     QString stateText;
-                                    QString hashText;
+                                    QStringList hashValues;
                                     QString errorText;
                                     const QFileInfo info(paths.at(row));
                                     if (!info.isFile())
@@ -10830,12 +10873,13 @@ namespace
                                         }
                                         else
                                         {
-                                            QCryptographicHash hash(QCryptographicHash::Sha256);
+                                            CommonFileHashes hashes;
                                             while (!file.atEnd() && !cancelRequested->load())
                                             {
                                                 const QByteArray block = file.read(1024 * 1024);
                                                 if (block.isEmpty() && file.error() != QFileDevice::NoError) break;
-                                                hash.addData(block);
+                                                if (block.isEmpty()) break;
+                                                hashes.addData(block);
                                             }
                                             if (cancelRequested->load())
                                             {
@@ -10849,19 +10893,20 @@ namespace
                                             else
                                             {
                                                 stateText = QStringLiteral("完成");
-                                                hashText = QString::fromLatin1(hash.result().toHex().toUpper());
+                                                hashValues = hashes.results();
                                             }
                                         }
                                     }
                                     ++completed;
                                     if (tableGuard == nullptr) return;
                                     QMetaObject::invokeMethod(tableGuard.data(),
-                                        [tableGuard, progressGuard, row, completed, stateText, hashText, errorText]()
+                                        [tableGuard, progressGuard, row, completed, stateText, hashValues, errorText]()
                                         {
                                             if (tableGuard == nullptr) return;
                                             tableGuard->item(static_cast<int>(row), 1)->setText(stateText);
-                                            tableGuard->item(static_cast<int>(row), 2)->setText(hashText);
-                                            tableGuard->item(static_cast<int>(row), 3)->setText(errorText);
+                                            for (qsizetype index = 0; index < hashValues.size(); ++index)
+                                                tableGuard->item(static_cast<int>(row), static_cast<int>(index) + 2)->setText(hashValues.at(index));
+                                            tableGuard->item(static_cast<int>(row), tableGuard->columnCount() - 1)->setText(errorText);
                                             if (progressGuard != nullptr) progressGuard->setValue(completed);
                                         }, Qt::QueuedConnection);
                                 }
@@ -10889,7 +10934,7 @@ namespace
             QVBoxLayout* layout = new QVBoxLayout(page);
 
             QHBoxLayout* toolbarLayout = new QHBoxLayout();
-            QPushButton* startButton = new QPushButton(QStringLiteral("计算 SHA256"), page);
+            QPushButton* startButton = new QPushButton(QStringLiteral("计算常用哈希"), page);
             QPushButton* cancelButton = new QPushButton(QStringLiteral("取消"), page);
             cancelButton->setEnabled(false);
             toolbarLayout->addWidget(startButton, 0);
@@ -10907,10 +10952,9 @@ namespace
             layout->addWidget(textEditorWidget, 1);
 
             textEditorWidget->setLocalizedText(QStringLiteral(
-                "Phase 10 哈希页：\n"
-                "- SHA256 使用用户态流式读取，避免一次性读入大文件。\n"
-                "- 点击“取消”会在下一个块读取边界停止。\n"
-                "- 可用 PowerShell Get-FileHash -Algorithm SHA256 进行对比。\n"));
+                "常用哈希算法：MD5、SHA-1、SHA-224、SHA-256、SHA-384、SHA-512、SHA3-256、BLAKE2b-512。\n"
+                "所有算法共享一次流式读取；取消或读取失败时不展示未完成的摘要。\n"
+                "可用 PowerShell Get-FileHash 对比 MD5、SHA1、SHA256、SHA384、SHA512。\n"));
 
             connect(startButton, &QPushButton::clicked, this, [this, textEditorWidget, progressBar, startButton, cancelButton]()
                 {
