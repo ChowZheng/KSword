@@ -2426,4 +2426,5 @@
     <ClInclude Include="..\..\shared\ApiMonitorCoverage.h" />
   </ItemGroup>
   <ItemGroup><ClCompile Include="MonitorDock\WinAPIDock.Coverage.cpp" /></ItemGroup>
+  <ItemGroup><ClInclude Include="..\..\shared\ApiMonitorPlatform.h" /><ClInclude Include="..\..\shared\ApiMonitorInjection.h" /></ItemGroup>
 </Project>

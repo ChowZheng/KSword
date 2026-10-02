@@ -202,7 +202,7 @@ void WinAPIDock::initializeUi()
     dllPathLayout->setSpacing(6);
     m_agentDllPathEdit = new QLineEdit(dllPathRowWidget);
     m_agentDllPathEdit->setText(defaultDllPathHint());
-    m_agentDllPathEdit->setToolTip(QStringLiteral("需要注入到目标进程中的 APIMonitor_x64.dll 路径。"));
+    m_agentDllPathEdit->setToolTip(QStringLiteral("Agent DLL 路径；安装监控时根据目标进程位数自动选择同目录下的 APIMonitor_x86.dll 或 APIMonitor_x64.dll。"));
     m_agentDllPathEdit->setStyleSheet(blueInputStyle());
 
     m_browseAgentDllButton = new QPushButton(dllPathRowWidget);
@@ -275,7 +275,7 @@ void WinAPIDock::initializeUi()
     m_hookProcessCheck->setToolTip(QStringLiteral("CreateProcessW 等进程控制相关 API。"));
     m_hookLoaderCheck->setToolTip(QStringLiteral("LoadLibraryW / LoadLibraryExW 等模块加载相关 API。该类 Hook 对 GUI 进程稳定性风险更高，默认关闭。"));
     m_hookClipboardCheck->setToolTip(QStringLiteral("OpenClipboard / GetClipboardData / SetClipboardData / OleGetClipboard 等剪贴板相关 API。独立于「进程 API」分类，也是「剪贴板保护」杂项页复用的同一套 Hook。"));
-    m_autoInjectChildCheck->setToolTip(QStringLiteral("启用后，Agent 会在受支持的 CreateProcess 系列调用成功时自动注入子进程，并继续监控后代；仅支持 x64 进程。"));
+    m_autoInjectChildCheck->setToolTip(QStringLiteral("启用后，Agent 会在受支持的 CreateProcess 系列调用成功时自动注入子进程，并继续监控后代；支持 x86 与 x64 进程，自动选择对应 Agent。"));
     m_rawFallbackCheck->setToolTip(QStringLiteral("对强类型表未覆盖的已加载模块导出安装 Raw ABI 入口 Hook。强类型 Hook 优先，Raw 只记录模块/函数/地址等兜底信息。"));
     m_rawDefaultDenyListCheck->setToolTip(QStringLiteral("Raw 黑名单只影响兜底 Hook；强类型 Hook 不受影响。建议长期保持开启，避免字符串、堆、锁、时间等高频基础 API 刷爆日志。关闭后，下方额外黑名单仍然生效。"));
     m_rawModuleListEdit->setToolTip(QStringLiteral("分号分隔模块名。Agent 只扫描已加载模块，后续 LoadLibrary 后会重试补装。"));

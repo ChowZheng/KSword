@@ -4,6 +4,7 @@ from ctypes import wintypes
 import os
 from pathlib import Path
 import subprocess
+import shutil
 import tempfile
 import time
 import uuid
@@ -53,17 +54,20 @@ def session_identity(text):
 
 
 class LiveFixture:
-    def __init__(self, source, configuration=None):
-        if not AGENT.exists():
+    def __init__(self, source, configuration=None, *, agent=AGENT, compiler_environment=None, injector=None):
+        self.agent = Path(agent)
+        if not self.agent.exists():
             raise RuntimeError(f"build {ARCHITECTURE} Release Agent first")
         self.temporary = tempfile.TemporaryDirectory(prefix="ksword_apimon_live_")
         self.directory = Path(self.temporary.name)
         cpp = self.directory / "fixture.cpp"
         cpp.write_text(source, encoding="utf-8")
-        subprocess.run(["cl", "/nologo", "/EHsc", "/std:c++17", "/utf-8", "/MT",
+        compiler = shutil.which("cl", path=compiler_environment["PATH"]) if compiler_environment else "cl"
+        subprocess.run([compiler, "/nologo", "/EHsc", "/std:c++17", "/utf-8", "/MT",
                         str(cpp), "/Fe:" + str(self.directory / "fixture.exe"),
-                        "/Fo:" + str(self.directory / "fixture.obj"), "/link", "Ws2_32.lib", "Ole32.lib"], check=True)
-        self.process = subprocess.Popen([str(self.directory / "fixture.exe"), str(AGENT)],
+                        "/Fo:" + str(self.directory / "fixture.obj"), "/link", "Ws2_32.lib", "Ole32.lib"], check=True,
+                       env=compiler_environment)
+        self.process = subprocess.Popen([str(self.directory / "fixture.exe"), str(self.agent)],
                                         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         self.pid = int(self.process.stdout.readline().decode().strip())
         self.session_text = "fixture-" + uuid.uuid4().hex
@@ -79,7 +83,10 @@ class LiveFixture:
         self.events = []
         self.snapshots = []
         self.pending_snapshot = None
-        self.command("L")
+        if injector is None:
+            self.command("L")
+        else:
+            injector(self.pid, self.agent)
         self.connect()
 
     def connect(self):
@@ -112,7 +119,7 @@ class LiveFixture:
 
     def write_config(self, overrides):
         values = {"pid": self.pid, "pipe_name": f"\\\\.\\pipe\\KswordApiMon_{self.pid}",
-                  "session_id": self.session_text, "agent_dll_path": str(AGENT), "stop_flag_path": str(self.stop),
+                  "session_id": self.session_text, "agent_dll_path": str(self.agent), "stop_flag_path": str(self.stop),
                   "enable_file": 1, "enable_registry": 0, "enable_network": 0,
                   "enable_process": 0, "enable_loader": 0, "enable_clipboard": 0,
                   "enable_raw_fallback": 0, "auto_inject_child": 0, "detail_limit": 319}

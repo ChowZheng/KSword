@@ -1,4 +1,5 @@
 #include "ClipboardGuardPage.h"
+#include "../../../../shared/ApiMonitorInjection.h"
 #include "../../theme.h"
 #include "../../MonitorDock/WinApiMonitorProtocol.h"
 #include "../../Framework/PrivilegeElevationPrompt.h"
@@ -36,7 +37,7 @@
 // ClipboardGuardPage.Session.cpp
 // 作用：
 // 1) 规则表与驱动的双向同步（KSWORD_ARK_CLIPBOARD_POLICY_RULE 整表下发/回读）；
-// 2) 按规则匹配当前运行进程，注入 APIMonitor_x64.dll 并写会话 INI；
+// 2) 按规则匹配当前运行进程，按目标位数注入 Agent 并写会话 INI；
 // 3) 每个受管进程一条命名管道读取线程，事件解析后送进共享队列，
 //    由 QTimer 批量刷进事件表（照抄 WinAPIDock 的 child-pipe 范式）。
 // ============================================================
@@ -280,6 +281,16 @@ namespace ks::misc
         const std::uint32_t pid, const ClipboardGuardRule& matchedRule,
         const QString& sessionId, QString* const errorTextOut) const
     {
+        std::wstring agentDllPath, platformError;
+        if (!ks::winapi_monitor::resolveAgentPath(pid,
+                (QCoreApplication::applicationDirPath() + QStringLiteral("/APIMonitor_x64.dll")).toStdWString(),
+                &agentDllPath, &platformError))
+        {
+            if (errorTextOut) *errorTextOut = QStringLiteral("无法选择匹配目标进程位数的 Agent DLL：%1")
+                .arg(QString::fromStdWString(platformError));
+            return false;
+        }
+
         const QString configPath = QString::fromStdWString(ks::winapi_monitor::buildConfigPathForPid(pid));
         if (!QDir().mkpath(QFileInfo(configPath).absolutePath()))
         {
@@ -314,7 +325,7 @@ namespace ks::misc
         outputStream << "pipe_name=" << QString::fromStdWString(ks::winapi_monitor::buildPipeNameForPid(pid)) << '\n';
         outputStream << "stop_flag_path=" << QString::fromStdWString(ks::winapi_monitor::buildStopFlagPathForPid(pid)) << '\n';
         outputStream << "session_id=" << sessionId << '\n';
-        outputStream << "agent_dll_path=" << QDir::toNativeSeparators(QCoreApplication::applicationDirPath() + QStringLiteral("/APIMonitor_x64.dll")) << '\n';
+        outputStream << "agent_dll_path=" << QDir::toNativeSeparators(QString::fromStdWString(agentDllPath)) << '\n';
         // 只开剪贴板分类，不随手把通用文件/注册表/网络/进程/加载器监控一起打开——
         // "剪贴板保护"和通用 API 监控是两个不同的使用场景，这里只要剪贴板这一份。
         outputStream << "enable_file=0\n";
@@ -416,15 +427,17 @@ namespace ks::misc
                 && residentIt->second == processRecord.creationTime100ns;
             if (!reuseResidentAgent)
             {
-                const QString agentDllPath = QDir::toNativeSeparators(QCoreApplication::applicationDirPath() + QStringLiteral("/APIMonitor_x64.dll"));
-                std::string injectError;
-                if (!ks::process::InjectDllByPath(processRecord.pid, agentDllPath.toUtf8().toStdString(), &injectError))
+                std::wstring agentDllPath, injectError;
+                if (!ks::winapi_monitor::resolveAgentPath(processRecord.pid,
+                        (QCoreApplication::applicationDirPath() + QStringLiteral("/APIMonitor_x64.dll")).toStdWString(),
+                        &agentDllPath, &injectError)
+                    || !ks::winapi_monitor::injectAgent(processRecord.pid, agentDllPath, &injectError))
                 {
                     teardownSession(processRecord.pid);
                     if (errorTextOut != nullptr)
                     {
                         *errorTextOut = QStringLiteral("注入 PID=%1 失败：%2")
-                            .arg(processRecord.pid).arg(QString::fromStdString(injectError));
+                            .arg(processRecord.pid).arg(QString::fromStdWString(injectError));
                     }
                     return false;
                 }

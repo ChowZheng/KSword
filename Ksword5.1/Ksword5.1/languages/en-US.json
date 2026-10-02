@@ -5933,6 +5933,10 @@
     "notification.copy.log_template": "%1\n%2\n%3\nFile: %4\nFunction: %5\nGUID: %6"
   },
   "source_translations": {
+    "无法选择匹配目标进程位数的 Agent DLL：%1": "Cannot select an Agent DLL matching the target architecture: %1",
+    "选择 API 监控 DLL": "Select API monitor DLL",
+    "Agent DLL 路径；安装监控时根据目标进程位数自动选择同目录下的 APIMonitor_x86.dll 或 APIMonitor_x64.dll。": "Agent DLL path. Installation selects APIMonitor_x86.dll or APIMonitor_x64.dll in the same directory for the target architecture.",
+    "启用后，Agent 会在受支持的 CreateProcess 系列调用成功时自动注入子进程，并继续监控后代；支持 x86 与 x64 进程，自动选择对应 Agent。": "When enabled, the Agent injects children after supported CreateProcess calls succeed and follows descendants. Both x86 and x64 processes are supported with the matching Agent selected automatically.",
     "提交": "Submission",
     "等待完成": "Awaiting completion",
     "取消结果": "Cancellation result",

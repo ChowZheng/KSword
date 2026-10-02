@@ -10,6 +10,7 @@
 #include "../core/MonitorAsyncIo.h"
 #include "ContextThunk.h"
 #include "ExportCatalog.h"
+#include "../../shared/ApiMonitorInjection.h"
 #ifdef _M_IX86
 #include "../../APIMonitor_x86/hook/EntryStubs.h"
 #endif
@@ -2119,152 +2120,15 @@ namespace apimon
         }
 
         // InjectAgentIntoChildProcess 作用：
-        // - 输入：childPidValue 为子进程 PID，dllPath 为 APIMonitor_x64.dll 路径；
-        // - 处理：使用 VirtualAllocEx/WriteProcessMemory/CreateRemoteThread(LoadLibraryW) 注入；
+        // - 输入：childPidValue 为子进程 PID，dllPath 为匹配子进程位数的 Agent 路径；
+        // - 处理：按子进程位数选择原生注入或对应注入助手；
         // - 返回：注入成功返回 true，失败返回 false 并填充 errorTextOut。
         bool InjectAgentIntoChildProcess(
             const DWORD childPidValue,
             const std::wstring& dllPath,
             std::wstring* const errorTextOut)
         {
-            if (errorTextOut != nullptr)
-            {
-                errorTextOut->clear();
-            }
-            if (childPidValue == 0 || dllPath.empty())
-            {
-                if (errorTextOut != nullptr)
-                {
-                    *errorTextOut = L"child pid or dll path is empty.";
-                }
-                return false;
-            }
-
-            HANDLE processHandle = ::OpenProcess(
-                PROCESS_CREATE_THREAD | PROCESS_QUERY_INFORMATION | PROCESS_VM_OPERATION | PROCESS_VM_WRITE | PROCESS_VM_READ,
-                FALSE,
-                childPidValue);
-            if (processHandle == nullptr)
-            {
-                if (errorTextOut != nullptr)
-                {
-                    *errorTextOut = L"OpenProcess child failed. error=" + std::to_wstring(::GetLastError());
-                }
-                return false;
-            }
-
-            const std::size_t byteCount = (dllPath.size() + 1) * sizeof(wchar_t);
-            void* remotePathMemory = ::VirtualAllocEx(
-                processHandle,
-                nullptr,
-                byteCount,
-                MEM_COMMIT | MEM_RESERVE,
-                PAGE_READWRITE);
-            if (remotePathMemory == nullptr)
-            {
-                if (errorTextOut != nullptr)
-                {
-                    *errorTextOut = L"VirtualAllocEx child failed. error=" + std::to_wstring(::GetLastError());
-                }
-                ::CloseHandle(processHandle);
-                return false;
-            }
-
-            SIZE_T bytesWritten = 0;
-            const BOOL writeOk = ::WriteProcessMemory(
-                processHandle,
-                remotePathMemory,
-                dllPath.c_str(),
-                byteCount,
-                &bytesWritten);
-            if (writeOk == FALSE || bytesWritten != byteCount)
-            {
-                if (errorTextOut != nullptr)
-                {
-                    *errorTextOut = L"WriteProcessMemory child failed. error=" + std::to_wstring(::GetLastError());
-                }
-                ::VirtualFreeEx(processHandle, remotePathMemory, 0, MEM_RELEASE);
-                ::CloseHandle(processHandle);
-                return false;
-            }
-
-            HMODULE kernelModule = ::GetModuleHandleW(L"kernel32.dll");
-            FARPROC loadLibraryPointer = kernelModule != nullptr ? ::GetProcAddress(kernelModule, "LoadLibraryW") : nullptr;
-            if (loadLibraryPointer == nullptr)
-            {
-                if (errorTextOut != nullptr)
-                {
-                    *errorTextOut = L"GetProcAddress LoadLibraryW failed.";
-                }
-                ::VirtualFreeEx(processHandle, remotePathMemory, 0, MEM_RELEASE);
-                ::CloseHandle(processHandle);
-                return false;
-            }
-
-            HANDLE remoteThread = ::CreateRemoteThread(
-                processHandle,
-                nullptr,
-                0,
-                reinterpret_cast<LPTHREAD_START_ROUTINE>(loadLibraryPointer),
-                remotePathMemory,
-                0,
-                nullptr);
-            if (remoteThread == nullptr)
-            {
-                if (errorTextOut != nullptr)
-                {
-                    *errorTextOut = L"CreateRemoteThread child failed. error=" + std::to_wstring(::GetLastError());
-                }
-                ::VirtualFreeEx(processHandle, remotePathMemory, 0, MEM_RELEASE);
-                ::CloseHandle(processHandle);
-                return false;
-            }
-
-            const DWORD waitResult = ::WaitForSingleObject(remoteThread, 10000);
-            const DWORD waitError = waitResult == WAIT_FAILED ? ::GetLastError() : ERROR_SUCCESS;
-            if (waitResult != WAIT_OBJECT_0)
-            {
-                if (errorTextOut != nullptr)
-                {
-                    *errorTextOut = waitResult == WAIT_TIMEOUT
-                        ? L"Remote LoadLibraryW timed out; remote DLL path is retained until the child exits."
-                        : L"WaitForSingleObject remote LoadLibraryW failed. error=" + std::to_wstring(waitError);
-                }
-
-                // The remote thread can still be reading remotePathMemory after a timeout.
-                // The child process reclaims this allocation on exit.
-                ::CloseHandle(remoteThread);
-                ::CloseHandle(processHandle);
-                return false;
-            }
-
-            DWORD exitCode = 0;
-            if (::GetExitCodeThread(remoteThread, &exitCode) == FALSE)
-            {
-                const DWORD exitCodeError = ::GetLastError();
-                ::CloseHandle(remoteThread);
-                ::VirtualFreeEx(processHandle, remotePathMemory, 0, MEM_RELEASE);
-                ::CloseHandle(processHandle);
-                if (errorTextOut != nullptr)
-                {
-                    *errorTextOut = L"GetExitCodeThread remote LoadLibraryW failed. error=" + std::to_wstring(exitCodeError);
-                }
-                return false;
-            }
-
-            ::CloseHandle(remoteThread);
-            ::VirtualFreeEx(processHandle, remotePathMemory, 0, MEM_RELEASE);
-            ::CloseHandle(processHandle);
-
-            if (exitCode == 0)
-            {
-                if (errorTextOut != nullptr)
-                {
-                    *errorTextOut = L"Remote LoadLibraryW returned NULL.";
-                }
-                return false;
-            }
-            return true;
+            return ks::winapi_monitor::injectAgent(childPidValue, dllPath, errorTextOut);
         }
 
         // AutoInjectChildIfRequested 作用：
@@ -2291,10 +2155,13 @@ namespace apimon
             DWORD leaseError = 0;
             bool successValue = childLease.acquire(processInfoPointer->dwProcessId, &leaseError);
             if (!successValue) errorText = L"Child Agent session is already owned or unavailable. error=" + std::to_wstring(leaseError);
-            if (successValue) successValue = WriteChildMonitorConfig(processInfoPointer->dwProcessId, configValue, &errorText);
+            MonitorConfig childConfig = configValue;
+            if (successValue) successValue = ks::winapi_monitor::resolveAgentPath(
+                processInfoPointer->dwProcessId, configValue.agentDllPath, &childConfig.agentDllPath, &errorText);
+            if (successValue) successValue = WriteChildMonitorConfig(processInfoPointer->dwProcessId, childConfig, &errorText);
             if (successValue)
             {
-                successValue = InjectAgentIntoChildProcess(processInfoPointer->dwProcessId, configValue.agentDllPath, &errorText);
+                successValue = InjectAgentIntoChildProcess(processInfoPointer->dwProcessId, childConfig.agentDllPath, &errorText);
             }
 
             // The UI takes over the lease after receiving this notification.

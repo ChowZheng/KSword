@@ -1190,4 +1190,13 @@
     <ClInclude Include="..\..\shared\ApiMonitorCoverage.h" />
   </ItemGroup>
   <ItemGroup><ClCompile Include="MonitorDock\WinAPIDock.Coverage.cpp" /></ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\APIMonitor_x86\APIMonitor_x86.vcxproj">
+      <Project>{250A09F6-9F1F-456A-A407-901BA91E3B3D}</Project>
+      <SetPlatform>Platform=Win32</SetPlatform>
+      <LinkLibraryDependencies>false</LinkLibraryDependencies><ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+    </ProjectReference>
+    <ClInclude Include="..\..\shared\ApiMonitorPlatform.h" />
+    <ClInclude Include="..\..\shared\ApiMonitorInjection.h" />
+  </ItemGroup>
 </Project>

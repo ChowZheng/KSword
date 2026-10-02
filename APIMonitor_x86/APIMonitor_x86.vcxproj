@@ -66,4 +66,12 @@
     <Copy SourceFiles="$(ProjectDir)..\APIMonitor_x64\api_monitor_definitions.json" DestinationFiles="$(OutDir)profiles\api_monitor_definitions.json" SkipUnchangedFiles="true" />
   </Target>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <ItemGroup>
+    <ProjectReference Include="Injector.vcxproj">
+      <Project>{FA92D149-18C9-4BB0-A57E-6D63713E3AE2}</Project><SetPlatform>Platform=Win32</SetPlatform>
+      <LinkLibraryDependencies>false</LinkLibraryDependencies><ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+    </ProjectReference>
+    <ClInclude Include="..\shared\ApiMonitorPlatform.h" />
+    <ClInclude Include="..\shared\ApiMonitorInjection.h" />
+  </ItemGroup>
 </Project>

@@ -55,6 +55,7 @@
 #define NOMINMAX
 #endif
 #include <TlHelp32.h>
+#include "../../../shared/ApiMonitorInjection.h"
 
 namespace
 {
@@ -736,7 +737,7 @@ void WinAPIDock::browseAgentDllPath()
 
     const QString selectedPath = QFileDialog::getOpenFileName(
         this,
-        QStringLiteral("选择 APIMonitor_x64.dll"),
+        QStringLiteral("选择 API 监控 DLL"),
         defaultPath,
         QStringLiteral("DLL 文件 (*.dll)"));
     if (selectedPath.trimmed().isEmpty())
@@ -1226,13 +1227,16 @@ void WinAPIDock::startMonitoring()
         return;
     }
 
-    const QString dllPathText = QDir::cleanPath(m_agentDllPathEdit->text().trimmed());
-    const QFileInfo dllFileInfo(dllPathText);
-    if (!dllFileInfo.exists() || !dllFileInfo.isFile())
+    std::wstring selectedDllPath, platformError;
+    if (!ks::winapi_monitor::resolveAgentPath(pidValue, m_agentDllPathEdit->text().trimmed().toStdWString(),
+            &selectedDllPath, &platformError))
     {
-        QMessageBox::warning(this, QStringLiteral("WinAPI 监控"), QStringLiteral("Agent DLL 不存在：%1").arg(dllPathText));
+        QMessageBox::warning(this, QStringLiteral("WinAPI 监控"),
+            QStringLiteral("无法选择匹配目标进程位数的 Agent DLL：%1").arg(QString::fromStdWString(platformError)));
         return;
     }
+    const QString dllPathText = QDir::cleanPath(QString::fromStdWString(selectedDllPath));
+    m_agentDllPathEdit->setText(dllPathText);
 
     if (m_pipeThread != nullptr) stopMonitoringInternal(true);
     DWORD leaseError = 0;
@@ -1296,9 +1300,10 @@ void WinAPIDock::startMonitoring()
 
     startPipeReadThread();
 
-    std::string detailText;
+    std::wstring injectionDetail;
     const bool injectOk = reuseResidentAgent
-        || ks::process::InjectDllByPath(pidValue, dllPathText.toStdString(), &detailText);
+        || ks::winapi_monitor::injectAgent(pidValue, selectedDllPath, &injectionDetail);
+    const std::string detailText = QString::fromStdWString(injectionDetail).toUtf8().toStdString();
     if (!injectOk)
     {
         const QString injectErrorText = QString::fromStdString(detailText);

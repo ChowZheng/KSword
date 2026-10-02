@@ -122,4 +122,5 @@
   </ItemGroup>
   <ItemGroup><ClInclude Include="hook\WinsockExtensionHandlers.inc" /></ItemGroup>
   <ItemGroup><ClInclude Include="hook\ExportCatalog.h" /></ItemGroup>
+  <ItemGroup><ClInclude Include="..\shared\ApiMonitorPlatform.h" /><ClInclude Include="..\shared\ApiMonitorInjection.h" /></ItemGroup>
 </Project>
