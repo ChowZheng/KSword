@@ -1095,6 +1095,7 @@ bool WinAPIDock::writeSessionConfigFile(QString* errorTextOut) const
     QTextStream outputStream(&configFile);
     outputStream << "[monitor]\n";
     outputStream << "pipe_name=" << m_currentPipeName << '\n';
+    outputStream << "root_stop_flag_path=" << m_currentStopFlagPath << '\n';
     outputStream << "stop_flag_path=" << m_currentStopFlagPath << '\n';
     outputStream << "session_id=" << m_currentSessionId << '\n';
     outputStream << "agent_dll_path=" << (m_agentDllPathEdit != nullptr ? QDir::cleanPath(m_agentDllPathEdit->text().trimmed()) : QString()) << '\n';
@@ -1276,6 +1277,7 @@ void WinAPIDock::startMonitoring()
     m_pipeReconnectAttempts.store(0);
     {
         std::lock_guard<std::mutex> lock(m_childPipeMutex);
+        m_childSessionLeases.clear();
         m_childSessionPids.clear();
         m_childPipeHandleValues.clear();
     }
@@ -1373,6 +1375,7 @@ void WinAPIDock::stopMonitoringInternal(const bool waitForThread)
     }
     joinChildPipeThreads();
     closeChildPipeHandles();
+    { std::lock_guard<std::mutex> lock(m_childPipeMutex); m_childSessionLeases.clear(); }
     m_sessionLease.reset();
 
     m_pipeRunning.store(false);

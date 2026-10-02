@@ -228,6 +228,7 @@ private:
     std::unique_ptr<std::thread> m_pipeThread;             // m_pipeThread：命名管道读取线程。
     std::vector<std::unique_ptr<std::thread>> m_childPipeThreads; // m_childPipeThreads：自动注入子进程后的子管道读取线程。
     std::vector<std::uintptr_t> m_childPipeHandleValues;   // m_childPipeHandleValues：子管道句柄快照，用于停止时打断阻塞 ReadFile。
+    std::vector<ks::winapi_monitor::SessionLease> m_childSessionLeases;
     std::vector<std::uint32_t> m_childSessionPids;          // m_childSessionPids：已发现的自动注入子进程 PID，用于写停止标记。
     std::mutex m_childPipeMutex;                           // m_childPipeMutex：保护子管道线程/句柄/PID 容器。
     std::atomic_bool m_processRefreshPending{ false };     // m_processRefreshPending：进程刷新是否进行中。

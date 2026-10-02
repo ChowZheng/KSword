@@ -351,7 +351,25 @@ void WinAPIDock::startChildPipeReadThread(const std::uint32_t childPidValue)
         {
             return;
         }
+    }
+
+    ks::winapi_monitor::SessionLease lease;
+    DWORD leaseError = 0;
+    if (!lease.acquire(childPidValue, &leaseError))
+    {
+        appendInternalEvent(QStringLiteral("内部"), QStringLiteral("子进程管道连接失败"),
+            QStringLiteral("无法占用 PID=%1 的 Agent 会话（错误码 %2）；该进程可能已由 API 监控或剪贴板保护占用。").arg(childPidValue).arg(leaseError));
+        return;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(m_childPipeMutex);
+        if (std::find(m_childSessionPids.begin(), m_childSessionPids.end(), childPidValue) != m_childSessionPids.end())
+        {
+            return;
+        }
         m_childSessionPids.push_back(childPidValue);
+        m_childSessionLeases.push_back(std::move(lease));
     }
 
     const QString pipeNameText = QString::fromStdWString(ks::winapi_monitor::buildPipeNameForPid(childPidValue));
@@ -447,6 +465,14 @@ void WinAPIDock::startChildPipeReadThread(const std::uint32_t childPidValue)
                 continue;
             }
 
+            std::uint32_t descendantPid = 0;
+            if (tryExtractAutoInjectChildPid(packetValue, &descendantPid))
+            {
+                QMetaObject::invokeMethod(qApp, [guardThis, generation, descendantPid]() {
+                    if (!guardThis || guardThis->m_sessionGeneration.load() != generation) return;
+                    guardThis->startChildPipeReadThread(descendantPid);
+                }, Qt::QueuedConnection);
+            }
             guardThis->enqueuePendingRow(packetToEventRow(packetValue));
         }
 

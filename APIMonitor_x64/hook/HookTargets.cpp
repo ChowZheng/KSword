@@ -3063,7 +3063,8 @@ namespace apimon
                 // Loader hook 还承担“后加载模块补装”职责：
                 // - enableLoader 控制是否上报 LoadLibrary 事件；
                 // - 注册表/网络/Shell32 进程启动模块可能晚于 Agent 注入加载，因此启用这些分类时也要安装加载器 hook。
-                return configValue.enableLoader || configValue.enableRegistry || configValue.enableNetwork || configValue.enableProcess;
+                return configValue.enableLoader || configValue.enableRegistry || configValue.enableNetwork || configValue.enableProcess
+                    || configValue.autoInjectChild || configValue.enableClipboard || configValue.enableRawFallback || configValue.fakeSuccessEnabled;
             case ks::winapi_monitor::EventCategory::Clipboard:
                 // 剪贴板 hook 默认关闭：必须显式 enableClipboard，
                 // 不能像其它分类一样落到下面的 default true，否则普通 API 监控会话
@@ -3654,7 +3655,14 @@ namespace apimon
                 return TryInstallFakeSuccessRule(*fakeRule, bindingValue.categoryValue, detailTextOut);
             }
 
-            if (!CategoryEnabled(bindingValue.categoryValue)
+            const bool childCreation = ActiveConfig().autoInjectChild &&
+                (std::strcmp(bindingValue.procName, "CreateProcessA") == 0
+                 || std::strcmp(bindingValue.procName, "CreateProcessW") == 0
+                 || std::strcmp(bindingValue.procName, "CreateProcessAsUserA") == 0
+                 || std::strcmp(bindingValue.procName, "CreateProcessAsUserW") == 0
+                 || std::strcmp(bindingValue.procName, "CreateProcessWithTokenW") == 0
+                 || std::strcmp(bindingValue.procName, "CreateProcessWithLogonW") == 0);
+            if ((!CategoryEnabled(bindingValue.categoryValue) && !childCreation)
                 || bindingValue.hookRecord->installed
                 || bindingValue.hookRecord->permanentlyDisabled)
             {
@@ -3754,10 +3762,10 @@ namespace apimon
 
             const std::wstring childConfigPath = ks::winapi_monitor::buildConfigPathForPid(childPidValue);
             const std::wstring childStopPath = ks::winapi_monitor::buildStopFlagPathForPid(childPidValue);
-            (void)::DeleteFileW(childStopPath.c_str());
+            const std::wstring temporaryPath = childConfigPath + L".tmp_" + std::to_wstring(::GetCurrentThreadId());
 
             HANDLE fileHandle = ::CreateFileW(
-                childConfigPath.c_str(),
+                temporaryPath.c_str(),
                 GENERIC_WRITE,
                 FILE_SHARE_READ,
                 nullptr,
@@ -3777,12 +3785,18 @@ namespace apimon
                 L"[monitor]\r\n"
                 L"pipe_name=" + ks::winapi_monitor::buildPipeNameForPid(childPidValue) + L"\r\n"
                 L"stop_flag_path=" + childStopPath + L"\r\n"
+                L"root_stop_flag_path=" + (configValue.rootStopFlagPath.empty() ? configValue.stopFlagPath : configValue.rootStopFlagPath) + L"\r\n"
+                L"session_id=" + configValue.sessionId + L"_" + std::to_wstring(childPidValue) + L"_" + std::to_wstring(::GetTickCount64()) + L"\r\n"
                 L"agent_dll_path=" + configValue.agentDllPath + L"\r\n"
                 L"enable_file=" + std::to_wstring(configValue.enableFile ? 1 : 0) + L"\r\n"
                 L"enable_registry=" + std::to_wstring(configValue.enableRegistry ? 1 : 0) + L"\r\n"
                 L"enable_network=" + std::to_wstring(configValue.enableNetwork ? 1 : 0) + L"\r\n"
                 L"enable_process=" + std::to_wstring(configValue.enableProcess ? 1 : 0) + L"\r\n"
                 L"enable_loader=" + std::to_wstring(configValue.enableLoader ? 1 : 0) + L"\r\n"
+                L"enable_clipboard=" + std::to_wstring(configValue.enableClipboard ? 1 : 0) + L"\r\n"
+                L"clipboard_read_action=" + std::to_wstring(static_cast<unsigned>(configValue.clipboardReadAction)) + L"\r\n"
+                L"clipboard_write_action=" + std::to_wstring(static_cast<unsigned>(configValue.clipboardWriteAction)) + L"\r\n"
+                L"clipboard_enum_action=" + std::to_wstring(static_cast<unsigned>(configValue.clipboardEnumAction)) + L"\r\n"
                 L"auto_inject_child=" + std::to_wstring(configValue.autoInjectChild ? 1 : 0) + L"\r\n"
                 L"enable_raw_fallback=" + std::to_wstring(configValue.enableRawFallback ? 1 : 0) + L"\r\n"
                 L"raw_use_default_denylist=" + std::to_wstring(configValue.rawUseDefaultDenyList ? 1 : 0) + L"\r\n"
@@ -3821,6 +3835,18 @@ namespace apimon
                 {
                     *errorTextOut = L"WriteFile child config failed. error=" + std::to_wstring(writeError);
                 }
+                (void)::DeleteFileW(temporaryPath.c_str());
+                return false;
+            }
+            if (!::MoveFileExW(temporaryPath.c_str(), childConfigPath.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+            {
+                if (errorTextOut) *errorTextOut = L"Atomic child config commit failed. error=" + std::to_wstring(::GetLastError());
+                (void)::DeleteFileW(temporaryPath.c_str());
+                return false;
+            }
+            if (::GetFileAttributesW(childStopPath.c_str()) != INVALID_FILE_ATTRIBUTES && !::DeleteFileW(childStopPath.c_str()))
+            {
+                if (errorTextOut) *errorTextOut = L"Could not remove child stop flag. error=" + std::to_wstring(::GetLastError());
                 return false;
             }
             return true;
@@ -3985,6 +4011,7 @@ namespace apimon
         {
             const MonitorConfig& configValue = ActiveConfig();
             if (createResult == FALSE
+                || StopRequested() || IsStopFlagPresent(configValue)
                 || !configValue.autoInjectChild
                 || processInfoPointer == nullptr
                 || processInfoPointer->dwProcessId == 0
@@ -3994,12 +4021,18 @@ namespace apimon
             }
 
             std::wstring errorText;
-            bool successValue = WriteChildMonitorConfig(processInfoPointer->dwProcessId, configValue, &errorText);
+            ks::winapi_monitor::SessionLease childLease;
+            DWORD leaseError = 0;
+            bool successValue = childLease.acquire(processInfoPointer->dwProcessId, &leaseError);
+            if (!successValue) errorText = L"Child Agent session is already owned or unavailable. error=" + std::to_wstring(leaseError);
+            if (successValue) successValue = WriteChildMonitorConfig(processInfoPointer->dwProcessId, configValue, &errorText);
             if (successValue)
             {
                 successValue = InjectAgentIntoChildProcess(processInfoPointer->dwProcessId, configValue.agentDllPath, &errorText);
             }
 
+            // The UI takes over the lease after receiving this notification.
+            childLease.reset();
             SendMonitorEvent(
                 ks::winapi_monitor::EventCategory::Internal,
                 L"Agent",
@@ -4552,7 +4585,7 @@ namespace apimon
             const DWORD lastError = ::GetLastError();
             const DWORD childPid = (resultValue != FALSE && processInfoPointer != nullptr) ? processInfoPointer->dwProcessId : 0;
             AutoInjectChildFromCreateProcessAIfRequested(resultValue, processInfoPointer);
-            SendMonitorEvent(ks::winapi_monitor::EventCategory::Process, L"KernelBase", L"CreateProcessA", resultValue != FALSE ? 0 : static_cast<std::int32_t>(lastError), TrimDetail(L"app=" + appNameText + L" cmd=" + commandLineText + L" cwd=" + currentDirectoryText + L" flags=" + HexValue(creationFlags) + L" inherit=" + std::to_wstring(inheritHandles != FALSE) + L" childPid=" + std::to_wstring(childPid)));
+            if (ActiveConfig().enableProcess) SendMonitorEvent(ks::winapi_monitor::EventCategory::Process, L"KernelBase", L"CreateProcessA", resultValue != FALSE ? 0 : static_cast<std::int32_t>(lastError), TrimDetail(L"app=" + appNameText + L" cmd=" + commandLineText + L" cwd=" + currentDirectoryText + L" flags=" + HexValue(creationFlags) + L" inherit=" + std::to_wstring(inheritHandles != FALSE) + L" childPid=" + std::to_wstring(childPid)));
             ::SetLastError(lastError);
             return resultValue;
         }
@@ -4572,7 +4605,7 @@ namespace apimon
             const DWORD lastError = ::GetLastError();
             const DWORD childPid = (resultValue != FALSE && processInfoPointer != nullptr) ? processInfoPointer->dwProcessId : 0;
             AutoInjectChildIfRequested(resultValue, processInfoPointer);
-            SendMonitorEvent(ks::winapi_monitor::EventCategory::Process, L"KernelBase", L"CreateProcessW", resultValue != FALSE ? 0 : static_cast<std::int32_t>(lastError), TrimDetail(L"app=" + appNameText + L" cmd=" + commandLineText + L" cwd=" + currentDirectoryText + L" flags=" + HexValue(creationFlags) + L" inherit=" + std::to_wstring(inheritHandles != FALSE) + L" childPid=" + std::to_wstring(childPid)));
+            if (ActiveConfig().enableProcess) SendMonitorEvent(ks::winapi_monitor::EventCategory::Process, L"KernelBase", L"CreateProcessW", resultValue != FALSE ? 0 : static_cast<std::int32_t>(lastError), TrimDetail(L"app=" + appNameText + L" cmd=" + commandLineText + L" cwd=" + currentDirectoryText + L" flags=" + HexValue(creationFlags) + L" inherit=" + std::to_wstring(inheritHandles != FALSE) + L" childPid=" + std::to_wstring(childPid)));
             ::SetLastError(lastError);
             return resultValue;
         }
@@ -7440,18 +7473,54 @@ namespace apimon
             (HANDLE existingTokenHandle, DWORD desiredAccess, LPSECURITY_ATTRIBUTES tokenAttributes, SECURITY_IMPERSONATION_LEVEL impersonationLevel, TOKEN_TYPE tokenType, PHANDLE newTokenHandlePointer),
             (existingTokenHandle, desiredAccess, tokenAttributes, impersonationLevel, tokenType, newTokenHandlePointer),
             { AppendWideText(detailBuffer, L"token="); AppendHexText(detailBuffer, reinterpret_cast<std::uint64_t>(existingTokenHandle)); AppendWideText(detailBuffer, L" access="); AppendHexText(detailBuffer, desiredAccess); AppendWideText(detailBuffer, L" level="); AppendUnsignedText(detailBuffer, static_cast<unsigned long long>(impersonationLevel)); AppendWideText(detailBuffer, L" type="); AppendUnsignedText(detailBuffer, static_cast<unsigned long long>(tokenType)); AppendWideText(detailBuffer, L" newToken="); AppendHexText(detailBuffer, newTokenHandlePointer != nullptr ? reinterpret_cast<std::uint64_t>(*newTokenHandlePointer) : 0); })
-        APIMON_SIMPLE_BOOL_HOOK(HookedCreateProcessAsUserW, g_createProcessAsUserWOriginal, ks::winapi_monitor::EventCategory::Process, L"Advapi32", L"CreateProcessAsUserW",
-            (HANDLE tokenHandle, LPCWSTR applicationNamePointer, LPWSTR commandLinePointer, LPSECURITY_ATTRIBUTES processAttributes, LPSECURITY_ATTRIBUTES threadAttributes, BOOL inheritHandles, DWORD creationFlags, LPVOID environmentPointer, LPCWSTR currentDirectoryPointer, LPSTARTUPINFOW startupInfoPointer, LPPROCESS_INFORMATION processInformationPointer),
-            (tokenHandle, applicationNamePointer, commandLinePointer, processAttributes, threadAttributes, inheritHandles, creationFlags, environmentPointer, currentDirectoryPointer, startupInfoPointer, processInformationPointer),
-            { AppendWideText(detailBuffer, L"token="); AppendHexText(detailBuffer, reinterpret_cast<std::uint64_t>(tokenHandle)); AppendWideText(detailBuffer, L" app="); AppendWideText(detailBuffer, applicationNamePointer); AppendWideText(detailBuffer, L" cmd="); AppendWideText(detailBuffer, commandLinePointer); AppendWideText(detailBuffer, L" flags="); AppendHexText(detailBuffer, creationFlags); AppendWideText(detailBuffer, L" childPid="); AppendUnsignedText(detailBuffer, processInformationPointer != nullptr ? processInformationPointer->dwProcessId : 0); })
-        APIMON_SIMPLE_BOOL_HOOK(HookedCreateProcessAsUserA, g_createProcessAsUserAOriginal, ks::winapi_monitor::EventCategory::Process, L"Advapi32", L"CreateProcessAsUserA",
-            (HANDLE tokenHandle, LPCSTR applicationNamePointer, LPSTR commandLinePointer, LPSECURITY_ATTRIBUTES processAttributes, LPSECURITY_ATTRIBUTES threadAttributes, BOOL inheritHandles, DWORD creationFlags, LPVOID environmentPointer, LPCSTR currentDirectoryPointer, LPSTARTUPINFOA startupInfoPointer, LPPROCESS_INFORMATION processInformationPointer),
-            (tokenHandle, applicationNamePointer, commandLinePointer, processAttributes, threadAttributes, inheritHandles, creationFlags, environmentPointer, currentDirectoryPointer, startupInfoPointer, processInformationPointer),
-            { AppendWideText(detailBuffer, L"token="); AppendHexText(detailBuffer, reinterpret_cast<std::uint64_t>(tokenHandle)); AppendWideText(detailBuffer, L" app="); AppendAnsiText(detailBuffer, applicationNamePointer); AppendWideText(detailBuffer, L" cmd="); AppendAnsiText(detailBuffer, commandLinePointer); AppendWideText(detailBuffer, L" flags="); AppendHexText(detailBuffer, creationFlags); AppendWideText(detailBuffer, L" childPid="); AppendUnsignedText(detailBuffer, processInformationPointer != nullptr ? processInformationPointer->dwProcessId : 0); })
-        APIMON_SIMPLE_BOOL_HOOK(HookedCreateProcessWithTokenW, g_createProcessWithTokenWOriginal, ks::winapi_monitor::EventCategory::Process, L"Advapi32", L"CreateProcessWithTokenW",
-            (HANDLE tokenHandle, DWORD logonFlags, LPCWSTR applicationNamePointer, LPWSTR commandLinePointer, DWORD creationFlags, LPVOID environmentPointer, LPCWSTR currentDirectoryPointer, LPSTARTUPINFOW startupInfoPointer, LPPROCESS_INFORMATION processInformationPointer),
-            (tokenHandle, logonFlags, applicationNamePointer, commandLinePointer, creationFlags, environmentPointer, currentDirectoryPointer, startupInfoPointer, processInformationPointer),
-            { AppendWideText(detailBuffer, L"token="); AppendHexText(detailBuffer, reinterpret_cast<std::uint64_t>(tokenHandle)); AppendWideText(detailBuffer, L" logonFlags="); AppendHexText(detailBuffer, logonFlags); AppendWideText(detailBuffer, L" app="); AppendWideText(detailBuffer, applicationNamePointer); AppendWideText(detailBuffer, L" cmd="); AppendWideText(detailBuffer, commandLinePointer); AppendWideText(detailBuffer, L" childPid="); AppendUnsignedText(detailBuffer, processInformationPointer != nullptr ? processInformationPointer->dwProcessId : 0); })
+        BOOL WINAPI HookedCreateProcessAsUserW(HANDLE tokenHandle, LPCWSTR applicationNamePointer, LPWSTR commandLinePointer, LPSECURITY_ATTRIBUTES processAttributes, LPSECURITY_ATTRIBUTES threadAttributes, BOOL inheritHandles, DWORD creationFlags, LPVOID environmentPointer, LPCWSTR currentDirectoryPointer, LPSTARTUPINFOW startupInfoPointer, LPPROCESS_INFORMATION processInformationPointer)
+        {
+            ScopedHookGuard guard;
+            if (guard.bypass()) return g_createProcessAsUserWOriginal(tokenHandle, applicationNamePointer, commandLinePointer, processAttributes, threadAttributes, inheritHandles, creationFlags, environmentPointer, currentDirectoryPointer, startupInfoPointer, processInformationPointer);
+            const BOOL result = g_createProcessAsUserWOriginal(tokenHandle, applicationNamePointer, commandLinePointer, processAttributes, threadAttributes, inheritHandles, creationFlags, environmentPointer, currentDirectoryPointer, startupInfoPointer, processInformationPointer);
+            const DWORD lastError = ::GetLastError();
+            AutoInjectChildIfRequested(result, processInformationPointer);
+            if (ActiveConfig().enableProcess)
+            {
+                wchar_t detailBuffer[ks::winapi_monitor::kMaxDetailChars] = {};
+                { AppendWideText(detailBuffer, L"token="); AppendHexText(detailBuffer, reinterpret_cast<std::uint64_t>(tokenHandle)); AppendWideText(detailBuffer, L" app="); AppendWideText(detailBuffer, applicationNamePointer); AppendWideText(detailBuffer, L" cmd="); AppendWideText(detailBuffer, commandLinePointer); AppendWideText(detailBuffer, L" flags="); AppendHexText(detailBuffer, creationFlags); AppendWideText(detailBuffer, L" childPid="); AppendUnsignedText(detailBuffer, processInformationPointer != nullptr ? processInformationPointer->dwProcessId : 0); }
+                SendRawEventWithStatus(ks::winapi_monitor::EventCategory::Process, L"Advapi32", L"CreateProcessAsUserW", result ? 0 : lastError, detailBuffer);
+            }
+            ::SetLastError(lastError);
+            return result;
+        }
+        BOOL WINAPI HookedCreateProcessAsUserA(HANDLE tokenHandle, LPCSTR applicationNamePointer, LPSTR commandLinePointer, LPSECURITY_ATTRIBUTES processAttributes, LPSECURITY_ATTRIBUTES threadAttributes, BOOL inheritHandles, DWORD creationFlags, LPVOID environmentPointer, LPCSTR currentDirectoryPointer, LPSTARTUPINFOA startupInfoPointer, LPPROCESS_INFORMATION processInformationPointer)
+        {
+            ScopedHookGuard guard;
+            if (guard.bypass()) return g_createProcessAsUserAOriginal(tokenHandle, applicationNamePointer, commandLinePointer, processAttributes, threadAttributes, inheritHandles, creationFlags, environmentPointer, currentDirectoryPointer, startupInfoPointer, processInformationPointer);
+            const BOOL result = g_createProcessAsUserAOriginal(tokenHandle, applicationNamePointer, commandLinePointer, processAttributes, threadAttributes, inheritHandles, creationFlags, environmentPointer, currentDirectoryPointer, startupInfoPointer, processInformationPointer);
+            const DWORD lastError = ::GetLastError();
+            AutoInjectChildIfRequested(result, processInformationPointer);
+            if (ActiveConfig().enableProcess)
+            {
+                wchar_t detailBuffer[ks::winapi_monitor::kMaxDetailChars] = {};
+                { AppendWideText(detailBuffer, L"token="); AppendHexText(detailBuffer, reinterpret_cast<std::uint64_t>(tokenHandle)); AppendWideText(detailBuffer, L" app="); AppendAnsiText(detailBuffer, applicationNamePointer); AppendWideText(detailBuffer, L" cmd="); AppendAnsiText(detailBuffer, commandLinePointer); AppendWideText(detailBuffer, L" flags="); AppendHexText(detailBuffer, creationFlags); AppendWideText(detailBuffer, L" childPid="); AppendUnsignedText(detailBuffer, processInformationPointer != nullptr ? processInformationPointer->dwProcessId : 0); }
+                SendRawEventWithStatus(ks::winapi_monitor::EventCategory::Process, L"Advapi32", L"CreateProcessAsUserA", result ? 0 : lastError, detailBuffer);
+            }
+            ::SetLastError(lastError);
+            return result;
+        }
+        BOOL WINAPI HookedCreateProcessWithTokenW(HANDLE tokenHandle, DWORD logonFlags, LPCWSTR applicationNamePointer, LPWSTR commandLinePointer, DWORD creationFlags, LPVOID environmentPointer, LPCWSTR currentDirectoryPointer, LPSTARTUPINFOW startupInfoPointer, LPPROCESS_INFORMATION processInformationPointer)
+        {
+            ScopedHookGuard guard;
+            if (guard.bypass()) return g_createProcessWithTokenWOriginal(tokenHandle, logonFlags, applicationNamePointer, commandLinePointer, creationFlags, environmentPointer, currentDirectoryPointer, startupInfoPointer, processInformationPointer);
+            const BOOL result = g_createProcessWithTokenWOriginal(tokenHandle, logonFlags, applicationNamePointer, commandLinePointer, creationFlags, environmentPointer, currentDirectoryPointer, startupInfoPointer, processInformationPointer);
+            const DWORD lastError = ::GetLastError();
+            AutoInjectChildIfRequested(result, processInformationPointer);
+            if (ActiveConfig().enableProcess)
+            {
+                wchar_t detailBuffer[ks::winapi_monitor::kMaxDetailChars] = {};
+                { AppendWideText(detailBuffer, L"token="); AppendHexText(detailBuffer, reinterpret_cast<std::uint64_t>(tokenHandle)); AppendWideText(detailBuffer, L" logonFlags="); AppendHexText(detailBuffer, logonFlags); AppendWideText(detailBuffer, L" app="); AppendWideText(detailBuffer, applicationNamePointer); AppendWideText(detailBuffer, L" cmd="); AppendWideText(detailBuffer, commandLinePointer); AppendWideText(detailBuffer, L" childPid="); AppendUnsignedText(detailBuffer, processInformationPointer != nullptr ? processInformationPointer->dwProcessId : 0); }
+                SendRawEventWithStatus(ks::winapi_monitor::EventCategory::Process, L"Advapi32", L"CreateProcessWithTokenW", result ? 0 : lastError, detailBuffer);
+            }
+            ::SetLastError(lastError);
+            return result;
+        }
         APIMON_SIMPLE_BOOL_HOOK(HookedLookupPrivilegeValueW, g_lookupPrivilegeValueWOriginal, ks::winapi_monitor::EventCategory::Process, L"Advapi32", L"LookupPrivilegeValueW",
             (LPCWSTR systemNamePointer, LPCWSTR namePointer, PLUID luidPointer), (systemNamePointer, namePointer, luidPointer),
             { AppendWideText(detailBuffer, L"system="); AppendWideText(detailBuffer, systemNamePointer); AppendWideText(detailBuffer, L" name="); AppendWideText(detailBuffer, namePointer); AppendWideText(detailBuffer, L" luidLow="); AppendHexText(detailBuffer, luidPointer != nullptr ? luidPointer->LowPart : 0); })
@@ -7903,10 +7972,22 @@ namespace apimon
             return resultValue;
         }
 
-        APIMON_SIMPLE_BOOL_HOOK(HookedCreateProcessWithLogonW, g_createProcessWithLogonWOriginal, ks::winapi_monitor::EventCategory::Process, L"Advapi32", L"CreateProcessWithLogonW",
-            (LPCWSTR userNamePointer, LPCWSTR domainPointer, LPCWSTR passwordPointer, DWORD logonFlags, LPCWSTR applicationNamePointer, LPWSTR commandLinePointer, DWORD creationFlags, LPVOID environmentPointer, LPCWSTR currentDirectoryPointer, LPSTARTUPINFOW startupInfoPointer, LPPROCESS_INFORMATION processInformationPointer),
-            (userNamePointer, domainPointer, passwordPointer, logonFlags, applicationNamePointer, commandLinePointer, creationFlags, environmentPointer, currentDirectoryPointer, startupInfoPointer, processInformationPointer),
-            { AppendWideText(detailBuffer, L"user="); AppendWideText(detailBuffer, domainPointer); AppendWideText(detailBuffer, L"\\"); AppendWideText(detailBuffer, userNamePointer); AppendWideText(detailBuffer, L" logonFlags="); AppendHexText(detailBuffer, logonFlags); AppendWideText(detailBuffer, L" app="); AppendWideText(detailBuffer, applicationNamePointer); AppendWideText(detailBuffer, L" cmd="); AppendWideText(detailBuffer, commandLinePointer); AppendWideText(detailBuffer, L" childPid="); AppendUnsignedText(detailBuffer, processInformationPointer != nullptr ? processInformationPointer->dwProcessId : 0); })
+        BOOL WINAPI HookedCreateProcessWithLogonW(LPCWSTR userNamePointer, LPCWSTR domainPointer, LPCWSTR passwordPointer, DWORD logonFlags, LPCWSTR applicationNamePointer, LPWSTR commandLinePointer, DWORD creationFlags, LPVOID environmentPointer, LPCWSTR currentDirectoryPointer, LPSTARTUPINFOW startupInfoPointer, LPPROCESS_INFORMATION processInformationPointer)
+        {
+            ScopedHookGuard guard;
+            if (guard.bypass()) return g_createProcessWithLogonWOriginal(userNamePointer, domainPointer, passwordPointer, logonFlags, applicationNamePointer, commandLinePointer, creationFlags, environmentPointer, currentDirectoryPointer, startupInfoPointer, processInformationPointer);
+            const BOOL result = g_createProcessWithLogonWOriginal(userNamePointer, domainPointer, passwordPointer, logonFlags, applicationNamePointer, commandLinePointer, creationFlags, environmentPointer, currentDirectoryPointer, startupInfoPointer, processInformationPointer);
+            const DWORD lastError = ::GetLastError();
+            AutoInjectChildIfRequested(result, processInformationPointer);
+            if (ActiveConfig().enableProcess)
+            {
+                wchar_t detailBuffer[ks::winapi_monitor::kMaxDetailChars] = {};
+                { AppendWideText(detailBuffer, L"user="); AppendWideText(detailBuffer, domainPointer); AppendWideText(detailBuffer, L"\\"); AppendWideText(detailBuffer, userNamePointer); AppendWideText(detailBuffer, L" logonFlags="); AppendHexText(detailBuffer, logonFlags); AppendWideText(detailBuffer, L" app="); AppendWideText(detailBuffer, applicationNamePointer); AppendWideText(detailBuffer, L" cmd="); AppendWideText(detailBuffer, commandLinePointer); AppendWideText(detailBuffer, L" childPid="); AppendUnsignedText(detailBuffer, processInformationPointer != nullptr ? processInformationPointer->dwProcessId : 0); }
+                SendRawEventWithStatus(ks::winapi_monitor::EventCategory::Process, L"Advapi32", L"CreateProcessWithLogonW", result ? 0 : lastError, detailBuffer);
+            }
+            ::SetLastError(lastError);
+            return result;
+        }
 
         // HookedServiceQuery 作用：记录服务二级配置、状态和枚举，补齐服务创建/启动之外的 SCM 侦察面；返回原始 BOOL。
         APIMON_SIMPLE_BOOL_HOOK(HookedChangeServiceConfig2W, g_changeServiceConfig2WOriginal, ks::winapi_monitor::EventCategory::Process, L"Advapi32", L"ChangeServiceConfig2W",

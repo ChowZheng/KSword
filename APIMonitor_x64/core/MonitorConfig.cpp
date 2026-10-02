@@ -298,6 +298,7 @@ namespace apimon
             configValue.configPath,
             L"stop_flag_path",
             ks::winapi_monitor::buildStopFlagPathForPid(configValue.targetPid).c_str());
+        configValue.rootStopFlagPath = QueryIniText(configValue.configPath, L"root_stop_flag_path", L"");
         configValue.sessionId = QueryIniText(
             configValue.configPath,
             L"session_id",
@@ -373,7 +374,11 @@ namespace apimon
             return false;
         }
 
-        const DWORD fileAttributes = ::GetFileAttributesW(configValue.stopFlagPath.c_str());
-        return fileAttributes != INVALID_FILE_ATTRIBUTES && (fileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0;
+        const auto present = [](const std::wstring& path) {
+            const DWORD attributes = ::GetFileAttributesW(path.c_str());
+            return attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY) == 0;
+        };
+        return present(configValue.stopFlagPath)
+            || (!configValue.rootStopFlagPath.empty() && present(configValue.rootStopFlagPath));
     }
 }

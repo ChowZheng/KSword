@@ -5921,6 +5921,7 @@
     "notification.copy.log_template": "%1\n%2\n%3\n文件：%4\n函数：%5\nGUID：%6"
   },
   "source_translations": {
+    "启用后，Agent 会在受支持的 CreateProcess 系列调用成功时自动注入子进程，并继续监控后代；仅支持 x64 进程。": "启用后，Agent 会在受支持的 CreateProcess 系列调用成功时自动注入子进程，并继续监控后代；仅支持 x64 进程。",
     "SessionReady": "SessionReady",
     "InstallHooksFailed": "InstallHooksFailed",
     "HooksPartial": "HooksPartial",
