@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup><Filter Include="hook"><UniqueIdentifier>{8D448BA9-3022-4D95-BF73-4470B5C708A1}</UniqueIdentifier></Filter></ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="dllmain.cpp" />
+    <ClCompile Include="hook\HookEngineX86.cpp"><Filter>hook</Filter></ClCompile>
+    <ClInclude Include="hook\InstructionDecoder.inc"><Filter>hook</Filter></ClInclude>
+    <ClInclude Include="..\APIMonitor_x64\hook\HookEngine.h"><Filter>hook</Filter></ClInclude>
+    <ClInclude Include="..\APIMonitor_x64\pch.h" />
+  </ItemGroup>
+</Project>

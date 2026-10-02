@@ -7,7 +7,13 @@ namespace apimon
 {
     namespace
     {
-        constexpr std::size_t kAbsoluteJumpSize = 14; // kAbsoluteJumpSize：FF 25 [rip+0] + 8 字节目标地址，不破坏通用寄存器。
+#ifdef _M_IX86
+        constexpr std::size_t kAbsoluteJumpSize = 5;
+        constexpr char kLandingPad[] = "\xF3\x0F\x1E\xFB";
+#else
+        constexpr std::size_t kAbsoluteJumpSize = 14;
+        constexpr char kLandingPad[] = "\xF3\x0F\x1E\xFA";
+#endif
         thread_local std::uint32_t g_inlineHookInternalBypassDepth = 0; // g_inlineHookInternalBypassDepth：HookEngine 内部操作重入屏蔽深度。
 
         // Allocate the handle list before suspension: a suspended thread may own the heap lock.
@@ -58,7 +64,12 @@ namespace apimon
                     CONTEXT context{};
                     context.ContextFlags = CONTEXT_CONTROL;
                     if (::GetThreadContext(thread, &context) == FALSE) return false;
-                    if (context.Rip >= first && context.Rip < first + length) return false;
+#ifdef _M_IX86
+                    const auto instructionPointer = context.Eip;
+#else
+                    const auto instructionPointer = context.Rip;
+#endif
+                    if (instructionPointer >= first && instructionPointer < first + length) return false;
                 }
                 return true;
             }
@@ -92,6 +103,9 @@ namespace apimon
             std::int64_t relativeDisplacement = 0;
         };
 
+#ifdef _M_IX86
+#include "../../APIMonitor_x86/hook/InstructionDecoder.inc"
+#else
         InstructionDescription DecodeInstruction(const unsigned char* code, std::size_t size)
         {
             InstructionDescription d;
@@ -187,6 +201,7 @@ namespace apimon
             return finish(immediate);
         }
 
+#endif
         bool SafeRead(const void* source, void* destination, std::size_t size)
         {
             const auto begin = reinterpret_cast<std::uintptr_t>(source);
@@ -197,7 +212,7 @@ namespace apimon
                 MEMORY_BASIC_INFORMATION info{};
                 if (!::VirtualQuery(reinterpret_cast<void*>(position), &info, sizeof(info)) || info.State != MEM_COMMIT
                     || (info.Protect & (PAGE_NOACCESS | PAGE_GUARD))) return false;
-                const auto end = reinterpret_cast<std::uintptr_t>(info.BaseAddress) + info.RegionSize;
+                const auto end = reinterpret_cast<std::uintptr_t>(info.BaseAddress) + static_cast<std::uintptr_t>(info.RegionSize);
                 if (end <= position) return false;
                 position = (std::min)(end, begin + size);
             }
@@ -221,7 +236,14 @@ namespace apimon
         }
 
         bool FitsRel32(std::int64_t value)
-        { return value >= INT32_MIN && value <= INT32_MAX; }
+        {
+#ifdef _M_IX86
+            // rel32 reaches every 32-bit address using modular arithmetic.
+            (void)value; return true;
+#else
+            return value >= INT32_MIN && value <= INT32_MAX;
+#endif
+        }
 
         std::size_t RelocatedSize(const InstructionDescription& instruction)
         {
@@ -246,7 +268,8 @@ namespace apimon
                 *failureOffset = from;
                 if (instruction.flow == ControlFlow::Call || instruction.flow == ControlFlow::Jump || instruction.flow == ControlFlow::Conditional)
                 {
-                    std::uintptr_t target = source + from + instruction.length + instruction.relativeDisplacement;
+                    const std::uintptr_t targetValue = static_cast<std::uintptr_t>(source + from + instruction.length + instruction.relativeDisplacement);
+                    std::uintptr_t target = targetValue;
                     if (target >= source && target < source + patchSize)
                     {
                         const auto end = oldOffsets.begin() + instructions.size();
@@ -283,6 +306,10 @@ namespace apimon
 
         unsigned char* AllocateNear(const void* target)
         {
+#ifdef _M_IX86
+            (void)target;
+            return static_cast<unsigned char*>(::VirtualAlloc(nullptr, 4096, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
+#else
             SYSTEM_INFO info{}; ::GetSystemInfo(&info);
             const auto granularity = static_cast<std::uintptr_t>(info.dwAllocationGranularity);
             const auto center = reinterpret_cast<std::uintptr_t>(target) & ~(granularity - 1);
@@ -303,6 +330,7 @@ namespace apimon
                 }
             }
             return nullptr;
+#endif
         }
 
         // BuildAbsoluteJump 作用：
@@ -311,6 +339,12 @@ namespace apimon
         // - 返回：无返回值，调用者随后负责刷新指令缓存。
         void BuildAbsoluteJump(unsigned char* targetBuffer, const void* destinationAddress)
         {
+#ifdef _M_IX86
+            targetBuffer[0] = 0xE9;
+            const std::uint32_t delta = reinterpret_cast<std::uintptr_t>(destinationAddress)
+                - (reinterpret_cast<std::uintptr_t>(targetBuffer) + 5);
+            std::memcpy(targetBuffer + 1, &delta, 4);
+#else
             targetBuffer[0] = 0xFF;
             targetBuffer[1] = 0x25;
             targetBuffer[2] = 0x00;
@@ -318,6 +352,7 @@ namespace apimon
             targetBuffer[4] = 0x00;
             targetBuffer[5] = 0x00;
             std::memcpy(targetBuffer + 6, &destinationAddress, sizeof(destinationAddress));
+#endif
         }
 
         struct EntryPatch
@@ -351,7 +386,7 @@ namespace apimon
                 const auto readable = ReadCode(current, bytes, sizeof(bytes));
                 if (!readable) { *reason = L"unreadable or non-executable entry"; return nullptr; }
                 // Keep the exported ENDBR entry intact; relocation starts after it.
-                if (readable >= 4 && std::memcmp(bytes, "\xF3\x0F\x1E\xFA", 4) == 0) return current;
+                if (readable >= 4 && std::memcmp(bytes, kLandingPad, 4) == 0) return current;
                 if (bytes[0] == 0xE9 || bytes[0] == 0xEB)
                 {
                     const auto d = DecodeInstruction(bytes, readable);
@@ -359,7 +394,11 @@ namespace apimon
                     current = reinterpret_cast<unsigned char*>(reinterpret_cast<std::uintptr_t>(current) + d.length + d.relativeDisplacement);
                     continue;
                 }
+#ifdef _M_IX86
+                const bool rexIndirect = false;
+#else
                 const bool rexIndirect = readable >= 3 && bytes[0] == 0x48 && bytes[1] == 0xFF && bytes[2] == 0x25;
+#endif
                 if ((readable >= 2 && bytes[0] == 0xFF && bytes[1] == 0x25) || rexIndirect)
                 {
                     const std::size_t prefix = rexIndirect ? 1 : 0;
@@ -367,7 +406,11 @@ namespace apimon
                     std::int32_t displacement{};
                     std::memcpy(&displacement, bytes + prefix + 2, 4);
                     void* next = nullptr;
+#ifdef _M_IX86
+                    const auto slot = static_cast<std::uint32_t>(displacement);
+#else
                     const auto slot = reinterpret_cast<std::uintptr_t>(current) + prefix + 6 + displacement;
+#endif
                     if (!SafeRead(reinterpret_cast<void*>(slot), &next, sizeof(next)))
                     { *reason = L"unreadable jump-stub pointer"; return nullptr; }
                     current = static_cast<unsigned char*>(next);
@@ -458,7 +501,7 @@ namespace apimon
         unsigned char saved[32]{};
         auto readable = ReadCode(entry, saved, sizeof(saved));
         if (!readable) return fail(L"unreadable entry", entry, 0, true);
-        const bool endbr = readable >= 4 && std::memcmp(saved, "\xF3\x0F\x1E\xFA", 4) == 0;
+        const bool endbr = readable >= 4 && std::memcmp(saved, kLandingPad, 4) == 0;
         auto* target = entry + (endbr ? 4 : 0);
         // Check already-patched addresses before decoding or following the installed detour.
         for (const auto& candidate : g_entryPatches)
@@ -496,7 +539,7 @@ namespace apimon
             if (candidate->active && address < first + candidate->size && first < address + patchSize)
             { ::VirtualFree(allocation, 0, MEM_RELEASE); return fail(L"overlapping patch interval", target, 0, true); }
         }
-        if (endbr) std::memcpy(allocation, "\xF3\x0F\x1E\xFA", 4);
+        if (endbr) std::memcpy(allocation, kLandingPad, 4);
         std::size_t emitted = 0;
         if (!BuildRelocatedCode(saved, reinterpret_cast<std::uintptr_t>(target), patchSize,
             allocation + prefix, reinterpret_cast<std::uintptr_t>(allocation + prefix), instructions,
@@ -504,7 +547,8 @@ namespace apimon
         { ::VirtualFree(allocation, 0, MEM_RELEASE); return fail(reason, target, failureOffset, true); }
         // Prefer direct return control flow when usesNearRelay; no register is clobbered.
         auto* tail = allocation + prefix + emitted;
-        const auto returnDelta = reinterpret_cast<std::intptr_t>(target + patchSize) - reinterpret_cast<std::intptr_t>(tail + 5);
+        const auto returnDelta = static_cast<std::int64_t>(reinterpret_cast<std::uintptr_t>(target + patchSize))
+            - static_cast<std::int64_t>(reinterpret_cast<std::uintptr_t>(tail + 5));
         if (FitsRel32(returnDelta))
         { tail[0] = 0xE9; const std::int32_t delta = static_cast<std::int32_t>(returnDelta); std::memcpy(tail + 1, &delta, 4); }
         else BuildAbsoluteJump(tail, target + patchSize);
@@ -516,7 +560,8 @@ namespace apimon
         std::memset(state->patched.data(), 0x90, patchSize);
         if (usesNearRelay)
         {
-            const auto delta = reinterpret_cast<std::intptr_t>(allocation + relayOffset) - reinterpret_cast<std::intptr_t>(target + 5);
+            const auto delta = static_cast<std::int64_t>(reinterpret_cast<std::uintptr_t>(allocation + relayOffset))
+                - static_cast<std::int64_t>(reinterpret_cast<std::uintptr_t>(target + 5));
             if (!FitsRel32(delta)) { ::VirtualFree(allocation, 0, MEM_RELEASE); return fail(L"usesNearRelay relay exceeds rel32 range", target, 0, false); }
             state->patched[0] = 0xE9; const auto relative = static_cast<std::int32_t>(delta);
             std::memcpy(state->patched.data() + 1, &relative, 4);
