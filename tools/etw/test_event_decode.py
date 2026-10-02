@@ -72,6 +72,18 @@ presets+='\n'+fun('const std::vector<EtwPresetProviderDescriptor>& etwPresetProv
 code=code.replace('PARSER',presets+'\nPARSER')
 code=code.replace('PARSER',s[s.index('    // EtwSchemaPropertyEntry'):s.index('    // 100ns 时间戳文本格式化')]).replace('SAMPLE_BYTES',','.join(str(x) for x in payload))
 tests={
+ 'status_translation': r'''
+ schema={};schema.propertyList={prop(0,"Result",TDH_INTYPE_BOOLEAN)};std::uint32_t result=0;
+ run(schema,&result,sizeof(result));auto semantic=inferEtwSemanticSummary(QStringLiteral("Microsoft-Windows-Security-Auditing"),QStringLiteral("Audit"),QString(),decoded);
+ if(semantic.statusText!=decoded[0].valueText||semantic.statusText==QStringLiteral("成功"))return 130;
+ schema.propertyList={prop(0,"Status",TDH_INTYPE_UINT32)};result=1;
+ run(schema,&result,sizeof(result));semantic=inferEtwSemanticSummary(QStringLiteral("Vendor"),QStringLiteral("State"),QString(),decoded);
+ if(semantic.statusText!=QStringLiteral("1"))return 131;
+ schema.propertyList={prop(0,"Status",TDH_INTYPE_INT32)};schema.propertyList[0].outType=TDH_OUTTYPE_NTSTATUS;result=0xc0000005;
+ run(schema,&result,sizeof(result));semantic=inferEtwSemanticSummary(QStringLiteral("Kernel-FileIO"),QStringLiteral("OperationEnd"),QString(),decoded);
+ if(semantic.statusText!=decoded[0].valueText||semantic.statusText.contains(QStringLiteral("FFFFFFFF")))return 132;
+ if(etwPropertyMeaningText(QStringLiteral("result"))!=QStringLiteral("结果"))return 133;
+ ''',
  'action_translation': r'''
  struct ActionCase{const char* provider;const char* event;const char* opcode;int value;const char* expected;};
  const ActionCase cases[]={

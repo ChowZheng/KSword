@@ -2784,7 +2784,7 @@ namespace
             {"shareaccess", QStringLiteral("共享访问权限")},
             {"status", QStringLiteral("状态码")},
             {"ntstatus", QStringLiteral("NT状态码")},
-            {"result", QStringLiteral("结果码")},
+            {"result", QStringLiteral("结果")},
             {"opcode", QStringLiteral("操作码")},
             {"informationclass", QStringLiteral("信息类")},
             {"hostname", QStringLiteral("主机名")},
@@ -3858,17 +3858,9 @@ namespace
             QStringLiteral("win32error"), QStringLiteral("win32status") });
         if (statusProperty != nullptr)
         {
-            if (statusProperty->numericAvailable)
-            {
-                const std::uint64_t statusValue = statusProperty->numericValue;
-                summary.statusText = statusValue == 0
-                    ? QStringLiteral("成功")
-                    : QStringLiteral("0x%1").arg(static_cast<qulonglong>(statusValue), 8, 16, QChar(u'0')).toUpper();
-            }
-            else
-            {
-                summary.statusText = statusProperty->valueText;
-            }
+            // Result/Status 在不同 schema 中可能是 BOOL、计数、枚举或错误码。
+            // 保留 TDH 按声明输出类型格式化的值，不统一把 0 当成成功或转成十六进制。
+            summary.statusText = statusProperty->valueText;
         }
         return summary;
     }
