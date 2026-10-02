@@ -3,6 +3,7 @@
 - [ETW 解析与进程归属](ksword-etw-decoding.md) — 事件头与关联身份、映像枚举、数组/结构体布局、网络端口和 TraceLogging 缓存
 
 - [API Monitor 生命周期与事件协议](ksword-api-monitor.md) — x86/x64 工程与自动注入、JSON 定义、异步/覆盖协议、会话互斥、退役 Hook 保留与回归证据
+- [Syscall 监控与 SysWhispers 兼容形态](ksword-syscall-monitor.md) — QPC 栈关联、进入/退出布局、系统映像信任、静态调用号边界与有界离线回归
 
 - [欢迎页采样与 GPU 遥测蓝屏](ksword-welcome-gpu-telemetry.md) — 首页采样范围、GetNodePerfData 空指针现场、17763 系列禁用与 WDDM 2.4 门槛
 - [KSword UI/主题架构](ksword-ui-architecture.md) — theme.h 动态/静态 token 边界与构建期门禁、全局样式块链路、WindowChrome 标题栏染色、周期后台刷新与全局进度通知边界

@@ -2340,6 +2340,12 @@
     <ClInclude Include="..\..\shared\evidence\MemoryRegionEvidence.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="..\..\shared\evidence\SyscallEvidence.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\shared\evidence\SyscallCorrelation.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="..\..\shared\evidence\InjectionSurvey.h">
       <Filter>Header Files</Filter>
     </ClInclude>

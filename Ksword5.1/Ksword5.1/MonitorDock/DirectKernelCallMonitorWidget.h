@@ -10,6 +10,8 @@
 // ============================================================
 
 #include "../Framework.h"
+#include "../../../shared/evidence/SyscallCorrelation.h"
+#include "../../../shared/evidence/SyscallEvidence.h"
 
 #include <QWidget>
 
@@ -19,6 +21,7 @@
 #include <cstdint>
 #include <deque>
 #include <memory>
+#include <map>
 #include <mutex>
 #include <set>
 #include <thread>
@@ -37,6 +40,7 @@ class QTableWidgetItem;
 class QTimer;
 class QVBoxLayout;
 struct _EVENT_RECORD;
+struct _EVENT_TRACE_LOGFILEW;
 
 class DirectKernelCallMonitorWidget final : public QWidget
 {
@@ -66,14 +70,6 @@ public:
         QString sourceModule;
     };
 
-    struct DecodedProperty
-    {
-        QString name;
-        QString valueText;
-        std::uint64_t numericValue = 0;
-        bool hasNumericValue = false;
-    };
-
     struct ModuleRange
     {
         std::uint64_t startAddress = 0;
@@ -96,6 +92,9 @@ public:
     struct CapturedEventRow
     {
         QString time100nsText;
+        std::uint64_t eventTime100ns = 0;
+        std::uint64_t kernelServiceAddress = 0;
+        std::uint8_t pointerSize = 8;
         std::uint32_t pid = 0;
         std::uint64_t processCreationTime100ns = 0U; // processCreationTime100ns：事件发生时对应进程实例的创建时间。
         std::uint32_t tid = 0;
@@ -114,6 +113,16 @@ public:
         QString globalSearchText;
     };
 
+    struct FrameInspection
+    {
+        ks::evidence::syscall::FrameEvidence evidence;
+        QString moduleText;
+        std::uint64_t creationTime100ns = 0;
+        std::chrono::steady_clock::time_point sampledAt{};
+        std::shared_ptr<void> processOwner;
+        bool readable = false;
+    };
+
 private:
     void initializeUi();
     void initializeConnections();
@@ -121,6 +130,7 @@ private:
     void startCapture();
     void stopCapture();
     void stopCaptureInternal(bool waitForThread);
+    bool stopOwnedSession();
     void setCapturePaused(bool paused);
     void updateActionState();
     void updateStatusLabel();
@@ -134,11 +144,13 @@ private:
     void openEventDetailViewerForRow(int rowIndex);
 
     static void WINAPI eventRecordCallback(struct _EVENT_RECORD* eventRecordPtr);
+    static ULONG WINAPI bufferCallback(struct _EVENT_TRACE_LOGFILEW* traceLogFile);
     void enqueueEventFromRecord(const struct _EVENT_RECORD* eventRecordPtr);
+    void publishCorrelatedRows(std::vector<ks::evidence::syscall::Correlator<CapturedEventRow>::Output> outputs);
+    void analyzeUserStack(CapturedEventRow& row, const std::vector<std::uint64_t>& frames);
+    void enqueueRow(CapturedEventRow row);
+    void synchronizeCaptureInterval();
     CapturedEventRow buildRowFromRecord(const struct _EVENT_RECORD* eventRecordPtr);
-    std::vector<DecodedProperty> decodeEventProperties(
-        const struct _EVENT_RECORD* eventRecordPtr,
-        QString* eventNameOut) const;
     QString serviceNameForNumber(std::uint32_t syscallNumber) const;
     // processNameForPid 作用：
     // - 查询或复用 PID 对应的名称，并同步返回进程创建时间；
@@ -189,7 +201,25 @@ private:
     mutable std::mutex m_syscallMapMutex;
     std::unordered_map<std::uint32_t, ProcessIdentityCacheEntry> m_processNameCache; // PID 到限时验证身份的缓存。
     std::unordered_map<std::uint32_t, std::vector<ModuleRange>> m_moduleRangeCache;
+    std::unordered_map<std::uint32_t, std::chrono::steady_clock::time_point> m_moduleRefreshTimes;
+    std::map<std::pair<std::uint32_t, std::uint64_t>, FrameInspection> m_frameInspectionCache;
     std::mutex m_cacheMutex;
+    // Only the ProcessTrace consumer touches the correlation cache.
+    ks::evidence::syscall::Correlator<CapturedEventRow> m_stackCorrelator;
+    std::uint64_t m_qpcOrigin = 0;
+    std::uint64_t m_filetimeOrigin = 0;
+    std::uint64_t m_qpcFrequency = 1;
+    std::atomic<ULONG> m_stackEnableStatus{ ERROR_NOT_READY };
+    std::atomic<ULONG> m_sessionStopStatus{ ERROR_SUCCESS };
+    std::atomic<std::uint64_t> m_etwEventsLost{ 0 };
+    std::atomic<std::uint64_t> m_etwBuffersLost{ 0 };
+    std::atomic<std::uint64_t> m_stackMatched{ 0 };
+    std::atomic<std::uint64_t> m_stackMissing{ 0 };
+    std::atomic<std::uint64_t> m_stackConflicts{ 0 };
+    std::atomic<std::uint64_t> m_stackCapacityEvicted{ 0 };
+    std::chrono::steady_clock::time_point m_lastTraceStatsQuery{};
+    std::atomic<std::uint64_t> m_captureIntervalGeneration{ 0 };
+    std::uint64_t m_consumerIntervalGeneration = 0;
     static constexpr std::size_t kPendingRowCapacity = 24000;
     static constexpr std::size_t kUiFlushRowLimit = 160;
     static constexpr int kUiFlushBudgetMs = 4;

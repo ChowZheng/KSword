@@ -931,6 +931,8 @@
     <ClInclude Include="..\..\shared\evidence\PeImageMap.h" />
     <ClInclude Include="..\..\shared\evidence\ImageDiff.h" />
     <ClInclude Include="..\..\shared\evidence\MemoryRegionEvidence.h" />
+    <ClInclude Include="..\..\shared\evidence\SyscallEvidence.h" />
+    <ClInclude Include="..\..\shared\evidence\SyscallCorrelation.h" />
     <ClInclude Include="..\..\shared\evidence\InjectionSurvey.h" />
     <ClInclude Include="..\..\shared\ProcessTerminateMethods.h" />
     <ClInclude Include="..\..\shared\crash\WinCrashHandler.h" />
