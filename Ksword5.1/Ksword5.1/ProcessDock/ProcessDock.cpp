@@ -10060,6 +10060,14 @@ QVariant ProcessDock::processTableData(const ProcessTableRow& tableRow, const in
         // Name 列固定显示目标 EXE 图标（命中缓存后开销可控）。
         return resolveProcessIcon(processRecord);
     }
+    if (role == Qt::ToolTipRole && tableColumn == TableColumn::Protection)
+    {
+        // 偏移来源保留在提示中，避免每一行重复占用保护状态列。
+        return processContextText(
+            "process.table.cell.protection_source_tooltip",
+            QStringLiteral("保护字段来源：%1"))
+            .arg(processFieldSourceText(processRecord.r0ProtectionSource));
+    }
     if (role == Qt::ToolTipRole && tableColumn == TableColumn::Name)
     {
         if (tableRow.activitySnapshotActive)
@@ -13393,9 +13401,7 @@ QString ProcessDock::formatColumnText(const ks::process::ProcessRecord& processR
         {
             return QStringLiteral("Unavailable (%1)").arg(processFieldSourceText(processRecord.r0ProtectionSource));
         }
-        return QStringLiteral("%1 (%2)")
-            .arg(byteHexText(processRecord.r0Protection))
-            .arg(processFieldSourceText(processRecord.r0ProtectionSource));
+        return byteHexText(processRecord.r0Protection);
     case TableColumn::Ppl:
         if ((processRecord.r0FieldFlags & KSWORD_ARK_PROCESS_FIELD_PROTECTION_PRESENT) == 0U)
         {
