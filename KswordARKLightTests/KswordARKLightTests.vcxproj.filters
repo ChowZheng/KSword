@@ -1,4 +1,4 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup>
     <Filter Include="Tests"><UniqueIdentifier>{AE827AFD-B600-41EA-BDB5-B26A04D21A5B}</UniqueIdentifier></Filter>
@@ -7,6 +7,11 @@
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="KswordARKLightTests.cpp"><Filter>Tests</Filter></ClCompile>
+    <ClCompile Include="ProcessInformationTests.cpp"><Filter>Tests</Filter></ClCompile>
+    <ClCompile Include="..\KswordARKLight\Features\Process\ProcessDetails.cpp"><Filter>Production</Filter></ClCompile>
+    <ClCompile Include="..\KswordARKLight\Features\Process\ProcessColumns.cpp"><Filter>Production</Filter></ClCompile>
+    <ClCompile Include="..\KswordARKLight\Features\Process\ProcessEnumerator.cpp"><Filter>Production</Filter></ClCompile>
+    <ClCompile Include="..\KswordARKLight\Core\NtApi.cpp"><Filter>Production</Filter></ClCompile>
     <ClCompile Include="EvidenceContractTests.cpp"><Filter>Tests</Filter></ClCompile>
     <ClCompile Include="CrossViewTests.cpp"><Filter>Tests</Filter></ClCompile>
     <ClCompile Include="EntityGraphTests.cpp"><Filter>Tests</Filter></ClCompile>

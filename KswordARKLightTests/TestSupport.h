@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 // 各验收测试套件共用的最小断言支撑。每个套件返回自己的失败计数，wmain 汇总。
 
@@ -66,3 +66,5 @@ int RunDdmaPlanTests();           // DDMA 磁盘 DMA（shared/driver，ATA 寄�
 int RunNumericTextParseTests();   // 数值文本解析（shared/evidence，地址/数量两种默认进制）
 int RunMemoryTamperCrossViewTests(); // 内存内容交叉视图（shared/evidence，多读取路径互比）
 int RunDmaProcessOpPlanTests();      // DMA 进程操作计划（shared/evidence，空隙/备份/读回校验）
+
+int RunProcessInformationTests();

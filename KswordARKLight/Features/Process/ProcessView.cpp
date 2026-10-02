@@ -2,6 +2,7 @@
 
 #include "ProcessActions.h"
 #include "ProcessColumns.h"
+#include "ProcessDetails.h"
 #include "ProcessEnumerator.h"
 #include "ProcessModel.h"
 #include "../AuditCommon/AuditFormatting.h"
@@ -300,6 +301,8 @@ struct ProcessViewState {
     HWND listView = nullptr;
     HIMAGELIST imageList = nullptr;
     ProcessModel model;
+    std::shared_ptr<std::unordered_map<std::wstring, std::string>> signatureCache =
+        std::make_shared<std::unordered_map<std::wstring, std::string>>();
     // activeColumns 用途：当前运行期实际展示的逻辑列；关闭页面后不持久化。
     std::vector<ProcessColumnId> activeColumns = DefaultProcessColumns(ProcessViewPreset::Detail);
     ProcessViewPreset preset = ProcessViewPreset::Detail;
@@ -1810,21 +1813,6 @@ bool WriteClipboardText(HWND owner, const std::wstring& text) {
     return Ksword::Ui::CopyTextToClipboard(owner, text, L"进程模块");
 }
 
-// DetailDemandForColumns 用途：仅为当前可见深度列请求主程序进程库的额外采集。
-std::uint32_t DetailDemandForColumns(const std::vector<ProcessColumnId>& columns) {
-    std::uint32_t demand = ks::process::ProcessDetailDemand::None;
-    const auto has = [&columns](ProcessColumnId id) { return std::find(columns.begin(), columns.end(), id) != columns.end(); };
-    if (has(ProcessColumnId::GpuEngine)) demand |= ks::process::ProcessDetailDemand::GpuEngine;
-    if (has(ProcessColumnId::GpuDedicatedMemory) || has(ProcessColumnId::GpuSharedMemory)) demand |= ks::process::ProcessDetailDemand::GpuMemory;
-    if (has(ProcessColumnId::PackageName)) demand |= ks::process::ProcessDetailDemand::PackageName;
-    if (has(ProcessColumnId::Description)) demand |= ks::process::ProcessDetailDemand::FileDescription;
-    if (has(ProcessColumnId::DpiAwareness)) demand |= ks::process::ProcessDetailDemand::DpiAwareness;
-    if (has(ProcessColumnId::UacVirtualization)) demand |= ks::process::ProcessDetailDemand::UacVirtualization;
-    if (has(ProcessColumnId::DataExecutionPrevention) || has(ProcessColumnId::ControlFlowGuard) || has(ProcessColumnId::HardwareStackProtection)) demand |= ks::process::ProcessDetailDemand::MitigationPolicy;
-    if (has(ProcessColumnId::JobObject)) demand |= ks::process::ProcessDetailDemand::JobObject;
-    return demand;
-}
-
 // ApplyR0KernelColumnDetails 用途：仅在内核列可见时调用 R0 HandleTable 与 SectionObject 查询并回填列表。
 void ApplyR0KernelColumnDetails(std::vector<ProcessSnapshotRow>& rows, const std::vector<ProcessColumnId>& columns) {
     const bool needHandleTable = std::find(columns.begin(), columns.end(), ProcessColumnId::HandleTable) != columns.end();
@@ -1857,71 +1845,78 @@ void ApplyR0KernelColumnDetails(std::vector<ProcessSnapshotRow>& rows, const std
     }
 }
 
-// ApplyMainProcessDetails 用途：复用 Ksword5.1 已链接的进程库，把真实 R3 深度字段写入 Light 行。
-void ApplyMainProcessDetails(std::vector<ProcessSnapshotRow>& rows, const std::vector<ProcessColumnId>& columns) {
+// Enrich on the worker; signature results survive later refreshes and are
+// bounded by the current set of PID + creation-time identities.
+void ApplyMainProcessDetails(std::vector<ProcessSnapshotRow>& rows,
+    const std::vector<ProcessColumnId>& columns,
+    std::unordered_map<std::wstring, std::string>& signatureCache) {
     const std::uint32_t demand = DetailDemandForColumns(columns);
-    const std::vector<ks::process::ProcessRecord> records = ks::process::EnumerateProcesses(ks::process::ProcessEnumStrategy::Auto, nullptr, demand);
+    const auto has = [&columns](ProcessColumnId id) {
+        return std::find(columns.begin(), columns.end(), id) != columns.end();
+    };
+    const auto records = ks::process::EnumerateProcesses(ks::process::ProcessEnumStrategy::Auto, nullptr, demand);
     std::unordered_map<std::uint32_t, const ks::process::ProcessRecord*> byPid;
-    for (const ks::process::ProcessRecord& record : records) byPid[record.pid] = &record;
-    const auto put = [](ProcessSnapshotRow& row, ProcessColumnId id, const std::wstring& text) { if (!text.empty()) row.detailTexts[static_cast<std::uint8_t>(id)] = text; };
-    const bool wantsSignature = std::find(columns.begin(), columns.end(), ProcessColumnId::Signature) != columns.end();
-    static std::atomic_size_t signatureCursor{ 0 };
-    const std::size_t signatureStart = rows.empty() ? 0 : signatureCursor.fetch_add(24U) % rows.size();
-    std::size_t signatureOrdinal = 0;
-    for (ProcessSnapshotRow& row : rows) {
+    for (const auto& record : records) byPid[record.pid] = &record;
+    std::unordered_set<std::wstring> liveKeys;
+    std::size_t signatureBudget = 24;
+    for (auto& row : rows) {
         const auto found = byPid.find(row.processId);
-        if (found == byPid.end()) continue;
-        const ks::process::ProcessRecord& record = *found->second;
-        bool verifySignature = false;
-        // 静态详情只为需要静态字段的视图采集；签名校验同样在后台完成。
-        ks::process::ProcessRecord details{};
-        const bool staticNeeded = std::any_of(columns.begin(), columns.end(), [](ProcessColumnId id) {
-            return id == ProcessColumnId::Path || id == ProcessColumnId::CommandLine || id == ProcessColumnId::User || id == ProcessColumnId::Signature || id == ProcessColumnId::IsAdmin || id == ProcessColumnId::PplLevel || id == ProcessColumnId::PowerThrottling || id == ProcessColumnId::PackageName || id == ProcessColumnId::Description || id == ProcessColumnId::JobObject || id == ProcessColumnId::UacVirtualization || id == ProcessColumnId::DataExecutionPrevention || id == ProcessColumnId::ControlFlowGuard || id == ProcessColumnId::HardwareStackProtection || id == ProcessColumnId::DpiAwareness;
+        if (found == byPid.end() || row.r0KernelOnly) continue;
+        ks::process::ProcessRecord details = *found->second;
+        if (row.creationTime100ns != 0 && row.creationTime100ns != details.creationTime100ns) continue;
+        const auto key = ProcessStableKey(row.processId, row.creationTime100ns);
+        liveKeys.insert(key);
+        const bool needsStatic = std::any_of(columns.begin(), columns.end(), [](ProcessColumnId id) {
+            const auto* descriptor = FindProcessColumn(id);
+            return descriptor && (descriptor->group == ProcessColumnGroup::General ||
+                descriptor->group == ProcessColumnGroup::Security || id == ProcessColumnId::PowerThrottling);
         });
-        if (staticNeeded) {
-            // WinVerifyTrust 对受保护或网络路径映像可能长时间阻塞；每轮只验证有限数量，其他行明确标记待验证。
-            const std::size_t signatureOffset = rows.empty() ? 0 : (signatureOrdinal++ + rows.size() - signatureStart) % rows.size();
-            verifySignature = wantsSignature && signatureOffset < 24U;
-            ks::process::QueryProcessStaticDetailByPid(record.pid, details, verifySignature);
-            // 这一步实际执行缓解策略、UAC、作业、包名和 DPI 的按需读取，不能只传 demand 给枚举器。
+        if (needsStatic) {
+            const bool verifySignature = has(ProcessColumnId::Signature) && signatureBudget > 0 &&
+                signatureCache.find(key) == signatureCache.end() && row.processId > 4;
+            if (verifySignature) --signatureBudget;
+            ks::process::FillProcessStaticDetails(details, verifySignature);
             ks::process::FillProcessOnDemandDetails(details, demand, nullptr);
+            // A new handle may have resolved a recycled PID while we queried.
+            if (row.processId > 4) {
+                HANDLE process = ::OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, row.processId);
+                FILETIME created{}, exited{}, kernel{}, user{};
+                const bool ok = process && ::GetProcessTimes(process, &created, &exited, &kernel, &user);
+                if (process) ::CloseHandle(process);
+                const ULONGLONG actual = (static_cast<ULONGLONG>(created.dwHighDateTime) << 32U) | created.dwLowDateTime;
+                if (ok && actual != row.creationTime100ns) continue;
+            }
+            if (verifySignature && details.staticDetailsReady && !details.signatureState.empty())
+                signatureCache[key] = details.signatureState;
+            const auto signature = signatureCache.find(key);
+            if (signature != signatureCache.end()) details.signatureState = signature->second;
         }
-        const ks::process::ProcessRecord& source = details.staticDetailsReady ? details : record;
-        put(row, ProcessColumnId::Path, NarrowToWide(source.imagePath));
-        put(row, ProcessColumnId::CommandLine, NarrowToWide(source.commandLine));
-        put(row, ProcessColumnId::User, NarrowToWide(source.userName));
-        put(row, ProcessColumnId::StartTime, NarrowToWide(record.startTimeText));
-        put(row, ProcessColumnId::Signature, wantsSignature && !verifySignature ? L"待验证" : NarrowToWide(source.signatureState));
-        put(row, ProcessColumnId::Description, NarrowToWide(source.fileDescription));
-        put(row, ProcessColumnId::PackageName, NarrowToWide(source.packageFullName));
-        put(row, ProcessColumnId::IsAdmin, source.isAdmin ? L"是" : L"否");
-        put(row, ProcessColumnId::PowerThrottling, source.efficiencyModeSupported ? (source.efficiencyModeEnabled ? L"已启用" : L"已禁用") : L"不支持");
-        put(row, ProcessColumnId::Status, record.processStateKnown ? (record.processSuspended ? L"已挂起" : L"运行中") : L"未知");
-        put(row, ProcessColumnId::GpuEngine, NarrowToWide(record.gpuEngineText));
-        put(row, ProcessColumnId::JobObject, source.jobObjectKnown ? (source.inJobObject ? L"是" : L"否") : L"访问受限");
-        put(row, ProcessColumnId::UacVirtualization, std::to_wstring(static_cast<unsigned int>(source.uacVirtualizationState)));
-        put(row, ProcessColumnId::DataExecutionPrevention, std::to_wstring(static_cast<unsigned int>(source.dataExecutionPreventionState)));
-        put(row, ProcessColumnId::ControlFlowGuard, std::to_wstring(static_cast<unsigned int>(source.controlFlowGuardState)));
-        put(row, ProcessColumnId::HardwareStackProtection, std::to_wstring(static_cast<unsigned int>(source.hardwareStackProtectionState)));
-        put(row, ProcessColumnId::DpiAwareness, std::to_wstring(static_cast<unsigned int>(source.dpiAwarenessLevel)));
-        std::uint32_t protectionLevel = 0;
-        std::string protectionText;
-        if (ks::process::QueryProcessProtectionLevelByPid(record.pid, &protectionLevel, &protectionText, nullptr)) put(row, ProcessColumnId::PplLevel, NarrowToWide(protectionText));
-        else put(row, ProcessColumnId::PplLevel, L"访问受限");
-        if (record.gpuMemoryKnown) { put(row, ProcessColumnId::GpuDedicatedMemory, FormatByteSize(record.gpuDedicatedMemoryBytes)); put(row, ProcessColumnId::GpuSharedMemory, FormatByteSize(record.gpuSharedMemoryBytes)); }
+        if (has(ProcessColumnId::PplLevel) || has(ProcessColumnId::Protection) || has(ProcessColumnId::Ppl)) {
+            details.protectionLevelKnown = ks::process::QueryProcessProtectionLevelByPid(
+                details.pid, &details.protectionLevel, &details.protectionLevelText, nullptr);
+        }
+        ApplyProcessDetailRecord(row, details);
+        if (details.gpuMemoryKnown) {
+            row.detailTexts[static_cast<std::uint8_t>(ProcessColumnId::GpuDedicatedMemory)] = FormatByteSize(details.gpuDedicatedMemoryBytes);
+            row.detailTexts[static_cast<std::uint8_t>(ProcessColumnId::GpuSharedMemory)] = FormatByteSize(details.gpuSharedMemoryBytes);
+        }
+        if (!details.gpuEngineText.empty())
+            row.detailTexts[static_cast<std::uint8_t>(ProcessColumnId::GpuEngine)] = NarrowToWide(details.gpuEngineText);
     }
+    std::erase_if(signatureCache, [&liveKeys](const auto& entry) { return liveKeys.find(entry.first) == liveKeys.end(); });
 }
 
 // CollectProcessRefreshSnapshot performs every potentially blocking query for a
 // process refresh. It never accesses HWNDs or ProcessViewState and is safe for
 // AsyncSnapshotTask's worker thread.
-ProcessRefreshSnapshot CollectProcessRefreshSnapshot(const std::vector<ProcessColumnId>& columns) {
+ProcessRefreshSnapshot CollectProcessRefreshSnapshot(const std::vector<ProcessColumnId>& columns,
+    std::unordered_map<std::wstring, std::string>& signatureCache) {
     ProcessRefreshSnapshot snapshot{};
     snapshot.enumeration = EnumerateProcessesByNtQuerySystemInformation();
     if (!snapshot.enumeration.success) {
         return snapshot;
     }
-    ApplyMainProcessDetails(snapshot.enumeration.rows, columns);
+    ApplyMainProcessDetails(snapshot.enumeration.rows, columns, signatureCache);
     snapshot.hiddenAudit = ApplyDefaultHiddenProcessAudit(snapshot.enumeration.rows);
     ApplyR0ProcessAuditRows(snapshot.enumeration.rows, snapshot.crossViewStatusSuffix);
     ApplyR0KernelColumnDetails(snapshot.enumeration.rows, columns);
@@ -2026,7 +2021,7 @@ void BeginProcessRefresh(ProcessViewState& state) {
     }
     const std::vector<ProcessColumnId> requestedColumns = state.activeColumns;
     state.refreshTask->request(
-        [requestedColumns]() { return CollectProcessRefreshSnapshot(requestedColumns); },
+        [requestedColumns, signatureCache = state.signatureCache]() { return CollectProcessRefreshSnapshot(requestedColumns, *signatureCache); },
         [&state](std::uint64_t, std::optional<ProcessRefreshSnapshot>&& snapshot, std::exception_ptr error) {
             if (state.refreshButton) {
                 ::EnableWindow(state.refreshButton, TRUE);
@@ -2854,7 +2849,9 @@ LRESULT CALLBACK ProcessViewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
         break;
     case WM_TIMER:
         if (state && wParam == kRefreshTimerId) {
-            if (state->refreshPaused) {
+            // Automatic ticks must not supersede the in-flight generation:
+            // slow signature/R0 queries would otherwise never reach the table.
+            if (state->refreshPaused || (state->refreshTask && state->refreshTask->running())) {
                 return 0;
             }
             if ((::GetAsyncKeyState(VK_LCONTROL) & 0x8000) != 0) {

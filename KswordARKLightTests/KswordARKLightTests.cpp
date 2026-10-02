@@ -1,4 +1,4 @@
-﻿#include "../KswordARKLight/Core/DriverLeasePolicy.h"
+#include "../KswordARKLight/Core/DriverLeasePolicy.h"
 #include "../KswordARKLight/Core/EntityRef.h"
 #include "../KswordARKLight/Core/WorkspaceConfig.h"
 #include "../KswordARKLight/Features/File/PathNavigator.h"
@@ -500,6 +500,7 @@ int wmain() {
 
     // 下一阶段验收（docs/next/KSword_Next_Roadmap_Acceptance.md）的离线自动测试。
     // 每个套件调用 shared/evidence 的生产实现，返回自己的失败计数。
+    failures += RunProcessInformationTests();
     failures += RunEvidenceContractTests();
     failures += RunCrossViewTests();
     failures += RunEntityGraphTests();

@@ -1,4 +1,4 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup Label="ProjectConfigurations">
     <ProjectConfiguration Include="Debug|x64"><Configuration>Debug</Configuration><Platform>x64</Platform></ProjectConfiguration>
@@ -52,6 +52,11 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="KswordARKLightTests.cpp" />
+    <ClCompile Include="ProcessInformationTests.cpp" />
+    <ClCompile Include="..\KswordARKLight\Features\Process\ProcessDetails.cpp" />
+    <ClCompile Include="..\KswordARKLight\Features\Process\ProcessColumns.cpp" />
+    <ClCompile Include="..\KswordARKLight\Features\Process\ProcessEnumerator.cpp" />
+    <ClCompile Include="..\KswordARKLight\Core\NtApi.cpp" />
     <ClCompile Include="EvidenceContractTests.cpp" />
     <ClCompile Include="CrossViewTests.cpp" />
     <ClCompile Include="EntityGraphTests.cpp" />

@@ -35,6 +35,17 @@ std::wstring TimeText(ULONGLONG time100ns) {
     return buffer;
 }
 
+std::wstring StartTimeText(ULONGLONG value) {
+    if (value == 0) return L"不适用";
+    FILETIME utc{ static_cast<DWORD>(value), static_cast<DWORD>(value >> 32U) }, local{};
+    SYSTEMTIME time{};
+    if (!::FileTimeToLocalFileTime(&utc, &local) || !::FileTimeToSystemTime(&local, &time)) return L"时间转换失败";
+    wchar_t buffer[64]{};
+    ::swprintf_s(buffer, L"%04u-%02u-%02u %02u:%02u:%02u", time.wYear, time.wMonth, time.wDay,
+        time.wHour, time.wMinute, time.wSecond);
+    return buffer;
+}
+
 const std::vector<ProcessColumnDescriptor> kColumns = {
     { ProcessColumnId::Name, ProcessColumnGroup::General, L"进程", 250, LVCFMT_LEFT, true },
     { ProcessColumnId::Pid, ProcessColumnGroup::General, L"PID", 78, LVCFMT_RIGHT, true },
@@ -132,7 +143,9 @@ std::wstring ProcessColumnText(const ProcessSnapshotRow& row, ProcessColumnId co
     const auto collected = row.detailTexts.find(static_cast<std::uint8_t>(column));
     if (collected != row.detailTexts.end()) return collected->second;
     switch (column) {
-    case C::Name: return row.imageName; case C::Pid: return NumberText(row.processId); case C::ParentPid: return NumberText(row.parentProcessId); case C::Path: return row.imagePath.empty() ? L"<访问被拒绝>" : row.imagePath; case C::SessionId: return NumberText(row.sessionId); case C::ThreadCount: return NumberText(row.threadCount); case C::BasePriority: return NumberText(row.basePriority); case C::Cpu: { wchar_t b[32]{}; ::swprintf_s(b, L"%.1f%%", row.cpuUsagePercent); return b; }
+    case C::StartTime: return StartTimeText(row.creationTime100ns);
+    case C::BasePriority: return std::to_wstring(row.basePriority);
+    case C::Name: return row.imageName; case C::Pid: return NumberText(row.processId); case C::ParentPid: return NumberText(row.parentProcessId); case C::Path: return row.imagePath.empty() ? L"<访问被拒绝>" : row.imagePath; case C::SessionId: return NumberText(row.sessionId); case C::ThreadCount: return NumberText(row.threadCount); case C::Cpu: { wchar_t b[32]{}; ::swprintf_s(b, L"%.1f%%", row.cpuUsagePercent); return b; }
     case C::CpuTime: return TimeText(row.kernelTime100ns + row.userTime100ns); case C::CycleTime: return NumberText(row.cycleTime); case C::WorkingSet: return BytesText(row.workingSetBytes); case C::PeakWorkingSet: return BytesText(row.peakWorkingSetBytes); case C::WorkingSetDelta: return (row.workingSetDeltaBytes >= 0 ? L"+" : L"") + BytesText(static_cast<ULONGLONG>(row.workingSetDeltaBytes >= 0 ? row.workingSetDeltaBytes : -row.workingSetDeltaBytes)); case C::PrivateWorkingSet: return BytesText(row.privatePageBytes); case C::VirtualMemory: return BytesText(row.virtualSizeBytes); case C::CommitSize: return BytesText(row.commitBytes); case C::PagedPool: return BytesText(row.pagedPoolBytes); case C::NonPagedPool: return BytesText(row.nonPagedPoolBytes); case C::PageFaults: return NumberText(row.pageFaultCount); case C::PageFaultDelta: return (row.pageFaultDelta >= 0 ? L"+" : L"") + NumberText(static_cast<ULONGLONG>(row.pageFaultDelta >= 0 ? row.pageFaultDelta : -row.pageFaultDelta)); case C::IoReads: return NumberText(row.ioReadOperations); case C::IoWrites: return NumberText(row.ioWriteOperations); case C::IoOther: return NumberText(row.ioOtherOperations); case C::IoReadBytes: return BytesText(row.ioReadBytes); case C::IoWriteBytes: return BytesText(row.ioWriteBytes); case C::IoOtherBytes: return BytesText(row.ioOtherBytes); case C::HandleCount: return NumberText(row.handleCount); case C::Eprocess: { wchar_t b[32]{}; ::swprintf_s(b, L"0x%0*llX", sizeof(void*) == 8 ? 16 : 8, static_cast<unsigned long long>(row.r0ProcessObjectAddress)); return row.r0ProcessObjectAddress ? b : L"-"; }
     case C::R0Source: return row.r0AuditSummary.empty() ? L"不可用" : row.r0AuditSummary; case C::R0Anomaly: return row.r0AuditDetail.empty() ? L"-" : row.r0AuditDetail; case C::R0Status: return row.r0KernelOnly ? L"仅 R0" : (row.r0AuditSummary.empty() ? L"不可用" : L"已审计"); case C::ProcessType: return row.r0KernelOnly ? L"仅内核" : L"进程"; case C::Status: return L"运行中";
     default: return L"不可用";

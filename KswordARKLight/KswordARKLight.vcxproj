@@ -174,6 +174,7 @@
     <ClCompile Include="Features\Network\NetworkView.cpp" />
     <ClCompile Include="Features\Process\ProcessActions.cpp" />
     <ClCompile Include="Features\Process\ProcessColumns.cpp" />
+    <ClCompile Include="Features\Process\ProcessDetails.cpp" />
     <ClCompile Include="Features\Process\ProcessEnumerator.cpp" />
     <ClCompile Include="Features\Process\ProcessFeature.cpp" />
     <ClCompile Include="Features\Process\ProcessModel.cpp" />
@@ -398,6 +399,7 @@
     <ClInclude Include="Features\Process\ProcessModel.h" />
     <ClInclude Include="Features\Process\ProcessView.h" />
     <ClInclude Include="Features\Process\ProcessColumns.h" />
+    <ClInclude Include="Features\Process\ProcessDetails.h" />
     <ClInclude Include="Features\Registry\RegistryActions.h" />
     <ClInclude Include="Features\Registry\RegistryFeature.h" />
     <ClInclude Include="Features\Registry\RegistryModel.h" />
