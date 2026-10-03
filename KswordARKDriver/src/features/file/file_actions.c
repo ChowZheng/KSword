@@ -109,12 +109,6 @@ typedef NTSTATUS (NTAPI* KSWORD_ARK_IO_CREATE_FILE_EX_FN)(
     PLARGE_INTEGER, ULONG, ULONG, ULONG, ULONG, PVOID, ULONG,
     CREATE_FILE_TYPE, PVOID, ULONG, PIO_DRIVER_CREATE_CONTEXT);
 
-typedef enum _KSWORD_ARK_MMFLUSH_TYPE
-{
-    KswordArkMmFlushForDelete = 0,
-    KswordArkMmFlushForWrite = 1
-} KSWORD_ARK_MMFLUSH_TYPE;
-
 typedef PVOID
 (NTAPI* KSWORD_ARK_FILE_EX_ALLOCATE_POOL2_FN)(
     _In_ POOL_FLAGS Flags,
@@ -129,13 +123,6 @@ ObQueryNameString(
     _Out_writes_bytes_opt_(Length) POBJECT_NAME_INFORMATION ObjectNameInfo,
     _In_ ULONG Length,
     _Out_ PULONG ReturnLength
-    );
-
-NTKERNELAPI
-BOOLEAN
-MmFlushImageSection(
-    _In_ PSECTION_OBJECT_POINTERS SectionPointer,
-    _In_ KSWORD_ARK_MMFLUSH_TYPE FlushType
     );
 
 static PVOID
@@ -1184,9 +1171,7 @@ Return Value:
 --*/
 {
     PFILE_OBJECT fileObject = NULL;
-    PSECTION_OBJECT_POINTERS sectionPointers = NULL;
     NTSTATUS status;
-    BOOLEAN flushOk;
 
     status = ObReferenceObjectByHandle(
         fileHandle,
@@ -1199,15 +1184,9 @@ Return Value:
         return status;
     }
 
-    sectionPointers = fileObject->SectionObjectPointer;
-    if (sectionPointers == NULL || sectionPointers->ImageSectionObject == NULL) {
-        ObDereferenceObject(fileObject);
-        return STATUS_SUCCESS;
-    }
-
-    flushOk = MmFlushImageSection(sectionPointers, KswordArkMmFlushForDelete);
-    ObDereferenceObject(fileObject);
-    return flushOk ? STATUS_SUCCESS : STATUS_CANNOT_DELETE;
+    status = KswordARKDriverFlushFileObjectForDelete(fileObject); // 交由 MM 清理共享映像状态并检查数据 section 的写探针。
+    ObDereferenceObject(fileObject); // 刷新完成后释放本次引用。
+    return status; // 活动映射仍返回真实失败。
 }
 
 static NTSTATUS
@@ -1326,20 +1305,22 @@ static NTSTATUS
 KswordARKDriverDeletePathByIrp(
     _In_reads_(pathLengthChars) PCWSTR pathText,
     _In_ USHORT pathLengthChars,
-    _In_ BOOLEAN isDirectory
+    _In_ BOOLEAN isDirectory,
+    _Inout_opt_ KSWORD_ARK_DELETE_PATH_RESPONSE* Details
     )
 /*++
 
 Routine Description:
 
-    使用现有通用 IRP 引擎投递 IRP_MJ_SET_INFORMATION /
-    FileDispositionInformation。目标固定为 RELATED 栈顶，因此 CREATE、目标请求与
-    CLEANUP/CLOSE 都经过完整文件系统栈；本后端不会回退到 ZwSetInformationFile。
+    使用现有通用 IRP 引擎的 BASE_FS CREATE 和配对 CLEANUP/CLOSE。
+    删除优先 Ex/POSIX + 忽略只读，旧文件系统回退传统类；受阻时直接清空
+    section 三成员再重试。本后端不会回退到 ZwSetInformationFile。
 
 Arguments:
 
     pathText/pathLengthChars - 已校验的 NT 路径。
     isDirectory - TRUE 表示 CREATE 阶段要求目录语义。
+    Details - 可选 v2 删除回执，记录 CREATE 与目标 IRP 的实际状态。
 
 Return Value:
 
@@ -1381,9 +1362,10 @@ Return Value:
     }
     request->confirmationToken = KSWORD_ARK_FILE_IRP_CONFIRMATION_TOKEN;
     request->majorFunction = IRP_MJ_SET_INFORMATION;
-    request->targetLayer = KSWORD_ARK_FILE_IRP_LAYER_RELATED;
+    request->targetLayer = KSWORD_ARK_FILE_IRP_LAYER_BASE_FS; // CREATE 和删除均使用现有基础文件系统目标层。
     request->timeoutMs = KSWORD_ARK_FILE_IRP_DEFAULT_TIMEOUT_MS;
-    request->desiredAccess = DELETE | SYNCHRONIZE | FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES;
+    // 删除只需 DELETE；Ex 的忽略只读位不要求增加属性写权限，避免 CREATE 共享冲突。
+    request->desiredAccess = DELETE | SYNCHRONIZE;
     request->shareAccess = FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE;
     request->createDisposition = FILE_OPEN;
     request->createOptions = isDirectory ? 0UL : FILE_NON_DIRECTORY_FILE;
@@ -1399,7 +1381,7 @@ Return Value:
 
     RtlZeroMemory(&dispositionInformation, sizeof(dispositionInformation));
     dispositionInformation.DeleteFile = TRUE;
-    transportStatus = KswordARKDriverSubmitFileIrp(
+    transportStatus = KswordARKDriverSubmitFileDeleteIrp( // 仅删除预设启用强制 section 清空与 Ex/传统类兼容。
         response,
         responseBytes,
         request,
@@ -1413,6 +1395,14 @@ Return Value:
     if (bytesWritten < KSWORD_ARK_FILE_IRP_SUBMIT_RESPONSE_HEADER_SIZE) {
         resultStatus = STATUS_INFO_LENGTH_MISMATCH;
         goto Exit;
+    }
+    if (Details != NULL) {
+        if ((response->stageFlags & KSWORD_ARK_FILE_IRP_STAGE_CREATE) != 0UL) {
+            Details->openStatus = response->createStatus;
+        }
+        if ((response->stageFlags & KSWORD_ARK_FILE_IRP_STAGE_OPERATION) != 0UL) {
+            Details->dispositionStatus = response->operationStatus;
+        }
     }
     if (!NT_SUCCESS(response->createStatus)) {
         resultStatus = response->createStatus;
@@ -1577,6 +1567,9 @@ KswordARKDriverDeletePathPosix(
     indexValid = KswordARKDriverQueryFileIndex(fileHandle, &originalIndex);
     status = KswordARKDriverDeleteFileWithDispositionEx(
         fileHandle, FALSE, !IgnoreShare);
+    if (IgnoreShare && KswordARKDriverShouldRetryDeleteByIrp(status)) { // 打开成功后的过滤层拒绝要在同一对象上重试。
+        status = KswordARKDriverDeleteHandleByIrp(fileHandle, FALSE); // 不按路径重开，保留原文件身份和忽略共享打开语义。
+    }
     if (Details != NULL) {
         Details->dispositionStatus = status;
     }
@@ -1596,10 +1589,17 @@ KswordARKDriverDeletePathPosix(
                     retryIndex.QuadPart == originalIndex.QuadPart) {
                     status = KswordARKDriverDeleteFileWithDispositionEx(
                         retryHandle, TRUE, !IgnoreShare);
-                    if (KswordARKDriverIsDispositionExUnsupportedStatus(status) &&
+                    if (IgnoreShare && KswordARKDriverShouldRetryDeleteByIrp(status)) { // 只读重试同样需要绕过 SET_INFORMATION 过滤层。
+                        status = KswordARKDriverDeleteHandleByIrp(retryHandle, TRUE); // 沿用已经复核身份的句柄并请求忽略只读位。
+                    }
+                    if ((KswordARKDriverIsDispositionExUnsupportedStatus(status) || // 旧文件系统未支持 Ex 时仍可清理只读位。
+                        (IgnoreShare && (status == STATUS_CANNOT_DELETE || status == STATUS_ACCESS_DENIED))) && // 基础层传统类也可能被只读位阻碍。
                         NT_SUCCESS(KswordARKDriverNormalizeReadOnlyAttribute(retryHandle))) {
                         status = KswordARKDriverDeleteFileWithDispositionEx(
                             retryHandle, FALSE, !IgnoreShare);
+                        if (IgnoreShare && KswordARKDriverShouldRetryDeleteByIrp(status)) { // 旧文件系统归一化属性后再尝试基础层删除。
+                            status = KswordARKDriverDeleteHandleByIrp(retryHandle, FALSE); // 同一重试句柄保持文件身份不变。
+                        }
                     }
                     if (Details != NULL) {
                         Details->dispositionStatus = status;
@@ -1705,9 +1705,9 @@ Return Value:
     }
 
     if ((deleteFlags & KSWORD_ARK_DELETE_PATH_FLAG_BACKEND_IRP) != 0UL) {
-        status = KswordARKDriverDeletePathByIrp(pathText, pathLengthChars, isDirectory);
+        status = KswordARKDriverDeletePathByIrp(
+            pathText, pathLengthChars, isDirectory, Details);
         if (Details != NULL) {
-            Details->dispositionStatus = status;
             if (!NT_SUCCESS(status)) {
                 Details->outcome = KSWORD_ARK_DELETE_PATH_OUTCOME_FAILED;
             }

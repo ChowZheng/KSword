@@ -1947,13 +1947,59 @@ Return Value:
 }
 
 NTSTATUS
-KswordARKDriverSubmitFileIrp(
+KswordARKDriverSetDispositionByIrp(
+    _In_ PFILE_OBJECT FileObject,
+    _In_ ULONG InformationClass,
+    _In_reads_bytes_(InputBytes) const void* InputData,
+    _In_ ULONG InputBytes,
+    _Out_ PBOOLEAN CancelledOut)
+{
+    KSWORD_ARK_FILE_IRP_SUBMIT_REQUEST* request = NULL; // 大请求结构放池内存，避免消耗内核栈。
+    KSWORD_ARK_FILE_IRP_TARGET target; // 仅借用对象和基础设备，不执行 CREATE/CLEANUP/CLOSE。
+    ULONG outputBytes = 0UL; // SET_INFORMATION 不需要响应数据。
+    ULONGLONG information = 0ULL; // 接收同步 IRP 的 Information。
+    UCHAR unusedOutput = 0U; // 为通用执行器提供容量为零的有效输出地址。
+    NTSTATUS status; // 保留实际目标 IRP 状态。
+
+    if (CancelledOut == NULL) { // 调用方必须能区分已取消的请求。
+        return STATUS_INVALID_PARAMETER; // 无输出地址时不发送 IRP。
+    }
+    *CancelledOut = FALSE; // 初始化所有前置失败的取消标志。
+    if (FileObject == NULL || InputData == NULL || KeGetCurrentIrql() != PASSIVE_LEVEL ||
+        !((InformationClass == (ULONG)FileDispositionInformation && InputBytes == sizeof(FILE_DISPOSITION_INFORMATION)) ||
+          (InformationClass == 64UL && InputBytes == sizeof(ULONG)))) { // 内部接口只接受两种定长删除信息类。
+        return STATUS_INVALID_PARAMETER; // 不将任意信息类暴露为内部旁路。
+    }
+    RtlZeroMemory(&target, sizeof(target)); // 借用视图没有释放责任。
+    target.FileObject = FileObject; // 由调用方持有有效对象引用。
+    target.TargetDevice = IoGetBaseFileSystemDeviceObject(FileObject); // 必须直达基础文件系统，禁止静默回退栈顶。
+    if (target.TargetDevice == NULL) { // 当前对象没有可用的基础文件系统层。
+        return STATUS_INVALID_DEVICE_STATE; // 如实报告底层重试不可用。
+    }
+    request = (KSWORD_ARK_FILE_IRP_SUBMIT_REQUEST*)KswordArkFileIrpAllocate(
+        KSWORD_ARK_FILE_IRP_SUBMIT_REQUEST_HEADER_SIZE); // 复用引擎的非分页分配与释放标签。
+    if (request == NULL) { // 池分配失败不能继续构造请求。
+        return STATUS_INSUFFICIENT_RESOURCES; // 不改变调用方对象。
+    }
+    request->majorFunction = IRP_MJ_SET_INFORMATION; // 固定为删除标记请求。
+    request->informationClass = InformationClass; // Ex 或传统删除类。
+    request->inputBytes = InputBytes; // 输入长度已经按信息类严格校验。
+    status = KswordArkFileIrpExecuteOperation(request, &target, InputData, InputBytes,
+        KSWORD_ARK_FILE_IRP_DEFAULT_TIMEOUT_MS, &unusedOutput, 0UL,
+        &outputBytes, &information, CancelledOut); // 复用原引擎的缓冲、取消排空和完成生命周期。
+    KswordArkFileIrpFree(request); // 请求完成后才释放请求快照。
+    return status; // 对象与句柄继续由原调用方拥有。
+}
+
+static NTSTATUS
+KswordArkFileIrpSubmit(
     _Out_writes_bytes_(OutputBufferLength) PVOID OutputBuffer,
     _In_ size_t OutputBufferLength,
     _In_ const KSWORD_ARK_FILE_IRP_SUBMIT_REQUEST* Request,
     _In_reads_bytes_opt_(InputBytes) const void* InputData,
     _In_ ULONG InputBytes,
-    _Out_ size_t* BytesWrittenOut
+    _Out_ size_t* BytesWrittenOut,
+    _In_ BOOLEAN ForceDelete
     )
 {
     KSWORD_ARK_FILE_IRP_SUBMIT_RESPONSE* response = NULL;
@@ -2003,6 +2049,14 @@ KswordARKDriverSubmitFileIrp(
         response->operationStatus = STATUS_INVALID_PARAMETER;
         return STATUS_SUCCESS;
     }
+    if (ForceDelete && (Request->majorFunction != IRP_MJ_SET_INFORMATION ||
+        Request->targetLayer != KSWORD_ARK_FILE_IRP_LAYER_BASE_FS ||
+        Request->informationClass != (ULONG)FileDispositionInformation ||
+        InputData == NULL || InputBytes != sizeof(FILE_DISPOSITION_INFORMATION) ||
+        !((const FILE_DISPOSITION_INFORMATION*)InputData)->DeleteFile)) { // 内部强制入口只接受 BASE_FS 删除预设。
+        response->operationStatus = STATUS_INVALID_PARAMETER; // 错误请求不触碰 section。
+        return STATUS_SUCCESS; // 语义失败写入标准回执。
+    }
 
     // 写语义与危险 major 的双重闸门：先看令牌，再看专用标志。
     if (KswordArkFileIrpRequestHasWriteSemantics(Request) ||
@@ -2040,6 +2094,10 @@ KswordARKDriverSubmitFileIrp(
         &target,
         Request->targetLayer,
         &target.ResolvedLayer);
+    if (ForceDelete) { // 删除预设必须使用基础文件系统，不能被通用层选择器静默回退。
+        target.TargetDevice = target.BaseFsDevice; // 不可用时后续操作返回失败。
+        target.ResolvedLayer = KSWORD_ARK_FILE_IRP_LAYER_BASE_FS; // 回执保留实际要求的删除层。
+    }
     response->targetLayer = target.ResolvedLayer;
     response->fileObjectAddress = (ULONGLONG)(ULONG_PTR)target.FileObject;
     response->relatedDeviceAddress = (ULONGLONG)(ULONG_PTR)target.RelatedDevice;
@@ -2077,17 +2135,24 @@ KswordARKDriverSubmitFileIrp(
         response->operationStatus = status;
     }
     else {
-        NTSTATUS operationStatus = KswordArkFileIrpExecuteOperation(
-            Request,
-            &target,
-            InputData,
-            InputBytes,
-            timeoutMs,
-            response->outputData,
-            outputCapacity,
-            &outputBytes,
-            &information,
-            &cancelled);
+        NTSTATUS operationStatus; // 删除预设与通用提交共用阶段回执和收尾路径。
+        if (ForceDelete) { // 仅内部删除预设启用直接清空共享 section。
+            operationStatus = KswordARKDriverDeleteFileObjectByIrp(
+                target.FileObject, TRUE, &cancelled); // 优先 Ex+忽略只读，旧文件系统兼容传统类。
+        }
+        else { // 通用 R3 请求保持调用方指定的信息类和载荷。
+            operationStatus = KswordArkFileIrpExecuteOperation(
+                Request,
+                &target,
+                InputData,
+                InputBytes,
+                timeoutMs,
+                response->outputData,
+                outputCapacity,
+                &outputBytes,
+                &information,
+                &cancelled);
+        }
         stageFlags |= KSWORD_ARK_FILE_IRP_STAGE_OPERATION;
         response->operationStatus = operationStatus;
         response->information = information;
@@ -2122,6 +2187,32 @@ KswordARKDriverSubmitFileIrp(
         KSWORD_ARK_FILE_IRP_SUBMIT_RESPONSE_HEADER_SIZE + response->outputBytes;
     *BytesWrittenOut = response->size;
     return STATUS_SUCCESS;
+}
+
+NTSTATUS
+KswordARKDriverSubmitFileIrp(
+    _Out_writes_bytes_(OutputBufferLength) PVOID OutputBuffer,
+    _In_ size_t OutputBufferLength,
+    _In_ const KSWORD_ARK_FILE_IRP_SUBMIT_REQUEST* Request,
+    _In_reads_bytes_opt_(InputBytes) const void* InputData,
+    _In_ ULONG InputBytes,
+    _Out_ size_t* BytesWrittenOut)
+{
+    return KswordArkFileIrpSubmit(OutputBuffer, OutputBufferLength, Request,
+        InputData, InputBytes, BytesWrittenOut, FALSE); // 通用入口不清空共享 section。
+}
+
+NTSTATUS
+KswordARKDriverSubmitFileDeleteIrp(
+    _Out_writes_bytes_(OutputBufferLength) PVOID OutputBuffer,
+    _In_ size_t OutputBufferLength,
+    _In_ const KSWORD_ARK_FILE_IRP_SUBMIT_REQUEST* Request,
+    _In_reads_bytes_(InputBytes) const void* InputData,
+    _In_ ULONG InputBytes,
+    _Out_ size_t* BytesWrittenOut)
+{
+    return KswordArkFileIrpSubmit(OutputBuffer, OutputBufferLength, Request,
+        InputData, InputBytes, BytesWrittenOut, TRUE); // FileDock 删除预设专用内部入口。
 }
 
 static NTSTATUS

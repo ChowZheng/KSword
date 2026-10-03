@@ -199,6 +199,7 @@
     <ClCompile Include="src\features\file\file_delete_recursive.c" />
     <ClCompile Include="src\features\file\file_directory_query.c" />
     <ClCompile Include="src\features\file\file_irp_request.c" />
+    <ClCompile Include="src\features\file\file_delete_irp.c" />
     <ClCompile Include="src\features\file_monitor\file_monitor_operation_map.c" />
     <ClCompile Include="src\features\file_monitor\file_monitor_runtime.c" />
     <ClCompile Include="src\features\file_monitor\file_monitor_ioctl.c" />

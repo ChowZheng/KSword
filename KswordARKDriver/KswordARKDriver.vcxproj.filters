@@ -987,6 +987,9 @@
     <ClCompile Include="src\features\file\file_irp_request.c">
       <Filter>Source Files\Features</Filter>
     </ClCompile>
+    <ClCompile Include="src\features\file\file_delete_irp.c">
+      <Filter>Source Files\Features</Filter>
+    </ClCompile>
     <ClCompile Include="src\features\file\file_irp_ioctl.c">
       <Filter>Source Files\Features</Filter>
     </ClCompile>

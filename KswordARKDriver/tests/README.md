@@ -96,6 +96,13 @@ powershell -ExecutionPolicy Bypass -File KswordARKDriver\tests\DriverFunctionalM
 
 退出码：`0` 通过，`1` 有失败用例或中途中止，`2` 观察到系统崩溃，`3` 预检未过。
 
+## 文件删除 IRP 离线回归
+
+文件删除 IRP 的离线回归运行 `pwsh -NoProfile -File KswordARKDriver/tests/FileDeleteIrpRegression.ps1`。
+它以有界 kernel API 模拟执行真实 `file_delete_irp.c`，在 `/W4 /WX` 下验证 15 项删除语义与引用生命周期。
+测试不加载驱动、不删除真实文件；不能验证强制 section 清空对活动映射与缓存的实机影响。
+构建和回归产物位于 `.codex-build-logs/file-delete-irp/`。
+
 ## 已卸载驱动布局离线回归
 
 运行 `pwsh -NoProfile -File KswordARKDriver/tests/UnloadedLayoutRegression.ps1`。
