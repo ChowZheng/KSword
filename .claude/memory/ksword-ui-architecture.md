@@ -40,6 +40,13 @@ KSword 主程序位于 `Ksword5.1/Ksword5.1`（Qt 6.9.3 Widgets + Qt Advanced Do
 
 **全局基线样式只允许颜色/边框，禁止 min-height/padding 等几何属性**——app 级几何会穿透局部样式破坏紧凑布局（曾导致主窗口标题栏按钮被撑高、最大化后标题文字上偏）。
 
+## 角落通知卡片的点击穿透
+
+- `Framework/NotificationCardManager.cpp` 的卡片是独立顶层浮窗。`WM_NCHITTEST/HTTRANSPARENT` 只继续命中同线程窗口，不能保证穿透到其他程序；`NoTextInteraction` 也仅禁用文本交互。
+- 卡片本体使用 `WindowTransparentForInput`，复制与展开按钮放在独立的 owned Tool 窗口中，以两个按钮矩形的并集设置原生窗口 mask。正文、标题、背景、按钮间隙直接命中紧邻下层窗口，包括主窗口，不做跨进程消息转发或基于光标轮询的样式切换。
+- 按钮窗口的区域内绘制 1/255 alpha，避免分层窗口的零 alpha 像素使按钮空白处也穿透；位置、布局占位尺寸、展开/收起、主题、显隐和淡入淡出必须同步，销毁卡片时按钮窗口随 owner 销毁。
+- 自动化验证禁止写入真实系统剪贴板：即使最终恢复原文本，也会污染用户剪贴板历史。复制动作需替换剪贴板写入端或仅作源码检查；不得以“恢复剪贴板内容”作为可无影响验证的依据。
+
 ## 透明背景与毛玻璃（MainWindow.cpp）
 
 配置项：`backgroundTransparencyEnabled`（总开关）+ `backgroundTranslucencyMaterial`（auto/mica/desktop）。

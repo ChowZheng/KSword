@@ -3,7 +3,7 @@
 // NotificationCardManager：统一管理日志通知与任务进度卡片。
 // - 从全局日志/进度管理器读取增量快照；
 // - 把卡片布局到显示器工作区或主窗口 Dock 客户区；
-// - 保证复制按钮以外的区域完整点击穿透。
+// - 保证复制、展开按钮以外的区域跨进程点击穿透。
 
 #include "../Framework.h"
 #include "../SettingsDock/AppearanceSettings.h"

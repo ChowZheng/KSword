@@ -6,25 +6,21 @@
 
 #include <QApplication>
 #include <QClipboard>
-#include <QCursor>
 #include <QDateTime>
 #include <QFontMetrics>
 #include <QGuiApplication>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QPainter>
 #include <QPointer>
 #include <QProgressBar>
 #include <QPropertyAnimation>
+#include <QRegion>
 #include <QScreen>
 #include <QTimer>
 #include <QToolButton>
 #include <QVBoxLayout>
 #include <QWindow>
-
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#include <Windows.h>
 
 #include <algorithm>
 #include <cmath>
@@ -131,6 +127,29 @@ namespace
 
 namespace ks::ui
 {
+    // 卡片本体整体输入透明；独立的按钮窗口只保留两个按钮的窗口区域。
+    // HTTRANSPARENT 只能继续命中同线程窗口，无法替代跨进程穿透。
+    class NotificationControlsWindow final : public QWidget
+    {
+    public:
+        explicit NotificationControlsWindow(QWidget* const owner)
+            : QWidget(owner, Qt::Tool | Qt::FramelessWindowHint | Qt::WindowStaysOnTopHint
+                | Qt::WindowDoesNotAcceptFocus | Qt::NoDropShadowWindowHint)
+        {
+            setAttribute(Qt::WA_TranslucentBackground, true);
+            setAttribute(Qt::WA_ShowWithoutActivating, true);
+            setFocusPolicy(Qt::NoFocus);
+        }
+
+    protected:
+        void paintEvent(QPaintEvent*) override
+        {
+            // 分层窗口的零 alpha 像素也会穿透。保留最低 alpha，让按钮空白处可点。
+            QPainter painter(this);
+            painter.fillRect(rect(), QColor(0, 0, 0, 1));
+        }
+    };
+
     class NotificationCard final : public QWidget
     {
     public:
@@ -151,7 +170,8 @@ namespace ks::ui
                 Qt::Tool |
                 Qt::FramelessWindowHint |
                 Qt::WindowStaysOnTopHint |
-                Qt::WindowDoesNotAcceptFocus);
+                Qt::WindowDoesNotAcceptFocus |
+                Qt::WindowTransparentForInput);
             setFocusPolicy(Qt::NoFocus);
             setFixedWidth(kCardWidth);
 
@@ -171,21 +191,25 @@ namespace ks::ui
             m_titleLabel->setObjectName(QStringLiteral("ksNotificationCardTitle"));
             m_titleLabel->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
             titleLayout->addWidget(m_titleLabel, 1);
-            m_copyButton = new QToolButton(m_frame);
+            m_controlsWindow = new NotificationControlsWindow(this);
+            m_copyButton = new QToolButton(m_controlsWindow);
             m_copyButton->setObjectName(QStringLiteral("ksNotificationCardCopy"));
             m_copyButton->setText(ks::i18n::text(QStringLiteral("notification.copy"), QStringLiteral("复制")));
             m_copyButton->setToolTip(ks::i18n::text(QStringLiteral("notification.copy.tooltip"), QStringLiteral("复制卡片内容到剪贴板")));
             m_copyButton->setAutoRaise(true);
             m_copyButton->setFocusPolicy(Qt::NoFocus);
-            titleLayout->addWidget(m_copyButton, 0, Qt::AlignTop);
-            m_expandButton = new QToolButton(m_frame);
+            m_copySlot = new QWidget(m_frame);
+            titleLayout->addWidget(m_copySlot, 0, Qt::AlignTop);
+            m_expandButton = new QToolButton(m_controlsWindow);
             m_expandButton->setObjectName(QStringLiteral("ksNotificationCardExpand"));
             m_expandButton->setArrowType(Qt::DownArrow);
             m_expandButton->setToolTip(ks::i18n::text(QStringLiteral("notification.expand"), QStringLiteral("展开完整日志")));
             m_expandButton->setAutoRaise(true);
             m_expandButton->setFocusPolicy(Qt::NoFocus);
             m_expandButton->hide();
-            titleLayout->addWidget(m_expandButton, 0, Qt::AlignTop);
+            m_expandSlot = new QWidget(m_frame);
+            m_expandSlot->hide();
+            titleLayout->addWidget(m_expandSlot, 0, Qt::AlignTop);
             frameLayout->addLayout(titleLayout);
 
             m_bodyLabel = new QLabel(m_frame);
@@ -215,6 +239,7 @@ namespace ks::ui
                     }
                     m_copyButton->setText(
                         ks::i18n::text(QStringLiteral("notification.copy.done"), QStringLiteral("已复制")));
+                    updateLogHeightLimit();
                 }
             });
             connect(m_expandButton, &QToolButton::clicked, this, [this]() {
@@ -226,6 +251,8 @@ namespace ks::ui
                 }
             });
 
+            m_copySlot->installEventFilter(this);
+            m_expandSlot->installEventFilter(this);
             refreshVisuals();
         }
 
@@ -302,6 +329,8 @@ namespace ks::ui
                 .arg(KswordTheme::TextPrimaryColorHex())
                 .arg(KswordTheme::RgbaColorName(accent, 36))
                 .arg(KswordTheme::SurfaceMutedColorHex()));
+            m_controlsWindow->setStyleSheet(m_frame->styleSheet());
+            updateControlSizes();
         }
 
         void animateTo(const QPoint& targetPosition, const bool animate)
@@ -310,11 +339,14 @@ namespace ks::ui
             {
                 move(targetPosition);
                 setWindowOpacity(0.0);
+                m_controlsWindow->setWindowOpacity(0.0);
                 show();
                 QPropertyAnimation* fadeIn = new QPropertyAnimation(this, "windowOpacity", this);
                 fadeIn->setDuration(kAnimationDurationMs);
                 fadeIn->setStartValue(0.0);
                 fadeIn->setEndValue(1.0);
+                connect(fadeIn, &QPropertyAnimation::valueChanged, m_controlsWindow,
+                    [this](const QVariant& value) { m_controlsWindow->setWindowOpacity(value.toReal()); });
                 fadeIn->start(QAbstractAnimation::DeleteWhenStopped);
                 return;
             }
@@ -344,6 +376,8 @@ namespace ks::ui
             fadeOut->setDuration(kAnimationDurationMs);
             fadeOut->setStartValue(windowOpacity());
             fadeOut->setEndValue(0.0);
+            connect(fadeOut, &QPropertyAnimation::valueChanged, m_controlsWindow,
+                [this](const QVariant& value) { m_controlsWindow->setWindowOpacity(value.toReal()); });
             connect(fadeOut, &QPropertyAnimation::finished, this, [this]() {
                 hide();
                 deleteLater();
@@ -352,31 +386,75 @@ namespace ks::ui
         }
 
     protected:
-        bool nativeEvent(const QByteArray& eventType, void* message, qintptr* result) override
+        bool eventFilter(QObject* watched, QEvent* event) override
         {
-            Q_UNUSED(eventType);
-            MSG* nativeMessage = static_cast<MSG*>(message);
-            if (nativeMessage != nullptr && nativeMessage->message == WM_NCHITTEST && result != nullptr)
+            if ((watched == m_copySlot || watched == m_expandSlot)
+                && (event->type() == QEvent::Move || event->type() == QEvent::Resize
+                    || event->type() == QEvent::Show || event->type() == QEvent::Hide))
             {
-                // 使用 Qt 的全局光标逻辑坐标，并转换到按钮自身坐标系：
-                // - 避免直接使用 Win32 物理坐标导致高 DPI 下命中区域偏移；
-                // - 避免把嵌套在 m_frame 中的按钮矩形误当作卡片坐标。
-                const QPoint cardPosition = mapFromGlobal(QCursor::pos());
-                const auto controlHit = [this, &cardPosition](const QToolButton* const button) {
-                    return button != nullptr
-                        && button->isVisible()
-                        && button->rect().contains(button->mapFrom(this, cardPosition));
-                };
-                if (!controlHit(m_copyButton) && !controlHit(m_expandButton))
-                {
-                    *result = HTTRANSPARENT;
-                    return true;
-                }
+                syncControlsWindow();
             }
-            return QWidget::nativeEvent(eventType, message, result);
+            return QWidget::eventFilter(watched, event);
+        }
+
+        void moveEvent(QMoveEvent* event) override
+        {
+            QWidget::moveEvent(event);
+            syncControlsWindow();
+        }
+
+        void resizeEvent(QResizeEvent* event) override
+        {
+            QWidget::resizeEvent(event);
+            syncControlsWindow();
+        }
+
+        void showEvent(QShowEvent* event) override
+        {
+            QWidget::showEvent(event);
+            syncControlsWindow();
+        }
+
+        void hideEvent(QHideEvent* event) override
+        {
+            m_controlsWindow->hide();
+            QWidget::hideEvent(event);
         }
 
     private:
+        void updateControlSizes()
+        {
+            m_copySlot->setFixedSize(m_copyButton->sizeHint());
+            m_expandSlot->setFixedSize(m_expandButton->sizeHint());
+        }
+
+        void syncControlsWindow()
+        {
+            if (m_controlsWindow == nullptr || m_copySlot == nullptr || m_expandSlot == nullptr)
+            {
+                return;
+            }
+            m_controlsWindow->setGeometry(QRect(mapToGlobal(QPoint(0, 0)), size()));
+            const QRect copyRect(m_copySlot->mapTo(this, QPoint(0, 0)), m_copySlot->size());
+            m_copyButton->setGeometry(copyRect);
+            QRegion inputRegion(copyRect);
+            const bool expandVisible = !m_expandSlot->isHidden();
+            m_expandButton->setVisible(expandVisible);
+            if (expandVisible)
+            {
+                const QRect expandRect(m_expandSlot->mapTo(this, QPoint(0, 0)), m_expandSlot->size());
+                m_expandButton->setGeometry(expandRect);
+                inputRegion += expandRect;
+            }
+            // 原生窗口区域排除正文、标题和按钮之间的空隙，穿透不依赖命中消息转发。
+            m_controlsWindow->setMask(inputRegion);
+            if (isVisible() && !m_controlsWindow->isVisible())
+            {
+                m_controlsWindow->show();
+                m_controlsWindow->raise();
+            }
+        }
+
         void adjustToContent()
         {
             const int bodyWidth = kCardWidth - 42;
@@ -395,7 +473,7 @@ namespace ks::ui
             const bool canExpand = m_kind == Kind::Log
                 && m_logHeightLimitEnabled
                 && naturalHeight > maximumHeight;
-            m_expandButton->setVisible(canExpand);
+            m_expandSlot->setVisible(canExpand);
             if (canExpand && !m_logExpanded)
             {
                 m_bodyLabel->setMaximumHeight(maximumHeight);
@@ -404,8 +482,11 @@ namespace ks::ui
             m_expandButton->setToolTip(ks::i18n::text(
                 m_logExpanded ? QStringLiteral("notification.collapse") : QStringLiteral("notification.expand"),
                 m_logExpanded ? QStringLiteral("收起日志") : QStringLiteral("展开完整日志")));
+            updateControlSizes();
             layout()->activate();
+            m_frame->layout()->activate();
             adjustSize();
+            syncControlsWindow();
         }
 
         Kind m_kind;
@@ -413,6 +494,9 @@ namespace ks::ui
         QLabel* m_titleLabel = nullptr;
         QLabel* m_bodyLabel = nullptr;
         QProgressBar* m_progressBar = nullptr;
+        NotificationControlsWindow* m_controlsWindow = nullptr;
+        QWidget* m_copySlot = nullptr;
+        QWidget* m_expandSlot = nullptr;
         QToolButton* m_copyButton = nullptr;
         QToolButton* m_expandButton = nullptr;
         QColor m_accentColor;
