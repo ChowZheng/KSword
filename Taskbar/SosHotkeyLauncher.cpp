@@ -1,4 +1,5 @@
 #include "SosHotkeyLauncher.h"
+#include "../shared/rescue/RescueDesktopWin32.h"
 
 #include <QCoreApplication>
 #include <QDebug>
@@ -20,9 +21,12 @@ namespace
     // - 输入 executablePath：要启动的 exe 路径；
     // - 处理：构造 CreateProcessW 需要的可写命令行缓冲区；
     // - 返回：以 NUL 结尾的 wchar_t 缓冲区。
-    std::vector<wchar_t> buildMutableCommandLine(const std::wstring& executablePath)
+    std::vector<wchar_t> buildMutableCommandLine(
+        const std::wstring& executablePath, const std::wstring& clientPath)
     {
-        std::wstring commandLineText = L"\"" + executablePath + L"\"";
+        // Taskbar 的独立监护入口负责创建桌面，SOS Hook 线程只派发启动请求。
+        std::wstring commandLineText = L"\"" + executablePath + L"\" "
+            + ks::rescue::kHostArgument + L" \"" + clientPath + L"\"";
         std::vector<wchar_t> commandLineBuffer(commandLineText.begin(), commandLineText.end());
         commandLineBuffer.push_back(L'\0');
         return commandLineBuffer;
@@ -39,12 +43,19 @@ SosHotkeyLauncher::SosHotkeyLauncher(const QString& applicationDirectoryPath)
 
     m_kswordExecutablePath = QDir::toNativeSeparators(executableInfo.absoluteFilePath()).toStdWString();
     m_kswordWorkingDirectory = QDir::toNativeSeparators(executableInfo.absolutePath()).toStdWString();
+    m_rescueHostExecutablePath = QDir::toNativeSeparators(
+        QCoreApplication::applicationFilePath()).toStdWString();
 }
 
 SosHotkeyLauncher::~SosHotkeyLauncher()
 {
     // 析构时必须先退出消息循环，再释放对象，避免静态钩子回调访问悬空实例。
     stop();
+    if (m_rescueHostProcess != nullptr)
+    {
+        // 监护进程独立存活到救援实例退出；Taskbar 退出只释放自己的引用。
+        ::CloseHandle(m_rescueHostProcess);
+    }
 }
 
 bool SosHotkeyLauncher::start()
@@ -239,6 +250,16 @@ void SosHotkeyLauncher::handleKeyDown(const DWORD vkCode, const DWORD flags)
 
 void SosHotkeyLauncher::launchKswordFromHookThread()
 {
+    if (m_rescueHostProcess != nullptr)
+    {
+        // 活动会话期间不创建第二个私有桌面或并发启动第三个 KSword 实例。
+        if (::WaitForSingleObject(m_rescueHostProcess, 0) == WAIT_TIMEOUT)
+        {
+            return;
+        }
+        ::CloseHandle(m_rescueHostProcess);
+        m_rescueHostProcess = nullptr;
+    }
     const ULONGLONG nowTickMs = ::GetTickCount64();
     if (m_lastLaunchTickMs != 0 &&
         nowTickMs - m_lastLaunchTickMs < kLaunchDebounceMs)
@@ -256,9 +277,10 @@ void SosHotkeyLauncher::launchKswordFromHookThread()
     PROCESS_INFORMATION processInfo{};
     startupInfo.cb = sizeof(startupInfo);
 
-    std::vector<wchar_t> commandLineBuffer = buildMutableCommandLine(m_kswordExecutablePath);
+    std::vector<wchar_t> commandLineBuffer = buildMutableCommandLine(
+        m_rescueHostExecutablePath, m_kswordExecutablePath);
     const BOOL createOk = ::CreateProcessW(
-        m_kswordExecutablePath.c_str(),
+        m_rescueHostExecutablePath.c_str(),
         commandLineBuffer.data(),
         nullptr,
         nullptr,
@@ -276,9 +298,9 @@ void SosHotkeyLauncher::launchKswordFromHookThread()
     }
 
     ::CloseHandle(processInfo.hThread);
-    ::CloseHandle(processInfo.hProcess);
+    m_rescueHostProcess = processInfo.hProcess;
     m_lastLaunchTickMs = nowTickMs;
-    qInfo() << "[Taskbar][SOS] 已通过 SOS Enter 启动 Ksword5.1.exe。";
+    qInfo() << "[Taskbar][SOS] 已启动独立救援桌面监护进程，PID=" << processInfo.dwProcessId;
 }
 
 QString SosHotkeyLauncher::resolveKswordExecutablePath(const QString& applicationDirectoryPath)

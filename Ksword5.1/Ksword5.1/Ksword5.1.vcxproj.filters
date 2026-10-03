@@ -1022,6 +1022,12 @@
     <ClCompile Include="UI\WindowChrome.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="UI\RescueDesktopSession.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\shared\rescue\RescueDesktopWin32.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="UI\PerformanceNavCard.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -2320,6 +2326,12 @@
       <Filter>Header Files</Filter>
     </QtMoc>
     <ClInclude Include="UI\WindowChrome.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="UI\RescueDesktopSession.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\shared\rescue\RescueDesktopWin32.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="UI\ThemedMessageBox.h">

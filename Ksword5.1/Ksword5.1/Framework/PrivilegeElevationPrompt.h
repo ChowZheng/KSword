@@ -62,6 +62,23 @@ namespace ks::ui
             return true;
         }
 
+        // 私有桌面只通过继承句柄接入；runas 无法继承这些句柄，必须保留当前救援会话。
+        if (QCoreApplication::instance() != nullptr
+            && QCoreApplication::instance()->property("ksword_rescue_desktop").toBool())
+        {
+            QMessageBox notice(parent); // 使用不透明背景，避免继承主窗口的透明样式。
+            notice.setIcon(QMessageBox::Information);
+            notice.setWindowTitle(ks::i18n::text(
+                QStringLiteral("rescue.desktop.status"), QStringLiteral("救援桌面")));
+            notice.setText(ks::i18n::text(QStringLiteral("rescue.desktop.privilege"),
+                QStringLiteral("救援实例保持当前权限。请返回原桌面后切换权限，再进入救援桌面。")));
+            notice.setStyleSheet(QStringLiteral(
+                "QMessageBox { background: palette(window); color: palette(window-text); }"
+                "QMessageBox QLabel { background: transparent; color: palette(window-text); }"));
+            notice.exec();
+            return false;
+        }
+
         QMessageBox prompt(parent);
         prompt.setIcon(QMessageBox::Information);
         prompt.setWindowTitle(ks::i18n::text(
