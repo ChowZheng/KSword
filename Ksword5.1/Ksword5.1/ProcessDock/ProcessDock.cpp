@@ -3469,27 +3469,16 @@ namespace
             .arg(processFieldSourceText(processRecord.r0SectionSignatureLevelSource));
     }
 
-    QString pointerAvailabilityText(
+    QString processPointerText(
         const bool available,
-        const std::uint64_t addressValue,
-        const std::uint32_t sourceValue)
+        const std::uint64_t addressValue)
     {
-        // available 表示 offset/capability 是否可用；addressValue 是当前字段值。
-        // 返回值含来源，方便用户判断 DynData 是否命中。
-        if (!available)
+        // 表格只显示实际地址；缺失字段与空指针均使用紧凑占位符。
+        if (!available || addressValue == 0U)
         {
-            return QStringLiteral("Unavailable (%1)").arg(processFieldSourceText(sourceValue));
+            return QStringLiteral("-");
         }
-        if (addressValue == 0U)
-        {
-            return QStringLiteral("Available: null (%1)").arg(processFieldSourceText(sourceValue));
-        }
-        const QString addressText = QStringLiteral("0x%1")
-            .arg(static_cast<qulonglong>(addressValue), 0, 16)
-            .toUpper();
-        return QStringLiteral("Available: 0x%1 (%2)")
-            .arg(addressText.mid(2))
-            .arg(processFieldSourceText(sourceValue));
+        return QStringLiteral("0x%1").arg(QString::number(addressValue, 16).toUpper());
     }
 
     // enumerateProcessesByR0Driver 作用：
@@ -10087,7 +10076,8 @@ QVariant ProcessDock::processTableData(const ProcessTableRow& tableRow, const in
         // Name 列固定显示目标 EXE 图标（命中缓存后开销可控）。
         return resolveProcessIcon(processRecord);
     }
-    if (role == Qt::ToolTipRole && tableColumn == TableColumn::Protection)
+    if (role == Qt::ToolTipRole &&
+        (tableColumn == TableColumn::Protection || tableColumn == TableColumn::Ppl))
     {
         // 偏移来源保留在提示中，避免每一行重复占用保护状态列。
         return processContextText(
@@ -10101,6 +10091,13 @@ QVariant ProcessDock::processTableData(const ProcessTableRow& tableRow, const in
             "process.table.cell.handle_table_source_tooltip",
             QStringLiteral("句柄表字段来源：%1"))
             .arg(processFieldSourceText(processRecord.r0ObjectTableSource));
+    }
+    if (role == Qt::ToolTipRole && tableColumn == TableColumn::SectionObject)
+    {
+        return processContextText(
+            "process.table.cell.section_object_source_tooltip",
+            QStringLiteral("SectionObject 字段来源：%1"))
+            .arg(processFieldSourceText(processRecord.r0SectionObjectSource));
     }
     if (role == Qt::ToolTipRole && tableColumn == TableColumn::Name)
     {
@@ -13433,30 +13430,25 @@ QString ProcessDock::formatColumnText(const ks::process::ProcessRecord& processR
     case TableColumn::Protection:
         if ((processRecord.r0FieldFlags & KSWORD_ARK_PROCESS_FIELD_PROTECTION_PRESENT) == 0U)
         {
-            return QStringLiteral("Unavailable (%1)").arg(processFieldSourceText(processRecord.r0ProtectionSource));
+            return QStringLiteral("-");
         }
         return byteHexText(processRecord.r0Protection);
     case TableColumn::Ppl:
         if ((processRecord.r0FieldFlags & KSWORD_ARK_PROCESS_FIELD_PROTECTION_PRESENT) == 0U)
         {
-            return QStringLiteral("Unavailable");
+            return QStringLiteral("-");
         }
         return processProtectionText(processRecord.r0Protection);
     case TableColumn::HandleCount:
         return QString::number(processRecord.handleCount);
     case TableColumn::HandleTable:
-        if ((processRecord.r0FieldFlags & KSWORD_ARK_PROCESS_FIELD_OBJECT_TABLE_AVAILABLE) == 0U)
-        {
-            return pointerAvailabilityText(false, processRecord.r0ObjectTableAddress, processRecord.r0ObjectTableSource);
-        }
-        return processRecord.r0ObjectTableAddress == 0U
-            ? QStringLiteral("null")
-            : QStringLiteral("0x%1").arg(QString::number(processRecord.r0ObjectTableAddress, 16).toUpper());
+        return processPointerText(
+            (processRecord.r0FieldFlags & KSWORD_ARK_PROCESS_FIELD_OBJECT_TABLE_AVAILABLE) != 0U,
+            processRecord.r0ObjectTableAddress);
     case TableColumn::SectionObject:
-        return pointerAvailabilityText(
+        return processPointerText(
             (processRecord.r0FieldFlags & KSWORD_ARK_PROCESS_FIELD_SECTION_OBJECT_AVAILABLE) != 0U,
-            processRecord.r0SectionObjectAddress,
-            processRecord.r0SectionObjectSource);
+            processRecord.r0SectionObjectAddress);
     case TableColumn::R0Status:
         return processR0StatusText(processRecord.r0Status);
 
