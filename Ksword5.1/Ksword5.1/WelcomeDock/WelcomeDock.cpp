@@ -66,15 +66,16 @@ namespace
     }};
 
     // donorNames 作用：集中维护公开感谢名单；后续补充捐赠者只需修改这一处。
-    const std::array<QString, 11> donorNames = {{
-        QStringLiteral("长空落日"), QStringLiteral("Extrella_Explorer"),
+    const std::array<QString, 13> donorNames = {{
+        QStringLiteral("长空落日"), QStringLiteral("Estrella_Explore"),
         QStringLiteral("Txt Text"), QStringLiteral("Mapleleaf"),
         QStringLiteral("存钱买油条（云舟API）"), QStringLiteral("Solicom"),
         QStringLiteral("東雪蓮可爱捏"), QStringLiteral("JIAN2486"),
-        QStringLiteral("NtKrnl64"), QStringLiteral("一花一树叶"), QStringLiteral("hzh")
+        QStringLiteral("NtKrnl64"), QStringLiteral("一花一树叶"), QStringLiteral("hzh"),
+        QStringLiteral("ACH@流星"), QStringLiteral("嗯呢呗")
     }};
 
-    const QString kReleaseVersionText = QStringLiteral("5.1.5.0正式版"); // RELEASE_META_VERSION_MARKER
+    const QString kReleaseVersionText = QStringLiteral("5.1.5.1Pre"); // RELEASE_META_VERSION_MARKER
     const QString kReleaseBuildTimeText = QStringLiteral("2026-09-27 19:28:24.098 +08:00"); // RELEASE_META_BUILD_TIME_MARKER
     const QString kQQGroupInviteUrl = QStringLiteral("https://qm.qq.com/q/5tWNPfIxkk");
     const QString kPplControlRepositoryUrl = QStringLiteral("https://github.com/itm4n/PPLcontrol");
