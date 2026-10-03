@@ -124,10 +124,9 @@ namespace
     } };
 
     // kSecurityPolicies lists every policy bit currently surfaced by Phase 1.
-    constexpr std::array<PolicyDisplay, 6> kSecurityPolicies{ {
+    constexpr std::array<PolicyDisplay, 5> kSecurityPolicies{ {
         { KSWORD_ARK_SECURITY_POLICY_FLAG_ACTIVE, "POLICY_ACTIVE", L"安全策略启用", "kernel.driver_status.policy.active" },
         { KSWORD_ARK_SECURITY_POLICY_ALLOW_MUTATING_ACTIONS, "ALLOW_MUTATING_ACTIONS", L"允许进程修改动作", "kernel.driver_status.policy.mutating_actions" },
-        { KSWORD_ARK_SECURITY_POLICY_ALLOW_FILE_DELETE, "ALLOW_FILE_DELETE", L"允许文件删除", "kernel.driver_status.policy.file_delete" },
         { KSWORD_ARK_SECURITY_POLICY_ALLOW_CALLBACK_CONTROL, "ALLOW_CALLBACK_CONTROL", L"允许回调控制", "kernel.driver_status.policy.callback_control" },
         { KSWORD_ARK_SECURITY_POLICY_ALLOW_PROCESS_PROTECTION, "ALLOW_PROCESS_PROTECTION", L"允许进程保护修改", "kernel.driver_status.policy.process_protection" },
         { KSWORD_ARK_SECURITY_POLICY_ALLOW_KERNEL_SNAPSHOTS, "ALLOW_KERNEL_SNAPSHOTS", L"允许内核快照", "kernel.driver_status.policy.kernel_snapshots" }

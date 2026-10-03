@@ -288,28 +288,6 @@ Return Value:
         KswordARKFileIoctlLog(Device, "Warn", "R0 delete ioctl: path not null-terminated, chars=%u.", (unsigned int)requestSnapshot.pathLengthChars);
         return STATUS_INVALID_PARAMETER;
     }
-    {
-        KSWORD_ARK_SAFETY_CONTEXT safetyContext;
-        RtlZeroMemory(&safetyContext, sizeof(safetyContext));
-        safetyContext.Operation = KSWORD_ARK_SAFETY_OPERATION_FILE_DELETE;
-        safetyContext.TargetProcessId = 0UL;
-        safetyContext.ContextFlags = KSWORD_ARK_SAFETY_CONTEXT_FLAG_UI_CONFIRMED;
-        safetyContext.TargetText = requestSnapshot.path;
-        safetyContext.TargetTextChars = requestSnapshot.pathLengthChars;
-        status = KswordARKSafetyEvaluate(Device, &safetyContext);
-        if (!NT_SUCCESS(status)) {
-            KswordARKFileIoctlLog(Device, "Warn", "R0 delete denied by safety policy: chars=%u, status=0x%08X.", (unsigned int)requestSnapshot.pathLengthChars, (unsigned int)status);
-            return status;
-        }
-        if ((requestSnapshot.flags & KSWORD_ARK_DELETE_PATH_FLAG_BACKEND_IGNORE_SHARE_POSIX) != 0UL) {
-            safetyContext.Operation = KSWORD_ARK_SAFETY_OPERATION_FILE_DELETE_IGNORE_SHARE;
-            status = KswordARKSafetyEvaluate(Device, &safetyContext);
-            if (!NT_SUCCESS(status)) {
-                return status;
-            }
-        }
-    }
-
     // 响应包可选：旧版 R3 只发请求不收响应，此时保持“返回 NTSTATUS”的旧契约。
     status = KswordARKRetrieveRequiredOutputBuffer(
         Request,

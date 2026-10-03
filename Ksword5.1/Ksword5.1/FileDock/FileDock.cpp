@@ -3507,14 +3507,6 @@ namespace
                 else if (!driverResult.io.ok)
                 {
                     stats.failedCount += 1U;
-                    if (backend == ksword::ark::FileDeleteBackend::IgnoreSharePosix &&
-                        driverResult.io.win32Error == ERROR_ACCESS_DENIED)
-                    {
-                        stats.errors.push_back(QStringLiteral(
-                            "R0 安全策略未启用高风险共享检查删除；默认关闭。目标：%1")
-                            .arg(QDir::toNativeSeparators(path)));
-                        continue;
-                    }
                     appendDriverDeleteFailureDetail(
                         path,
                         isDirectory,
@@ -16007,7 +15999,7 @@ void FileDock::showPanelContextMenu(FilePanelWidgets& panel, const QPoint& local
     QAction* driverIgnoreShareDeleteAction = r0DeleteMenu->addAction(
         QIcon(":/Icon/process_terminate.svg"), QStringLiteral("驱动(POSIX·忽略共享检查，高风险)"));
     driverIgnoreShareDeleteAction->setToolTip(QStringLiteral(
-        "仅单文件；需单独启用默认关闭的 R0 安全策略。尝试跳过 I/O 管理器共享检查，文件系统仍可能拒绝。"));
+        "仅单文件；尝试跳过 I/O 管理器共享检查，文件系统仍可能拒绝。"));
     QAction* unlockByDriverAction = menu.addAction(
         QIcon(":/Icon/handle_close.svg"),
         ks::i18n::displayText(QStringLiteral("文件解锁器")));
@@ -17333,7 +17325,7 @@ void FileDock::deleteSelectedItemsWithMode(FilePanelWidgets& panel, const FileDe
         modeNameText = QStringLiteral("R0 驱动(POSIX·忽略共享检查)");
         confirmTitleText = QStringLiteral("高风险文件删除确认");
         confirmBodyText = QStringLiteral(
-            "将对选中的单个文件尝试跳过 I/O 管理器共享检查，再请求 POSIX 删除。该模式默认被 R0 安全策略禁用；文件系统和过滤驱动仍可能拒绝，且不会自动结束进程或关闭句柄。删除不可撤销。是否继续？");
+            "将对选中的单个文件尝试跳过 I/O 管理器共享检查，再请求 POSIX 删除。文件系统和过滤驱动仍可能拒绝，且不会自动结束进程或关闭句柄。删除不可撤销。是否继续？");
         break;
     default:
         return;

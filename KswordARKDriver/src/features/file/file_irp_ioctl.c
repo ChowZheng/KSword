@@ -378,19 +378,24 @@ Return Value:
     }
 
     /*
-     * 安全策略：写语义走文件写入闸门；PnP/电源等非文件语义按内核改动处理。
-     * 令牌本身在 IRP 引擎里再校验一次，两处都不能省。
+     * 删除类 SET_INFORMATION 由用户确认和 IRP 引擎的令牌校验负责，
+     * 不再受通用文件写入策略位拦截。其它写入 IRP 仍沿用原有策略。
      */
     safetyOperation = KSWORD_ARK_SAFETY_OPERATION_NONE;
     switch (requestCopy->majorFunction) {
     case IRP_MJ_WRITE:
-    case IRP_MJ_SET_INFORMATION:
     case IRP_MJ_SET_EA:
     case IRP_MJ_SET_VOLUME_INFORMATION:
     case IRP_MJ_SET_SECURITY:
     case IRP_MJ_SET_QUOTA:
     case IRP_MJ_FILE_SYSTEM_CONTROL:
         safetyOperation = KSWORD_ARK_SAFETY_OPERATION_FILE_DELETE;
+        break;
+    case IRP_MJ_SET_INFORMATION:
+        if (requestCopy->informationClass != FileDispositionInformation &&
+            requestCopy->informationClass != 64UL /* FileDispositionInformationEx */) {
+            safetyOperation = KSWORD_ARK_SAFETY_OPERATION_FILE_DELETE;
+        }
         break;
     case IRP_MJ_POWER:
     case IRP_MJ_PNP:
