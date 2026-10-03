@@ -5,7 +5,7 @@
 // DirectKernelCallMonitorWidget.cpp
 // 作用：
 // 1) 用 ETW System Syscall Provider 采集系统调用事件；
-// 2) 通过 TDH 解码事件字段，关联 PID / 调用号 / 调用地址；
+// 2) 严格解码经典进入/退出事件，关联原始 QPC、CPU 和 StackWalk 载荷身份；
 // 3) 解析 ntdll/win32u 导出桩，辅助把系统调用号转换为服务名。
 // ============================================================
 
@@ -14,6 +14,7 @@
 #include "../UI/TableInteractionSupport.h"
 #include "../UI/ThemeStatusRole.h"
 #include "../theme.h"
+#include "../../../shared/evidence/SyscallEvidence.h"
 
 #include <QAbstractItemView>
 #include <QAbstractItemModel>
@@ -23,6 +24,7 @@
 #include <QCheckBox>
 #include <QClipboard>
 #include <QFile>
+#include <QDir>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QElapsedTimer>
@@ -57,9 +59,9 @@
 #include <Windows.h>
 #include <Objbase.h>
 #include <TlHelp32.h>
+#include <Psapi.h>
 #include <evntrace.h>
 #include <evntcons.h>
-#include <tdh.h>
 
 // 兼容旧版 SDK：EVENT_TRACE_FLAG_SYSTEMCALL 是 PERF_SYSCALL 的 legacy kernel flag。
 // 若头文件未暴露该宏，使用 evntrace.h 中长期稳定的系统调用事件标志位。
@@ -68,7 +70,7 @@
 #endif
 
 #pragma comment(lib, "Advapi32.lib")
-#pragma comment(lib, "Tdh.lib")
+#pragma comment(lib, "Psapi.lib")
 
 namespace
 {
@@ -78,8 +80,22 @@ namespace
     constexpr int kRoleDetailText = Qt::UserRole + 3;
     constexpr int kRoleProcessCreationTime100ns = Qt::UserRole + 4;
 
-    constexpr GUID kKswordDirectKernelCallSessionGuid =
-        { 0xd22e25bd, 0x51fe, 0x4219, { 0x9a, 0xcf, 0x81, 0xc8, 0xaa, 0x73, 0xc7, 0x8d } };
+    constexpr GUID kPerfInfoGuid =
+        { 0xce1dbfb4, 0x137e, 0x4da6, { 0x87, 0xb0, 0x3f, 0x59, 0xaa, 0x10, 0x2c, 0xbc } };
+    constexpr GUID kStackWalkGuid =
+        { 0xdef2fe46, 0x7bd6, 0x4b80, { 0xbd, 0x94, 0xf5, 0x7f, 0xe2, 0x0d, 0x0c, 0xe3 } };
+
+    std::uint64_t correlationNowMs()
+    {
+        return static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count());
+    }
+
+    void retainLossCount(std::atomic<std::uint64_t>& counter, ULONG observed)
+    {
+        auto previous = counter.load();
+        while (previous < observed && !counter.compare_exchange_weak(previous, observed)) {}
+    }
 
     QString blueButtonStyle()
     {
@@ -186,248 +202,20 @@ namespace
         return regex.isValid() && regex.match(sourceText).hasMatch();
     }
 
-    QString trimmedWideString(const wchar_t* textPointer, const int characterCount)
-    {
-        if (textPointer == nullptr || characterCount <= 0)
-        {
-            return QString();
-        }
-
-        QString text = QString::fromWCharArray(textPointer, characterCount);
-        while (text.endsWith(QChar(u'\0')))
-        {
-            text.chop(1);
-        }
-        return text.trimmed();
-    }
-
-    QString trimmedAnsiString(const char* textPointer, const int byteCount)
-    {
-        if (textPointer == nullptr || byteCount <= 0)
-        {
-            return QString();
-        }
-
-        QByteArray bytes(textPointer, byteCount);
-        while (!bytes.isEmpty() && bytes.endsWith('\0'))
-        {
-            bytes.chop(1);
-        }
-        return QString::fromLocal8Bit(bytes).trimmed();
-    }
-
-    QString decodedValueText(
-        const unsigned char* dataPointer,
-        const ULONG dataSize,
-        const USHORT inType,
-        std::uint64_t* numericValueOut,
-        bool* hasNumericValueOut)
-    {
-        if (numericValueOut != nullptr)
-        {
-            *numericValueOut = 0;
-        }
-        if (hasNumericValueOut != nullptr)
-        {
-            *hasNumericValueOut = false;
-        }
-        if (dataPointer == nullptr || dataSize == 0)
-        {
-            return QString();
-        }
-
-        auto setNumeric = [&](const std::uint64_t value) {
-            if (numericValueOut != nullptr)
-            {
-                *numericValueOut = value;
-            }
-            if (hasNumericValueOut != nullptr)
-            {
-                *hasNumericValueOut = true;
-            }
-        };
-
-        switch (inType)
-        {
-        case TDH_INTYPE_UNICODESTRING:
-            return trimmedWideString(
-                reinterpret_cast<const wchar_t*>(dataPointer),
-                static_cast<int>(dataSize / sizeof(wchar_t)));
-        case TDH_INTYPE_ANSISTRING:
-            return trimmedAnsiString(reinterpret_cast<const char*>(dataPointer), static_cast<int>(dataSize));
-        case TDH_INTYPE_INT8:
-        {
-            const std::int8_t value = *reinterpret_cast<const std::int8_t*>(dataPointer);
-            setNumeric(static_cast<std::uint64_t>(static_cast<std::int64_t>(value)));
-            return QString::number(value);
-        }
-        case TDH_INTYPE_UINT8:
-        {
-            const std::uint8_t value = *reinterpret_cast<const std::uint8_t*>(dataPointer);
-            setNumeric(value);
-            return QString::number(value);
-        }
-        case TDH_INTYPE_INT16:
-        {
-            std::int16_t value = 0;
-            if (dataSize >= sizeof(value))
-            {
-                std::memcpy(&value, dataPointer, sizeof(value));
-            }
-            setNumeric(static_cast<std::uint64_t>(static_cast<std::int64_t>(value)));
-            return QString::number(value);
-        }
-        case TDH_INTYPE_UINT16:
-        {
-            std::uint16_t value = 0;
-            if (dataSize >= sizeof(value))
-            {
-                std::memcpy(&value, dataPointer, sizeof(value));
-            }
-            setNumeric(value);
-            return QString::number(value);
-        }
-        case TDH_INTYPE_INT32:
-        {
-            std::int32_t value = 0;
-            if (dataSize >= sizeof(value))
-            {
-                std::memcpy(&value, dataPointer, sizeof(value));
-            }
-            setNumeric(static_cast<std::uint64_t>(static_cast<std::int64_t>(value)));
-            return QString::number(value);
-        }
-        case TDH_INTYPE_UINT32:
-        case TDH_INTYPE_HEXINT32:
-        {
-            std::uint32_t value = 0;
-            if (dataSize >= sizeof(value))
-            {
-                std::memcpy(&value, dataPointer, sizeof(value));
-            }
-            setNumeric(value);
-            return inType == TDH_INTYPE_HEXINT32
-                ? QStringLiteral("0x%1").arg(value, 8, 16, QChar(u'0')).toUpper()
-                : QString::number(value);
-        }
-        case TDH_INTYPE_INT64:
-        {
-            std::int64_t value = 0;
-            if (dataSize >= sizeof(value))
-            {
-                std::memcpy(&value, dataPointer, sizeof(value));
-            }
-            setNumeric(static_cast<std::uint64_t>(value));
-            return QString::number(static_cast<qlonglong>(value));
-        }
-        case TDH_INTYPE_UINT64:
-        case TDH_INTYPE_HEXINT64:
-        case TDH_INTYPE_POINTER:
-        {
-            std::uint64_t value = 0;
-            if (dataSize >= sizeof(value))
-            {
-                std::memcpy(&value, dataPointer, sizeof(value));
-            }
-            else if (dataSize >= sizeof(std::uint32_t))
-            {
-                std::uint32_t value32 = 0;
-                std::memcpy(&value32, dataPointer, sizeof(value32));
-                value = value32;
-            }
-            setNumeric(value);
-            return (inType == TDH_INTYPE_UINT64)
-                ? QString::number(static_cast<qulonglong>(value))
-                : formatAddress(value);
-        }
-        case TDH_INTYPE_BOOLEAN:
-        {
-            std::uint32_t value = 0;
-            if (dataSize >= sizeof(value))
-            {
-                std::memcpy(&value, dataPointer, sizeof(value));
-            }
-            else
-            {
-                value = dataPointer[0];
-            }
-            setNumeric(value);
-            return value != 0 ? QStringLiteral("true") : QStringLiteral("false");
-        }
-        case TDH_INTYPE_GUID:
-            if (dataSize >= sizeof(GUID))
-            {
-                GUID guidValue{};
-                std::memcpy(&guidValue, dataPointer, sizeof(guidValue));
-                return guidToText(guidValue);
-            }
-            break;
-        default:
-            break;
-        }
-
-        QStringList byteList;
-        const ULONG visibleBytes = std::min<ULONG>(dataSize, 32);
-        for (ULONG indexValue = 0; indexValue < visibleBytes; ++indexValue)
-        {
-            byteList << QStringLiteral("%1").arg(dataPointer[indexValue], 2, 16, QChar(u'0')).toUpper();
-        }
-        if (dataSize > visibleBytes)
-        {
-            byteList << QStringLiteral("...");
-        }
-        return byteList.join(QStringLiteral(" "));
-    }
-
-    QString eventNameFromInfo(const unsigned char* infoBuffer, const TRACE_EVENT_INFO* traceInfo)
-    {
-        if (infoBuffer == nullptr || traceInfo == nullptr)
-        {
-            return QString();
-        }
-
-        auto textAtOffset = [&](const ULONG offsetValue) -> QString {
-            if (offsetValue == 0)
-            {
-                return QString();
-            }
-            const wchar_t* textPointer = reinterpret_cast<const wchar_t*>(infoBuffer + offsetValue);
-            return QString::fromWCharArray(textPointer).trimmed();
-        };
-
-        QString eventName = textAtOffset(traceInfo->EventNameOffset);
-        if (!eventName.isEmpty())
-        {
-            return eventName;
-        }
-        eventName = textAtOffset(traceInfo->TaskNameOffset);
-        if (!eventName.isEmpty())
-        {
-            return eventName;
-        }
-        return textAtOffset(traceInfo->OpcodeNameOffset);
-    }
-
-    std::optional<std::uint32_t> tryReadSyscallNumberFromStub(const unsigned char* functionPointer)
+    std::optional<std::uint32_t> tryReadSyscallNumberFromStub(
+        const unsigned char* functionPointer, const std::size_t length)
     {
         if (functionPointer == nullptr)
         {
             return std::nullopt;
         }
 
-        for (std::size_t offsetValue = 0; offsetValue + sizeof(std::uint32_t) < 32; ++offsetValue)
+        // Only a complete x64 service stub yields a number. An arbitrary B8
+        // immediate (or a detoured export) must not populate the service map.
+        const auto code = ks::evidence::syscall::InspectCode(functionPointer, length, 0);
+        if (code.nativeStub && code.hasSystemCallNumber)
         {
-            if (functionPointer[offsetValue] != 0xB8)
-            {
-                continue;
-            }
-
-            std::uint32_t syscallNumber = 0;
-            std::memcpy(&syscallNumber, functionPointer + offsetValue + 1, sizeof(syscallNumber));
-            if (syscallNumber < 0x10000U)
-            {
-                return syscallNumber;
-            }
+            return code.systemCallNumber;
         }
         return std::nullopt;
     }
@@ -507,6 +295,10 @@ namespace
             }
 
             const DWORD functionRva = functionRvaArray[ordinalValue];
+            if (functionRva >= ntHeaders->OptionalHeader.SizeOfImage)
+            {
+                continue;
+            }
             if (functionRva >= exportDirectoryInfo.VirtualAddress
                 && functionRva < exportDirectoryInfo.VirtualAddress + exportDirectoryInfo.Size)
             {
@@ -514,7 +306,9 @@ namespace
             }
 
             const unsigned char* functionPointer = basePointer + functionRva;
-            const std::optional<std::uint32_t> syscallNumber = tryReadSyscallNumberFromStub(functionPointer);
+            const std::size_t readableLength = (std::min)(std::size_t(32),
+                static_cast<std::size_t>(ntHeaders->OptionalHeader.SizeOfImage - functionRva));
+            const std::optional<std::uint32_t> syscallNumber = tryReadSyscallNumberFromStub(functionPointer, readableLength);
             if (!syscallNumber.has_value())
             {
                 continue;
@@ -535,81 +329,7 @@ namespace
         }
     }
 
-    void stopActiveKswordTraceSessionsByPrefix(const QStringList& sessionPrefixList)
-    {
-        constexpr ULONG kQuerySessionCapacity = 96;
-        constexpr ULONG kTraceNameChars = 1024;
-        constexpr ULONG kLogFileChars = 1024;
-        constexpr ULONG kPropertyBufferSize =
-            sizeof(EVENT_TRACE_PROPERTIES)
-            + (kTraceNameChars + kLogFileChars) * sizeof(wchar_t);
 
-        std::vector<std::vector<unsigned char>> propertyBufferList(
-            kQuerySessionCapacity,
-            std::vector<unsigned char>(kPropertyBufferSize, 0));
-        std::vector<EVENT_TRACE_PROPERTIES*> propertyPointerList(kQuerySessionCapacity, nullptr);
-
-        for (ULONG indexValue = 0; indexValue < kQuerySessionCapacity; ++indexValue)
-        {
-            auto* properties = reinterpret_cast<EVENT_TRACE_PROPERTIES*>(propertyBufferList[indexValue].data());
-            properties->Wnode.BufferSize = kPropertyBufferSize;
-            properties->LoggerNameOffset = sizeof(EVENT_TRACE_PROPERTIES);
-            properties->LogFileNameOffset =
-                sizeof(EVENT_TRACE_PROPERTIES) + kTraceNameChars * sizeof(wchar_t);
-            propertyPointerList[indexValue] = properties;
-        }
-
-        ULONG sessionCount = kQuerySessionCapacity;
-        const ULONG queryStatus = ::QueryAllTracesW(
-            propertyPointerList.data(),
-            kQuerySessionCapacity,
-            &sessionCount);
-        if (queryStatus != ERROR_SUCCESS && queryStatus != ERROR_MORE_DATA)
-        {
-            return;
-        }
-
-        for (ULONG indexValue = 0; indexValue < sessionCount && indexValue < kQuerySessionCapacity; ++indexValue)
-        {
-            const EVENT_TRACE_PROPERTIES* properties = propertyPointerList[indexValue];
-            if (properties == nullptr || properties->LoggerNameOffset == 0)
-            {
-                continue;
-            }
-
-            const wchar_t* loggerNamePointer = reinterpret_cast<const wchar_t*>(
-                propertyBufferList[indexValue].data() + properties->LoggerNameOffset);
-            const QString loggerNameText = QString::fromWCharArray(loggerNamePointer).trimmed();
-            if (loggerNameText.isEmpty())
-            {
-                continue;
-            }
-
-            const bool shouldStop = std::any_of(
-                sessionPrefixList.begin(),
-                sessionPrefixList.end(),
-                [&loggerNameText](const QString& prefixText) {
-                    return !prefixText.trimmed().isEmpty()
-                        && loggerNameText.startsWith(prefixText, Qt::CaseInsensitive);
-                });
-            if (!shouldStop)
-            {
-                continue;
-            }
-
-            const std::wstring loggerNameWide = loggerNameText.toStdWString();
-            std::vector<unsigned char> stopBuffer(
-                sizeof(EVENT_TRACE_PROPERTIES) + (loggerNameWide.size() + 1) * sizeof(wchar_t),
-                0);
-            auto* stopProperties = reinterpret_cast<EVENT_TRACE_PROPERTIES*>(stopBuffer.data());
-            stopProperties->Wnode.BufferSize = static_cast<ULONG>(stopBuffer.size());
-            stopProperties->LoggerNameOffset = sizeof(EVENT_TRACE_PROPERTIES);
-            wchar_t* stopLoggerNamePointer = reinterpret_cast<wchar_t*>(
-                stopBuffer.data() + stopProperties->LoggerNameOffset);
-            ::wcscpy_s(stopLoggerNamePointer, loggerNameWide.size() + 1, loggerNameWide.c_str());
-            ::ControlTraceW(0, stopLoggerNamePointer, stopProperties, EVENT_TRACE_CONTROL_STOP);
-        }
-    }
 }
 
 DirectKernelCallMonitorWidget::DirectKernelCallMonitorWidget(QWidget* parent)
@@ -665,7 +385,7 @@ void DirectKernelCallMonitorWidget::initializeUi()
 
     m_resolveAddressCheck = new QCheckBox(QStringLiteral("解析调用地址"), m_controlPanel);
     m_resolveAddressCheck->setChecked(true);
-    m_resolveAddressCheck->setToolTip(QStringLiteral("尝试把事件中的调用地址映射到进程模块，用于识别疑似直接 syscall"));
+    m_resolveAddressCheck->setToolTip(QStringLiteral("关联用户调用栈并只读检查 syscall 桩，识别直接调用、疑似间接调用和 SysWhispers 兼容形态"));
     controlLayout->addWidget(m_resolveAddressCheck, 0, 5);
 
     controlLayout->addWidget(new QLabel(QStringLiteral("最大行数"), m_controlPanel), 1, 0);
@@ -726,6 +446,7 @@ void DirectKernelCallMonitorWidget::initializeUi()
     controlLayout->addWidget(m_mapStatusLabel, 2, 0, 1, 3);
 
     m_statusLabel = new QLabel(QStringLiteral("● 空闲"), m_controlPanel);
+    m_statusLabel->setWordWrap(true);
     ks::ui::ApplyStatusRole(m_statusLabel, ks::ui::StatusRole::Idle);
     controlLayout->addWidget(m_statusLabel, 2, 3, 1, 3);
     m_rootLayout->addWidget(m_controlPanel, 0);
@@ -787,7 +508,7 @@ void DirectKernelCallMonitorWidget::initializeUi()
         QStringLiteral("时间(100ns)"),
         QStringLiteral("PID / TID"),
         QStringLiteral("进程"),
-        QStringLiteral("调用号"),
+        QStringLiteral("桩内调用号（静态）"),
         QStringLiteral("服务名"),
         QStringLiteral("判定"),
         QStringLiteral("调用地址"),
@@ -939,6 +660,12 @@ void DirectKernelCallMonitorWidget::startCapture()
         m_captureThread.reset();
     }
 
+    if (!stopOwnedSession())
+    {
+        updateStatusLabel();
+        return;
+    }
+
     const std::set<std::uint32_t> pidSet = parsePidSet(m_targetPidEdit != nullptr ? m_targetPidEdit->text() : QString());
     const bool captureAll = m_globalCaptureCheck != nullptr && m_globalCaptureCheck->isChecked();
     if (pidSet.empty() && !captureAll)
@@ -978,7 +705,29 @@ void DirectKernelCallMonitorWidget::startCapture()
         std::lock_guard<std::mutex> lock(m_cacheMutex);
         m_processNameCache.clear();
         m_moduleRangeCache.clear();
+        m_moduleRefreshTimes.clear();
     }
+    m_stackCorrelator.Reset();
+    ++m_captureIntervalGeneration;
+    m_consumerIntervalGeneration = m_captureIntervalGeneration.load();
+    m_frameInspectionCache.clear();
+    m_stackEnableStatus.store(ERROR_NOT_READY);
+    m_etwEventsLost.store(0);
+    m_etwBuffersLost.store(0);
+    m_stackMatched.store(0);
+    m_stackMissing.store(0);
+    m_stackConflicts.store(0);
+    m_stackCapacityEvicted.store(0);
+    m_lastTraceStatsQuery = {};
+    LARGE_INTEGER qpcBefore{}, qpcAfter{}, frequency{};
+    FILETIME captureTime{};
+    ::QueryPerformanceFrequency(&frequency);
+    ::QueryPerformanceCounter(&qpcBefore);
+    ::GetSystemTimePreciseAsFileTime(&captureTime);
+    ::QueryPerformanceCounter(&qpcAfter);
+    m_qpcOrigin = static_cast<std::uint64_t>(qpcBefore.QuadPart + (qpcAfter.QuadPart - qpcBefore.QuadPart) / 2);
+    m_qpcFrequency = static_cast<std::uint64_t>((std::max)(1LL, frequency.QuadPart));
+    m_filetimeOrigin = (static_cast<std::uint64_t>(captureTime.dwHighDateTime) << 32) | captureTime.dwLowDateTime;
     {
         std::lock_guard<std::mutex> lock(m_captureConfigMutex);
         m_capturePidSet = pidSet;
@@ -992,8 +741,16 @@ void DirectKernelCallMonitorWidget::startCapture()
     m_captureStopFlag.store(false);
     m_sessionHandle.store(0);
     m_traceHandle.store(0);
-    m_sessionName = QStringLiteral("KswordDirectKernelCall");
-    stopActiveKswordTraceSessionsByPrefix(QStringList{ m_sessionName });
+    GUID sessionGuid{};
+    const HRESULT guidStatus = ::CoCreateGuid(&sessionGuid);
+    if (FAILED(guidStatus))
+    {
+        m_captureRunning.store(false);
+        updateActionState();
+        return;
+    }
+    m_sessionName = QStringLiteral("KswordDirectKernelCall-%1-%2")
+        .arg(::GetCurrentProcessId()).arg(guidToText(sessionGuid));
 
     if (m_captureProgressPid == 0)
     {
@@ -1009,7 +766,7 @@ void DirectKernelCallMonitorWidget::startCapture()
     updateStatusLabel();
 
     QPointer<DirectKernelCallMonitorWidget> guardThis(this);
-    m_captureThread = std::make_unique<std::thread>([guardThis, bufferSizeKb]() {
+    m_captureThread = std::make_unique<std::thread>([guardThis, bufferSizeKb, sessionGuid]() {
         if (guardThis == nullptr)
         {
             return;
@@ -1045,11 +802,11 @@ void DirectKernelCallMonitorWidget::startCapture()
         std::vector<unsigned char> propertyBuffer(propertyBufferSize, 0);
         auto* properties = reinterpret_cast<EVENT_TRACE_PROPERTIES*>(propertyBuffer.data());
         properties->Wnode.BufferSize = propertyBufferSize;
-        properties->Wnode.ClientContext = 2;
+        properties->Wnode.ClientContext = 1; // QPC; header and StackWalk payload must share one clock.
         properties->Wnode.Flags = WNODE_FLAG_TRACED_GUID;
         // 私有 SystemTraceProvider 会话不能使用 SystemTraceControlGuid。
         // 如果 private logger name 搭配 SystemTraceControlGuid，StartTraceW 会返回 87。
-        properties->Wnode.Guid = kKswordDirectKernelCallSessionGuid;
+        properties->Wnode.Guid = sessionGuid;
         properties->LogFileMode = EVENT_TRACE_REAL_TIME_MODE | EVENT_TRACE_SYSTEM_LOGGER_MODE;
         properties->LoggerNameOffset = sizeof(EVENT_TRACE_PROPERTIES);
         // 使用 legacy EnableFlags 启用 syscall 事件，避免较新 System Provider
@@ -1065,11 +822,6 @@ void DirectKernelCallMonitorWidget::startCapture()
 
         TRACEHANDLE sessionHandle = 0;
         ULONG startStatus = ::StartTraceW(&sessionHandle, loggerNamePointer, properties);
-        if (startStatus == ERROR_ALREADY_EXISTS)
-        {
-            ::ControlTraceW(0, loggerNamePointer, properties, EVENT_TRACE_CONTROL_STOP);
-            startStatus = ::StartTraceW(&sessionHandle, loggerNamePointer, properties);
-        }
 
         if (startStatus != ERROR_SUCCESS)
         {
@@ -1089,17 +841,14 @@ void DirectKernelCallMonitorWidget::startCapture()
         }
 
         guardThis->m_sessionHandle.store(static_cast<std::uint64_t>(sessionHandle));
+        CLASSIC_EVENT_ID stackEvent{};
+        stackEvent.EventGuid = kPerfInfoGuid;
+        stackEvent.Type = 51; // SysCallEnter
+        guardThis->m_stackEnableStatus.store(::TraceSetInformation(
+            sessionHandle, TraceStackTracingInfo, &stackEvent, sizeof(stackEvent)));
         if (guardThis->m_captureStopFlag.load())
         {
-            const std::uint64_t ownedSessionHandle = guardThis->m_sessionHandle.exchange(0);
-            if (ownedSessionHandle != 0)
-            {
-                ::ControlTraceW(
-                    static_cast<TRACEHANDLE>(ownedSessionHandle),
-                    loggerNamePointer,
-                    properties,
-                    EVENT_TRACE_CONTROL_STOP);
-            }
+            guardThis->stopOwnedSession();
             reportStopped();
             return;
         }
@@ -1107,16 +856,17 @@ void DirectKernelCallMonitorWidget::startCapture()
 
         EVENT_TRACE_LOGFILEW traceLogFile{};
         traceLogFile.LoggerName = loggerNamePointer;
-        traceLogFile.ProcessTraceMode = PROCESS_TRACE_MODE_REAL_TIME | PROCESS_TRACE_MODE_EVENT_RECORD;
+        traceLogFile.ProcessTraceMode = PROCESS_TRACE_MODE_REAL_TIME | PROCESS_TRACE_MODE_EVENT_RECORD
+            | PROCESS_TRACE_MODE_RAW_TIMESTAMP;
         traceLogFile.EventRecordCallback = &DirectKernelCallMonitorWidget::eventRecordCallback;
+        traceLogFile.BufferCallback = &DirectKernelCallMonitorWidget::bufferCallback;
         traceLogFile.Context = guardThis.data();
 
         TRACEHANDLE traceHandle = ::OpenTraceW(&traceLogFile);
         if (traceHandle == INVALID_PROCESSTRACE_HANDLE)
         {
-            ::ControlTraceW(sessionHandle, loggerNamePointer, properties, EVENT_TRACE_CONTROL_STOP);
-            guardThis->m_sessionHandle.store(0);
             const ULONG lastError = ::GetLastError();
+            guardThis->stopOwnedSession();
             QMetaObject::invokeMethod(qApp, [guardThis, lastError]() {
                 if (guardThis == nullptr)
                 {
@@ -1140,36 +890,22 @@ void DirectKernelCallMonitorWidget::startCapture()
             {
                 ::CloseTrace(static_cast<TRACEHANDLE>(ownedTraceHandle));
             }
-            const std::uint64_t ownedSessionHandle = guardThis->m_sessionHandle.exchange(0);
-            if (ownedSessionHandle != 0)
-            {
-                ::ControlTraceW(
-                    static_cast<TRACEHANDLE>(ownedSessionHandle),
-                    loggerNamePointer,
-                    properties,
-                    EVENT_TRACE_CONTROL_STOP);
-            }
+            guardThis->stopOwnedSession();
             reportStopped();
             return;
         }
         kPro.set(guardThis->m_captureProgressPid, "接收 syscall 事件", 0, 55.0f);
 
         const ULONG processStatus = ::ProcessTrace(&traceHandle, 1, nullptr, nullptr);
+        guardThis->publishCorrelatedRows(guardThis->m_stackCorrelator.Expire(correlationNowMs(), true));
+        guardThis->m_frameInspectionCache.clear();
         const std::uint64_t ownedTraceHandle = guardThis->m_traceHandle.exchange(0);
         if (ownedTraceHandle != 0)
         {
             ::CloseTrace(static_cast<TRACEHANDLE>(ownedTraceHandle));
         }
 
-        const std::uint64_t ownedSessionHandle = guardThis->m_sessionHandle.exchange(0);
-        if (ownedSessionHandle != 0)
-        {
-            ::ControlTraceW(
-                static_cast<TRACEHANDLE>(ownedSessionHandle),
-                loggerNamePointer,
-                properties,
-                EVENT_TRACE_CONTROL_STOP);
-        }
+        guardThis->stopOwnedSession();
 
         QMetaObject::invokeMethod(qApp, [guardThis, processStatus]() {
             if (guardThis == nullptr)
@@ -1204,6 +940,37 @@ void DirectKernelCallMonitorWidget::stopCapture()
     stopCaptureInternal(false);
 }
 
+bool DirectKernelCallMonitorWidget::stopOwnedSession()
+{
+    const auto ownedSession = m_sessionHandle.exchange(0);
+    if (ownedSession == 0) { return true; }
+    const auto name = m_sessionName.toStdWString();
+    std::vector<unsigned char> bytes(sizeof(EVENT_TRACE_PROPERTIES) + (name.size() + 1) * sizeof(wchar_t), 0);
+    auto* properties = reinterpret_cast<EVENT_TRACE_PROPERTIES*>(bytes.data());
+    properties->Wnode.BufferSize = static_cast<ULONG>(bytes.size());
+    properties->LoggerNameOffset = sizeof(EVENT_TRACE_PROPERTIES);
+    auto* loggerName = reinterpret_cast<wchar_t*>(bytes.data() + properties->LoggerNameOffset);
+    ::wcscpy_s(loggerName, name.size() + 1, name.c_str());
+    const ULONG status = ::ControlTraceW(static_cast<TRACEHANDLE>(ownedSession),
+        loggerName, properties, EVENT_TRACE_CONTROL_STOP);
+    if (status == ERROR_SUCCESS || status == ERROR_WMI_INSTANCE_NOT_FOUND)
+    {
+        m_sessionStopStatus.store(ERROR_SUCCESS);
+        if (status == ERROR_SUCCESS)
+        {
+            retainLossCount(m_etwEventsLost, properties->EventsLost);
+            retainLossCount(m_etwBuffersLost, properties->RealTimeBuffersLost);
+        }
+        return true;
+    }
+    // Keep ownership after a failed stop. The consumer's final cleanup,
+    // destructor, or next start can retry without touching another session.
+    std::uint64_t empty = 0;
+    m_sessionHandle.compare_exchange_strong(empty, ownedSession);
+    m_sessionStopStatus.store(status);
+    return false;
+}
+
 void DirectKernelCallMonitorWidget::stopCaptureInternal(bool waitForThread)
 {
     m_captureStopFlag.store(true);
@@ -1214,28 +981,7 @@ void DirectKernelCallMonitorWidget::stopCaptureInternal(bool waitForThread)
         ::CloseTrace(static_cast<TRACEHANDLE>(ownedTraceHandle));
     }
 
-    const std::uint64_t ownedSessionHandle = m_sessionHandle.exchange(0);
-    if (ownedSessionHandle != 0)
-    {
-        const std::wstring sessionNameWide = m_sessionName.toStdWString();
-        std::vector<unsigned char> propertyBuffer(
-            sizeof(EVENT_TRACE_PROPERTIES) + (sessionNameWide.size() + 1) * sizeof(wchar_t),
-            0);
-        auto* properties = reinterpret_cast<EVENT_TRACE_PROPERTIES*>(propertyBuffer.data());
-        properties->Wnode.BufferSize = static_cast<ULONG>(propertyBuffer.size());
-        properties->LoggerNameOffset = sizeof(EVENT_TRACE_PROPERTIES);
-        wchar_t* loggerNamePointer = reinterpret_cast<wchar_t*>(propertyBuffer.data() + properties->LoggerNameOffset);
-        if (!sessionNameWide.empty())
-        {
-            ::wcscpy_s(loggerNamePointer, sessionNameWide.size() + 1, sessionNameWide.c_str());
-        }
-
-        ::ControlTraceW(
-            static_cast<TRACEHANDLE>(ownedSessionHandle),
-            loggerNamePointer,
-            properties,
-            EVENT_TRACE_CONTROL_STOP);
-    }
+    stopOwnedSession();
 
     if (m_captureThread == nullptr || !m_captureThread->joinable())
     {
@@ -1255,6 +1001,7 @@ void DirectKernelCallMonitorWidget::stopCaptureInternal(bool waitForThread)
     {
         m_captureThread->join();
         m_captureThread.reset();
+        stopOwnedSession();
         m_captureRunning.store(false);
         m_capturePaused.store(false);
         if (m_uiUpdateTimer != nullptr)
@@ -1285,6 +1032,7 @@ void DirectKernelCallMonitorWidget::setCapturePaused(bool paused)
         return;
     }
     m_capturePaused.store(paused);
+    ++m_captureIntervalGeneration;
     updateActionState();
     updateStatusLabel();
 }
@@ -1302,6 +1050,10 @@ void DirectKernelCallMonitorWidget::updateActionState()
     if (m_globalCaptureCheck != nullptr)
     {
         m_globalCaptureCheck->setEnabled(!running);
+    }
+    if (m_resolveAddressCheck != nullptr)
+    {
+        m_resolveAddressCheck->setEnabled(!running);
     }
     if (m_bufferSizeSpin != nullptr)
     {
@@ -1381,6 +1133,21 @@ void DirectKernelCallMonitorWidget::updateStatusLabel()
         m_statusLabel->setText(QStringLiteral("● 空闲  事件=%1").arg(eventCount));
         ks::ui::ApplyStatusRole(m_statusLabel, ks::ui::StatusRole::Idle);
     }
+    std::size_t queueDropped = 0;
+    {
+        std::lock_guard<std::mutex> lock(m_pendingMutex);
+        queueDropped = m_pendingDroppedRows;
+    }
+    m_statusLabel->setText(m_statusLabel->text() + QStringLiteral(
+        " | 栈匹配=%1 / 缺失=%2 / 冲突=%3 / 容量淘汰=%4 | ETW 丢失=%5 / 缓冲丢失=%6 / 队列丢弃=%7")
+        .arg(m_stackMatched.load()).arg(m_stackMissing.load()).arg(m_stackConflicts.load())
+        .arg(m_stackCapacityEvicted.load()).arg(m_etwEventsLost.load()).arg(m_etwBuffersLost.load())
+        .arg(static_cast<qulonglong>(queueDropped)));
+    if (m_sessionStopStatus.load() != ERROR_SUCCESS)
+    {
+        m_statusLabel->setText(m_statusLabel->text() + QStringLiteral(" | ETW 会话停止失败：%1").arg(m_sessionStopStatus.load()));
+        ks::ui::ApplyStatusRole(m_statusLabel, ks::ui::StatusRole::Error);
+    }
 }
 
 void WINAPI DirectKernelCallMonitorWidget::eventRecordCallback(struct _EVENT_RECORD* eventRecordPtr)
@@ -1398,28 +1165,140 @@ void WINAPI DirectKernelCallMonitorWidget::eventRecordCallback(struct _EVENT_REC
     widget->enqueueEventFromRecord(eventRecordPtr);
 }
 
+ULONG WINAPI DirectKernelCallMonitorWidget::bufferCallback(struct _EVENT_TRACE_LOGFILEW* traceLogFile)
+{
+    if (traceLogFile == nullptr || traceLogFile->Context == nullptr)
+    {
+        return TRUE;
+    }
+    auto* widget = static_cast<DirectKernelCallMonitorWidget*>(traceLogFile->Context);
+    widget->synchronizeCaptureInterval();
+    widget->publishCorrelatedRows(widget->m_stackCorrelator.Expire(correlationNowMs()));
+    const auto now = std::chrono::steady_clock::now();
+    const auto session = widget->m_sessionHandle.load();
+    if (session != 0 && now - widget->m_lastTraceStatsQuery >= std::chrono::seconds(1))
+    {
+        widget->m_lastTraceStatsQuery = now;
+        std::vector<unsigned char> bytes(sizeof(EVENT_TRACE_PROPERTIES) + 2048 * sizeof(wchar_t), 0);
+        auto* properties = reinterpret_cast<EVENT_TRACE_PROPERTIES*>(bytes.data());
+        properties->Wnode.BufferSize = static_cast<ULONG>(bytes.size());
+        properties->LoggerNameOffset = sizeof(EVENT_TRACE_PROPERTIES);
+        if (::ControlTraceW(static_cast<TRACEHANDLE>(session), nullptr, properties, EVENT_TRACE_CONTROL_QUERY) == ERROR_SUCCESS)
+        {
+            retainLossCount(widget->m_etwEventsLost, properties->EventsLost);
+            retainLossCount(widget->m_etwBuffersLost, properties->RealTimeBuffersLost);
+        }
+    }
+    return TRUE;
+}
+
+void DirectKernelCallMonitorWidget::enqueueRow(CapturedEventRow row)
+{
+    std::lock_guard<std::mutex> lock(m_pendingMutex);
+    if (m_pendingRows.size() >= kPendingRowCapacity)
+    {
+        m_pendingRows.pop_front();
+        ++m_pendingDroppedRows;
+    }
+    m_pendingRows.push_back(std::move(row));
+}
+
+void DirectKernelCallMonitorWidget::synchronizeCaptureInterval()
+{
+    const auto generation = m_captureIntervalGeneration.load();
+    if (generation != m_consumerIntervalGeneration)
+    {
+        m_stackCorrelator.Reset();
+        m_consumerIntervalGeneration = generation;
+    }
+}
+
 void DirectKernelCallMonitorWidget::enqueueEventFromRecord(const struct _EVENT_RECORD* eventRecordPtr)
 {
     const EVENT_RECORD* eventRecord = reinterpret_cast<const EVENT_RECORD*>(eventRecordPtr);
-    if (eventRecord == nullptr || m_captureStopFlag.load() || m_capturePaused.load())
+    if (eventRecord == nullptr)
     {
         return;
     }
-    const std::uint32_t pidValue = static_cast<std::uint32_t>(eventRecord->EventHeader.ProcessId);
-    if (!shouldCapturePid(pidValue))
+    synchronizeCaptureInterval();
+    if (m_captureStopFlag.load() || m_capturePaused.load())
     {
+        // A discarded event or stack must never survive into another capture interval.
+        m_stackCorrelator.Reset();
         return;
     }
-
-    CapturedEventRow row = buildRowFromRecord(eventRecordPtr);
+    const auto nowMs = correlationNowMs();
+    publishCorrelatedRows(m_stackCorrelator.Expire(nowMs));
+    const auto opcode = eventRecord->EventHeader.EventDescriptor.Opcode;
+    const std::size_t pointerSize = (eventRecord->EventHeader.Flags & EVENT_HEADER_FLAG_32_BIT_HEADER) ? 4 : 8;
+    const ks::evidence::syscall::Key key{
+        static_cast<std::uint64_t>(eventRecord->EventHeader.TimeStamp.QuadPart),
+        static_cast<std::uint16_t>(::GetEventProcessorIndex(eventRecord)) };
+    if (::IsEqualGUID(eventRecord->EventHeader.ProviderId, kStackWalkGuid) && opcode == 32)
     {
-        std::lock_guard<std::mutex> lock(m_pendingMutex);
-        if (m_pendingRows.size() >= kPendingRowCapacity)
+        std::uint64_t timestamp = 0;
+        std::uint32_t pid = 0, tid = 0;
+        std::vector<std::uint64_t> frames;
+        if (ks::evidence::syscall::ParseStackPayload(
+                static_cast<const std::uint8_t*>(eventRecord->UserData), eventRecord->UserDataLength,
+                pointerSize, timestamp, pid, tid, frames))
         {
-            m_pendingRows.pop_front();
-            ++m_pendingDroppedRows;
+            if (!shouldCapturePid(pid)) { return; }
+            // Payload identity belongs to the triggering event. The stack record's
+            // header may instead name the worker collecting the deferred user stack.
+            publishCorrelatedRows(m_stackCorrelator.AddStack(
+                {timestamp, key.cpu}, pid, tid, std::move(frames), nowMs));
         }
-        m_pendingRows.push_back(std::move(row));
+        return;
+    }
+    ks::evidence::syscall::SyscallPayload payload;
+    if (!::IsEqualGUID(eventRecord->EventHeader.ProviderId, kPerfInfoGuid)
+        || !ks::evidence::syscall::ParseSyscallPayload(opcode, pointerSize,
+            eventRecord->UserData, eventRecord->UserDataLength, payload))
+    {
+        return;
+    }
+    auto row = buildRowFromRecord(eventRecordPtr);
+    if (row.pid != UINT32_MAX && !shouldCapturePid(row.pid)) { return; }
+    if (opcode == 52)
+    {
+        // Exit carries an NTSTATUS, never a service number or a user return PC.
+        if (row.pid != UINT32_MAX && shouldCapturePid(row.pid))
+        {
+            row.processText = processNameForPid(row.pid, &row.processCreationTime100ns);
+            row.globalSearchText += QStringLiteral(" | %1 | %2").arg(row.processText, row.time100nsText);
+            enqueueRow(std::move(row));
+        }
+        return;
+    }
+    const auto pid = row.pid;
+    const auto tid = row.tid;
+    publishCorrelatedRows(m_stackCorrelator.AddEvent(key, pid, tid, std::move(row), nowMs));
+    // Modern providers may attach the stack directly instead of emitting StackWalk.
+    // Only a complete, bounded extension with usable header identity is admitted.
+    if (pid == UINT32_MAX || tid == UINT32_MAX || eventRecord->ExtendedData == nullptr)
+    {
+        return;
+    }
+    for (USHORT i = 0; i < eventRecord->ExtendedDataCount; ++i)
+    {
+        const auto& extended = eventRecord->ExtendedData[i];
+        const std::size_t width = extended.ExtType == EVENT_HEADER_EXT_TYPE_STACK_TRACE64 ? 8
+            : extended.ExtType == EVENT_HEADER_EXT_TYPE_STACK_TRACE32 ? 4 : 0;
+        if (width == 0 || extended.DataPtr == 0 || extended.DataSize <= 8
+            || (extended.DataSize - 8) % width != 0 || (extended.DataSize - 8) / width > 192)
+        {
+            continue;
+        }
+        std::vector<std::uint64_t> frames;
+        const auto* data = reinterpret_cast<const unsigned char*>(extended.DataPtr);
+        for (std::size_t offset = 8; offset < extended.DataSize; offset += width)
+        {
+            std::uint64_t address = 0;
+            std::memcpy(&address, data + offset, width);
+            frames.push_back(address);
+        }
+        publishCorrelatedRows(m_stackCorrelator.AddStack(key, pid, tid, std::move(frames), nowMs));
     }
 }
 
@@ -1428,259 +1307,317 @@ DirectKernelCallMonitorWidget::CapturedEventRow DirectKernelCallMonitorWidget::b
 {
     const EVENT_RECORD* eventRecord = reinterpret_cast<const EVENT_RECORD*>(eventRecordPtr);
     CapturedEventRow row;
-    if (eventRecord == nullptr)
-    {
-        return row;
-    }
-
-    row.time100nsText = QString::number(static_cast<qlonglong>(eventRecord->EventHeader.TimeStamp.QuadPart));
-    row.pid = static_cast<std::uint32_t>(eventRecord->EventHeader.ProcessId);
-    row.tid = static_cast<std::uint32_t>(eventRecord->EventHeader.ThreadId);
+    const auto rawQpc = static_cast<std::uint64_t>(eventRecord->EventHeader.TimeStamp.QuadPart);
+    const long double delta = (static_cast<long double>(rawQpc) - m_qpcOrigin) * 10000000.0L / m_qpcFrequency;
+    row.eventTime100ns = static_cast<std::uint64_t>((std::max)(0.0L, static_cast<long double>(m_filetimeOrigin) + delta));
+    row.time100nsText = QString::number(static_cast<qulonglong>(row.eventTime100ns));
+    row.pid = eventRecord->EventHeader.ProcessId;
+    row.tid = eventRecord->EventHeader.ThreadId;
     row.pidTidText = QStringLiteral("%1 / %2").arg(row.pid).arg(row.tid);
-    row.processText = processNameForPid(
-        row.pid,
-        &row.processCreationTime100ns);
-    row.eventName = QStringLiteral("Event_%1").arg(eventRecord->EventHeader.EventDescriptor.Id);
-
-    QString decodedEventName;
-    const std::vector<DecodedProperty> propertyList = decodeEventProperties(eventRecordPtr, &decodedEventName);
-    if (!decodedEventName.trimmed().isEmpty())
+    row.pointerSize = (eventRecord->EventHeader.Flags & EVENT_HEADER_FLAG_32_BIT_HEADER) ? 4 : 8;
+    row.syscallNumberText = QStringLiteral("<未知>");
+    row.serviceName = QStringLiteral("<未解析>");
+    row.callAddressText = QStringLiteral("<未知>");
+    row.verdictText = QStringLiteral("证据不足：未取得用户调用栈");
+    if (eventRecord->EventHeader.EventDescriptor.Opcode == 51)
     {
-        row.eventName = decodedEventName.trimmed();
-    }
-
-    QStringList propertyLineList;
-    std::optional<std::uint32_t> syscallNumber;
-    std::optional<std::uint64_t> callAddress;
-    for (const DecodedProperty& property : propertyList)
-    {
-        propertyLineList << QStringLiteral("%1=%2").arg(property.name, property.valueText);
-        const QString normalized = normalizeName(property.name);
-        if (property.hasNumericValue)
-        {
-            const bool looksLikeSyscallNumber = normalized.contains(QStringLiteral("syscall"))
-                || normalized.contains(QStringLiteral("systemcall"))
-                || normalized.contains(QStringLiteral("servicenumber"))
-                || normalized.contains(QStringLiteral("serviceid"))
-                || normalized.contains(QStringLiteral("syscallid"));
-            if (!syscallNumber.has_value() && looksLikeSyscallNumber && property.numericValue < 0x10000ULL)
-            {
-                syscallNumber = static_cast<std::uint32_t>(property.numericValue);
-            }
-
-            const bool looksLikeAddress = normalized.contains(QStringLiteral("calladdress"))
-                || normalized.contains(QStringLiteral("returnaddress"))
-                || normalized.contains(QStringLiteral("instructionpointer"))
-                || normalized == QStringLiteral("ip")
-                || normalized == QStringLiteral("pc")
-                || normalized.contains(QStringLiteral("programcounter"));
-            if (!callAddress.has_value() && looksLikeAddress && property.numericValue > 0x10000ULL)
-            {
-                callAddress = property.numericValue;
-            }
-        }
-    }
-
-    if (!syscallNumber.has_value() && eventRecord->UserData != nullptr && eventRecord->UserDataLength >= sizeof(std::uint32_t))
-    {
-        std::uint32_t candidate = 0;
-        std::memcpy(&candidate, eventRecord->UserData, sizeof(candidate));
-        if (candidate < 0x10000U)
-        {
-            syscallNumber = candidate;
-            propertyLineList << QStringLiteral("fallback.raw0.syscallCandidate=%1").arg(candidate);
-        }
-    }
-
-    if (syscallNumber.has_value())
-    {
-        row.hasSyscallNumber = true;
-        row.syscallNumber = *syscallNumber;
-        row.syscallNumberText = QStringLiteral("%1 / 0x%2")
-            .arg(row.syscallNumber)
-            .arg(row.syscallNumber, 4, 16, QChar(u'0'))
-            .toUpper();
-        row.serviceName = serviceNameForNumber(row.syscallNumber);
+        row.eventName = QStringLiteral("SysCallEnter");
+        std::memcpy(&row.kernelServiceAddress, eventRecord->UserData, row.pointerSize);
+        row.detailAllText = QStringLiteral("内核服务地址：%1\n原始 QPC：%2\n")
+            .arg(formatAddress(row.kernelServiceAddress)).arg(static_cast<qulonglong>(rawQpc));
     }
     else
     {
-        row.syscallNumberText = QStringLiteral("<未知>");
-        row.serviceName = QStringLiteral("<未解析>");
+        row.eventName = QStringLiteral("SysCallExit");
+        std::uint32_t status = 0;
+        std::memcpy(&status, eventRecord->UserData, sizeof(status));
+        row.verdictText = QStringLiteral("系统调用退出（不含调用号）");
+        row.detailText = QStringLiteral("NTSTATUS=0x%1").arg(status, 8, 16, QChar(u'0'));
+        row.detailAllText = row.detailText;
+        row.globalSearchText = QStringLiteral("%1 | %2 | %3").arg(row.pidTidText, row.eventName, row.detailText);
     }
-
-    if (callAddress.has_value())
-    {
-        row.callAddress = *callAddress;
-        row.callAddressText = formatAddress(row.callAddress);
-    }
-    else
-    {
-        row.callAddressText = QStringLiteral("<未知>");
-    }
-
-    QString callModuleText;
-    if (row.callAddress != 0 && m_resolveCallAddress.load())
-    {
-        callModuleText = moduleNameForAddress(row.pid, row.callAddress);
-    }
-
-    if (row.callAddress == 0)
-    {
-        row.verdictText = QStringLiteral("待判定");
-    }
-    else if (isKernelModeAddress(row.callAddress))
-    {
-        row.verdictText = QStringLiteral("内核服务入口");
-    }
-    else if (callModuleText.compare(QStringLiteral("ntdll.dll"), Qt::CaseInsensitive) == 0
-        || callModuleText.compare(QStringLiteral("win32u.dll"), Qt::CaseInsensitive) == 0)
-    {
-        row.verdictText = QStringLiteral("常规导出桩");
-    }
-    else if (!callModuleText.trimmed().isEmpty())
-    {
-        row.verdictText = QStringLiteral("疑似直接调用:%1").arg(callModuleText);
-    }
-    else
-    {
-        row.verdictText = QStringLiteral("疑似直接调用");
-    }
-
-    row.detailText = QStringLiteral("%1 | %2 | %3")
-        .arg(row.verdictText, row.callAddressText, row.serviceName);
-    row.detailAllText = QStringLiteral(
-        "Provider: System Syscall (%1)\n"
-        "EventId: %2\n"
-        "EventName: %3\n"
-        "PID/TID: %4\n"
-        "Process: %5\n"
-        "Syscall: %6\n"
-        "Service: %7\n"
-        "CallAddress: %8\n"
-        "Verdict: %9\n"
-        "Properties:\n%10")
-        .arg(guidToText(eventRecord->EventHeader.ProviderId))
-        .arg(eventRecord->EventHeader.EventDescriptor.Id)
-        .arg(row.eventName)
-        .arg(row.pidTidText)
-        .arg(row.processText)
-        .arg(row.syscallNumberText)
-        .arg(row.serviceName)
-        .arg(callModuleText.isEmpty() ? row.callAddressText : QStringLiteral("%1 (%2)").arg(row.callAddressText, callModuleText))
-        .arg(row.verdictText)
-        .arg(propertyLineList.isEmpty() ? QStringLiteral("<无 TDH 字段>") : propertyLineList.join(QChar(u'\n')));
-    row.globalSearchText = QStringLiteral("%1 | %2 | %3 | %4 | %5 | %6 | %7 | %8")
-        .arg(row.time100nsText)
-        .arg(row.pidTidText)
-        .arg(row.processText)
-        .arg(row.syscallNumberText)
-        .arg(row.serviceName)
-        .arg(row.verdictText)
-        .arg(row.callAddressText)
-        .arg(row.detailAllText);
     return row;
 }
 
-std::vector<DirectKernelCallMonitorWidget::DecodedProperty> DirectKernelCallMonitorWidget::decodeEventProperties(
-    const struct _EVENT_RECORD* eventRecordPtr,
-    QString* eventNameOut) const
+void DirectKernelCallMonitorWidget::publishCorrelatedRows(
+    std::vector<ks::evidence::syscall::Correlator<CapturedEventRow>::Output> outputs)
 {
-    const EVENT_RECORD* eventRecord = reinterpret_cast<const EVENT_RECORD*>(eventRecordPtr);
-    std::vector<DecodedProperty> propertyList;
-    if (eventRecord == nullptr)
+    for (auto& output : outputs)
     {
-        return propertyList;
-    }
-
-    ULONG infoBufferSize = 0;
-    ULONG status = ::TdhGetEventInformation(
-        const_cast<EVENT_RECORD*>(eventRecord),
-        0,
-        nullptr,
-        nullptr,
-        &infoBufferSize);
-    if (status != ERROR_INSUFFICIENT_BUFFER || infoBufferSize == 0)
-    {
-        return propertyList;
-    }
-
-    std::vector<unsigned char> infoBuffer(infoBufferSize, 0);
-    auto* traceInfo = reinterpret_cast<TRACE_EVENT_INFO*>(infoBuffer.data());
-    status = ::TdhGetEventInformation(
-        const_cast<EVENT_RECORD*>(eventRecord),
-        0,
-        nullptr,
-        traceInfo,
-        &infoBufferSize);
-    if (status != ERROR_SUCCESS)
-    {
-        return propertyList;
-    }
-
-    if (eventNameOut != nullptr)
-    {
-        *eventNameOut = eventNameFromInfo(infoBuffer.data(), traceInfo);
-    }
-
-    propertyList.reserve(traceInfo->TopLevelPropertyCount);
-    for (ULONG propertyIndex = 0; propertyIndex < traceInfo->TopLevelPropertyCount; ++propertyIndex)
-    {
-        const EVENT_PROPERTY_INFO& propertyInfo = traceInfo->EventPropertyInfoArray[propertyIndex];
-        if ((propertyInfo.Flags & PropertyStruct) != 0 || propertyInfo.NameOffset == 0)
+        switch (output.state)
+        {
+        case ks::evidence::syscall::CorrelationState::Matched: ++m_stackMatched; break;
+        case ks::evidence::syscall::CorrelationState::MissingStack: ++m_stackMissing; break;
+        case ks::evidence::syscall::CorrelationState::Ambiguous: ++m_stackConflicts; break;
+        case ks::evidence::syscall::CorrelationState::CapacityEvicted: ++m_stackCapacityEvicted; break;
+        }
+        auto& row = output.row;
+        row.pid = output.pid;
+        row.tid = output.tid;
+        // Unknown header identities can be filled only by an exact stack match.
+        if (row.pid == UINT32_MAX || !shouldCapturePid(row.pid) || m_capturePaused.load())
         {
             continue;
         }
-
-        const wchar_t* propertyNamePointer = reinterpret_cast<const wchar_t*>(
-            infoBuffer.data() + propertyInfo.NameOffset);
-        const QString propertyName = QString::fromWCharArray(propertyNamePointer).trimmed();
-        if (propertyName.isEmpty())
+        row.pidTidText = QStringLiteral("%1 / %2").arg(row.pid).arg(row.tid);
+        row.processText = processNameForPid(row.pid, &row.processCreationTime100ns);
+        if (row.processCreationTime100ns > row.eventTime100ns)
         {
-            continue;
+            row.processText = QStringLiteral("PID %1").arg(row.pid);
+            row.processCreationTime100ns = 0;
+            row.verdictText = QStringLiteral("证据不足：进程身份不匹配");
         }
-
-        PROPERTY_DATA_DESCRIPTOR descriptor{};
-        descriptor.PropertyName = reinterpret_cast<ULONGLONG>(propertyNamePointer);
-        descriptor.ArrayIndex = ULONG_MAX;
-
-        ULONG propertySize = 0;
-        status = ::TdhGetPropertySize(
-            const_cast<EVENT_RECORD*>(eventRecord),
-            0,
-            nullptr,
-            1,
-            &descriptor,
-            &propertySize);
-        if (status != ERROR_SUCCESS || propertySize == 0 || propertySize > 4096)
+        else if (output.state == ks::evidence::syscall::CorrelationState::Matched)
         {
-            continue;
+            analyzeUserStack(row, output.frames);
         }
-
-        std::vector<unsigned char> propertyBuffer(propertySize, 0);
-        status = ::TdhGetProperty(
-            const_cast<EVENT_RECORD*>(eventRecord),
-            0,
-            nullptr,
-            1,
-            &descriptor,
-            propertySize,
-            propertyBuffer.data());
-        if (status != ERROR_SUCCESS)
+        else if (output.state == ks::evidence::syscall::CorrelationState::Ambiguous)
         {
-            continue;
+            row.verdictText = QStringLiteral("证据不足：调用栈关联冲突");
         }
-
-        DecodedProperty decodedProperty;
-        decodedProperty.name = propertyName;
-        decodedProperty.valueText = decodedValueText(
-            propertyBuffer.data(),
-            propertySize,
-            propertyInfo.nonStructType.InType,
-            &decodedProperty.numericValue,
-            &decodedProperty.hasNumericValue);
-        propertyList.push_back(std::move(decodedProperty));
+        else if (output.state == ks::evidence::syscall::CorrelationState::CapacityEvicted)
+        {
+            row.verdictText = QStringLiteral("证据不足：调用栈关联容量已满");
+        }
+        row.detailText = QStringLiteral("%1 | %2 | %3").arg(row.verdictText, row.callAddressText, row.serviceName);
+        row.detailAllText += QStringLiteral("%1\n%2\n调用栈启用状态：%3\n")
+            .arg(row.pidTidText, row.detailText).arg(m_stackEnableStatus.load());
+        row.globalSearchText = QStringLiteral("%1 | %2 | %3 | %4 | %5")
+            .arg(row.time100nsText, row.processText, row.pidTidText, row.eventName, row.detailAllText);
+        enqueueRow(std::move(row));
     }
-    return propertyList;
+}
+
+void DirectKernelCallMonitorWidget::analyzeUserStack(CapturedEventRow& row, const std::vector<std::uint64_t>& frames)
+{
+    using namespace ks::evidence::syscall;
+    std::vector<std::uint64_t> userFrames;
+    QStringList stackText;
+    for (const auto address : frames)
+    {
+        stackText << formatAddress(address);
+        if (IsUserAddress(address, row.pointerSize))
+        {
+            userFrames.push_back(address);
+        }
+    }
+    row.detailAllText += QStringLiteral("ETW 调用栈：\n%1\n").arg(stackText.join(QChar(u'\n')));
+    if (userFrames.empty())
+    {
+        return;
+    }
+    row.callAddress = userFrames.front();
+    row.callAddressText = formatAddress(row.callAddress);
+    if (!m_resolveCallAddress.load())
+    {
+        row.verdictText = QStringLiteral("证据不足：调用地址解析已关闭");
+        return;
+    }
+    if (row.pointerSize != 8)
+    {
+        row.verdictText = QStringLiteral("证据不足：当前桩检测仅支持原生 x64");
+        return;
+    }
+    if (row.processCreationTime100ns == 0)
+    {
+        row.verdictText = QStringLiteral("证据不足：进程身份不可验证");
+        return;
+    }
+    // Inspection is a bounded post-event sample, not proof that these bytes ran.
+    // Cache for 250ms with process-instance identity to keep hot syscall streams
+    // from repeatedly opening handles and reading the same callsite.
+    const auto sampledAt = std::chrono::steady_clock::now();
+    HANDLE process = nullptr;
+    std::shared_ptr<void> processOwner;
+    bool triedOpen = false;
+    bool unsupportedArchitecture = false;
+    auto openVerified = [&]() {
+        if (triedOpen) { return process != nullptr; }
+        triedOpen = true;
+        process = ::OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ | SYNCHRONIZE, FALSE, row.pid);
+        FILETIME created{}, exited{}, kernel{}, user{};
+        if (process != nullptr && ::GetProcessTimes(process, &created, &exited, &kernel, &user))
+        {
+            const auto creation = (static_cast<std::uint64_t>(created.dwHighDateTime) << 32) | created.dwLowDateTime;
+            if (creation == row.processCreationTime100ns && creation <= row.eventTime100ns)
+            {
+                BOOL wow64 = FALSE;
+                if (::IsWow64Process(process, &wow64) && !wow64)
+                {
+                    processOwner = std::shared_ptr<void>(process, [](void* handle) { ::CloseHandle(handle); });
+                    return true;
+                }
+                unsupportedArchitecture = true;
+            }
+        }
+        if (process != nullptr) { ::CloseHandle(process); process = nullptr; }
+        return false;
+    };
+    auto readWindow = [&](std::uint64_t pc, std::vector<unsigned char>& bytes, std::size_t& pcOffset) {
+        MEMORY_BASIC_INFORMATION info{};
+        if (!IsUserAddress(pc) || !::VirtualQueryEx(process, reinterpret_cast<LPCVOID>(pc), &info, sizeof(info))
+            || info.State != MEM_COMMIT || (info.Protect & (PAGE_GUARD | PAGE_NOACCESS)) != 0)
+        {
+            return false;
+        }
+        const auto regionStart = reinterpret_cast<std::uint64_t>(info.BaseAddress);
+        const auto regionEnd = regionStart + info.RegionSize;
+        const auto start = (std::max)(regionStart, pc > 192 ? pc - 192 : 0);
+        const auto end = (std::min)(regionEnd, pc + 192);
+        if (end <= start) { return false; }
+        bytes.resize(static_cast<std::size_t>(end - start));
+        SIZE_T read = 0;
+        if (!::ReadProcessMemory(process, reinterpret_cast<LPCVOID>(start), bytes.data(), bytes.size(), &read)
+            || read != bytes.size())
+        {
+            bytes.clear();
+            return false;
+        }
+        pcOffset = static_cast<std::size_t>(pc - start);
+        return true;
+    };
+    std::vector<FrameEvidence> evidence;
+    bool unreadable = false;
+    for (std::size_t i = 0; i < (std::min)(std::size_t(2), userFrames.size()); ++i)
+    {
+        const auto pc = userFrames[i];
+        const auto key = std::make_pair(row.pid, pc);
+        auto cached = m_frameInspectionCache.find(key);
+        FrameInspection inspection;
+        if (cached != m_frameInspectionCache.end() && cached->second.creationTime100ns == row.processCreationTime100ns
+            && ((!cached->second.readable && !cached->second.processOwner)
+                || (cached->second.processOwner && ::WaitForSingleObject(cached->second.processOwner.get(), 0) == WAIT_TIMEOUT))
+            && sampledAt - cached->second.sampledAt < std::chrono::milliseconds(250))
+        {
+            inspection = cached->second;
+        }
+        else
+        {
+            inspection.creationTime100ns = row.processCreationTime100ns;
+            inspection.sampledAt = sampledAt;
+            inspection.evidence.address = pc;
+            if (openVerified())
+            {
+                inspection.processOwner = processOwner;
+                MEMORY_BASIC_INFORMATION info{};
+                if (::VirtualQueryEx(process, reinterpret_cast<LPCVOID>(pc), &info, sizeof(info)) && info.State == MEM_COMMIT)
+                {
+                    const DWORD protection = info.Protect & 0xff;
+                    inspection.evidence.executable = !(info.Protect & PAGE_GUARD) &&
+                        (protection == PAGE_EXECUTE || protection == PAGE_EXECUTE_READ
+                         || protection == PAGE_EXECUTE_READWRITE || protection == PAGE_EXECUTE_WRITECOPY);
+                    inspection.evidence.nonImage = info.Type == MEM_PRIVATE || info.Type == MEM_MAPPED;
+                    inspection.moduleText = moduleNameForAddress(row.pid, pc);
+                    // Toolhelp is only a presentation hint. Native-module trust
+                    // comes from a MEM_IMAGE mapping with the same actual file path
+                    // as our system DLL, not target-controlled loader metadata.
+                    if (info.Type == MEM_IMAGE)
+                    {
+                        std::vector<wchar_t> mappedPath(32768, L'\0');
+                        if (::GetMappedFileNameW(process, reinterpret_cast<LPVOID>(pc), mappedPath.data(), 32768))
+                        {
+                            bool systemIdentitiesComplete = true;
+                            const QString targetPath = QString::fromWCharArray(mappedPath.data());
+                            const wchar_t* nativeNames[] = {L"ntdll.dll", L"win32u.dll"};
+                            for (const auto* name : nativeNames)
+                            {
+                                const auto localModule = ::GetModuleHandleW(name);
+                                std::vector<wchar_t> localMappedPath(32768, L'\0'), localDosPath(32768, L'\0');
+                                wchar_t systemDirectory[MAX_PATH]{};
+                                const bool localIdentityKnown = localModule != nullptr
+                                    && ::GetMappedFileNameW(::GetCurrentProcess(), localModule, localMappedPath.data(), 32768)
+                                    && ::GetModuleFileNameW(localModule, localDosPath.data(), 32768)
+                                    && ::GetSystemDirectoryW(systemDirectory, MAX_PATH)
+                                    && QDir::cleanPath(QString::fromWCharArray(localDosPath.data())).compare(
+                                        QDir::cleanPath(QString::fromWCharArray(systemDirectory) + QChar(u'/')
+                                            + QString::fromWCharArray(name)), Qt::CaseInsensitive) == 0;
+                                systemIdentitiesComplete &= localIdentityKnown;
+                                if (localIdentityKnown
+                                    && targetPath.compare(QString::fromWCharArray(localMappedPath.data()), Qt::CaseInsensitive) == 0)
+                                {
+                                    inspection.evidence.nativeModule = true;
+                                    inspection.moduleText = QString::fromWCharArray(name);
+                                    break;
+                                }
+                            }
+                            // Unknown system identities cannot establish that an
+                            // image is non-native, even if Toolhelp supplied a name.
+                            inspection.evidence.moduleIdentityKnown = inspection.evidence.nativeModule || systemIdentitiesComplete;
+                        }
+                    }
+
+                    std::vector<unsigned char> bytes;
+                    std::size_t offset = 0;
+                    if (inspection.evidence.executable && readWindow(pc, bytes, offset))
+                    {
+                        inspection.readable = true;
+                        inspection.evidence.code = InspectCode(bytes.data(), bytes.size(), offset);
+                        // A tail-jumping wrapper does not remain on the stack.
+                        // For a return immediately following call rel32, inspect
+                        // that call's target for the full resolver-wrapper shape.
+                        if (i == 1 && offset >= 5 && bytes[offset - 5] == 0xe8)
+                        {
+                            std::int32_t displacement = 0;
+                            std::memcpy(&displacement, bytes.data() + offset - 4, sizeof(displacement));
+                            const auto target = static_cast<std::uint64_t>(static_cast<std::int64_t>(pc) + displacement);
+                            std::vector<unsigned char> targetBytes;
+                            std::size_t targetOffset = 0;
+                            MEMORY_BASIC_INFORMATION targetInfo{};
+                            if (IsUserAddress(target) && ::VirtualQueryEx(process, reinterpret_cast<LPCVOID>(target), &targetInfo, sizeof(targetInfo))
+                                && targetInfo.State == MEM_COMMIT && (targetInfo.Protect & PAGE_GUARD) == 0
+                                && ((targetInfo.Protect & 0xff) == PAGE_EXECUTE_READ
+                                    || (targetInfo.Protect & 0xff) == PAGE_EXECUTE_READWRITE
+                                    || (targetInfo.Protect & 0xff) == PAGE_EXECUTE_WRITECOPY)
+                                && readWindow(target, targetBytes, targetOffset))
+                            {
+                                if (CompatibleWrapperAtEntry(targetBytes.data() + targetOffset,
+                                        targetBytes.size() - targetOffset))
+                                {
+                                    inspection.evidence.code.whispererCompatible = true;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if (m_frameInspectionCache.size() >= 4096) { m_frameInspectionCache.clear(); }
+            m_frameInspectionCache[key] = inspection;
+        }
+        unreadable |= !inspection.readable;
+        evidence.push_back(inspection.evidence);
+        row.detailAllText += QStringLiteral("用户帧 %1：%2 (%3)\n")
+            .arg(i).arg(formatAddress(pc), inspection.moduleText.isEmpty() ? QStringLiteral("<未解析>") : inspection.moduleText);
+    }
+    if (unsupportedArchitecture)
+    {
+        row.verdictText = QStringLiteral("证据不足：当前桩检测仅支持原生 x64");
+        return;
+    }
+    const auto assessment = Assess(evidence);
+    switch (assessment.path)
+    {
+    case PathKind::Direct: row.verdictText = QStringLiteral("疑似直接 syscall（指令已核对）"); break;
+    case PathKind::Indirect:
+        row.verdictText = assessment.whispererCompatible
+            ? QStringLiteral("疑似间接 syscall（兼容解析桩）")
+            : QStringLiteral("系统 syscall 桩（动态代码来源）");
+        break;
+    case PathKind::NativeStub: row.verdictText = QStringLiteral("系统 syscall 桩（来源未证明安全）"); break;
+    default: row.verdictText = unreadable ? QStringLiteral("证据不足：调用代码不可读") : QStringLiteral("证据不足：未匹配 syscall 桩"); break;
+    }
+    if (assessment.whispererCompatible)
+    {
+        row.verdictText += QStringLiteral(" / SysWhispers 兼容形态");
+    }
+    if (assessment.path != PathKind::Indirect && !evidence.empty() && evidence.front().code.hasSystemCallNumber)
+    {
+        row.hasSyscallNumber = true;
+        row.syscallNumber = evidence.front().code.systemCallNumber;
+        row.syscallNumberText = QStringLiteral("%1 / 0x%2").arg(row.syscallNumber).arg(row.syscallNumber, 4, 16, QChar(u'0'));
+        row.serviceName = serviceNameForNumber(row.syscallNumber);
+        row.detailAllText += QStringLiteral("显示的调用号来自桩内静态立即数；未采集执行时的 EAX。\n");
+    }
+    row.detailAllText += QStringLiteral("判定基于事件关联和采集后的内存样本；动态代码也可能来自 JIT、运行时或安全软件。兼容形态不能确定工具、版本或恶意性。\n");
 }
 
 QString DirectKernelCallMonitorWidget::serviceNameForNumber(std::uint32_t syscallNumber) const
@@ -1803,6 +1740,7 @@ QString DirectKernelCallMonitorWidget::processNameForPid(
         if (identityChanged)
         {
             m_moduleRangeCache.erase(pid);
+            m_moduleRefreshTimes.erase(pid);
         }
         m_processNameCache[pid] = nextCacheEntry;
     }
@@ -1815,27 +1753,35 @@ QString DirectKernelCallMonitorWidget::processNameForPid(
 
 QString DirectKernelCallMonitorWidget::moduleNameForAddress(std::uint32_t pid, std::uint64_t addressValue)
 {
-    if (pid == 0 || addressValue == 0)
-    {
-        return QString();
-    }
-
+    if (pid == 0 || addressValue == 0) { return QString(); }
+    const auto now = std::chrono::steady_clock::now();
+    bool refresh = true;
     {
         std::lock_guard<std::mutex> lock(m_cacheMutex);
-        if (m_moduleRangeCache.find(pid) == m_moduleRangeCache.end())
+        const auto stamp = m_moduleRefreshTimes.find(pid);
+        const auto ranges = m_moduleRangeCache.find(pid);
+        bool hit = false;
+        if (ranges != m_moduleRangeCache.end())
         {
-            refreshModuleRangesForPid(pid);
-        }
-        const auto found = m_moduleRangeCache.find(pid);
-        if (found != m_moduleRangeCache.end())
-        {
-            for (const ModuleRange& range : found->second)
+            for (const auto& range : ranges->second)
             {
-                if (addressValue >= range.startAddress && addressValue < range.endAddress)
-                {
-                    return range.moduleName;
-                }
+                hit |= addressValue >= range.startAddress && addressValue < range.endAddress;
             }
+        }
+        if (stamp != m_moduleRefreshTimes.end())
+        {
+            refresh = now - stamp->second >= std::chrono::milliseconds(hit ? 1000 : 250);
+        }
+    }
+    // Do not hold the cache lock while taking a potentially slow module snapshot.
+    if (refresh) { refreshModuleRangesForPid(pid); }
+    std::lock_guard<std::mutex> lock(m_cacheMutex);
+    const auto found = m_moduleRangeCache.find(pid);
+    if (found != m_moduleRangeCache.end())
+    {
+        for (const auto& range : found->second)
+        {
+            if (addressValue >= range.startAddress && addressValue < range.endAddress) { return range.moduleName; }
         }
     }
     return QString();
@@ -1843,30 +1789,29 @@ QString DirectKernelCallMonitorWidget::moduleNameForAddress(std::uint32_t pid, s
 
 void DirectKernelCallMonitorWidget::refreshModuleRangesForPid(std::uint32_t pid)
 {
-    std::vector<ModuleRange> rangeList;
-    HANDLE snapshotHandle = ::CreateToolhelp32Snapshot(
-        TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32,
-        static_cast<DWORD>(pid));
-    if (snapshotHandle != INVALID_HANDLE_VALUE)
+    std::vector<ModuleRange> ranges;
+    HANDLE snapshot = ::CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, pid);
+    if (snapshot != INVALID_HANDLE_VALUE)
     {
-        MODULEENTRY32W moduleEntry{};
-        moduleEntry.dwSize = sizeof(moduleEntry);
-        if (::Module32FirstW(snapshotHandle, &moduleEntry) != FALSE)
+        MODULEENTRY32W entry{};
+        entry.dwSize = sizeof(entry);
+        if (::Module32FirstW(snapshot, &entry))
         {
             do
             {
                 ModuleRange range;
-                range.startAddress = reinterpret_cast<std::uint64_t>(moduleEntry.modBaseAddr);
-                range.endAddress = range.startAddress + static_cast<std::uint64_t>(moduleEntry.modBaseSize);
-                range.moduleName = QString::fromWCharArray(moduleEntry.szModule);
-                range.imagePath = QString::fromWCharArray(moduleEntry.szExePath);
-                rangeList.push_back(std::move(range));
-            } while (::Module32NextW(snapshotHandle, &moduleEntry) != FALSE);
+                range.startAddress = reinterpret_cast<std::uint64_t>(entry.modBaseAddr);
+                range.endAddress = range.startAddress + entry.modBaseSize;
+                range.moduleName = QString::fromWCharArray(entry.szModule);
+                range.imagePath = QString::fromWCharArray(entry.szExePath);
+                ranges.push_back(std::move(range));
+            } while (::Module32NextW(snapshot, &entry));
         }
-        ::CloseHandle(snapshotHandle);
+        ::CloseHandle(snapshot);
     }
-
-    m_moduleRangeCache[pid] = std::move(rangeList);
+    std::lock_guard<std::mutex> lock(m_cacheMutex);
+    m_moduleRangeCache[pid] = std::move(ranges);
+    m_moduleRefreshTimes[pid] = std::chrono::steady_clock::now();
 }
 
 std::set<std::uint32_t> DirectKernelCallMonitorWidget::parsePidSet(const QString& text) const

@@ -306,21 +306,24 @@ namespace ksword::kvm
         unsigned long long physicalAddress,
         const QByteArray& payload);
 
-    // readVirtual/writeVirtual：先按给定页目录基址走页表翻译，再读写。
-    // directoryBase 为 0 时按当前进程（即驱动调用线程所在进程）页表解析。
+    // readVirtual/writeVirtual：先自动解析目标 PID 的 CR3，或用自定义 CR3 翻译。
+    // 非零 directoryBase 为显式覆盖，processId 不再参与；二者为 0 保留当前线程页表语义。
     KvmMemoryResult readVirtual(
         unsigned long long directoryBase,
         unsigned long long virtualAddress,
-        unsigned long length);
+        unsigned long length,
+        unsigned long processId = 0UL);
     KvmMemoryResult writeVirtual(
         unsigned long long directoryBase,
         unsigned long long virtualAddress,
-        const QByteArray& payload);
+        const QByteArray& payload,
+        unsigned long processId = 0UL);
 
     // translate：只做虚拟到物理翻译，不访问目标内存。
     KvmMemoryResult translate(
         unsigned long long directoryBase,
-        unsigned long long virtualAddress);
+        unsigned long long virtualAddress,
+        unsigned long processId = 0UL);
 
     // KvmViewEntry：一条已安装的 EPT 分离视图。
     struct KvmViewEntry

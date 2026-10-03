@@ -140,7 +140,7 @@ private:
     QWidget* m_threadPage = nullptr;    // m_threadPage：线程表的 A/B/C 包装页。
     QWidget* m_memoryPage = nullptr;    // m_memoryPage：内存表的 A/B/C 包装页。
     QWidget* m_handlePage = nullptr;    // m_handlePage：句柄表的 A/B/C 包装页。
-    CodeEditorWidget* m_rawMemoryEditor = nullptr; // m_rawMemoryEditor：已验证 TRIAGE 数据块的只读十六进制预览。
+    QTabWidget* m_rawMemoryTabs = nullptr; // 已验证 TRIAGE 字节块的只读分页预览。
     DumpMemoryView* m_memoryView = nullptr; // m_memoryView：按虚拟地址重开 DMP 的只读内存查看器。
     CodeEditorWidget* m_reportEditor = nullptr; // m_reportEditor：全文报告只读编辑器。
 

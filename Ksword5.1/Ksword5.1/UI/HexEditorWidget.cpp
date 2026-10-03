@@ -1,4 +1,7 @@
 #include "HexEditorWidget.Internal.h"
+#include "../Internationalization/LanguageManager.h"
+
+#include <QSignalBlocker>
 
 namespace ksword::ui::hex_editor_internal
 {
@@ -191,6 +194,9 @@ void HexEditorWidget::setRegionData(
     {
         m_baseAddress = baseAddress;
         m_buffer.clear();
+        m_changeBaseline.clear();
+        m_previousRead.clear();
+        m_recentChangeMask.clear();
         ++m_bufferRevision;
         clearSearchState();
         m_selectionRangeValid = false;
@@ -213,6 +219,12 @@ void HexEditorWidget::setRegionData(
 
 void HexEditorWidget::setByteArray(const QByteArray& bytes, const std::uint64_t baseAddress)
 {
+    if (baseAddress != m_baseAddress || bytes.size() != m_buffer.size())
+    {
+        m_changeBaseline.clear();
+        m_previousRead.clear();
+        m_recentChangeMask.clear();
+    }
     // 覆盖当前缓冲区，更新基址和版本号。
     m_buffer = bytes;
     m_baseAddress = baseAddress;
@@ -231,6 +243,95 @@ void HexEditorWidget::setByteArray(const QByteArray& bytes, const std::uint64_t 
     updateStatusLabel(
         QStringLiteral("加载完成：%1 字节。")
         .arg(static_cast<qulonglong>(m_buffer.size())));
+}
+
+void HexEditorWidget::setChangeBaseline(const QByteArray& original)
+{
+    if (original.size() == m_changeBaseline.size() && original == m_changeBaseline) return;
+    m_changeBaseline = original.size() == m_buffer.size() ? original : QByteArray();
+    refreshChangeHighlights();
+}
+
+void HexEditorWidget::setRecentChangeMask(const QByteArray& changedMask)
+{
+    if (m_previousRead.isEmpty() && changedMask == m_recentChangeMask) return;
+    m_recentChangeMask = changedMask.size() == m_buffer.size() ? changedMask : QByteArray();
+    m_previousRead.clear();
+    refreshChangeHighlights();
+}
+
+void HexEditorWidget::setChangeReferences(const QByteArray& original, const QByteArray& previousRead)
+{
+    // QByteArray sharing makes unchanged snapshot references a constant-time
+    // check in the editor's per-byte path. The edited row already repaints in
+    // byteEdited/setByteAtAbsoluteAddress; full replacements rebuild the table.
+    const QByteArray baseline = original.size() == m_buffer.size() ? original : QByteArray();
+    const QByteArray preceding = previousRead.size() == m_buffer.size() ? previousRead : QByteArray();
+    if (baseline == m_changeBaseline && preceding == m_previousRead) return;
+    m_changeBaseline = baseline;
+    m_previousRead = preceding;
+    m_recentChangeMask = QByteArray(m_buffer.size(), '\0');
+    const QByteArray& currentRead = original.size() == m_buffer.size() ? original : m_buffer;
+    if (!m_previousRead.isEmpty())
+        for (qsizetype i = 0; i < m_buffer.size(); ++i)
+            m_recentChangeMask[i] = m_previousRead.at(i) != currentRead.at(i) ? '\1' : '\0';
+    refreshChangeHighlights();
+}
+
+void HexEditorWidget::clearChangeHighlights()
+{
+    if (m_changeBaseline.isEmpty() && m_previousRead.isEmpty() && m_recentChangeMask.isEmpty()) return;
+    m_changeBaseline.clear();
+    m_previousRead.clear();
+    m_recentChangeMask.clear();
+    refreshChangeHighlights();
+}
+
+void HexEditorWidget::refreshChangeHighlights()
+{
+    if (!m_hexTable) return;
+    const QSignalBlocker blocker(m_hexTable);
+    const bool wasIgnoring = m_ignoreItemChanged;
+    m_ignoreItemChanged = true;
+    for (int row = 0; row < m_hexTable->rowCount(); ++row) updateRowHighlightByRow(row);
+    m_ignoreItemChanged = wasIgnoring;
+    m_hexTable->viewport()->update();
+}
+
+void HexEditorWidget::applyChangeHighlight(QTableWidgetItem* byteItem, std::uint64_t offset)
+{
+    if (!byteItem || offset >= static_cast<std::uint64_t>(m_buffer.size())) return;
+    const auto index = static_cast<qsizetype>(offset);
+    const bool pending = index < m_changeBaseline.size() && m_buffer.at(index) != m_changeBaseline.at(index);
+    const bool recent = index < m_recentChangeMask.size() && m_recentChangeMask.at(index) != 0;
+    QFont font = m_hexTable->font();
+    font.setBold(pending || recent);
+    byteItem->setFont(font);
+    QStringList tooltip;
+    if (pending || recent)
+    {
+        const auto base = m_hexTable->palette().color(QPalette::Base);
+        const auto accent = KswordTheme::AccentColor(pending
+            ? KswordTheme::AccentRole::Orange : KswordTheme::AccentRole::Cyan);
+        byteItem->setBackground(KswordTheme::BlendColors(base, accent, 95));
+        if (index < m_changeBaseline.size())
+            tooltip.push_back(ks::i18n::sourceText(QStringLiteral("原始字节：%1"))
+                .arg(byteToHexText(static_cast<std::uint8_t>(m_changeBaseline.at(index)))));
+        if (index < m_previousRead.size())
+            tooltip.push_back(ks::i18n::sourceText(QStringLiteral("上次读取：%1"))
+                .arg(byteToHexText(static_cast<std::uint8_t>(m_previousRead.at(index)))));
+        tooltip.push_back(ks::i18n::sourceText(QStringLiteral("当前字节：%1"))
+            .arg(byteToHexText(static_cast<std::uint8_t>(m_buffer.at(index)))));
+    }
+    byteItem->setToolTip(tooltip.join(QChar('\n')));
+}
+
+void HexEditorWidget::changeEvent(QEvent* event)
+{
+    QWidget::changeEvent(event);
+    if (event && (event->type() == QEvent::PaletteChange
+        || event->type() == QEvent::ApplicationPaletteChange
+        || event->type() == QEvent::LanguageChange)) refreshChangeHighlights();
 }
 
 void HexEditorWidget::clearData()

@@ -19,12 +19,14 @@
 #include "Internationalization/LanguageManager.h"
 #include "MinidumpFormat.h"
 #include "UI/CodeEditorWidget.h"
+#include "UI/MemoryEditorWidget.h"
 #include "UI/TableHeaderSortingSupport.h"
 #include "theme.h"
 
 #include <QAction>
 #include <QHeaderView>
 #include <QHBoxLayout>
+#include <QLabel>
 #include <QMenu>
 #include <QPointer>
 #include <QPushButton>
@@ -125,6 +127,13 @@ void MinidumpDock::clearResultTabs()
         {
             detachedPage->hide();
         }
+    }
+    // 原始字节块页持有前一次转储的复制数据，换结果时销毁这些子页。
+    while (m_rawMemoryTabs->count() > 0)
+    {
+        QWidget* const blockPage = m_rawMemoryTabs->widget(0);
+        m_rawMemoryTabs->removeTab(0);
+        delete blockPage;
     }
 }
 
@@ -1006,32 +1015,24 @@ void MinidumpDock::renderResult(const ks::minidump::DumpParseResult& result)
     }
 
     // ===================== 原始内存预览页 =====================
-    // TRIAGE 数据块与 Secondary Dump Data 都是随小型内核转储保存的原始字节。
-    // 这里展示解析器已完成边界校验后复制的有限预览，绝不让 UI 回读文件，也不把
-    // 没有虚拟地址的辅助数据误称为完整内存。
+    // 带虚拟地址的 TRIAGE 块复用只读内存多视图。辅助文件数据仍是文本预览，
+    // 不把文件偏移解释成虚拟地址，也不为未捕获字节提供读取或写回入口。
     if (!result.byteBlocks.empty())
     {
-        QString rawText;
-        rawText.reserve(static_cast<qsizetype>(result.byteBlocks.size() * 2000));
         for (std::size_t index = 0; index < result.byteBlocks.size(); ++index)
         {
             const ks::minidump::DumpByteBlock& block = result.byteBlocks[index];
-            if (index != 0)
-            {
-                rawText += QLatin1Char('\n');
-            }
             const std::uint64_t previewBytes = block.previewBytes.size();
             const std::uint64_t omittedBytes = block.capturedBytes > previewBytes
-                ? block.capturedBytes - previewBytes
-                : 0;
-            rawText += QStringLiteral("[%1 %2]\n%3: %4\n%5: %6\n%7: %8\n%9: %10 %11\n%12: %13 %14\n\n")
-                .arg(translated("minidump.raw.block", "数据块"))
-                .arg(index + 1)
+                ? block.capturedBytes - previewBytes : 0;
+            const QString blockTitle = QStringLiteral("%1 %2")
+                .arg(translated("minidump.raw.block", "数据块")).arg(index + 1);
+            QString rawText = QStringLiteral("[%1]\n%2: %3\n%4: %5\n%6: %7\n%8: %9 %10\n%11: %12 %13\n")
+                .arg(blockTitle)
                 .arg(translated("minidump.raw.source", "来源"))
-                .arg(block.source)
+                .arg(ks::i18n::sourceText(block.source))
                 .arg(translated("minidump.raw.address", "虚拟地址"))
-                .arg(block.hasVirtualAddress
-                    ? hexText(block.address)
+                .arg(block.hasVirtualAddress ? hexText(block.address)
                     : translated("minidump.raw.not_applicable", "不适用"))
                 .arg(translated("minidump.raw.file_offset", "文件偏移"))
                 .arg(hexText(block.fileOffset))
@@ -1041,14 +1042,46 @@ void MinidumpDock::renderResult(const ks::minidump::DumpParseResult& result)
                 .arg(translated("minidump.raw.preview_size", "预览大小"))
                 .arg(previewBytes)
                 .arg(translated("minidump.raw.bytes", "字节"));
-            rawText += ks::minidump::FormatDumpBytes(
-                block.hasVirtualAddress ? block.address : block.fileOffset,
-                block.previewBytes.empty() ? nullptr : block.previewBytes.data(),
-                previewBytes,
-                omittedBytes);
+            if (block.hasVirtualAddress)
+            {
+                auto* page = new QWidget(m_rawMemoryTabs);
+                auto* layout = new QVBoxLayout(page);
+                layout->setContentsMargins(0, 0, 0, 0);
+                auto* metadata = new QLabel(rawText, page);
+                metadata->setTextFormat(Qt::PlainText);
+                metadata->setTextInteractionFlags(Qt::TextSelectableByMouse);
+                metadata->setWordWrap(true);
+                layout->addWidget(metadata);
+                auto* editor = new ks::ui::MemoryEditorWidget(page);
+                editor->setEditable(false);
+                const QByteArray bytes(block.previewBytes.empty() ? nullptr
+                    : reinterpret_cast<const char*>(block.previewBytes.data()),
+                    static_cast<qsizetype>(previewBytes));
+                const auto architecture = result.pointerSize == 4
+                    ? ks::ui::DisassemblyArchitecture::X86 : ks::ui::DisassemblyArchitecture::X64;
+                const auto anchor = result.faultingAddress >= block.address
+                    && result.faultingAddress - block.address < previewBytes
+                    ? result.faultingAddress : block.address;
+                editor->setSnapshot(bytes, block.address, architecture, anchor,
+                    QStringLiteral("dump-block:%1:%2:%3:%4")
+                        .arg(result.filePath).arg(result.fileSize)
+                        .arg(result.fileLastModifiedUtcMs).arg(block.fileOffset));
+                layout->addWidget(editor, 1);
+                m_rawMemoryTabs->addTab(page, blockTitle);
+            }
+            else
+            {
+                rawText += QLatin1Char('\n');
+                rawText += ks::minidump::FormatDumpBytes(block.fileOffset,
+                    block.previewBytes.empty() ? nullptr : block.previewBytes.data(),
+                    previewBytes, omittedBytes);
+                auto* report = new CodeEditorWidget(m_rawMemoryTabs);
+                report->setReadOnly(true);
+                report->setRawText(rawText);
+                m_rawMemoryTabs->addTab(report, blockTitle);
+            }
         }
-        m_rawMemoryEditor->setRawText(rawText);
-        m_resultTabs->addTab(m_rawMemoryEditor,
+        m_resultTabs->addTab(m_rawMemoryTabs,
             translated("minidump.tab.raw_memory", "原始内存"));
     }
 

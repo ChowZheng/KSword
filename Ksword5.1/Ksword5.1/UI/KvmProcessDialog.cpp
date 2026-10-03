@@ -1,6 +1,7 @@
 #include "KvmProcessDialog.h"
 
 #include "KvmControl.h"
+#include "../../../shared/evidence/MemoryAddressInput.h"
 #include "../Framework/DestructiveActionConfirmation.h"
 #include "../Internationalization/LanguageManager.h"
 
@@ -67,19 +68,15 @@ namespace
     // 去定"（处置的入口页、注入的就地解析 LoadLibraryW），此时回填 0。
     bool parseOptionalHex(const QString& text, unsigned long long* valueOut)
     {
-        QString compact = text.trimmed();
+        const QByteArray compact = text.trimmed().toLatin1();
         if (compact.isEmpty())
         {
             *valueOut = 0;
             return true;
         }
-        if (compact.startsWith(QStringLiteral("0x"), Qt::CaseInsensitive))
-        {
-            compact = compact.mid(2);
-        }
-        bool converted = false;
-        const unsigned long long value = compact.toULongLong(&converted, 16);
-        if (!converted)
+        std::uint64_t value = 0;
+        if (!Ksword::Evidence::ParseHexAddress(
+                std::string_view(compact.constData(), static_cast<std::size_t>(compact.size())), value))
         {
             return false;
         }

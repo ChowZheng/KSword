@@ -305,6 +305,10 @@ void MemoryDock::initializeConnections()
         });
 
     connect(m_detachButton, &QPushButton::clicked, this, [this]() {
+        if (!confirmDiscardMemoryEditsForProcessChange())
+        {
+            return;
+        }
         kLogEvent detachClickEvent;
         info << detachClickEvent
             << "[MemoryDock] 点击分离按钮, currentPid="
@@ -964,64 +968,12 @@ void MemoryDock::initializeConnections()
         jumpToAddressFromUi();
         });
 
-    connect(m_hexEditorWidget, &HexEditorWidget::byteEdited, this,
-        [this](const std::uint64_t absoluteAddress, const std::uint8_t oldValue, const std::uint8_t newValue) {
-            QString errorText;
-            if (!writeSingleByteAtViewer(absoluteAddress, newValue, errorText))
-            {
-                kLogEvent viewerWriteFailEvent;
-                err << viewerWriteFailEvent
-                    << "[MemoryDock] 十六进制编辑写入失败, address="
-                    << formatAddress(absoluteAddress).toStdString()
-                    << ", error="
-                    << errorText.toStdString()
-                    << eol;
-
-                // 写入失败时把控件数据回滚到旧值，保证显示与目标进程一致。
-                m_hexEditorWidget->setByteAtAbsoluteAddress(absoluteAddress, oldValue, true);
-                // privilegePromptHandled：合并已知无写权限与错误文本两条恢复路径。
-                bool privilegePromptHandled = false;
-                if (m_attachedProcessHandle != nullptr &&
-                    !m_canReadWriteMemory &&
-                    !ks::ui::isCurrentProcessElevated())
-                {
-                    (void)ks::ui::requestAdministratorRestartForFeature(
-                        this,
-                        QStringLiteral("编辑进程内存"));
-                    privilegePromptHandled = true;
-                }
-                if (!privilegePromptHandled)
-                {
-                    privilegePromptHandled = ks::ui::promptForPrivilegeFailure(
-                        this,
-                        QStringLiteral("编辑进程内存"),
-                        errorText);
-                }
-                if (!privilegePromptHandled)
-                {
-                    QMessageBox::warning(this, "内存编辑", errorText);
-                }
-                return;
-            }
-
-            // 本地缓存同步更新，避免后续断点/书签逻辑读到旧页缓存。
-            if (absoluteAddress >= m_currentViewerAddress)
-            {
-                const std::uint64_t offset = absoluteAddress - m_currentViewerAddress;
-                if (offset < static_cast<std::uint64_t>(m_currentViewerPageBytes.size()))
-                {
-                    m_currentViewerPageBytes[static_cast<int>(offset)] = static_cast<char>(newValue);
-                }
-            }
-
-            kLogEvent viewerWriteSuccessEvent;
-            info << viewerWriteSuccessEvent
-                << "[MemoryDock] 十六进制编辑写入成功, address="
-                << formatAddress(absoluteAddress).toStdString()
-                << ", value=0x"
-                << QString("%1").arg(newValue, 2, 16, QChar('0')).toUpper().toStdString()
-                << eol;
-        });
+    connect(m_viewerMemoryEditor, &ks::ui::MemoryEditorWidget::bytesChanged,
+        this, &MemoryDock::updateMemoryViewerEditState);
+    connect(m_viewerApplyButton, &QPushButton::clicked,
+        this, &MemoryDock::applyMemoryViewerChanges);
+    connect(m_viewerDiscardButton, &QPushButton::clicked,
+        this, &MemoryDock::discardMemoryViewerChanges);
 
     connect(m_hexEditorWidget, &HexEditorWidget::aboutToShowContextMenu, this,
         [this](QMenu* menu, const std::uint64_t absoluteAddress, const bool hasByte) {
@@ -1258,18 +1210,26 @@ void MemoryDock::initializeConnections()
 
     connect(m_removeBookmarkButton, &QPushButton::clicked, this, [this]() {
         const int row = m_bookmarkTable->currentRow();
-        if (row < 0 || row >= static_cast<int>(m_bookmarkCache.size()))
+        const QTableWidgetItem* const addressItem =
+            row >= 0 ? m_bookmarkTable->item(row, 0) : nullptr;
+        if (addressItem == nullptr)
         {
             return;
         }
+        bool converted = false;
+        const std::uint64_t bookmarkId = addressItem->data(Qt::UserRole).toULongLong(&converted);
+        if (!converted || bookmarkId == 0) return;
+        const auto found = std::find_if(m_bookmarkCache.begin(), m_bookmarkCache.end(),
+            [bookmarkId](const BookmarkEntry& bookmark) { return bookmark.id == bookmarkId; });
+        if (found == m_bookmarkCache.end()) return;
         kLogEvent removeBookmarkEvent;
         info << removeBookmarkEvent
             << "[MemoryDock] 删除书签, row="
             << row
             << ", address="
-            << formatAddress(m_bookmarkCache[static_cast<std::size_t>(row)].address).toStdString()
+            << formatAddress(found->address).toStdString()
             << eol;
-        m_bookmarkCache.erase(m_bookmarkCache.begin() + row);
+        m_bookmarkCache.erase(found);
         rebuildBookmarkTable();
         });
 
@@ -1283,18 +1243,27 @@ void MemoryDock::initializeConnections()
 
     connect(m_jumpBookmarkButton, &QPushButton::clicked, this, [this]() {
         const int row = m_bookmarkTable->currentRow();
-        if (row < 0 || row >= static_cast<int>(m_bookmarkCache.size()))
+        const QTableWidgetItem* const addressItem =
+            row >= 0 ? m_bookmarkTable->item(row, 0) : nullptr;
+        if (addressItem == nullptr)
         {
             return;
         }
+        bool converted = false;
+        const std::uint64_t bookmarkId = addressItem->data(Qt::UserRole).toULongLong(&converted);
+        if (!converted || bookmarkId == 0) return;
+        const auto found = std::find_if(m_bookmarkCache.begin(), m_bookmarkCache.end(),
+            [bookmarkId](const BookmarkEntry& bookmark) { return bookmark.id == bookmarkId; });
+        if (found == m_bookmarkCache.end()) return;
+        const std::uint64_t address = found->address;
         kLogEvent jumpBookmarkEvent;
         info << jumpBookmarkEvent
             << "[MemoryDock] 跳转书签, row="
             << row
             << ", address="
-            << formatAddress(m_bookmarkCache[static_cast<std::size_t>(row)].address).toStdString()
+            << formatAddress(address).toStdString()
             << eol;
-        jumpToAddress(m_bookmarkCache[static_cast<std::size_t>(row)].address);
+        jumpToAddress(address);
         });
 
     // ========================================================
@@ -1344,21 +1313,13 @@ void MemoryDock::initializeConnections()
         resetDriverMemoryRwState();
         });
 
-    connect(m_driverMemoryHexEditor, &HexEditorWidget::byteEdited, this,
-        [this](const std::uint64_t absoluteAddress, const std::uint8_t oldValue, const std::uint8_t newValue) {
-            Q_UNUSED(oldValue);
-            if (!m_driverMemoryHasSnapshot || absoluteAddress < m_driverMemoryBaseAddress)
+    connect(m_driverMemoryEditor, &ks::ui::MemoryEditorWidget::bytesChanged, this,
+        [this]() {
+            if (!m_driverMemoryHasSnapshot)
             {
                 return;
             }
-
-            const std::uint64_t offset = absoluteAddress - m_driverMemoryBaseAddress;
-            if (offset >= static_cast<std::uint64_t>(m_driverMemoryEditedBytes.size()))
-            {
-                return;
-            }
-
-            m_driverMemoryEditedBytes[static_cast<int>(offset)] = static_cast<char>(newValue);
+            m_driverMemoryEditedBytes = m_driverMemoryEditor->data();
             std::vector<DriverDiffBlock> diffBlocks;
             collectDriverMemoryDiffBlocks(diffBlocks);
             m_driverMemoryApplyButton->setEnabled(!diffBlocks.empty());
@@ -1368,9 +1329,6 @@ void MemoryDock::initializeConnections()
                     QString("缓存已修改：差异块=%1，点击“应用差异到真实内存”后才会写入。")
                     .arg(diffBlocks.size()));
             }
-
-            // 改一个字节可能改变整条指令，派生视图必须跟着重算。
-            refreshDriverMemoryViewsFromSnapshot();
         });
 
     // 来源切换要同步调整可用控件：物理内存通道没有目标进程与模块的概念。
@@ -1417,40 +1375,6 @@ void MemoryDock::initializeConnections()
 
     connect(m_driverMemoryWriteStringButton, &QPushButton::clicked, this, [this]() {
         writeStringIntoDriverMemoryBuffer();
-        });
-
-    // 三个分段按钮互斥，只在被选中时切换视图，避免取消选中时重复触发。
-    connect(m_driverMemoryHexViewButton, &QToolButton::toggled, this, [this](bool checked) {
-        if (checked)
-        {
-            applyDriverMemoryViewMode(DriverMemoryViewMode::Hex);
-        }
-        });
-    connect(m_driverMemoryDisasmViewButton, &QToolButton::toggled, this, [this](bool checked) {
-        if (checked)
-        {
-            applyDriverMemoryViewMode(DriverMemoryViewMode::Disassembly);
-        }
-        });
-    connect(m_driverMemoryTextViewButton, &QToolButton::toggled, this, [this](bool checked) {
-        if (checked)
-        {
-            applyDriverMemoryViewMode(DriverMemoryViewMode::Text);
-        }
-        });
-
-    connect(m_driverMemoryTextEncodingCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
-        [this](int) {
-            // 编码只影响文本视图，其它视图无需重建。
-            if (m_driverMemoryViewMode == DriverMemoryViewMode::Text)
-            {
-                rebuildDriverMemoryTextView();
-            }
-        });
-
-    connect(m_driverMemoryDisasmTable, &QTableWidget::customContextMenuRequested, this,
-        [this](const QPoint& localPosition) {
-            showDriverMemoryDisassemblyContextMenu(localPosition);
         });
 
     // ========================================================

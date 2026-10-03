@@ -14,9 +14,13 @@
 class QComboBox;
 class QLabel;
 class QLineEdit;
-class QPlainTextEdit;
 class QPushButton;
 class QTableWidget;
+
+namespace ks::ui
+{
+    class MemoryEditorWidget;
+}
 
 class KvmViewDialog final : public QDialog
 {
@@ -29,25 +33,41 @@ private:
     // buildUi：构造控件树与信号连接。
     void buildUi();
     // refreshViews：后台查询已安装视图并刷新表格。
-    void refreshViews();
+    void refreshViews(bool preserveStatus = false);
     // startAdd/startRemove/startClear：发起一次后台视图操作。
     void startAdd();
     void startRemove();
     void startClear();
-    // setBusy：忙碌期间禁用全部动作按钮。
+    void startReadShadow();
+    void invalidateShadowSnapshot();
+    void updateShadowPreview();
+    bool parseTargetRequest(unsigned long long* addressOut, bool* virtualOut,
+        unsigned long long* cr3Out, unsigned long* processIdOut);
+    // setBusy：忙碌期间锁定表单与动作，保持操作参数一致。
     void setBusy(bool busy);
     // updateEnabledState：按写权限与忙碌状态刷新控件可用性。
     void updateEnabledState();
+    // updateTargetHint：显示目标所在页与原始页内偏移。
+    void updateTargetHint();
 
     QComboBox* m_kindBox = nullptr;
+    QComboBox* m_addressKindBox = nullptr;
     QComboBox* m_seedBox = nullptr;
     QLineEdit* m_addressEdit = nullptr;
-    QPlainTextEdit* m_shadowEdit = nullptr;
+    QLineEdit* m_processIdEdit = nullptr;
+    QLineEdit* m_cr3Edit = nullptr;
+    ks::ui::MemoryEditorWidget* m_shadowEditor = nullptr;
+    QPushButton* m_readShadowButton = nullptr;
+    QPushButton* m_discardShadowButton = nullptr;
     QTableWidget* m_viewTable = nullptr;
     QPushButton* m_addButton = nullptr;
     QPushButton* m_removeButton = nullptr;
     QPushButton* m_clearButton = nullptr;
     QPushButton* m_refreshButton = nullptr;
     QLabel* m_statusLabel = nullptr;
+    QLabel* m_targetHintLabel = nullptr;
     bool m_busy = false;
+    bool m_shadowSnapshotValid = false;
+    unsigned long long m_shadowPhysicalAddress = 0;
+    unsigned long long m_shadowReadSequence = 0;
 };

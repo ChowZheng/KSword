@@ -1476,6 +1476,10 @@ bool MemoryDock::attachToProcess(
         << (showMessage ? "true" : "false")
         << eol;
 
+    if (!confirmDiscardMemoryEditsForProcessChange())
+    {
+        return false;
+    }
     // 附加前先清理旧进程上下文，避免残留句柄。
     detachProcess();
 
@@ -1540,6 +1544,7 @@ bool MemoryDock::attachToProcess(
     m_attachedProcessHandle = processHandle;
     m_attachedPid = pid;
     m_attachedProcessName = processName;
+    refreshBookmarkValues();
     updateStatusBarText();
     syncTamperDetectionTargets();
 
@@ -1707,6 +1712,7 @@ void MemoryDock::detachProcess()
     m_attachedPid = 0;
     m_attachedProcessName.clear();
     m_canReadWriteMemory = false;
+    refreshBookmarkValues();
 
     // 分离时清理依赖上下文的数据缓存。
     m_moduleCache.clear();
@@ -1745,11 +1751,7 @@ void MemoryDock::detachProcess()
     {
         m_processMemoryEvidenceStatusLabel->setText(QStringLiteral("状态：请先附加进程。"));
     }
-    if (m_hexEditorWidget != nullptr)
-    {
-        m_hexEditorWidget->setEditable(false);
-        m_hexEditorWidget->clearData();
-    }
+    clearMemoryViewerSnapshot();
     resetDriverMemoryRwState();
     m_viewerStatusLabel->setText("未附加进程。");
 

@@ -6,6 +6,7 @@
 #include "../../../shared/driver/KswordArkDdmaPlan.h"
 
 #include <algorithm>
+#include <limits>
 #include <vector>
 
 // ============================================================
@@ -36,6 +37,13 @@ namespace ksword::memory_backend
         // x64 内核高半区起点。规范形式的地址要么低于 0x0000800000000000，
         // 要么不低于 0xFFFF800000000000，中间是不可用的空洞。
         constexpr std::uint64_t kKernelSpaceStart = 0xFFFF800000000000ULL;
+
+        bool isValidMemoryRange(const std::uint64_t address, const std::uint64_t length)
+        {
+            return length != 0ULL &&
+                length <= static_cast<std::uint64_t>((std::numeric_limits<qsizetype>::max)()) &&
+                address <= (std::numeric_limits<std::uint64_t>::max)() - (length - 1ULL);
+        }
 
         // ddmaFlagsForRead / ddmaFlagsForWrite：
         // 把"会话已确认"翻译成协议 flags。LBA_VALID 与 ACKNOWLEDGED 必须同时
@@ -389,6 +397,11 @@ namespace ksword::memory_backend
                 static_cast<SIZE_T>(payload.size()),
                 &bytesWritten);
             const DWORD writeError = (writeOk == FALSE) ? ::GetLastError() : ERROR_SUCCESS;
+            const BOOL flushed = bytesWritten == 0 ? TRUE : ::FlushInstructionCache(
+                processHandle,
+                reinterpret_cast<LPCVOID>(static_cast<std::uintptr_t>(virtualAddress)),
+                bytesWritten);
+            const DWORD flushError = flushed == FALSE ? ::GetLastError() : ERROR_SUCCESS;
             ::CloseHandle(processHandle);
 
             if (bytesWritten == 0)
@@ -397,8 +410,15 @@ namespace ksword::memory_backend
                     .arg(writeError);
                 return outcome;
             }
-            outcome.ok = true;
             outcome.bytesDone = static_cast<std::uint64_t>(bytesWritten);
+            if (flushed == FALSE)
+            {
+                outcome.failureText = QStringLiteral(
+                    "R3 通道写入已完成，但刷新指令缓存失败，win32=%1。")
+                    .arg(flushError);
+                return outcome;
+            }
+            outcome.ok = true;
             outcome.partial = (static_cast<qsizetype>(bytesWritten) < payload.size());
             return outcome;
         }
@@ -466,8 +486,9 @@ namespace ksword::memory_backend
             QByteArray collected;
             bool allDirectWindow = true;
             bool anyTransferred = false;
+            std::uint64_t offset = 0ULL;
 
-            for (std::uint64_t offset = 0ULL; offset < totalBytes;)
+            for (; offset < totalBytes;)
             {
                 const std::uint64_t remaining = totalBytes - offset;
                 const unsigned long chunk = static_cast<unsigned long>(
@@ -482,7 +503,7 @@ namespace ksword::memory_backend
                     isWrite
                         ? reinterpret_cast<const unsigned char*>(payload->constData() + offset)
                         : nullptr,
-                    /*requireWindow*/ false,
+                    /*requireWindow*/ isWrite,
                     /*uiConfirmed*/ true,
                     processId);
 
@@ -493,6 +514,7 @@ namespace ksword::memory_backend
                         : QStringLiteral("R-1 内存访问通信失败：%1")
                               .arg(QString::fromStdString(result.io.message));
                     outcome.bytesDone = offset;
+                    outcome.partial = offset != 0ULL;
                     outcome.data = collected;
                     return outcome;
                 }
@@ -502,16 +524,25 @@ namespace ksword::memory_backend
                 {
                     outcome.failureText = describeHvmMemoryStatus(status);
                     outcome.bytesDone = offset;
+                    outcome.partial = offset != 0ULL;
                     outcome.data = collected;
                     return outcome;
                 }
 
-                anyTransferred = true;
+                const unsigned long done = result.response.bytesTransferred;
+                if (done > chunk)
+                {
+                    outcome.failureText = QStringLiteral("R-1 返回的完成长度超出请求分片，已停止访问。");
+                    outcome.bytesDone = offset;
+                    outcome.partial = offset != 0ULL;
+                    outcome.data = collected;
+                    return outcome;
+                }
+                anyTransferred = anyTransferred || done != 0UL;
                 if (result.response.usedDirectWindow == 0U)
                 {
                     allDirectWindow = false;
                 }
-                const unsigned long done = result.response.bytesTransferred;
                 if (!isWrite && done != 0UL)
                 {
                     collected.append(
@@ -526,7 +557,7 @@ namespace ksword::memory_backend
                     outcome.partial = true;
                     break;
                 }
-                if (status == KSWORD_ARK_HVM_MEMORY_STATUS_PARTIAL)
+                if (done != chunk || status == KSWORD_ARK_HVM_MEMORY_STATUS_PARTIAL)
                 {
                     outcome.partial = true;
                     break;
@@ -538,14 +569,14 @@ namespace ksword::memory_backend
                 outcome.failureText = QStringLiteral("R-1 内存访问未完成任何分片。");
                 return outcome;
             }
-            outcome.ok = true;
-            outcome.bytesDone = isWrite
-                ? static_cast<std::uint64_t>(totalBytes)
-                : static_cast<std::uint64_t>(collected.size());
+            outcome.partial = outcome.partial || offset < totalBytes;
+            outcome.ok = !isWrite || !outcome.partial;
+            outcome.bytesDone = offset;
             outcome.data = collected;
-            if (!isWrite && static_cast<std::uint64_t>(collected.size()) < totalBytes)
+            if (outcome.partial)
             {
-                outcome.partial = true;
+                outcome.failureText = QStringLiteral("R-1 内存访问仅完成 %1/%2 字节，已停止访问。")
+                    .arg(offset).arg(totalBytes);
             }
             // 没走成私有窗口时**不能静默成功**：那一次读走的正是我们想避开的
             // MmCopyMemory，拿它去跟 R0 比对什么都证明不了，而界面上两者看起来
@@ -553,7 +584,7 @@ namespace ksword::memory_backend
             // 的同时保持 ok=true——数据是真的，只是它的独立性没有成立。
             if (!allDirectWindow)
             {
-                outcome.failureText = QStringLiteral("注意：本次访问回退到了 MmCopyMemory（私有页表窗口未标定），因此它与 R0 通道不再是两条独立的路径，两者一致不能用来排除内存管理器被挂钩。");
+                outcome.failureText += QStringLiteral("注意：本次访问回退到了 MmCopyMemory（私有页表窗口未标定），因此它与 R0 通道不再是两条独立的路径，两者一致不能用来排除内存管理器被挂钩。");
             }
             return outcome;
         }
@@ -659,6 +690,11 @@ namespace ksword::memory_backend
             outcome.failureText = QStringLiteral("读取长度为 0。");
             return outcome;
         }
+        if (!isValidMemoryRange(physicalAddress, lengthBytes))
+        {
+            outcome.failureText = QStringLiteral("内存访问范围超出地址空间或缓冲区容量。");
+            return outcome;
+        }
 
         if (backend == MemoryAccessBackend::UserMode)
         {
@@ -743,6 +779,15 @@ namespace ksword::memory_backend
                 return outcome;
             }
             outcome.data.append(chunk.data);
+            if (chunk.scratchDirty)
+            {
+                outcome.bytesDone = static_cast<std::uint64_t>(outcome.data.size());
+                outcome.partial = outcome.bytesDone < lengthBytes;
+                outcome.ok = !outcome.partial;
+                outcome.failureText = QStringLiteral("DDMA 暂存扇区未能还原，已停止后续读取；已读取 %1/%2 字节。")
+                    .arg(outcome.bytesDone).arg(lengthBytes);
+                return outcome;
+            }
             cursor += chunkLength;
             remaining -= chunkLength;
         }
@@ -763,6 +808,11 @@ namespace ksword::memory_backend
         if (bytes.isEmpty())
         {
             outcome.failureText = QStringLiteral("写入长度为 0。");
+            return outcome;
+        }
+        if (!isValidMemoryRange(physicalAddress, static_cast<std::uint64_t>(bytes.size())))
+        {
+            outcome.failureText = QStringLiteral("内存访问范围超出地址空间或缓冲区容量。");
             return outcome;
         }
 
@@ -887,6 +937,11 @@ namespace ksword::memory_backend
             outcome.failureText = QStringLiteral("读取长度为 0。");
             return outcome;
         }
+        if (!isValidMemoryRange(virtualAddress, lengthBytes))
+        {
+            outcome.failureText = QStringLiteral("内存访问范围超出地址空间或缓冲区容量。");
+            return outcome;
+        }
 
         if (backend == MemoryAccessBackend::UserMode)
         {
@@ -982,13 +1037,12 @@ namespace ksword::memory_backend
                 client.translateVirtualAddress(processId, cursor);
             if (!translation.io.ok || !translation.resolved)
             {
-                // 这一页翻译不出物理地址：按不可读处理，零填充并标记为部分结果。
-                // 不静默跳过，也不整体失败——内存查看器需要能继续展示后面的页。
-                outcome.data.append(static_cast<qsizetype>(chunkLength), '\0');
-                outcome.partial = true;
-                cursor += chunkLength;
-                remaining -= chunkLength;
-                continue;
+                // 未映射字节不是零值：不能把伪造的零交给搜索、比较或编辑器。
+                outcome.failureText = QStringLiteral("虚拟地址 %1 无法翻译，DDMA 读取已停止；已读取 %2 字节。")
+                    .arg(formatHex(cursor)).arg(outcome.data.size());
+                outcome.partial = !outcome.data.isEmpty();
+                outcome.bytesDone = static_cast<std::uint64_t>(outcome.data.size());
+                return outcome;
             }
 
             // translateVirtualAddress 返回的是整个映射的物理基址加页内偏移，
@@ -1010,6 +1064,15 @@ namespace ksword::memory_backend
                 return outcome;
             }
             outcome.data.append(chunk.data);
+            if (chunk.scratchDirty)
+            {
+                outcome.bytesDone = static_cast<std::uint64_t>(outcome.data.size());
+                outcome.partial = outcome.bytesDone < lengthBytes;
+                outcome.ok = !outcome.partial;
+                outcome.failureText = QStringLiteral("DDMA 暂存扇区未能还原，已停止后续读取；已读取 %1/%2 字节。")
+                    .arg(outcome.bytesDone).arg(lengthBytes);
+                return outcome;
+            }
             cursor += chunkLength;
             remaining -= chunkLength;
         }
@@ -1031,6 +1094,11 @@ namespace ksword::memory_backend
         if (bytes.isEmpty())
         {
             outcome.failureText = QStringLiteral("写入长度为 0。");
+            return outcome;
+        }
+        if (!isValidMemoryRange(virtualAddress, static_cast<std::uint64_t>(bytes.size())))
+        {
+            outcome.failureText = QStringLiteral("内存访问范围超出地址空间或缓冲区容量。");
             return outcome;
         }
 

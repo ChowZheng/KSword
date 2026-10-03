@@ -38,6 +38,12 @@ void MemoryDock::jumpToAddressFromUi()
 
 void MemoryDock::jumpToAddress(const std::uint64_t address)
 {
+    if (!confirmDiscardMemoryViewerChanges())
+    {
+        m_viewAddressEdit->setText(formatAddress(m_currentViewerAddress));
+        return;
+    }
+
     // 跳转日志：记录目标地址并切换页面。
     kLogEvent jumpAddressEvent;
     info << jumpAddressEvent
@@ -56,6 +62,11 @@ void MemoryDock::jumpToAddress(const std::uint64_t address)
 
 void MemoryDock::reloadMemoryViewerPage()
 {
+    if (!confirmDiscardMemoryViewerChanges())
+    {
+        return;
+    }
+
     // 页面重载日志：输出当前查看地址。
     kLogEvent reloadViewerStartEvent;
     dbg << reloadViewerStartEvent
@@ -67,11 +78,7 @@ void MemoryDock::reloadMemoryViewerPage()
     if (m_attachedProcessHandle == nullptr)
     {
         m_currentViewerPageBytes.clear();
-        if (m_hexEditorWidget != nullptr)
-        {
-            m_hexEditorWidget->setEditable(false);
-            m_hexEditorWidget->clearData();
-        }
+        clearMemoryViewerSnapshot();
         m_viewProtectLabel->setText("保护属性: -");
         m_viewerStatusLabel->setText("未附加进程。");
         kLogEvent reloadViewerNoAttachEvent;
@@ -100,28 +107,14 @@ void MemoryDock::reloadMemoryViewerPage()
         if (!ddmaOutcome.ok)
         {
             m_currentViewerPageBytes.clear();
-            if (m_hexEditorWidget != nullptr)
-            {
-                m_hexEditorWidget->setEditable(false);
-                m_hexEditorWidget->clearData();
-            }
+            clearMemoryViewerSnapshot();
             m_viewerStatusLabel->setText(
                 QStringLiteral("DDMA 读取失败：%1").arg(ddmaOutcome.failureText));
             return;
         }
 
         m_currentViewerPageBytes = ddmaOutcome.data;
-        if (m_hexEditorWidget != nullptr)
-        {
-            // DDMA 快照按只读展示：本页的单字节写入走 WriteProcessMemory，
-            // 与 DDMA 不是同一条通路，允许编辑会让用户以为改的是 DMA 视图。
-            m_hexEditorWidget->setEditable(false);
-            m_hexEditorWidget->setBytesPerRow(16);
-            m_hexEditorWidget->setRegionData(
-                m_currentViewerPageBytes.constData(),
-                static_cast<std::size_t>(m_currentViewerPageBytes.size()),
-                m_currentViewerAddress);
-        }
+        loadMemoryViewerSnapshot(false);
         QString ddmaStatusText = QStringLiteral("DDMA 读取完成：%1 字节（只读展示）。")
             .arg(m_currentViewerPageBytes.size());
         if (ddmaOutcome.partial)
@@ -156,11 +149,7 @@ void MemoryDock::reloadMemoryViewerPage()
     if (!readOutcome.ok)
     {
         m_currentViewerPageBytes.clear();
-        if (m_hexEditorWidget != nullptr)
-        {
-            m_hexEditorWidget->setEditable(false);
-            m_hexEditorWidget->clearData();
-        }
+        clearMemoryViewerSnapshot();
 
         // 失败时必须把**这个地址在目标进程里到底是什么状态**查出来。原先
         // VirtualQueryEx 只在成功路径上跑，于是报错只有一个 win32 错误码，
@@ -246,16 +235,11 @@ void MemoryDock::reloadMemoryViewerPage()
     bytesRead = static_cast<SIZE_T>(m_currentViewerPageBytes.size());
     const bool partialRead = readOutcome.partial || (bytesRead < kHexPageBytes);
 
-    // 投影到统一十六进制组件。
-    if (m_hexEditorWidget != nullptr)
-    {
-        m_hexEditorWidget->setEditable(m_canReadWriteMemory);
-        m_hexEditorWidget->setBytesPerRow(16);
-        m_hexEditorWidget->setRegionData(
-            m_currentViewerPageBytes.constData(),
-            static_cast<std::size_t>(m_currentViewerPageBytes.size()),
-            m_currentViewerAddress);
-    }
+    // 三种视图使用同一份快照，修改先保存在缓存，Apply 才写回目标。
+    loadMemoryViewerSnapshot(
+        !ksword::memory_backend::isKernelVirtualAddress(m_currentViewerAddress)
+        && (selectedBackend != ksword::memory_backend::MemoryAccessBackend::UserMode
+            || m_canReadWriteMemory));
 
     // 更新当前地址保护属性显示，帮助用户判断是否可写/可执行。
     MEMORY_BASIC_INFORMATION mbi{};
@@ -328,6 +312,10 @@ void MemoryDock::reloadMemoryViewerPage()
             .arg(bytesRead));
     }
 
+    if (!readOutcome.failureText.isEmpty())
+        m_viewerStatusLabel->setText(m_viewerStatusLabel->text()
+            + QStringLiteral(" ") + readOutcome.failureText);
+
     // 刷新完成日志：记录本页成功读取字节数。
     kLogEvent reloadViewerFinishEvent;
     dbg << reloadViewerFinishEvent
@@ -336,65 +324,253 @@ void MemoryDock::reloadMemoryViewerPage()
         << eol;
 }
 
-bool MemoryDock::writeSingleByteAtViewer(
-    const std::uint64_t absoluteAddress,
-    const std::uint8_t value,
-    QString& errorTextOut)
+bool MemoryDock::confirmDiscardMemoryViewerChanges()
 {
-    // 单字节写入入口日志：输出目标地址与目标值。
-    kLogEvent writeByteStartEvent;
-    dbg << writeByteStartEvent
-        << "[MemoryDock] writeSingleByteAtViewer: 请求写入, address="
-        << formatAddress(absoluteAddress).toStdString()
-        << ", value=0x"
-        << QString("%1").arg(value, 2, 16, QChar('0')).toUpper().toStdString()
-        << eol;
-
-    // 未附加进程或句柄只读时，禁止写入并明确返回失败原因。
-    if (m_attachedProcessHandle == nullptr)
+    if (m_viewerMemoryEditor == nullptr || !m_viewerMemoryEditor->hasChanges())
     {
-        errorTextOut = "当前未附加进程，无法写入。";
-        kLogEvent writeByteNoAttachEvent;
-        warn << writeByteNoAttachEvent
-            << "[MemoryDock] writeSingleByteAtViewer: 未附加进程。"
-            << eol;
+        return true;
+    }
+    if (QMessageBox::question(
+            this, QStringLiteral("内存编辑"),
+            QStringLiteral("当前缓存存在未应用的改动。是否丢弃改动并读取新快照？"),
+            QMessageBox::Yes | QMessageBox::No, QMessageBox::No) != QMessageBox::Yes)
+    {
         return false;
     }
-    if (!m_canReadWriteMemory)
-    {
-        errorTextOut = "当前句柄为只读权限，无法写入内存。";
-        kLogEvent writeByteReadonlyEvent;
-        warn << writeByteReadonlyEvent
-            << "[MemoryDock] writeSingleByteAtViewer: 当前句柄只读，拒绝写入。"
-            << eol;
-        return false;
-    }
-
-    SIZE_T bytesWritten = 0;
-    const BOOL writeOk = ::WriteProcessMemory(
-        m_attachedProcessHandle,
-        reinterpret_cast<LPVOID>(static_cast<std::uintptr_t>(absoluteAddress)),
-        &value,
-        sizeof(value),
-        &bytesWritten);
-    if (writeOk == FALSE || bytesWritten != sizeof(value))
-    {
-        errorTextOut = QString("WriteProcessMemory 失败，错误码=%1").arg(::GetLastError());
-        kLogEvent writeByteFailEvent;
-        err << writeByteFailEvent
-            << "[MemoryDock] writeSingleByteAtViewer: 写入失败, error="
-            << ::GetLastError()
-            << eol;
-        return false;
-    }
-
-    kLogEvent writeByteSuccessEvent;
-    info << writeByteSuccessEvent
-        << "[MemoryDock] writeSingleByteAtViewer: 写入成功, address="
-        << formatAddress(absoluteAddress).toStdString()
-        << eol;
-
+    discardMemoryViewerChanges();
     return true;
+}
+
+bool MemoryDock::confirmDiscardMemoryEditsForProcessChange()
+{
+    const bool viewerChanged = m_viewerMemoryEditor != nullptr && m_viewerMemoryEditor->hasChanges();
+    const bool driverChanged = m_driverMemoryEditor != nullptr && m_driverMemoryEditor->hasChanges();
+    if (!viewerChanged && !driverChanged)
+    {
+        return true;
+    }
+    return QMessageBox::question(this, QStringLiteral("内存编辑"),
+        QStringLiteral("丢弃已读取的缓存与未应用的改动"),
+        QMessageBox::Yes | QMessageBox::No, QMessageBox::No) == QMessageBox::Yes;
+}
+
+void MemoryDock::loadMemoryViewerSnapshot(const bool editable, const bool preserveArchitecture)
+{
+    if (m_viewerMemoryEditor == nullptr)
+    {
+        return;
+    }
+    BOOL wow64 = FALSE;
+    const bool isX86 = m_attachedProcessHandle != nullptr
+        && ::IsWow64Process(m_attachedProcessHandle, &wow64) != FALSE
+        && wow64 != FALSE
+        && !ksword::memory_backend::isKernelVirtualAddress(m_currentViewerAddress);
+    m_viewerSnapshotPid = m_attachedPid;
+    m_viewerSnapshotAttachmentGeneration = m_processAttachmentGeneration.load();
+    m_viewerSnapshotBackend = currentViewerBackend();
+    m_viewerSnapshotDdmaSession = currentDdmaSession();
+    const auto architecture = preserveArchitecture ? m_viewerMemoryEditor->currentArchitecture()
+        : (isX86 ? ks::ui::DisassemblyArchitecture::X86 : ks::ui::DisassemblyArchitecture::X64);
+    m_viewerMemoryEditor->setSnapshot(
+        m_currentViewerPageBytes, m_currentViewerAddress,
+        architecture,
+        m_currentViewerAddress,
+        QStringLiteral("memory_viewer_%1_%2_%3_%4").arg(m_viewerSnapshotPid)
+            .arg(m_viewerSnapshotAttachmentGeneration).arg(static_cast<int>(m_viewerSnapshotBackend))
+            .arg(ksword::memory_backend::ddmaSessionGeneration()));
+    m_viewerMemoryEditor->setEditable(editable);
+    updateMemoryViewerEditState();
+}
+
+void MemoryDock::clearMemoryViewerSnapshot()
+{
+    m_currentViewerPageBytes.clear();
+    m_viewerSnapshotPid = 0;
+    if (m_viewerMemoryEditor != nullptr)
+    {
+        m_viewerMemoryEditor->clear();
+        m_viewerMemoryEditor->setEditable(false);
+    }
+    updateMemoryViewerEditState();
+}
+
+void MemoryDock::updateMemoryViewerEditState()
+{
+    const bool changed = m_viewerMemoryEditor != nullptr && m_viewerMemoryEditor->hasChanges();
+    if (m_viewerApplyButton != nullptr)
+    {
+        m_viewerApplyButton->setEnabled(changed && m_hexEditorWidget->isEditable());
+    }
+    if (m_viewerDiscardButton != nullptr)
+    {
+        m_viewerDiscardButton->setEnabled(changed);
+    }
+    if (changed && m_viewerStatusLabel != nullptr)
+    {
+        m_viewerStatusLabel->setText(QStringLiteral(
+            "缓存已修改，应用差异后才会写入真实内存。"));
+    }
+}
+
+void MemoryDock::discardMemoryViewerChanges()
+{
+    if (m_viewerMemoryEditor != nullptr)
+    {
+        m_viewerMemoryEditor->discardChanges();
+    }
+    updateMemoryViewerEditState();
+    if (m_viewerStatusLabel != nullptr)
+    {
+        m_viewerStatusLabel->setText(QStringLiteral("已丢弃未应用的改动。"));
+    }
+}
+
+void MemoryDock::applyMemoryViewerChanges()
+{
+    if (m_viewerMemoryEditor == nullptr || !m_viewerMemoryEditor->hasChanges())
+    {
+        return;
+    }
+    using namespace ksword::memory_backend;
+    DWORD targetExitCode = 0;
+    if (m_attachedProcessHandle == nullptr || m_viewerSnapshotPid != m_attachedPid
+        || m_viewerSnapshotAttachmentGeneration != m_processAttachmentGeneration.load()
+        || m_viewerSnapshotBackend != currentViewerBackend()
+        || m_viewerSnapshotBackend == MemoryAccessBackend::Ddma
+        || isKernelVirtualAddress(m_currentViewerAddress)
+        || ::GetExitCodeProcess(m_attachedProcessHandle, &targetExitCode) == FALSE
+        || targetExitCode != STILL_ACTIVE)
+    {
+        QMessageBox::warning(this, QStringLiteral("内存编辑"),
+            QStringLiteral("目标进程或访问后端已改变，请重新读取后再应用改动。"));
+        return;
+    }
+    const auto blocks = m_viewerMemoryEditor->diffBlocks();
+    const auto snapshotPid = m_viewerSnapshotPid;
+    const auto snapshotGeneration = m_viewerSnapshotAttachmentGeneration;
+    const auto snapshotBase = m_currentViewerAddress;
+    const auto snapshotBackend = m_viewerSnapshotBackend;
+    const QByteArray snapshotOriginal = m_viewerMemoryEditor->originalBytes();
+    const QByteArray snapshotEdited = m_viewerMemoryEditor->data();
+    const auto stillCurrent = [&]() {
+        DWORD exitCode = 0;
+        return m_viewerSnapshotPid == snapshotPid && m_attachedPid == snapshotPid
+            && m_viewerSnapshotAttachmentGeneration == snapshotGeneration
+            && m_processAttachmentGeneration.load() == snapshotGeneration
+            && m_currentViewerAddress == snapshotBase
+            && m_viewerSnapshotBackend == snapshotBackend && currentViewerBackend() == snapshotBackend
+            && m_viewerMemoryEditor->originalBytes() == snapshotOriginal
+            && m_viewerMemoryEditor->data() == snapshotEdited
+            && m_attachedProcessHandle != nullptr
+            && ::GetExitCodeProcess(m_attachedProcessHandle, &exitCode) != FALSE
+            && exitCode == STILL_ACTIVE;
+    };
+    // 写入前逐块复核基线；任一块变化就不开始提交，避免覆盖外部工具的最新修改。
+    for (const auto& block : blocks)
+    {
+        const AccessOutcome live = readVirtual(m_viewerSnapshotBackend,
+            m_viewerSnapshotDdmaSession, m_viewerSnapshotPid,
+            block.address, static_cast<std::uint64_t>(block.originalBytes.size()));
+        if (!live.ok || live.partial || live.data != block.originalBytes)
+        {
+            const QString reason = live.ok
+                ? QStringLiteral("目标字节已改变，请重新读取后再编辑。")
+                : live.failureText;
+            QMessageBox::warning(this, QStringLiteral("内存编辑"), reason);
+            return;
+        }
+    }
+
+    std::uint64_t written = 0;
+    QString failureText;
+    bool forceApproved = false;
+    for (const auto& block : blocks)
+    {
+        AccessOutcome outcome = writeVirtual(m_viewerSnapshotBackend,
+            m_viewerSnapshotDdmaSession, m_viewerSnapshotPid,
+            block.address, block.bytes, forceApproved);
+        if (outcome.forceRequired && !forceApproved
+            && confirmForceDriverMemoryWrite(block.address,
+                static_cast<std::uint32_t>(block.bytes.size()), outcome.failureText, snapshotPid))
+        {
+            if (!stillCurrent())
+            {
+                QMessageBox::warning(this, QStringLiteral("内存编辑"),
+                    QStringLiteral("目标进程或访问后端已改变，请重新读取后再应用改动。"));
+                return;
+            }
+            forceApproved = true;
+            outcome = writeVirtual(m_viewerSnapshotBackend,
+                m_viewerSnapshotDdmaSession, m_viewerSnapshotPid,
+                block.address, block.bytes, true);
+        }
+        written += outcome.bytesDone;
+        if (!outcome.ok || outcome.bytesDone != static_cast<std::uint64_t>(block.bytes.size()))
+        {
+            failureText = outcome.failureText.isEmpty()
+                ? QStringLiteral("写入未完成。") : outcome.failureText;
+            break;
+        }
+        ::FlushInstructionCache(m_attachedProcessHandle,
+            reinterpret_cast<LPCVOID>(static_cast<std::uintptr_t>(block.address)),
+            static_cast<SIZE_T>(block.bytes.size()));
+        const AccessOutcome verified = readVirtual(m_viewerSnapshotBackend,
+            m_viewerSnapshotDdmaSession, m_viewerSnapshotPid,
+            block.address, static_cast<std::uint64_t>(block.bytes.size()));
+        if (!verified.ok || verified.partial || verified.data != block.bytes)
+        {
+            failureText = QStringLiteral("写入后的回读结果与编辑缓存不一致。");
+            break;
+        }
+    }
+
+    if (!stillCurrent())
+    {
+        QMessageBox::warning(this, QStringLiteral("内存编辑"),
+            QStringLiteral("目标进程或访问后端已改变，请重新读取后再应用改动。"));
+        return;
+    }
+    // 完整回读后建立实际内存基线；部分写入失败也不得把编辑缓存当作成功结果。
+    const AccessOutcome actual = readVirtual(m_viewerSnapshotBackend,
+        m_viewerSnapshotDdmaSession, m_viewerSnapshotPid,
+        m_currentViewerAddress, static_cast<std::uint64_t>(m_currentViewerPageBytes.size()));
+    if (actual.ok && !actual.partial)
+    {
+        for (const auto& block : blocks)
+        {
+            const qsizetype offset = static_cast<qsizetype>(block.address - m_currentViewerAddress);
+            if (actual.data.mid(offset, block.bytes.size()) != block.bytes)
+            {
+                failureText = QStringLiteral("写入后的回读结果与编辑缓存不一致。");
+                break;
+            }
+        }
+    }
+    if (actual.ok && !actual.partial && !actual.data.isEmpty())
+    {
+        m_currentViewerPageBytes = actual.data;
+        loadMemoryViewerSnapshot(true, true);
+    }
+    else
+    {
+        clearMemoryViewerSnapshot();
+    }
+    if (!failureText.isEmpty() || !actual.ok || actual.partial || actual.data.isEmpty())
+    {
+        const QString text = QStringLiteral("应用未完成：已写入 %1 字节。%2")
+            .arg(static_cast<qulonglong>(written))
+            .arg(!failureText.isEmpty() ? failureText
+                : (actual.failureText.isEmpty()
+                    ? QStringLiteral("写入后的回读结果与编辑缓存不一致。") : actual.failureText));
+        m_viewerStatusLabel->setText(text);
+        if (!ks::ui::promptForPrivilegeFailure(this, QStringLiteral("编辑进程内存"), text))
+        {
+            QMessageBox::warning(this, QStringLiteral("内存编辑"), text);
+        }
+        return;
+    }
+    m_viewerStatusLabel->setText(QStringLiteral("应用完成并已回读：%1 字节。")
+        .arg(static_cast<qulonglong>(written)));
 }
 
 bool MemoryDock::addBreakpointByAddress(
@@ -652,27 +828,14 @@ void MemoryDock::addBookmarkByAddress(const std::uint64_t address, const QString
     }
 
     BookmarkEntry bookmark{};
+    bookmark.id = ++m_nextBookmarkId;
     bookmark.address = address;
     bookmark.noteText = noteText;
     bookmark.addTimeText = QDateTime::currentDateTime().toString("yyyy-MM-dd HH:mm:ss");
 
-    // 添加时尽力读取一份初始值，失败不阻断添加流程。
-    if (m_attachedProcessHandle != nullptr)
-    {
-        QByteArray initialBytes(8, '\0');
-        SIZE_T bytesRead = 0;
-        if (::ReadProcessMemory(
-            m_attachedProcessHandle,
-            reinterpret_cast<LPCVOID>(static_cast<std::uintptr_t>(address)),
-            initialBytes.data(),
-            static_cast<SIZE_T>(initialBytes.size()),
-            &bytesRead) != FALSE && bytesRead > 0)
-        {
-            bookmark.lastValueBytes = initialBytes.left(static_cast<int>(bytesRead));
-        }
-    }
-
+    // 初始值也由所选后端异步读取，不能先用 R3 值冒充其它后端的结果。
     m_bookmarkCache.push_back(std::move(bookmark));
+    refreshBookmarkValues();
     kLogEvent addBookmarkFinishEvent;
     info << addBookmarkFinishEvent
         << "[MemoryDock] addBookmarkByAddress: 添加完成, totalBookmarkCount="
@@ -682,6 +845,14 @@ void MemoryDock::addBookmarkByAddress(const std::uint64_t address, const QString
 
 void MemoryDock::rebuildBookmarkTable()
 {
+    if (m_bookmarkTable == nullptr) return;
+    const QPointer<MemoryDock> safeThis(this);
+    if (ks::ui::DeferTableUiCommitIfContextMenuOpen(
+        this, QStringLiteral("memory-bookmark-table"), { m_bookmarkTable },
+        [safeThis]() { if (!safeThis.isNull()) safeThis->rebuildBookmarkTable(); }))
+    {
+        return;
+    }
     // 重建书签表日志：记录当前书签数量。
     kLogEvent rebuildBookmarkEvent;
     dbg << rebuildBookmarkEvent
@@ -690,79 +861,222 @@ void MemoryDock::rebuildBookmarkTable()
         << eol;
 
     // 书签表每次全量重建，逻辑清晰且数量通常不大，维护成本最低。
+    const QTableWidgetItem* const selectedAddress = m_bookmarkTable->item(m_bookmarkTable->currentRow(), 0);
+    const std::uint64_t selectedId = selectedAddress != nullptr
+        ? selectedAddress->data(Qt::UserRole).toULongLong() : 0;
+    const bool sortingEnabled = m_bookmarkTable->isSortingEnabled();
+    m_bookmarkTable->setSortingEnabled(false);
     m_bookmarkTable->setRowCount(static_cast<int>(m_bookmarkCache.size()));
     for (int row = 0; row < static_cast<int>(m_bookmarkCache.size()); ++row)
     {
         const BookmarkEntry& bookmark = m_bookmarkCache[static_cast<std::size_t>(row)];
-        m_bookmarkTable->setItem(row, 0, new QTableWidgetItem(formatAddress(bookmark.address)));
+        auto* const addressItem = new QTableWidgetItem(formatAddress(bookmark.address));
+        addressItem->setData(Qt::UserRole, static_cast<qulonglong>(bookmark.id));
+        m_bookmarkTable->setItem(row, 0, addressItem);
 
         // 书签“当前值”默认按十六进制字节串展示，通用于未知变量类型。
-        const QString valueText = bytesToDisplayString(bookmark.lastValueBytes, SearchValueType::ByteArray);
-        m_bookmarkTable->setItem(row, 1, new QTableWidgetItem(valueText));
+        QString valueText;
+        switch (bookmark.valueState)
+        {
+        case BookmarkValueState::Ready:
+            valueText = bytesToDisplayString(bookmark.lastValueBytes, SearchValueType::ByteArray);
+            if (!bookmark.readDetail.isEmpty())
+                valueText += ks::i18n::sourceText(QStringLiteral("（后端告警）"));
+            break;
+        case BookmarkValueState::Failed:
+            valueText = ks::i18n::sourceText(QStringLiteral("读取失败"));
+            break;
+        case BookmarkValueState::Partial:
+            valueText = ks::i18n::sourceText(QStringLiteral("读取不完整"));
+            break;
+        case BookmarkValueState::NoProcess:
+            valueText = ks::i18n::sourceText(QStringLiteral("未附加进程"));
+            break;
+        default:
+            valueText = ks::i18n::sourceText(QStringLiteral("等待刷新"));
+            break;
+        }
+        if (bookmark.scratchDirty)
+            valueText += ks::i18n::sourceText(QStringLiteral("（暂存扇区未还原）"));
+        auto* const valueItem = new QTableWidgetItem(valueText);
+        valueItem->setToolTip(ks::i18n::sourceText(QStringLiteral(
+            "后端：%1；PID：%2；读取时间：%3\n%4"))
+            .arg(ks::i18n::sourceText(ksword::memory_backend::backendDisplayName(currentBookmarkBackend())))
+            .arg(m_attachedPid).arg(bookmark.readTimeText)
+            .arg(ks::i18n::sourceText(bookmark.readDetail)));
+        m_bookmarkTable->setItem(row, 1, valueItem);
         m_bookmarkTable->setItem(row, 2, new QTableWidgetItem(bookmark.noteText));
         m_bookmarkTable->setItem(row, 3, new QTableWidgetItem(bookmark.addTimeText));
+    }
+    m_bookmarkTable->setSortingEnabled(sortingEnabled);
+    for (int row = 0; row < m_bookmarkTable->rowCount(); ++row)
+    {
+        if (m_bookmarkTable->item(row, 0)->data(Qt::UserRole).toULongLong() == selectedId)
+        {
+            m_bookmarkTable->setCurrentCell(row, 0);
+            break;
+        }
     }
 }
 
 void MemoryDock::refreshBookmarkValues()
 {
+    using namespace ksword::memory_backend;
     const QPointer<MemoryDock> safeThis(this);
-    if (ks::ui::DeferTableUiCommitIfContextMenuOpen(
-        this,
-        QStringLiteral("memory-bookmark-periodic-values"),
-        { m_bookmarkTable },
-        [safeThis]()
+    const std::uint64_t attachmentGeneration = m_processAttachmentGeneration.load();
+    const std::uint32_t targetPid = m_attachedPid;
+    const MemoryAccessBackend backend = currentBookmarkBackend();
+    const std::uint64_t ddmaGeneration = backend == MemoryAccessBackend::Ddma
+        ? ddmaSessionGeneration() : 0;
+    const bool contextChanged = m_bookmarkContextGeneration != attachmentGeneration
+        || m_bookmarkContextPid != targetPid || m_bookmarkContextBackend != backend
+        || m_bookmarkContextDdmaGeneration != ddmaGeneration;
+
+    // 先使缓存失效，再等待旧任务或菜单关闭；旧值不能跨进程/后端继续有效。
+    if (contextChanged || targetPid == 0)
+    {
+        ++m_bookmarkContextTicket;
+        m_bookmarkContextGeneration = attachmentGeneration;
+        m_bookmarkContextPid = targetPid;
+        m_bookmarkContextBackend = backend;
+        m_bookmarkContextDdmaGeneration = ddmaGeneration;
+        for (BookmarkEntry& bookmark : m_bookmarkCache)
         {
-            if (!safeThis.isNull())
-            {
-                safeThis->refreshBookmarkValues();
-            }
-        }))
-    {
-        return;
-    }
-
-    // 刷新书签值入口日志：记录当前书签规模。
-    kLogEvent refreshBookmarkStartEvent;
-    dbg << refreshBookmarkStartEvent
-        << "[MemoryDock] refreshBookmarkValues: 开始刷新, bookmarkCount="
-        << m_bookmarkCache.size()
-        << eol;
-
-    // 未附加进程或没有书签时无需刷新，直接返回避免无意义系统调用。
-    if (m_attachedProcessHandle == nullptr || m_bookmarkCache.empty())
-    {
-        kLogEvent refreshBookmarkSkipEvent;
-        dbg << refreshBookmarkSkipEvent
-            << "[MemoryDock] refreshBookmarkValues: 跳过刷新（未附加或无书签）。"
-            << eol;
-        return;
-    }
-
-    for (BookmarkEntry& bookmark : m_bookmarkCache)
-    {
-        const int requestLength = std::max<int>(8, bookmark.lastValueBytes.size());
-        QByteArray valueBytes(requestLength, '\0');
-        SIZE_T bytesRead = 0;
-        const BOOL readOk = ::ReadProcessMemory(
-            m_attachedProcessHandle,
-            reinterpret_cast<LPCVOID>(static_cast<std::uintptr_t>(bookmark.address)),
-            valueBytes.data(),
-            static_cast<SIZE_T>(valueBytes.size()),
-            &bytesRead);
-        if (readOk != FALSE && bytesRead > 0)
-        {
-            bookmark.lastValueBytes = valueBytes.left(static_cast<int>(bytesRead));
+            bookmark.lastValueBytes.clear();
+            bookmark.valueState = targetPid == 0
+                ? BookmarkValueState::NoProcess : BookmarkValueState::Pending;
+            bookmark.readDetail.clear();
+            bookmark.readTimeText.clear();
+            bookmark.scratchDirty = false;
         }
+        rebuildBookmarkTable();
     }
+    if (targetPid == 0 || m_bookmarkCache.empty())
+    {
+        m_bookmarkRefreshPending = false;
+        return;
+    }
+    if (backend == MemoryAccessBackend::Ddma && m_bookmarkDdmaReadBlocked
+        && m_bookmarkDdmaFaultGeneration == ddmaGeneration)
+    {
+        for (BookmarkEntry& bookmark : m_bookmarkCache)
+        {
+            bookmark.lastValueBytes.clear();
+            bookmark.valueState = BookmarkValueState::Failed;
+            bookmark.readDetail = QStringLiteral(
+                "当前 DDMA 会话的书签读取已停止：暂存扇区未能还原，请检查并重新配置会话。");
+            bookmark.scratchDirty = true;
+        }
+        m_bookmarkRefreshPending = false;
+        rebuildBookmarkTable();
+        return;
+    }
+    if (m_bookmarkRefreshInProgress)
+    {
+        m_bookmarkRefreshPending = true;
+        return;
+    }
+    m_bookmarkRefreshInProgress = true;
+    m_bookmarkRefreshPending = false;
+    const DdmaSession session = currentDdmaSession();
+    const std::vector<BookmarkEntry> requests = m_bookmarkCache;
+    const std::uint64_t contextTicket = m_bookmarkContextTicket;
 
-    // 刷新完成后重建表格，保证用户看到的是最新读回值。
-    rebuildBookmarkTable();
+    // Worker 只持有按值上下文，不使用 UI 或可被分离关闭的进程句柄。
+    QThreadPool::globalInstance()->start([safeThis, attachmentGeneration, targetPid,
+        backend, ddmaGeneration, session, requests, contextTicket]()
+    {
+        struct BookmarkReadResult
+        {
+            std::uint64_t id;
+            AccessOutcome outcome;
+            QString readTimeText;
+        };
+        std::vector<BookmarkReadResult> results;
+        results.reserve(requests.size());
+        bool stopForDirtyScratch = false;
+        for (const BookmarkEntry& request : requests)
+        {
+            AccessOutcome outcome;
+            if (stopForDirtyScratch)
+                outcome.failureText = QStringLiteral("暂存扇区未能还原，本轮后续书签读取已停止。");
+            else
+                outcome = readVirtual(backend, session, targetPid, request.address, 8);
+            stopForDirtyScratch = stopForDirtyScratch
+                || (backend == MemoryAccessBackend::Ddma && outcome.scratchDirty);
+            results.push_back({ request.id, std::move(outcome),
+                QDateTime::currentDateTime().toString("yyyy-MM-dd HH:mm:ss") });
+        }
 
-    kLogEvent refreshBookmarkFinishEvent;
-    dbg << refreshBookmarkFinishEvent
-        << "[MemoryDock] refreshBookmarkValues: 刷新完成。"
-        << eol;
+        QMetaObject::invokeMethod(qApp, [safeThis, attachmentGeneration, targetPid,
+            backend, ddmaGeneration, contextTicket, session, results = std::move(results)]()
+        {
+            // 磁盘还原故障与书签是否仍存在无关，不能随过期内存结果一起丢弃。
+            const bool dirtyScratch = backend == MemoryAccessBackend::Ddma
+                && std::any_of(results.begin(), results.end(),
+                    [](const BookmarkReadResult& result) { return result.outcome.scratchDirty; });
+            if (dirtyScratch && (safeThis.isNull() || !safeThis->m_bookmarkDdmaReadBlocked
+                || safeThis->m_bookmarkDdmaFaultGeneration != ddmaGeneration))
+            {
+                if (!safeThis.isNull())
+                {
+                    safeThis->m_bookmarkDdmaReadBlocked = true;
+                    safeThis->m_bookmarkDdmaFaultGeneration = ddmaGeneration;
+                }
+                QMessageBox::critical(safeThis.data(),
+                    ks::i18n::sourceText(QStringLiteral("DDMA 书签读取告警")),
+                    ks::i18n::sourceText(QStringLiteral(
+                        "DDMA 书签读取后未能还原磁盘 %1 的暂存扇区（LBA %2）。已停止此会话的书签读取，请检查暂存区并重新配置 DDMA 会话。"))
+                        .arg(session.diskIndex).arg(static_cast<qulonglong>(session.scratchLba)));
+            }
+            if (safeThis.isNull()) return;
+            const auto commit = [safeThis, attachmentGeneration, targetPid,
+                backend, ddmaGeneration, contextTicket, dirtyScratch, results]()
+            {
+                if (safeThis.isNull()) return;
+                MemoryDock* const dock = safeThis.data();
+                dock->m_bookmarkRefreshInProgress = false;
+                // 菜单可能延迟提交，提交这一刻也必须复核上下文。
+                if (contextTicket != dock->m_bookmarkContextTicket
+                    || attachmentGeneration != dock->m_processAttachmentGeneration.load()
+                    || targetPid != dock->m_attachedPid || backend != dock->currentBookmarkBackend()
+                    || (backend == MemoryAccessBackend::Ddma
+                        && ddmaGeneration != ddmaSessionGeneration()))
+                {
+                    dock->refreshBookmarkValues();
+                    return;
+                }
+                for (const BookmarkReadResult& result : results)
+                {
+                    const auto found = std::find_if(dock->m_bookmarkCache.begin(), dock->m_bookmarkCache.end(),
+                        [&result](const BookmarkEntry& bookmark) { return bookmark.id == result.id; });
+                    if (found == dock->m_bookmarkCache.end()) continue;
+                    BookmarkEntry& bookmark = *found;
+                    const AccessOutcome& outcome = result.outcome;
+                    const bool complete = outcome.ok && !outcome.partial
+                        && outcome.bytesDone == 8 && outcome.data.size() == 8;
+                    bookmark.lastValueBytes = complete ? outcome.data : QByteArray();
+                    bookmark.valueState = complete ? BookmarkValueState::Ready
+                        : (outcome.partial || outcome.bytesDone != 0 || !outcome.data.isEmpty()
+                            ? BookmarkValueState::Partial : BookmarkValueState::Failed);
+                    bookmark.readDetail = outcome.failureText;
+                    if (!complete && bookmark.valueState == BookmarkValueState::Partial)
+                    {
+                        bookmark.readDetail = ks::i18n::sourceText(QStringLiteral(
+                            "读取不完整：请求 8 字节，收到 %1 字节。%2"))
+                            .arg(outcome.data.size()).arg(ks::i18n::sourceText(outcome.failureText));
+                    }
+                    bookmark.readTimeText = result.readTimeText;
+                    bookmark.scratchDirty = outcome.scratchDirty;
+                }
+                dock->rebuildBookmarkTable();
+                if (dock->m_bookmarkRefreshPending || dirtyScratch) dock->refreshBookmarkValues();
+            };
+            if (!ks::ui::DeferTableUiCommitIfContextMenuOpen(
+                safeThis.data(), QStringLiteral("memory-bookmark-read-commit"),
+                { safeThis->m_bookmarkTable }, commit)) commit();
+        }, Qt::QueuedConnection);
+    });
 }
 
 void MemoryDock::updateStatusBarText()

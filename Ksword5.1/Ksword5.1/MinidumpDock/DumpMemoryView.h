@@ -24,6 +24,11 @@ class QPushButton;
 class QTextBrowser;
 class HexEditorWidget;
 
+namespace ks::ui
+{
+    class MemoryEditorWidget;
+}
+
 namespace ks::minidump
 {
     struct DumpMemoryRange;
@@ -91,7 +96,8 @@ private:
     QPushButton* m_previousButton = nullptr;
     QPushButton* m_nextButton = nullptr;
     QTextBrowser* m_messageView = nullptr; // m_messageView：可复制的读取状态和映射说明。
-    HexEditorWidget* m_hexEditor = nullptr; // m_hexEditor：只读十六进制、查找、复制和导出控件。
+    ks::ui::MemoryEditorWidget* m_memoryEditor = nullptr; // 已捕获字节的只读多视图。
+    HexEditorWidget* m_hexEditor = nullptr; // 保留十六进制查找、复制和导出入口。
 
     QString m_filePath;                 // m_filePath：解析时的原始 DMP 路径。
     std::uint64_t m_expectedFileSize = 0; // m_expectedFileSize：解析时文件大小。
@@ -99,6 +105,8 @@ private:
     std::vector<ks::minidump::DumpMemoryRange> m_ranges; // m_ranges：按虚拟地址排序的可读范围。
     std::vector<ks::minidump::ModuleEntry> m_modules; // m_modules：模块名+偏移输入与归属提示。
     std::vector<ks::minidump::MemoryRegionEntry> m_memoryRegions; // m_memoryRegions：地址属性提示。
+    std::uint32_t m_pointerSize = 8; // 从转储元数据取得目标指针宽度。
+    bool m_architectureInitialized = false; // 翻页保留手动选择的架构。
     std::uint64_t m_currentAddress = 0; // m_currentAddress：当前页首地址。
     std::uint64_t m_currentReadBytes = 0; // m_currentReadBytes：当前页实际加载字节数。
     int m_currentRangeIndex = -1;       // m_currentRangeIndex：当前页所属捕获范围。
