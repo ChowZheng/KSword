@@ -61,8 +61,8 @@ struct SupportManifest {
     std::string product;
     DWORD minimumWindowsMajor = 10;
     DWORD qtMinimumBuild = 17763;
-    DWORD advertisedMaximumBuild = 26100;
-    bool allowNewerWindows11 = false;
+    DWORD advertisedMaximumBuild = 0; // OS build 上限防护已停用。
+    bool allowNewerWindows11 = true;
     std::vector<ModuleDefinition> modules;
     std::vector<SupportProfile> profiles;
     std::string sha256;

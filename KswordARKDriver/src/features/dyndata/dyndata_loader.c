@@ -985,15 +985,16 @@ Return Value:
         return;
     }
 
-    /*
-     * Runtime pattern/layout fallbacks are only valid inside the advertised
-     * OS-build envelope.  A newer build may look structurally similar while
-     * private offsets have moved; leave every such field unavailable until an
-     * exact profile is explicitly supported.
-     */
-    if (!KswordArkStartupIsOsBuildSupported()) {
-        return;
-    }
+    // OS build 上限防护已停用；运行时探测继续执行其自身的布局校验。
+    // /*
+    //  * Runtime pattern/layout fallbacks are only valid inside the advertised
+    //  * OS-build envelope.  A newer build may look structurally similar while
+    //  * private offsets have moved; leave every such field unavailable until an
+    //  * exact profile is explicitly supported.
+    //  */
+    // if (!KswordArkStartupIsOsBuildSupported()) {
+    //     return;
+    // }
 
     KswordARKDriverResolveReadOnlyDynDataOffsets(&resolved);
     KswordARKDriverResolveKernelFallbackLayout(

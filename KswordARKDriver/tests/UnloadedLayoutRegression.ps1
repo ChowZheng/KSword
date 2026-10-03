@@ -51,7 +51,6 @@ static UCHAR recordBytes[6400];
 static WCHAR driverName[] = L"fixture.sys";
 static KSW_DYN_STATE dynState;
 static KIRQL testIrql;
-static BOOLEAN supportedBuild;
 static BOOLEAN readableGlobal;
 static BOOLEAN writableGlobal;
 static ULONG readCalls;
@@ -59,7 +58,6 @@ static ULONG failures;
 static PVOID testSystemRangeStart = (PVOID)(ULONG_PTR)0xFFFF800000000000ULL;
 
 static KIRQL TestIrql(VOID) { return testIrql; }
-static BOOLEAN TestBuildSupported(VOID) { return supportedBuild; }
 static VOID TestTime(PLARGE_INTEGER Time) { Time->QuadPart = 134000000000000000LL; }
 static VOID TestSnapshot(KSW_DYN_STATE* State) { *State = dynState; }
 
@@ -120,7 +118,6 @@ static BOOLEAN TestWritable(const KSW_RUNTIME_IMAGE_VIEW* View, ULONG_PTR Addres
 #define MmSystemRangeStart testSystemRangeStart
 #define RtlInitUnicodeString TestInitString
 #define RtlEqualUnicodeString TestEqualString
-#define KswordArkStartupIsOsBuildSupported TestBuildSupported
 #define KswordARKDynDataSnapshot TestSnapshot
 #define KswordARKRuntimeReadMemory TestRead
 #define KswordARKRuntimeInitializeImageView TestImage
@@ -168,7 +165,6 @@ static VOID Reset(VOID)
     WriteRecord(0U);
     WriteRecord(40U);
     testIrql = PASSIVE_LEVEL;
-    supportedBuild = TRUE;
     readableGlobal = TRUE;
     writableGlobal = TRUE;
     readCalls = 0UL;
@@ -222,8 +218,6 @@ int main(void)
     Expect("ambiguous stride rejected", KswordARKUnloadedResolveMmLayout(&layout), STATUS_NOT_SUPPORTED);
     Reset(); writableGlobal = FALSE;
     Expect("global outside writable data", KswordARKUnloadedResolveMmLayout(&layout), STATUS_NOT_SUPPORTED);
-    Reset(); supportedBuild = FALSE;
-    Expect("unknown OS cannot infer layout", KswordARKUnloadedResolveMmLayout(&layout), STATUS_NOT_SUPPORTED);
     Reset(); testIrql = DISPATCH_LEVEL;
     Expect("high IRQL cannot infer layout", KswordARKUnloadedResolveMmLayout(&layout), STATUS_NOT_SUPPORTED);
     Reset(); SetTrustedFields(KSW_DYN_FIELD_SOURCE_PDB_PROFILE); readableGlobal = FALSE;

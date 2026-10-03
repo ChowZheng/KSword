@@ -102,7 +102,6 @@ static PVOID TestExport(PVOID Base, PCCH Name)
 }
 
 static KIRQL TestIrql(VOID) { return PASSIVE_LEVEL; }
-static BOOLEAN TestSupported(VOID) { return TRUE; }
 static VOID TestTime(PLARGE_INTEGER Time) { Time->QuadPart = 134000000000000000LL; }
 static VOID TestInitString(PUNICODE_STRING String, PCWSTR Text)
 {
@@ -126,7 +125,6 @@ static BOOLEAN TestEqualString(PCUNICODE_STRING A, PCUNICODE_STRING B, BOOLEAN I
 #define RtlFindExportedRoutineByName TestExport
 #define RtlInitUnicodeString TestInitString
 #define RtlEqualUnicodeString TestEqualString
-#define KswordArkStartupIsOsBuildSupported TestSupported
 #include "@SCANNER@"
 #include "@RESOLVER@"
 

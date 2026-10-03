@@ -321,8 +321,9 @@ Return Value:
     g_KswordArkStartupOsBuildNumber = versionInfo.dwBuildNumber;
     InterlockedExchange(
         &g_KswordArkStartupOsBuildSupported,
-        (versionInfo.dwBuildNumber >= KSWORD_ARK_MINIMUM_SUPPORTED_OS_BUILD &&
-         versionInfo.dwBuildNumber <= KSWORD_ARK_MAXIMUM_SUPPORTED_OS_BUILD) ?
+        // 仅保留最低系统版本检查；OS build 上限防护已停用。
+        // versionInfo.dwBuildNumber <= KSWORD_ARK_MAXIMUM_SUPPORTED_OS_BUILD
+        (versionInfo.dwBuildNumber >= KSWORD_ARK_MINIMUM_SUPPORTED_OS_BUILD) ?
             1L : 0L);
     return g_KswordArkStartupOsBuildNumber;
 }

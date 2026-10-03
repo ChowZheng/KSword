@@ -10,7 +10,7 @@
 - [MSVC/WDK 构建恢复](ksword-build-recovery.md) — `LNK1000 IMAGE::BuildImage` 的一次性 WPO 禁用重建，以及驱动 x64 `ApiValidator` 后置校验边界
 - [驱动候选地址安全读取](ksword-driver-safe-read.md) — 不可信内核地址统一使用 `KswordARKRuntimeReadMemory`，以及 Release 同构函数符号归因注意事项
 - [已卸载驱动来源布局](ksword-unloaded-driver-layout.md) — NtosActive 与单项可用性的区别、精确全局 RVA 的局部运行时布局补全、离线回归与实机边界
-- [驱动 OS build 上限与 DynData fail-closed](ksword-driver-os-build-gate.md) — 超出已验证 build 时禁用 runtime offset fallback，R0 仅保留诊断 IOCTL，Launcher 同步阻止普通 GUI 启动
+- [驱动 OS build 上限策略](ksword-driver-os-build-gate.md) — 2026-10-03 按用户要求注释 R0/Launcher 上限拦截与 runtime fallback build 防护，保留最低版本及逐功能校验；附历史 fail-closed 策略
 - [蓝屏 BGP、截图基线与崩溃前解析缓存](ksword-bugcheck-bgp.md) — `BPP=1` 延迟探测、24/32 BPP 预生成、四区截图布局、进程/模块缓存、Stop Code 白名单归因与 fail-closed 边界
 - [蓝屏 Shield PatchGuard 安全缓冲](ksword-bugcheck-shield.md) — 只走公共 BugCheck reason 回调、多阶段有界 stall、KSHL 确认令牌、绝不写私有 ntoskrnl 状态
 - [CI 合并回归恢复](ksword-ci-merge-recovery.md) — Actions 日志收敛顺序、共享 IOCTL 编号兼容、WDK 令牌声明与 `/WX` 协议头约束

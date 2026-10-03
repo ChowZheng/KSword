@@ -313,9 +313,10 @@ KswordARKDriverResolveMmUnloadedLayout(
     KSW_RUNTIME_IMAGE_VIEW view; // 本次查询的映像边界与节属性快照。
     KSW_UNLOADED_LAYOUT_CANDIDATE candidate; // 只发布唯一且多记录一致的布局。
 
-    // 未验证的系统版本、缺失身份和越界 RVA 都不能参与推断。
+    // OS build 防护已停用；继续校验 IRQL、模块身份与 RVA 边界。
     if (Layout == NULL || NtoskrnlIdentity == NULL ||
-        !KswordArkStartupIsOsBuildSupported() || KeGetCurrentIrql() > APC_LEVEL ||
+        // !KswordArkStartupIsOsBuildSupported() ||
+        KeGetCurrentIrql() > APC_LEVEL ||
         NtoskrnlIdentity->present == 0UL || NtoskrnlIdentity->imageBase == 0ULL ||
         PointerRva == 0UL || PointerRva >= NtoskrnlIdentity->sizeOfImage ||
         NtoskrnlIdentity->imageBase > (~0ULL - PointerRva)) {

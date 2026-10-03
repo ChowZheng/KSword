@@ -324,8 +324,8 @@ Return Value:
             : STATUS_NOT_SUPPORTED,
         "OS build support",
         KswordArkStartupIsOsBuildSupported()
-            ? "OS build is inside the validated DynData range."
-            : "OS build is outside the validated DynData range; offset-dependent IOCTLs are disabled.");
+            ? "OS build meets the minimum requirement; upper-bound enforcement is disabled."
+            : "OS build is unknown or below the minimum requirement.");
 
     KswordARKDynDataSnapshot(&dynState);
     response->dynDataCapabilityMask = dynState.CapabilityMask;
