@@ -1312,7 +1312,8 @@ KswordARKDriverDeletePathByIrp(
 
 Routine Description:
 
-    使用现有通用 IRP 引擎的 BASE_FS CREATE 和配对 CLEANUP/CLOSE。
+    使用 I/O 管理器正常打开取得完整对象，再向 BASE_FS 发送删除 IRP。
+    引用与句柄由通用引擎释放，CLEANUP/CLOSE 由 I/O 管理器配对。
     删除优先 Ex/POSIX + 忽略只读，旧文件系统回退传统类；受阻时直接清空
     section 三成员再重试。本后端不会回退到 ZwSetInformationFile。
 
@@ -1362,7 +1363,7 @@ Return Value:
     }
     request->confirmationToken = KSWORD_ARK_FILE_IRP_CONFIRMATION_TOKEN;
     request->majorFunction = IRP_MJ_SET_INFORMATION;
-    request->targetLayer = KSWORD_ARK_FILE_IRP_LAYER_BASE_FS; // CREATE 和删除均使用现有基础文件系统目标层。
+    request->targetLayer = KSWORD_ARK_FILE_IRP_LAYER_BASE_FS; // 仅删除 IRP 直达基础文件系统，打开走托管路径。
     request->timeoutMs = KSWORD_ARK_FILE_IRP_DEFAULT_TIMEOUT_MS;
     // 删除只需 DELETE；Ex 的忽略只读位不要求增加属性写权限，避免 CREATE 共享冲突。
     request->desiredAccess = DELETE | SYNCHRONIZE;

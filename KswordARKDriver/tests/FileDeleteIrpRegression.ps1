@@ -10,10 +10,18 @@ foreach ($taskRequired in @($taskVcvars, $taskKit)) {
     if (!(Test-Path -LiteralPath $taskRequired)) { throw "Required input missing: $taskRequired" }
 }
 New-Item -ItemType Directory -Path $taskOutput -Force | Out-Null
+# Replay the exact production open/submit routines as well as the delete algorithm.
+$taskProduction = [IO.File]::ReadAllText((Join-Path $taskRoot 'KswordARKDriver\src\features\file\file_irp_request.c'))
+$taskTarget = [regex]::Match($taskProduction, '(?s)typedef struct _KSWORD_ARK_FILE_IRP_TARGET\b.*?\} KSWORD_ARK_FILE_IRP_TARGET, \*PKSWORD_ARK_FILE_IRP_TARGET;')
+$taskOpen = [regex]::Match($taskProduction, '(?s)static NTSTATUS\s+KswordArkFileIrpOpenTarget\(.*?(?=// KSWORD_ARK_FILE_IRP_BUFFER_MODE)')
+$taskSubmit = [regex]::Match($taskProduction, '(?s)static NTSTATUS\s+KswordArkFileIrpSubmit\(.*?(?=static NTSTATUS\s+KswordArkFileIrpConsumeDirectoryBuffer\()')
+if (!$taskTarget.Success -or !$taskOpen.Success -or !$taskSubmit.Success) { throw 'Cannot locate production file IRP open/submit routines.' }
+[IO.File]::WriteAllText((Join-Path $taskOutput 'file_irp_target_replay.h'), $taskTarget.Value, [Text.UTF8Encoding]::new($false))
+[IO.File]::WriteAllText((Join-Path $taskOutput 'file_irp_submit_replay.h'), ($taskOpen.Value + $taskSubmit.Value), [Text.UTF8Encoding]::new($false))
 $taskSource = Join-Path $taskRoot 'KswordARKDriver\tests\file_delete_irp_regression.c'
 $taskExecutable = Join-Path $taskOutput 'file_delete_irp_regression.exe'
 $taskObject = Join-Path $taskOutput 'file_delete_irp_regression.obj'
-$taskIncludes = @((Join-Path $taskKit 'km'), (Join-Path $taskKit 'shared'), (Join-Path $taskKit 'ucrt'),
+$taskIncludes = @($taskOutput, (Join-Path $taskKit 'km'), (Join-Path $taskKit 'shared'), (Join-Path $taskKit 'ucrt'),
     (Join-Path $taskRoot 'KswordARKDriver\include'), (Join-Path $taskRoot 'shared'))
 $taskCompile = @('call', ('"{0}"' -f $taskVcvars), '>', 'nul', '&&',
     'cl.exe', '/nologo', '/W4', '/WX', '/utf-8', '/D_AMD64_', '/D_WIN64',

@@ -1273,19 +1273,21 @@ static NTSTATUS
 KswordArkFileIrpOpenTarget(
     _In_ const KSWORD_ARK_FILE_IRP_SUBMIT_REQUEST* Request,
     _In_ ULONG TimeoutMs,
+    _In_ BOOLEAN ForceManagedOpen, // 删除预设需要 I/O 管理器建立完整的打开对象。
     _Inout_ PKSWORD_ARK_FILE_IRP_TARGET Target
     )
 /*++
 
 Routine Description:
 
-    按请求的栈层选择打开方式：栈顶层用托管打开，其余层用手工 CREATE 直发。
-    这样"选择哪一层"这一个 UI 选项就同时决定了 CREATE 是否绕过过滤层。
+    通用构造器按请求的栈层选择打开方式；内部删除预设与目录枚举固定托管打开。
+    后续 IRP 的目标层仍由请求决定，不因托管打开而改发栈顶。
 
 Arguments:
 
     Request - 已完成边界校验的请求快照。
     TimeoutMs - CREATE 等待上限。
+    ForceManagedOpen - 删除预设固定正常打开，后续 IRP 仍使用请求的目标层。
     Target - 接收打开结果。
 
 Return Value:
@@ -1316,7 +1318,7 @@ Return Value:
     }
     createOptions |= FILE_SYNCHRONOUS_IO_NONALERT | FILE_OPEN_FOR_BACKUP_INTENT;
 
-    if (Request->targetLayer == KSWORD_ARK_FILE_IRP_LAYER_RELATED) {
+    if (ForceManagedOpen || Request->targetLayer == KSWORD_ARK_FILE_IRP_LAYER_RELATED) { // 删除预设不使用裸 FILE_OBJECT。
         return KswordArkFileIrpOpenManaged(
             Request->path,
             Request->pathLengthChars,
@@ -2081,7 +2083,8 @@ KswordArkFileIrpSubmit(
     }
 
     RtlZeroMemory(&target, sizeof(target));
-    status = KswordArkFileIrpOpenTarget(Request, timeoutMs, &target);
+    // 裸 CREATE 的成功状态不能保证 NTFS 将对象识别为用户文件/目录打开；删除复用正常打开对象。
+    status = KswordArkFileIrpOpenTarget(Request, timeoutMs, ForceDelete, &target); // 只改变内部删除预设的打开方式。
     response->createStatus = status;
     stageFlags |= KSWORD_ARK_FILE_IRP_STAGE_CREATE;
     if (!NT_SUCCESS(status)) {
@@ -2544,6 +2547,7 @@ KswordARKDriverEnumerateDirectoryByIrp(
     status = KswordArkFileIrpOpenTarget(
         &openRequest,
         KSWORD_ARK_FILE_IRP_DEFAULT_TIMEOUT_MS,
+        TRUE, // 目录枚举也必须取得完整的托管打开对象。
         &target);
     response->openStatus = status;
     response->lastStatus = status;
