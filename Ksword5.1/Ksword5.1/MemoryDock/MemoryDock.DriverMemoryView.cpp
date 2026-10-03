@@ -16,6 +16,21 @@ using namespace ksword::memory_dock_internal;
 
 namespace
 {
+    constexpr qsizetype kDriverMemoryTextViewLineWidth = 16;
+
+    // 文本导出仍需 ASCII 列，不能依赖已移除的旧文本视图辅助函数。
+    QString driverMemoryPrintableText(const QByteArray& bytes)
+    {
+        QString text;
+        text.reserve(bytes.size());
+        for (const char byte : bytes)
+        {
+            const auto value = static_cast<unsigned char>(byte);
+            text += value >= 0x20 && value <= 0x7e ? QChar(value) : QChar('.');
+        }
+        return text;
+    }
+
     // driverMemoryBytesText 作用：
     // - 把一段原始字节渲染成反汇编表格里的“原始字节”列文本；
     // - 输入 bytes：单条指令的字节序列；
@@ -182,7 +197,7 @@ void MemoryDock::dumpDriverMemorySnapshotToFile()
                 .arg(driverMemoryHexAddressText(
                     m_driverMemoryBaseAddress + static_cast<std::uint64_t>(lineStart)))
                 .arg(driverMemoryBytesText(lineSlice), -47)
-                .arg(driverMemoryPrintableText(lineSlice, false));
+                .arg(driverMemoryPrintableText(lineSlice));
         }
         const QByteArray encodedText = dumpText.toUtf8();
         writtenBytes = outputFile.write(encodedText);

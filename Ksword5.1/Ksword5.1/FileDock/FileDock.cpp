@@ -33,6 +33,7 @@
 
 #include <QApplication>
 #include <QAbstractItemView>
+#include <QAbstractTableModel>
 #include <QAction>
 #include <QByteArray>
 #include <QButtonGroup>
@@ -62,6 +63,7 @@
 #include <QGridLayout>
 #include <QGroupBox>
 #include <QHeaderView>
+#include <QHash>
 #include <QHBoxLayout>
 #include <QInputDialog>
 #include <QItemSelectionModel>
@@ -74,6 +76,7 @@
 #include <QModelIndex>
 #include <QMouseEvent>
 #include <QPlainTextEdit>
+#include <QPersistentModelIndex>
 #include <QPair>
 #include <QTextEdit>
 #include <QPointer>
@@ -1934,19 +1937,6 @@ namespace
         return ks::file::QueryReparsePointInfo(nativePathText.toStdWString(), directoryHint);
     }
 
-    // reparseKindMarkerForBatch 作用：
-    // - 供平铺模型批量回填时使用的重解析点标记查询；
-    // - 与 reparseKindMarkerForPath 的区别在于**限额**：整批回填最多做
-    //   kMaxBatchReparseProbes 次同步查询，超出后一律返回空。
-    // 为什么要限额：
-    // - 每一行都要 GetFileAttributesW，重解析点行还要再打开文件发 FSCTL，
-    //   全都是 UI 线程上的同步文件 IO；
-    // - R0/IRP 读取方式本来就是用来看"WinAPI 视角有问题"的路径，对这些路径
-    //   Win32 查询可能长时间阻塞甚至挂住，一行卡住整个界面就没响应了；
-    // - 上万行的目录即使每行只花几十微秒，累计也是秒级卡顿。
-    // 代价是超出限额的行不显示重解析点标记，这比界面失去响应好得多。
-    constexpr int kMaxBatchReparseProbes = 512;
-
     QString reparseKindMarkerForPath(const QString& path)
     {
         const QString nativePathText = QDir::toNativeSeparators(path).trimmed();
@@ -2022,12 +2012,124 @@ namespace
         return content;
     }
 
+    // 仅为请求显示的单元格排队。查询无论多慢都不占用模型/UI 线程；
+    // 一次至多查询 32 项，空结果也缓存，重置后用代次和路径复核拒绝旧结果。
+    class AsyncReparseMarkerCache final : public QObject
+    {
+    public:
+        explicit AsyncReparseMarkerCache(
+            QObject* parent, std::function<void(const QModelIndex&)> changed)
+            : QObject(parent), m_changed(std::move(changed)), m_timer(this)
+        {
+            m_timer.setSingleShot(true);
+            connect(&m_timer, &QTimer::timeout, this, [this]() { startBatch(); });
+        }
+
+        QString marker(const QString& path, const QModelIndex& index)
+        {
+            const auto cached = m_cache.constFind(path);
+            if (cached != m_cache.cend())
+            {
+                return cached.value();
+            }
+            if (!m_pending.contains(path) && !m_inFlight.contains(path))
+            {
+                m_pending.insert(path, QPersistentModelIndex(index.siblingAtColumn(0)));
+            }
+            if (!m_running && !m_timer.isActive())
+            {
+                m_timer.start(0);
+            }
+            return QString();
+        }
+
+        void reset()
+        {
+            ++m_generation;
+            m_cache.clear();
+            m_pending.clear();
+            m_inFlight.clear();
+        }
+
+    private:
+        void startBatch()
+        {
+            if (m_running || m_pending.isEmpty())
+            {
+                return;
+            }
+            QHash<QString, QPersistentModelIndex> batch;
+            while (!m_pending.isEmpty() && batch.size() < 32)
+            {
+                auto next = m_pending.begin();
+                batch.insert(next.key(), next.value());
+                m_inFlight.insert(next.key());
+                m_pending.erase(next);
+            }
+            m_running = true;
+            const int generation = m_generation;
+            QPointer<AsyncReparseMarkerCache> guard(this);
+            QThreadPool::globalInstance()->start(QRunnable::create([guard, generation, batch]() {
+                QHash<QString, QString> results;
+                for (auto it = batch.cbegin(); it != batch.cend(); ++it)
+                {
+                    results.insert(it.key(), reparseKindMarkerForPath(it.key()));
+                }
+                // QPointer 只在 UI 线程解引用，不在工作线程与模型销毁竞争。
+                QMetaObject::invokeMethod(qApp, [guard, generation, batch, results]() {
+                    if (!guard)
+                    {
+                        return;
+                    }
+                    guard->m_running = false;
+                    if (guard->m_generation == generation)
+                    {
+                        for (auto it = batch.cbegin(); it != batch.cend(); ++it)
+                        {
+                            guard->m_inFlight.remove(it.key());
+                            const QModelIndex index = it.value();
+                            const auto* fs = qobject_cast<const QFileSystemModel*>(index.model());
+                            if (!index.isValid() || (fs ? fs->filePath(index) :
+                                index.data(Qt::UserRole).toString()) != it.key())
+                            {
+                                continue;
+                            }
+                            const QString markerText = results.value(it.key());
+                            guard->m_cache.insert(it.key(), markerText);
+                            if (!markerText.isEmpty())
+                            {
+                                guard->m_changed(index);
+                            }
+                        }
+                    }
+                    if (!guard->m_pending.isEmpty())
+                    {
+                        guard->m_timer.start(0);
+                    }
+                }, Qt::QueuedConnection);
+            }));
+        }
+
+        std::function<void(const QModelIndex&)> m_changed;
+        QTimer m_timer;
+        QHash<QString, QString> m_cache;
+        QHash<QString, QPersistentModelIndex> m_pending;
+        QSet<QString> m_inFlight;
+        int m_generation = 0;
+        bool m_running = false;
+    };
+
     class ReparseAwareFileSystemModel final : public QFileSystemModel
     {
     public:
         explicit ReparseAwareFileSystemModel(QObject* parent = nullptr)
-            : QFileSystemModel(parent)
+            : QFileSystemModel(parent), m_markers(this, [this](const QModelIndex& index) {
+                emit dataChanged(index, index.siblingAtColumn(2),
+                    { Qt::DisplayRole, Qt::ToolTipRole });
+            })
         {
+            connect(this, &QFileSystemModel::directoryLoaded, this,
+                [this](const QString&) { m_markers.reset(); });
         }
 
         QVariant data(const QModelIndex& index, const int role = Qt::DisplayRole) const override
@@ -2043,6 +2145,12 @@ namespace
                 return baseValue;
             }
 
+            if (index.column() != 0 && index.column() != 2)
+            {
+                return baseValue.metaType().id() == QMetaType::QString
+                    ? QVariant(ks::i18n::displayText(baseValue.toString())) : baseValue;
+            }
+
             QVariant localizedBaseValue = baseValue;
             if (role == Qt::DisplayRole &&
                 (index.column() == 1 || index.column() == 2) &&
@@ -2051,7 +2159,7 @@ namespace
                 localizedBaseValue = ks::i18n::displayText(baseValue.toString());
             }
 
-            const QString markerText = reparseKindMarkerForPath(filePath(index));
+            const QString markerText = m_markers.marker(filePath(index), index);
             if (markerText.isEmpty())
             {
                 return localizedBaseValue;
@@ -2098,6 +2206,9 @@ namespace
             }
             return baseValue;
         }
+
+    private:
+        mutable AsyncReparseMarkerCache m_markers;
     };
 
     // ExplorerFileSortProxyModel：
@@ -2113,6 +2224,8 @@ namespace
         explicit ExplorerFileSortProxyModel(QObject* parent = nullptr)
             : QSortFilterProxyModel(parent)
         {
+            m_collator.setCaseSensitivity(Qt::CaseInsensitive);
+            m_collator.setNumericMode(true);
         }
 
     protected:
@@ -2138,10 +2251,7 @@ namespace
             {
                 const QString leftName = displayName(left);
                 const QString rightName = displayName(right);
-                QCollator collator;
-                collator.setCaseSensitivity(Qt::CaseInsensitive);
-                collator.setNumericMode(true);
-                const int naturalCompare = collator.compare(leftName, rightName);
+                const int naturalCompare = m_collator.compare(leftName, rightName);
                 if (naturalCompare != 0)
                 {
                     return naturalCompare < 0;
@@ -2157,6 +2267,29 @@ namespace
                 }
             }
 
+            if (const auto* fs = qobject_cast<QFileSystemModel*>(sourceModel()))
+            {
+                // 直接读 QFileSystemModel 的元数据缓存，不经过 DisplayRole/重解析标记。
+                if (left.column() == 1)
+                    return fs->size(left) < fs->size(right);
+                if (left.column() == 2)
+                    return QString::compare(fs->type(left), fs->type(right),
+                        Qt::CaseInsensitive) < 0;
+                if (left.column() == 3)
+                    return fs->lastModified(left) < fs->lastModified(right);
+            }
+            else
+            {
+                if (left.column() == 1)
+                    return left.data(Qt::UserRole).toULongLong() <
+                        right.data(Qt::UserRole).toULongLong();
+                if (left.column() == 2)
+                    return QString::compare(left.data(Qt::UserRole).toString(),
+                        right.data(Qt::UserRole).toString(), Qt::CaseInsensitive) < 0;
+                if (left.column() == 3)
+                    return left.data(Qt::UserRole).toDateTime() <
+                        right.data(Qt::UserRole).toDateTime();
+            }
             return QSortFilterProxyModel::lessThan(left, right);
         }
 
@@ -2168,7 +2301,7 @@ namespace
             if (QFileSystemModel* const fileSystemModel =
                     qobject_cast<QFileSystemModel*>(source))
             {
-                return QFileInfo(fileSystemModel->filePath(sourceIndex)).isDir();
+                return fileSystemModel->isDir(sourceIndex);
             }
 
             return sourceIndex.siblingAtColumn(0)
@@ -2183,11 +2316,13 @@ namespace
             if (QFileSystemModel* const fileSystemModel =
                     qobject_cast<QFileSystemModel*>(source))
             {
-                return QFileInfo(fileSystemModel->filePath(sourceIndex)).fileName();
+                return fileSystemModel->fileName(sourceIndex);
             }
 
             return sourceIndex.siblingAtColumn(0).data(Qt::DisplayRole).toString();
         }
+
+        QCollator m_collator;
     };
 
     // buildDriverNtPath：
@@ -3778,38 +3913,136 @@ namespace
         }
     }
 
-    // markSuspiciousRowIfNeeded 作用：
-    // - 输入：刚构造好的一行、该行条目名、疑似隐藏项名称集合（已折叠大小写）；
-    // - 处理：命中时给整行加醒目底色和说明性 tooltip；
-    // - 说明：这份名单来自"绕过路径可见、常规路径不可见"的差集，是 MFT/IRP 两种
-    //   解析方式的核心产出。只在状态栏报一个数字，用户仍然无法定位到具体是哪几行。
-    void markSuspiciousRowIfNeeded(
-        const QList<QStandardItem*>& rowItems,
-        const QString& entryName,
-        const QSet<QString>& suspiciousNameSet)
+    // 直接发布后台枚举快照，避免在 UI 上为 N 行创建 6N 个 QStandardItem。
+    // 类型/图标/时间等展示内容只为视图请求的单元格生成。
+    class ManualDirectoryModel final : public QAbstractTableModel
     {
-        if (suspiciousNameSet.isEmpty() ||
-            !suspiciousNameSet.contains(entryName.toCaseFolded()))
+    public:
+        using Entries = std::vector<ks::file::ManualDirectoryEntry>;
+
+        explicit ManualDirectoryModel(std::function<QString(std::uint64_t)> sizeText,
+            QObject* parent = nullptr)
+            : QAbstractTableModel(parent), m_sizeText(std::move(sizeText)),
+              m_directoryIcon(QApplication::style()->standardIcon(QStyle::SP_DirIcon)),
+              m_fileIcon(QApplication::style()->standardIcon(QStyle::SP_FileIcon)),
+              m_markers(this, [this](const QModelIndex& index) {
+                  emit dataChanged(index.siblingAtColumn(2), index.siblingAtColumn(2),
+                      { Qt::DisplayRole, Qt::ToolTipRole });
+              })
         {
-            return;
         }
 
-        // 用低透明度的告警色铺底：既要一眼看见，又不能盖掉选中态和交替行色。
-        QColor highlightColor(
-            KswordTheme::AccentHex(KswordTheme::AccentRole::Orange));
-        highlightColor.setAlpha(72);
-        const QString tipText = QStringLiteral(
-            "该条目只有绕过过滤层或直读 $MFT 才能看到，常规目录枚举视图中不存在。");
-        for (QStandardItem* rowItem : rowItems)
+        void setSnapshot(std::shared_ptr<const Entries> entries, QSet<QString> suspiciousNames = {})
         {
-            if (rowItem == nullptr)
+            beginResetModel();
+            auto retired = std::move(m_entries);
+            auto retiredNames = std::move(m_suspiciousNames);
+            m_entries = std::move(entries);
+            m_suspiciousNames = std::move(suspiciousNames);
+            m_markers.reset();
+            endResetModel();
+            if (retired || !retiredNames.isEmpty())
             {
-                continue;
+                // 刷新大目录时，旧快照中大量字符串的销毁也放到后台。
+                QThreadPool::globalInstance()->start(QRunnable::create(
+                    [retired = std::move(retired), retiredNames = std::move(retiredNames)]() mutable {
+                        retired.reset();
+                        retiredNames.clear();
+                    }));
             }
-            rowItem->setBackground(highlightColor);
-            rowItem->setToolTip(tipText);
         }
-    }
+
+        int rowCount(const QModelIndex& parent = {}) const override
+        {
+            return parent.isValid() || !m_entries ? 0 : static_cast<int>(
+                std::min<std::size_t>(m_entries->size(), std::numeric_limits<int>::max()));
+        }
+
+        int columnCount(const QModelIndex& parent = {}) const override
+        {
+            return parent.isValid() ? 0 : static_cast<int>(ManualModelColumn::Count);
+        }
+
+        QVariant headerData(int section, Qt::Orientation orientation,
+            int role = Qt::DisplayRole) const override
+        {
+            if (orientation == Qt::Horizontal && role == Qt::DisplayRole)
+            {
+                static const QStringList headers{ QStringLiteral("名称"), QStringLiteral("大小"),
+                    QStringLiteral("类型"), QStringLiteral("修改时间"),
+                    QStringLiteral("完整路径"), QStringLiteral("目录标记") };
+                return section >= 0 && section < headers.size()
+                    ? QVariant(ks::i18n::displayText(headers[section])) : QVariant();
+            }
+            return QAbstractTableModel::headerData(section, orientation, role);
+        }
+
+        QVariant data(const QModelIndex& index, int role = Qt::DisplayRole) const override
+        {
+            if (!index.isValid() || index.row() < 0 || index.row() >= rowCount())
+            {
+                return {};
+            }
+            const auto& entry = (*m_entries)[static_cast<std::size_t>(index.row())];
+            const auto column = static_cast<ManualModelColumn>(index.column());
+            if (role == Qt::UserRole + 1 && column == ManualModelColumn::Name)
+                return entry.isDirectory;
+            if (role == Qt::UserRole)
+            {
+                switch (column)
+                {
+                case ManualModelColumn::Name: return entry.absolutePath;
+                case ManualModelColumn::Size: return QVariant::fromValue<qulonglong>(entry.sizeBytes);
+                case ManualModelColumn::Type: return entry.typeText;
+                case ManualModelColumn::ModifiedTime: return entry.modifiedTime;
+                default: return {};
+                }
+            }
+            if (role == Qt::DecorationRole && column == ManualModelColumn::Name)
+                return entry.isDirectory ? m_directoryIcon : m_fileIcon;
+            if ((role == Qt::BackgroundRole || role == Qt::ToolTipRole) &&
+                m_suspiciousNames.contains(entry.name.toCaseFolded()))
+            {
+                if (role == Qt::ToolTipRole)
+                    return ks::i18n::displayText(QStringLiteral(
+                        "该条目只有绕过过滤层或直读 $MFT 才能看到，常规目录枚举视图中不存在。"));
+                QColor highlightColor(KswordTheme::AccentHex(KswordTheme::AccentRole::Orange));
+                highlightColor.setAlpha(72);
+                return QBrush(highlightColor);
+            }
+            if (role != Qt::DisplayRole)
+                return {};
+            switch (column)
+            {
+            case ManualModelColumn::Name: return entry.name;
+            case ManualModelColumn::Size:
+                return entry.isDirectory ? QStringLiteral("-") : m_sizeText(entry.sizeBytes);
+            case ManualModelColumn::Type:
+            {
+                const QString marker = m_markers.marker(entry.absolutePath, index);
+                const QString typeText = ks::i18n::displayText(entry.typeText);
+                return marker.isEmpty() ? typeText :
+                    QStringLiteral("%1 / %2").arg(ks::i18n::displayText(marker), typeText);
+            }
+            case ManualModelColumn::ModifiedTime:
+                return entry.modifiedTime.isValid()
+                    ? entry.modifiedTime.toString(QStringLiteral("yyyy-MM-dd HH:mm:ss"))
+                    : QStringLiteral("-");
+            case ManualModelColumn::FullPath: return QDir::toNativeSeparators(entry.absolutePath);
+            case ManualModelColumn::IsDirectory:
+                return entry.isDirectory ? QStringLiteral("1") : QStringLiteral("0");
+            default: return {};
+            }
+        }
+
+    private:
+        std::shared_ptr<const Entries> m_entries;
+        QSet<QString> m_suspiciousNames;
+        std::function<QString(std::uint64_t)> m_sizeText;
+        QIcon m_directoryIcon;
+        QIcon m_fileIcon;
+        mutable AsyncReparseMarkerCache m_markers;
+    };
 
     // buildSuspiciousNameSet 作用：把疑似隐藏项名单折叠大小写后转成集合，
     // 避免在逐行回填时做 O(n) 线性查找。
@@ -12693,14 +12926,7 @@ void FileDock::initializePanel(FilePanelWidgets& panel, const QString& titleText
     panel.proxyModel->setFilterCaseSensitivity(Qt::CaseInsensitive);
     panel.proxyModel->setFilterKeyColumn(0);
 
-    panel.manualModel = new QStandardItemModel(panel.rootWidget);
-    panel.manualModel->setColumnCount(static_cast<int>(ManualModelColumn::Count));
-    panel.manualModel->setHeaderData(static_cast<int>(ManualModelColumn::Name), Qt::Horizontal, QStringLiteral("名称"));
-    panel.manualModel->setHeaderData(static_cast<int>(ManualModelColumn::Size), Qt::Horizontal, QStringLiteral("大小"));
-    panel.manualModel->setHeaderData(static_cast<int>(ManualModelColumn::Type), Qt::Horizontal, QStringLiteral("类型"));
-    panel.manualModel->setHeaderData(static_cast<int>(ManualModelColumn::ModifiedTime), Qt::Horizontal, QStringLiteral("修改时间"));
-    panel.manualModel->setHeaderData(static_cast<int>(ManualModelColumn::FullPath), Qt::Horizontal, QStringLiteral("完整路径"));
-    panel.manualModel->setHeaderData(static_cast<int>(ManualModelColumn::IsDirectory), Qt::Horizontal, QStringLiteral("目录标记"));
+    panel.manualModel = new ManualDirectoryModel(&FileDock::formatSizeText, panel.rootWidget);
 
     panel.manualProxyModel = new ExplorerFileSortProxyModel(panel.rootWidget);
     panel.manualProxyModel->setSourceModel(panel.manualModel);
@@ -12713,6 +12939,8 @@ void FileDock::initializePanel(FilePanelWidgets& panel, const QString& titleText
 
     panel.compactFileView = new QListView(panel.fileViewStack);
     panel.compactFileView->setMinimumWidth(0);
+    panel.compactFileView->setLayoutMode(QListView::Batched);
+    panel.compactFileView->setBatchSize(128);
     panel.compactFileView->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Expanding);
     panel.compactFileView->setModel(panel.proxyModel);
     panel.compactFileView->setModelColumn(0);
@@ -12731,6 +12959,7 @@ void FileDock::initializePanel(FilePanelWidgets& panel, const QString& titleText
     // - 禁用全局 TableColumnAutoFit，避免 QFileSystemModel 某些长名称/类型列在选择或加载时重算列宽；
     // - 横向 size policy 使用 Ignored，确保 QTreeView 的 header/内容宽度不会反向撑大 QSplitter 子面板。
     panel.fileView->setMinimumWidth(0);
+    panel.fileView->setUniformRowHeights(true);
     panel.fileView->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Expanding);
     ks::ui::SetTableColumnAutoFitEnabled(panel.fileView, false);
     panel.fileView->setModel(panel.proxyModel);
@@ -12976,7 +13205,7 @@ void FileDock::initializeConnections(FilePanelWidgets& panel)
         panel.manualResultPartial = false;
         if (panel.manualModel != nullptr)
         {
-            panel.manualModel->setRowCount(0);
+            static_cast<ManualDirectoryModel*>(panel.manualModel)->setSnapshot({});
         }
         applyReadModeToPanel(panel);
         refreshPanel(panel);
@@ -13493,65 +13722,95 @@ void FileDock::updatePanelStatus(FilePanelWidgets& panel)
     // 路径状态：直接显示当前目录。
     panel.pathStatusLabel->setText(QStringLiteral("路径: %1").arg(QDir::toNativeSeparators(panel.currentPath)));
 
-    // 统计选中项数量与总大小（文件夹大小不做递归统计，避免卡顿）。
-    const std::vector<QString> selectedItemPaths = selectedPaths(panel);
+    // 统计只读枚举模型缓存，不能对每个选中路径重新查盘。
+    QModelIndexList selectedRows = panel.fileView->selectionModel()->selectedRows(0);
+    if (selectedRows.isEmpty() && panel.fileView->currentIndex().isValid())
+        selectedRows.push_back(panel.fileView->currentIndex().siblingAtColumn(0));
     std::uint64_t totalSize = 0;
-    for (const QString& path : selectedItemPaths)
+    const bool manualMode = currentModeIsManual(panel);
+    for (const QModelIndex& proxyIndex : selectedRows)
     {
-        QFileInfo info(path);
-        if (info.isFile())
+        const QModelIndex sourceIndex = manualMode
+            ? panel.manualProxyModel->mapToSource(proxyIndex)
+            : panel.proxyModel->mapToSource(proxyIndex);
+        if (!sourceIndex.isValid())
+            continue;
+        if (manualMode)
         {
-            totalSize += static_cast<std::uint64_t>(std::max<qint64>(0, info.size()));
+            if (!sourceIndex.data(Qt::UserRole + 1).toBool())
+                totalSize += sourceIndex.siblingAtColumn(1).data(Qt::UserRole).toULongLong();
+        }
+        else if (!panel.fsModel->isDir(sourceIndex))
+        {
+            totalSize += static_cast<std::uint64_t>(std::max<qint64>(0, panel.fsModel->size(sourceIndex)));
         }
     }
-
-    QString attributeHint;
-    if (selectedItemPaths.size() == 1)
-    {
-        QFileInfo info(selectedItemPaths.front());
-        QStringList attrs;
-        if (!info.isWritable())
-        {
-            attrs.push_back(QStringLiteral("只读"));
-        }
-        if (info.isHidden())
-        {
-            attrs.push_back(QStringLiteral("隐藏"));
-        }
-        if (info.isSymLink())
-        {
-            attrs.push_back(QStringLiteral("链接"));
-        }
-        if (!attrs.isEmpty())
-        {
-            attributeHint = QStringLiteral(" [%1]").arg(attrs.join(','));
-        }
-    }
-
+    const qsizetype selectedCount = selectedRows.size();
     panel.selectionStatusLabel->setText(
         QStringLiteral("选中: %1  大小: %2%3")
-        .arg(selectedItemPaths.size())
-        .arg(formatSizeText(totalSize))
-        .arg(attributeHint));
+        .arg(selectedCount).arg(formatSizeText(totalSize)).arg(QString()));
 
-    // 磁盘状态：显示当前分区剩余空间。
-    const QStorageInfo storageInfo(panel.currentPath);
-    if (storageInfo.isValid() && storageInfo.isReady())
+    const int statusSerial = ++panel.statusRequestSerial;
+    if (!panel.statusQueryInProgress)
     {
-        panel.diskStatusLabel->setText(
-            QStringLiteral("剩余: %1 / 总计: %2")
-            .arg(formatSizeText(static_cast<std::uint64_t>(storageInfo.bytesAvailable())))
-            .arg(formatSizeText(static_cast<std::uint64_t>(storageInfo.bytesTotal()))));
-    }
-    else
-    {
-        panel.diskStatusLabel->setText(QStringLiteral("磁盘: -"));
+        panel.statusQueryInProgress = true;
+        const QString currentPath = panel.currentPath;
+        QString singlePath;
+        if (selectedCount == 1)
+        {
+            const QModelIndex sourceIndex = manualMode
+                ? panel.manualProxyModel->mapToSource(selectedRows.front())
+                : panel.proxyModel->mapToSource(selectedRows.front());
+            singlePath = manualMode ? sourceIndex.data(Qt::UserRole).toString()
+                : panel.fsModel->filePath(sourceIndex);
+        }
+        const bool leftPanel = (&panel == &m_leftPanel);
+        QPointer<FileDock> guard(this);
+        QThreadPool::globalInstance()->start(QRunnable::create(
+            [guard, leftPanel, currentPath, singlePath, statusSerial, selectedCount, totalSize]() {
+                QStringList attrs;
+                if (!singlePath.isEmpty())
+                {
+                    const QFileInfo info(singlePath);
+                    if (!info.isWritable()) attrs.push_back(QStringLiteral("只读"));
+                    if (info.isHidden()) attrs.push_back(QStringLiteral("隐藏"));
+                    if (info.isSymLink()) attrs.push_back(QStringLiteral("链接"));
+                }
+                const QStorageInfo storage(currentPath);
+                const bool ready = storage.isValid() && storage.isReady();
+                const qint64 available = storage.bytesAvailable();
+                const qint64 total = storage.bytesTotal();
+                QMetaObject::invokeMethod(qApp,
+                    [guard, leftPanel, statusSerial, selectedCount, totalSize, attrs,
+                     ready, available, total]() {
+                        if (!guard)
+                            return;
+                        auto& target = leftPanel ? guard->m_leftPanel : guard->m_rightPanel;
+                        target.statusQueryInProgress = false;
+                        if (target.statusRequestSerial != statusSerial)
+                        {
+                            // 查询期间选区或路径已变：合并中间请求，只补查当前状态。
+                            guard->updatePanelStatus(target);
+                            return;
+                        }
+                        const QString attributeHint = attrs.isEmpty() ? QString() :
+                            QStringLiteral(" [%1]").arg(attrs.join(','));
+                        target.selectionStatusLabel->setText(
+                            QStringLiteral("选中: %1  大小: %2%3")
+                            .arg(selectedCount).arg(formatSizeText(totalSize)).arg(attributeHint));
+                        target.diskStatusLabel->setText(ready
+                            ? QStringLiteral("剩余: %1 / 总计: %2")
+                                .arg(formatSizeText(static_cast<std::uint64_t>(std::max<qint64>(0, available))))
+                                .arg(formatSizeText(static_cast<std::uint64_t>(std::max<qint64>(0, total))))
+                            : QStringLiteral("磁盘: -"));
+                    }, Qt::QueuedConnection);
+            }));
     }
 
     // 状态日志去重：只有内容变化时输出，避免选区抖动造成日志风暴。
     const QString statusSignature = QStringLiteral("%1|%2|%3|%4")
         .arg(panel.currentPath)
-        .arg(selectedItemPaths.size())
+        .arg(selectedCount)
         .arg(static_cast<qulonglong>(totalSize))
         .arg(panel.diskStatusLabel->text());
     if (statusSignature != panel.lastStatusLogSignature)
@@ -13562,7 +13821,7 @@ void FileDock::updatePanelStatus(FilePanelWidgets& panel)
             << "[FileDock] 状态栏更新, panel="
             << panel.panelNameText.toStdString()
             << ", selectedCount="
-            << selectedItemPaths.size()
+            << selectedCount
             << ", selectedBytes="
             << static_cast<qulonglong>(totalSize)
             << ", path="
@@ -13988,176 +14247,9 @@ void FileDock::recreateFileSystemModel(FilePanelWidgets& panel)
     }
 }
 
-bool FileDock::reloadManualModel(FilePanelWidgets& panel, const bool showWarningMessage)
-{
-    if (panel.manualModel == nullptr || panel.currentPath.isEmpty())
-    {
-        return false;
-    }
-
-    std::vector<ks::file::ManualDirectoryEntry> entries;
-    ks::file::ManualFsType fsType = ks::file::ManualFsType::Unknown;
-    QString errorText;
-    QString sourceDetail;
-    // usedWinApiFallback：记录手动 NTFS 解析是否已经降级到 Windows API。
-    bool usedWinApiFallback = false;
-    bool partialResult = false;
-    QStringList suspiciousNames;
-    const ManualParseBackend parseBackend = manualParseBackendForPanel(panel);
-    const bool driverMode = parseBackendIsKernel(parseBackend);
-    const QString backendText = parseBackendDisplayText(parseBackend);
-    const ks::file::ManualFsType requestedFsType = requestedManualFsTypeForPanel(panel);
-    const int requestedReadMode = panel.readModeCombo != nullptr
-        ? panel.readModeCombo->currentIndex()
-        : 0;
-    const bool parseOk = runManualParseBackend(
-        parseBackend,
-        panel.currentPath,
-        requestedFsType,
-        entries,
-        fsType,
-        errorText,
-        usedWinApiFallback,
-        partialResult,
-        sourceDetail,
-        suspiciousNames);
-
-    panel.manualModel->removeRows(0, panel.manualModel->rowCount());
-    panel.lastManualFsType = fsType;
-    panel.manualRequestedFsType = requestedFsType;
-    panel.manualRequestedReadMode = requestedReadMode;
-    panel.manualResultPartial = partialResult;
-    panel.manualSourceDetail = sourceDetail;
-    panel.manualSuspiciousNames = suspiciousNames;
-    if (!parseOk)
-    {
-        // privilegePromptHandled：恢复提示已处理权限问题时不再显示手动解析通用错误。
-        const bool privilegePromptHandled = ks::ui::promptForPrivilegeFailure(
-            this,
-            driverMode
-                ? QStringLiteral("%1目录").arg(backendText)
-                : QStringLiteral("读取原始文件系统数据"),
-            errorText);
-        panel.manualLoadedPath.clear();
-        if (panel.parserStatusLabel != nullptr)
-        {
-            panel.parserStatusLabel->setText(
-                QStringLiteral("解析器: %1失败").arg(backendText));
-        }
-        if (showWarningMessage && !privilegePromptHandled)
-        {
-            QMessageBox::warning(
-                this,
-                QStringLiteral("%1失败").arg(backendText),
-                QStringLiteral("路径: %1\n错误: %2")
-                .arg(QDir::toNativeSeparators(panel.currentPath))
-                .arg(errorText));
-        }
-
-        kLogEvent event;
-        warn << event
-            << "[FileDock] 目录解析失败, source="
-            << parseBackendLogTag(parseBackend)
-            << ", panel="
-            << panel.panelNameText.toStdString()
-            << ", path="
-            << QDir::toNativeSeparators(panel.currentPath).toStdString()
-            << ", error="
-            << errorText.toStdString()
-            << eol;
-        return false;
-    }
-
-    const QSet<QString> suspiciousNameSet = buildSuspiciousNameSet(suspiciousNames);
-    // reparseProbeBudget：本批回填允许的同步重解析点探测次数。
-    int reparseProbeBudget = kMaxBatchReparseProbes;
-    for (const ks::file::ManualDirectoryEntry& itemValue : entries)
-    {
-        QList<QStandardItem*> rowItems;
-        rowItems.reserve(static_cast<int>(ManualModelColumn::Count));
-
-        QStandardItem* nameItem = new QStandardItem(itemValue.name);
-        nameItem->setIcon(QApplication::style()->standardIcon(
-            itemValue.isDirectory ? QStyle::SP_DirIcon : QStyle::SP_FileIcon));
-        nameItem->setData(itemValue.absolutePath, Qt::UserRole);
-        nameItem->setData(itemValue.isDirectory, Qt::UserRole + 1);
-        rowItems.push_back(nameItem);
-
-        QStandardItem* sizeItem = new QStandardItem(itemValue.isDirectory ? QStringLiteral("-") : formatSizeText(itemValue.sizeBytes));
-        sizeItem->setData(static_cast<qulonglong>(itemValue.sizeBytes), Qt::UserRole);
-        rowItems.push_back(sizeItem);
-
-        QString typeText = itemValue.typeText;
-        // 限额内才做同步探测，见 kMaxBatchReparseProbes 的说明。
-        if (reparseProbeBudget > 0)
-        {
-            --reparseProbeBudget;
-            const QString reparseMarkerText =
-                reparseKindMarkerForPath(itemValue.absolutePath);
-            if (!reparseMarkerText.isEmpty())
-            {
-                typeText = QStringLiteral("%1 / %2").arg(reparseMarkerText, typeText);
-            }
-        }
-        rowItems.push_back(new QStandardItem(typeText));
-        rowItems.push_back(new QStandardItem(itemValue.modifiedTime.isValid()
-            ? itemValue.modifiedTime.toString(QStringLiteral("yyyy-MM-dd HH:mm:ss"))
-            : QStringLiteral("-")));
-        rowItems.push_back(new QStandardItem(QDir::toNativeSeparators(itemValue.absolutePath)));
-        rowItems.push_back(new QStandardItem(itemValue.isDirectory ? QStringLiteral("1") : QStringLiteral("0")));
-        markSuspiciousRowIfNeeded(rowItems, itemValue.name, suspiciousNameSet);
-        panel.manualModel->appendRow(rowItems);
-    }
-
-    if (panel.parserStatusLabel != nullptr)
-    {
-        // 手动链路失败后若已回退到 Windows API，则必须明确展示真实来源，避免 UI 误导。
-        if (!sourceDetail.isEmpty())
-        {
-            QString statusText = QStringLiteral("解析器: %1").arg(sourceDetail);
-            if (!suspiciousNames.isEmpty())
-            {
-                statusText += QStringLiteral("；疑似隐藏项 %1 个")
-                    .arg(suspiciousNames.size());
-            }
-            panel.parserStatusLabel->setText(statusText);
-        }
-        else if (usedWinApiFallback)
-        {
-            panel.parserStatusLabel->setText(
-                QStringLiteral("解析器: Windows API 回退 (%1)")
-                .arg(manualFsTypeToText(fsType)));
-        }
-        else
-        {
-            panel.parserStatusLabel->setText(
-                QStringLiteral("解析器: %1 (手动)")
-                .arg(manualFsTypeToText(fsType)));
-        }
-    }
-    panel.manualLoadedPath = panel.currentPath;
-
-    kLogEvent event;
-    info << event
-        << "[FileDock] 目录解析完成, source="
-        << parseBackendLogTag(parseBackend)
-        << ", panel="
-        << panel.panelNameText.toStdString()
-        << ", partial="
-        << (partialResult ? "true" : "false")
-        << ", fsType="
-        << manualFsTypeToText(fsType).toStdString()
-        << ", rows="
-        << entries.size()
-        << ", path="
-        << QDir::toNativeSeparators(panel.currentPath).toStdString()
-        << eol;
-    return true;
-}
-
 void FileDock::requestAsyncManualReload(FilePanelWidgets& panel, const bool showWarningMessage)
 {
-    if (panel.manualModel == nullptr || panel.currentPath.isEmpty())
+    if (panel.manualModel == nullptr || panel.currentPath.isEmpty() || !currentModeIsManual(panel))
     {
         return;
     }
@@ -14289,6 +14381,7 @@ void FileDock::requestAsyncManualReload(FilePanelWidgets& panel, const bool show
             suspiciousNames);
 
         kPro.set(progressPid, parseOk ? "生成目录列表中" : "解析失败，整理错误信息", 0, 78.0f);
+        const QSet<QString> suspiciousNameSet = buildSuspiciousNameSet(suspiciousNames);
 
         if (safeThis.isNull())
         {
@@ -14297,7 +14390,7 @@ void FileDock::requestAsyncManualReload(FilePanelWidgets& panel, const bool show
         }
 
         const bool invokeOk = QMetaObject::invokeMethod(
-            safeThis.data(),
+            qApp,
             [safeThis,
              leftPanelRequest,
              requestPath,
@@ -14317,7 +14410,8 @@ void FileDock::requestAsyncManualReload(FilePanelWidgets& panel, const bool show
              usedWinApiFallback,
              partialResult,
              sourceDetail,
-             suspiciousNames]() mutable {
+              suspiciousNames,
+              suspiciousNameSet]() mutable {
                 if (safeThis.isNull())
                 {
                     kPro.set(progressPid, "界面已关闭", 0, 100.0f);
@@ -14325,7 +14419,9 @@ void FileDock::requestAsyncManualReload(FilePanelWidgets& panel, const bool show
                 }
 
                 FilePanelWidgets& targetPanel = leftPanelRequest ? safeThis->m_leftPanel : safeThis->m_rightPanel;
-                if (targetPanel.manualParseRequestSerial != requestSerial)
+                if (targetPanel.manualParseRequestSerial != requestSerial ||
+                    targetPanel.currentPath.compare(requestPath, Qt::CaseInsensitive) != 0 ||
+                    targetPanel.readModeCombo->currentIndex() != requestedReadMode)
                 {
                     // 过期结果直接丢弃，避免“慢任务覆盖新路径数据”。
                     // 运行状态只有在这一批结果确实属于当前那次运行时才清：
@@ -14397,7 +14493,8 @@ void FileDock::requestAsyncManualReload(FilePanelWidgets& panel, const bool show
                      usedWinApiFallback,
                      partialResult,
                      sourceDetail,
-                     suspiciousNames]()
+                      suspiciousNames,
+                      suspiciousNameSet]()
                 {
                     if (safeThis.isNull())
                     {
@@ -14407,8 +14504,21 @@ void FileDock::requestAsyncManualReload(FilePanelWidgets& panel, const bool show
 
                     FilePanelWidgets& commitPanel =
                         leftPanelRequest ? safeThis->m_leftPanel : safeThis->m_rightPanel;
-                    if (commitPanel.manualParseRequestSerial != requestSerial)
+                    if (commitPanel.manualParseRequestSerial != requestSerial ||
+                        commitPanel.currentPath.compare(requestPath, Qt::CaseInsensitive) != 0 ||
+                        commitPanel.readModeCombo->currentIndex() != requestedReadMode)
                     {
+                        if (commitPanel.manualParseRequestSerial == requestSerial)
+                        {
+                            commitPanel.manualParseInProgress = false;
+                            commitPanel.manualParsingPath.clear();
+                            commitPanel.readModeCombo->setEnabled(true);
+                            const bool pendingWarning = commitPanel.manualParsePendingShowWarning;
+                            commitPanel.manualParsePending = false;
+                            commitPanel.manualParsePendingShowWarning = false;
+                            safeThis->requestAsyncManualReload(commitPanel, pendingWarning);
+                        }
+                        kPro.set(progressPid, "结果过期已忽略", 0, 100.0f);
                         return;
                     }
 
@@ -14424,11 +14534,12 @@ void FileDock::requestAsyncManualReload(FilePanelWidgets& panel, const bool show
                         commitPanel.readModeCombo->setEnabled(true);
                     }
 
-                    commitPanel.manualModel->setRowCount(0);
+
                     commitPanel.lastManualFsType = parsedFsType;
 
                     if (!parseOk)
                     {
+                        static_cast<ManualDirectoryModel*>(commitPanel.manualModel)->setSnapshot({});
                         // 失败时也记住路径，避免过滤/排序触发连续重试。
                         commitPanel.manualLoadedPath = requestPath;
                         if (commitPanel.parserStatusLabel != nullptr)
@@ -14470,81 +14581,10 @@ void FileDock::requestAsyncManualReload(FilePanelWidgets& panel, const bool show
                     }
                     else
                     {
-                        // 批量回填模型：
-                        // - 不再阻断 manualModel 信号，避免 proxy 无法感知新增行导致“日志显示有 rows 但视图空白”。
-                        // - 通过临时关闭视图重绘降低批量插入期间的 UI 开销。
-                        if (commitPanel.fileView != nullptr)
-                        {
-                            commitPanel.fileView->setUpdatesEnabled(false);
-                            commitPanel.compactFileView->setUpdatesEnabled(false);
-                        }
-                        const QSet<QString> suspiciousNameSet =
-                            buildSuspiciousNameSet(suspiciousNames);
-                        // reparseProbeBudget：本批回填允许的同步重解析点探测次数。
-                        int reparseProbeBudget = kMaxBatchReparseProbes;
-                        for (const ks::file::ManualDirectoryEntry& itemValue : *parsedEntriesSnapshot)
-                        {
-                            QList<QStandardItem*> rowItems;
-                            rowItems.reserve(static_cast<int>(ManualModelColumn::Count));
-
-                            QStandardItem* nameItem = new QStandardItem(itemValue.name);
-                            nameItem->setIcon(QApplication::style()->standardIcon(
-                                itemValue.isDirectory ? QStyle::SP_DirIcon : QStyle::SP_FileIcon));
-                            nameItem->setData(itemValue.absolutePath, Qt::UserRole);
-                            nameItem->setData(itemValue.isDirectory, Qt::UserRole + 1);
-                            rowItems.push_back(nameItem);
-
-                            QStandardItem* sizeItem = new QStandardItem(
-                                itemValue.isDirectory
-                                ? QStringLiteral("-")
-                                : formatSizeText(itemValue.sizeBytes));
-                            sizeItem->setData(
-                                static_cast<qulonglong>(itemValue.sizeBytes),
-                                Qt::UserRole);
-                            rowItems.push_back(sizeItem);
-
-                            QString typeText = itemValue.typeText;
-                            // 限额内才做同步探测，见 kMaxBatchReparseProbes 的说明。
-                            // 这条路径尤其关键：R0/IRP 读取方式一次可以回填上万行，
-                            // 逐行做 Win32 查询会把 UI 线程按住好几秒。
-                            if (reparseProbeBudget > 0)
-                            {
-                                --reparseProbeBudget;
-                                const QString reparseMarkerText =
-                                    reparseKindMarkerForPath(itemValue.absolutePath);
-                                if (!reparseMarkerText.isEmpty())
-                                {
-                                    typeText = QStringLiteral("%1 / %2")
-                                        .arg(reparseMarkerText, typeText);
-                                }
-                            }
-                            rowItems.push_back(new QStandardItem(typeText));
-                            rowItems.push_back(new QStandardItem(
-                                itemValue.modifiedTime.isValid()
-                                ? itemValue.modifiedTime.toString(
-                                    QStringLiteral("yyyy-MM-dd HH:mm:ss"))
-                                : QStringLiteral("-")));
-                            rowItems.push_back(new QStandardItem(
-                                QDir::toNativeSeparators(itemValue.absolutePath)));
-                            rowItems.push_back(new QStandardItem(
-                                itemValue.isDirectory
-                                ? QStringLiteral("1")
-                                : QStringLiteral("0")));
-                            markSuspiciousRowIfNeeded(
-                                rowItems, itemValue.name, suspiciousNameSet);
-                            commitPanel.manualModel->appendRow(rowItems);
-                        }
-                        if (commitPanel.manualProxyModel != nullptr)
-                        {
-                            commitPanel.manualProxyModel->invalidate();
-                        }
-                        if (commitPanel.fileView != nullptr)
-                        {
-                            commitPanel.fileView->setRootIndex(QModelIndex());
-                            commitPanel.compactFileView->setRootIndex(QModelIndex());
-                            commitPanel.fileView->setUpdatesEnabled(true);
-                            commitPanel.compactFileView->setUpdatesEnabled(true);
-                        }
+                        static_cast<ManualDirectoryModel*>(commitPanel.manualModel)->setSnapshot(
+                            parsedEntriesSnapshot, suspiciousNameSet);
+                        commitPanel.fileView->setRootIndex(QModelIndex());
+                        commitPanel.compactFileView->setRootIndex(QModelIndex());
 
                         if (commitPanel.parserStatusLabel != nullptr)
                         {
@@ -19203,14 +19243,8 @@ QString FileDock::currentIndexPath(const FilePanelWidgets& panel) const
             return QString();
         }
 
-        const QStandardItem* fullPathItem = panel.manualModel->item(
-            sourceIndex.row(),
-            static_cast<int>(ManualModelColumn::FullPath));
-        if (fullPathItem == nullptr)
-        {
-            return QString();
-        }
-        return fullPathItem->text();
+        return sourceIndex.siblingAtColumn(
+            static_cast<int>(ManualModelColumn::FullPath)).data().toString();
     }
 
     if (panel.proxyModel == nullptr || panel.fsModel == nullptr)
@@ -19231,6 +19265,8 @@ std::vector<QString> FileDock::selectedPaths(const FilePanelWidgets& panel) cons
 
     const QModelIndexList selectedRows = panel.fileView->selectionModel()->selectedRows(0);
     result.reserve(static_cast<std::size_t>(selectedRows.size()));
+    QSet<QString> seenPaths;
+    seenPaths.reserve(selectedRows.size());
 
     if (currentModeIsManual(panel))
     {
@@ -19245,20 +19281,15 @@ std::vector<QString> FileDock::selectedPaths(const FilePanelWidgets& panel) cons
             {
                 continue;
             }
-            const QStandardItem* fullPathItem = panel.manualModel->item(
-                sourceIndex.row(),
-                static_cast<int>(ManualModelColumn::FullPath));
-            if (fullPathItem == nullptr)
-            {
-                continue;
-            }
-            const QString pathText = fullPathItem->text();
+            const QString pathText = sourceIndex.siblingAtColumn(
+                static_cast<int>(ManualModelColumn::FullPath)).data().toString();
             if (pathText.isEmpty())
             {
                 continue;
             }
-            if (std::find(result.begin(), result.end(), pathText) == result.end())
+            if (!seenPaths.contains(pathText))
             {
+                seenPaths.insert(pathText);
                 result.push_back(pathText);
             }
         }
@@ -19281,8 +19312,9 @@ std::vector<QString> FileDock::selectedPaths(const FilePanelWidgets& panel) cons
             {
                 continue;
             }
-            if (std::find(result.begin(), result.end(), path) == result.end())
+            if (!seenPaths.contains(path))
             {
+                seenPaths.insert(path);
                 result.push_back(path);
             }
         }
