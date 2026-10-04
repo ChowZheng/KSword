@@ -90,6 +90,7 @@
 #include <QStyleOptionSlider>
 #include <QStyledItemDelegate>
 #include <QSlider>
+#include <QSpinBox>
 #include <QScrollBar>
 #include <QSvgRenderer>
 #include <QTabBar>
@@ -779,7 +780,6 @@ namespace
     constexpr int CpuCoreSnapshotMinimumIntervalMilliseconds = 1000;
     constexpr int ProcessTableMinimumIntervalMilliseconds = 500;
     constexpr int ProcessTableMaximumIntervalMilliseconds = 60000;
-    constexpr std::size_t ActivityMaximumSampleCount = 1800;
     constexpr qsizetype ActivityIconCacheMaximumCount = 8192;
 
     // formatProcessWin32Error 作用：
@@ -4951,17 +4951,6 @@ void ProcessDock::initializeTopControls()
         QStringLiteral("process.activity.tooltip.background"),
         QStringLiteral("默认仅进程列表 Tab 显示时刷新和记录；勾选后切到其它 Tab 仍继续刷新并记录。"));
 
-    m_activityListOnlyRefreshCheck = new QCheckBox(QStringLiteral("不记录历史"), m_processSettingsDialog);
-    m_activityListOnlyRefreshCheck->setToolTip(QStringLiteral("勾选后周期刷新仍会更新进程列表，但不会向上方时间轴写入新的活动记录。"));
-    languageManager.bindText(
-        m_activityListOnlyRefreshCheck,
-        QStringLiteral("process.activity.list_only"),
-        QStringLiteral("不记录历史"));
-    languageManager.bindToolTip(
-        m_activityListOnlyRefreshCheck,
-        QStringLiteral("process.activity.tooltip.list_only"),
-        QStringLiteral("勾选后周期刷新仍会更新进程列表，但不会向上方时间轴写入新的活动记录。"));
-
     m_processSettingsLayout->addWidget(m_strategyCombo);
     m_processSettingsLayout->addWidget(m_refreshLabel);
     m_processSettingsLayout->addWidget(m_tableRefreshIntervalSpin);
@@ -4970,7 +4959,6 @@ void ProcessDock::initializeTopControls()
     m_processSettingsLayout->addWidget(m_kernelCompareCheck);
     m_processSettingsLayout->addWidget(m_showKswordHiddenProcessCheck);
     m_processSettingsLayout->addWidget(m_activityBackgroundRecordCheck);
-    m_processSettingsLayout->addWidget(m_activityListOnlyRefreshCheck);
     m_processSettingsLayout->addStretch(1);
 
     // “选择列”入口：
@@ -5055,6 +5043,35 @@ void ProcessDock::initializeProcessActivityPanel()
         QStringLiteral("清空当前刷新同步记录的进程活动样本。"));
     m_activityClearButton->setStyleSheet(buildBlueButtonStyle(false));
 
+    m_activityHistoryModeCombo = new QComboBox(m_activityPanelWidget);
+    m_activityHistoryModeCombo->addItem(QStringLiteral("不记录历史"), static_cast<int>(ActivityHistoryMode::None));
+    m_activityHistoryModeCombo->addItem(QStringLiteral("全量留存"), static_cast<int>(ActivityHistoryMode::All));
+    m_activityHistoryModeCombo->addItem(QStringLiteral("留存最近"), static_cast<int>(ActivityHistoryMode::Recent));
+    languageManager.bindComboBoxItem(m_activityHistoryModeCombo, 0,
+        QStringLiteral("process.activity.list_only"), QStringLiteral("不记录历史"));
+    languageManager.bindComboBoxItem(m_activityHistoryModeCombo, 1,
+        QStringLiteral("process.activity.history.all"), QStringLiteral("全量留存"));
+    languageManager.bindComboBoxItem(m_activityHistoryModeCombo, 2,
+        QStringLiteral("process.activity.history.recent"), QStringLiteral("留存最近"));
+    m_activityHistoryModeCombo->setCurrentIndex(2);
+    applyBlueComboBoxRuntimeStyle(m_activityHistoryModeCombo);
+    languageManager.bindToolTip(m_activityHistoryModeCombo,
+        QStringLiteral("process.activity.history.tooltip.mode"),
+        QStringLiteral("选择历史留存方式；不记录历史仅停止新增记录，全量留存不限制采样数量。"));
+
+    m_activityHistoryLimitSpin = new QSpinBox(m_activityPanelWidget);
+    m_activityHistoryLimitSpin->setRange(1, std::numeric_limits<int>::max());
+    m_activityHistoryLimitSpin->setValue(50);
+    m_activityHistoryLimitSpin->setKeyboardTracking(false);
+    m_activityHistoryLimitSpin->setMaximumWidth(120);
+    m_activityHistoryLimitSpin->setSuffix(QStringLiteral(" 次"));
+    languageManager.bindSuffix(m_activityHistoryLimitSpin,
+        QStringLiteral("process.activity.history.count_suffix"), QStringLiteral(" 次"));
+    m_activityHistoryLimitSpin->setToolTip(QStringLiteral("保留最近的采样次数，默认 50 次；减少次数会立即移除更早的历史样本。"));
+    languageManager.bindToolTip(m_activityHistoryLimitSpin,
+        QStringLiteral("process.activity.history.tooltip.limit"),
+        QStringLiteral("保留最近的采样次数，默认 50 次；减少次数会立即移除更早的历史样本。"));
+
     const QString metricButtonStyle = QStringLiteral(
         "QPushButton {"
         "  color:%1;"
@@ -5137,11 +5154,13 @@ void ProcessDock::initializeProcessActivityPanel()
         QStringLiteral("显示:"));
 
     // 活动控制项并入顶部控制行，图表面板只保留图表本身，省下一整行垂直空间。
-    // 设置类控件已集中到齿轮窗口，这里只保留清空、指标选择和窗口拾取入口。
+    // 历史留存方式直接放在图表上方，数量输入仅在“留存最近”模式显示。
     int topControlInsertIndex = m_controlLayout->indexOf(m_processSearchLineEdit) + 1;
     m_controlLayout->insertSpacing(topControlInsertIndex++, 12);
     for (QWidget* const activityControlWidget : {
              static_cast<QWidget*>(m_activityClearButton),
+             static_cast<QWidget*>(m_activityHistoryModeCombo),
+             static_cast<QWidget*>(m_activityHistoryLimitSpin),
              static_cast<QWidget*>(activityDisplayLabel),
              static_cast<QWidget*>(m_activityCpuButton),
              static_cast<QWidget*>(m_activityMemoryButton),
@@ -6171,18 +6190,21 @@ void ProcessDock::initializeConnections()
         }
     });
 
-    // 不记录历史：
-    // - 勾选时不清空历史样本，只暂停后续 append；
-    // - 取消后继续沿用同一条记录时间轴，方便对比前后变化。
-    connect(m_activityListOnlyRefreshCheck, &QCheckBox::toggled, this, [this](const bool checked) {
-        kLogEvent logEvent;
-        info << logEvent
-            << "[ProcessDock] 不记录历史开关变更, listOnly="
-            << (checked ? "true" : "false")
-            << eol;
+    // 不记录历史保留已有样本；切换到最近 N 次或减少 N 时立即裁剪缓存。
+    const auto applyActivityHistoryRetention = [this]() {
+        m_activityHistoryMode = static_cast<ActivityHistoryMode>(m_activityHistoryModeCombo->currentData().toInt());
+        m_activityHistoryLimitSpin->setVisible(m_activityHistoryMode == ActivityHistoryMode::Recent);
+        const std::size_t removedSampleCount = trimProcessActivitySamples();
+        refreshProcessActivityTimeline(removedSampleCount);
         updateProcessActivityStatusLabel();
         refreshProcessActivityChart();
-    });
+        if (removedSampleCount > 0)
+        {
+            rebuildTable();
+        }
+    };
+    connect(m_activityHistoryModeCombo, &QComboBox::currentIndexChanged, this, applyActivityHistoryRetention);
+    connect(m_activityHistoryLimitSpin, &QSpinBox::valueChanged, this, applyActivityHistoryRetention);
 
     // 表格右键菜单。
     connect(m_processTable, &QWidget::customContextMenuRequested, this, [this](const QPoint& localPosition) {
@@ -9024,7 +9046,7 @@ bool ProcessDock::isProcessActivityRecordingAllowedNow() const
         return false;
     }
 
-    if (m_activityListOnlyRefreshCheck != nullptr && m_activityListOnlyRefreshCheck->isChecked())
+    if (m_activityHistoryMode == ActivityHistoryMode::None)
     {
         return false;
     }
@@ -9160,10 +9182,10 @@ void ProcessDock::appendProcessActivitySample()
     }
 
     m_activitySamples.push_back(std::move(sample));
-    const bool sampleIndexShiftedLeft = trimProcessActivitySamples();
+    const std::size_t removedSampleCount = trimProcessActivitySamples();
     if (m_activityChartWidget != nullptr)
     {
-        m_activityChartWidget->animateLatestSample(sampleIndexShiftedLeft);
+        m_activityChartWidget->animateLatestSample(removedSampleCount > 0);
     }
     if (!m_activitySamples.empty())
     {
@@ -9174,7 +9196,7 @@ void ProcessDock::appendProcessActivitySample()
         m_activityTableSnapshotIndex = -1;
         m_activityTableSnapshotRecords.clear();
     }
-    refreshProcessActivityTimeline(sampleIndexShiftedLeft);
+    refreshProcessActivityTimeline(removedSampleCount);
     refreshProcessActivityChart();
     updateProcessActivityStatusLabel();
 }
@@ -9251,15 +9273,19 @@ void ProcessDock::appendProcessActivitySampleToDetailWindows(const ProcessActivi
     }
 }
 
-bool ProcessDock::trimProcessActivitySamples()
+std::size_t ProcessDock::trimProcessActivitySamples()
 {
-    // 样本缓存固定上限，避免长时间记录造成内存无限增长。
-    if (m_activitySamples.size() <= ActivityMaximumSampleCount)
+    // 全量模式不淘汰；不记录模式保留已有历史，只停止后续采样。
+    if (m_activityHistoryMode != ActivityHistoryMode::Recent)
     {
-        return false;
+        return 0;
     }
-
-    const std::size_t removeCount = m_activitySamples.size() - ActivityMaximumSampleCount;
+    const std::size_t sampleLimit = static_cast<std::size_t>(m_activityHistoryLimitSpin->value());
+    if (m_activitySamples.size() <= sampleLimit)
+    {
+        return 0;
+    }
+    const std::size_t removeCount = m_activitySamples.size() - sampleLimit;
     for (std::size_t removeIndex = 0; removeIndex < removeCount; ++removeIndex)
     {
         m_activitySamples.pop_front();
@@ -9271,12 +9297,13 @@ bool ProcessDock::trimProcessActivitySamples()
         {
             m_activityTableSnapshotIndex = -1;
             m_activityTableSnapshotRecords.clear();
+            m_activityTimelinePinnedToLatest = true;
         }
     }
-    return removeCount > 0;
+    return removeCount;
 }
 
-void ProcessDock::refreshProcessActivityTimeline(const bool indexShiftedLeft)
+void ProcessDock::refreshProcessActivityTimeline(const std::size_t removedSampleCount)
 {
     if (m_activityTimelineSlider == nullptr)
     {
@@ -9285,8 +9312,8 @@ void ProcessDock::refreshProcessActivityTimeline(const bool indexShiftedLeft)
 
     const bool oldUpdating = m_activityTimelineSliderUpdating;
     const int sampleCount = static_cast<int>(m_activitySamples.size());
-    const int previousValue = (indexShiftedLeft && !m_activityTimelinePinnedToLatest)
-        ? std::max(0, m_activityTimelineSlider->value())
+    const int previousValue = (removedSampleCount > 0 && !m_activityTimelinePinnedToLatest)
+        ? std::max(0, m_activityTimelineSlider->value() - static_cast<int>(removedSampleCount))
         : m_activityTimelineSlider->value();
     const int previousMaximum = m_activityTimelineSlider->maximum();
     const bool shouldPinToLatest = m_activityTimelinePinnedToLatest || previousValue >= previousMaximum;

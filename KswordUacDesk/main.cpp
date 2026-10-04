@@ -31,36 +31,9 @@ namespace
         SetProcessDPIAware();
     }
 
-    void stageTrace(const QString& message)
+    void qtMessageHandler(QtMsgType, const QMessageLogContext&, const QString&)
     {
-        PrivilegeStage::writeDiagnosticLog(message);
-        const std::wstring text = QStringLiteral("[KswordUacDesk] ").append(message).append(QLatin1Char('\n')).toStdWString();
-        OutputDebugStringW(text.c_str());
-    }
-
-    LONG WINAPI unhandledExceptionFilter(EXCEPTION_POINTERS* exceptionInfo)
-    {
-        const DWORD code = exceptionInfo && exceptionInfo->ExceptionRecord
-            ? exceptionInfo->ExceptionRecord->ExceptionCode : 0;
-        const quintptr address = exceptionInfo && exceptionInfo->ExceptionRecord
-            ? reinterpret_cast<quintptr>(exceptionInfo->ExceptionRecord->ExceptionAddress) : 0;
-        PrivilegeStage::writeDiagnosticLog(QStringLiteral("unhandled-exception: code=0x%1 address=0x%2")
-                                                .arg(code, 0, 16).arg(address, 0, 16));
-        return EXCEPTION_EXECUTE_HANDLER;
-    }
-
-    void qtMessageHandler(QtMsgType type, const QMessageLogContext&, const QString& message)
-    {
-        const char* typeName = "unknown";
-        switch (type)
-        {
-        case QtDebugMsg: typeName = "debug"; break;
-        case QtInfoMsg: typeName = "info"; break;
-        case QtWarningMsg: typeName = "warning"; break;
-        case QtCriticalMsg: typeName = "critical"; break;
-        case QtFatalMsg: typeName = "fatal"; break;
-        }
-        PrivilegeStage::writeDiagnosticLog(QStringLiteral("qt-%1: %2").arg(QString::fromLatin1(typeName), message));
+        // Suppress Qt diagnostics, including its default debugger/stderr output.
     }
 
     QString valueAfter(const QStringList& args, const QString& prefix)
@@ -116,8 +89,8 @@ namespace
     int runInitial(const QString& executable, const QStringList& args)
     {
         const DWORD session = PrivilegeStage::currentSessionId();
-        stageTrace(QStringLiteral("initial: entered args=%1").arg(args.join(QLatin1Char(' '))));
-        stageTrace(QStringLiteral("initial: elevated=%1, system=%2, uiAccess=%3, session=%4, desktop=%5")
+        KSWORD_UAC_DIAGNOSTIC_LOG(QStringLiteral("initial: entered args=%1").arg(args.join(QLatin1Char(' '))));
+        KSWORD_UAC_DIAGNOSTIC_LOG(QStringLiteral("initial: elevated=%1, system=%2, uiAccess=%3, session=%4, desktop=%5")
                        .arg(PrivilegeStage::isProcessElevated() ? 1 : 0)
                        .arg(PrivilegeStage::isSystem() ? 1 : 0)
                        .arg(PrivilegeStage::hasUiAccess() ? 1 : 0)
@@ -129,7 +102,7 @@ namespace
         HANDLE ready = CreateEventW(nullptr, TRUE, FALSE, QStringLiteral("Global\\KswordUacDesk.Ready.%1").arg(GetCurrentProcessId()).toStdWString().c_str());
         if (!ready)
         {
-            stageTrace(QStringLiteral("initial: CreateEvent failed"));
+            KSWORD_UAC_DIAGNOSTIC_LOG(QStringLiteral("initial: CreateEvent failed"));
             return 2;
         }
         const QString handoff = QStringLiteral("Global\\KswordUacDesk.Ready.%1").arg(GetCurrentProcessId());
@@ -140,21 +113,21 @@ namespace
             : PrivilegeStage::launchAdminStage(executable, stageArgs(QStringLiteral("admin"), handoff, parentPid, parentCreation), error);
         if (!launched)
         {
-            stageTrace(QStringLiteral("initial: stage launch failed: %1").arg(error.isEmpty() ? QStringLiteral("ShellExecuteExW 失败或未返回错误") : error));
+            KSWORD_UAC_DIAGNOSTIC_LOG(QStringLiteral("initial: stage launch failed: %1").arg(error.isEmpty() ? QStringLiteral("ShellExecuteExW 失败或未返回错误") : error));
             CloseHandle(ready);
             return 3;
         }
-        stageTrace(QStringLiteral("initial: child stage created, waiting for handoff"));
+        KSWORD_UAC_DIAGNOSTIC_LOG(QStringLiteral("initial: child stage created, waiting for handoff"));
         const DWORD wait = WaitForSingleObject(ready, 10000);
         CloseHandle(ready);
-        stageTrace(QStringLiteral("initial: handoff wait result=%1").arg(wait));
+        KSWORD_UAC_DIAGNOSTIC_LOG(QStringLiteral("initial: handoff wait result=%1").arg(wait));
         return wait == WAIT_OBJECT_0 ? 0 : 4;
     }
 
     int runAdmin(const QString& executable, const QStringList& args)
     {
-        stageTrace(QStringLiteral("admin: entered args=%1").arg(args.join(QLatin1Char(' '))));
-        stageTrace(QStringLiteral("admin: elevated=%1, system=%2, uiAccess=%3, session=%4, desktop=%5")
+        KSWORD_UAC_DIAGNOSTIC_LOG(QStringLiteral("admin: entered args=%1").arg(args.join(QLatin1Char(' '))));
+        KSWORD_UAC_DIAGNOSTIC_LOG(QStringLiteral("admin: elevated=%1, system=%2, uiAccess=%3, session=%4, desktop=%5")
                        .arg(PrivilegeStage::isProcessElevated() ? 1 : 0)
                        .arg(PrivilegeStage::isSystem() ? 1 : 0)
                        .arg(PrivilegeStage::hasUiAccess() ? 1 : 0)
@@ -162,12 +135,12 @@ namespace
                        .arg(PrivilegeStage::currentDesktopName()));
         if (!PrivilegeStage::isProcessElevated())
         {
-            stageTrace(QStringLiteral("admin: process is not elevated"));
+            KSWORD_UAC_DIAGNOSTIC_LOG(QStringLiteral("admin: process is not elevated"));
             return 5;
         }
         QString handoff = valueAfter(args, QStringLiteral("--ksword-uac-handoff="));
         HANDLE ready = handoff.isEmpty() ? nullptr : OpenEventW(SYNCHRONIZE, FALSE, handoff.toStdWString().c_str());
-        stageTrace(QStringLiteral("admin: handoff=%1 eventHandle=%2").arg(handoff).arg(reinterpret_cast<quintptr>(ready), 0, 16));
+        KSWORD_UAC_DIAGNOSTIC_LOG(QStringLiteral("admin: handoff=%1 eventHandle=%2").arg(handoff).arg(reinterpret_cast<quintptr>(ready), 0, 16));
         if (handoff.isEmpty())
         {
             handoff = QStringLiteral("Global\\KswordUacDesk.Ready.%1").arg(GetCurrentProcessId());
@@ -180,11 +153,11 @@ namespace
                                                                  QStringLiteral("winsta0\\Winlogon"), PrivilegeStage::currentSessionId(), error);
         if (!launched)
         {
-            stageTrace(QStringLiteral("admin: SYSTEM stage launch failed: %1").arg(error));
+            KSWORD_UAC_DIAGNOSTIC_LOG(QStringLiteral("admin: SYSTEM stage launch failed: %1").arg(error));
             if (ready) CloseHandle(ready);
             return 6;
         }
-        stageTrace(QStringLiteral("admin: SYSTEM stage created, waiting for handoff"));
+        KSWORD_UAC_DIAGNOSTIC_LOG(QStringLiteral("admin: SYSTEM stage created, waiting for handoff"));
         if (ready) WaitForSingleObject(ready, 10000);
         if (ready) CloseHandle(ready);
         return 0;
@@ -192,12 +165,9 @@ namespace
 
     int runSystem(const QString& executable, const QStringList& args, QApplication& app)
     {
-        stageTrace(QStringLiteral("system: entered args=%1").arg(args.join(QLatin1Char(' '))));
+        KSWORD_UAC_DIAGNOSTIC_LOG(QStringLiteral("system: entered args=%1").arg(args.join(QLatin1Char(' '))));
         app.setQuitOnLastWindowClosed(false);
-        QObject::connect(&app, &QCoreApplication::aboutToQuit, [] {
-            PrivilegeStage::writeDiagnosticLog(QStringLiteral("system: QApplication aboutToQuit emitted"));
-        });
-        stageTrace(QStringLiteral("system: elevated=%1, system=%2, uiAccess=%3, session=%4, desktop=%5")
+        KSWORD_UAC_DIAGNOSTIC_LOG(QStringLiteral("system: elevated=%1, system=%2, uiAccess=%3, session=%4, desktop=%5")
                        .arg(PrivilegeStage::isProcessElevated() ? 1 : 0)
                        .arg(PrivilegeStage::isSystem() ? 1 : 0)
                        .arg(PrivilegeStage::hasUiAccess() ? 1 : 0)
@@ -205,21 +175,23 @@ namespace
                        .arg(PrivilegeStage::currentDesktopName()));
         if (!PrivilegeStage::isSystem() || !PrivilegeStage::hasUiAccess())
         {
-            stageTrace(QStringLiteral("system: identity check failed; refusing to run UI"));
+            KSWORD_UAC_DIAGNOSTIC_LOG(QStringLiteral("system: identity check failed; refusing to run UI"));
             return 7;
         }
         if (PrivilegeStage::currentDesktopName().compare(QStringLiteral("Winlogon"), Qt::CaseInsensitive) != 0)
         {
-            stageTrace(QStringLiteral("system: current desktop is not Winlogon; refusing to run UI"));
+            KSWORD_UAC_DIAGNOSTIC_LOG(QStringLiteral("system: current desktop is not Winlogon; refusing to run UI"));
             return 8;
         }
         HANDLE owner = nullptr;
         if (!acquireOwner(PrivilegeStage::currentSessionId(), owner))
         {
-            stageTrace(QStringLiteral("system: another active owner already exists or mutex creation failed"));
+            KSWORD_UAC_DIAGNOSTIC_LOG(QStringLiteral("system: another active owner already exists or mutex creation failed"));
             if (owner) CloseHandle(owner);
             return 9;
         }
+        // Keep ownership until the monitor, window, and workers are destroyed.
+        const std::unique_ptr<void, decltype(&CloseHandle)> ownerLease(owner, &CloseHandle);
 
         HANDLE parent = nullptr;
         const DWORD parentPid = valueAfter(args, QStringLiteral("--ksword-parent-pid=")).toULongLong();
@@ -230,8 +202,7 @@ namespace
             if (!parent || processCreationTime(parent) != parentCreation)
             {
                 if (parent) CloseHandle(parent);
-                CloseHandle(owner);
-                stageTrace(QStringLiteral("system: Ksword5.1 parent identity check failed"));
+                KSWORD_UAC_DIAGNOSTIC_LOG(QStringLiteral("system: Ksword5.1 parent identity check failed"));
                 return 10;
             }
         }
@@ -253,13 +224,16 @@ namespace
         }
         systemFont.setStyleStrategy(QFont::PreferAntialias);
         QApplication::setFont(systemFont);
-        stageTrace(QStringLiteral("system: inherited system font family=%1 fallback=%2 pointSize=%3 antialias=1")
+        KSWORD_UAC_DIAGNOSTIC_LOG(QStringLiteral("system: inherited system font family=%1 fallback=%2 pointSize=%3 antialias=1")
                        .arg(systemFont.family())
                        .arg(systemFont.families().join(QStringLiteral(",")))
                        .arg(systemFont.pointSizeF(), 0, 'f', 2));
         UacDeskWindow window;
         window.setInitialStatus(QStringLiteral("SYSTEM/UIAccess 已接管，正在等待 UAC 安全桌面事件"));
-        window.setParentWatch(parent, parentCreation);
+        if (!window.setParentWatch(parent, parentCreation))
+        {
+            return 11;
+        }
         QObject::connect(QGuiApplication::styleHints(), &QStyleHints::colorSchemeChanged, &window,
                          [&window](Qt::ColorScheme) { window.refreshAppearance(); });
 
@@ -278,7 +252,7 @@ namespace
         // match is produced.  Winlogon is also used by the lock screen, so
         // showing the window at startup would leak the panel onto the lock UI.
         QTimer::singleShot(0, &window, [&window] { window.refreshNow(); });
-        stageTrace(QStringLiteral("system: UIAccess window started and monitor attached"));
+        KSWORD_UAC_DIAGNOSTIC_LOG(QStringLiteral("system: UIAccess window started and monitor attached"));
         const QString handoff = valueAfter(args, QStringLiteral("--ksword-uac-handoff="));
         if (!handoff.isEmpty())
         {
@@ -286,23 +260,21 @@ namespace
             if (ready) { SetEvent(ready); CloseHandle(ready); }
         }
         const int code = app.exec();
-        stageTrace(QStringLiteral("system: QApplication::exec returned code=%1").arg(code));
-        CloseHandle(owner);
+        KSWORD_UAC_DIAGNOSTIC_LOG(QStringLiteral("system: QApplication::exec returned code=%1").arg(code));
         return code;
     }
 }
 
 int main(int argc, char* argv[])
 {
-    SetUnhandledExceptionFilter(&unhandledExceptionFilter);
     initializeProcessDpiAwareness();
-    PrivilegeStage::writeDiagnosticLog(QStringLiteral("process-entry: argc=%1").arg(argc));
-    QApplication bootstrap(argc, argv);
+    KSWORD_UAC_DIAGNOSTIC_LOG(QStringLiteral("process-entry: argc=%1").arg(argc));
     qInstallMessageHandler(&qtMessageHandler);
+    QApplication bootstrap(argc, argv);
     const QString executable = QCoreApplication::applicationFilePath();
     const QStringList args = QCoreApplication::arguments();
     const QString stage = valueAfter(args, QStringLiteral("--ksword-uac-stage="));
-    PrivilegeStage::writeDiagnosticLog(QStringLiteral("process-entry: stage=%1 executable=%2").arg(stage, executable));
+    KSWORD_UAC_DIAGNOSTIC_LOG(QStringLiteral("process-entry: stage=%1 executable=%2").arg(stage, executable));
     if (stage.compare(QStringLiteral("admin"), Qt::CaseInsensitive) == 0)
         return runAdmin(executable, args);
     if (stage.compare(QStringLiteral("system"), Qt::CaseInsensitive) == 0)

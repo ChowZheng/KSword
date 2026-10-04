@@ -93,34 +93,6 @@ namespace
     const GUID kLegacyAlpcProvider = {0x45d8cccd, 0x539f, 0x4b72, {0xa8, 0xb7, 0x5c, 0x68, 0x31, 0x42, 0x60, 0x9a}};
     UacEventMonitor* g_eventMonitor = nullptr;
 
-    void appendDiagnosticLog(const QString& message)
-    {
-        CreateDirectoryW(L"E:\\Temp", nullptr);
-        HANDLE file = CreateFileW(L"E:\\Temp\\KswordUacDesk-stage.log", FILE_APPEND_DATA,
-                                  FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
-                                  OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-        if (file == INVALID_HANDLE_VALUE)
-            return;
-
-        SYSTEMTIME now{};
-        GetLocalTime(&now);
-        const QString line = QStringLiteral("%1-%2-%3 %4:%5:%6.%7 pid=%8 tid=%9 %10\r\n")
-            .arg(now.wYear, 4, 10, QLatin1Char('0'))
-            .arg(now.wMonth, 2, 10, QLatin1Char('0'))
-            .arg(now.wDay, 2, 10, QLatin1Char('0'))
-            .arg(now.wHour, 2, 10, QLatin1Char('0'))
-            .arg(now.wMinute, 2, 10, QLatin1Char('0'))
-            .arg(now.wSecond, 2, 10, QLatin1Char('0'))
-            .arg(now.wMilliseconds, 3, 10, QLatin1Char('0'))
-            .arg(GetCurrentProcessId())
-            .arg(GetCurrentThreadId())
-            .arg(message);
-        const QByteArray utf8 = line.toUtf8();
-        DWORD written = 0;
-        WriteFile(file, utf8.constData(), static_cast<DWORD>(utf8.size()), &written, nullptr);
-        CloseHandle(file);
-    }
-
     QString winError(DWORD error = GetLastError())
     {
         wchar_t buffer[512] = {};
@@ -144,6 +116,24 @@ namespace
         return rtlGetVersion(reinterpret_cast<PRTL_OSVERSIONINFOW>(&version)) == 0
             ? version.dwBuildNumber
             : 0;
+    }
+
+    ULONG stopTraceSession(TRACEHANDLE session, const QString& traceName)
+    {
+        const std::wstring name = traceName.toStdWString();
+        std::vector<BYTE> buffer(sizeof(EVENT_TRACE_PROPERTIES) +
+                                 (name.size() + 1) * sizeof(wchar_t), 0);
+        auto* properties = reinterpret_cast<EVENT_TRACE_PROPERTIES*>(buffer.data());
+        properties->Wnode.BufferSize = static_cast<ULONG>(buffer.size());
+        properties->LoggerNameOffset = sizeof(EVENT_TRACE_PROPERTIES);
+        return ControlTraceW(session, name.c_str(), properties, EVENT_TRACE_CONTROL_STOP);
+    }
+
+    void closeTraceConsumer(std::atomic<TRACEHANDLE>& consumer)
+    {
+        const TRACEHANDLE handle = consumer.exchange(0);
+        if (handle != 0 && handle != INVALID_PROCESSTRACE_HANDLE)
+            CloseTrace(handle);
     }
 
     QString timestampedEtwSessionName(const QString& component = {})
@@ -175,14 +165,14 @@ namespace
         const ULONG queryStatus = QueryAllTracesW(properties.data(), kEtwQueryCapacity, &loggerCount);
         if (queryStatus != ERROR_SUCCESS && queryStatus != ERROR_MORE_DATA)
         {
-            PrivilegeStage::writeDiagnosticLog(QStringLiteral(
+            KSWORD_UAC_DIAGNOSTIC_LOG(QStringLiteral(
                 "etw-cleanup: QueryAllTracesW failed status=0x%1 (%2)")
                 .arg(queryStatus, 0, 16).arg(winError(queryStatus)));
             return;
         }
 
         const ULONG inspected = std::min(loggerCount, kEtwQueryCapacity);
-        PrivilegeStage::writeDiagnosticLog(QStringLiteral(
+        KSWORD_UAC_DIAGNOSTIC_LOG(QStringLiteral(
             "etw-cleanup: enumerated sessions=%1 queryStatus=0x%2")
             .arg(inspected).arg(queryStatus, 0, 16));
         for (ULONG i = 0; i < inspected; ++i)
@@ -198,7 +188,7 @@ namespace
                 continue;
 
             const ULONG stopStatus = ControlTraceW(0, name, value, EVENT_TRACE_CONTROL_STOP);
-            PrivilegeStage::writeDiagnosticLog(QStringLiteral(
+            KSWORD_UAC_DIAGNOSTIC_LOG(QStringLiteral(
                 "etw-cleanup: stop name=%1 status=0x%2")
                 .arg(sessionName).arg(stopStatus, 0, 16));
         }
@@ -673,7 +663,7 @@ namespace
     {
         result = nullptr;
         error.clear();
-        PrivilegeStage::writeDiagnosticLog(QStringLiteral("token: begin, targetSession=%1").arg(sessionId));
+        KSWORD_UAC_DIAGNOSTIC_LOG(QStringLiteral("token: begin, targetSession=%1").arg(sessionId));
         if (!PrivilegeStage::isProcessElevated())
         {
             error = QStringLiteral("当前阶段不是提升管理员，不能打开 SYSTEM 进程令牌。");
@@ -711,7 +701,7 @@ namespace
             error = QStringLiteral("没有找到当前 Session 的 winlogon.exe 或 services.exe SYSTEM 令牌源。");
             return false;
         }
-        PrivilegeStage::writeDiagnosticLog(QStringLiteral("token: selected source pid=%1 rank=%2").arg(sourcePid).arg(bestRank));
+        KSWORD_UAC_DIAGNOSTIC_LOG(QStringLiteral("token: selected source pid=%1 rank=%2").arg(sourcePid).arg(bestRank));
 
         HANDLE sourceProcess = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, sourcePid);
         if (!sourceProcess)
@@ -734,7 +724,7 @@ namespace
             CloseHandle(sourceProcess);
             return false;
         }
-        PrivilegeStage::writeDiagnosticLog(QStringLiteral("token: source pid=%1 verified LocalSystem").arg(sourcePid));
+        KSWORD_UAC_DIAGNOSTIC_LOG(QStringLiteral("token: source pid=%1 verified LocalSystem").arg(sourcePid));
 
         DWORD sourceTokenSession = 0;
         if (!queryTokenSessionId(sourceToken, sourceTokenSession, error))
@@ -743,7 +733,7 @@ namespace
             CloseHandle(sourceProcess);
             return false;
         }
-        PrivilegeStage::writeDiagnosticLog(QStringLiteral("token: source token session=%1").arg(sourceTokenSession));
+        KSWORD_UAC_DIAGNOSTIC_LOG(QStringLiteral("token: source token session=%1").arg(sourceTokenSession));
 
         SECURITY_ATTRIBUTES security{sizeof(security)};
         HANDLE impersonationToken = nullptr;
@@ -809,7 +799,7 @@ namespace
             CloseHandle(sourceProcess);
             return false;
         }
-        PrivilegeStage::writeDiagnosticLog(QStringLiteral("token: primary token UIAccess verified=1, targetSession=%1").arg(sessionId));
+        KSWORD_UAC_DIAGNOSTIC_LOG(QStringLiteral("token: primary token UIAccess verified=1, targetSession=%1").arg(sessionId));
 
         CloseHandle(impersonationToken);
         CloseHandle(sourceToken);
@@ -955,10 +945,7 @@ namespace
     }
 }
 
-void PrivilegeStage::writeDiagnosticLog(const QString& message)
-{
-    appendDiagnosticLog(message);
-}
+
 
 QString formatFileTime(quint64 fileTime)
 {
@@ -1477,7 +1464,7 @@ bool PrivilegeStage::hasUiAccess()
 
 bool PrivilegeStage::launchAdminStage(const QString& executable, const QStringList& args, QString& error)
 {
-    writeDiagnosticLog(QStringLiteral("admin-launch: begin executable=%1 args=%2")
+    KSWORD_UAC_DIAGNOSTIC_LOG(QStringLiteral("admin-launch: begin executable=%1 args=%2")
                            .arg(executable, args.join(QLatin1Char(' '))));
     SHELLEXECUTEINFOW info{sizeof(info)};
     const QString parameters = std::accumulate(args.cbegin(), args.cend(), QString(), [](const QString& a, const QString& b) { return a.isEmpty() ? b : a + QLatin1Char(' ') + b; });
@@ -1491,7 +1478,7 @@ bool PrivilegeStage::launchAdminStage(const QString& executable, const QStringLi
     const bool ok = ShellExecuteExW(&info) != FALSE;
     if (!ok)
         error = QStringLiteral("ShellExecuteExW(runas) 失败：") + winError();
-    writeDiagnosticLog(ok
+    KSWORD_UAC_DIAGNOSTIC_LOG(ok
         ? QStringLiteral("admin-launch: ShellExecuteExW succeeded")
         : QStringLiteral("admin-launch: %1").arg(error));
     if (info.hProcess) CloseHandle(info.hProcess);
@@ -1501,12 +1488,12 @@ bool PrivilegeStage::launchAdminStage(const QString& executable, const QStringLi
 bool PrivilegeStage::launchSystemStage(const QString& executable, const QStringList& args, const QString& desktop,
                                        DWORD targetSession, QString& error)
 {
-    writeDiagnosticLog(QStringLiteral("system-launch: begin executable=%1 targetSession=%2 desktop=%3 args=%4")
+    KSWORD_UAC_DIAGNOSTIC_LOG(QStringLiteral("system-launch: begin executable=%1 targetSession=%2 desktop=%3 args=%4")
                            .arg(executable).arg(targetSession).arg(desktop, args.join(QLatin1Char(' '))));
     HANDLE token = nullptr;
     if (!duplicateSystemTokenForSession(targetSession, token, error))
     {
-        writeDiagnosticLog(QStringLiteral("system-launch: token preparation failed: %1").arg(error));
+        KSWORD_UAC_DIAGNOSTIC_LOG(QStringLiteral("system-launch: token preparation failed: %1").arg(error));
         return false;
     }
     const QString parameters = std::accumulate(args.cbegin(), args.cend(), QString(), [](const QString& a, const QString& b) { return a.isEmpty() ? b : a + QLatin1Char(' ') + b; });
@@ -1527,7 +1514,7 @@ bool PrivilegeStage::launchSystemStage(const QString& executable, const QStringL
                                             &startup, &processInfo) != FALSE;
     if (!ok)
         error = QStringLiteral("CreateProcessWithTokenW(SYSTEM/UIAccess, desktop=%1) 失败：").arg(desktop) + winError();
-    writeDiagnosticLog(ok
+    KSWORD_UAC_DIAGNOSTIC_LOG(ok
         ? QStringLiteral("system-launch: CreateProcessWithTokenW succeeded childPid=%1").arg(processInfo.dwProcessId)
         : QStringLiteral("system-launch: %1").arg(error));
     if (processInfo.hThread) CloseHandle(processInfo.hThread);
@@ -1552,7 +1539,7 @@ namespace
 {
     void logEtwCallbackException(DWORD code)
     {
-        PrivilegeStage::writeDiagnosticLog(QStringLiteral("etw-callback: SEH exception code=0x%1, event dropped")
+        KSWORD_UAC_DIAGNOSTIC_LOG(QStringLiteral("etw-callback: SEH exception code=0x%1, event dropped")
                                                .arg(code, 0, 16));
     }
 }
@@ -1586,13 +1573,13 @@ void UacEventMonitor::start()
     m_objectEventHook = SetWinEventHook(EVENT_OBJECT_CREATE, EVENT_OBJECT_SHOW,
                                         nullptr, &UacEventMonitor::winEventCallback,
                                         0, 0, WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
-    PrivilegeStage::writeDiagnosticLog(QStringLiteral(
+    KSWORD_UAC_DIAGNOSTIC_LOG(QStringLiteral(
         "winevent: desktopHook=0x%1 objectHook=0x%2; hooks are wake-up only")
                                            .arg(reinterpret_cast<quintptr>(m_winEventHook), 0, 16)
                                            .arg(reinterpret_cast<quintptr>(m_objectEventHook), 0, 16));
     DWORD serviceState = SERVICE_STOPPED;
     m_appInfoPid = appInfoServicePid(serviceState);
-    PrivilegeStage::writeDiagnosticLog(QStringLiteral("uac-queue: Appinfo pid=%1 state=%2")
+    KSWORD_UAC_DIAGNOSTIC_LOG(QStringLiteral("uac-queue: Appinfo pid=%1 state=%2")
                                            .arg(m_appInfoPid.load()).arg(serviceState));
     startEtw();
     startAlpcEtw();
@@ -1669,7 +1656,7 @@ std::optional<UacOriginEvidence> UacEventMonitor::readConsentOrigin(DWORD sessio
     if (!okPid || !okLength || !okAddress || appInfoPid == 0 || requestAddress == 0 ||
         bufferLength < targetPathOffset || bufferLength > 0x10000)
     {
-        PrivilegeStage::writeDiagnosticLog(QStringLiteral(
+        KSWORD_UAC_DIAGNOSTIC_LOG(QStringLiteral(
             "appinfo-origin: reject consentPid=%1 cmd=%2 parsed appInfo=%3 length=%4 address=0x%5")
                                                .arg(consentPid).arg(consentCommandLine.left(600))
                                                .arg(appInfoPid).arg(bufferLength).arg(requestAddress, 0, 16));
@@ -1679,7 +1666,7 @@ std::optional<UacOriginEvidence> UacEventMonitor::readConsentOrigin(DWORD sessio
     HANDLE appInfo = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ, FALSE, appInfoPid);
     if (!appInfo)
     {
-        PrivilegeStage::writeDiagnosticLog(QStringLiteral("appinfo-origin: OpenProcess failed pid=%1 error=%2")
+        KSWORD_UAC_DIAGNOSTIC_LOG(QStringLiteral("appinfo-origin: OpenProcess failed pid=%1 error=%2")
                                                .arg(appInfoPid).arg(winError()));
         return std::nullopt;
     }
@@ -1691,14 +1678,14 @@ std::optional<UacOriginEvidence> UacEventMonitor::readConsentOrigin(DWORD sessio
     CloseHandle(appInfo);
     if (!readOk || bytesRead != request.size())
     {
-        PrivilegeStage::writeDiagnosticLog(QStringLiteral(
+        KSWORD_UAC_DIAGNOSTIC_LOG(QStringLiteral(
             "appinfo-origin: ReadProcessMemory failed appInfoPid=%1 address=0x%2 requested=%3 read=%4 error=%5")
                                                .arg(appInfoPid).arg(requestAddress, 0, 16)
                                                .arg(bufferLength).arg(static_cast<qulonglong>(bytesRead)).arg(winError()));
         return std::nullopt;
     }
 
-    PrivilegeStage::writeDiagnosticLog(QStringLiteral(
+    KSWORD_UAC_DIAGNOSTIC_LOG(QStringLiteral(
         "appinfo-origin: layout osBuild=%1 family=%2 originPidOffset=0x%3 targetPathOffset=0x%4")
                                            .arg(osBuild)
                                            .arg(useWin11Layout ? QStringLiteral("Win11") : QStringLiteral("Win10/fallback"))
@@ -1711,7 +1698,7 @@ std::optional<UacOriginEvidence> UacEventMonitor::readConsentOrigin(DWORD sessio
     if (originPid == 0 || originPid == appInfoPid || originPid == consentPid ||
         originPid == GetCurrentProcessId())
     {
-        PrivilegeStage::writeDiagnosticLog(QStringLiteral(
+        KSWORD_UAC_DIAGNOSTIC_LOG(QStringLiteral(
             "appinfo-origin: invalid origin pid=%1 consent=%2 appInfo=%3 target=%4")
                                                .arg(originPid).arg(consentPid).arg(appInfoPid).arg(targetPath));
         return std::nullopt;
@@ -1720,13 +1707,13 @@ std::optional<UacOriginEvidence> UacEventMonitor::readConsentOrigin(DWORD sessio
     ProcessIdentity origin;
     if (!ProcessInspector::query(originPid, origin) || !origin.isValid())
     {
-        PrivilegeStage::writeDiagnosticLog(QStringLiteral("appinfo-origin: origin process unavailable pid=%1")
+        KSWORD_UAC_DIAGNOSTIC_LOG(QStringLiteral("appinfo-origin: origin process unavailable pid=%1")
                                                .arg(originPid));
         return std::nullopt;
     }
     if (origin.sessionId != sessionId || ProcessInspector::isProtectedName(origin.imagePath))
     {
-        PrivilegeStage::writeDiagnosticLog(QStringLiteral(
+        KSWORD_UAC_DIAGNOSTIC_LOG(QStringLiteral(
             "appinfo-origin: origin rejected pid=%1 originSession=%2 expectedSession=%3 path=%4")
                                                .arg(origin.pid).arg(origin.sessionId).arg(sessionId).arg(origin.imagePath));
         return std::nullopt;
@@ -1754,7 +1741,7 @@ std::optional<UacOriginEvidence> UacEventMonitor::readConsentOrigin(DWORD sessio
     }
     if (logEvidence)
     {
-        PrivilegeStage::writeDiagnosticLog(QStringLiteral(
+        KSWORD_UAC_DIAGNOSTIC_LOG(QStringLiteral(
             "appinfo-origin: resolved consentPid=%1 appInfoPid=%2 length=%3 request=0x%4 originPid=%5 originPath=%6 targetPath=%7 pidOffset=0x%8 pathOffset=0x%9")
                                                .arg(consentPid).arg(appInfoPid).arg(bufferLength)
                                                .arg(requestAddress, 0, 16).arg(origin.pid).arg(origin.imagePath).arg(targetPath)
@@ -1790,7 +1777,7 @@ void WINAPI UacEventMonitor::winEventCallback(HWINEVENTHOOK, DWORD event, HWND h
         {
             g_eventMonitor->m_consentPid.store(pid);
             g_eventMonitor->m_lastConsentDiscoveryMs.store(GetTickCount64());
-            PrivilegeStage::writeDiagnosticLog(QStringLiteral("winevent: %1 hwnd=0x%2 consentPid=%3 path=%4")
+            KSWORD_UAC_DIAGNOSTIC_LOG(QStringLiteral("winevent: %1 hwnd=0x%2 consentPid=%3 path=%4")
                                                    .arg(event == EVENT_OBJECT_CREATE ? QStringLiteral("CREATE") : QStringLiteral("SHOW"))
                                                    .arg(reinterpret_cast<quintptr>(hwnd), 0, 16)
                                                    .arg(pid).arg(path));
@@ -1817,11 +1804,7 @@ void WINAPI UacEventMonitor::etwEventCallback(PEVENT_RECORD record)
 
 void UacEventMonitor::etwEventCallbackImpl(PEVENT_RECORD record)
 {
-    static volatile LONG firstCallbackLogged = 0;
-    if (InterlockedCompareExchange(&firstCallbackLogged, 1, 0) == 0)
-        PrivilegeStage::writeDiagnosticLog(QStringLiteral("etw-callback: first callback entered record=0x%1")
-                                               .arg(reinterpret_cast<quintptr>(record), 0, 16));
-    if (!g_eventMonitor || !record) return;
+    if (!g_eventMonitor || !record || !g_eventMonitor->m_running.load()) return;
     EventItem item{};
     item.provider = record->EventHeader.ProviderId;
     item.eventId = record->EventHeader.EventDescriptor.Id;
@@ -1833,28 +1816,6 @@ void UacEventMonitor::etwEventCallbackImpl(PEVENT_RECORD record)
                               IsEqualGUID(item.provider, kLegacyAlpcProvider);
     if (isAlpcRecord)
     {
-        // Keep a bounded raw sample. This is deliberately before event
-        // classification: classic SystemTraceProvider records use ALPCGuid in
-        // the header, even when enabled through SystemAlpcProvider.
-        static volatile LONG rawAlpcLogCount = 0;
-        const LONG rawIndex = InterlockedIncrement(&rawAlpcLogCount);
-        if (rawIndex <= 64 || (rawIndex % 256) == 0)
-        {
-            PrivilegeStage::writeDiagnosticLog(QStringLiteral(
-                "etw-alpc: raw provider=%1 id=%2 version=%3 channel=%4 task=%5 opcode=%6 level=%7 keyword=0x%8 pid=%9 tid=%10 userlen=%11 cpu=%12")
-                .arg(IsEqualGUID(item.provider, kLegacyAlpcProvider) ? QStringLiteral("legacy") : QStringLiteral("system"))
-                .arg(item.eventId)
-                .arg(record->EventHeader.EventDescriptor.Version)
-                .arg(record->EventHeader.EventDescriptor.Channel)
-                .arg(item.task)
-                .arg(item.opcode)
-                .arg(record->EventHeader.EventDescriptor.Level)
-                .arg(record->EventHeader.EventDescriptor.Keyword, 0, 16)
-                .arg(record->EventHeader.ProcessId)
-                .arg(record->EventHeader.ThreadId)
-                .arg(record->UserDataLength)
-                .arg(record->BufferContext.ProcessorNumber));
-        }
         const ULONG eventId = record->EventHeader.EventDescriptor.Id;
         const ULONG task = record->EventHeader.EventDescriptor.Task;
         const ULONG opcode = record->EventHeader.EventDescriptor.Opcode;
@@ -1863,36 +1824,10 @@ void UacEventMonitor::etwEventCallbackImpl(PEVENT_RECORD record)
         if (send || receive)
         {
             const ULONG messageId = alpcMessageId(record);
-            static volatile LONG classifiedAlpcLogCount = 0;
-            const LONG classifiedIndex = InterlockedIncrement(&classifiedAlpcLogCount);
-            if (classifiedIndex <= 64 || (classifiedIndex % 512) == 0)
-            {
-                PrivilegeStage::writeDiagnosticLog(QStringLiteral(
-                    "etw-alpc: kind=%1 id=%2 opcode=%3 pid=%4 tid=%5 message=%6 payload=%7 sample=%8")
-                    .arg(send ? QStringLiteral("send") : QStringLiteral("receive"))
-                    .arg(eventId).arg(opcode)
-                    .arg(record->EventHeader.ProcessId)
-                    .arg(record->EventHeader.ThreadId)
-                    .arg(messageId)
-                    .arg(record->UserDataLength)
-                    .arg(classifiedIndex));
-            }
             if (messageId != 0)
                 g_eventMonitor->observeAlpc(receive, record->EventHeader.ProcessId,
                                             record->EventHeader.ThreadId, messageId, item.eventTimeMs);
         }
-    }
-    if (IsEqualGUID(item.provider, kLuaProvider))
-    {
-        const QString payload = decodeEtwPayload(record);
-        PrivilegeStage::writeDiagnosticLog(QStringLiteral("etw-lua: id=%1 version=%2 channel=%3 task=%4 opcode=%5 pid=%6 payload=%7")
-                                               .arg(item.eventId)
-                                               .arg(record->EventHeader.EventDescriptor.Version)
-                                               .arg(record->EventHeader.EventDescriptor.Channel)
-                                               .arg(item.task)
-                                               .arg(item.opcode)
-                                               .arg(item.pid)
-                                               .arg(payload.left(4000)));
     }
     g_eventMonitor->pushEvent(item);
 }
@@ -1928,7 +1863,7 @@ void UacEventMonitor::observeAlpc(bool receive, DWORD pid, DWORD tid, ULONG mess
     if (appInfoPid == 0 || pid != appInfoPid)
         return;
 
-    PrivilegeStage::writeDiagnosticLog(QStringLiteral("uac-queue: Appinfo receive pid=%1 tid=%2 message=%3")
+    KSWORD_UAC_DIAGNOSTIC_LOG(QStringLiteral("uac-queue: Appinfo receive pid=%1 tid=%2 message=%3")
                                            .arg(pid).arg(tid).arg(messageId));
     for (auto it = m_alpcSends.crbegin(); it != m_alpcSends.crend(); ++it)
     {
@@ -1951,13 +1886,13 @@ void UacEventMonitor::observeAlpc(bool receive, DWORD pid, DWORD tid, ULONG mess
             m_uacOrigins.enqueue({messageId, it->pid, it->tid, appInfoPid, eventTimeMs, now});
             while (m_uacOrigins.size() > 128)
                 m_uacOrigins.dequeue();
-            PrivilegeStage::writeDiagnosticLog(QStringLiteral("uac-queue: candidate pid=%1 tid=%2 message=%3 ageMs=%4 appinfoPid=%5")
+            KSWORD_UAC_DIAGNOSTIC_LOG(QStringLiteral("uac-queue: candidate pid=%1 tid=%2 message=%3 ageMs=%4 appinfoPid=%5")
                                                    .arg(it->pid).arg(it->tid).arg(messageId)
                                                    .arg(now - it->observedAtMs).arg(appInfoPid));
         }
         return;
     }
-    PrivilegeStage::writeDiagnosticLog(QStringLiteral("uac-queue: Appinfo receive has no matching send message=%1")
+    KSWORD_UAC_DIAGNOSTIC_LOG(QStringLiteral("uac-queue: Appinfo receive has no matching send message=%1")
                                            .arg(messageId));
 }
 
@@ -1995,7 +1930,7 @@ std::optional<ProcessIdentity> UacEventMonitor::takeUacOrigin(DWORD sessionId, q
             continue;
         if (!targetPath.isEmpty() && isSamePath(identity.imagePath, targetPath))
         {
-            PrivilegeStage::writeDiagnosticLog(QStringLiteral("uac-queue: requester path equals UAC target path pid=%1 path=%2")
+            KSWORD_UAC_DIAGNOSTIC_LOG(QStringLiteral("uac-queue: requester path equals UAC target path pid=%1 path=%2")
                                                    .arg(identity.pid).arg(identity.imagePath));
         }
 
@@ -2017,7 +1952,7 @@ std::optional<ProcessIdentity> UacEventMonitor::takeUacOrigin(DWORD sessionId, q
 
     if (matches.size() != 1)
     {
-        PrivilegeStage::writeDiagnosticLog(QStringLiteral("uac-queue: resolve target=%1 recent=%2 valid=%3 result=%4")
+        KSWORD_UAC_DIAGNOSTIC_LOG(QStringLiteral("uac-queue: resolve target=%1 recent=%2 valid=%3 result=%4")
                                                .arg(targetPath).arg(recent.size()).arg(matches.size())
                                                .arg(matches.size() == 1 ? QStringLiteral("unique") : QStringLiteral("ambiguous-or-none")));
         return std::nullopt;
@@ -2033,7 +1968,7 @@ std::optional<ProcessIdentity> UacEventMonitor::takeUacOrigin(DWORD sessionId, q
                 ++it;
         }
     }
-    PrivilegeStage::writeDiagnosticLog(QStringLiteral("uac-queue: resolved pid=%1 tidMessage=%2 path=%3")
+    KSWORD_UAC_DIAGNOSTIC_LOG(QStringLiteral("uac-queue: resolved pid=%1 tidMessage=%2 path=%3")
                                            .arg(matches.front().pid).arg(matchMessages.front()).arg(matches.front().imagePath));
     return matches.front();
 }
@@ -2048,7 +1983,7 @@ void UacEventMonitor::consumeEvents()
         const DWORD pid = appInfoServicePid(serviceState);
         const DWORD previous = m_appInfoPid.exchange(pid);
         if (previous != pid)
-            PrivilegeStage::writeDiagnosticLog(QStringLiteral("uac-queue: Appinfo pid changed %1 -> %2 state=%3")
+            KSWORD_UAC_DIAGNOSTIC_LOG(QStringLiteral("uac-queue: Appinfo pid changed %1 -> %2 state=%3")
                                                    .arg(previous).arg(pid).arg(serviceState));
     }
     QQueue<EventItem> events;
@@ -2068,7 +2003,7 @@ void UacEventMonitor::consumeEvents()
 
 void UacEventMonitor::startEtw()
 {
-    PrivilegeStage::writeDiagnosticLog(QStringLiteral("etw: start requested"));
+    KSWORD_UAC_DIAGNOSTIC_LOG(QStringLiteral("etw: start requested"));
     m_traceName = timestampedEtwSessionName();
     const size_t size = sizeof(EVENT_TRACE_PROPERTIES) + 2 * 1024;
     auto* properties = reinterpret_cast<EVENT_TRACE_PROPERTIES*>(calloc(1, size));
@@ -2084,24 +2019,26 @@ void UacEventMonitor::startEtw()
     free(properties);
     if (status != ERROR_SUCCESS)
     {
-        PrivilegeStage::writeDiagnosticLog(QStringLiteral("etw: StartTraceW failed status=0x%1").arg(status, 0, 16));
+        m_traceSession = 0;
+        KSWORD_UAC_DIAGNOSTIC_LOG(QStringLiteral("etw: StartTraceW failed status=0x%1").arg(status, 0, 16));
         return;
     }
-    PrivilegeStage::writeDiagnosticLog(QStringLiteral("etw: StartTraceW succeeded session=0x%1").arg(m_traceSession, 0, 16));
+    KSWORD_UAC_DIAGNOSTIC_LOG(QStringLiteral("etw: StartTraceW succeeded session=0x%1").arg(m_traceSession, 0, 16));
     const ULONG luaStatus = EnableTraceEx2(m_traceSession, &kLuaProvider, EVENT_CONTROL_CODE_ENABLE_PROVIDER,
                                            TRACE_LEVEL_VERBOSE, kLuaDiagnosticKeyword, 0, 0, nullptr);
-    PrivilegeStage::writeDiagnosticLog(QStringLiteral("etw: EnableTraceEx2(Microsoft-Windows-LUA) status=0x%1")
+    KSWORD_UAC_DIAGNOSTIC_LOG(QStringLiteral("etw: EnableTraceEx2(Microsoft-Windows-LUA) status=0x%1")
                                            .arg(luaStatus, 0, 16));
     if (luaStatus != ERROR_SUCCESS)
     {
-        ControlTraceW(m_traceSession, m_traceName.toStdWString().data(), nullptr, EVENT_TRACE_CONTROL_STOP);
+        stopTraceSession(m_traceSession, m_traceName);
         m_traceSession = 0;
         return;
     }
     m_etwStop = false;
+    m_etwAvailable = false;
     m_etwThread = std::thread([this]
     {
-        PrivilegeStage::writeDiagnosticLog(QStringLiteral("etw-thread: entered"));
+        KSWORD_UAC_DIAGNOSTIC_LOG(QStringLiteral("etw-thread: entered"));
         EVENT_TRACE_LOGFILEW logfile{};
         std::wstring name = m_traceName.toStdWString();
         // EVENT_TRACE_LOGFILEW::LoggerName 是 LPWSTR，不是内嵌字符数组。
@@ -2109,29 +2046,34 @@ void UacEventMonitor::startEtw()
         logfile.LoggerName = name.data();
         logfile.ProcessTraceMode = PROCESS_TRACE_MODE_REAL_TIME | PROCESS_TRACE_MODE_EVENT_RECORD;
         logfile.EventRecordCallback = &UacEventMonitor::etwEventCallback;
-        m_traceHandle = OpenTraceW(&logfile);
-        PrivilegeStage::writeDiagnosticLog(QStringLiteral("etw-thread: OpenTrace handle=0x%1").arg(m_traceHandle, 0, 16));
-        if (m_traceHandle != INVALID_PROCESSTRACE_HANDLE)
+        TRACEHANDLE traceHandle = OpenTraceW(&logfile);
+        m_traceHandle.store(traceHandle);
+        KSWORD_UAC_DIAGNOSTIC_LOG(QStringLiteral("etw-thread: OpenTrace handle=0x%1").arg(m_traceHandle, 0, 16));
+        if (traceHandle != INVALID_PROCESSTRACE_HANDLE)
         {
-            const ULONG traceStatus = ProcessTrace(&m_traceHandle, 1, nullptr, nullptr);
-            m_etwAvailable = traceStatus == ERROR_SUCCESS || traceStatus == ERROR_CANCELLED;
-            PrivilegeStage::writeDiagnosticLog(QStringLiteral("etw-thread: ProcessTrace returned status=0x%1 available=%2")
-                                                   .arg(traceStatus, 0, 16)
-                                                   .arg(m_etwAvailable ? 1 : 0));
-            CloseTrace(m_traceHandle);
-            m_traceHandle = 0;
+            if (!m_etwStop.load())
+            {
+                const ULONG traceStatus = ProcessTrace(&traceHandle, 1, nullptr, nullptr);
+                m_etwAvailable = traceStatus == ERROR_SUCCESS || traceStatus == ERROR_CANCELLED;
+            }
         }
+        // The worker or stopper closes the consumer, never both. Checking the
+        // stop flag after publication also covers shutdown racing OpenTrace.
+        closeTraceConsumer(m_traceHandle);
     });
-    m_etwAvailable = false;
 }
 
 void UacEventMonitor::stopEtw()
 {
+    m_etwStop = true;
     if (m_traceSession != 0)
     {
-        ControlTraceW(m_traceSession, m_traceName.toStdWString().data(), nullptr, EVENT_TRACE_CONTROL_STOP);
+        stopTraceSession(m_traceSession, m_traceName);
         m_traceSession = 0;
     }
+    // CloseTrace cancels real-time ProcessTrace even if stopping the controller
+    // failed, so join cannot depend solely on ControlTrace succeeding.
+    closeTraceConsumer(m_traceHandle);
     if (m_etwThread.joinable()) m_etwThread.join();
 }
 
@@ -2150,7 +2092,7 @@ void UacEventMonitor::startAlpcEtw()
     // This keeps the Qt thread out of potentially blocking ETW APIs.
     m_alpcThread = std::thread([this, traceName]
     {
-        PrivilegeStage::writeDiagnosticLog(QStringLiteral("etw-alpc-thread: entered"));
+        KSWORD_UAC_DIAGNOSTIC_LOG(QStringLiteral("etw-alpc-thread: entered"));
         const std::wstring sessionNameWide = traceName.toStdWString();
         const ULONG traceNameBytes = static_cast<ULONG>((sessionNameWide.size() + 1) * sizeof(wchar_t));
         const ULONG propertyBufferSize = static_cast<ULONG>(sizeof(EVENT_TRACE_PROPERTIES) + traceNameBytes);
@@ -2178,7 +2120,7 @@ void UacEventMonitor::startAlpcEtw()
         ULONG startStatus = StartTraceW(&sessionHandle, loggerNamePointer, properties);
         if (startStatus == ERROR_ALREADY_EXISTS)
         {
-            PrivilegeStage::writeDiagnosticLog(QStringLiteral(
+            KSWORD_UAC_DIAGNOSTIC_LOG(QStringLiteral(
                 "etw-alpc-thread: stale/existing session found; stopping by name and retrying"));
             ControlTraceW(0, loggerNamePointer, properties, EVENT_TRACE_CONTROL_STOP);
             startStatus = StartTraceW(&sessionHandle, loggerNamePointer, properties);
@@ -2186,12 +2128,12 @@ void UacEventMonitor::startAlpcEtw()
         m_alpcLastStatus.store(startStatus);
         if (startStatus != ERROR_SUCCESS)
         {
-            PrivilegeStage::writeDiagnosticLog(QStringLiteral("etw-alpc-thread: StartTraceW failed status=0x%1 (%2)")
+            KSWORD_UAC_DIAGNOSTIC_LOG(QStringLiteral("etw-alpc-thread: StartTraceW failed status=0x%1 (%2)")
                                                    .arg(startStatus, 0, 16).arg(winError(startStatus)));
             return;
         }
         m_alpcSession.store(static_cast<ULONG64>(sessionHandle));
-        PrivilegeStage::writeDiagnosticLog(QStringLiteral(
+        KSWORD_UAC_DIAGNOSTIC_LOG(QStringLiteral(
             "etw-alpc-thread: StartTraceW succeeded session=0x%1 name=%2 enableFlags=ALPC")
             .arg(static_cast<qulonglong>(sessionHandle), 0, 16).arg(traceName));
 
@@ -2207,7 +2149,7 @@ void UacEventMonitor::startAlpcEtw()
         const ULONG providerStatus = EnableTraceEx2(
             sessionHandle, &kSystemAlpcProvider, EVENT_CONTROL_CODE_ENABLE_PROVIDER,
             TRACE_LEVEL_VERBOSE, kSystemAlpcKeyword, 0, 0, nullptr);
-        PrivilegeStage::writeDiagnosticLog(QStringLiteral(
+        KSWORD_UAC_DIAGNOSTIC_LOG(QStringLiteral(
             "etw-alpc-thread: EnableTraceEx2(SystemAlpcProvider) status=0x%1")
             .arg(providerStatus, 0, 16));
         if (providerStatus != ERROR_SUCCESS)
@@ -2226,14 +2168,14 @@ void UacEventMonitor::startAlpcEtw()
         logfile.EventRecordCallback = &UacEventMonitor::etwEventCallback;
         const TRACEHANDLE traceHandle = OpenTraceW(&logfile);
         m_alpcTraceHandle.store(static_cast<TRACEHANDLE>(traceHandle));
-        PrivilegeStage::writeDiagnosticLog(QStringLiteral(
+        KSWORD_UAC_DIAGNOSTIC_LOG(QStringLiteral(
             "etw-alpc-thread: OpenTrace handle=0x%1")
             .arg(static_cast<qulonglong>(traceHandle), 0, 16));
         if (traceHandle == INVALID_PROCESSTRACE_HANDLE)
         {
             const ULONG error = GetLastError();
             m_alpcLastStatus.store(error);
-            PrivilegeStage::writeDiagnosticLog(QStringLiteral(
+            KSWORD_UAC_DIAGNOSTIC_LOG(QStringLiteral(
                 "etw-alpc-thread: OpenTrace failed status=0x%1 (%2)")
                 .arg(error, 0, 16).arg(winError(error)));
         }
@@ -2244,13 +2186,12 @@ void UacEventMonitor::startAlpcEtw()
                 TRACEHANDLE processTraceHandle = traceHandle;
                 const ULONG traceStatus = ProcessTrace(&processTraceHandle, 1, nullptr, nullptr);
                 m_alpcLastStatus.store(m_alpcStop.load() ? ERROR_SUCCESS : traceStatus);
-                PrivilegeStage::writeDiagnosticLog(QStringLiteral(
+                KSWORD_UAC_DIAGNOSTIC_LOG(QStringLiteral(
                     "etw-alpc-thread: ProcessTrace returned status=0x%1 stop=%2")
                     .arg(traceStatus, 0, 16).arg(m_alpcStop.load() ? 1 : 0));
             }
-            CloseTrace(traceHandle);
-            m_alpcTraceHandle.store(0);
         }
+        closeTraceConsumer(m_alpcTraceHandle);
 
         const ULONG64 ownedSession = m_alpcSession.exchange(0);
         if (ownedSession != 0)
@@ -2265,18 +2206,9 @@ void UacEventMonitor::stopAlpcEtw()
     const ULONG64 ownedSession = m_alpcSession.exchange(0);
     if (ownedSession != 0)
     {
-        const std::wstring sessionNameWide = m_alpcTraceName.toStdWString();
-        std::vector<unsigned char> propertyBuffer(
-            sizeof(EVENT_TRACE_PROPERTIES) + (sessionNameWide.size() + 1) * sizeof(wchar_t), 0);
-        auto* properties = reinterpret_cast<EVENT_TRACE_PROPERTIES*>(propertyBuffer.data());
-        properties->Wnode.BufferSize = static_cast<ULONG>(propertyBuffer.size());
-        properties->LoggerNameOffset = sizeof(EVENT_TRACE_PROPERTIES);
-        wchar_t* loggerNamePointer = reinterpret_cast<wchar_t*>(
-            propertyBuffer.data() + properties->LoggerNameOffset);
-        wcscpy_s(loggerNamePointer, sessionNameWide.size() + 1, sessionNameWide.c_str());
-        ControlTraceW(static_cast<TRACEHANDLE>(ownedSession), loggerNamePointer,
-                      properties, EVENT_TRACE_CONTROL_STOP);
+        stopTraceSession(static_cast<TRACEHANDLE>(ownedSession), m_alpcTraceName);
     }
+    closeTraceConsumer(m_alpcTraceHandle);
     if (m_alpcThread.joinable())
         m_alpcThread.join();
     m_alpcTraceHandle.store(0);
@@ -2295,7 +2227,7 @@ UacApplicationIdentity UacWindowScanner::scan()
     }
     if (!desktop)
     {
-        PrivilegeStage::writeDiagnosticLog(QStringLiteral("uac-scan: cannot open Winlogon desktop: %1").arg(winError()));
+        KSWORD_UAC_DIAGNOSTIC_LOG(QStringLiteral("uac-scan: cannot open Winlogon desktop: %1").arg(winError()));
         return result;
     }
     QVector<HWND> windows;
@@ -2411,7 +2343,7 @@ UacApplicationIdentity UacWindowScanner::scan()
     if (currentWindowSummary != previousWindowSummary)
     {
         previousWindowSummary = currentWindowSummary;
-        PrivilegeStage::writeDiagnosticLog(QStringLiteral("uac-scan: enumerated=%1 consent=%2 %3")
+        KSWORD_UAC_DIAGNOSTIC_LOG(QStringLiteral("uac-scan: enumerated=%1 consent=%2 %3")
                                                 .arg(windows.size())
                                                 .arg(sawConsentProcess ? 1 : 0)
                                                 .arg(currentWindowSummary));
@@ -2493,7 +2425,7 @@ namespace
                 QMutexLocker locker(&detailCacheMutex);
                 cachedDetailKey = detailKey;
                 cachedDetails = state;
-                PrivilegeStage::writeDiagnosticLog(QStringLiteral(
+                KSWORD_UAC_DIAGNOSTIC_LOG(QStringLiteral(
                     "uac-match: AppInfo origin pid=%1 name=%2 target=%3 protected=%4 details=refreshed")
                                                        .arg(state.origin.pid)
                                                        .arg(ProcessInspector::fileName(state.origin.imagePath))
@@ -2517,7 +2449,7 @@ namespace
         // cannot prove the request's original caller.
         if (!state.originResolved)
         {
-            PrivilegeStage::writeDiagnosticLog(QStringLiteral(
+            KSWORD_UAC_DIAGNOSTIC_LOG(QStringLiteral(
                 "uac-match: UAC window seen but AppInfo origin is unresolved; actions disabled"));
             state.reason = QStringLiteral("已发现 UAC 窗口，尚未读取有效 AppInfo 发起者");
             return state;
@@ -2549,13 +2481,13 @@ QString UacWindowScanner::readUiAutomationName(HWND hwnd)
     if (!hwnd)
         return {};
 
-    PrivilegeStage::writeDiagnosticLog(QStringLiteral("uac-ui: probe begin hwnd=0x%1")
+    KSWORD_UAC_DIAGNOSTIC_LOG(QStringLiteral("uac-ui: probe begin hwnd=0x%1")
                                            .arg(reinterpret_cast<quintptr>(hwnd), 0, 16));
     const HRESULT initResult = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
     const bool shouldUninitialize = SUCCEEDED(initResult);
     if (FAILED(initResult) && initResult != RPC_E_CHANGED_MODE)
     {
-        PrivilegeStage::writeDiagnosticLog(QStringLiteral("uac-ui: CoInitializeEx(MTA) failed hr=0x%1")
+        KSWORD_UAC_DIAGNOSTIC_LOG(QStringLiteral("uac-ui: CoInitializeEx(MTA) failed hr=0x%1")
                                                .arg(static_cast<unsigned long>(initResult), 0, 16));
         return {};
     }
@@ -2617,21 +2549,21 @@ QString UacWindowScanner::readUiAutomationName(HWND hwnd)
             }
             else
             {
-                PrivilegeStage::writeDiagnosticLog(QStringLiteral("uac-ui: FindAll failed hwnd=0x%1 hr=0x%2")
+                KSWORD_UAC_DIAGNOSTIC_LOG(QStringLiteral("uac-ui: FindAll failed hwnd=0x%1 hr=0x%2")
                                                        .arg(reinterpret_cast<quintptr>(hwnd), 0, 16)
                                                        .arg(static_cast<unsigned long>(hr), 0, 16));
             }
             if (elements) elements->Release();
             if (condition) condition->Release();
             root->Release();
-            PrivilegeStage::writeDiagnosticLog(QStringLiteral("uac-ui: UIA success hwnd=0x%1 elements=%2 values=%3")
+            KSWORD_UAC_DIAGNOSTIC_LOG(QStringLiteral("uac-ui: UIA success hwnd=0x%1 elements=%2 values=%3")
                                                    .arg(reinterpret_cast<quintptr>(hwnd), 0, 16)
                                                    .arg(elementCount)
                                                    .arg(uiAutomationValues.join(QStringLiteral(" | ")).left(1000)));
         }
         else
         {
-            PrivilegeStage::writeDiagnosticLog(QStringLiteral("uac-ui: ElementFromHandle failed hwnd=0x%1 hr=0x%2")
+            KSWORD_UAC_DIAGNOSTIC_LOG(QStringLiteral("uac-ui: ElementFromHandle failed hwnd=0x%1 hr=0x%2")
                                                    .arg(reinterpret_cast<quintptr>(hwnd), 0, 16)
                                                    .arg(static_cast<unsigned long>(hr), 0, 16));
         }
@@ -2639,7 +2571,7 @@ QString UacWindowScanner::readUiAutomationName(HWND hwnd)
     }
     else
     {
-        PrivilegeStage::writeDiagnosticLog(QStringLiteral("uac-ui: CoCreateInstance(CUIAutomation) failed hr=0x%1")
+        KSWORD_UAC_DIAGNOSTIC_LOG(QStringLiteral("uac-ui: CoCreateInstance(CUIAutomation) failed hr=0x%1")
                                                .arg(static_cast<unsigned long>(hr), 0, 16));
     }
 
@@ -2667,14 +2599,14 @@ QString UacWindowScanner::readUiAutomationName(HWND hwnd)
             VariantClear(&childId);
         }
         accessible->Release();
-        PrivilegeStage::writeDiagnosticLog(QStringLiteral("uac-ui: MSAA success hwnd=0x%1 children=%2 values=%3")
+        KSWORD_UAC_DIAGNOSTIC_LOG(QStringLiteral("uac-ui: MSAA success hwnd=0x%1 children=%2 values=%3")
                                                .arg(reinterpret_cast<quintptr>(hwnd), 0, 16)
                                                .arg(childCount)
                                                .arg(msaaValues.join(QStringLiteral(" | ")).left(1000)));
     }
     else
     {
-        PrivilegeStage::writeDiagnosticLog(QStringLiteral("uac-ui: AccessibleObjectFromWindow failed hwnd=0x%1 hr=0x%2")
+        KSWORD_UAC_DIAGNOSTIC_LOG(QStringLiteral("uac-ui: AccessibleObjectFromWindow failed hwnd=0x%1 hr=0x%2")
                                                .arg(reinterpret_cast<quintptr>(hwnd), 0, 16)
                                                .arg(static_cast<unsigned long>(hr), 0, 16));
     }
@@ -2716,7 +2648,7 @@ UacDeskWindow::UacDeskWindow(QWidget* parent)
     m_dragHandle->setCursor(Qt::OpenHandCursor);
     m_dragHandle->installEventFilter(this);
     layout->addWidget(m_brandHeader);
-    PrivilegeStage::writeDiagnosticLog(QStringLiteral(
+    KSWORD_UAC_DIAGNOSTIC_LOG(QStringLiteral(
         "ui: brand resources horizontalLogo=0 icon=%1 accent=%2")
                                            .arg(applicationIcon.isNull() ? 0 : 1)
                                            .arg(KswordTheme::ThemeColorName(KswordTheme::DefaultPrimaryAccentColor())));
@@ -2805,26 +2737,46 @@ UacDeskWindow::UacDeskWindow(QWidget* parent)
 
 UacDeskWindow::~UacDeskWindow()
 {
-    PrivilegeStage::writeDiagnosticLog(QStringLiteral("window: UacDeskWindow destructor"));
+    KSWORD_UAC_DIAGNOSTIC_LOG(QStringLiteral("window: UacDeskWindow destructor"));
+    m_refreshTimer.stop();
     m_scanStop = true;
     m_scanGeneration.fetch_add(1);
+    if (m_parentWatchStop) SetEvent(m_parentWatchStop);
+    if (m_parentWatchThread.joinable()) m_parentWatchThread.join();
+    if (m_parentWatchStop) CloseHandle(m_parentWatchStop);
     if (m_scanThread.joinable()) m_scanThread.join();
     if (m_actionThread.joinable()) m_actionThread.join();
     if (m_launchThread.joinable()) m_launchThread.join();
-    if (m_parentCheckThread.joinable()) m_parentCheckThread.join();
     if (m_parentProcess) CloseHandle(m_parentProcess);
 }
 
-void UacDeskWindow::setParentWatch(HANDLE processHandle, quint64 creationTime)
+bool UacDeskWindow::setParentWatch(HANDLE processHandle, quint64 creationTime)
 {
     m_parentProcess = processHandle;
-    m_parentCreationTime = creationTime;
-    if (m_parentProcess)
+    if (!m_parentProcess) return true;
+    // Validate once, then wait on this exact process object. PID reuse cannot
+    // change the identity of an already-open process handle.
+    if (creationTime == 0 || processCreationTime(m_parentProcess) != creationTime)
+        return false;
+    m_parentWatchStop = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    if (!m_parentWatchStop) return false;
+    m_parentWatchThread = std::thread([this]
     {
-        m_parentTimer.setInterval(400);
-        QObject::connect(&m_parentTimer, &QTimer::timeout, this, [this] { checkParent(); });
-        m_parentTimer.start();
-    }
+        // Cancellation comes first so destruction never queues another quit.
+        const HANDLE waits[] = {m_parentWatchStop, m_parentProcess};
+        const DWORD result = WaitForMultipleObjects(2, waits, FALSE, INFINITE);
+        if (result == WAIT_OBJECT_0 || m_scanStop.load()) return;
+        // A failed wait must not leave an unmonitored companion running.
+        QMetaObject::invokeMethod(this, [this]
+        {
+            m_refreshTimer.stop();
+            m_scanStop = true;
+            m_scanGeneration.fetch_add(1);
+            close();
+            qApp->quit();
+        }, Qt::QueuedConnection);
+    });
+    return true;
 }
 
 void UacDeskWindow::setInitialStatus(const QString& status) { showStatus(status); }
@@ -2955,7 +2907,7 @@ void UacDeskWindow::applyScanResult(const UacApplicationIdentity& identity, cons
         if (isVisible())
         {
             hide();
-            PrivilegeStage::writeDiagnosticLog(QStringLiteral(
+            KSWORD_UAC_DIAGNOSTIC_LOG(QStringLiteral(
                 "uac-visibility: hidden because no valid UAC window was detected"));
         }
         m_positionedUacWindow = nullptr;
@@ -3011,7 +2963,7 @@ void UacDeskWindow::applyScanResult(const UacApplicationIdentity& identity, cons
         show();
         repositionBesideUac(identity);
         m_positionedUacWindow = identity.consentWindow;
-        PrivilegeStage::writeDiagnosticLog(QStringLiteral("uac-layout: positioned once hwnd=0x%1 rect=%2,%3,%4,%5")
+        KSWORD_UAC_DIAGNOSTIC_LOG(QStringLiteral("uac-layout: positioned once hwnd=0x%1 rect=%2,%3,%4,%5")
                                                .arg(reinterpret_cast<quintptr>(identity.consentWindow), 0, 16)
                                                .arg(identity.windowRect.left()).arg(identity.windowRect.top())
                                                .arg(identity.windowRect.width()).arg(identity.windowRect.height()));
@@ -3073,7 +3025,7 @@ void UacDeskWindow::repositionBesideUac(const UacApplicationIdentity& identity)
                                          panelWidth,
                                          panelHeight,
                                          SWP_NOACTIVATE | SWP_SHOWWINDOW);
-    PrivilegeStage::writeDiagnosticLog(QStringLiteral(
+    KSWORD_UAC_DIAGNOSTIC_LOG(QStringLiteral(
         "uac-layout: native adjacent right result=%1 x=%2 y=%3 w=%4 h=%5 uacRight=%6 uacTop=%7")
                                            .arg(positioned ? 1 : 0)
                                            .arg(x).arg(y).arg(panelWidth).arg(panelHeight)
@@ -3091,8 +3043,9 @@ void UacDeskWindow::updateButtons()
 
 void UacDeskWindow::showStatus(const QString& status, bool error)
 {
+    Q_UNUSED(status);
     Q_UNUSED(error);
-    PrivilegeStage::writeDiagnosticLog(QStringLiteral("ui-status: %1").arg(status));
+    KSWORD_UAC_DIAGNOSTIC_LOG(QStringLiteral("ui-status: %1").arg(status));
 }
 
 void UacDeskWindow::launchMainOnSecureDesktop()
@@ -3100,7 +3053,7 @@ void UacDeskWindow::launchMainOnSecureDesktop()
     if (m_launchRunning.exchange(true)) return;
     if (m_launchThread.joinable()) m_launchThread.join();
     const QString executable = QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("Ksword5.1.exe"));
-    PrivilegeStage::writeDiagnosticLog(QStringLiteral("system-launch: Ksword target resolved from application directory: %1")
+    KSWORD_UAC_DIAGNOSTIC_LOG(QStringLiteral("system-launch: Ksword target resolved from application directory: %1")
                                            .arg(executable));
     QStringList args;
     const DWORD sessionId = PrivilegeStage::currentSessionId();
@@ -3205,44 +3158,6 @@ void UacDeskWindow::runProcessAction(int action)
         else
         {
             m_actionRunning = false;
-        }
-    });
-}
-
-bool UacDeskWindow::isAlive(HANDLE process) { return process && WaitForSingleObject(process, 0) == WAIT_TIMEOUT; }
-
-void UacDeskWindow::checkParent()
-{
-    if (!m_parentProcess || m_parentCheckRunning.exchange(true)) return;
-    if (m_parentCheckThread.joinable()) m_parentCheckThread.join();
-    const HANDLE parentProcess = m_parentProcess;
-    const quint64 expectedCreationTime = m_parentCreationTime;
-    m_parentCheckThread = std::thread([this, parentProcess, expectedCreationTime]
-    {
-        const bool alive = isAlive(parentProcess);
-        const bool identityMatches = alive && processCreationTime(parentProcess) == expectedCreationTime;
-        if ((!alive || !identityMatches) && !m_scanStop.load())
-        {
-            QMetaObject::invokeMethod(this, [this, alive]
-            {
-                m_parentCheckRunning = false;
-                if (!alive)
-                {
-                    PrivilegeStage::writeDiagnosticLog(QStringLiteral("parent-watch: parent process is no longer alive, quitting"));
-                    showStatus(QStringLiteral("Ksword5.1 已退出，安全桌面伴随程序即将退出"));
-                }
-                else
-                {
-                    PrivilegeStage::writeDiagnosticLog(QStringLiteral("parent-watch: parent creation time changed, quitting"));
-                    showStatus(QStringLiteral("父进程身份发生变化，伴随程序即将退出"), true);
-                }
-                close();
-                qApp->quit();
-            }, Qt::QueuedConnection);
-        }
-        else
-        {
-            m_parentCheckRunning = false;
         }
     });
 }
