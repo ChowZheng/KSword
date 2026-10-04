@@ -17,6 +17,7 @@
 - [蓝屏 Shield PatchGuard 安全缓冲](ksword-bugcheck-shield.md) — 只走公共 BugCheck reason 回调、多阶段有界 stall、KSHL 确认令牌、绝不写私有 ntoskrnl 状态
 - [CI 合并回归恢复](ksword-ci-merge-recovery.md) — Actions 日志收敛顺序、共享 IOCTL 编号兼容、WDK 令牌声明与 `/WX` 协议头约束
 - [FileDock 文件元数据编辑](ksword-file-metadata-editor.md) — FILE_BASIC_INFO 零值写入、重解析点句柄、文件身份复核、结构性属性保留与异步回读
+- [FileDock 右键菜单与特殊权限启动](ksword-file-context-menu.md) — 不可用动作隐藏、菜单顺序、System/TI/管理员/普通用户令牌启动及验收边界
 - [FileDock 大目录响应性](ksword-filedock-latency.md) — 快照模型、缓存排序、后台重解析标记与状态查询、十万项全选回归
 - [R0 文件删除边界](ksword-file-delete.md) — POSIX 路径移除、共享检查高风险模式、回执兼容与 Win10 动态入口
 - [Win32k 消息 Hook 筛选](ksword-message-hook-filtering.md) — 同侧原子筛选、目标/所有者 UI 范围、异步旧结果抑制、Hook 独立预算与诊断

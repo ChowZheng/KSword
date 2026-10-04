@@ -1154,6 +1154,9 @@
     <ClCompile Include="ksword\process\process.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="ksword\process\process_run_as.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="ksword\process\ProcessImageDeleteGuard.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -2140,6 +2143,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="ksword\process\process.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="ksword\process\process_run_as.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="ksword\process\ProcessImageDeleteGuard.h">

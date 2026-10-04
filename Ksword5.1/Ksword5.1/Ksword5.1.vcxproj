@@ -546,6 +546,7 @@
     <ClCompile Include="ksword\process\injection_trace_collector.cpp" />
     <ClCompile Include="ksword\process\process_cpu_core_etw_monitor.cpp" />
     <ClCompile Include="ksword\process\process.cpp" />
+    <ClCompile Include="ksword\process\process_run_as.cpp" />
     <ClCompile Include="ksword\process\ProcessImageDeleteGuard.cpp" />
     <ClCompile Include="ksword\window\context_menu_probe.cpp" />
     <ClCompile Include="ksword\service\service.cpp" />
@@ -711,6 +712,7 @@
     <ClInclude Include="ksword\process\ProcessCpuUsageModel.h" />
     <ClInclude Include="ksword\process\process_cpu_core_etw_monitor.h" />
     <ClInclude Include="ksword\process\process.h" />
+    <ClInclude Include="ksword\process\process_run_as.h" />
     <ClInclude Include="ksword\process\ProcessImageDeleteGuard.h" />
     <ClInclude Include="ksword\window\context_menu_probe.h" />
     <ClInclude Include="ksword\profile\ProfileJsonLoader.h" />

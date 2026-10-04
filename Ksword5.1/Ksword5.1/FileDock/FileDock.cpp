@@ -30,6 +30,7 @@
 #include "../ksword/file/file_handle_tools.h"
 #include "../ksword/file/file_metadata_transaction.h"
 #include "../ksword/file/file.h"
+#include "../ksword/process/process_run_as.h"
 
 #include <QApplication>
 #include <QAbstractItemView>
@@ -15909,6 +15910,26 @@ void FileDock::recoverSelectedDeletedFilesAsync()
     }).detach();
 }
 
+namespace
+{
+    // 递归隐藏禁用动作和空子菜单；Qt 同时折叠首尾/连续分隔线。
+    bool hideUnavailableFileMenuActions(QMenu& menu)
+    {
+        menu.setSeparatorsCollapsible(true);
+        bool hasVisibleAction = false;
+        for (QAction* action : menu.actions())
+        {
+            if (action->isSeparator()) continue;
+            QMenu* child = action->menu();
+            const bool childHasActions = child == nullptr || hideUnavailableFileMenuActions(*child);
+            const bool visible = action->isVisible() && action->isEnabled() && childHasActions;
+            action->setVisible(visible);
+            hasVisibleAction = hasVisibleAction || visible;
+        }
+        return hasVisibleAction;
+    }
+}
+
 void FileDock::showPanelContextMenu(FilePanelWidgets& panel, const QPoint& localPos)
 {
     kLogEvent menuOpenEvent;
@@ -15993,6 +16014,14 @@ void FileDock::showPanelContextMenu(FilePanelWidgets& panel, const QPoint& local
     QMenu menu(this);
     menu.setStyleSheet(buildContextMenuStyle());
     QAction* openAction = menu.addAction(QIcon(":/Icon/process_start.svg"), QStringLiteral("打开/运行"));
+    QMenu* runAsMenu = menu.addMenu(QIcon(":/Icon/process_start.svg"),
+        ks::i18n::displayText(QStringLiteral("以特殊权限运行")));
+    QAction* runAsSystemAction = runAsMenu->addAction(QStringLiteral("System"));
+    QAction* runAsTrustedInstallerAction = runAsMenu->addAction(QStringLiteral("TrustedInstaller"));
+    QAction* runAsAdministratorAction = runAsMenu->addAction(
+        ks::i18n::displayText(QStringLiteral("管理员")));
+    QAction* runAsStandardAction = runAsMenu->addAction(
+        ks::i18n::displayText(QStringLiteral("普通用户")));
     QAction* copyPathAction = menu.addAction(QIcon(":/Icon/process_copy_cell.svg"), QStringLiteral("复制路径(Ctrl+C)"));
     QAction* copyKernelPathAction = menu.addAction(QIcon(":/Icon/process_copy_cell.svg"), QStringLiteral("复制内核模式地址"));
     QAction* copyShortNameAction = menu.addAction(QIcon(":/Icon/process_copy_cell.svg"), QStringLiteral("复制短文件名"));
@@ -16040,10 +16069,6 @@ void FileDock::showPanelContextMenu(FilePanelWidgets& panel, const QPoint& local
         QIcon(":/Icon/process_terminate.svg"), QStringLiteral("驱动(POSIX·忽略共享检查，高风险)"));
     driverIgnoreShareDeleteAction->setToolTip(QStringLiteral(
         "仅单文件；尝试跳过 I/O 管理器共享检查，文件系统仍可能拒绝。"));
-    QAction* unlockByDriverAction = menu.addAction(
-        QIcon(":/Icon/handle_close.svg"),
-        ks::i18n::displayText(QStringLiteral("文件解锁器")));
-    unlockByDriverAction->setToolTip(QStringLiteral("在文件属性中扫描占用，并提供关闭句柄、R3/R0 结束进程操作"));
     QMenu* addOplockMenu = menu.addMenu(QIcon(":/Icon/plus.svg"), QStringLiteral("添加 Oplock（访问计数）"));
     QAction* addOplockLevel1Action = addOplockMenu->addAction(QStringLiteral("Level 1 - 独占读写缓存，别人访问会计数"));
     QAction* addOplockLevel2Action = addOplockMenu->addAction(QStringLiteral("Level 2 - 共享只读缓存，别人写入会计数"));
@@ -16086,7 +16111,6 @@ void FileDock::showPanelContextMenu(FilePanelWidgets& panel, const QPoint& local
     QAction* openTerminalAction = menu.addAction(QIcon(":/Icon/process_tree.svg"), QStringLiteral("在终端中打开"));
     menu.addSeparator();
     QAction* columnAction = menu.addAction(QIcon(":/Icon/process_list.svg"), QStringLiteral("选择列..."));
-    QAction* detailAction = menu.addAction(QIcon(":/Icon/process_details.svg"), QStringLiteral("属性..."));
     menu.addSeparator();
 
     // 分析动作改为顶层菜单，减少层级并提升右键操作效率。
@@ -16095,11 +16119,28 @@ void FileDock::showPanelContextMenu(FilePanelWidgets& panel, const QPoint& local
     QAction* entropyAction = menu.addAction(QIcon(":/Icon/disk_analyze.svg"), QStringLiteral("计算熵值"));
     QAction* hexAction = menu.addAction(QIcon(":/Icon/process_details.svg"), QStringLiteral("十六进制查看"));
     QAction* peAction = menu.addAction(QIcon(":/Icon/process_list.svg"), QStringLiteral("在PE查看器中打开"));
+    menu.addSeparator();
     QAction* mappedProcessScanAction = menu.addAction(QIcon(":/Icon/process_tree.svg"), QStringLiteral("扫描映射进程(R0)"));
+    QAction* unlockByDriverAction = menu.addAction(
+        QIcon(":/Icon/handle_close.svg"),
+        ks::i18n::displayText(QStringLiteral("文件解锁器")));
+    unlockByDriverAction->setToolTip(QStringLiteral("在文件属性中扫描占用，并提供关闭句柄、R3/R0 结束进程操作"));
+    menu.addSeparator();
     QMenu* pluginMenu = menu.addMenu(QIcon(":/Icon/process_start.svg"), QStringLiteral("插件"));
+    menu.addSeparator();
+    QAction* detailAction = menu.addAction(QIcon(":/Icon/process_details.svg"), QStringLiteral("属性..."));
 
     // 结合选中集合动态启用菜单项，保证“多选”和“右键动作”行为一致。
     const bool singleFileOnly = isSingleSelection && QFileInfo(firstPath).isFile();
+    const bool executableSelected = singleFileOnly &&
+        QFileInfo(firstPath).suffix().compare(QStringLiteral("exe"), Qt::CaseInsensitive) == 0;
+    const ks::process::RunAsAvailability runAsAvailability = executableSelected
+        ? ks::process::QueryRunAsAvailability() : ks::process::RunAsAvailability{};
+    runAsMenu->setEnabled(executableSelected);
+    runAsSystemAction->setEnabled(executableSelected && runAsAvailability.system);
+    runAsTrustedInstallerAction->setEnabled(executableSelected && runAsAvailability.trustedInstaller);
+    runAsAdministratorAction->setEnabled(executableSelected && runAsAvailability.administrator);
+    runAsStandardAction->setEnabled(executableSelected && runAsAvailability.standardUser);
     ks::plugin_host::InvocationContext pluginContext;
     pluginContext.targetKind = ks::plugin_host::TargetKind::File;
     pluginContext.filePath = firstPath;
@@ -16159,6 +16200,7 @@ void FileDock::showPanelContextMenu(FilePanelWidgets& panel, const QPoint& local
     mappedProcessScanAction->setEnabled(hasAnyFile);
     pluginMenu->setEnabled(singleFileOnly);
 
+    hideUnavailableFileMenuActions(menu);
     QAction* selectedAction = menu.exec(menuView->viewport()->mapToGlobal(localPos));
     if (selectedAction == nullptr)
     {
@@ -16182,6 +16224,37 @@ void FileDock::showPanelContextMenu(FilePanelWidgets& panel, const QPoint& local
             << eol;
     }
 
+    if (selectedAction->parent() == runAsMenu)
+    {
+        const ks::process::RunAsIdentity identity = selectedAction == runAsSystemAction
+            ? ks::process::RunAsIdentity::System
+            : selectedAction == runAsTrustedInstallerAction
+                ? ks::process::RunAsIdentity::TrustedInstaller
+                : selectedAction == runAsAdministratorAction
+                    ? ks::process::RunAsIdentity::Administrator
+                    : ks::process::RunAsIdentity::StandardUser;
+        const QString identityText = selectedAction->text();
+        const std::wstring executablePath = QDir::toNativeSeparators(firstPath).toStdWString();
+        const QPointer<FileDock> guardedSelf(this);
+        QThreadPool::globalInstance()->start([guardedSelf, executablePath, identity, identityText]()
+            {
+                const auto result = ks::process::RunExecutableAs(executablePath, identity);
+                kLogEvent event;
+                (result.success ? info : warn) << event
+                    << "[FileDock] Run executable as, identity=" << identityText.toStdString()
+                    << ", pid=" << result.processId << ", error=" << result.error << eol;
+                QMetaObject::invokeMethod(qApp, [guardedSelf, result, identityText]()
+                    {
+                        if (guardedSelf.isNull() || result.success || result.error == ERROR_CANCELLED) return;
+                        QMessageBox::warning(guardedSelf.data(),
+                            ks::i18n::displayText(QStringLiteral("以特殊权限运行")),
+                            ks::i18n::displayText(QStringLiteral("无法以 %1 权限运行该程序。\n错误码：%2\n%3"))
+                                .arg(identityText).arg(result.error)
+                                .arg(ks::i18n::packedSourceText(QString::fromStdWString(result.detail))));
+                    }, Qt::QueuedConnection);
+            });
+        return;
+    }
     if (selectedAction->parent() == fileIntegritySubMenu)
     {
         const DWORD integrityRid = selectedAction->data().toUInt();
