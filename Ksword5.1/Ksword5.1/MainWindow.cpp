@@ -5193,6 +5193,23 @@ void MainWindow::closeEvent(QCloseEvent* event)
     kLogEvent closeEventLog;
     info << closeEventLog << "[MainWindow] 收到关闭事件，准备退出进程。" << eol;
 
+    // 救援实例临时借用驱动和布局；退出时不覆盖主实例的配置，也不停止全局 R0 服务。
+    if (qApp != nullptr && qApp->property("ksword_rescue_desktop").toBool())
+    {
+        if (m_privilegeStatusTimer != nullptr)
+        {
+            m_privilegeStatusTimer->stop();
+        }
+        CallbackPromptManager::shutdownGlobalManager();
+        if (event != nullptr)
+        {
+            event->accept();
+        }
+        QMainWindow::closeEvent(event);
+        QCoreApplication::quit();
+        return;
+    }
+
     // 退出时优先保存 ADS 布局，确保用户拖拽/浮动/激活 Tab 状态下次启动可恢复。
     saveDockLayoutToConfig();
     persistLogOutputWindowGeometry();
@@ -8339,6 +8356,21 @@ void MainWindow::refreshPrivilegeStatusButtons()
         m_r0StatusButton->setToolTip(r0Enabled
             ? "R0 已启用：KswordARK 驱动服务正在运行（点击卸载）"
             : "R0 未启用：点击创建并启动 KswordARK 驱动服务");
+    }
+
+    // 救援实例不能用权限切换重启丢掉私有桌面句柄；只禁用会重启进程的三个按钮。
+    const bool rescueActive = qApp != nullptr && qApp->property("ksword_rescue_desktop").toBool();
+    if (rescueActive)
+    {
+        for (QPushButton* button : { m_uiAccessStatusButton, m_adminStatusButton, m_systemStatusButton })
+        {
+            if (button != nullptr)
+            {
+                button->setEnabled(false);
+                button->setToolTip(ks::i18n::text(QStringLiteral("rescue.desktop.privilege"),
+                    QStringLiteral("救援实例保持当前权限。请返回原桌面后切换权限，再进入救援桌面。")));
+            }
+        }
     }
 
     // 仅在状态变化时写日志，避免定时器造成日志刷屏。

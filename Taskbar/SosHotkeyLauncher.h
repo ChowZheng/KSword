@@ -16,7 +16,7 @@
 // SosHotkeyLauncher：
 // - 作用：在 Taskbar 辅助程序启动后安装全局低级键盘钩子；
 // - 检测固定序列 S、O、S、Enter；
-// - 命中后启动 Ksword5.1 主程序，不记录其它键盘输入。
+// - 命中后由独立监护进程在私有救援桌面启动 Ksword5.1，不记录其它键盘输入。
 class SosHotkeyLauncher final
 {
 public:
@@ -104,6 +104,8 @@ private:
 
     std::wstring m_kswordExecutablePath;             // Ksword5.1.exe 绝对路径。
     std::wstring m_kswordWorkingDirectory;           // 主程序启动工作目录。
+    std::wstring m_rescueHostExecutablePath;         // 当前 Taskbar.exe，使用其无 Qt 监护入口。
+    HANDLE m_rescueHostProcess = nullptr;            // 避免重复 SOS 创建并发救援会话。
 };
 
 #endif

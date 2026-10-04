@@ -52,6 +52,12 @@
     <ClCompile Include="SosHotkeyLauncher.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="RescueDesktopHost.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\shared\rescue\RescueDesktopWin32.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="AudioAnalyze.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -117,6 +123,12 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="SosHotkeyLauncher.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="RescueDesktopHost.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\shared\rescue\RescueDesktopWin32.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>

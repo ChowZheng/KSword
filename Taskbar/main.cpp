@@ -1,6 +1,7 @@
 #include "Taskbar.h"
 #include "DisplayRestartMonitor.h"
 #include "SosHotkeyLauncher.h"
+#include "RescueDesktopHost.h"
 #include "TaskbarEarthquakeClient.h"
 #include "TaskbarNotificationService.h"
 #include "TaskbarRestartCoordinator.h"
@@ -53,6 +54,12 @@ namespace
 
 int main(int argc, char* argv[])
 {
+    // SOS 监护入口必须早于 QApplication 与 AppBar 创建，避免已有 HWND 阻止切换线程桌面。
+    const int rescueHostResult = RunRescueDesktopHostIfRequested();
+    if (rescueHostResult >= 0)
+    {
+        return rescueHostResult;
+    }
     // 启用 OpenGLES，沿用原任务栏绘制路径，避免改动 Qt 渲染策略。
     QCoreApplication::setAttribute(Qt::AA_UseOpenGLES);
 
@@ -71,7 +78,7 @@ int main(int argc, char* argv[])
     // SOS 键盘钩子尽早启动：
     // - 独立高优先级线程安装 WH_KEYBOARD_LL；
     // - 只检测 S O S Enter 固定序列；
-    // - 命中后启动 Ksword5.1 主程序。
+    // - 命中后在私有救援桌面启动 Ksword5.1 主程序。
     SosHotkeyLauncher sosHotkeyLauncher(QCoreApplication::applicationDirPath());
     sosHotkeyLauncher.start();
 

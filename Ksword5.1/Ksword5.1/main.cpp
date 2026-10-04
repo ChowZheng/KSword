@@ -15,6 +15,7 @@
 #include "UI/ThemedMessageBox.h"
 #include "UI/GlobalDialogTheme.h"
 #include "UI/GlobalRefreshShortcut.h"
+#include "UI/RescueDesktopSession.h"
 #include "UI/WindowChrome.h"
 #include "UI/TableColumnAutoFit.h"
 #include "UI/TableInteractionSupport.h"
@@ -1306,6 +1307,12 @@ namespace
 
 int main(int argc, char* argv[])
 {
+    // 救援客户端先核验白名单继承的桌面/事件，再允许任何 Qt 或启动页创建窗口。
+    ks::ui::RescueDesktopSession rescueSession;
+    if (!rescueSession.initializeBeforeQt())
+    {
+        return 2;
+    }
     // 启动流程：
     // 1) 初始化 DPI 感知；
     // 2) 读取配置并处理推荐缩放；
@@ -1315,7 +1322,7 @@ int main(int argc, char* argv[])
     ks::crash::Configuration crashConfiguration;
     crashConfiguration.productName = L"KswordARK";
     crashConfiguration.dumpFilePrefix = L"Ksword5.1";
-    crashConfiguration.preferLauncherReporter = true;
+    crashConfiguration.preferLauncherReporter = !rescueSession.active();
     ks::crash::InstallCrashHandler(crashConfiguration);
     const bool crashRestartWait =
         ks::crash::WaitForCrashRestartTargetFromCommandLine(
@@ -1328,7 +1335,7 @@ int main(int argc, char* argv[])
     // startupSettings 需在防多开判定前读取：用户关闭“防止多开”后，新启动必须直接继续创建实例。
     ks::settings::AppearanceSettings startupSettings = ks::settings::loadAppearanceSettings();
     const bool privilegeRestartLaunch = hasCommandLineArgument(kPrivilegeRestartArgument);
-    const bool skipSingleInstanceLaunch = crashRestartWait;
+    const bool skipSingleInstanceLaunch = crashRestartWait || rescueSession.active();
     if (startupSettings.preventMultipleInstances && !privilegeRestartLaunch && !skipSingleInstanceLaunch)
     {
         if (HWND existingWindowHandle = findExistingKswordMainWindow())
@@ -1373,14 +1380,22 @@ int main(int argc, char* argv[])
     }
     else if (skipSingleInstanceLaunch)
     {
-        startupTraceRaw("verified crash restart predecessor exited, skipping single-instance check");
+        if (rescueSession.active())
+        {
+            startupTraceRaw("verified rescue desktop client, skipping single-instance check");
+        }
+        else
+        {
+            startupTraceRaw("verified crash restart predecessor exited, skipping single-instance check");
+        }
     }
     else if (!startupSettings.preventMultipleInstances)
     {
         startupTraceRaw("prevent multiple instances disabled in settings, skipping single-instance check");
     }
 
-    if (!startupUnlockPathList.empty() && !privilegeRestartLaunch && !isCurrentProcessElevated())
+    if (!rescueSession.active() && !startupUnlockPathList.empty()
+        && !privilegeRestartLaunch && !isCurrentProcessElevated())
     {
         // Shell 文件解锁入口必须尽早提权：
         // - 文件占用扫描依赖管理员权限和 SeDebugPrivilege，否则系统/高权限进程句柄容易漏报；
@@ -1466,7 +1481,7 @@ int main(int argc, char* argv[])
     }
 
     startupTraceRaw("before maybeApplyStartupScaleRecommendation");
-    if (maybeApplyStartupScaleRecommendation(&startupSettings))
+    if (!rescueSession.active() && maybeApplyStartupScaleRecommendation(&startupSettings))
     {
         startupTraceRaw("maybeApplyStartupScaleRecommendation returned true, exiting current instance");
         kLogEvent restartTakeoverEvent;
@@ -1477,6 +1492,7 @@ int main(int argc, char* argv[])
     }
 
     if (startupSettings.autoRequestAdminOnStartup
+        && !rescueSession.active()
         && !privilegeRestartLaunch
         && !isCurrentProcessElevated())
     {
@@ -1535,6 +1551,7 @@ int main(int argc, char* argv[])
 
     startupTraceRaw("before QApplication construction");
     QApplication app(argc, argv);
+    rescueSession.install(app);
     startupTraceRaw("QApplication constructed");
     disableQtPopupScrollEffects();
 
@@ -1772,6 +1789,7 @@ int main(int argc, char* argv[])
     }
 
     MainWindow window(nullptr, startupProgressCallback, startupSystemFont);
+    rescueSession.attachWindow(window);
     startupTraceRaw("MainWindow constructed");
     {
         kLogEvent windowConstructEvent;
@@ -1840,7 +1858,7 @@ int main(int argc, char* argv[])
     }
     applyNativeAppIconToWidget(&window);
 
-    if (isCurrentProcessElevated())
+    if (!rescueSession.active() && isCurrentProcessElevated())
     {
         QTimer::singleShot(0, &window, []()
             {
