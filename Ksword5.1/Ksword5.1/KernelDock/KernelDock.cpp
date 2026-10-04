@@ -1,6 +1,7 @@
 
 #include "KernelDock.h"
 #include "../UI/VisibleTableWidget.h"
+#include "../UI/ThemeAccentIcon.h"
 
 // ============================================================
 // KernelDock.cpp
@@ -244,7 +245,8 @@ namespace
     // - 变量 iconPath：图标资源路径，统一放在调用点便于审阅。
     QIcon tabIcon(const QString& iconPath)
     {
-        return tintedSvgIcon(iconPath, KswordTheme::PrimaryBlueColor);
+        // 普通标签保留默认蓝源图并动态取色，选中对比色仍由 selectedTabIcon 处理。
+        return ks::ui::MakeThemeAccentIcon(tintedSvgIcon(iconPath, KswordTheme::DefaultPrimaryAccentColor()));
     }
 
     // selectedTabIcon：

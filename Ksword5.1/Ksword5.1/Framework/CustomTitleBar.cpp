@@ -931,6 +931,11 @@ namespace ks::ui
         setTitleInputMode(true, focusInput);
     }
 
+    void CustomTitleBar::activateCommandInput(const bool focusInput)
+    {
+        setTitleInputMode(false, focusInput);
+    }
+
     void CustomTitleBar::setSearchScopeDisplayText(const QString& displayText)
     {
         const QString normalizedText = displayText.trimmed();
@@ -957,10 +962,9 @@ namespace ks::ui
         m_searchInputModeActive = searchModeActive;
         updateTitleInputModeVisuals();
         emit inputModeChanged(searchModeActive);
-        if (searchModeActive && m_commandLineEdit != nullptr
-            && !m_commandLineEdit->text().trimmed().isEmpty())
+        if (searchModeActive && m_commandLineEdit != nullptr)
         {
-            // 切回搜索模式时把已有文本重新交给搜索控制器恢复结果弹层。
+            // 切回搜索模式时同步当前文本；空串也要清除 CMD 模式前保存的旧查询。
             emit searchTextEdited(m_commandLineEdit->text());
         }
         if (focusInput && m_commandLineEdit != nullptr)
@@ -986,7 +990,7 @@ namespace ks::ui
             m_inputModeButton->setText(
                 ks::i18n::sourceText(QStringLiteral("搜索")) + QStringLiteral(" ▾"));
             m_inputModeButton->setToolTip(
-                ks::i18n::sourceText(QStringLiteral("搜索范围：%1。聚焦输入框后按 Tab 切换范围。"))
+                ks::i18n::sourceText(QStringLiteral("搜索范围：%1。聚焦输入框后按 Tab/Shift+Tab 循环切换全局、当前页面、当前表格和 CMD。"))
                     .arg(m_searchScopeDisplayText));
             m_commandLineEdit->setPlaceholderText(
                 ks::i18n::sourceText(QStringLiteral("搜索")));
@@ -994,6 +998,8 @@ namespace ks::ui
         else
         {
             m_inputModeButton->setText(QStringLiteral("CMD ▾"));
+            m_inputModeButton->setToolTip(ks::i18n::sourceText(QStringLiteral(
+                "CMD 模式：聚焦输入框后按 Tab 切到全局搜索，按 Shift+Tab 切到当前表格搜索。")));
             m_commandLineEdit->setPlaceholderText(
                 QStringLiteral("输入命令后回车：将使用 cmd /K 在新控制台执行"));
         }

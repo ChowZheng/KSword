@@ -4,6 +4,7 @@
 #include "../UI/FlatTableModel.h"
 #include "../UI/TableInteractionSupport.h"
 #include "../UI/VisibleTableWidget.h"
+#include "../UI/ThemeAccentIcon.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -213,8 +214,8 @@ namespace
     }
 
     // createBlueThemedIcon 作用：
-    // - 把 qrc 中的单色 SVG 图标重新着色为主题蓝色；
-    // - 避免修改原始 SVG 文件，实现运行时统一换色。
+    // - 把 qrc 中的单色 SVG 图标生成固定默认蓝源图；
+    // - 当前主题由动态图标引擎派生，避免首次懒加载时捕获自定义色为原图。
     // 参数 resourcePath：qrc 资源路径（如 :/Icon/log_copy.svg）。
     // 参数 iconSize：输出图标尺寸。
     // 返回值：重着色后的 QIcon；若渲染失败则回退原图标。
@@ -233,15 +234,15 @@ namespace
         QPixmap tintedPixmap(iconSize);
         tintedPixmap.fill(Qt::transparent);
 
-        // 第一步先渲染原 SVG；第二步用 SourceIn 把非透明像素统一染成主题蓝。
+        // 先渲染原 SVG，再用 SourceIn 稳定源图颜色；实际主题色在绘制时应用。
         QPainter painter(&tintedPixmap);
         painter.setRenderHint(QPainter::Antialiasing, true);
         svgRenderer.render(&painter, QRectF(0, 0, iconSize.width(), iconSize.height()));
         painter.setCompositionMode(QPainter::CompositionMode_SourceIn);
-        painter.fillRect(tintedPixmap.rect(), KswordTheme::PrimaryBlueColor);
+        painter.fillRect(tintedPixmap.rect(), KswordTheme::DefaultPrimaryAccentColor());
         painter.end();
 
-        return QIcon(tintedPixmap);
+        return ks::ui::MakeThemeAccentIcon(QIcon(tintedPixmap));
     }
 
     // buildBlueCheckBoxStyleSheet 作用：

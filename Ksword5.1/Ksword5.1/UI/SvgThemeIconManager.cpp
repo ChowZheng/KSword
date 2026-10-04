@@ -26,6 +26,7 @@
 #include <QPointer>
 #include <QSet>
 #include <QSize>
+#include <QTabBar>
 #include <QTabWidget>
 #include <QTimer>
 #include <QVariant>
@@ -51,6 +52,8 @@ namespace
         "ksword_svg_theme_original_tab_icon"; // Tab 页面保存所属标签原始图标。
     constexpr auto LastTabIconKeyProperty =
         "ksword_svg_theme_last_tab_icon_key"; // 管理器最近写入 Tab 图标的 cacheKey。
+    constexpr auto PendingIconRefreshProperty =
+        "ksword_svg_theme_refresh_pending"; // 控件是否已有排队的增量补色。
 
     // cachedTintedIcons：
     // - key 是原图像素签名 + 目标颜色；
@@ -525,28 +528,82 @@ bool ks::ui::SvgThemeIconManager::eventFilter(
         return QObject::eventFilter(watchedObject, eventObject);
     }
 
-    // Polish 覆盖按需创建的页面；ActionAdded 覆盖运行期新建右键菜单。
-    if (eventObject->type() == QEvent::Polish)
+    // Polish 之后页面仍可能设置图标；Show 与动作变更补上这些晚到的资源。
+    // 排队执行避免在构造、菜单派发或绘制栈中重入控件自身的更新流程。
+    const QEvent::Type eventType = eventObject->type(); // 本次事件的类别。
+    QWidget* widgetPointer = qobject_cast<QWidget*>(watchedObject); // 事件所属控件。
+    if (widgetPointer != nullptr &&
+        (eventType == QEvent::Polish || eventType == QEvent::Show ||
+         eventType == QEvent::ActionAdded || eventType == QEvent::ActionChanged ||
+         eventType == QEvent::WindowIconChange))
     {
-        if (QWidget* widgetPointer = qobject_cast<QWidget*>(watchedObject))
+        scheduleWidgetRefresh(widgetPointer);
+    }
+    else if (eventType == QEvent::Paint)
+    {
+        // QAbstractButton::setIcon 没有 IconChanged 事件，以绘制前的身份变化兜底。
+        // 已染色的图标不排队，因此常驻刷新不会重复栅格化或形成重绘循环。
+        if (auto* buttonPointer = qobject_cast<QAbstractButton*>(watchedObject))
         {
-            int ignoredCacheHits = 0; // ignoredCacheHits：懒加载单控件不单独记录统计。
-            (void)applyToWidget(widgetPointer, &ignoredCacheHits);
-            const QList<QAction*> actionList =
-                directWidgetActions(widgetPointer);
-            for (QAction* actionPointer : actionList)
+            const QIcon currentIcon = buttonPointer->icon(); // 按钮当前图标。
+            if (!buttonPointer->property("ksword_theme_icon_managed").toBool() &&
+                !currentIcon.isNull() &&
+                buttonPointer->property(LastButtonIconKeyProperty).toULongLong() !=
+                    static_cast<qulonglong>(currentIcon.cacheKey()))
             {
-                (void)applyToAction(actionPointer, &ignoredCacheHits);
+                scheduleWidgetRefresh(buttonPointer);
+            }
+        }
+        else if (auto* tabBarPointer = qobject_cast<QTabBar*>(watchedObject))
+        {
+            // 标签图标由 QTabBar 绘制，真正保存原图的对象仍是 QTabWidget 页面。
+            if (auto* tabWidgetPointer = qobject_cast<QTabWidget*>(tabBarPointer->parentWidget()))
+            {
+                for (int tabIndex = 0; tabIndex < tabWidgetPointer->count(); ++tabIndex)
+                {
+                    QWidget* pagePointer = tabWidgetPointer->widget(tabIndex); // 标签所属页面。
+                    const QIcon currentIcon = tabWidgetPointer->tabIcon(tabIndex); // 当前标签图标。
+                    if (pagePointer != nullptr && !currentIcon.isNull() &&
+                        pagePointer->property(LastTabIconKeyProperty).toULongLong() !=
+                            static_cast<qulonglong>(currentIcon.cacheKey()))
+                    {
+                        scheduleWidgetRefresh(tabWidgetPointer);
+                        break;
+                    }
+                }
             }
         }
     }
-    else if (eventObject->type() == QEvent::ActionAdded)
-    {
-        auto* actionEvent = static_cast<QActionEvent*>(eventObject);
-        int ignoredCacheHits = 0; // ignoredCacheHits：事件增量处理不计入批量报告。
-        (void)applyToAction(actionEvent->action(), &ignoredCacheHits);
-    }
     return QObject::eventFilter(watchedObject, eventObject);
+}
+
+void ks::ui::SvgThemeIconManager::scheduleWidgetRefresh(QWidget* widgetPointer)
+{
+    if (widgetPointer == nullptr || widgetPointer->property(PendingIconRefreshProperty).toBool())
+    {
+        return;
+    }
+    widgetPointer->setProperty(PendingIconRefreshProperty, true);
+    const QPointer<QWidget> safeWidget(widgetPointer); // 防止排队期间控件销毁。
+    QTimer::singleShot(0, this, [this, safeWidget]()
+    {
+        if (safeWidget == nullptr)
+        {
+            return;
+        }
+        safeWidget->setProperty(PendingIconRefreshProperty, false);
+        if (!m_customTintActive)
+        {
+            return;
+        }
+        int ignoredCacheHits = 0; // 增量补色不计入启动批处理统计。
+        (void)applyToWidget(safeWidget, &ignoredCacheHits);
+        const QList<QAction*> actionList = directWidgetActions(safeWidget); // 当前直接关联的动作。
+        for (QAction* actionPointer : actionList)
+        {
+            (void)applyToAction(actionPointer, &ignoredCacheHits);
+        }
+    });
 }
 
 int ks::ui::SvgThemeIconManager::applyToWidget(
@@ -562,7 +619,8 @@ int ks::ui::SvgThemeIconManager::applyToWidget(
     if (auto* buttonPointer = qobject_cast<QAbstractButton*>(widgetPointer))
     {
         const QIcon currentIcon = buttonPointer->icon();
-        if (!currentIcon.isNull())
+        // ADS 提供器已生成各状态/DPI 的主题图标，不再把它压成单一 Normal 颜色。
+        if (!buttonPointer->property("ksword_theme_icon_managed").toBool() && !currentIcon.isNull())
         {
             const QIcon originalIcon = originalIconFromProperty(
                 buttonPointer,
@@ -582,7 +640,7 @@ int ks::ui::SvgThemeIconManager::applyToWidget(
             {
                 bool cacheHit = false;
                 const QIcon replacementIcon = themedIcon(originalIcon, &cacheHit);
-                if (!replacementIcon.isNull())
+                if (!replacementIcon.isNull() && replacementIcon.cacheKey() != currentIcon.cacheKey())
                 {
                     buttonPointer->setIcon(replacementIcon);
                     rememberAppliedIconKey(
@@ -594,6 +652,11 @@ int ks::ui::SvgThemeIconManager::applyToWidget(
                     {
                         ++(*cacheHitCount);
                     }
+                }
+                else if (replacementIcon.isNull())
+                {
+                    // 非候选多色图标也登记身份，避免每次绘制重复排队扫描。
+                    rememberAppliedIconKey(buttonPointer, LastButtonIconKeyProperty, currentIcon);
                 }
             }
         }
@@ -627,7 +690,7 @@ int ks::ui::SvgThemeIconManager::applyToWidget(
             bool cacheHit = false;
             const QIcon replacementIcon =
                 themedIcon(originalWindowIcon, &cacheHit);
-            if (!replacementIcon.isNull())
+            if (!replacementIcon.isNull() && replacementIcon.cacheKey() != currentWindowIcon.cacheKey())
             {
                 widgetPointer->setWindowIcon(replacementIcon);
                 rememberAppliedIconKey(
@@ -670,7 +733,7 @@ bool ks::ui::SvgThemeIconManager::applyToAction(
 
     bool cacheHit = false;
     const QIcon replacementIcon = themedIcon(originalIcon, &cacheHit);
-    if (replacementIcon.isNull())
+    if (replacementIcon.isNull() || replacementIcon.cacheKey() == actionPointer->icon().cacheKey())
     {
         return false;
     }
@@ -721,8 +784,10 @@ int ks::ui::SvgThemeIconManager::applyToTabWidget(
 
         bool cacheHit = false;
         const QIcon replacementIcon = themedIcon(originalIcon, &cacheHit);
-        if (replacementIcon.isNull())
+        if (replacementIcon.isNull() || replacementIcon.cacheKey() == currentIcon.cacheKey())
         {
+            // 非候选标签同样标记已检查，避免每次 QTabBar 绘制重新排队。
+            rememberAppliedIconKey(pagePointer, LastTabIconKeyProperty, currentIcon);
             continue;
         }
         tabWidgetPointer->setTabIcon(tabIndex, replacementIcon);

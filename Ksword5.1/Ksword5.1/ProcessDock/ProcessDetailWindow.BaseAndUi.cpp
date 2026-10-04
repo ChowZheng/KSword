@@ -4607,6 +4607,11 @@ void ProcessDetailWindow::initializeActionTab()
         QIcon(":/Icon/process_terminate.svg"),
         ks::i18n::sourceText(QStringLiteral("R0 驱动结束（四步：清保护 → ZwTerminate → 逐线程 → 清零内存）")),
         static_cast<int>(ks::process::TerminateMethodTable().size()));
+    // 组合链使用独立 ID，保留已有单方法及 R0 选项的 ID 和默认选择。
+    m_terminateActionCombo->addItem(
+        QIcon(":/Icon/process_terminate.svg"),
+        ks::i18n::sourceText(QStringLiteral("结束进程(组合方法链)")),
+        static_cast<int>(ks::process::TerminateMethodTable().size()) + 1);
     m_terminateActionCombo->setToolTip("选择结束当前进程的执行方案");
     m_executeTerminateActionButton = buildTextActionButton(
         QStringLiteral("执行"),

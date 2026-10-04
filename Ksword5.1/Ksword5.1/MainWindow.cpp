@@ -99,6 +99,8 @@
 #include "UI/CommandExecutionPopup.h"
 #include "UI/WindowChrome.h"
 #include "UI/SvgThemeIconManager.h"
+#include "UI/ThemeControlGlyphs.h"
+#include "UI/DockThemeIcons.h"
 #include "UI/SmoothScrollSupport.h"
 #include "UI/ThemeColorRemap.h"
 #include "UI/ThemedMessageBox.h"
@@ -613,26 +615,9 @@ namespace
     {
         if (activeTab)
         {
-            return KswordTheme::ActiveTabBackgroundColor();
+            return KswordTheme::DockTabBackgroundColor(KswordTheme::DockTabState::Active);
         }
-        return KswordTheme::PrimaryBlueSubtleColor();
-    }
-
-    // dockTabTextColor 作用：
-    // - 返回 ADS Dock 标签文字的最终颜色；
-    // - 选中标签根据实际活动背景自动选择可读文字色；
-    // - 未选中标签沿用当前主题主文字色。
-    // 入参 activeTab：true=当前选中标签；false=普通标签。
-    // 返回：可直接写入 QWidget/QLabel palette 与局部样式表的 QColor。
-    QColor dockTabTextColor(const bool activeTab)
-    {
-        if (!activeTab)
-        {
-            return KswordTheme::TextPrimaryColor();
-        }
-
-        // 活动标签使用专用前景色，按混合后的实际背景重新计算对比度。
-        return KswordTheme::ActiveTabTextColor();
+        return KswordTheme::DockTabBackgroundColor(KswordTheme::DockTabState::Hover);
     }
 
     // shouldTemporarilyDropTopMostForDockSwitch：
@@ -723,51 +708,8 @@ namespace
     // 返回：无返回值；仅在颜色变化时更新 palette/styleSheet，避免 StyleChange 风暴。
     void applyDockTabTextColor(QWidget* tabWidget, const bool activeTab)
     {
-        if (tabWidget == nullptr)
-        {
-            return;
-        }
-
-        const QColor finalTextColor = dockTabTextColor(activeTab);
-        const QString finalTextColorName = finalTextColor.name(QColor::HexRgb).toUpper();
-
-        if (tabWidget->property("kswordDockTabTextColor").toString() != finalTextColorName)
-        {
-            QPalette tabPalette = tabWidget->palette();
-            tabPalette.setColor(QPalette::WindowText, finalTextColor);
-            tabPalette.setColor(QPalette::Text, finalTextColor);
-            tabPalette.setColor(QPalette::ButtonText, finalTextColor);
-            tabWidget->setPalette(tabPalette);
-            tabWidget->setProperty("kswordDockTabTextColor", finalTextColorName);
-        }
-
-        const QString labelStyle = QStringLiteral(
-            "color:%1 !important;"
-            "background-color:transparent !important;"
-            "background:transparent !important;"
-            "font-weight:%2;")
-            .arg(finalTextColorName)
-            .arg(activeTab ? QStringLiteral("700") : QStringLiteral("600"));
-
-        const QList<QLabel*> labelChildren = tabWidget->findChildren<QLabel*>();
-        for (QLabel* labelWidget : labelChildren)
-        {
-            if (labelWidget == nullptr)
-            {
-                continue;
-            }
-
-            QPalette labelPalette = labelWidget->palette();
-            labelPalette.setColor(QPalette::WindowText, finalTextColor);
-            labelPalette.setColor(QPalette::Text, finalTextColor);
-            labelPalette.setColor(QPalette::ButtonText, finalTextColor);
-            labelWidget->setPalette(labelPalette);
-
-            if (labelWidget->styleSheet() != labelStyle)
-            {
-                labelWidget->setStyleSheet(labelStyle);
-            }
-        }
+        ks::ui::ApplyDockTabTextColor(
+            tabWidget, activeTab, tabWidget != nullptr && tabWidget->underMouse());
     }
 
     // configureDockTabStyleSurface 作用：
@@ -982,7 +924,7 @@ namespace
             {
                 handled = ads::CDockWidgetTab::event(eventObject);
             }
-            if (shouldSyncTextAfterEvent)
+            if (shouldSyncTextAfterEvent || shouldRepaintAfterEvent)
             {
                 syncDockTabTextColor();
             }
@@ -1060,7 +1002,7 @@ namespace
                     eventObject->type() == QEvent::Show);
 
             const bool handled = ads::CAutoHideTab::event(eventObject);
-            if (shouldSyncTextAfterEvent)
+            if (shouldSyncTextAfterEvent || shouldRepaintAfterEvent)
             {
                 syncDockTabTextColor();
             }
@@ -4667,7 +4609,7 @@ namespace
     // buildGlobalControlContrastStyleBlock 作用：
     // - 为复选框、单选框、可勾选视图项和滑块提供完整的状态图形；
     // - 所有活动边界相对控件表面至少保持 3:1 非文本对比度；
-    // - 勾号、半选横线和单选圆点按实际填充色选择黑/白图形。
+    // - 勾号、半选横线和单选圆点由主题色派生，并相对实际填充色校正对比度。
     QString buildGlobalControlContrastStyleBlock(const bool darkModeEnabled)
     {
         Q_UNUSED(darkModeEnabled);
@@ -4676,18 +4618,17 @@ namespace
         const QColor accentHoverColor = KswordTheme::ControlAccentHoverColor();
         const QColor accentPressedColor = KswordTheme::ControlAccentPressedColor();
         const QColor disabledFillColor = KswordTheme::ControlDisabledFillColor();
-        const auto glyphPath = [](const QColor& fillColor, const QString& whitePath, const QString& blackPath) {
-            return KswordTheme::MaximumContrastMonochromeColor(fillColor) == KswordTheme::WhiteColor()
-                ? whitePath
-                : blackPath;
+        // glyphPath 根据底色生成当前主题的 SVG；引号保护包含空格的缓存路径。
+        const auto glyphPath = [](const QColor& fillColor, const QString& resourcePath,
+                                  const bool disabled = false) {
+            const QString path = ks::ui::ThemedControlGlyphPath(
+                resourcePath, KswordTheme::ControlGlyphColor(fillColor, disabled));
+            return QStringLiteral("\"%1\"").arg(path);
         };
 
         const QString whiteCheckPath = QStringLiteral(":/Icon/ks_control_check_white.svg");
-        const QString blackCheckPath = QStringLiteral(":/Icon/ks_control_check_black.svg");
         const QString whiteDashPath = QStringLiteral(":/Icon/ks_control_dash_white.svg");
-        const QString blackDashPath = QStringLiteral(":/Icon/ks_control_dash_black.svg");
         const QString whiteRadioPath = QStringLiteral(":/Icon/ks_control_radio_white.svg");
-        const QString blackRadioPath = QStringLiteral(":/Icon/ks_control_radio_black.svg");
 
         QString controlStyle = QString::fromLatin1(
             "\n__BEGIN_MARKER__\n"
@@ -4764,18 +4705,18 @@ namespace
         controlStyle.replace(QStringLiteral("__DISABLED_TEXT__"), KswordTheme::TextDisabledColorHex());
         controlStyle.replace(QStringLiteral("__DISABLED_OUTLINE__"), KswordTheme::ControlDisabledOutlineHex());
         controlStyle.replace(QStringLiteral("__DISABLED_FILL__"), KswordTheme::ThemeColorName(disabledFillColor));
-        controlStyle.replace(QStringLiteral("__CHECK_ICON__"), glyphPath(accentColor, whiteCheckPath, blackCheckPath));
-        controlStyle.replace(QStringLiteral("__CHECK_HOVER_ICON__"), glyphPath(accentHoverColor, whiteCheckPath, blackCheckPath));
-        controlStyle.replace(QStringLiteral("__CHECK_PRESSED_ICON__"), glyphPath(accentPressedColor, whiteCheckPath, blackCheckPath));
-        controlStyle.replace(QStringLiteral("__CHECK_DISABLED_ICON__"), glyphPath(disabledFillColor, whiteCheckPath, blackCheckPath));
-        controlStyle.replace(QStringLiteral("__DASH_ICON__"), glyphPath(accentColor, whiteDashPath, blackDashPath));
-        controlStyle.replace(QStringLiteral("__DASH_HOVER_ICON__"), glyphPath(accentHoverColor, whiteDashPath, blackDashPath));
-        controlStyle.replace(QStringLiteral("__DASH_PRESSED_ICON__"), glyphPath(accentPressedColor, whiteDashPath, blackDashPath));
-        controlStyle.replace(QStringLiteral("__DASH_DISABLED_ICON__"), glyphPath(disabledFillColor, whiteDashPath, blackDashPath));
-        controlStyle.replace(QStringLiteral("__RADIO_ICON__"), glyphPath(accentColor, whiteRadioPath, blackRadioPath));
-        controlStyle.replace(QStringLiteral("__RADIO_HOVER_ICON__"), glyphPath(accentHoverColor, whiteRadioPath, blackRadioPath));
-        controlStyle.replace(QStringLiteral("__RADIO_PRESSED_ICON__"), glyphPath(accentPressedColor, whiteRadioPath, blackRadioPath));
-        controlStyle.replace(QStringLiteral("__RADIO_DISABLED_ICON__"), glyphPath(disabledFillColor, whiteRadioPath, blackRadioPath));
+        controlStyle.replace(QStringLiteral("__CHECK_ICON__"), glyphPath(accentColor, whiteCheckPath));
+        controlStyle.replace(QStringLiteral("__CHECK_HOVER_ICON__"), glyphPath(accentHoverColor, whiteCheckPath));
+        controlStyle.replace(QStringLiteral("__CHECK_PRESSED_ICON__"), glyphPath(accentPressedColor, whiteCheckPath));
+        controlStyle.replace(QStringLiteral("__CHECK_DISABLED_ICON__"), glyphPath(disabledFillColor, whiteCheckPath, true));
+        controlStyle.replace(QStringLiteral("__DASH_ICON__"), glyphPath(accentColor, whiteDashPath));
+        controlStyle.replace(QStringLiteral("__DASH_HOVER_ICON__"), glyphPath(accentHoverColor, whiteDashPath));
+        controlStyle.replace(QStringLiteral("__DASH_PRESSED_ICON__"), glyphPath(accentPressedColor, whiteDashPath));
+        controlStyle.replace(QStringLiteral("__DASH_DISABLED_ICON__"), glyphPath(disabledFillColor, whiteDashPath, true));
+        controlStyle.replace(QStringLiteral("__RADIO_ICON__"), glyphPath(accentColor, whiteRadioPath));
+        controlStyle.replace(QStringLiteral("__RADIO_HOVER_ICON__"), glyphPath(accentHoverColor, whiteRadioPath));
+        controlStyle.replace(QStringLiteral("__RADIO_PRESSED_ICON__"), glyphPath(accentPressedColor, whiteRadioPath));
+        controlStyle.replace(QStringLiteral("__RADIO_DISABLED_ICON__"), glyphPath(disabledFillColor, whiteRadioPath, true));
         return controlStyle;
     }
 
@@ -5058,6 +4999,29 @@ MainWindow::MainWindow(
     m_mainRootLayout->setSpacing(0);
 
     m_pDockManager = new ads::CDockManager(m_mainRootContainer);
+    // 先注册主题图标提供器，再创建业务标签；新增/浮动/恢复布局后补齐已缓存按钮。
+    ks::ui::RefreshDockThemeIcons(m_pDockManager);
+    const auto scheduleDockThemeIcons = [this]()
+    {
+        // 合并同一轮布局构造的多个信号，避免在 ADS 构造栈中改写图标。
+        constexpr auto pendingProperty = "ksword_dock_theme_icons_pending";
+        if (m_pDockManager == nullptr || m_pDockManager->property(pendingProperty).toBool())
+        {
+            return;
+        }
+        m_pDockManager->setProperty(pendingProperty, true);
+        QTimer::singleShot(0, this, [this]()
+        {
+            if (m_pDockManager != nullptr)
+            {
+                m_pDockManager->setProperty("ksword_dock_theme_icons_pending", false);
+                ks::ui::RefreshDockThemeIcons(m_pDockManager);
+            }
+        });
+    };
+    connect(m_pDockManager, &ads::CDockManager::dockAreaCreated, this, scheduleDockThemeIcons);
+    connect(m_pDockManager, &ads::CDockManager::floatingWidgetCreated, this, scheduleDockThemeIcons);
+    connect(m_pDockManager, &ads::CDockManager::stateRestored, this, scheduleDockThemeIcons);
     m_mainRootLayout->addWidget(m_pDockManager, 1);
     setCentralWidget(m_mainRootContainer);
     initResizeBorderOverlays();
@@ -6649,6 +6613,12 @@ void MainWindow::initGlobalUiSearchController()
         &ks::ui::GlobalUiSearchController::requestSearchInputActivation,
         m_customTitleBar,
         &ks::ui::CustomTitleBar::activateSearchInput);
+    // 四节点循环只切换输入模式；既有 inputModeChanged 接线同步搜索与 CMD 配置弹层。
+    connect(
+        m_globalUiSearchController,
+        &ks::ui::GlobalUiSearchController::requestCommandInputActivation,
+        m_customTitleBar,
+        &ks::ui::CustomTitleBar::activateCommandInput);
     connect(
         m_globalUiSearchController,
         &ks::ui::GlobalUiSearchController::searchScopeDisplayTextChanged,
@@ -12131,6 +12101,8 @@ void MainWindow::applyAppearanceSettings(
     if (themeVisualRefreshRequired)
     {
         refreshThemeDependentVisuals(darkModeEnabled);
+        // 平台标准 QIcon 不会因 palette 改变自动重建，显式更新停靠按钮各状态。
+        ks::ui::RefreshDockThemeIcons(m_pDockManager);
 
         // 专用刷新入口只覆盖少数几个自带 refreshThemeVisuals 的面板；其余页面把静态
         // 主题色固化在自己的 styleSheet 里，而控件自身样式表优先级高于全局 QSS。
@@ -12694,20 +12666,6 @@ QString MainWindow::buildAppearanceOverlayStyleSheet(
     // - ADS Dock tab 继续使用下面的 dockTabChildHoverColor，不在这里改动。
     const QString normalTabHoverColor = KswordTheme::ThemeColorName(
         darkModeEnabled ? KswordTheme::PrimaryBlueSubtleColor() : KswordTheme::SurfaceMutedColor());
-    // dockActiveTabTextColor 作用：
-    // - 只控制 ADS Dock 选中标签文字；
-    // - 深浅模式统一使用白字，修复深色活动背景上的低对比文字；
-    // - 普通 QTabBar 仍沿用 activeTabTextColor，避免扩大样式影响面。
-    const QString dockActiveTabTextColor = KswordTheme::ThemeColorName(
-        dockTabTextColor(true));
-    const QString tabHoverColor = darkModeEnabled
-        ? KswordTheme::ThemeColorName(KswordTheme::PrimaryBlueSubtleColor())
-        : subtleThemeColor;
-    // dockTabChildHoverColor 作用：
-    // - ADS Dock 标签内部常由 QLabel/QWidget 组合绘制；
-    // - 深色模式下如果子控件继续透明或继承错误 palette，会露出近白底；
-    // - 因此 hover 时父子统一使用明确背景色，避免半透明/调色板回退。
-    const QString dockTabChildHoverColor = tabHoverColor;
     const QString tooltipStyle = QStringLiteral(
         "QToolTip{"
         "  background-color:%1 !important;"
@@ -12900,142 +12858,25 @@ QString MainWindow::buildAppearanceOverlayStyleSheet(
     // tabStyle 作用：统一普通 Tab 与 ADS Dock Tab 的颜色、边距和选中态。
     // 字号不在这里设置，保证所有 Tab 栏继承 Qt 默认应用字号。
     const QString tabStyle = QStringLiteral(
-        "QTabBar{"
-        "  border:none !important;"
-        "}"
+        "QTabBar{border:none !important;}"
         "QTabBar::tab{"
-        "  background-color:%1 !important;"
-        "  color:%2 !important;"
-        "  border:none !important;"
-        "  border-radius:0px !important;"
-        "  padding:3px 12px;"
-        "  min-height:22px;"
-        "  margin:0px;"
-        "}"
-        "QTabBar::tab:left,QTabBar::tab:right{"
-        "  padding:5px 6px;"
-        "}"
+        " background-color:%1 !important;color:%2 !important;"
+        " border:none !important;border-radius:0px !important;"
+        " padding:3px 12px;min-height:22px;margin:0px;}"
+        "QTabBar::tab:left,QTabBar::tab:right{padding:5px 6px;}"
         "QTabBar::tab:selected{"
-        "  background-color:%4 !important;"
-        "  color:%5 !important;"
-        "  font-weight:700;"
-        "}"
-        "QTabBar::tab:hover:!selected{"
-        "  background-color:%9 !important;"
-        "  background:%9 !important;"
-        "  color:%2 !important;"
-        "}"
+        " background-color:%3 !important;color:%4 !important;font-weight:700;}"
+        "QTabBar::tab:hover:!selected,"
         "QMainWindow QTabBar::tab:hover:!selected,"
         "QMainWindow QTabBar::tab:pressed:!selected{"
-        "  background-color:%9 !important;"
-        "  background:%9 !important;"
-        "  color:%2 !important;"
-        "}"
+        " background-color:%5 !important;background:%5 !important;color:%2 !important;}"
         "QMainWindow QTabBar::tab:selected:hover,"
         "QMainWindow QTabBar::tab:selected:pressed{"
-        "  background-color:%4 !important;"
-        "  background:%4 !important;"
-        "  color:%5 !important;"
-        "}"
-        "ads--CDockAreaTabBar{"
-        "  background:transparent !important;"
-        "  border:none !important;"
-        "  padding:0px;"
-        "}"
-        "ads--CDockWidgetTab,ads--CAutoHideTab{"
-        "  background-color:%1 !important;"
-        "  color:%2 !important;"
-        "  border:none !important;"
-        "  border-radius:0px !important;"
-        "  padding:3px 12px;"
-        "  margin:0px;"
-        "  min-height:22px;"
-        "}"
-        "ads--CDockWidgetTab QLabel,ads--CAutoHideTab QLabel{"
-        "  color:%2 !important;"
-        "}"
-        "ads--CDockWidgetTab[activeTab=\"true\"],ads--CAutoHideTab[activeTab=\"true\"]{"
-        "  background-color:%4 !important;"
-        "  background:%4 !important;"
-        "  color:%8 !important;"
-        "}"
-        "ads--CDockWidgetTab[activeTab=\"true\"] QLabel,"
-        "ads--CDockWidgetTab[activeTab=\"true\"] QWidget,"
-        "ads--CAutoHideTab[activeTab=\"true\"] QLabel,"
-        "ads--CAutoHideTab[activeTab=\"true\"] QWidget{"
-        "  color:%8 !important;"
-        "  background-color:transparent !important;"
-        "  background:transparent !important;"
-        "  font-weight:700;"
-        "}"
-        "ads--CDockWidgetTab:hover,"
-        "ads--CDockWidgetTab[activeTab=\"true\"]:hover,"
-        "ads--CDockWidgetTab[kswordDockTab=\"true\"]:hover,"
-        "ads--CAutoHideTab:hover,"
-        "ads--CAutoHideTab[activeTab=\"true\"]:hover,"
-        "ads--CAutoHideTab[kswordAutoHideTab=\"true\"]:hover{"
-        "  background-color:%6 !important;"
-        "  background:%6 !important;"
-        "  color:%2 !important;"
-        "  border:none !important;"
-        "}"
-        "ads--CDockWidgetTab:hover[activeTab=\"false\"],"
-        "ads--CDockWidgetTab[kswordDockTab=\"true\"]:hover[activeTab=\"false\"],"
-        "ads--CAutoHideTab:hover[activeTab=\"false\"],"
-        "ads--CAutoHideTab[kswordAutoHideTab=\"true\"]:hover[activeTab=\"false\"]{"
-        "  background-color:%6 !important;"
-        "  background:%6 !important;"
-        "  color:%2 !important;"
-        "}"
-        "ads--CDockAreaWidget ads--CDockAreaTitleBar ads--CDockWidgetTab:hover,"
-        "ads--CDockAreaWidget ads--CDockAreaTitleBar ads--CDockWidgetTab[kswordDockTab=\"true\"]:hover,"
-        "ads--CDockAreaWidget ads--CDockAreaTitleBar ads--CAutoHideTab:hover,"
-        "ads--CDockAreaWidget ads--CDockAreaTitleBar ads--CAutoHideTab[kswordAutoHideTab=\"true\"]:hover{"
-        "  background-color:%6 !important;"
-        "  background:%6 !important;"
-        "  color:%2 !important;"
-        "  border:none !important;"
-        "}"
-        "ads--CDockWidgetTab:hover QLabel,ads--CDockWidgetTab:hover QWidget,"
-        "ads--CDockWidgetTab[kswordDockTab=\"true\"]:hover QLabel,"
-        "ads--CDockWidgetTab[kswordDockTab=\"true\"]:hover QWidget,"
-        "ads--CAutoHideTab:hover QLabel,ads--CAutoHideTab:hover QWidget,"
-        "ads--CAutoHideTab[kswordAutoHideTab=\"true\"]:hover QLabel,"
-        "ads--CAutoHideTab[kswordAutoHideTab=\"true\"]:hover QWidget,"
-        "ads--CDockAreaWidget ads--CDockAreaTitleBar ads--CDockWidgetTab:hover QLabel,"
-        "ads--CDockAreaWidget ads--CDockAreaTitleBar ads--CDockWidgetTab:hover QWidget,"
-        "ads--CDockAreaWidget ads--CDockAreaTitleBar ads--CAutoHideTab:hover QLabel,"
-        "ads--CDockAreaWidget ads--CDockAreaTitleBar ads--CAutoHideTab:hover QWidget{"
-        "  color:%2 !important;"
-        "  background-color:%7 !important;"
-        "  background:%7 !important;"
-        "}"
-        "ads--CDockWidgetTab[activeTab=\"true\"]:hover,"
-        "ads--CAutoHideTab[activeTab=\"true\"]:hover{"
-        "  background-color:%4 !important;"
-        "  background:%4 !important;"
-        "  color:%8 !important;"
-        "}"
-        "ads--CDockWidgetTab[activeTab=\"true\"]:hover QLabel,"
-        "ads--CDockWidgetTab[activeTab=\"true\"]:hover QWidget,"
-        "ads--CAutoHideTab[activeTab=\"true\"]:hover QLabel,"
-        "ads--CAutoHideTab[activeTab=\"true\"]:hover QWidget{"
-        "  color:%8 !important;"
-        "  background-color:transparent !important;"
-        "  background:transparent !important;"
-        "}"
-        "ads--CDockAreaTitleBar QToolButton,ads--CDockAreaTitleBar QPushButton{"
-        "  border:none !important;"
-        "  background:transparent !important;"
-        "}")
+        " background-color:%3 !important;background:%3 !important;color:%4 !important;}")
         .arg(inactiveTabColor)
         .arg(inactiveTabTextColor)
-        .arg(panelBorderColor)
         .arg(activeTabColor)
         .arg(activeTabTextColor)
-        .arg(tabHoverColor)
-        .arg(dockTabChildHoverColor)
-        .arg(dockActiveTabTextColor)
         .arg(normalTabHoverColor);
 
     const QString sharedOverlayStyle = depthOverlayStyle
@@ -13317,7 +13158,8 @@ QString MainWindow::buildAppearanceOverlayStyleSheet(
             + finalDockAreaTransparentStyle
             + kernelDockStyle
             + tabPluginOpaqueStyle
-            + finalOrdinaryTabHoverStyle;
+            + finalOrdinaryTabHoverStyle
+            + KswordTheme::DockNavigationStyleSheet();
     }
 
     return rootStyle
@@ -13386,5 +13228,6 @@ QString MainWindow::buildAppearanceOverlayStyleSheet(
         + finalDockAreaTransparentStyle
         + kernelDockStyle
         + tabPluginOpaqueStyle
-        + finalOrdinaryTabHoverStyle;
+        + finalOrdinaryTabHoverStyle
+        + KswordTheme::DockNavigationStyleSheet();
 }

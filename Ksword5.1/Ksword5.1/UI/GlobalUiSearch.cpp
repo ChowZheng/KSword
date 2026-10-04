@@ -993,20 +993,52 @@ namespace ks::ui
 
         if (watchedObject == m_searchInputEdit)
         {
-            if (eventType == QEvent::KeyPress && m_searchModeActive)
+            if (eventType == QEvent::KeyPress)
             {
+                // keyEvent 用途：仅在标题输入框截获四节点循环，弹层内字段保留正常焦点导航。
                 auto* keyEvent = static_cast<QKeyEvent*>(eventObject);
+                // isScopeCycleKey 用途：普通 Tab/Shift+Tab；不拦截 Ctrl/Alt/Meta 组合快捷键。
+                const bool isScopeCycleKey = (keyEvent->key() == Qt::Key_Tab
+                    || keyEvent->key() == Qt::Key_Backtab)
+                    && !keyEvent->modifiers().testFlag(Qt::ControlModifier)
+                    && !keyEvent->modifiers().testFlag(Qt::AltModifier)
+                    && !keyEvent->modifiers().testFlag(Qt::MetaModifier);
+                if (isScopeCycleKey)
+                {
+                    // direction 用途：兼容 Key_Backtab 和带 Shift 的 Key_Tab 两种反向事件。
+                    const int direction = keyEvent->key() == Qt::Key_Backtab
+                        || keyEvent->modifiers().testFlag(Qt::ShiftModifier)
+                        ? -1
+                        : 1;
+                    if (m_searchModeActive)
+                    {
+                        cycleSearchScope(direction);
+                    }
+                    else
+                    {
+                        // 从 CMD 进入当前表格时重新采用最近交互上下文，不复用旧显式目标。
+                        if (direction < 0)
+                        {
+                            m_targetTableView.clear();
+                        }
+                        setSearchScope(direction < 0
+                            ? UiSearchScope::CurrentTable
+                            : UiSearchScope::Global);
+                        emit requestSearchInputActivation(true);
+                    }
+                    keyEvent->accept();
+                    return true;
+                }
+
+                // CMD 回车/Esc 继续由 CommandExecutionPopup 处理校验和关闭，不在搜索层消费。
+                if (!m_searchModeActive)
+                {
+                    return false;
+                }
+
                 const bool popupVisible = m_popupPanel != nullptr && m_popupPanel->isVisible();
                 switch (keyEvent->key())
                 {
-                case Qt::Key_Tab:
-                    cycleSearchScope(1);
-                    keyEvent->accept();
-                    return true;
-                case Qt::Key_Backtab:
-                    cycleSearchScope(-1);
-                    keyEvent->accept();
-                    return true;
                 case Qt::Key_Down:
                     if (popupVisible)
                     {
@@ -1818,6 +1850,14 @@ namespace ks::ui
         constexpr int kScopeCount = 3;
         const int currentScopeIndex = static_cast<int>(m_searchScope);
         const int normalizedDirection = direction < 0 ? -1 : 1;
+        // 第四节点是独立 CMD 模式：搜索边界不再三取模回到另一端，先收起在途搜索。
+        if ((normalizedDirection > 0 && m_searchScope == UiSearchScope::CurrentTable)
+            || (normalizedDirection < 0 && m_searchScope == UiSearchScope::Global))
+        {
+            dismissPopup();
+            emit requestCommandInputActivation(true);
+            return;
+        }
         const int nextScopeIndex =
             (currentScopeIndex + normalizedDirection + kScopeCount) % kScopeCount;
         if (static_cast<UiSearchScope>(nextScopeIndex) == UiSearchScope::CurrentTable)

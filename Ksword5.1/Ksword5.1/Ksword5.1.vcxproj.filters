@@ -1037,6 +1037,21 @@
     <ClCompile Include="UI\SvgThemeIconManager.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="UI\ThemeControlGlyphs.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\ThemeAccentIcon.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\PerformanceChartTheme.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\DockThemeIcons.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="HardwareDock\HardwareDock.Theme.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="UI\ThemeColorRemap.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -2302,6 +2317,18 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="UI\SvgThemeIconManager.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="UI\ThemeControlGlyphs.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="UI\ThemeAccentIcon.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="UI\PerformanceChartTheme.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="UI\DockThemeIcons.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="UI\ThemeColorRemap.h">

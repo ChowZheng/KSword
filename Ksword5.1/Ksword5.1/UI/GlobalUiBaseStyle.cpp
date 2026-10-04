@@ -212,37 +212,32 @@ namespace ks::ui
 
             "__END_MARKER__\n");
 
-        // 步进箭头没法用 QSS 着色，只能按“按钮底色的最大对比单色”在黑白两版之间挑；
-        // 与 KswordTheme::ThemedComboBoxStyle 的下拉箭头用同一套判定，保证同一界面里
-        // 下拉框和数字框的箭头颜色不会一深一浅。
-        const auto arrowResourcePath = [](const QColor& backgroundColor, const bool pointingUp) {
-            const bool useWhite =
-                KswordTheme::MaximumContrastMonochromeColor(backgroundColor) ==
-                KswordTheme::WhiteColor();
-            if (pointingUp)
-            {
-                return useWhite
-                    ? QStringLiteral(":/Icon/ks_control_up_white.svg")
-                    : QStringLiteral(":/Icon/ks_control_up_black.svg");
-            }
-            return useWhite
-                ? QStringLiteral(":/Icon/ks_control_down_white.svg")
-                : QStringLiteral(":/Icon/ks_control_down_black.svg");
+        // 步进与下拉箭头共用主题前景派生链；SVG 缓存弥补 QSS 本身不能为图片着色。
+        // 返回带引号的 URL 参数，缓存目录包含空格时也能被 QSS 正确解析。
+        const auto arrowResourcePath = [](const QColor& backgroundColor,
+                                         const bool pointingUp,
+                                         const bool disabled) {
+            const QString resourcePath = pointingUp
+                ? QStringLiteral(":/Icon/ks_control_up_white.svg")
+                : QStringLiteral(":/Icon/ks_control_down_white.svg");
+            const QColor foregroundColor = KswordTheme::ControlGlyphColor(backgroundColor, disabled);
+            return QStringLiteral("\"%1\"").arg(
+                ThemedControlGlyphPath(resourcePath, foregroundColor));
         };
 
         baseControlStyle.replace(QStringLiteral("__BEGIN_MARKER__"), QString::fromLatin1(kBaseControlStyleBeginMarker));
         baseControlStyle.replace(
             QStringLiteral("__ARROW_UP_OFF__"),
-            QStringLiteral(":/Icon/ks_control_up_muted.svg"));
+            arrowResourcePath(KswordTheme::SurfaceMutedColor(), true, true));
         baseControlStyle.replace(
             QStringLiteral("__ARROW_DOWN_OFF__"),
-            QStringLiteral(":/Icon/ks_control_down_muted.svg"));
+            arrowResourcePath(KswordTheme::SurfaceMutedColor(), false, true));
         baseControlStyle.replace(
             QStringLiteral("__ARROW_UP__"),
-            arrowResourcePath(KswordTheme::SurfaceAltColor(), true));
+            arrowResourcePath(KswordTheme::SurfaceAltColor(), true, false));
         baseControlStyle.replace(
             QStringLiteral("__ARROW_DOWN__"),
-            arrowResourcePath(KswordTheme::SurfaceAltColor(), false));
+            arrowResourcePath(KswordTheme::SurfaceAltColor(), false, false));
         baseControlStyle.replace(QStringLiteral("__STATUS_ROLE_RULES__"), BuildStatusRoleStyleRules());
         baseControlStyle.replace(QStringLiteral("__END_MARKER__"), QString::fromLatin1(kBaseControlStyleEndMarker));
         baseControlStyle.replace(QStringLiteral("__WINDOW__"), KswordTheme::MainBackgroundColorHex());
@@ -259,7 +254,7 @@ namespace ks::ui
         baseControlStyle.replace(
             QStringLiteral("__ON_ACCENT__"),
             KswordTheme::ThemeColorName(
-                KswordTheme::MaximumContrastMonochromeColor(KswordTheme::ControlAccentColor())));
+                KswordTheme::OnAccentColor(KswordTheme::ControlAccentColor())));
         return baseControlStyle;
     }
 }

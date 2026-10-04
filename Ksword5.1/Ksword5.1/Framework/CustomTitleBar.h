@@ -119,6 +119,9 @@ namespace ks::ui
         // activateSearchInput：切回搜索模式；focusInput 决定是否把焦点跳到顶部输入框。
         void activateSearchInput(bool focusInput = true);
 
+        // activateCommandInput：切到 CMD 模式并复用模式通知；focusInput 决定是否聚焦顶部输入框。
+        void activateCommandInput(bool focusInput = true);
+
         // setSearchScopeDisplayText：刷新顶部搜索范围标签与 Tab 切换提示。
         void setSearchScopeDisplayText(const QString& displayText);
 
@@ -162,7 +165,7 @@ namespace ks::ui
 
         // inputModeChanged：
         // - 作用：通知输入模式切换（用于收起/恢复搜索结果弹层）；
-        // - 触发：用户在模式菜单中切换搜索/CMD 时触发；
+        // - 触发：模式菜单或输入框 Tab/Shift+Tab 切换搜索/CMD 时触发；
         // - 传入 searchModeActive：true=搜索模式，false=CMD 模式。
         void inputModeChanged(bool searchModeActive);
 

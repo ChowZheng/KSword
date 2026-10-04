@@ -12,6 +12,8 @@
 #include <QSize>
 #include <QString>
 
+#include "UI/ThemeControlGlyphs.h"
+
 #include <cmath>
 
 namespace KswordTheme
@@ -919,8 +921,8 @@ namespace KswordTheme
         return QColor(67, 160, 255);
     }
 
-    // PrimaryBlueColor 是所有蓝色强调控件的运行期种子。用户自定义时只替换该种子，
-    // 原有深浅主题偏移仍会继续作用，其他语义色不受影响。
+    // PrimaryBlueColor 是强调色族的运行期种子。各角色先应用相对 RGB 偏移，
+    // 再应用独立深浅偏移；自定义颜色因此覆盖图表、时间线和语义角色的全部来源。
     inline QColor PrimaryBlueColor = DefaultPrimaryAccentColor();
 
     inline QColor PrimaryAccentColor()
@@ -937,25 +939,33 @@ namespace KswordTheme
         InvalidateThemeColorCache();
     }
 
-    inline QColor AccentSeed(const AccentRole role)
+    // AccentSeedOffset 作用：量化各角色相对于默认主题种子的 RGB 差值。
+    // 默认种子 (67,160,255) 时逐通道精确还原原配色；修改主题色时角色跟随同一偏移链。
+    inline constexpr RgbOffset AccentSeedOffset(const AccentRole role)
     {
         switch (role)
         {
-        case AccentRole::Blue: return PrimaryAccentColor();
-        case AccentRole::Purple: return QColor(184, 99, 255);
-        case AccentRole::Green: return QColor(47, 125, 50);
-        case AccentRole::Orange: return QColor(217, 119, 6);
-        case AccentRole::Cyan: return QColor(0, 188, 212);
-        case AccentRole::Yellow: return QColor(245, 158, 11);
-        case AccentRole::Red: return QColor(220, 50, 47);
-        case AccentRole::Teal: return QColor(0, 150, 136);
-        case AccentRole::Indigo: return QColor(63, 81, 181);
-        case AccentRole::Brown: return QColor(121, 85, 72);
-        case AccentRole::Lime: return QColor(139, 195, 74);
-        case AccentRole::Slate: return QColor(96, 125, 139);
-        case AccentRole::Violet: return QColor(121, 76, 210);
+        case AccentRole::Blue: return { 0, 0, 0 };
+        case AccentRole::Purple: return { 117, -61, 0 };
+        case AccentRole::Green: return { -20, -35, -205 };
+        case AccentRole::Orange: return { 150, -41, -249 };
+        case AccentRole::Cyan: return { -67, 28, -43 };
+        case AccentRole::Yellow: return { 178, -2, -244 };
+        case AccentRole::Red: return { 153, -110, -208 };
+        case AccentRole::Teal: return { -67, -10, -119 };
+        case AccentRole::Indigo: return { -4, -79, -74 };
+        case AccentRole::Brown: return { 54, -75, -183 };
+        case AccentRole::Lime: return { 72, 35, -181 };
+        case AccentRole::Slate: return { 29, -35, -116 };
+        case AccentRole::Violet: return { 54, -84, -45 };
         }
-        return PrimaryAccentColor();
+        return {};
+    }
+
+    // AccentSeed 作用：从运行期主题种子和命名角色偏移生成颜色，不保留固定双色分支。
+    inline QColor AccentSeed(const AccentRole role)
+    {
+        return OffsetColor(PrimaryAccentColor(), AccentSeedOffset(role));
     }
 
     // AccentColor 作用：按深色、浅色两套独立亮度偏移生成强调色。
@@ -965,9 +975,13 @@ namespace KswordTheme
         const int darkOffset,
         const int lightOffset)
     {
-        return ThemeOffsetColor(
+        const QColor adjustedColor = ThemeOffsetColor(
             AccentSeed(role),
             UniformThemeOffset(darkOffset, lightOffset));
+        // 默认角色保持既有像素；自定义种子通道截断后仍须让图表线/图形对表面可辨。
+        return PrimaryAccentColor() == DefaultPrimaryAccentColor()
+            ? adjustedColor
+            : EnsureTextContrast(adjustedColor, SurfaceColor(), 3.0);
     }
 
     // 默认强调色也明确保留两套数字：深色背景提高亮度，浅色背景略微压低亮度。
@@ -1010,7 +1024,8 @@ namespace KswordTheme
     inline QColor SemanticTextColor(const AccentRole role, const QColor& semanticBackground)
     {
         const QColor preferredColor = AccentColor(role);
-        if (!CustomMainBackgroundColor.isValid())
+        if (!CustomMainBackgroundColor.isValid()
+            && PrimaryAccentColor() == DefaultPrimaryAccentColor())
         {
             return EnsureTextContrast(preferredColor, SurfaceColor());
         }
@@ -1601,6 +1616,88 @@ namespace KswordTheme
             : BlackColor();
     }
 
+    enum class DockTabState
+    {
+        Inactive,
+        Hover,
+        Active
+    };
+
+    // 主导航的三态只从主体色派生，不参与用户背景种子的调色或表面对比校准。
+    // 固定黑白参照仅约束极端主体色的明度，避免黑色/白色种子把三态同时截断。
+    inline QColor DockTabBackgroundColor(const DockTabState state)
+    {
+        const QColor reference = IsDarkModeEnabled() ? BlackColor() : WhiteColor();
+        const QColor seed = EnsureTextContrast(PrimaryAccentColor(), reference, 3.0);
+        switch (state)
+        {
+        case DockTabState::Inactive:
+            return ThemeOffsetColor(seed, UniformThemeOffset(-62, 32));
+        case DockTabState::Hover:
+            return ThemeOffsetColor(seed, UniformThemeOffset(-38, 8));
+        case DockTabState::Active:
+            return ThemeOffsetColor(seed, UniformThemeOffset(-18, -26));
+        }
+        return seed;
+    }
+
+    // 文字按实际导航底色选择黑/白，不能继承背景种子校准后的正文文字色。
+    inline QColor DockTabTextColor(const DockTabState state)
+    {
+        return MaximumContrastMonochromeColor(DockTabBackgroundColor(state));
+    }
+
+    // Qt按钮有时在活动标签上仍请求Normal图标，故每个图形同时对三态保持3:1。
+    // 禁用态只混入导航底色，也不参与用户面板背景种子的调色。
+    inline QColor DockTabGlyphColor(const DockTabState state, const bool disabled = false)
+    {
+        const QColor background = DockTabBackgroundColor(state);
+        const QColor preferred = disabled
+            ? BlendColors(background, PrimaryAccentColor(), 96)
+            : PrimaryAccentColor();
+        const QColor backgrounds[]{
+            DockTabBackgroundColor(DockTabState::Inactive),
+            DockTabBackgroundColor(DockTabState::Hover),
+            DockTabBackgroundColor(DockTabState::Active) };
+        return EnsureTextContrastForBackgrounds(preferred, backgrounds, 3, 3.0);
+    }
+
+    // 此块最后追加，覆盖背景图透明兜底；只影响ADS导航，不覆盖业务页面的QTabBar。
+    // 父子控件与自绘hover必须共用上面的颜色，避免标签文字层露出背景色。
+    inline QString DockNavigationStyleSheet()
+    {
+        return QStringLiteral(R"(
+ads--CDockAreaTitleBar,ads--CDockAreaTabBar{ background:%1 !important;background-color:%1 !important;color:%2 !important;}
+ads--CDockAreaTitleBar QToolButton,ads--CDockAreaTitleBar QPushButton{ background:transparent !important;color:%2 !important;}
+ads--CDockAreaTitleBar QToolButton:hover,ads--CDockAreaTitleBar QPushButton:hover{ background:%3 !important;background-color:%3 !important;color:%4 !important;}
+ads--CDockAreaTitleBar QToolButton:pressed,ads--CDockAreaTitleBar QPushButton:pressed{ background:%5 !important;background-color:%5 !important;color:%6 !important;}
+ads--CDockAreaTitleBar QToolButton:disabled,ads--CDockAreaTitleBar QPushButton:disabled{ background:transparent !important;background-color:transparent !important;color:%2 !important;}
+ads--CDockAreaTabBar{border:none !important;padding:0px;}
+ads--CDockWidgetTab,ads--CAutoHideTab{ background:%1 !important;background-color:%1 !important;color:%2 !important; border:none !important;border-radius:0px !important; padding:3px 12px;margin:0px;min-height:22px;}
+ads--CDockWidgetTab QLabel,ads--CDockWidgetTab QWidget,ads--CAutoHideTab QLabel,ads--CAutoHideTab QWidget{ background:transparent !important;background-color:transparent !important; color:%2 !important;}
+ads--CDockWidgetTab:hover,ads--CAutoHideTab:hover,ads--CDockWidgetTab[kswordDockTab="true"]:hover,ads--CAutoHideTab[kswordAutoHideTab="true"]:hover,ads--CDockAreaWidget ads--CDockAreaTitleBar ads--CDockWidgetTab:hover,ads--CDockAreaWidget ads--CDockAreaTitleBar ads--CAutoHideTab:hover{ background:%3 !important;background-color:%3 !important;color:%4 !important;}
+ads--CDockWidgetTab:hover QLabel,ads--CDockWidgetTab:hover QWidget,ads--CAutoHideTab:hover QLabel,ads--CAutoHideTab:hover QWidget,ads--CDockWidgetTab[kswordDockTab="true"]:hover QLabel,ads--CDockWidgetTab[kswordDockTab="true"]:hover QWidget,ads--CAutoHideTab[kswordAutoHideTab="true"]:hover QLabel,ads--CAutoHideTab[kswordAutoHideTab="true"]:hover QWidget,ads--CDockAreaWidget ads--CDockAreaTitleBar ads--CDockWidgetTab:hover QLabel,ads--CDockAreaWidget ads--CDockAreaTitleBar ads--CDockWidgetTab:hover QWidget,ads--CDockAreaWidget ads--CDockAreaTitleBar ads--CAutoHideTab:hover QLabel,ads--CDockAreaWidget ads--CDockAreaTitleBar ads--CAutoHideTab:hover QWidget{ background:transparent !important;background-color:transparent !important; color:%4 !important;}
+ads--CDockWidgetTab[activeTab="true"],ads--CAutoHideTab[activeTab="true"],ads--CDockWidgetTab[activeTab="true"]:hover,ads--CAutoHideTab[activeTab="true"]:hover,ads--CDockAreaWidget ads--CDockAreaTitleBar ads--CDockWidgetTab[activeTab="true"]:hover,ads--CDockAreaWidget ads--CDockAreaTitleBar ads--CAutoHideTab[activeTab="true"]:hover{ background:%5 !important;background-color:%5 !important;color:%6 !important; font-weight:700;}
+ads--CDockWidgetTab[activeTab="true"] QLabel,ads--CDockWidgetTab[activeTab="true"] QWidget,ads--CAutoHideTab[activeTab="true"] QLabel,ads--CAutoHideTab[activeTab="true"] QWidget,ads--CDockAreaWidget ads--CDockAreaTitleBar ads--CDockWidgetTab[activeTab="true"]:hover QLabel,ads--CDockAreaWidget ads--CDockAreaTitleBar ads--CDockWidgetTab[activeTab="true"]:hover QWidget,ads--CDockAreaWidget ads--CDockAreaTitleBar ads--CAutoHideTab[activeTab="true"]:hover QLabel,ads--CDockAreaWidget ads--CDockAreaTitleBar ads--CAutoHideTab[activeTab="true"]:hover QWidget{ background:transparent !important;background-color:transparent !important; color:%6 !important;}
+)")
+            .arg(ThemeColorName(DockTabBackgroundColor(DockTabState::Inactive)))
+            .arg(ThemeColorName(DockTabTextColor(DockTabState::Inactive)))
+            .arg(ThemeColorName(DockTabBackgroundColor(DockTabState::Hover)))
+            .arg(ThemeColorName(DockTabTextColor(DockTabState::Hover)))
+            .arg(ThemeColorName(DockTabBackgroundColor(DockTabState::Active)))
+            .arg(ThemeColorName(DockTabTextColor(DockTabState::Active)));
+    }
+
+    // ControlGlyphColor 作用：让箭头/勾号等控件图形从主题色派生，并对实际底色保持 3:1。
+    // disabled 为 true 时先混入中性底色降低强调程度；最后校准避免极端主题下图形消失。
+    inline QColor ControlGlyphColor(const QColor& backgroundColor, const bool disabled = false)
+    {
+        const QColor preferredColor = disabled
+            ? BlendColors(SurfaceMutedColor(), PrimaryAccentColor(), 96)
+            : PrimaryAccentColor();
+        return EnsureTextContrast(preferredColor, backgroundColor, 3.0);
+    }
+
     inline QString ControlOutlineHex() { return ThemeColorName(ControlOutlineColor()); }
     inline QString ControlAccentHex() { return ThemeColorName(ControlAccentColor()); }
     inline QString ControlAccentHoverHex() { return ThemeColorName(ControlAccentHoverColor()); }
@@ -1673,7 +1770,7 @@ namespace KswordTheme
         const QString outlineColor = ControlOutlineHex();
         const QString hoverColor = SurfaceAltColorHex();
         const QString accentColorText = ThemeColorName(accentColor);
-        const QString accentTextColor = ThemeColorName(MaximumContrastMonochromeColor(accentColor));
+        const QString accentTextColor = ThemeColorName(OnAccentColor(accentColor));
 
         return QStringLiteral(
             "QAbstractItemView{"
@@ -1730,14 +1827,13 @@ namespace KswordTheme
         const QString accentHoverColor = ControlAccentHoverHex();
         const QString accentPressedColor = ControlAccentPressedHex();
         const QString disabledOutlineColor = ControlDisabledOutlineHex();
-        const QString accentTextColor = ThemeColorName(MaximumContrastMonochromeColor(accentColor));
-        const auto arrowPathForBackground = [](const QColor& backgroundColor) {
-            return MaximumContrastMonochromeColor(backgroundColor) == WhiteColor()
-                ? QStringLiteral(":/Icon/ks_control_down_white.svg")
-                : QStringLiteral(":/Icon/ks_control_down_black.svg");
-        };
-        const QString arrowPath = arrowPathForBackground(SurfaceAltColor());
-        const QString disabledArrowPath = arrowPathForBackground(SurfaceMutedColor());
+        const QString accentTextColor = ThemeColorName(OnAccentColor(accentColor));
+        // 箭头作为主题前景缓存 SVG，QSS 不再只在预制白/黑资源之间二选一。
+        const QString arrowResource = QStringLiteral(":/Icon/ks_control_down_white.svg");
+        const QString arrowPath = ks::ui::ThemedControlGlyphPath(
+            arrowResource, ControlGlyphColor(SurfaceAltColor()));
+        const QString disabledArrowPath = ks::ui::ThemedControlGlyphPath(
+            arrowResource, ControlGlyphColor(SurfaceMutedColor(), true));
 
         return QStringLiteral(
             "QComboBox{"
@@ -1782,14 +1878,14 @@ namespace KswordTheme
             "  border-left-color:%10 !important;"
             "}"
             "QComboBox::down-arrow{"
-            "  image:url(%12);"
+            "  image:url(\"%12\");"
             "  width:12px;"
             "  height:12px;"
             "  margin-right:4px;"
             "  subcontrol-origin:padding;"
             "  subcontrol-position:center right;"
             "}"
-            "QComboBox::down-arrow:disabled{image:url(%13);}"
+            "QComboBox::down-arrow:disabled{image:url(\"%13\");}"
             "QComboBox QAbstractItemView{"
             "  background:%1 !important;"
             "  background-color:%1 !important;"

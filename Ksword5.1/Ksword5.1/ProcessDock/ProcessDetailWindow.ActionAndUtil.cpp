@@ -482,6 +482,11 @@ void ProcessDetailWindow::executeSelectedTerminateAction()
     {
         executeR0TerminateProcessAction();
     }
+    else if (actionId == static_cast<int>(ks::process::TerminateMethodTable().size()) + 1)
+    {
+        // 组合选项复用共享方法表与详情页身份校验，不改变单方法/R0 路由。
+        executeTerminateProcessComboAction();
+    }
     else
     {
         kLogEvent invalidTerminateActionEvent;

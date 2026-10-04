@@ -15,6 +15,9 @@ KSword 主程序位于 `Ksword5.1/Ksword5.1`（Qt 6.9.3 Widgets + Qt Advanced Do
 
 ## UI 主题架构
 
+- 顶部ADS导航使用独立的`DockTabState`角色（`theme.h::DockTabBackgroundColor/TextColor/GlyphColor`）：主体色+深浅RGB偏移，固定黑白参照防止极端种子截断，不读取用户背景种子。`DockNavigationStyleSheet`最后追加，覆盖旧基础属性hover和背景图透明兜底；普通业务QTabBar不受影响。自绘hover与局部文字必须同源；共享的实际前景补偿入口在`UI/DockThemeIcons::ApplyDockTabTextColor`，自有工厂在选中/hover/主题事件后调用。Qt在选中标签上仍可能请求Normal图标，导航图形需要对三态都保持对比。真实ADS+生产样式/前景/图标离屏回归本轮4769断言通过；整个MainWindow工厂仅静态核对。
+- 2026-10-04全项目配色审计见`docs/全项目配色审计.md`：全局旧色补偿只改QWidget显式palette/QSS，不覆盖item brush、QTextCharFormat/ExtraSelection、模型HTML或成员缓存；已有颜色角色也不能证明存量内容会随主题刷新。审计的13组待修问题与已修ADS导航分开，独立产品的固定设计/状态语义/数据原色不自动算缺陷。
+
 - `theme.h`（KswordTheme 命名空间）：design-token 中心。中性表面色（Window/Surface/SurfaceAlt/SurfaceMuted/Border）由 RGB 偏移从种子色派生；强调色 PrimaryBlueColor 可由用户自定义；提供 EnsureTextContrast 等 WCAG 对比度工具。
 - `theme.h` 的颜色访问器分两族，名字只差一个词，用错编译器和 Qt 都不报错：**动态** token（`SurfaceHex()`、`TextPrimaryHex()`、`PrimaryBlueHex` 等，共 14 个）返回 `palette(base)` 这类样式表角色，Qt 每次重绘重新求值，天然跟随主题；**静态** token（`*ColorHex()`）在调用瞬间固化成 `#RRGGBB`。
 - `palette(...)` 是 QSS 专有扩展，**只有样式表能解析**。写进 QLabel/QTextEdit 富文本（走 QTextDocument 的 CSS 解析器）、`QColor` 字符串构造、`setForeground`/`QPen` 等绘制路径，或通过环境变量传给插件进程，都会被**静默丢弃**——声明整条失效、元素退回继承色，没有任何警告。这类误用已经犯过 5 次（HardwareDock 的 CPU 详情单元格、GlobalUiSearch 的结果副标题、NotificationCardManager、PluginHost）。上述场景一律改用 `*ColorHex()`。
@@ -110,6 +113,9 @@ KSword 主程序位于 `Ksword5.1/Ksword5.1`（Qt 6.9.3 Widgets + Qt Advanced Do
 
 ## 踩坑记录
 
+- 2026-10-04 主题恢复：`theme.h::AccentSeedOffset` 记录角色相对默认强调色的 RGB 偏移，角色不能重新固化成独立配色；`UI/ThemeControlGlyphs` 按实际底色生成控件图形，QSS 调用方所属目标必须链接其 `.cpp`。
+- QADS provider 注册只影响后续生成的图标，现存标题栏和标签按钮还须由 `UI/DockThemeIcons` 刷新。其按钮带 `ksword_theme_icon_managed` 属性，通用图标扫描必须跳过，避免覆盖 Disabled/Selected/DPR 状态。模型项中的自制单色图标使用 `UI/ThemeAccentIcon` 保留源图并在绘制时读取当前主题；Shell/进程多色图不要接入该包装。
+- 可复现主题回归入口为 `tools/Invoke-ThemeRecoveryUiTests.ps1`，使用真实 QADS、项目 `shared/ui/KsPainterChart` 与 Qt offscreen，不启动主程序或访问驱动。项目自有 `QChart/QLineSeries` 不能误当成 QtCharts 同名类型。历史三方集合与功能入口审查见 `docs/合并功能恢复审查.md`；范围语言审计通过不能替代整库语言门禁或生产 GUI 验收。
 - 构建带 **i18n 审计钩子**：源码中任何"可提取"字符串字面量（中文日志、英文句子、无路径分隔的头文件名、甚至 `GetProcAddress` 的函数名）都必须在两个语言包的 `source_translations` 有条目，否则构建直接失败。QSS 选择器行要与 `{` 写在同一字符串片段内才会被审计排除。
 - 语言包**只能定点编辑**：用脚本 json.load/dump 会重排键序与缩进，产生 5 万行无意义 diff。
 - 约 1374 处散落 `setStyleSheet` 分布在 136 个文件（多带 `!important`），未来渐进收敛到全局基线。

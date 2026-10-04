@@ -1,6 +1,7 @@
 #include "ProcessTraceMonitorWidget.h"
 #include "../UI/VisibleTableWidget.h"
 #include "../UI/ThemeStatusRole.h"
+#include "../UI/ThemeAccentIcon.h"
 
 // ============================================================
 // ProcessTraceMonitorWidget.Ui.cpp
@@ -36,7 +37,7 @@
 namespace
 {
     // createBlueIcon：
-    // - 作用：把 SVG 图标统一染成主题蓝色；
+    // - 作用：生成固定默认蓝源图，当前主题色由动态图标引擎在绘制时应用；
     // - 调用：本页所有简单语义按钮统一使用图标代替文字。
     QIcon createBlueIcon(const char* resourcePath, const QSize& iconSize = QSize(16, 16))
     {
@@ -54,10 +55,11 @@ namespace
         painter.setRenderHint(QPainter::Antialiasing, true);
         renderer.render(&painter, QRectF(0, 0, iconSize.width(), iconSize.height()));
         painter.setCompositionMode(QPainter::CompositionMode_SourceIn);
-        painter.fillRect(pixmap.rect(), KswordTheme::PrimaryBlueColor);
+        // 保持原图颜色与懒加载时的主题无关，确保恢复默认时有稳定基线。
+        painter.fillRect(pixmap.rect(), KswordTheme::DefaultPrimaryAccentColor());
         painter.end();
 
-        return QIcon(pixmap);
+        return ks::ui::MakeThemeAccentIcon(QIcon(pixmap));
     }
 
     // createIconButton：

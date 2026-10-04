@@ -79,6 +79,10 @@ namespace ks::ui
         // - 返回本片实际替换或还原的图标槽位数量。
         int runIconApplySlice(quint64 runGeneration, int* cacheHitCount);
 
+        // scheduleWidgetRefresh：运行期换图标、显示或重绘后排队补色。
+        // 入参为待更新控件；同一控件只排一次，销毁或恢复默认后自动放弃。
+        void scheduleWidgetRefresh(QWidget* widgetPointer);
+
         // 下列函数分别处理 QWidget、QAction、Tab 和单个 QIcon。
         int applyToWidget(QWidget* widgetPointer, int* cacheHitCount);
         bool applyToAction(QAction* actionPointer, int* cacheHitCount);
