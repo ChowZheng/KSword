@@ -93,6 +93,7 @@
 #include <QRunnable>
 #include <QScreen>
 #include <QScrollArea>
+#include <QScrollBar>
 #include <QSaveFile>
 #include <QSet>
 #include <QShortcut>
@@ -2504,6 +2505,201 @@ namespace
         }
 
         QCollator m_collator;
+    };
+
+    // 刷新同一目录时按可见文件恢复视口。仅在 FileDock 的刷新入口启用，
+    // 不改变全局样式、普通导航或其他表格的刷新策略。
+    class FileRefreshScrollState final : public QObject
+    {
+    public:
+        FileRefreshScrollState(QAbstractItemView* view, QString directory,
+            std::function<bool()> isCurrent)
+            : QObject(view), m_view(view), m_directory(std::move(directory)),
+              m_isCurrent(std::move(isCurrent)), m_timer(this)
+        {
+            constexpr char stateName[] = "file_refresh_scroll_state";
+            auto* previous = dynamic_cast<FileRefreshScrollState*>(
+                view->findChild<QObject*>(QLatin1String(stateName), Qt::FindDirectChildrenOnly));
+            if (previous && !previous->m_cancelled && previous->m_isCurrent())
+            {
+                // 连续刷新时模型可能已清空，沿用尚未恢复的视口而非重新保存表头。
+                m_vertical = previous->m_vertical;
+                m_horizontal = previous->m_horizontal;
+                m_anchorPath = previous->m_anchorPath;
+                m_anchorTop = previous->m_anchorTop;
+            }
+            else
+            {
+                m_vertical = view->verticalScrollBar()->value();
+                m_horizontal = view->horizontalScrollBar()->value();
+                QModelIndex anchor;
+                // 图标网格的左上角可能是空隙，仅在视口顶端有界查找。
+                for (int y = 0; y < std::min(128, view->viewport()->height()) && !anchor.isValid(); y += 8)
+                    for (int x = 8; x < view->viewport()->width() && !anchor.isValid(); x += 32)
+                        anchor = view->indexAt(QPoint(x, y));
+                if (anchor.isValid())
+                {
+                    anchor = anchor.siblingAtColumn(0);
+                    m_anchorPath = indexPath(anchor);
+                    m_anchorTop = view->visualRect(anchor).top();
+                }
+            }
+            delete previous;
+            setObjectName(QLatin1String(stateName));
+            m_model = view->model();
+            m_timer.setSingleShot(true);
+            connect(&m_timer, &QTimer::timeout, this, [this]() { restore(); });
+            connect(view->verticalScrollBar(), &QScrollBar::rangeChanged, this,
+                [this](int, int) { schedule(); });
+            // 用户在等待期间主动滚动/操作时，旧位置不再覆盖新的意图。
+            connect(view->verticalScrollBar(), &QScrollBar::actionTriggered, this,
+                [this](int) { finish(); });
+            connect(view->horizontalScrollBar(), &QScrollBar::actionTriggered, this,
+                [this](int) { finish(); });
+            view->installEventFilter(this);
+            view->viewport()->installEventFilter(this);
+        }
+
+        void waitForModel(QAbstractItemModel* source)
+        {
+            if (auto* fs = qobject_cast<QFileSystemModel*>(source))
+            {
+                connect(fs, &QFileSystemModel::directoryLoaded, this, [this](const QString& path) {
+                    if (!m_isCurrent())
+                        finish();
+                    else if (samePath(path, m_directory))
+                    {
+                        m_ready = true;
+                        schedule();
+                    }
+                });
+            }
+            else
+            {
+                connect(source, &QAbstractItemModel::modelReset, this, [this]() {
+                    m_ready = true;
+                    schedule();
+                });
+            }
+        }
+
+    protected:
+        bool eventFilter(QObject* object, QEvent* event) override
+        {
+            switch (event->type())
+            {
+            case QEvent::Wheel:
+            case QEvent::MouseButtonPress:
+            case QEvent::KeyPress:
+                finish();
+                break;
+            case QEvent::Show:
+            case QEvent::Resize:
+                schedule();
+                break;
+            default:
+                break;
+            }
+            return QObject::eventFilter(object, event);
+        }
+
+    private:
+        static bool samePath(const QString& a, const QString& b)
+        {
+            return QDir::fromNativeSeparators(a).compare(
+                QDir::fromNativeSeparators(b), Qt::CaseInsensitive) == 0;
+        }
+
+        static QString indexPath(QModelIndex index)
+        {
+            if (const auto* proxy = qobject_cast<const QSortFilterProxyModel*>(index.model()))
+                index = proxy->mapToSource(index);
+            if (const auto* fs = qobject_cast<const QFileSystemModel*>(index.model()))
+                return fs->filePath(index);
+            return index.data(Qt::UserRole).toString();
+        }
+
+        void schedule()
+        {
+            if (!m_cancelled && m_ready && !m_timer.isActive())
+                m_timer.start(0);
+        }
+
+        void finish()
+        {
+            m_cancelled = true;
+            m_timer.stop();
+            deleteLater();
+        }
+
+        void restore()
+        {
+            if (!m_view || !m_model || !m_isCurrent() || m_view->model() != m_model)
+            {
+                finish();
+                return;
+            }
+            if (!m_view->isVisible())
+                return; // 隐藏面板等到 Show 后再恢复，不强制布局整个图标列表。
+
+            const QModelIndex root = m_view->rootIndex();
+            const int rows = m_model->rowCount(root);
+            if (!m_resolved)
+            {
+                // 只读模型中的路径缓存，不能通过 QFileSystemModel::index(path) 查盘。
+                for (int row = 0; row < rows && !m_anchorPath.isEmpty(); ++row)
+                {
+                    const QModelIndex index = m_model->index(row, 0, root);
+                    if (samePath(indexPath(index), m_anchorPath))
+                    {
+                        m_anchor = index;
+                        break;
+                    }
+                }
+                m_resolved = true;
+            }
+            if (m_anchor.isValid())
+            {
+                if (m_view->visualRect(m_anchor).isEmpty())
+                {
+                    // QListView::Batched 尚未布局到该项，继续让 Qt 分批完成。
+                    m_timer.start(16);
+                    return;
+                }
+                m_view->scrollTo(m_anchor, QAbstractItemView::PositionAtTop);
+                if (m_view->verticalScrollMode() == QAbstractItemView::ScrollPerPixel)
+                {
+                    auto* bar = m_view->verticalScrollBar();
+                    bar->setValue(bar->value() + m_view->visualRect(m_anchor).top() - m_anchorTop);
+                }
+            }
+            else
+            {
+                if (rows > 0 && m_view->visualRect(m_model->index(rows - 1, 0, root)).isEmpty())
+                {
+                    m_timer.start(16);
+                    return;
+                }
+                // 原文件已删除或被筛掉时，滚动条自动将旧位置夹到新的合法范围。
+                m_view->verticalScrollBar()->setValue(m_vertical);
+            }
+            m_view->horizontalScrollBar()->setValue(m_horizontal);
+            finish();
+        }
+
+        QPointer<QAbstractItemView> m_view;
+        QPointer<QAbstractItemModel> m_model;
+        QString m_directory;
+        std::function<bool()> m_isCurrent;
+        QTimer m_timer;
+        QString m_anchorPath;
+        QPersistentModelIndex m_anchor;
+        int m_vertical = 0;
+        int m_horizontal = 0;
+        int m_anchorTop = 0;
+        bool m_ready = false;
+        bool m_resolved = false;
+        bool m_cancelled = false;
     };
 
     // buildDriverNtPath：
@@ -13691,14 +13887,38 @@ void FileDock::refreshPanel(FilePanelWidgets& panel)
         return;
     }
 
+    QAbstractItemView* const view = panel.fileViewStack != nullptr
+        && panel.fileViewStack->currentWidget() == panel.compactFileView
+        ? static_cast<QAbstractItemView*>(panel.compactFileView) : panel.fileView;
+    const QString refreshedPath = panel.currentPath;
+    const QString refreshedFilter = panel.filterEdit->text();
+    const int refreshedViewMode = panel.viewModeCombo->currentIndex();
+    const int refreshedSortMode = panel.sortModeCombo->currentIndex();
+    const int refreshedReadMode = panel.readModeCombo->currentIndex();
+    auto* scrollState = new FileRefreshScrollState(view, refreshedPath,
+        [this, &panel, refreshedPath, refreshedFilter, refreshedViewMode,
+         refreshedSortMode, refreshedReadMode, view]() {
+            QAbstractItemView* const activeView = panel.fileViewStack != nullptr
+                && panel.fileViewStack->currentWidget() == panel.compactFileView
+                ? static_cast<QAbstractItemView*>(panel.compactFileView) : panel.fileView;
+            return activeView == view
+                && panel.filterEdit->text() == refreshedFilter
+                && panel.viewModeCombo->currentIndex() == refreshedViewMode
+                && panel.sortModeCombo->currentIndex() == refreshedSortMode
+                && panel.readModeCombo->currentIndex() == refreshedReadMode
+                && pathEqualsCaseInsensitive(panel.currentPath, refreshedPath);
+        });
+
     // 复用导航逻辑触发模型重载，不写历史避免污染。
     if (currentModeIsManual(panel))
     {
+        scrollState->waitForModel(panel.manualModel);
         panel.manualLoadedPath.clear();
     }
     else
     {
         recreateFileSystemModel(panel);
+        scrollState->waitForModel(panel.fsModel);
     }
     navigateToPath(panel, panel.currentPath, false);
 }

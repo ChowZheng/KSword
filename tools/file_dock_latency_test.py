@@ -156,6 +156,126 @@ std::shared_ptr<ManualDirectoryModel::Entries> entries(int count, const QString&
     }
     return result;
 }
+void checkRefreshScroll() {
+    std::cout << "checking refresh viewport preservation" << std::endl;
+    const QString directory = QStringLiteral("scroll-fixture");
+    QString current = directory;
+    auto format = [](std::uint64_t size) { return QString::number(size); };
+    ManualDirectoryModel model(format);
+    ExplorerFileSortProxyModel proxy; proxy.setSourceModel(&model); proxy.sort(0);
+    auto original = entries(5000, directory);
+    model.setSnapshot(original);
+    QTreeView tree;
+    tree.setUniformRowHeights(true);
+    tree.setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
+    tree.setModel(&proxy); tree.resize(500, 320); tree.show();
+    require(until([&]() { return tree.verticalScrollBar()->maximum() > 1000; }), "tree did not lay out");
+    tree.scrollTo(proxy.index(1800, 0), QAbstractItemView::PositionAtTop);
+    tree.verticalScrollBar()->setValue(tree.verticalScrollBar()->value() + 7);
+    tree.horizontalScrollBar()->setValue(50);
+    const int horizontal = tree.horizontalScrollBar()->value();
+    const QModelIndex oldAnchor = tree.indexAt(QPoint(8, 0));
+    const QString anchorPath = oldAnchor.data(Qt::UserRole).toString();
+    const int anchorTop = tree.visualRect(oldAnchor).top();
+    require(!anchorPath.isEmpty(), "tree anchor not captured");
+    auto begin = [&](QAbstractItemView& view) {
+        auto* state = new FileRefreshScrollState(&view, directory, [&]() { return current == directory; });
+        state->waitForModel(&model);
+    };
+    auto restored = [&](QAbstractItemView& view) {
+        return until([&]() {
+            QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+            return !view.findChild<QObject*>(QStringLiteral("file_refresh_scroll_state"), Qt::FindDirectChildrenOnly);
+        });
+    };
+    auto inserted = std::make_shared<ManualDirectoryModel::Entries>(*original);
+    for (int i = 0; i < 20; ++i) {
+        ks::file::ManualDirectoryEntry entry;
+        entry.name = QStringLiteral("ahead%1").arg(i);
+        entry.absolutePath = directory + QLatin1Char('/') + entry.name;
+        inserted->push_back(entry);
+    }
+    begin(tree);
+    model.setSnapshot(inserted);
+    proxy.sort(0);
+    require(restored(tree), "tree restoration did not finish");
+    const QModelIndex newAnchor = tree.indexAt(QPoint(8, 0));
+    require(newAnchor.data(Qt::UserRole).toString() == anchorPath && tree.visualRect(newAnchor).top() == anchorTop,
+        "inserting earlier rows shifted the visible file or pixel offset");
+    require(tree.horizontalScrollBar()->value() == horizontal, "horizontal scroll position was lost");
+
+    const int beforeDeletion = tree.verticalScrollBar()->value();
+    begin(tree);
+    auto deleted = std::make_shared<ManualDirectoryModel::Entries>(*inserted);
+    deleted->erase(std::remove_if(deleted->begin(), deleted->end(),
+        [&](const auto& entry) { return entry.absolutePath == anchorPath; }), deleted->end());
+    model.setSnapshot(deleted);
+    require(restored(tree) && tree.verticalScrollBar()->value() == beforeDeletion,
+        "deleted anchor jumped to the table head");
+    begin(tree);
+    model.setSnapshot(entries(60, directory));
+    require(restored(tree) && tree.verticalScrollBar()->value() == tree.verticalScrollBar()->maximum(),
+        "shrinking rows did not clamp the old scroll position");
+
+    model.setSnapshot(original);
+    tree.scrollTo(proxy.index(1800, 0), QAbstractItemView::PositionAtTop);
+    const int beforeRepeat = tree.verticalScrollBar()->value();
+    begin(tree);
+    model.setSnapshot({});
+    begin(tree);
+    model.setSnapshot(original);
+    require(restored(tree) && tree.verticalScrollBar()->value() == beforeRepeat,
+        "repeated refresh saved the temporarily empty viewport");
+    begin(tree);
+    model.setSnapshot(original);
+    QKeyEvent home(QEvent::KeyPress, Qt::Key_Home, Qt::NoModifier);
+    QApplication::sendEvent(&tree, &home);
+    tree.scrollToTop();
+    require(restored(tree) && tree.verticalScrollBar()->value() == 0,
+        "pending restoration overrode user input");
+    tree.scrollTo(proxy.index(1800, 0), QAbstractItemView::PositionAtTop);
+    begin(tree);
+    current = QStringLiteral("other-directory");
+    model.setSnapshot(entries(5000, current));
+    tree.scrollToTop();
+    require(restored(tree) && tree.verticalScrollBar()->value() == 0,
+        "old directory scroll position leaked into navigation");
+    current = directory;
+
+    QTreeView detached;
+    auto detachedProxy = std::make_unique<ExplorerFileSortProxyModel>();
+    detachedProxy->setSourceModel(&model);
+    detached.setModel(detachedProxy.get()); detached.show();
+    begin(detached);
+    model.setSnapshot(original);
+    detachedProxy.reset();
+    require(restored(detached), "destroyed model left a pending restoration");
+    auto closedView = std::make_unique<QTreeView>();
+    closedView->setModel(&proxy); closedView->show();
+    begin(*closedView);
+    model.setSnapshot(original);
+    closedView.reset();
+    QCoreApplication::processEvents();
+
+    for (const auto mode : {QListView::ListMode, QListView::IconMode}) {
+        model.setSnapshot(original);
+        QListView list;
+        list.setModel(&proxy); list.setViewMode(mode);
+        list.setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
+        list.setUniformItemSizes(true); list.setLayoutMode(QListView::Batched); list.setBatchSize(128);
+        if (mode == QListView::IconMode) { list.setGridSize(QSize(128, 96)); list.setWrapping(true); }
+        list.resize(520, 320); list.show();
+        require(until([&]() { return !list.visualRect(proxy.index(4999, 0)).isEmpty(); }), "batched fixture did not lay out");
+        list.scrollTo(proxy.index(2200, 0), QAbstractItemView::PositionAtTop);
+        QCoreApplication::processEvents();
+        const int oldValue = list.verticalScrollBar()->value();
+        begin(list);
+        model.setSnapshot({});
+        model.setSnapshot(original);
+        require(restored(list) && std::abs(list.verticalScrollBar()->value() - oldValue) <= 1,
+            "batched list/icon refresh lost its scroll position");
+    }
+}
 int main(int argc, char** argv) {
     std::cout << "starting QApplication" << std::endl;
     TimedApplication app(argc, argv);
@@ -202,6 +322,23 @@ int main(int argc, char** argv) {
         require(until([&]() { return done; }, 30000), "System32 load never completed");
         QElapsedTimer settle; settle.start();
         until([&]() { return settle.elapsed() >= 1500; });
+        std::cout << "checking visible System32 refresh" << std::endl;
+        realView.scrollTo(realProxy.index(2500, 0, realView.rootIndex()), QAbstractItemView::PositionAtTop);
+        const int previousScroll = realView.verticalScrollBar()->value();
+        ReparseAwareFileSystemModel refreshedFs;
+        refreshedFs.setReadOnly(false);
+        refreshedFs.setFilter(QDir::AllEntries | QDir::NoDotAndDotDot);
+        auto* scrollState = new FileRefreshScrollState(&realView, path, []() { return true; });
+        scrollState->waitForModel(&refreshedFs);
+        realProxy.setSourceModel(&refreshedFs);
+        const QModelIndex refreshedRoot = refreshedFs.setRootPath(path);
+        realView.setRootIndex(realProxy.mapFromSource(refreshedRoot));
+        require(until([&]() {
+            QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+            return !realView.findChild<QObject*>(QStringLiteral("file_refresh_scroll_state"), Qt::FindDirectChildrenOnly);
+        }, 30000), "System32 refresh scroll restoration never completed");
+        require(realView.verticalScrollBar()->value() == previousScroll,
+            "recreating the System32 filesystem model lost the viewport");
         require(realFs.rowCount(realRoot) > 1000, "System32 fixture was unexpectedly small");
         require(maxGap < 100, "System32 load exceeded the 100ms UI stall budget");
         require(presentationOnUi == 0, "file presentation IO ran on the UI thread");
@@ -401,6 +538,7 @@ int main(int argc, char** argv) {
     closedPresentation.reset();
     QThreadPool::globalInstance()->waitForDone(); QCoreApplication::processEvents();
     require(presentationOnUi == 0, "Shell/MIME IO ran on the UI thread");
+    checkRefreshScroll();
     std::cout << "PASS rows=100000 publish_ms=" << publishMs << " sort_ms=" << sortMs
         << " heartbeats=" << heartbeats << " ui_probes=" << probesOnUi << std::endl;
     QThreadPool::globalInstance()->waitForDone(); QCoreApplication::processEvents();

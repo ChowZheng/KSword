@@ -26,3 +26,12 @@
 - `python tools/file_dock_latency_test.py --system32` 首先测试真实 System32 导航与可见 QTreeView，随后执行原有十万行回归。先完成空视图的首帧绘制，排除窗口初次启动成本；用 1 ms 定时器测量导航和 1.5 秒补全期间的最大 UI 间隔，门槛为 100 ms。修复后本机多次实测约 46–62 ms。另覆盖真实原生图标/MIME 描述、120 ms 慢查询期间的 UI 心跳、去重、失败缓存、重置和关闭后的旧结果。
 - Qt 源码依据：[qfilesystemmodel.cpp](https://raw.githubusercontent.com/qt/qtbase/v6.9.3/src/gui/itemmodels/qfilesystemmodel.cpp)、[qfileinfogatherer.cpp](https://raw.githubusercontent.com/qt/qtbase/v6.9.3/src/gui/itemmodels/qfileinfogatherer.cpp)、[qabstractfileiconprovider.cpp](https://raw.githubusercontent.com/qt/qtbase/v6.9.3/src/gui/image/qabstractfileiconprovider.cpp)。
 - 最终回归最大 UI 间隔 55 ms；十万行及慢展示查询用例通过。完整 x64 Release 构建 `BUILD_RESULT=SUCCESS / EXIT_CODE=0`，产物 20,662,680 字节（日志 `.codex-build-logs/ksword-build-check-20261004-150149.raw.log`）。首次链接遇到当前程序占用（LNK1104），将旧 exe 改为同目录备份名后重新链接，保留运行实例；新版本需重启使用。测试签名写入成功但本机信任验证仍报 `0x80096019`，不等于签名信任校验通过。
+
+## 同目录刷新保留视口
+
+- 滚动恢复属于数据刷新行为，不能放入全局 QSS/主题样式。`FileRefreshScrollState` 仅由 `FileDock::refreshPanel` 为当前可见的详情/树或列表/图标视图创建；其他页面需要时再抽公共行为组件并显式接入。
+- 在重建模型之前保存可见文件的完整路径、行内像素偏移及横向/纵向滚动值；Windows API 等匹配目录的 `directoryLoaded`，手动模式等快照 `modelReset`，排队到过滤/排序完成后恢复。优先保持同一文件的视口位置，文件被删/筛掉时将原滚动值夹到新范围。
+- 连续刷新复用尚未恢复的状态，不能把临时空模型的表头位置覆盖进去。目录、视图模式、过滤、排序或读取方式改变，以及用户主动操作视图/滚动条后，丢弃旧恢复任务。
+- 路径查找只遍历已枚举模型缓存，不调用 `QFileSystemModel::index(path)` 做同步查盘；只读持久索引在布局变动中追踪文件。`QListView::Batched` 等目标项分批布局可用后再恢复，禁止 `doItemsLayout()` 强制一次布局整个大目录；隐藏面板等 `Show`。
+- 回归覆盖前方插入条目后的文件/像素偏移、横向位置、删除锚点、行数缩减、连续刷新、跨目录和用户操作取消、5,000 项列表/图标分批布局；真实 System32 重建 `QFileSystemModel` 后仍保持原位置。加载与刷新测得最大 UI 间隔 44 ms（100 ms 门槛）。
+- 模型/视图在恢复回调前销毁也已回归。完整主程序 x64 Release 构建成功（`BUILD_RESULT=SUCCESS`、`EXIT_CODE=0`，日志 `.codex-build-logs/ksword-build-check-20261004-152940.raw.log`），产物 20,669,848 字节；仍保留运行中的旧实例，需重启使用新版。
