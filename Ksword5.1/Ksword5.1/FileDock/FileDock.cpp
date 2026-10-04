@@ -58,6 +58,7 @@
 #include <QFileInfo>
 #include <QFileDialog>
 #include <QFileSystemModel>
+#include <QFileIconProvider>
 #include <QFont>
 #include <QFormLayout>
 #include <QFrame>
@@ -67,6 +68,7 @@
 #include <QHash>
 #include <QHBoxLayout>
 #include <QInputDialog>
+#include <QImage>
 #include <QItemSelectionModel>
 #include <QLabel>
 #include <QLineEdit>
@@ -74,6 +76,8 @@
 #include <QMenu>
 #include <QMessageBox>
 #include <QMetaObject>
+#include <QMimeDatabase>
+#include <QMimeType>
 #include <QModelIndex>
 #include <QMouseEvent>
 #include <QPlainTextEdit>
@@ -122,6 +126,7 @@
 #define NOMINMAX
 #endif
 #include <Windows.h>
+#include <Shellapi.h>
 #include <winioctl.h>
 #include <Wbemidl.h>
 #include <fltUser.h>
@@ -2120,25 +2125,198 @@ namespace
         bool m_running = false;
     };
 
+    struct FilePresentation
+    {
+        QImage icon;
+        QString type;
+    };
+
+    FilePresentation queryFilePresentation(const QString& path)
+    {
+        FilePresentation result;
+        const HRESULT comResult = ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+        const QString nativePath = QDir::toNativeSeparators(path);
+        SHFILEINFOW shellInfo{};
+        if (::SHGetFileInfoW(reinterpret_cast<const wchar_t*>(nativePath.utf16()), 0,
+            &shellInfo, sizeof(shellInfo), SHGFI_ICON | SHGFI_SMALLICON) && shellInfo.hIcon)
+        {
+            result.icon = QImage::fromHICON(shellInfo.hIcon);
+            ::DestroyIcon(shellInfo.hIcon);
+        }
+        if (SUCCEEDED(comResult))
+            ::CoUninitialize();
+
+        // MIME 数据库初始化、名称匹配及内容嗅探全部在工作线程。
+        const QMimeType mime = QMimeDatabase().mimeTypeForFile(path);
+        result.type = mime.comment();
+        if (result.type.isEmpty())
+            result.type = mime.name();
+        return result;
+    }
+
+    // 只为被视图请求的项补充展示信息；QPixmap 和持久索引只在 UI 线程使用。
+    class AsyncFilePresentationCache final : public QObject
+    {
+    public:
+        explicit AsyncFilePresentationCache(QObject* parent)
+            : QObject(parent), m_timer(this)
+        {
+            m_timer.setSingleShot(true);
+            connect(&m_timer, &QTimer::timeout, this, [this]() { startBatch(); });
+        }
+
+        QVariant value(const QString& path, const QModelIndex& index, const int role)
+        {
+            const auto cached = m_cache.constFind(path);
+            if (cached != m_cache.cend())
+                return role == Qt::DecorationRole ? cached->icon : cached->type;
+            if (!m_pending.contains(path) && !m_inFlight.contains(path))
+                m_pending.insert(path, QPersistentModelIndex(index.siblingAtColumn(0)));
+            if (!m_running && !m_timer.isActive())
+                m_timer.start(0);
+            return QVariant();
+        }
+
+        void reset()
+        {
+            ++m_generation;
+            m_cache.clear();
+            m_pending.clear();
+            m_inFlight.clear();
+        }
+
+    private:
+        struct CachedPresentation
+        {
+            QVariant icon;
+            QVariant type;
+        };
+
+        void startBatch()
+        {
+            if (m_running || m_pending.isEmpty())
+                return;
+            QHash<QString, QPersistentModelIndex> batch;
+            while (!m_pending.isEmpty() && batch.size() < 8)
+            {
+                auto next = m_pending.begin();
+                batch.insert(next.key(), next.value());
+                m_inFlight.insert(next.key());
+                m_pending.erase(next);
+            }
+            m_running = true;
+            const int generation = m_generation;
+            QPointer<AsyncFilePresentationCache> guard(this);
+            QThreadPool::globalInstance()->start(QRunnable::create([guard, generation, batch]() {
+                QHash<QString, FilePresentation> results;
+                for (auto it = batch.cbegin(); it != batch.cend(); ++it)
+                    results.insert(it.key(), queryFilePresentation(it.key()));
+                QMetaObject::invokeMethod(qApp, [guard, generation, batch, results]() {
+                    if (!guard)
+                        return;
+                    guard->m_running = false;
+                    if (guard->m_generation == generation)
+                    {
+                        for (auto it = batch.cbegin(); it != batch.cend(); ++it)
+                        {
+                            guard->m_inFlight.remove(it.key());
+                            const QModelIndex index = it.value();
+                            const auto* fs = qobject_cast<const QFileSystemModel*>(index.model());
+                            if (!index.isValid() || !fs || fs->filePath(index) != it.key())
+                                continue;
+                            const FilePresentation result = results.value(it.key());
+                            CachedPresentation cached;
+                            if (!result.icon.isNull())
+                                cached.icon = QIcon(QPixmap::fromImage(result.icon));
+                            if (!fs->isDir(index) && !result.type.isEmpty())
+                                cached.type = result.type;
+                            // 限制图标的 GUI 资源数量，切目录时也只需释放有界缓存。
+                            if (guard->m_cache.size() >= 512)
+                                guard->m_cache.erase(guard->m_cache.begin());
+                            // 包括失败结果，避免绘制时重复投递慢查询。
+                            guard->m_cache.insert(it.key(), cached);
+                            auto* model = const_cast<QFileSystemModel*>(fs);
+                            emit model->dataChanged(index, index.siblingAtColumn(2),
+                                { Qt::DecorationRole, Qt::DisplayRole });
+                        }
+                    }
+                    if (!guard->m_pending.isEmpty())
+                        guard->m_timer.start(0);
+                }, Qt::QueuedConnection);
+            }));
+        }
+
+        QTimer m_timer;
+        QHash<QString, CachedPresentation> m_cache;
+        QHash<QString, QPersistentModelIndex> m_pending;
+        QSet<QString> m_inFlight;
+        int m_generation = 0;
+        bool m_running = false;
+    };
+
+    // Qt 6.9 在 UI 线程为目录整批结果调用 icon/type；这条路径只读已 stat 的
+    // QFileInfo 并返回占位值，不能调用 Windows Shell 或初始化 MIME 数据库。
+    class FastFileIconProvider final : public QFileIconProvider
+    {
+    public:
+        FastFileIconProvider()
+            : m_directoryIcon(QApplication::style()->standardIcon(QStyle::SP_DirIcon)),
+              m_fileIcon(QApplication::style()->standardIcon(QStyle::SP_FileIcon))
+        {
+        }
+
+        QIcon icon(const QFileInfo& info) const override
+        {
+            // Qt gatherer 已在后台 stat() 过这个 QFileInfo。
+            return info.isDir() ? m_directoryIcon : m_fileIcon;
+        }
+
+        QString type(const QFileInfo& info) const override
+        {
+            if (!info.isFile())
+                return QFileIconProvider::type(info);
+
+            const QString suffix = info.suffix().toUpper();
+            return suffix.isEmpty() ? ks::i18n::displayText(QStringLiteral("文件")) : suffix;
+        }
+
+    private:
+        QIcon m_directoryIcon;
+        QIcon m_fileIcon;
+    };
+
     class ReparseAwareFileSystemModel final : public QFileSystemModel
     {
     public:
         explicit ReparseAwareFileSystemModel(QObject* parent = nullptr)
-            : QFileSystemModel(parent), m_markers(this, [this](const QModelIndex& index) {
+            : QFileSystemModel(parent), m_presentation(this), m_markers(this, [this](const QModelIndex& index) {
                 emit dataChanged(index, index.siblingAtColumn(2),
                     { Qt::DisplayRole, Qt::ToolTipRole });
             })
         {
+            setIconProvider(&m_iconProvider);
             connect(this, &QFileSystemModel::directoryLoaded, this,
-                [this](const QString&) { m_markers.reset(); });
+                [this](const QString&) { m_markers.reset(); m_presentation.reset(); });
+            connect(this, &QAbstractItemModel::modelReset, this,
+                [this]() { m_markers.reset(); m_presentation.reset(); });
+            connect(this, &QFileSystemModel::fileRenamed, this,
+                [this](const QString&, const QString&, const QString&) { m_presentation.reset(); });
         }
 
         QVariant data(const QModelIndex& index, const int role = Qt::DisplayRole) const override
         {
-            const QVariant baseValue = QFileSystemModel::data(index, role);
+            QVariant baseValue = QFileSystemModel::data(index, role);
             if (!index.isValid())
             {
                 return baseValue;
+            }
+
+            if ((role == Qt::DecorationRole && index.column() == 0)
+                || (role == Qt::DisplayRole && index.column() == 2 && !isDir(index)))
+            {
+                const QVariant enriched = m_presentation.value(filePath(index), index, role);
+                if (enriched.isValid())
+                    baseValue = enriched;
             }
 
             if (role != Qt::DisplayRole && role != Qt::ToolTipRole)
@@ -2209,6 +2387,8 @@ namespace
         }
 
     private:
+        FastFileIconProvider m_iconProvider;
+        mutable AsyncFilePresentationCache m_presentation;
         mutable AsyncReparseMarkerCache m_markers;
     };
 

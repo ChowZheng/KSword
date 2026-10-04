@@ -1,8 +1,9 @@
 """Compile and run the actual FileDock models in a bounded Qt offscreen harness.
 
 Extracts production classes without linking the rest of the application. Only
-theme/i18n and the blocking reparse query are substituted; Qt models, sorting,
-queued callbacks and object lifetimes are real. Requires the x64 MSVC/Qt SDKs.
+theme/i18n and reparse IO are substituted. Presentation queries use the actual
+Shell/MIME implementation with injected delays/failures for lifetime tests.
+Qt models, sorting and callbacks are real. Requires the x64 MSVC/Qt SDKs.
 """
 
 import argparse
@@ -22,6 +23,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--qt-dir', type=Path, default=Path('D:/Software/Qt/6.9.3/msvc2022_64'))
     parser.add_argument('--vcvars', type=Path, default=Path('D:/Software/VS/VC/Auxiliary/Build/vcvars64.bat'))
+    parser.add_argument('--system32', action='store_true', help='Measure visible System32 loading and event-loop stalls')
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[1]
     source = (root / 'Ksword5.1/Ksword5.1/FileDock/FileDock.cpp').read_text(encoding='utf-8')
@@ -32,10 +34,24 @@ def main():
         between(source, '    enum class ManualModelColumn', '    // manualFsTypeToText'),
         between(source, '    class ManualDirectoryModel', '    // buildSuspiciousNameSet'),
     ])
+    classes = classes.replace('FilePresentation queryFilePresentation(', 'FilePresentation realQueryFilePresentation(')
+    classes = classes.replace('    // 只为被视图请求的项补充展示信息', r'''
+FilePresentation queryFilePresentation(const QString& path) {
+    ++presentationQueries;
+    if (QThread::currentThread() == qApp->thread()) ++presentationOnUi;
+    if (path.contains(QStringLiteral("slow-presentation")))
+        std::this_thread::sleep_for(std::chrono::milliseconds(120));
+    if (path.contains(QStringLiteral("failed-presentation"))) return {};
+    return realQueryFilePresentation(path);
+}
+    // 只为被视图请求的项补充展示信息''')
+    classes = classes.replace('// QSortFilterProxyModel::lessThan 接收的是源模型索引', '++compareCalls;\n            // QSortFilterProxyModel::lessThan 接收的是源模型索引')
     entry = between(header, '    struct ManualDirectoryEntry', '    // MftScanDiagnostics')
     harness = r'''
 #include <QtWidgets>
 #include <QtCore>
+#include <Windows.h>
+#include <Shellapi.h>
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -52,7 +68,25 @@ namespace KswordTheme {
 enum class AccentRole { Orange };
 QString AccentHex(AccentRole) { return QStringLiteral("#ff8800"); }
 }
+class TimedApplication : public QApplication {
+public:
+    using QApplication::QApplication;
+    bool measure = false;
+    bool notify(QObject* receiver, QEvent* event) override {
+        QElapsedTimer timing; timing.start();
+        const QByteArray receiverClass = receiver->metaObject()->className();
+        const int type = int(event->type());
+        const bool result = QApplication::notify(receiver, event);
+        if (measure && timing.elapsed() >= 20)
+            std::cout << "SLOW_EVENT type=" << type << " receiver="
+                << receiverClass.constData() << " ms=" << timing.elapsed() << std::endl;
+        return result;
+    }
+};
 std::atomic<int> probes{0};
+std::atomic<int> compareCalls{0};
+std::atomic<int> presentationQueries{0};
+std::atomic<int> presentationOnUi{0};
 std::atomic<int> probesOnUi{0};
 QString reparseKindMarkerForPath(const QString& path) {
     ++probes;
@@ -124,7 +158,59 @@ std::shared_ptr<ManualDirectoryModel::Entries> entries(int count, const QString&
 }
 int main(int argc, char** argv) {
     std::cout << "starting QApplication" << std::endl;
-    QApplication app(argc, argv);
+    TimedApplication app(argc, argv);
+    if (app.arguments().contains(QStringLiteral("--system32"))) {
+        std::cout << "checking visible System32 load" << std::endl;
+        ReparseAwareFileSystemModel realFs;
+        realFs.setReadOnly(false);
+        realFs.setResolveSymlinks(true);
+        realFs.setFilter(QDir::AllEntries | QDir::NoDotAndDotDot);
+        ExplorerFileSortProxyModel realProxy;
+        realProxy.setSourceModel(&realFs);
+        QTreeView realView;
+        realView.setUniformRowHeights(true);
+        realView.setModel(&realProxy);
+        realView.setSortingEnabled(true);
+        realView.header()->setStretchLastSection(false);
+        realView.header()->setSectionResizeMode(0, QHeaderView::Stretch);
+        realView.resize(800, 600);
+        realView.show();
+        // 测量已经打开的文件面板导航，排除 Qt 第一次创建/绘制窗口的启动成本。
+        QElapsedTimer warmup; warmup.start();
+        until([&]() { return warmup.elapsed() >= 100; });
+        const QString path = QDir::fromNativeSeparators(qEnvironmentVariable("SystemRoot")) + QStringLiteral("/System32");
+        bool done = false;
+        QObject::connect(&realFs, &QFileSystemModel::directoryLoaded, [&](const QString& loadedPath) {
+            if (QDir(loadedPath) == QDir(path)) {
+                realView.sortByColumn(0, Qt::AscendingOrder);
+                done = true;
+            }
+        });
+        qint64 maxGap = 0;
+        QElapsedTimer lastBeat; lastBeat.start();
+        QTimer loopProbe;
+        loopProbe.setInterval(1);
+        QObject::connect(&loopProbe, &QTimer::timeout, [&]() {
+            maxGap = std::max(maxGap, lastBeat.restart());
+        });
+        loopProbe.start();
+        app.measure = true;
+        compareCalls = 0;
+        const QModelIndex realRoot = realFs.setRootPath(path);
+        realView.setRootIndex(realProxy.mapFromSource(realRoot));
+        realView.sortByColumn(0, Qt::AscendingOrder);
+        require(until([&]() { return done; }, 30000), "System32 load never completed");
+        QElapsedTimer settle; settle.start();
+        until([&]() { return settle.elapsed() >= 1500; });
+        require(realFs.rowCount(realRoot) > 1000, "System32 fixture was unexpectedly small");
+        require(maxGap < 100, "System32 load exceeded the 100ms UI stall budget");
+        require(presentationOnUi == 0, "file presentation IO ran on the UI thread");
+        app.measure = false;
+        std::cout << "SYSTEM32 rows=" << realFs.rowCount(realRoot) << " max_ui_gap_ms=" << maxGap
+            << " comparisons=" << compareCalls << std::endl;
+    }
+    QThreadPool::globalInstance()->waitForDone(); QCoreApplication::processEvents();
+    probes = 0;
     std::cout << "checking large snapshot" << std::endl;
     auto format = [](std::uint64_t size) { return QString::number(size); };
     ManualDirectoryModel model(format);
@@ -240,6 +326,11 @@ int main(int argc, char** argv) {
         require(file.open(QIODevice::WriteOnly), "fixture creation failed");
         file.write(QByteArray(i % 127 + 1, 'x'));
     }
+    for (const QString& name : {QStringLiteral("slow-presentation.txt"), QStringLiteral("failed-presentation.txt")}) {
+        QFile file(directory.filePath(name));
+        require(file.open(QIODevice::WriteOnly), "presentation fixture creation failed");
+        file.write("text fixture");
+    }
     ReparseAwareFileSystemModel fs;
     fs.setFilter(QDir::AllEntries | QDir::NoDotAndDotDot);
     bool loaded = false;
@@ -247,15 +338,17 @@ int main(int argc, char** argv) {
         if (QDir(path) == QDir(directory.path())) loaded = true;
     });
     const QModelIndex sourceRoot = fs.setRootPath(directory.path());
-    require(until([&]() { return loaded && fs.rowCount(sourceRoot) == 1500; }), "filesystem model did not load");
+    require(until([&]() { return loaded && fs.rowCount(sourceRoot) == 1502; }), "filesystem model did not load");
     ExplorerFileSortProxyModel fsProxy;
     fsProxy.setSourceModel(&fs);
     const int beforeFsSort = probes;
+    const int beforeFsPresentation = presentationQueries;
     for (int column = 0; column < 4; ++column) fsProxy.sort(column);
     require(probes == beforeFsSort, "filesystem sort triggered reparse IO");
+    require(presentationQueries == beforeFsPresentation, "filesystem sorting queued Shell/MIME queries");
     fsProxy.sort(0);
     const QModelIndex proxyRoot = fsProxy.mapFromSource(sourceRoot);
-    require(fsProxy.index(1, 0, proxyRoot).data(QFileSystemModel::FileNameRole).toString() ==
+    require(fsProxy.index(2, 0, proxyRoot).data(QFileSystemModel::FileNameRole).toString() ==
         QStringLiteral("file2.txt"), "filesystem natural sorting failed");
     fs.index(0, 0, sourceRoot).data();
     require(until([&]() { return probes > beforeFsSort; }), "filesystem display did not queue probe");
@@ -265,6 +358,49 @@ int main(int argc, char** argv) {
     QCoreApplication::processEvents();
     require(probes == afterFsProbe, "filesystem negative cache failed");
     require(probesOnUi == 0, "reparse IO ran on the UI thread");
+    std::cout << "checking async Shell/MIME presentation" << std::endl;
+    const QString slowPath = directory.filePath(QStringLiteral("slow-presentation.txt"));
+    const QModelIndex slowIndex = fs.index(slowPath);
+    AsyncFilePresentationCache presentation(&fs);
+    const int beforePresentation = presentationQueries;
+    const int beforePresentationBeats = heartbeats;
+    timing.restart();
+    for (int i = 0; i < 100; ++i)
+        presentation.value(slowPath, slowIndex, Qt::DecorationRole);
+    require(timing.elapsed() < 50, "presentation data blocked on Shell/MIME IO");
+    require(until([&]() { return presentation.value(slowPath, slowIndex, Qt::DecorationRole).isValid(); }),
+        "native file icon did not arrive");
+    require(heartbeats > beforePresentationBeats + 20, "slow presentation stalled UI");
+    require(presentationQueries == beforePresentation + 1, "presentation queries were not deduplicated");
+    const QMimeType expectedType = QMimeDatabase().mimeTypeForFile(slowPath);
+    require(presentation.value(slowPath, slowIndex, Qt::DisplayRole).toString() == expectedType.comment(),
+        "detailed MIME type was not preserved");
+    const QString failedPath = directory.filePath(QStringLiteral("failed-presentation.txt"));
+    const QModelIndex failedIndex = fs.index(failedPath);
+    presentation.value(failedPath, failedIndex, Qt::DecorationRole);
+    require(until([&]() { return presentationQueries > beforePresentation + 1; }), "failed query never started");
+    QThreadPool::globalInstance()->waitForDone(); QCoreApplication::processEvents();
+    const int afterFailure = presentationQueries;
+    for (int i = 0; i < 100; ++i)
+        presentation.value(failedPath, failedIndex, Qt::DecorationRole);
+    QCoreApplication::processEvents();
+    require(presentationQueries == afterFailure, "failed presentation was not cached");
+    presentation.reset();
+    presentation.value(slowPath, slowIndex, Qt::DecorationRole);
+    require(until([&]() { return presentationQueries > afterFailure; }), "stale presentation never started");
+    presentation.reset();
+    QThreadPool::globalInstance()->waitForDone(); QCoreApplication::processEvents();
+    require(!presentation.value(slowPath, slowIndex, Qt::DecorationRole).isValid(),
+        "stale presentation overwrote reset cache");
+    require(until([&]() { return presentation.value(slowPath, slowIndex, Qt::DecorationRole).isValid(); }),
+        "reset presentation never retried");
+    auto closedPresentation = std::make_unique<AsyncFilePresentationCache>(&fs);
+    const int beforePresentationClose = presentationQueries;
+    closedPresentation->value(slowPath, slowIndex, Qt::DecorationRole);
+    require(until([&]() { return presentationQueries > beforePresentationClose; }), "close presentation never started");
+    closedPresentation.reset();
+    QThreadPool::globalInstance()->waitForDone(); QCoreApplication::processEvents();
+    require(presentationOnUi == 0, "Shell/MIME IO ran on the UI thread");
     std::cout << "PASS rows=100000 publish_ms=" << publishMs << " sort_ms=" << sortMs
         << " heartbeats=" << heartbeats << " ui_probes=" << probesOnUi << std::endl;
     QThreadPool::globalInstance()->waitForDone(); QCoreApplication::processEvents();
@@ -285,11 +421,14 @@ int main(int argc, char** argv) {
             f'/external:I"{qt / "include/QtCore"}" /external:I"{qt / "include/QtGui"}" '
             f'/external:I"{qt / "include/QtWidgets"}" "{cpp}" '
             f'/Fo"{out / "test.obj"}" /Fe"{exe}" /link /LIBPATH:"{qt / "lib"}" '
-            'Qt6Core.lib Qt6Gui.lib Qt6Widgets.lib\nif errorlevel 1 exit /b %errorlevel%\n'
+            'Qt6Core.lib Qt6Gui.lib Qt6Widgets.lib Shell32.lib Ole32.lib User32.lib\nif errorlevel 1 exit /b %errorlevel%\n'
             f'"{qt / "bin/windeployqt.exe"}" --no-translations --no-system-d3d-compiler '
             f'--no-opengl-sw --compiler-runtime "{exe}"\nexit /b %errorlevel%\n', encoding='utf-8')
-        subprocess.run(['cmd.exe', '/d', '/c', str(build)], check=True, cwd=root,
-                       stdout=subprocess.DEVNULL)
+        compilation = subprocess.run(['cmd.exe', '/d', '/c', str(build)], cwd=root,
+                                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        if compilation.returncode:
+            print(compilation.stdout)
+        compilation.check_returncode()
         shutil.copy2(qt / 'plugins/platforms/qoffscreen.dll', out / 'platforms/qoffscreen.dll')
         for dll in (root / 'Ksword5.1/x64/Release').glob('*140*.dll'):
             shutil.copy2(dll, out / dll.name)
@@ -298,7 +437,8 @@ int main(int argc, char** argv) {
             str(qt / 'bin'), str(root / 'Ksword5.1/x64/Release'), environment['PATH']])
         previous = ctypes.windll.kernel32.SetErrorMode(3)
         try:
-            subprocess.run([str(exe)], check=True, env=environment, timeout=30)
+            subprocess.run([str(exe)] + (['--system32'] if args.system32 else []),
+                           check=True, env=environment, timeout=90 if args.system32 else 30)
         finally:
             ctypes.windll.kernel32.SetErrorMode(previous)
 
