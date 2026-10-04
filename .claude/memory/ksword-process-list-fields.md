@@ -13,3 +13,15 @@
 - 通过现有 `dyn apply-profile` 接口只合入精确字段 item 2 后，驱动回读为 `0x518` / PDB profile，独立 PowerShell 枚举返回有效 Section 指针；前 30 条记录中 25 条非零。System、Secure System、Registry 等可能真实为空。此验证没有写 EPROCESS、替换或重新装载驱动。
 - 进程列表指针可读不代表完整 Section 映射枚举可用：`section query-process` 仍受 `_SECTION.ControlArea` 与映射链布局依赖约束，本次仍仅由公共文件对象路径获得 ControlArea。
 - 现场日志与旧配置备份位于 `.codex-build-logs/process-columns-20261002/`。管理员只读诊断可用隐藏窗口的独立 PowerShell 进程执行 CLI 并落盘；普通会话的 Win32 5 仅代表访问被拒，不能据此推断驱动功能失败。
+
+## 2026-10-03 内存采集口径诊断
+
+- 当前进程列表策略默认为 `NtQuerySystemInformation(SystemProcessInformation)`（策略下拉框 index=1），并非默认 Toolhelp。NtQuery 已填充动态计数器时，刷新缓存路径不会再用 PSAPI 覆盖内存字段。
+- RAM 单元格的“使用”是 `WorkingSetSize`（含共享页的总工作集），“申请”是 `PrivatePageCount` / PSAPI `PrivateUsage`（私有提交量，不是虚拟地址保留量）。任务管理器的默认内存列通常采用专用或活动专用工作集，不能直接比较上述两项；应按 PID 在两边选择同名指标。
+- 内存视图已有“工作集”“内存(专用工作集)”“内存(活动的专用工作集)”等独立列；NtQuery 专用工作集来自 `WorkingSetPrivateSize`，按字节使用，不乘页大小。
+- `updateUsageSummaryInHeader` 的 RAM 表头汇总 `ramMB`（私有提交），RAM 行排序却按 `workingSetMB`（总工作集）；表头不是全系统物理内存利用率，且受搜索/隐藏筛选影响。即使汇总总工作集，也会重复计算共享页，不能作为系统物理用量。
+- 默认采样间隔 1 秒，列表显示间隔 2 秒；历史时间轴还可切换到旧样本。比较必须对齐指标、进程身份和采样时刻。
+- 活动专用工作集目前只是“全部线程 Waiting 且 Suspended/WrSuspended 则清零，否则等于专用工作集”的派生值。这不是单独采到的系统活动内存计数，不能仅依据现有代码注释宣称所有 Windows 版本及挂起场景均与任务管理器一致。
+- Toolhelp 补采使用 `PROCESS_MEMORY_COUNTERS_EX`，没有专用工作集；还把 `PROCESS_VM_READ` 和受限查询权限绑定打开，失败后只补句柄数。现代 Windows 的 `GetProcessMemoryInfo` 只要求查询权限，可改为独立采集；支持的系统可用 `PROCESS_MEMORY_COUNTERS_EX2.PrivateWorkingSetSize`，旧系统保留明确回退/不可用状态。EX2 官方最低版本为 Windows 10/11 22H2 加 2023 年 9 月累积更新。
+- 本机一次只读 x64 对照（非任务管理器 UI 验收）：explorer PID 14456 总工作集 216.06 MiB、专用工作集 91.04 MiB、私有提交 252.87 MiB；KSword PID 33216 分别 384.71/326.37/362.07 MiB。两者的 NtQuery 与 PSAPI EX2 同指标在 0.01 MiB 显示精度内一致；部分 svchost 拒绝 OpenProcess，但 NtQuery 仍返回内存计数。该证据支持统计口径差异及系统级快照的覆盖优势，不证明任意时刻/目标/API 均完全一致。
+- 官方定义参考：[GetProcessMemoryInfo](https://learn.microsoft.com/en-us/windows/win32/api/psapi/nf-psapi-getprocessmemoryinfo)、[PROCESS_MEMORY_COUNTERS_EX2](https://learn.microsoft.com/en-us/windows/win32/api/psapi/ns-psapi-process_memory_counters_ex2)。后续修改优先统一列名、字段与汇总口径，保留 NtQuery 批量采集；切换 API 本身不能消除不同指标的差异。

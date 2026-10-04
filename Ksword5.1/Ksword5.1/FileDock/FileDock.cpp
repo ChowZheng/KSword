@@ -3406,74 +3406,6 @@ namespace
         return result;
     }
 
-    // collectOccupyProcessIdsByPath：
-    // - 作用：调用现有占用扫描器，提取“占用目标路径”的 PID 集合；
-    // - 说明：这里运行在 R3，结果只用于展示/诊断，不能隐式结束进程。
-    std::vector<std::uint32_t> collectOccupyProcessIdsByPath(
-        const QString& path,
-        QStringList* const detailTextListOut)
-    {
-        if (detailTextListOut != nullptr)
-        {
-            detailTextListOut->clear();
-        }
-
-        const std::vector<QString> scanTargets{ path };
-        const filedock::handleusage::HandleUsageScanResult scanResult =
-            filedock::handleusage::scanHandleUsageByPaths(
-                scanTargets,
-                0,
-                false);
-
-        std::set<std::uint32_t> processIdSet;
-        QStringList processPreviewList;
-        constexpr std::size_t MaxPreviewCount = 6U;
-        for (const filedock::handleusage::HandleUsageEntry& entry : scanResult.entries)
-        {
-            if (entry.processId == 0U || entry.processId <= 4U)
-            {
-                continue;
-            }
-
-            const std::uint32_t processId = entry.processId;
-            const auto insertResult = processIdSet.insert(processId);
-            if (!insertResult.second)
-            {
-                continue;
-            }
-
-            if (processPreviewList.size() < static_cast<int>(MaxPreviewCount))
-            {
-                const QString processName =
-                    entry.processName.trimmed().isEmpty()
-                    ? QStringLiteral("Unknown")
-                    : entry.processName.trimmed();
-                processPreviewList.push_back(
-                    QStringLiteral("%1(%2)").arg(processName).arg(processId));
-            }
-        }
-
-        if (detailTextListOut != nullptr)
-        {
-            const QString diagnosticText = scanResult.diagnosticText.trimmed().isEmpty()
-                ? QStringLiteral("-")
-                : scanResult.diagnosticText.simplified();
-            detailTextListOut->push_back(
-                QStringLiteral("occupyScan matched=%1, diagnostic=%2")
-                .arg(scanResult.matchedHandleCount)
-                .arg(diagnosticText));
-
-            if (!processPreviewList.isEmpty())
-            {
-                detailTextListOut->push_back(
-                    QStringLiteral("occupyPidPreview=%1")
-                    .arg(processPreviewList.join(QStringLiteral(", "))));
-            }
-        }
-
-        return std::vector<std::uint32_t>(processIdSet.begin(), processIdSet.end());
-    }
-
     // 强制删除档要在展开每一层之前修权限，声明前置到这里，定义仍在多权限删除小节内。
     DWORD takeOwnershipAndGrantFullControl(
         const QString& path,
@@ -3831,10 +3763,9 @@ namespace
     }
 
     // appendDriverDeleteFailureDetail：
-    // - 作用：R0 删除失败时补充占用来源提示；
-    // - 说明：只扫描不结束进程，绕过文件解锁器的显式确认流程是不可接受的。
+    // - 作用：立即保存 R0 失败回执及现有解锁器入口提示；
+    // - 说明：全系统占用诊断由用户按需触发，不能阻塞失败结果展示。
     void appendDriverDeleteFailureDetail(
-        const QString& path,
         const bool isDirectory,
         const QString& baseDetailText,
         FileDeleteBatchStats& statsInOut)
@@ -3844,14 +3775,8 @@ namespace
 
         if (!isDirectory)
         {
-            QStringList scanDetails;
-            const std::vector<std::uint32_t> occupyPids =
-                collectOccupyProcessIdsByPath(path, &scanDetails);
-            errorLines.push_back(
-                QStringLiteral("occupyPidCount=%1, autoTerminate=disabled").arg(occupyPids.size()));
             errorLines.push_back(
                 QStringLiteral("可使用“文件解锁器”检查占用，或另行选择“重启后删除”；不会自动结束进程或关闭句柄。"));
-            errorLines.append(scanDetails);
         }
 
         statsInOut.errors.push_back(errorLines.join(QStringLiteral(" | ")));
@@ -3892,7 +3817,6 @@ namespace
 
             statsInOut.failedCount += 1U;
             appendDriverDeleteFailureDetail(
-                target.path,
                 target.isDirectory,
                 QString::fromStdString(detailText),
                 statsInOut);
@@ -3986,6 +3910,7 @@ namespace
             }
             else
             {
+                const auto deleteBeginTime = std::chrono::steady_clock::now();
                 const ksword::ark::DeletePathResult driverResult = driverClient.deletePathEx(
                     driverHandle,
                     driverNtPath.toStdWString(),
@@ -3993,6 +3918,21 @@ namespace
                     wantRecursive,
                     true,
                     backend);
+                const auto ioElapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() - deleteBeginTime).count();
+                {
+                    kLogEvent event;
+                    (driverResult.io.ok &&
+                        driverResult.response.deleteStatus == KSWORD_ARK_DELETE_PATH_STATUS_COMPLETED
+                        ? dbg : warn) << event
+                        << "[FileDock] R0 delete response, path="
+                        << QDir::toNativeSeparators(path).toStdString()
+                        << ", backend=" << static_cast<int>(backend)
+                        << ", ioElapsedMs=" << ioElapsedMs
+                        << ", ioOk=" << driverResult.io.ok
+                        << ", responseV2=" << driverResult.responseV2
+                        << eol;
+                }
 
                 if (driverResult.unsupported)
                 {
@@ -4020,7 +3960,6 @@ namespace
                 {
                     stats.failedCount += 1U;
                     appendDriverDeleteFailureDetail(
-                        path,
                         isDirectory,
                         QStringLiteral("驱动删除失败：%1（%2）")
                             .arg(QDir::toNativeSeparators(path))
@@ -4049,7 +3988,6 @@ namespace
                             stats.failedCount += 1U;
                         }
                         appendDriverDeleteFailureDetail(
-                            path,
                             isDirectory,
                             describeDriverDeleteResponse(path, driverResult),
                             stats);
@@ -17946,7 +17884,10 @@ void FileDock::deleteSelectedItemsWithMode(FilePanelWidgets& panel, const FileDe
                     FilePanelWidgets& completedPanel = sourceWasLeftPanel
                         ? dock->m_leftPanel
                         : dock->m_rightPanel;
-                    dock->refreshPanel(completedPanel);
+                    if (stats.failedCount == 0U)
+                    {
+                        dock->refreshPanel(completedPanel);
+                    }
 
                     QStringList summaryLines;
                     if (stats.recycledCount > 0U)
@@ -18037,6 +17978,15 @@ void FileDock::deleteSelectedItemsWithMode(FilePanelWidgets& panel, const FileDe
                                 .arg(modeNameText)
                                 .arg(summaryLines.join(QStringLiteral("\n")))
                                 .arg(buildLogPreviewText(stats.errors)));
+                        // 模态弹窗运行嵌套事件循环；关闭时 Dock 可能已销毁，须重新校验 QPointer。
+                        if (!guardedSelf.isNull())
+                        {
+                            FileDock* const completedDock = guardedSelf.data();
+                            FilePanelWidgets& failedPanel = sourceWasLeftPanel
+                                ? completedDock->m_leftPanel
+                                : completedDock->m_rightPanel;
+                            completedDock->refreshPanel(failedPanel);
+                        }
                         return;
                     }
 
