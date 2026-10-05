@@ -266,6 +266,79 @@ static void TestInvalidAndFailureResponses() {
     Check(result.ok && result.partial && !result.failureText.isEmpty() && result.data.size() == 17,
           "partial fallback read preserves prefix and user warning");
 }
+static void TestStrictHvmReads() {
+    DdmaSession session;
+    for (const bool virtualRead : {false, true}) {
+        const auto read = [session, virtualRead](std::uint64_t length) {
+            return virtualRead
+                ? readVirtual(MemoryAccessBackend::Hvm, session, 77, 0x7FFA, length, true)
+                : readPhysical(MemoryAccessBackend::Hvm, session, 0x7FFA, length, true);
+        };
+        Reset();
+        auto result = read(2050);
+        Check(result.ok && !result.partial && result.bytesDone == 2050 && result.data.size() == 2050 &&
+              result.failureText.isEmpty() && calls.size() == 3,
+              "strict direct-window read completes exact multi-chunk data");
+        Check(calls[0].requireWindow && calls[1].requireWindow && calls[2].requireWindow &&
+              calls[0].confirmed && calls[0].processId == (virtualRead ? 77U : 0U) &&
+              calls[0].operation == (virtualRead ? KSWORD_ARK_HVM_MEMORY_OP_READ_VIRTUAL : KSWORD_ARK_HVM_MEMORY_OP_READ_PHYSICAL) &&
+              calls[1].address == 0x83FA && calls[2].length == 2,
+              "every strict fragment preserves operation, PID, address and required private window");
+        Check(result.data.constData()[0] == '1' && result.data.constData()[1024] == '2' &&
+              result.data.constData()[2049] == '3',
+              "strict read collects consecutive authentic response bytes");
+
+        Reset(); script.push_back(Response(KSWORD_ARK_HVM_MEMORY_STATUS_OK, 1024, false));
+        result = read(2048);
+        Check(!result.ok && !result.partial && result.bytesDone == 0 && result.data.isEmpty() &&
+              !result.failureText.isEmpty() && calls.size() == 1 && calls[0].requireWindow,
+              "old driver ignoring strict requirement cannot expose successful fallback bytes");
+        Check(ksword::ark::standardCalls == 0 && ksword::ark::translationCalls == 0 && ddmaCalls == 0 && userCalls == 0,
+              "strict rejection never switches to an alternative memory backend");
+
+        Reset(); script.push_back(Response(KSWORD_ARK_HVM_MEMORY_STATUS_OK, 1024));
+        script.push_back(Response(KSWORD_ARK_HVM_MEMORY_STATUS_OK, 1024, false));
+        result = read(3072);
+        Check(!result.ok && result.partial && result.bytesDone == 1024 && result.data.size() == 1024 &&
+              calls.size() == 2 && calls[1].requireWindow && !result.failureText.isEmpty(),
+              "later fallback stops strict read with only earlier direct-window prefix");
+        Check(result.data.constData()[0] == '1' && result.data.constData()[1023] == '1' &&
+              ksword::ark::standardCalls == 0,
+              "strict prefix excludes all later fallback bytes and has no R0 retry");
+
+        Reset(); script.push_back(Response(KSWORD_ARK_HVM_MEMORY_STATUS_PARTIAL, 17, false));
+        result = read(2048);
+        Check(!result.ok && !result.partial && result.bytesDone == 0 && result.data.isEmpty() && calls.size() == 1,
+              "strict read rejects partial fallback without counting its alleged progress");
+
+        Reset(); script.push_back(Response(KSWORD_ARK_HVM_MEMORY_STATUS_OK, 1024));
+        script.push_back(Response(KSWORD_ARK_HVM_MEMORY_STATUS_PARTIAL, 17));
+        result = read(3072);
+        Check(result.ok && result.partial && result.bytesDone == 1041 && result.data.size() == 1041 && calls.size() == 2 &&
+              result.data.constData()[1023] == '1' && result.data.constData()[1040] == '2',
+              "strict direct partial read retains exact usable bytes without fabricating unreadable suffix");
+
+        Reset(); auto transportFailure = Response(KSWORD_ARK_HVM_MEMORY_STATUS_OK, 1024);
+        transportFailure.io.ok = false; script.push_back(transportFailure);
+        result = read(2048);
+        Check(!result.ok && !result.partial && result.bytesDone == 0 && result.data.isEmpty() && calls.size() == 1 &&
+              !result.failureText.isEmpty() && ksword::ark::standardCalls == 0,
+              "strict transport failure cannot expose untrusted response bytes or trigger R0 fallback");
+
+        Reset(); script.push_back(Response(KSWORD_ARK_HVM_MEMORY_STATUS_OK, 1024));
+        script.push_back(transportFailure);
+        result = read(3072);
+        Check(!result.ok && result.partial && result.bytesDone == 1024 && result.data.size() == 1024 && calls.size() == 2 &&
+              calls[1].requireWindow && ksword::ark::standardCalls == 0,
+              "later strict transport failure preserves only completed direct-window prefix");
+
+        Reset(); script.push_back(Response(KSWORD_ARK_HVM_MEMORY_STATUS_WINDOW_UNAVAILABLE, 0));
+        result = read(2048);
+        Check(!result.ok && result.data.isEmpty() && result.bytesDone == 0 && calls.size() == 1 &&
+              ksword::ark::standardCalls == 0,
+              "unavailable strict window stops without standard-driver retry");
+    }
+}
 static void TestPublicRangeGuards() {
     DdmaSession session;
     const std::uint64_t maximum = (std::numeric_limits<std::uint64_t>::max)();
@@ -360,7 +433,7 @@ static void TestDdmaDirtyScratchStopsPages() {
     }
 }
 int main() {
-    TestHvmSuccessAndPartial(); TestInvalidAndFailureResponses();
+    TestHvmSuccessAndPartial(); TestInvalidAndFailureResponses(); TestStrictHvmReads();
     TestPublicRangeGuards(); TestDdmaUnavailablePages(); TestDdmaDirtyScratchStopsPages();
     std::cout << "Production memory backend: " << checks << " checks, " << failures << " failures\n";
     return failures == 0 ? 0 : 1;

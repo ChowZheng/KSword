@@ -32,6 +32,9 @@ Environment:
 // 锁只保护排队和终态发布，绝不覆盖耗时的 BGP 初始化或资源销毁。
 static FAST_MUTEX g_KswordArkBugcheckControlLock;
 static volatile LONG g_KswordArkBugcheckControlReady = 0L;
+// 模式独立于会被初始化清零的诊断结构，安装前选择不会被工作项覆盖。
+static volatile LONG g_KswordArkBugcheckControlRenderMode =
+    KSWORD_ARK_BUGCHECK_RENDER_MODE_DIAGNOSTIC;
 static volatile LONG g_KswordArkBugcheckControlLifecycle =
     KSWORD_ARK_BUGCHECK_CONTROL_INACTIVE;
 static volatile LONG g_KswordArkBugcheckControlCancelRequested = 0L;
@@ -47,6 +50,19 @@ static VOID
 KswordARKBugcheckControlInstallWorker(
     _In_ WDFWORKITEM WorkItem
     );
+
+// 调用方无需控制锁；返回单次原子快照，崩溃路径不访问分页状态或同步等待。
+ULONG
+KswordARKBugcheckControlGetRenderMode(
+    VOID
+    )
+{
+    // 固定 LONG 读取与配置端 InterlockedExchange 配对，避免两个后端读取撕裂状态。
+    return (ULONG)InterlockedCompareExchange(
+        &g_KswordArkBugcheckControlRenderMode,
+        0L,
+        0L);
+}
 
 static ULONG
 KswordARKBugcheckControlCallbackMask(
@@ -120,6 +136,7 @@ KswordARKBugcheckControlFillResponse(
     Response->version = KSWORD_ARK_BUGCHECK_DIAGNOSTICS_PROTOCOL_VERSION;
     Response->status = ProtocolStatus;
     Response->lastStatus = (LONG)LastStatus;
+    Response->renderMode = KswordARKBugcheckControlGetRenderMode(); // 任何终态都回读实际模式。
 
     // BGP 快照只读取已发布的非分页状态；安装工作项运行时可用于轮询准备阶段。
     RtlZeroMemory(&bgpSnapshot, sizeof(bgpSnapshot));
@@ -268,6 +285,10 @@ KswordARKBugcheckControlInitialize(
     }
 
     g_KswordArkBugcheckControlDriverObject = DriverObject;
+    // 每次驱动生命周期默认原诊断页；R3 的安装或切换请求显式恢复保存的模式。
+    InterlockedExchange(
+        &g_KswordArkBugcheckControlRenderMode,
+        KSWORD_ARK_BUGCHECK_RENDER_MODE_DIAGNOSTIC);
     g_KswordArkBugcheckControlDevice = ControlDevice;
     InterlockedExchange(
         &g_KswordArkBugcheckControlLifecycle,
@@ -378,10 +399,13 @@ KswordARKBugcheckControlConfigure(
         Request->size != sizeof(*Request) ||
         Request->version != KSWORD_ARK_BUGCHECK_DIAGNOSTICS_PROTOCOL_VERSION ||
         Request->flags != 0UL ||
-        Request->reserved0 != 0UL ||
+        Request->renderMode > KSWORD_ARK_BUGCHECK_RENDER_MODE_LINUX_QR ||
+        (Request->action == KSWORD_ARK_BUGCHECK_DIAGNOSTICS_ACTION_QUERY &&
+         Request->renderMode != 0UL) ||
         Request->reserved1 != 0UL ||
         (Request->action != KSWORD_ARK_BUGCHECK_DIAGNOSTICS_ACTION_QUERY &&
-         Request->action != KSWORD_ARK_BUGCHECK_DIAGNOSTICS_ACTION_INSTALL)) {
+         Request->action != KSWORD_ARK_BUGCHECK_DIAGNOSTICS_ACTION_INSTALL &&
+         Request->action != KSWORD_ARK_BUGCHECK_DIAGNOSTICS_ACTION_SET_RENDER_MODE)) {
         KswordARKBugcheckControlFillResponse(
             Response,
             KSWORD_ARK_BUGCHECK_DIAGNOSTICS_STATUS_INVALID_REQUEST,
@@ -435,7 +459,28 @@ KswordARKBugcheckControlConfigure(
             protocolStatus = KSWORD_ARK_BUGCHECK_DIAGNOSTICS_STATUS_OK;
             lastStatus = STATUS_SUCCESS;
         }
+    } else if (Request->action ==
+               KSWORD_ARK_BUGCHECK_DIAGNOSTICS_ACTION_SET_RENDER_MODE) {
+        // 切换仅发布一个模式值；不安装资源、不注册回调，也不会触发 BugCheck。
+        if (lifecycle == KSWORD_ARK_BUGCHECK_CONTROL_INSTALLING ||
+            lifecycle == KSWORD_ARK_BUGCHECK_CONTROL_UNINSTALLING) {
+            protocolStatus = KSWORD_ARK_BUGCHECK_DIAGNOSTICS_STATUS_BUSY;
+            lastStatus = STATUS_DEVICE_BUSY;
+        } else {
+            // 未安装时也保存期望布局，后续 INSTALL 必须再次明确给出其保存值。
+            InterlockedExchange(
+                &g_KswordArkBugcheckControlRenderMode,
+                (LONG)Request->renderMode);
+            protocolStatus = lifecycle == KSWORD_ARK_BUGCHECK_CONTROL_INSTALLED
+                ? KSWORD_ARK_BUGCHECK_DIAGNOSTICS_STATUS_OK
+                : KSWORD_ARK_BUGCHECK_DIAGNOSTICS_STATUS_INACTIVE;
+            lastStatus = STATUS_SUCCESS;
+        }
     } else if (lifecycle == KSWORD_ARK_BUGCHECK_CONTROL_INSTALLED) {
+        // 已安装时再次 INSTALL 只确认模式并回读当前资源状态，不重复注册回调。
+        InterlockedExchange(
+            &g_KswordArkBugcheckControlRenderMode,
+            (LONG)Request->renderMode);
         protocolStatus = KSWORD_ARK_BUGCHECK_DIAGNOSTICS_STATUS_OK;
         lastStatus = STATUS_SUCCESS;
     } else if (lifecycle != KSWORD_ARK_BUGCHECK_CONTROL_INACTIVE) {
@@ -448,6 +493,11 @@ KswordARKBugcheckControlConfigure(
         lastStatus = STATUS_DEVICE_NOT_READY;
     } else {
         ULONGLONG deadline;
+
+        // 工作项执行完整初始化前先发布选定布局，诊断结构清零不会影响该选择。
+        InterlockedExchange(
+            &g_KswordArkBugcheckControlRenderMode,
+            (LONG)Request->renderMode);
 
         // IOCTL 只负责原子发布状态并排队。耗时准备不持有控制锁，也不占用 R3 请求。
         deadline = KeQueryInterruptTime() +

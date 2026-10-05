@@ -175,7 +175,8 @@
       <TaskbarQtDeployExe Condition="'$(TaskbarQtDeployExe)'=='' and '$(QTDIR)'!='' and Exists('$(QTDIR)\bin\windeployqt.exe')">$(QTDIR)\bin\windeployqt.exe</TaskbarQtDeployExe>
     </PropertyGroup>
     <Message Importance="High" Text="Taskbar: deploying Qt runtime and multimedia plugins to $(TargetDir)" Condition="Exists('$(TaskbarQtDeployExe)')" />
-    <Exec Command="&quot;$(TaskbarQtDeployExe)&quot; --release --force --compiler-runtime --dir &quot;$(TargetDir).&quot; &quot;$(TargetPath)&quot;" Condition="Exists('$(TaskbarQtDeployExe)')" />
+    <!-- 增量部署保留相同且可能被占用的 Qt DLL，并明确提供 VC 运行库定位环境。 -->
+    <Exec Command="&quot;$(TaskbarQtDeployExe)&quot; --release --compiler-runtime --dir &quot;$(TargetDir).&quot; &quot;$(TargetPath)&quot;" EnvironmentVariables="VCINSTALLDIR=$(VCInstallDir)" Condition="Exists('$(TaskbarQtDeployExe)')" />
     <Warning Condition="!Exists('$(TaskbarQtDeployExe)')" Text="Taskbar: windeployqt.exe was not found; Release output may be missing Qt Multimedia runtime files." />
   </Target>
 </Project>

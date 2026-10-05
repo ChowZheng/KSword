@@ -31,6 +31,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\DebuggerBackend\KswordDebuggerFileProtocol.h" />
+    <ClInclude Include="..\DebuggerBackend\KswordPluginTheme.h" />
     <ClInclude Include="LogSurface.h">
       <Filter>Source Files</Filter>
     </ClInclude>

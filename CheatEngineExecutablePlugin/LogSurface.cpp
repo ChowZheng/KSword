@@ -1,5 +1,6 @@
 #include "LogSurface.h"
 #include "../DebuggerBackend/KswordDebuggerFileProtocol.h"
+#include "../DebuggerBackend/KswordPluginTheme.h"
 #include <algorithm>
 #include <array>
 #include <cwchar>
@@ -173,6 +174,38 @@ namespace ksword::ce_log
     }
     bool message(HWND parent, UINT messageId, WPARAM wParam, LPARAM lParam, LRESULT& result)
     {
+        // 只替换日志页颜色，不改日志、光标、后端选项或确认状态。
+        if (messageId == WM_COPYDATA)
+        {
+            ksword::plugin_theme::Packet packet;
+            result = FALSE;
+            if (!ksword::plugin_theme::DecodeCopyData(parent, wParam, lParam, packet))
+            {
+                return true;
+            }
+            // 两个画刷都创建成功后才提交新快照，失败时保留旧色与有效画刷。
+            HBRUSH windowBrush = CreateSolidBrush(packet.window);
+            HBRUSH surfaceBrush = CreateSolidBrush(packet.surface);
+            if (windowBrush == nullptr || surfaceBrush == nullptr)
+            {
+                if (windowBrush != nullptr) DeleteObject(windowBrush);
+                if (surfaceBrush != nullptr) DeleteObject(surfaceBrush);
+                return true;
+            }
+            DeleteObject(gWindowBrush);
+            DeleteObject(gSurfaceBrush);
+            gWindowBrush = windowBrush;
+            gSurfaceBrush = surfaceBrush;
+            gWindow = packet.window;
+            gSurface = packet.surface;
+            gText = packet.text;
+            gBorder = packet.border;
+            gAccent = packet.accent;
+            // 包含已有编辑框、静态标签与owner-draw按钮，存量日志内容保持。
+            RedrawWindow(parent, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN);
+            result = TRUE;
+            return true;
+        }
         if (messageId == WM_COMMAND)
         {
             const int id = LOWORD(wParam);

@@ -154,6 +154,12 @@ typedef struct _KSWORD_ARK_BUGCHECK_STATE
 extern KSWORD_ARK_BUGCHECK_STATE g_KswordArkBugcheckState;
 extern UCHAR g_KswordArkBugcheckBitmapPixels[KSWORD_ARK_BUGCHECK_BITMAP_MAX_BYTES];
 
+// 两个崩溃绘图后端只读原子发布的模式；无参数，返回共享协议中的模式常量。
+ULONG
+KswordARKBugcheckControlGetRenderMode(
+    VOID
+    );
+
 // 控制器在 DriverEntry 只建立同步状态；配置 IOCTL 明确请求后才启动完整 BGP 诊断。
 NTSTATUS
 KswordARKBugcheckControlConfigure(

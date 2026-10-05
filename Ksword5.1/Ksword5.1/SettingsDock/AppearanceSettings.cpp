@@ -13,6 +13,7 @@
 #define NOMINMAX
 #endif
 #include <Windows.h>
+#include "../../../shared/driver/KswordArkBugcheckIoctl.h"
 
 #include <algorithm>
 #include <cmath>
@@ -869,6 +870,16 @@ ks::settings::AppearanceSettings ks::settings::loadAppearanceSettings()
     loadedSettings.bugcheckDiagnosticsAutoInstallEnabled = rootObject
         .value(QStringLiteral("bugcheck_diagnostics_auto_install_enabled"))
         .toBool(loadedSettings.bugcheckDiagnosticsAutoInstallEnabled);
+    // 旧配置/未知模式回退原诊断面板；协议模式值始终来自共享头。
+    loadedSettings.bugcheckDiagnosticsRenderMode = rootObject
+        .value(QStringLiteral("bugcheck_diagnostics_render_mode"))
+        .toInt(static_cast<int>(KSWORD_ARK_BUGCHECK_RENDER_MODE_DIAGNOSTIC));
+    if (loadedSettings.bugcheckDiagnosticsRenderMode !=
+        static_cast<int>(KSWORD_ARK_BUGCHECK_RENDER_MODE_LINUX_QR))
+    {
+        loadedSettings.bugcheckDiagnosticsRenderMode =
+            static_cast<int>(KSWORD_ARK_BUGCHECK_RENDER_MODE_DIAGNOSTIC);
+    }
     loadedSettings.logWindowGeometryBase64 = rootObject
         .value(QStringLiteral("log_window_geometry_base64"))
         .toString();
@@ -1060,6 +1071,12 @@ bool ks::settings::saveAppearanceSettings(const AppearanceSettings& settings, QS
     rootObject.insert(
         QStringLiteral("bugcheck_diagnostics_auto_install_enabled"),
         settings.bugcheckDiagnosticsAutoInstallEnabled);
+    rootObject.insert(
+        QStringLiteral("bugcheck_diagnostics_render_mode"),
+        settings.bugcheckDiagnosticsRenderMode ==
+            static_cast<int>(KSWORD_ARK_BUGCHECK_RENDER_MODE_LINUX_QR)
+                ? static_cast<int>(KSWORD_ARK_BUGCHECK_RENDER_MODE_LINUX_QR)
+                : static_cast<int>(KSWORD_ARK_BUGCHECK_RENDER_MODE_DIAGNOSTIC));
     rootObject.insert(
         QStringLiteral("log_window_geometry_base64"),
         settings.logWindowGeometryBase64.trimmed());

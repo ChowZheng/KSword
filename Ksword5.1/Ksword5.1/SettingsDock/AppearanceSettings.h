@@ -105,6 +105,7 @@ namespace ks::settings
     // suppressDangerousActionConfirmations：是否跳过危险操作的重复模态确认；风险信息、预检和审计不受影响。
     // bugcheckDiagnosticsAutoInstallEnabled：驱动启动成功后，R3 是否发送蓝屏诊断安装 IOCTL。
     // false 时不触发 BGP 扫描、不注册诊断回调，除非本次会话由用户明确安装。
+    // bugcheckDiagnosticsRenderMode：持久化蓝屏页面样式，缺省为原诊断面板。
     // virusTotalApiKey：VirusTotal 在线扫描 API Key，供 OnlineScan 模块运行时读取。
     // threatBookApiKey：ThreatBook（微步在线）在线扫描 API Key，供 OnlineScan 模块运行时读取。
     struct AppearanceSettings
@@ -160,6 +161,7 @@ namespace ks::settings
         bool suppressR0FeaturePrompts = false;
         bool suppressDangerousActionConfirmations = false;
         bool bugcheckDiagnosticsAutoInstallEnabled = false;
+        int bugcheckDiagnosticsRenderMode = 0;
         QString logWindowGeometryBase64;
         QString virusTotalApiKey;
         QString threatBookApiKey;

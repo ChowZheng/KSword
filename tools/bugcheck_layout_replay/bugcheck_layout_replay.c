@@ -516,6 +516,8 @@ ReplayDrawScenario(
     return failures;
 }
 
+int ReplayCheckLinux(void); // 独立回放验证新模式的二维码、布局与完整报告。
+
 int
 main(void)
 {
@@ -793,6 +795,7 @@ main(void)
         13UL,
         "critical-640x480");
 
+    failures += ReplayCheckLinux(); // 在同一次离线回放中保留原诊断页回归。
     if (failures != 0) {
         printf("RESULT FAIL (%d contract violations)\n", failures);
         return 1;

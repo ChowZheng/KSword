@@ -12,6 +12,8 @@
   ],
   "recordedUtc": "2026-09-05T07:36:00Z",
   "suites": [
+    { "name": "ProcessInformation", "minAssertions": 25 },
+    { "name": "Light callback synchronization", "minAssertions": 44 },
     { "name": "F evidence contract", "minAssertions": 192 },
     { "name": "X cross-view",        "minAssertions": 180 },
     { "name": "G entity graph",      "minAssertions": 351 },

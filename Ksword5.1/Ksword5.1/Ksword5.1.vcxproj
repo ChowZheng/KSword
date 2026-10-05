@@ -606,9 +606,11 @@
     <ClCompile Include="UI\ThemeControlGlyphs.cpp" />
     <ClCompile Include="UI\ThemeAccentIcon.cpp" />
     <ClCompile Include="UI\PerformanceChartTheme.cpp" />
-    <ClCompile Include="UI\DockThemeIcons.cpp" />
     <ClCompile Include="HardwareDock\HardwareDock.Theme.cpp" />
+    <ClCompile Include="UI\DockThemeIcons.cpp" />
     <ClCompile Include="UI\ThemeColorRemap.cpp" />
+    <ClCompile Include="UI\ThemeItemForeground.cpp" />
+    <ClCompile Include="UI\ThemePreviewWidget.cpp" />
     <ClCompile Include="UI\ThemeStatusRole.cpp" />
     <ClCompile Include="UI\TableColumnAutoFit.cpp" />
     <ClCompile Include="UI\TableFreezeSupport.cpp" />
@@ -644,6 +646,7 @@
     <ClCompile Include="ksword\process\injection_trace_collector.cpp" />
     <ClCompile Include="ksword\process\process_cpu_core_etw_monitor.cpp" />
     <ClCompile Include="ksword\process\process.cpp" />
+    <ClCompile Include="ksword\process\process_run_as.cpp" />
     <ClCompile Include="ksword\process\ProcessImageDeleteGuard.cpp" />
     <ClCompile Include="ksword\window\context_menu_probe.cpp" />
     <ClCompile Include="ksword\service\service.cpp" />
@@ -733,6 +736,7 @@
     <ClInclude Include="Framework.h" />
     <ClInclude Include="Ksword.h" />
     <ClInclude Include="PluginHost.h" />
+    <ClInclude Include="..\..\DebuggerBackend\KswordPluginTheme.h" />
     <ClInclude Include="Internationalization\LanguageManager.h" />
     <ClInclude Include="FileDock\ManualFileSystemParser.h" />
     <ClInclude Include="FileDock\NtfsRunListDecode.h" />
@@ -809,6 +813,7 @@
     <ClInclude Include="ksword\process\ProcessCpuUsageModel.h" />
     <ClInclude Include="ksword\process\process_cpu_core_etw_monitor.h" />
     <ClInclude Include="ksword\process\process.h" />
+    <ClInclude Include="ksword\process\process_run_as.h" />
     <ClInclude Include="ksword\process\ProcessImageDeleteGuard.h" />
     <ClInclude Include="ksword\window\context_menu_probe.h" />
     <ClInclude Include="ksword\profile\ProfileJsonLoader.h" />
@@ -878,13 +883,13 @@
     <ClInclude Include="..\..\third_party\systeminformer_dyn\PfnNative.h" />
     <ClInclude Include="MemoryDock\SystemMemoryAuditPage.h" />
     <ClInclude Include="MemoryDock\MemoryAccessBackend.h" />
+    <ClInclude Include="MemoryDock\WorkbenchIoPorts.h" />
+    <ClInclude Include="MemoryDock\WorkbenchIoMapping.h" />
     <ClInclude Include="MemoryDock\DdmaPage.h" />
     <ClInclude Include="MemoryDock\TamperDetectionPage.h" />
     <ClInclude Include="MemoryDock\DmaProcessOpPage.h" />
     <QtMoc Include="MiscDock\BootEditor\BootEditorTab.h" />
     <ClInclude Include="MiscDock\ApplicationControlPage.h" />
-    <ClInclude Include="MemoryDock\WorkbenchIoPorts.h" />
-    <ClInclude Include="MemoryDock\WorkbenchIoMapping.h" />
     <ClInclude Include="MiscDock\SoundSource\SoundSourceDetector.h" />
     <QtMoc Include="MiscDock\SoundSource\SoundSourcePage.h" />
     <ClInclude Include="MiscDock\RenderBenchmark\RenderBenchmarkPage.h" />
@@ -1077,6 +1082,8 @@
     <ClInclude Include="UI\PerformanceChartTheme.h" />
     <ClInclude Include="UI\DockThemeIcons.h" />
     <ClInclude Include="UI\ThemeColorRemap.h" />
+    <ClInclude Include="UI\ThemeItemForeground.h" />
+    <ClInclude Include="UI\ThemePreviewWidget.h" />
     <ClInclude Include="UI\ThemeStatusRole.h" />
     <ClInclude Include="UI\ThemedMessageBox.h" />
     <ClInclude Include="SettingsDock\AppearanceSettings.h" />

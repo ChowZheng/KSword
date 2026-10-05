@@ -839,7 +839,8 @@ namespace ks::ui
             .arg(commandTextColorText)
             .arg(commandBorderText)
             .replace(QStringLiteral("__TITLE_BUTTON_HOVER__"), KswordTheme::PrimaryBlueSolidHoverHex())
-            .replace(QStringLiteral("__TITLE_MODE_HOVER_TEXT__"), KswordTheme::OnAccentHex())
+            .replace(QStringLiteral("__TITLE_MODE_HOVER_TEXT__"),
+                KswordTheme::OnAccentHex(KswordTheme::PrimaryBlueSolidHoverColor()))
             .replace(QStringLiteral("__TITLE_BUTTON_PRESSED__"), KswordTheme::PrimaryBluePressedHex)
             .replace(QStringLiteral("__TITLE_CLOSE_HOVER__"), KswordTheme::AccentHex(KswordTheme::AccentRole::Red, 53, 27))
             .replace(QStringLiteral("__TITLE_CLOSE_PRESSED__"), KswordTheme::AccentHex(KswordTheme::AccentRole::Red, 30, 4));

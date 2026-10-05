@@ -531,10 +531,12 @@ namespace
             "QMessageBox#%1 QPushButton[ksword_primary=\"true\"]:hover{"
             "  background:__MESSAGE_PRIMARY_HOVER__;"
             "  border-color:__MESSAGE_PRIMARY_HOVER__;"
+            "  color:__MESSAGE_PRIMARY_HOVER_TEXT__;"
             "}"
             "QMessageBox#%1 QPushButton[ksword_primary=\"true\"]:pressed{"
             "  background:%9;"
             "  border-color:%9;"
+            "  color:%15;"
             "}"
             "QMessageBox#%1 QTextEdit{"
             "  background:__MESSAGE_SURFACE__;"
@@ -561,7 +563,9 @@ namespace
             .arg(outerBorderColorText)
             .arg(KswordTheme::OnAccentHex())
             .replace(QStringLiteral("__MESSAGE_SURFACE__"), surfaceColorText)
-            .replace(QStringLiteral("__MESSAGE_PRIMARY_HOVER__"), KswordTheme::PrimaryBlueSolidHoverHex());
+            .replace(QStringLiteral("__MESSAGE_PRIMARY_HOVER__"), KswordTheme::PrimaryBlueSolidHoverHex())
+            .replace(QStringLiteral("__MESSAGE_PRIMARY_HOVER_TEXT__"),
+                KswordTheme::OnAccentHex(KswordTheme::PrimaryBlueSolidHoverColor()));
     }
 
     // buildMessageBoxPalette 作用：
@@ -913,9 +917,11 @@ namespace
             }
 
             const bool darkModeEnabled = KswordTheme::IsDarkModeEnabled();
+            const QString targetStyleSheet = buildMessageBoxStyleSheet(darkModeEnabled);
             const bool themeAlreadyApplied =
                 messageBox->objectName() == QString::fromLatin1(kThemedMessageBoxObjectName) &&
-                messageBox->property(kThemeModePropertyName).toBool() == darkModeEnabled;
+                messageBox->property(kThemeModePropertyName).toBool() == darkModeEnabled &&
+                messageBox->styleSheet() == targetStyleSheet;
 
             // currentPolishingStateResetter 作用：
             // - 保证任意提前 return 或异常路径都能清除“正在应用主题”标记；
@@ -937,7 +943,6 @@ namespace
             PolishingStateResetter currentPolishingStateResetter{ messageBox };
 
             const QPalette sourcePalette = (qApp != nullptr) ? qApp->palette() : messageBox->palette();
-            const QString targetStyleSheet = buildMessageBoxStyleSheet(darkModeEnabled);
             // dialogMaxWidth 用于按屏幕可用宽度限制消息框，避免超宽导致视觉拥挤。
             const int dialogMaxWidth = computeMessageBoxMaxWidth(messageBox);
             // textMaxWidth 用于约束主文本和说明文本宽度，确保自动换行可靠生效。

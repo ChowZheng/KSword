@@ -607,7 +607,7 @@ namespace
 
     // dockTabHoverFillColor 作用：
     // - 返回 Dock 标签悬停时强制填充的背景色；
-    // - 普通标签 hover 使用弱强调底，当前选中标签 hover 继续使用活动强调底；
+    // - 普通标签 hover 使用背景悬停偏移，选中标签 hover 保持背景选中偏移；
     // - 避免浅色模式下选中 Dock 被 hover 补绘覆盖成淡蓝色。
     // 入参 activeTab：true 表示当前标签为 ADS 选中标签。
     // 返回：当前主题和标签状态对应的 hover 背景 QColor。
@@ -944,13 +944,19 @@ namespace
             }
 
             // 在基类 QFrame/QSS 绘制之后补一层实色背景，盖掉 ADS/系统默认白底；
-            // 选中标签必须保持主蓝底，避免浅色模式 hover 时变成淡蓝底。
+            // 选中标签保持背景色派生底面，并补回被背景补绘覆盖的主题色选中标记。
             // 子 QLabel 会在父控件 paintEvent 返回后再绘制，因此文字不会被遮住。
             const bool activeTab = property("activeTab").toBool();
             QPainter painter(this);
             painter.setPen(Qt::NoPen);
             painter.setBrush(dockTabHoverFillColor(activeTab));
             painter.drawRect(paintEventObject != nullptr ? paintEventObject->rect() : rect());
+            if (activeTab)
+            {
+                // marker 为底部两像素强调边；补绘后仍与生产QSS和预览保持一致。
+                const QRect marker(0, qMax(0, height() - 2), width(), qMin(2, height()));
+                painter.fillRect(marker, KswordTheme::DockTabHighlightColor());
+            }
         }
 
     private:
@@ -7537,6 +7543,15 @@ void MainWindow::showSettingsPanelFromMenu(bool showLanguageTab)
         });
     connect(
         settingsPanel,
+        &SettingsDock::bugcheckDiagnosticsRenderModeChanged,
+        this,
+        [this](const int renderMode)
+        {
+            // 模式保存不改变诊断入口是否安装，只同步下一次自动安装的请求值。
+            m_currentAppearanceSettings.bugcheckDiagnosticsRenderMode = renderMode;
+        });
+    connect(
+        settingsPanel,
         &SettingsDock::bugcheckDiagnosticsInstallationStarted,
         this,
         [this]()
@@ -8888,13 +8903,16 @@ void MainWindow::installBugcheckDiagnosticsAfterServiceStart()
     }
 
     // BGP 解析和预生成可能耗时，自动安装与手动安装都在工作线程等待 R0 IOCTL。
+    const unsigned long renderMode = static_cast<unsigned long>(
+        m_currentAppearanceSettings.bugcheckDiagnosticsRenderMode); // 固定本次自动安装模式。
     const QPointer<MainWindow> guardedSelf(this);
     QThreadPool::globalInstance()->start(
-        [guardedSelf]()
+        [guardedSelf, renderMode]()
         {
             const ksword::ark::BugcheckDiagnosticsResult result =
                 ksword::ark::DriverClient().configureBugcheckDiagnostics(
-                    KSWORD_ARK_BUGCHECK_DIAGNOSTICS_ACTION_INSTALL);
+                    KSWORD_ARK_BUGCHECK_DIAGNOSTICS_ACTION_INSTALL,
+                    renderMode);
             QCoreApplication* const application = QCoreApplication::instance();
             if (application == nullptr)
             {

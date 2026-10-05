@@ -10,6 +10,12 @@
 
 #include <vector>
 
+// 输入 FLTK 实色，返回前景/背景对比；使用前需先合成任何透明覆盖层。
+double KThemeContrast(Fl_Color foreground, Fl_Color background);
+
+// 保留合格前景，否则按实际按钮底选择可读色；不修改背景或主题配置。
+Fl_Color KThemeReadableText(Fl_Color preferred, Fl_Color background, double minimumRatio = 4.5);
+
 // KThemeMode selects the neutral palette while preserving the runtime accent color.
 enum class KThemeMode {
     Light,

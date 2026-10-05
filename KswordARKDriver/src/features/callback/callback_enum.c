@@ -20,7 +20,7 @@ Environment:
 #include "callback_external_core.h"
 #include "callback_extended_kernel.h"
 #include "ark/ark_dyndata.h"
-#include "../../platform/kernel_object_probe.h"
+#include "callback_global_fallback.h" // PE 函数边界、完整容器校验和统一安全读取。
 
 #define KSWORD_ARK_CALLBACK_ENUM_TAG 'eCbK'
 #define KSWORD_ARK_CALLBACK_ENUM_MAX_ENTRIES 4096UL
@@ -537,7 +537,7 @@ KswordArkCallbackEnumReadMemory(
 
 Routine Description:
 
-    带异常保护地读取内核内存。中文说明：私有回调数组和链表没有公开同步契约，
+    用统一安全读取器读取内核内存。中文说明：私有回调数组和链表没有公开同步契约，
     因此所有字段读取都必须短路径、边界化并能承受无效地址。
 
 Arguments:
@@ -548,28 +548,15 @@ Arguments:
 
 Return Value:
 
-    读取成功返回 TRUE；地址无效、参数错误或异常返回 FALSE。
+    完整读取返回 TRUE；地址无效、短读、参数错误或高 IRQL 返回 FALSE。
 
 --*/
 {
     if (SourceAddress == NULL || DestinationBuffer == NULL || BytesToRead == 0U) {
         return FALSE;
     }
-    // 中文说明：多数调用点在自旋锁内（DISPATCH_LEVEL），SEH 拦不住内核页错误，
-    // 因此整段范围必须逐页确认常驻——只探测首尾会漏掉中间页和跨页的短读。
-    if (!KswordARKKernelProbeRangeIsResident(SourceAddress, BytesToRead)) {
-        return FALSE;
-    }
-
-    __try {
-        RtlCopyMemory(DestinationBuffer, SourceAddress, BytesToRead);
-    }
-    __except (EXCEPTION_EXECUTE_HANDLER) {
-        RtlZeroMemory(DestinationBuffer, BytesToRead);
-        return FALSE;
-    }
-
-    return TRUE;
+    // 中文说明：候选地址必须用 MmCopyMemory 完整复制；高于 APC_LEVEL 时拒绝读取。
+    return KswordARKRuntimeReadMemory(SourceAddress, DestinationBuffer, BytesToRead);
 }
 
 static BOOLEAN
@@ -1710,188 +1697,91 @@ Return Value:
     KswordArkCallbackEnumCopyWide(entry->detail, RTL_NUMBER_OF(entry->detail), DetailText);
 }
 
-static NTSTATUS
-KswordArkCallbackEnumLocatePspCreateProcessNotifyRoutine(
-    _Out_ ULONG64* ArrayAddressOut
-    )
-/*++
-
-Routine Description:
-
-    定位 PspCreateProcessNotifyRoutine 私有数组。中文说明：实现复用 SKT64 思路，
-    先从 PsSetCreateProcessNotifyRoutine 找到内部 PspSet* 调用，再在内部函数中
-    查找 4C 8D rip-relative 数组地址。
-
-Arguments:
-
-    ArrayAddressOut - 输出 notify 数组地址。
-
-Return Value:
-
-    成功返回 STATUS_SUCCESS；未命中返回 STATUS_NOT_FOUND。
-
---*/
+static BOOLEAN
+KswordArkCallbackEnumFallbackExecutableProbe(
+    _In_opt_ PVOID Context, _In_ ULONG_PTR Address)
 {
-    ULONG64 exportAddress = (ULONG64)(ULONG_PTR)KswordArkCallbackEnumGetSystemRoutine(L"PsSetCreateProcessNotifyRoutine");
-    ULONG64 innerRoutine = 0ULL;
-    ULONG64 matchAddress = 0ULL;
-    ULONG64 arrayAddress = 0ULL;
-    static const UCHAR callPattern[] = { 0xE8U, 0x00U, 0x00U, 0x00U, 0x00U, 0x48U };
-    static const UCHAR callMask[] = { 1U, 0U, 0U, 0U, 0U, 1U };
-    static const UCHAR leaPattern[] = { 0x4CU, 0x8DU };
-    static const UCHAR leaMask[] = { 1U, 1U };
-
-    if (ArrayAddressOut == NULL) {
-        return STATUS_INVALID_PARAMETER;
+    KSWORD_ARK_CALLBACK_MODULE_CACHE* moduleCache = (KSWORD_ARK_CALLBACK_MODULE_CACHE*)Context; // 一次 IOCTL 共用模块快照。
+    KSW_RUNTIME_IMAGE_VIEW view; // 模块 PE 节只在本次短验证中使用。
+    ULONG64 base = 0ULL; // 找到回调所属的真实已加载模块。
+    ULONG size = 0UL; // 完整映像大小供 PE 验证。
+    WCHAR path[4]; // 路径无需展示，只取模块边界。
+    if (!NT_SUCCESS(KswordArkCallbackEnumResolveModuleByAddressCached(moduleCache,
+            (ULONG64)Address, path, RTL_NUMBER_OF(path), &base, &size)) ||
+        !KswordARKRuntimeInitializeImageView((PVOID)(ULONG_PTR)base, size, &view)) {
+        return FALSE; // 不以仅落入模块范围作为可执行函数证明。
     }
-    *ArrayAddressOut = 0ULL;
-    if (exportAddress == 0ULL) {
-        return STATUS_PROCEDURE_NOT_FOUND;
-    }
+    return KswordARKRuntimeAddressIsExecutable(&view, Address, 1U); // 数据节指针不能作为函数。
+}
 
-    if (!KswordArkCallbackEnumFindCodePattern(
-        exportAddress,
-        KSWORD_ARK_CALLBACK_ENUM_PRIVATE_SCAN_BYTES,
-        callPattern,
-        callMask,
-        sizeof(callPattern),
-        &matchAddress)) {
-        return STATUS_NOT_FOUND;
-    }
-
-    innerRoutine = KswordArkCallbackEnumResolveRelativeAddress(matchAddress, 1UL);
-    if (innerRoutine == 0ULL || !MmIsAddressValid((PVOID)(ULONG_PTR)innerRoutine)) {
-        return STATUS_NOT_FOUND;
-    }
-
-    if (!KswordArkCallbackEnumFindCodePattern(
-        innerRoutine,
-        KSWORD_ARK_CALLBACK_ENUM_PRIVATE_SCAN_BYTES,
-        leaPattern,
-        leaMask,
-        sizeof(leaPattern),
-        &matchAddress)) {
-        return STATUS_NOT_FOUND;
-    }
-
-    arrayAddress = KswordArkCallbackEnumResolveRelativeAddress(matchAddress, 3UL);
-    if (arrayAddress == 0ULL || !MmIsAddressValid((PVOID)(ULONG_PTR)arrayAddress)) {
-        return STATUS_NOT_FOUND;
-    }
-
-    *ArrayAddressOut = arrayAddress;
-    return STATUS_SUCCESS;
+static BOOLEAN
+KswordArkCallbackEnumFallbackRegistryLayoutProbe(
+    _In_opt_ PVOID Context, _In_ ULONG_PTR Head)
+{
+    UNREFERENCED_PARAMETER(Context); // 现有校准器读取当前自注册 Cookie/context/function 三元组。
+    return KswordArkCallbackRegistryLayoutValidated((ULONG64)Head); // 无活跃自注册时不猜固定前缀。
 }
 
 static NTSTATUS
-KswordArkCallbackEnumLocatePspCreateThreadNotifyRoutine(
-    _Out_ ULONG64* ArrayAddressOut
-    )
-/*++
-
-Routine Description:
-
-    定位 PspCreateThreadNotifyRoutine 私有数组。中文说明：SKT64 使用
-    PsRemoveCreateThreadNotifyRoutine 中的 48 8D 0D rip-relative 引用。
-
-Arguments:
-
-    ArrayAddressOut - 输出 notify 数组地址。
-
-Return Value:
-
-    成功返回 STATUS_SUCCESS；未命中返回 STATUS_NOT_FOUND。
-
---*/
+KswordArkCallbackEnumLocateValidatedGlobal(
+    _Inout_ KSWORD_ARK_CALLBACK_MODULE_CACHE* ModuleCache,
+    _In_ KSW_CALLBACK_GLOBAL_FAMILY Family, _Out_ ULONG64* AddressOut)
 {
-    ULONG64 exportAddress = (ULONG64)(ULONG_PTR)KswordArkCallbackEnumGetSystemRoutine(L"PsRemoveCreateThreadNotifyRoutine");
-    ULONG64 matchAddress = 0ULL;
-    ULONG64 arrayAddress = 0ULL;
-    static const UCHAR leaPattern[] = { 0x48U, 0x8DU, 0x0DU };
-    static const UCHAR leaMask[] = { 1U, 1U, 1U };
-
-    if (ArrayAddressOut == NULL) {
-        return STATUS_INVALID_PARAMETER;
+    KSW_RUNTIME_IMAGE_VIEW* view = NULL; // 避免在深层调用栈保存大型节视图。
+    KSWORD_ARK_CALLBACK_RUNTIME* runtime = KswordArkCallbackGetRuntime(); // 当前自注册状态供家族身份验证。
+    ULONG registeredBit = 0UL; // 每个通知家族各有当前注册位。
+    ULONG_PTR knownCallback = 0U; // 只有注册位活跃才要求该函数出现在容器中。
+    ULONG_PTR address = 0U; // 回退失败始终为零。
+    NTSTATUS status = STATUS_SUCCESS; // 保留精确失败原因供现有诊断行显示。
+    if (AddressOut == NULL) { // 先验证输出。
+        return STATUS_INVALID_PARAMETER; // 无输出缓冲区时停止。
     }
-    *ArrayAddressOut = 0ULL;
-    if (exportAddress == 0ULL) {
-        return STATUS_PROCEDURE_NOT_FOUND;
+    *AddressOut = 0ULL; // 未确认结构前不发布任何猜测。
+    status = KswordArkCallbackEnumEnsureModuleCache(ModuleCache); // 当前枚举模块表必须完整可用。
+    if (!NT_SUCCESS(status)) { // 模块枚举失败不能绕过可执行节验证。
+        return status; // 保留模块枚举失败原因。
     }
-
-    if (!KswordArkCallbackEnumFindCodePattern(
-        exportAddress,
-        KSWORD_ARK_CALLBACK_ENUM_PRIVATE_SCAN_BYTES,
-        leaPattern,
-        leaMask,
-        sizeof(leaPattern),
-        &matchAddress)) {
-        return STATUS_NOT_FOUND;
+    if (ModuleCache->ModuleInfo == NULL || ModuleCache->ModuleInfo->NumberOfModules == 0UL) {
+        return STATUS_NOT_FOUND; // 没有当前 ntoskrnl 映像视图。
     }
-
-    arrayAddress = KswordArkCallbackEnumResolveRelativeAddress(matchAddress, 3UL);
-    if (arrayAddress == 0ULL || !MmIsAddressValid((PVOID)(ULONG_PTR)arrayAddress)) {
-        return STATUS_NOT_FOUND;
+    switch (Family) { // 当前已注册的已知函数给结构证据增加家族身份约束。
+    case KswCallbackGlobalProcess: // 进程家族。
+        registeredBit = KSWORD_ARK_CALLBACK_REGISTERED_PROCESS; // 只使用对应家族注册位。
+        knownCallback = (ULONG_PTR)KswordArkProcessCreateNotifyEx; // 必须是本家族精确函数地址。
+        break; // 家族身份选择完成。
+    case KswCallbackGlobalThread: // 线程家族。
+        registeredBit = KSWORD_ARK_CALLBACK_REGISTERED_THREAD; // 只使用对应家族注册位。
+        knownCallback = (ULONG_PTR)KswordArkThreadCreateNotify; // 必须是本家族精确函数地址。
+        break; // 家族身份选择完成。
+    case KswCallbackGlobalImage: // 映像家族。
+        registeredBit = KSWORD_ARK_CALLBACK_REGISTERED_IMAGE; // 只使用对应家族注册位。
+        knownCallback = (ULONG_PTR)KswordArkLoadImageNotify; // 必须是本家族精确函数地址。
+        break; // 家族身份选择完成。
+    case KswCallbackGlobalRegistry: // 注册表家族。
+        registeredBit = KSWORD_ARK_CALLBACK_REGISTERED_REGISTRY; // 只使用对应家族注册位。
+        knownCallback = (ULONG_PTR)KswordArkRegistryCallback; // 必须是本家族精确函数地址。
+        break; // 家族身份选择完成。
+    default: // 非回调家族不扫描。
+        return STATUS_INVALID_PARAMETER; // 不接受未知家族。
     }
-
-    *ArrayAddressOut = arrayAddress;
-    return STATUS_SUCCESS;
-}
-
-static NTSTATUS
-KswordArkCallbackEnumLocatePspLoadImageNotifyRoutine(
-    _Out_ ULONG64* ArrayAddressOut
-    )
-/*++
-
-Routine Description:
-
-    定位 PspLoadImageNotifyRoutine 私有数组。中文说明：优先使用
-    PsSetLoadImageNotifyRoutineEx；如果导出缺失，再回退 PsSetLoadImageNotifyRoutine。
-
-Arguments:
-
-    ArrayAddressOut - 输出 notify 数组地址。
-
-Return Value:
-
-    成功返回 STATUS_SUCCESS；未命中返回 STATUS_NOT_FOUND。
-
---*/
-{
-    ULONG64 exportAddress = (ULONG64)(ULONG_PTR)KswordArkCallbackEnumGetSystemRoutine(L"PsSetLoadImageNotifyRoutineEx");
-    ULONG64 matchAddress = 0ULL;
-    ULONG64 arrayAddress = 0ULL;
-    static const UCHAR leaPattern[] = { 0x48U, 0x8DU, 0x0DU };
-    static const UCHAR leaMask[] = { 1U, 1U, 1U };
-
-    if (ArrayAddressOut == NULL) {
-        return STATUS_INVALID_PARAMETER;
+    if (runtime == NULL || (runtime->RegisteredCallbacksMask & registeredBit) == 0UL) { // 不要求已失效注册。
+        knownCallback = 0U; // 只保留当前活跃注册作为家族身份依据。
     }
-    *ArrayAddressOut = 0ULL;
-    if (exportAddress == 0ULL) {
-        exportAddress = (ULONG64)(ULONG_PTR)KswordArkCallbackEnumGetSystemRoutine(L"PsSetLoadImageNotifyRoutine");
+    view = (KSW_RUNTIME_IMAGE_VIEW*)KswordArkAllocateNonPaged(sizeof(*view), KSWORD_ARK_CALLBACK_ENUM_TAG); // 固定视图预算。
+    if (view == NULL) { // 不降级为不校验的扫描。
+        return STATUS_INSUFFICIENT_RESOURCES; // 内存不足不扫描。
     }
-    if (exportAddress == 0ULL) {
-        return STATUS_PROCEDURE_NOT_FOUND;
+    if (!KswordARKRuntimeInitializeImageView(ModuleCache->ModuleInfo->Modules[0].ImageBase,
+            ModuleCache->ModuleInfo->Modules[0].ImageSize, view)) {
+        ExFreePoolWithTag(view, KSWORD_ARK_CALLBACK_ENUM_TAG); // 释放视图。
+        return STATUS_INVALID_IMAGE_FORMAT; // 当前内核 PE 不完整时停止。
     }
-
-    if (!KswordArkCallbackEnumFindCodePattern(
-        exportAddress,
-        KSWORD_ARK_CALLBACK_ENUM_PRIVATE_SCAN_BYTES,
-        leaPattern,
-        leaMask,
-        sizeof(leaPattern),
-        &matchAddress)) {
-        return STATUS_NOT_FOUND;
-    }
-
-    arrayAddress = KswordArkCallbackEnumResolveRelativeAddress(matchAddress, 3UL);
-    if (arrayAddress == 0ULL || !MmIsAddressValid((PVOID)(ULONG_PTR)arrayAddress)) {
-        return STATUS_NOT_FOUND;
-    }
-
-    *ArrayAddressOut = arrayAddress;
-    return STATUS_SUCCESS;
+    status = KswordArkCallbackGlobalFallbackResolve(view, Family, knownCallback,
+        KswordArkCallbackEnumFallbackExecutableProbe, KswordArkCallbackEnumFallbackRegistryLayoutProbe,
+        ModuleCache, &address); // 两级公开导出调用图、唯一 writable 全局、完整双快照容器。
+    ExFreePoolWithTag(view, KSWORD_ARK_CALLBACK_ENUM_TAG); // 不缓存可能因模块卸载失效的视图。
+    *AddressOut = (ULONG64)address; // 仅唯一通过的地址非零。
+    return status; // 保留 pattern 来源与既有非 PDB 信任等级。
 }
 
 static NTSTATUS
@@ -1945,60 +1835,6 @@ Return Value:
     }
 
     *MaskAddressOut = maskAddress;
-    return STATUS_SUCCESS;
-}
-
-static NTSTATUS
-KswordArkCallbackEnumLocateCmCallbackListHead(
-    _Out_ ULONG64* ListHeadOut
-    )
-/*++
-
-Routine Description:
-
-    定位 CmCallbackListHead 私有链表头。中文说明：SKT64 从 CmUnRegisterCallback
-    中查找 48 8D 0D rip-relative 链表头引用。
-
-Arguments:
-
-    ListHeadOut - 输出链表头地址。
-
-Return Value:
-
-    成功返回 STATUS_SUCCESS；未命中返回 STATUS_NOT_FOUND。
-
---*/
-{
-    ULONG64 exportAddress = (ULONG64)(ULONG_PTR)KswordArkCallbackEnumGetSystemRoutine(L"CmUnRegisterCallback");
-    ULONG64 matchAddress = 0ULL;
-    ULONG64 listHead = 0ULL;
-    static const UCHAR leaPattern[] = { 0x48U, 0x8DU, 0x0DU };
-    static const UCHAR leaMask[] = { 1U, 1U, 1U };
-
-    if (ListHeadOut == NULL) {
-        return STATUS_INVALID_PARAMETER;
-    }
-    *ListHeadOut = 0ULL;
-    if (exportAddress == 0ULL) {
-        return STATUS_PROCEDURE_NOT_FOUND;
-    }
-
-    if (!KswordArkCallbackEnumFindCodePattern(
-        exportAddress,
-        KSWORD_ARK_CALLBACK_ENUM_PRIVATE_SCAN_BYTES,
-        leaPattern,
-        leaMask,
-        sizeof(leaPattern),
-        &matchAddress)) {
-        return STATUS_NOT_FOUND;
-    }
-
-    listHead = KswordArkCallbackEnumResolveRelativeAddress(matchAddress, 3UL);
-    if (listHead == 0ULL || !MmIsAddressValid((PVOID)(ULONG_PTR)listHead)) {
-        return STATUS_NOT_FOUND;
-    }
-
-    *ListHeadOut = listHead;
     return STATUS_SUCCESS;
 }
 
@@ -3528,7 +3364,7 @@ Return Value:
     }
     else {
         const NTSTATUS pdbStatus = status;
-        status = KswordArkCallbackEnumLocatePspCreateProcessNotifyRoutine(&processArray);
+        status = KswordArkCallbackEnumLocateValidatedGlobal(&moduleCache, KswCallbackGlobalProcess, &processArray);
         RtlZeroMemory(detailText, sizeof(detailText));
         if (!NT_SUCCESS(status)) {
             (VOID)RtlStringCbPrintfW(
@@ -3602,7 +3438,7 @@ Return Value:
     }
     else {
         const NTSTATUS pdbStatus = status;
-        status = KswordArkCallbackEnumLocatePspCreateThreadNotifyRoutine(&threadArray);
+        status = KswordArkCallbackEnumLocateValidatedGlobal(&moduleCache, KswCallbackGlobalThread, &threadArray);
         RtlZeroMemory(detailText, sizeof(detailText));
         if (!NT_SUCCESS(status)) {
             (VOID)RtlStringCbPrintfW(
@@ -3676,7 +3512,7 @@ Return Value:
     }
     else {
         const NTSTATUS pdbStatus = status;
-        status = KswordArkCallbackEnumLocatePspLoadImageNotifyRoutine(&imageArray);
+        status = KswordArkCallbackEnumLocateValidatedGlobal(&moduleCache, KswCallbackGlobalImage, &imageArray);
         RtlZeroMemory(detailText, sizeof(detailText));
         if (!NT_SUCCESS(status)) {
             (VOID)RtlStringCbPrintfW(
@@ -3745,7 +3581,7 @@ Return Value:
         }
     }
     else {
-        status = KswordArkCallbackEnumLocateCmCallbackListHead(&cmListHead);
+        status = KswordArkCallbackEnumLocateValidatedGlobal(&moduleCache, KswCallbackGlobalRegistry, &cmListHead);
         KswordArkCallbackEnumAddLocateRow(
             Builder,
             KSWORD_ARK_CALLBACK_ENUM_CLASS_REGISTRY,

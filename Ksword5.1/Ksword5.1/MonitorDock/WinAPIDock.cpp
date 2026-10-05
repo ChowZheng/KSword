@@ -1,5 +1,6 @@
 #include "WinAPIDock.h"
 #include "../UI/ThemeStatusRole.h"
+#include "../UI/ThemeItemForeground.h"
 
 // ============================================================
 // WinAPIDock.cpp
@@ -16,6 +17,7 @@
 #include <QComboBox>
 #include <QDateTime>
 #include <QDir>
+#include <QEvent>
 #include <QFileInfo>
 #include <QLabel>
 #include <QLineEdit>
@@ -40,6 +42,22 @@ WinAPIDock::WinAPIDock(QWidget* parent)
     updateStatusLabel();
 
     info << initEvent << "[WinAPIDock] WinAPI 监控页初始化完成。" << eol;
+}
+
+void WinAPIDock::changeEvent(QEvent* event)
+{
+    QWidget::changeEvent(event);
+    if (event == nullptr || (event->type() != QEvent::PaletteChange
+        && event->type() != QEvent::ApplicationPaletteChange) || m_itemThemeRefreshScheduled)
+    {
+        return;
+    }
+    // 已有事件只按 Info/Error 角色重新求色；保留排序、隐藏行、选择和监控代次。
+    m_itemThemeRefreshScheduled = true;
+    QTimer::singleShot(0, this, [this]() {
+        ks::ui::RefreshThemeItemForegrounds(m_eventTable);
+        m_itemThemeRefreshScheduled = false;
+    });
 }
 
 WinAPIDock::~WinAPIDock()

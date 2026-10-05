@@ -1,4 +1,5 @@
 #include "WinAPIDock.h"
+#include "../UI/ThemeItemForeground.h"
 #include "../theme.h"
 #include "../Framework/PrivilegeElevationPrompt.h"
 #include "../UI/TableInteractionSupport.h"
@@ -765,14 +766,12 @@ void WinAPIDock::appendEventRow(const EventRow& rowValue)
 
     if (rowValue.internalEvent)
     {
-        const QBrush internalBrush(KswordTheme::InfoColor());
-        categoryItem->setForeground(internalBrush);
-        apiItem->setForeground(internalBrush);
+        ks::ui::ApplyThemeItemForeground(categoryItem, ks::ui::ItemForegroundRole::Info);
+        ks::ui::ApplyThemeItemForeground(apiItem, ks::ui::ItemForegroundRole::Info);
     }
     else if (rowValue.resultKnown && rowValue.resultText != QStringLiteral("OK"))
     {
-        const QBrush errorBrush(KswordTheme::ErrorColor());
-        resultItem->setForeground(errorBrush);
+        ks::ui::ApplyThemeItemForeground(resultItem, ks::ui::ItemForegroundRole::Error);
     }
 
     m_eventTable->setItem(row, EventColumnTime100ns, timeItem);

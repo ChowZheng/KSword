@@ -10,10 +10,8 @@
 
 class QEvent;
 class QGridLayout;
-class QHideEvent;
 class QScrollArea;
 class QShowEvent;
-class QTimer;
 class QToolButton;
 class HardwareDock;
 class PerformanceNavCard;
@@ -68,12 +66,14 @@ signals:
 protected:
     void changeEvent(QEvent* event) override;
     void showEvent(QShowEvent* event) override;
-    void hideEvent(QHideEvent* event) override;
 
 private:
     void retranslateUi();
     void initializeLanguageButtonStyle();
-    void updateLanguageButtonRgbBorder();
+    // refreshThemeColors 只更新已有欢迎页控件的主题角色，不重建内容或请求硬件采样。
+    void refreshThemeColors();
+    // scheduleThemeRefresh 合并 palette 通知；退出 Qt 子树传播栈后再重设局部样式。
+    void scheduleThemeRefresh();
     void initializePerformanceCards();
     void initializeContributorCollapse();
     void updateCollapseState(bool contributorsExpanded);
@@ -91,6 +91,6 @@ public:
     // setHardwareDock 作用：把 WelcomeDock 接到主窗口已创建的 HardwareDock 采样源。
     void setHardwareDock(HardwareDock* hardwareDock);
 
-    int m_languageButtonHue = 0; // RGB 动效当前色相，范围为 0~359。
-    QTimer* m_languageButtonColorTimer = nullptr; // 语言按钮动画计时器：仅 WelcomeDock 可见时运行。
+private:
+    bool m_themeRefreshScheduled = false; // 当前事件轮只排队一次主题刷新。
 };

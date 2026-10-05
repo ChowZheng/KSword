@@ -1,4 +1,5 @@
 #include "SvgThemeIconManager.h"
+#include "ThemeAccentIcon.h"
 
 // ============================================================
 // SvgThemeIconManager.cpp
@@ -216,63 +217,6 @@ namespace
         return QCryptographicHash::hash(
             signatureBytes,
             QCryptographicHash::Sha256);
-    }
-
-    // tintPixmap：
-    // - 保留源图 alpha/轮廓；
-    // - 通过 SourceIn 一次性把所有可见像素替换为当前主题色。
-    QPixmap tintPixmap(const QPixmap& sourcePixmap, const QColor& themeColor)
-    {
-        if (sourcePixmap.isNull())
-        {
-            return QPixmap();
-        }
-        QPixmap tintedPixmapValue = sourcePixmap;
-        tintedPixmapValue.fill(Qt::transparent);
-
-        QPainter painter(&tintedPixmapValue);
-        painter.setCompositionMode(QPainter::CompositionMode_Source);
-        painter.drawPixmap(0, 0, sourcePixmap);
-        painter.setCompositionMode(QPainter::CompositionMode_SourceIn);
-        painter.fillRect(tintedPixmapValue.rect(), themeColor);
-        painter.end();
-        return tintedPixmapValue;
-    }
-
-    // iconRenderSizes：
-    // - UI 常用尺寸集中预渲染，后续绘制不再触发 SVG 解析；
-    // - 保留源位图声明的合理尺寸，并限制最大 96px 防止缓存膨胀。
-    QList<QSize> iconRenderSizes(const QIcon& sourceIcon)
-    {
-        QList<QSize> renderSizes{
-            QSize(16, 16),
-            QSize(20, 20),
-            QSize(24, 24),
-            QSize(32, 32),
-            QSize(48, 48),
-            QSize(64, 64)
-        };
-        const QList<QSize> sourceSizes =
-            sourceIcon.availableSizes(QIcon::Normal, QIcon::Off);
-        for (const QSize& sourceSize : sourceSizes)
-        {
-            if (sourceSize.isValid() &&
-                sourceSize.width() <= 96 &&
-                sourceSize.height() <= 96 &&
-                !renderSizes.contains(sourceSize))
-            {
-                renderSizes.push_back(sourceSize);
-            }
-        }
-        std::sort(
-            renderSizes.begin(),
-            renderSizes.end(),
-            [](const QSize& leftSize, const QSize& rightSize)
-            {
-                return leftSize.width() * leftSize.height() <
-                    rightSize.width() * rightSize.height();
-            });
-        return renderSizes;
     }
 
     // originalIconFromProperty：
@@ -863,22 +807,9 @@ QIcon ks::ui::SvgThemeIconManager::themedIcon(
         return rememberSourceKeyedResult(cachedIterator.value());
     }
 
-    QIcon replacementIcon; // replacementIcon：包含常用尺寸的最终主题图标。
-    const QList<QSize> renderSizes = iconRenderSizes(sourceIcon);
-    for (const QSize& renderSize : renderSizes)
-    {
-        const QPixmap sourcePixmap =
-            sourceIcon.pixmap(renderSize, QIcon::Normal, QIcon::Off);
-        const QPixmap tintedPixmapValue =
-            tintPixmap(sourcePixmap, m_themeColor);
-        if (!tintedPixmapValue.isNull())
-        {
-            replacementIcon.addPixmap(
-                tintedPixmapValue,
-                QIcon::Normal,
-                QIcon::Off);
-        }
-    }
+    // 动态引擎保留源的mode/state/DPR，并在实际请求时按当前底色校准。
+    // 背景变化而主体色不变时也不会复用不可读的单态RGB快照。
+    const QIcon replacementIcon = MakeThemeAccentIcon(sourceIcon, m_themeColor);
     if (!replacementIcon.isNull())
     {
         cachedTintedIcons().insert(cacheKey, replacementIcon);

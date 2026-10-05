@@ -1,4 +1,5 @@
 #include "HudProcessListPanel.h"
+#include "HudColors.h"
 
 #include <QAbstractItemView>
 #include <QApplication>
@@ -529,11 +530,7 @@ namespace
 
     QColor usageRatioToHighlightColor(double usageRatio)
     {
-        usageRatio = std::clamp(usageRatio, 0.0, 1.0);
-        const int alphaValue = static_cast<int>(24.0 + usageRatio * 146.0);
-        QColor highlightColor(46, 139, 255);
-        highlightColor.setAlpha(alphaValue);
-        return highlightColor;
+        return KswordHudColors::UsageHighlight(usageRatio);
     }
 
     class HudProcessMetricDelegate final : public QStyledItemDelegate
@@ -547,6 +544,12 @@ namespace
         void setTextColor(const QColor& colorValue)
         {
             m_textColor = colorValue;
+        }
+
+        // 输入面板实际合成底色，供选中行按实际绘制覆盖层校准文字。
+        void setBackgroundColor(const QColor& colorValue)
+        {
+            m_backgroundColor = colorValue;
         }
 
     protected:
@@ -565,12 +568,19 @@ namespace
             painter->setRenderHint(QPainter::Antialiasing, true);
 
             const bool selected = (option.state & QStyle::State_Selected) != 0;
+            const QVariant usageRatioVariant = index.data(kUsageRatioRole);
+            const QColor selectedBackground = KswordHudColors::Composite(
+                QColor(89, 139, 214, 88), m_backgroundColor);
+            // 文字先按所有覆盖底色求解，轨道绘制随后使用同一文字色做 alpha 校准。
+            const QColor textColor = selected
+                ? KswordHudColors::SelectedText(m_textColor, m_backgroundColor,
+                    usageRatioVariant.isValid() ? usageRatioVariant.toDouble() : -1.0)
+                : m_textColor;
             if (selected)
             {
                 painter->fillRect(option.rect, QColor(89, 139, 214, 88));
             }
 
-            const QVariant usageRatioVariant = index.data(kUsageRatioRole);
             if (usageRatioVariant.isValid())
             {
                 const double usageRatio = std::clamp(usageRatioVariant.toDouble(), 0.0, 1.0);
@@ -578,21 +588,23 @@ namespace
                 if (trackRect.width() > 2.0 && trackRect.height() > 2.0)
                 {
                     painter->setPen(Qt::NoPen);
-                    painter->setBrush(QColor(255, 255, 255, 18));
+                    const QColor trackColor = selected
+                        ? KswordHudColors::LegibleOverlay(QColor(255, 255, 255, 18), selectedBackground, textColor)
+                        : QColor(255, 255, 255, 18);
+                    painter->setBrush(trackColor);
                     painter->drawRoundedRect(trackRect, 8.0, 8.0);
 
                     QRectF fillRect = trackRect;
                     fillRect.setWidth(std::max(2.0, trackRect.width() * usageRatio));
-                    painter->setBrush(usageRatioToHighlightColor(usageRatio));
+                    const QColor fillColor = usageRatioToHighlightColor(usageRatio);
+                    painter->setBrush(selected
+                        ? KswordHudColors::LegibleOverlay(fillColor,
+                            KswordHudColors::Composite(trackColor, selectedBackground), textColor)
+                        : fillColor);
                     painter->drawRoundedRect(fillRect, 8.0, 8.0);
                 }
             }
 
-            QColor textColor = m_textColor;
-            if (selected)
-            {
-                textColor = QColor(255, 255, 255);
-            }
             painter->setPen(textColor);
 
             const int columnIndex = index.column();
@@ -626,6 +638,7 @@ namespace
 
     private:
         QColor m_textColor = QColor(255, 255, 255);
+        QColor m_backgroundColor = QColor(10, 15, 22); // 不含选中覆盖层的有效底色。
     };
 }
 
@@ -698,6 +711,7 @@ void HudProcessListPanel::initializeUi()
 
     auto* delegate = new HudProcessMetricDelegate(m_treeWidget);
     delegate->setTextColor(m_tableTextColor);
+    delegate->setBackgroundColor(m_effectiveBackgroundColor);
     m_metricDelegate = delegate;
     m_treeWidget->setItemDelegate(delegate);
 
@@ -748,7 +762,7 @@ void HudProcessListPanel::applyTreeWidgetStyle()
         "QTreeWidget::item{height:28px;}"
         "QTreeWidget::item:selected{"
         "background:rgba(89,139,214,88);"
-        "color:rgba(255,255,255,245);"
+        "color:palette(highlighted-text);"
         "}"
         "QHeaderView::section{"
         "background:transparent;"
@@ -798,7 +812,26 @@ void HudProcessListPanel::setTableTextColor(const QColor& colorValue)
 
     if (m_treeWidget != nullptr)
     {
+        setEffectiveBackgroundColor(m_effectiveBackgroundColor);
         applyTreeWidgetStyle();
+        m_treeWidget->viewport()->update();
+    }
+}
+
+void HudProcessListPanel::setEffectiveBackgroundColor(const QColor& colorValue)
+{
+    m_effectiveBackgroundColor = colorValue;
+    if (auto* delegate = dynamic_cast<HudProcessMetricDelegate*>(m_metricDelegate))
+    {
+        delegate->setBackgroundColor(colorValue);
+    }
+    if (m_treeWidget != nullptr)
+    {
+        // QSS 的选中文字与自绘 delegate 使用同一底色，不持有固定白色快照。
+        QPalette colors = m_treeWidget->palette();
+        colors.setColor(QPalette::Base, colorValue);
+        colors.setColor(QPalette::HighlightedText, KswordHudColors::SelectedText(m_tableTextColor, colorValue));
+        m_treeWidget->setPalette(colors);
         m_treeWidget->viewport()->update();
     }
 }

@@ -1,4 +1,5 @@
 #include "WinAPIDock.h"
+#include "../UI/ThemeItemForeground.h"
 #include "../UI/VisibleTableWidget.h"
 #include "../UI/ThemeStatusRole.h"
 #include "../theme.h"
@@ -520,6 +521,7 @@ void WinAPIDock::initializeUi()
     m_eventTable->setSelectionBehavior(QAbstractItemView::SelectRows);
     m_eventTable->setSelectionMode(QAbstractItemView::SingleSelection);
     m_eventTable->setAlternatingRowColors(true);
+    ks::ui::InstallThemeItemForegroundDelegate(m_eventTable);
     m_eventTable->setContextMenuPolicy(Qt::CustomContextMenu);
     m_eventTable->setHorizontalHeaderLabels(
         QStringList{

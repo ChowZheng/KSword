@@ -1,6 +1,7 @@
 
 #include "KernelDock.h"
 #include "../UI/DetailLayoutRegistry.h"
+#include "../UI/ThemeItemForeground.h"
 
 // ============================================================
 // KernelDock.Runtime.cpp
@@ -478,9 +479,9 @@ void KernelDock::rebuildObjectNamespaceTable(const QString& filterKeyword)
             rootItem->setData(0, NodeKindRole, static_cast<int>(ObjectNamespaceNodeKind::Root));
             rootItem->setData(0, NodePathRole, entry.rootPathText);
             rootItem->setData(0, NodeDescriptionRole, entry.scopeDescriptionText);
-            rootItem->setForeground(
+            ks::ui::ApplyThemeItemForeground(rootItem,
                 static_cast<int>(ObjectNamespaceColumn::Type),
-                QBrush(KswordTheme::PrimaryBlueColor));
+                ks::ui::ItemForegroundRole::Accent);
 
             rootItemMap.insert(entry.rootPathText, rootItem);
         }
@@ -501,9 +502,9 @@ void KernelDock::rebuildObjectNamespaceTable(const QString& filterKeyword)
             directoryItem->setData(0, NodeKindRole, static_cast<int>(ObjectNamespaceNodeKind::Directory));
             directoryItem->setData(0, NodePathRole, entry.directoryPathText);
             directoryItem->setData(0, NodeDescriptionRole, entry.scopeDescriptionText);
-            directoryItem->setForeground(
+            ks::ui::ApplyThemeItemForeground(directoryItem,
                 static_cast<int>(ObjectNamespaceColumn::Type),
-                QBrush(KswordTheme::PrimaryBlueColor));
+                ks::ui::ItemForegroundRole::Accent);
 
             directoryItemMap.insert(directoryKeyText, directoryItem);
         }
@@ -526,15 +527,15 @@ void KernelDock::rebuildObjectNamespaceTable(const QString& filterKeyword)
 
         if (!entry.querySucceeded)
         {
-            objectItem->setForeground(
+            ks::ui::ApplyThemeItemForeground(objectItem,
                 static_cast<int>(ObjectNamespaceColumn::Status),
-                QBrush(KswordTheme::WarningAccentColor()));
+                ks::ui::ItemForegroundRole::Warning);
         }
         else if (entry.isDirectory)
         {
-            objectItem->setForeground(
+            ks::ui::ApplyThemeItemForeground(objectItem,
                 static_cast<int>(ObjectNamespaceColumn::Type),
-                QBrush(KswordTheme::PrimaryBlueColor));
+                ks::ui::ItemForegroundRole::Accent);
         }
     }
 

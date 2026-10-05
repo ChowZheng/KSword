@@ -55,6 +55,7 @@ class QPushButton;
 class QResizeEvent;
 class QShowEvent;
 class QSlider;
+class QSpinBox;
 class QSortFilterProxyModel;
 class QTableWidget;
 class QTableView;
@@ -816,8 +817,8 @@ private:
         ProcessDetailWindow* detailWindow,
         const std::string& identityKey) const;
     void appendProcessActivitySampleToDetailWindows(const ProcessActivitySample& sample);
-    bool trimProcessActivitySamples();
-    void refreshProcessActivityTimeline(bool indexShiftedLeft = false);
+    std::size_t trimProcessActivitySamples();
+    void refreshProcessActivityTimeline(std::size_t removedSampleCount = 0);
     void refreshProcessActivityChart();
     void updateProcessActivityStatusLabel();
     void previewProcessActivitySnapshotForIndex(int sampleIndex);
@@ -1170,7 +1171,10 @@ private:
     ProcessActivityTimelineSlider* m_activityTimelineSlider = nullptr; // m_activityTimelineSlider：隐藏内部时间轴，公开交互由折线图点击完成。
     QPushButton* m_activityClearButton = nullptr;   // m_activityClearButton：清空当前刷新记录缓存。
     QCheckBox* m_activityBackgroundRecordCheck = nullptr; // 后台保持刷新/记录开关。
-    QCheckBox* m_activityListOnlyRefreshCheck = nullptr; // 只刷新进程列表、不写入活动记录的开关。
+    enum class ActivityHistoryMode { None, All, Recent };
+    ActivityHistoryMode m_activityHistoryMode = ActivityHistoryMode::Recent;
+    QComboBox* m_activityHistoryModeCombo = nullptr; // 图表上方的历史留存方式。
+    QSpinBox* m_activityHistoryLimitSpin = nullptr; // 最近采样数量，默认 50。
     QPushButton* m_activityCpuButton = nullptr;     // CPU 指标显示按钮。
     QPushButton* m_activityMemoryButton = nullptr;  // 内存指标显示按钮。
     QPushButton* m_activityDiskButton = nullptr;    // 磁盘指标显示按钮。

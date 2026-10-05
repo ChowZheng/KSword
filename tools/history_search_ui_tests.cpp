@@ -2,6 +2,7 @@
 #include "../Ksword5.1/Ksword5.1/UI/GlobalUiSearch.h"
 #include "../Ksword5.1/Ksword5.1/UI/CommandExecutionPopup.h"
 #include "../Ksword5.1/Ksword5.1/UI/TableSearchSupport.h"
+#include "../Ksword5.1/Ksword5.1/UI/ThemeItemForeground.h"
 #include "../Ksword5.1/Ksword5.1/theme.h"
 
 #include <QAction>
@@ -13,12 +14,22 @@
 #include <QKeyEvent>
 #include <QLineEdit>
 #include <QListWidget>
+#include <QImage>
+#include <QPainter>
+#include <QPersistentModelIndex>
+#include <QRegularExpression>
+#include <QSignalBlocker>
+#include <QScrollBar>
+#include <QStyleOptionViewItem>
 #include <QStandardItemModel>
 #include <QTabBar>
 #include <QTableView>
+#include <QTableWidget>
+#include <QTreeWidget>
 #include <QThread>
 #include <QToolButton>
 #include <QVBoxLayout>
+#include <algorithm>
 #include <iostream>
 
 namespace
@@ -66,6 +77,148 @@ namespace
         QKeyEvent keyEvent(QEvent::KeyPress, key, modifiers);
         QApplication::sendEvent(target, &keyEvent);
         drainEvents();
+    }
+
+    // applyFixtureTheme 模拟主程序提交当前主题后的 palette 通知，不调用 MainWindow 或业务后端。
+    void applyFixtureTheme(const bool darkMode, const QString& background, const QString& accent)
+    {
+        KswordTheme::SetDarkModeEnabled(darkMode);
+        KswordTheme::SetMainBackgroundColor(background);
+        KswordTheme::SetPrimaryAccentColor(accent);
+        QPalette palette = QApplication::palette(); // 仅离屏应用 palette，用真实主题表面与文字角色。
+        palette.setColor(QPalette::Window, KswordTheme::WindowColor());
+        palette.setColor(QPalette::Base, KswordTheme::SurfaceColor());
+        palette.setColor(QPalette::AlternateBase, KswordTheme::SurfaceAltColor());
+        palette.setColor(QPalette::Text, KswordTheme::TextPrimaryColor());
+        palette.setColor(QPalette::WindowText, KswordTheme::TextPrimaryColor());
+        palette.setColor(QPalette::Highlight, KswordTheme::PrimaryAccentColor());
+        palette.setColor(QPalette::HighlightedText, KswordTheme::OnAccentColor());
+        QApplication::setPalette(palette);
+        drainEvents();
+    }
+
+    // testItemForegroundRefresh 用真实 Qt 树/表测试生产刷新函数；不构造会枚举或监控的 Dock。
+    void testItemForegroundRefresh()
+    {
+        using Role = ks::ui::ItemForegroundRole;
+        applyFixtureTheme(false, QString(), QString());
+        QTableWidget table(6, 2); // 五种语义项和一项独立数据原色。
+        table.setAlternatingRowColors(true);
+        ks::ui::InstallThemeItemForegroundDelegate(&table);
+        const Role roles[] = {Role::Accent, Role::Secondary, Role::Info, Role::Warning, Role::Error};
+        for (int row = 0; row < 6; ++row)
+        {
+            table.setItem(row, 0, new QTableWidgetItem(QString::number(row)));
+            table.setItem(row, 1, new QTableWidgetItem(QStringLiteral("stable value")));
+            if (row < 5)
+            {
+                ks::ui::ApplyThemeItemForeground(table.item(row, 1), roles[row]);
+            }
+        }
+        table.item(5, 1)->setForeground(QColor(210, 60, 120));
+        table.setSortingEnabled(true);
+        table.sortItems(0, Qt::AscendingOrder);
+        table.setCurrentCell(2, 1);
+        table.setRowHidden(4, true);
+        const QPersistentModelIndex selected = table.currentIndex(); // 当前选择必须跨刷新保持有效。
+        QTableWidgetItem* const stableItem = table.item(2, 1);
+        const QColor dataColor = table.item(5, 1)->foreground().color();
+        int changedSignals = 0; // ForegroundRole 更新不得通知业务 itemChanged/搜索/排序监听。
+        QObject::connect(table.model(), &QAbstractItemModel::dataChanged, &table,
+            [&changedSignals]() { ++changedSignals; });
+        int itemChangedSignals = 0; // 同时覆盖 QTableWidget 的对外业务信号。
+        QObject::connect(&table, &QTableWidget::itemChanged, &table,
+            [&itemChangedSignals]() { ++itemChangedSignals; });
+
+        QTreeWidget tree;
+        tree.setColumnCount(2);
+        tree.setAlternatingRowColors(true);
+        ks::ui::InstallThemeItemForegroundDelegate(&tree);
+        auto* root = new QTreeWidgetItem(&tree);
+        auto* child = new QTreeWidgetItem(root);
+        root->setText(0, QStringLiteral("root"));
+        child->setText(0, QStringLiteral("child"));
+        ks::ui::ApplyThemeItemForeground(root, 1, Role::Accent);
+        ks::ui::ApplyThemeItemForeground(child, 1, Role::Warning);
+        root->setExpanded(true);
+        tree.setCurrentItem(child);
+        int treeChangedSignals = 0; // 树节点字段变更监听也不能在重着色时触发。
+        QObject::connect(&tree, &QTreeWidget::itemChanged, &tree,
+            [&treeChangedSignals]() { ++treeChangedSignals; });
+
+        // 连续 A→B→C 换色和黑/白/灰种子覆盖原项；真实绘制选态逐一对当前底保持可读。
+        for (const bool darkMode : {false, true})
+        {
+            for (const QString& background : {QString(), QStringLiteral("#FFFFFF"),
+                QStringLiteral("#000000"), QStringLiteral("#646464")})
+            {
+                for (const QString& accent : {QStringLiteral("#216D40"),
+                    QStringLiteral("#CC4400"), QStringLiteral("#FFFFFF")})
+                {
+                    applyFixtureTheme(darkMode, background, accent);
+                    ks::ui::RefreshThemeItemForegrounds(&table);
+                    ks::ui::RefreshThemeItemForegrounds(&tree);
+                    check(table.item(2, 1) == stableItem && table.currentIndex() == selected,
+                        "semantic refresh preserves table items and selection");
+                    check(table.isRowHidden(4) && table.isSortingEnabled(),
+                        "semantic refresh preserves hidden rows and sorting");
+                    check(table.item(5, 1)->foreground().color() == dataColor,
+                        "semantic refresh leaves untagged data colors untouched");
+                    check(tree.currentItem() == child && root->isExpanded() && child->parent() == root,
+                        "semantic refresh preserves tree selection and expansion");
+                    check(changedSignals == 0 && itemChangedSignals == 0 && treeChangedSignals == 0,
+                        "semantic refresh emits no model table or tree business changes");
+                    for (int row = 0; row < 5; ++row)
+                    {
+                        for (int state = 0; state < 3; ++state)
+                        {
+                            QStyleOptionViewItem option; // Alternate 由绘制选项给出，不假定 model row 奇偶。
+                            option.initFrom(&table);
+                            option.rect = QRect(0, 0, 220, 32);
+                            option.font.setPixelSize(16);
+                            option.state = QStyle::State_Enabled;
+                            if (state == 1)
+                            {
+                                option.features |= QStyleOptionViewItem::Alternate;
+                            }
+                            if (state == 2)
+                            {
+                                option.state |= QStyle::State_Selected;
+                            }
+                            const QModelIndex index = table.model()->index(row, 1);
+                            ks::ui::ApplyThemeItemForegroundToStyleOption(&option, index);
+                            const QColor actualBackground = state == 2 ? option.palette.color(QPalette::Highlight)
+                                : state == 1 ? option.palette.color(QPalette::AlternateBase)
+                                : option.palette.color(QPalette::Base);
+                            const QColor actualForeground = option.palette.color(
+                                state == 2 ? QPalette::HighlightedText : QPalette::Text);
+                            check(KswordTheme::ContrastRatio(actualForeground, actualBackground) >= 4.499,
+                                "semantic text readable on actual normal alternate or selected background");
+                            QImage image(220, 32, QImage::Format_ARGB32_Premultiplied);
+                            image.fill(actualBackground);
+                            QPainter painter(&image);
+                            table.itemDelegate()->paint(&painter, option, index);
+                            painter.end();
+                            int foregroundPixels = 0; // 验证实际已安装 delegate 使用了该当前前景。
+                            for (int y = 0; y < image.height(); ++y)
+                            {
+                                for (int x = 0; x < image.width(); ++x)
+                                {
+                                    if (image.pixelColor(x, y).rgb() == actualForeground.rgb())
+                                    {
+                                        ++foregroundPixels;
+                                    }
+                                }
+                            }
+                            check(foregroundPixels > 2, "actual semantic delegate renders current foreground");
+                        }
+                    }
+                    check(root->foreground(1).color() == table.item(0, 1)->foreground().color(),
+                        "tree and table share current accent role");
+                }
+            }
+        }
+        applyFixtureTheme(false, QString(), QString());
     }
 
     // testInputCycle 创建实际标题栏、搜索控制器和 CMD 弹层，参数决定深浅主题。
@@ -188,6 +341,73 @@ namespace
         check(!table.isRowHidden(0) && table.isRowHidden(1), "completed query filters unmatched row");
         check(table.isRowHidden(2), "query preserves independently hidden row");
         check(resultList != nullptr && resultList->count() == 1, "completed query presents one hit");
+        if (resultList != nullptr && resultList->count() == 1)
+        {
+            // 标记真实结果对象：如果主题刷新重新扫描/重建列表，这个标记会消失。
+            QListWidgetItem* const originalItem = resultList->item(0);
+            originalItem->setData(Qt::UserRole + 93, 4821);
+            const int scrollValue = resultList->verticalScrollBar()->value();
+            for (const bool nextDarkMode : {false, true, false})
+            {
+                applyFixtureTheme(nextDarkMode, nextDarkMode ? QStringLiteral("#000000")
+                    : QStringLiteral("#FFFFFF"), nextDarkMode ? QStringLiteral("#FFFFFF")
+                    : QStringLiteral("#216D40"));
+                check(resultList->item(0) == originalItem
+                    && originalItem->data(Qt::UserRole + 93).toInt() == 4821,
+                    "theme refresh keeps original search item instead of rescanning");
+                check(resultList->currentRow() == 0
+                    && resultList->verticalScrollBar()->value() == scrollValue,
+                    "theme refresh preserves selected result and scroll");
+                check(input->text() == QStringLiteral("needle") && !table.isRowHidden(0)
+                    && table.isRowHidden(1) && table.isRowHidden(2),
+                    "theme refresh preserves query and filtered row snapshots");
+                const QString html = originalItem->data(Qt::UserRole + 41).toString();
+                check(html.contains(QStringLiteral("needle")), "theme refresh uses original query snapshot");
+                check(!html.contains(QRegularExpression(QStringLiteral("color:#[0-9A-Fa-f]{6}"))),
+                    "search cache retains semantic markup instead of stale RGB");
+                for (int state = 0; state < 3; ++state)
+                {
+                    // 直接调用生产结果 delegate 的绘制，验证 normal/hover/selected 的语义解析。
+                    QStyleOptionViewItem option;
+                    option.initFrom(resultList);
+                    option.rect = QRect(0, 0, 500, 56);
+                    option.font.setPixelSize(16);
+                    option.state = QStyle::State_Enabled;
+                    if (state == 1)
+                    {
+                        option.state |= QStyle::State_MouseOver;
+                    }
+                    if (state == 2)
+                    {
+                        option.state |= QStyle::State_Selected;
+                    }
+                    const QColor base = option.palette.color(QPalette::Base);
+                    const QColor actualBackground = state == 0 ? base
+                        : KswordTheme::BlendColors(base, KswordTheme::PrimaryAccentColor(), state == 2 ? 52 : 26);
+                    const QColor currentText = KswordTheme::EnsureTextContrast(
+                        KswordTheme::PrimaryAccentColor(), actualBackground, 4.5);
+                    QImage image(500, 56, QImage::Format_ARGB32_Premultiplied);
+                    image.fill(base);
+                    QPainter painter(&image);
+                    resultList->itemDelegate()->paint(&painter, option, resultList->model()->index(0, 0));
+                    painter.end();
+                    int accentPixels = 0; // 匹配命中片段的实心像素，排除抗锯齿边缘和行底填充。
+                    for (int y = 0; y < image.height(); ++y)
+                    {
+                        for (int x = 0; x < image.width(); ++x)
+                        {
+                            if (image.pixelColor(x, y).rgb() == currentText.rgb())
+                            {
+                                ++accentPixels;
+                            }
+                        }
+                    }
+                    check(KswordTheme::ContrastRatio(currentText, actualBackground) >= 4.499
+                        && accentPixels > 2, "actual search delegate renders readable current accent per state");
+                }
+            }
+            applyFixtureTheme(darkMode, QString(), QString());
+        }
         sendKey(input, Qt::Key_Tab);
         check(!table.isRowHidden(1), "entering CMD removes query row filter");
         check(table.isRowHidden(2), "entering CMD preserves original row visibility");
@@ -201,6 +421,9 @@ namespace
         search.dismissPopup();
         QKeyEvent beginSearch(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
         QApplication::sendEvent(input, &beginSearch);
+        // 第一分片排队时送主题事件；颜色回调不能使已作废的搜索代次重新完成。
+        QEvent themeEvent(QEvent::ApplicationPaletteChange);
+        QApplication::sendEvent(&host, &themeEvent);
         QKeyEvent enterCommand(QEvent::KeyPress, Qt::Key_Tab, Qt::NoModifier);
         QApplication::sendEvent(input, &enterCommand);
         input->clear();
@@ -278,6 +501,40 @@ namespace
         sendKey(input, Qt::Key_Tab);
         sendKey(input, Qt::Key_Return);
         check(executionCount == 1, "search Enter never submits command");
+
+        // 正文恰好等于内部颜色标记时必须原样绘制，不能被属性解析替换为短 RGB 串。
+        model.setData(model.index(0, 0), QStringLiteral("__KS_SEARCH_PRIMARY_COLOR__"));
+        search.activateForTable(&table, QStringLiteral("__KS_SEARCH_PRIMARY_COLOR__"), true);
+        processFor(300);
+        check(resultList != nullptr && resultList->count() == 1, "literal color token remains searchable");
+        if (resultList != nullptr && resultList->count() == 1)
+        {
+            QStyleOptionViewItem option;
+            option.initFrom(resultList);
+            option.rect = QRect(0, 0, 900, 56);
+            option.font.setPixelSize(16);
+            option.state = QStyle::State_Enabled;
+            const QColor base = option.palette.color(QPalette::Base);
+            const QColor accent = KswordTheme::EnsureTextContrast(
+                KswordTheme::PrimaryAccentColor(), base, 4.5);
+            QImage image(900, 56, QImage::Format_ARGB32_Premultiplied);
+            image.fill(base);
+            QPainter painter(&image);
+            resultList->itemDelegate()->paint(&painter, option, resultList->model()->index(0, 0));
+            painter.end();
+            int rightmostAccentPixel = 0; // 只读命中正文第一行；原字面量比 #RRGGBB 明显更长。
+            for (int y = 6; y < 27; ++y)
+            {
+                for (int x = 0; x < image.width(); ++x)
+                {
+                    if (image.pixelColor(x, y).rgb() == accent.rgb())
+                    {
+                        rightmostAccentPixel = std::max(rightmostAccentPixel, x);
+                    }
+                }
+            }
+            check(rightmostAccentPixel > 180, "actual HTML drawing preserves literal token text");
+        }
     }
 }
 
@@ -286,6 +543,7 @@ int main(int argc, char* argv[])
 {
     QApplication application(argc, argv);
     QApplication::setQuitOnLastWindowClosed(false);
+    testItemForegroundRefresh();
     testInputCycle(false);
     testInputCycle(true);
     std::cout << "SEARCH_HISTORY_ASSERTIONS=" << assertionCount << '\n';

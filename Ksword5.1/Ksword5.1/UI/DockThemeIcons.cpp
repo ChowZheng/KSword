@@ -61,7 +61,7 @@ namespace ks::ui
         // manager 为获取平台样式的上下文；shape 为轮廓编号；返回可直接设置的 QIcon。
         QIcon makeThemeIcon(ads::CDockManager* manager, const QStyle::StandardPixmap shape)
         {
-            // standard 为平台原图；导航条和标签三态均按实际主体色底色校准。
+            // standard 为平台原图；图形从主题色派生，同时对三种背景偏移底面校准。
             const QIcon standard = manager->style()->standardIcon(shape, nullptr, manager);
             const QColor normal = KswordTheme::DockTabGlyphColor(KswordTheme::DockTabState::Inactive);
             const QColor active = KswordTheme::DockTabGlyphColor(KswordTheme::DockTabState::Hover);

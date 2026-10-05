@@ -36,6 +36,7 @@
 
 ## Qt 部署重复覆盖
 
+- 2026-10-04 合并后 Taskbar Release 同样因 `windeployqt --force` 无法删除已占用的 `Qt6Core.dll` 而报 MSB3073；Release DLL 与 Qt SDK DLL 的 SHA256 一致。`DeployTaskbarQtRuntime` 也改为标准增量部署，保留完整 Qt Multimedia 与媒体插件部署；必须确认整个 Build 退出码为 0，不能只验收已链接的 Taskbar.exe。
 - 2026-09-30 观察到 `windeployqt --force` 无法删除已有 `Release/Qt6Core.dll`，其 SHA256 与仓库 Qt SDK 完全相同。标准增量部署成功输出 `Qt6Core.dll is up to date.` 并完成其他依赖；主程序部署目标已移除无条件 `--force`，仍由 windeployqt 更新有变化的依赖，并传入 `VCINSTALLDIR`。
 - 编译/链接成功但 Qt 部署失败时，整体 Build 仍是失败，不能以新 exe 已生成替代后置部署通过。
 

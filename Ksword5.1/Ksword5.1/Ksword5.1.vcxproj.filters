@@ -1331,13 +1331,19 @@
     <ClCompile Include="UI\PerformanceChartTheme.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="UI\DockThemeIcons.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
     <ClCompile Include="HardwareDock\HardwareDock.Theme.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="UI\DockThemeIcons.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="UI\ThemeColorRemap.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\ThemeItemForeground.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\ThemePreviewWidget.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="UI\ThemeStatusRole.cpp">
@@ -1458,6 +1464,9 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="ksword\process\process.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="ksword\process\process_run_as.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="ksword\process\ProcessImageDeleteGuard.cpp">
@@ -1813,6 +1822,12 @@
     <ClInclude Include="MemoryDock\MemoryAccessBackend.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="MemoryDock\WorkbenchIoPorts.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="MemoryDock\WorkbenchIoMapping.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="MemoryDock\DdmaPage.h">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -1820,12 +1835,6 @@
       <Filter>Header Files</Filter>
     </QtMoc>
     <ClInclude Include="MiscDock\ApplicationControlPage.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="MemoryDock\WorkbenchIoPorts.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="MemoryDock\WorkbenchIoMapping.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <QtMoc Include="MiscDock\ClipboardGuard\ClipboardGuardPage.h">
@@ -2646,6 +2655,9 @@
     <ClInclude Include="ksword\process\process.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="ksword\process\process_run_as.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="ksword\process\ProcessImageDeleteGuard.h">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -2815,6 +2827,15 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="UI\ThemeColorRemap.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="UI\ThemeItemForeground.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="UI\ThemePreviewWidget.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\DebuggerBackend\KswordPluginTheme.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="UI\ThemeStatusRole.h">

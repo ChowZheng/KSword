@@ -15,8 +15,9 @@ KSword 主程序位于 `Ksword5.1/Ksword5.1`（Qt 6.9.3 Widgets + Qt Advanced Do
 
 ## UI 主题架构
 
-- 顶部ADS导航使用独立的`DockTabState`角色（`theme.h::DockTabBackgroundColor/TextColor/GlyphColor`）：主体色+深浅RGB偏移，固定黑白参照防止极端种子截断，不读取用户背景种子。`DockNavigationStyleSheet`最后追加，覆盖旧基础属性hover和背景图透明兜底；普通业务QTabBar不受影响。自绘hover与局部文字必须同源；共享的实际前景补偿入口在`UI/DockThemeIcons::ApplyDockTabTextColor`，自有工厂在选中/hover/主题事件后调用。Qt在选中标签上仍可能请求Normal图标，导航图形需要对三态都保持对比。真实ADS+生产样式/前景/图标离屏回归本轮4769断言通过；整个MainWindow工厂仅静态核对。
-- 2026-10-04全项目配色审计见`docs/全项目配色审计.md`：全局旧色补偿只改QWidget显式palette/QSS，不覆盖item brush、QTextCharFormat/ExtraSelection、模型HTML或成员缓存；已有颜色角色也不能证明存量内容会随主题刷新。审计的13组待修问题与已修ADS导航分开，独立产品的固定设计/状态语义/数据原色不自动算缺陷。
+- 顶部ADS导航使用独立的`DockTabState`角色（`theme.h::DockTabBackgroundColor/TextColor/GlyphColor`）：三态背景分别沿用背景种子的`SurfaceColor/SurfaceMutedColor/SurfaceAltColor`偏移，只有强调文字、图形与`DockTabHighlightColor`选中底边从主题色派生；底边两像素同时扣减底部padding，保持既有高度。`DockNavigationStyleSheet`最后追加，覆盖旧基础属性hover和背景图透明兜底；普通业务QTabBar不受影响。自绘hover必须补回选中底边，局部文字共用`UI/DockThemeIcons::ApplyDockTabTextColor`，自有工厂在选中/hover/主题事件后调用。Qt在选中标签上仍可能请求Normal图标，导航图形需要对三态都保持对比，背景变化后允许前景做对比度校准。2026-10-04本次背景/强调分离回归5921条断言通过，覆盖主体色变化时三态背景不变、背景种子驱动真实三态底面、选中/选中悬停标记及图标对比；日志`.codex-build-logs/titlebar-background-offset-ui.log`。MainWindow自绘工厂仅静态核对，未启动生产GUI。本次两次主程序Build尝试均在i18n门禁被并行MemoryWorkbench持续新增的文本缺项阻断（已定点补齐11条双语提示）；最新失败日志`.codex-build-logs/ksword-build-check-20261004-213558.raw.log`，不报告整库编译通过。
+- 2026-10-04全项目配色审计见`docs/全项目配色审计.md`，后续修复及验证见`docs/配色问题修复记录.md`：全局旧色补偿只改QWidget显式palette/QSS，不覆盖item brush、QTextCharFormat/ExtraSelection、模型HTML或成员缓存；已有颜色角色也不能证明存量内容会随主题刷新。独立产品的固定设计/状态语义/数据原色不自动算缺陷。
+- 表格交替底/搜索normal-hover-selected的多底组合可能没有共同达到4.5:1的单一文字色，要按实际绘制选项求前景，不能降低门槛或猜model row奇偶。`ThemeItemForeground`专属语义角色仅用于明确标记项，换色不重新枚举、不reset模型或隐藏/选择快照。自有插件日志页的热主题通过`DebuggerBackend/KswordPluginTheme.h`颜色快照传递，Qt宿主排队限时发送、Win32接收页更换成对画刷；第三方调试器主窗口保持独立。
 
 - `theme.h`（KswordTheme 命名空间）：design-token 中心。中性表面色（Window/Surface/SurfaceAlt/SurfaceMuted/Border）由 RGB 偏移从种子色派生；强调色 PrimaryBlueColor 可由用户自定义；提供 EnsureTextContrast 等 WCAG 对比度工具。
 - `theme.h` 的颜色访问器分两族，名字只差一个词，用错编译器和 Qt 都不报错：**动态** token（`SurfaceHex()`、`TextPrimaryHex()`、`PrimaryBlueHex` 等，共 14 个）返回 `palette(base)` 这类样式表角色，Qt 每次重绘重新求值，天然跟随主题；**静态** token（`*ColorHex()`）在调用瞬间固化成 `#RRGGBB`。
@@ -26,6 +27,7 @@ KSword 主程序位于 `Ksword5.1/Ksword5.1`（Qt 6.9.3 Widgets + Qt Advanced Do
 - `SurfaceMuted` 和 `TextDisabled` 没有动态版本，且不该硬造：QSS 的 `palette()` 选不到 disabled group，剩余空闲角色（light/bright-text/shadow）都会被 QStyle 用于原生控件的立体边框绘制。用到它们的页面必须自己具备重建入口（`changeEvent` 处理 `ApplicationPaletteChange`，或每次显示时重新生成样式）。
 - 纯图标按钮的几何同样由 `theme.h` 收口：紧凑工具栏使用 `ApplyCompactIconButtonMetrics`（28px 按钮 / 16px 图标），独立或强调动作使用 `ApplyStandardIconButtonMetrics`（32px / 18px）；页面不得继续新增 30/34/36px 的临时组合。
 - `MainWindow::applyAppearanceSettings`：主题应用唯一入口，设置 QApplication palette + 调用 `applyGlobalApplicationStyleBlocks`（带 marker 的 QSS 块替换机制，marker 常量在 MainWindow.cpp 顶部匿名命名空间）。
+- 外观设置的`UI/ThemePreviewWidget`展示未应用的深浅模式/主体色/背景色，选色器`currentColorChanged`仅更新样例，取消还原待应用值。`theme.h::ScopedThemePreview`借用线程局部种子同步求值，所有颜色复用生产角色算法并绕过全局角色缓存；禁止在该范围内处理事件或应用设置，不得用临时修改全局种子或QApplication palette实现预览。
 - 全局 QSS 块顺序：BaseControl（`UI/GlobalUiBaseStyle.cpp`）→ Tooltip → ContextMenu → ControlContrast → ComboBox，依次追加到 app stylesheet，基线块在最前，局部样式可覆盖。
 - `QComboBox` 弹出列表是独立 `Qt::Popup` 顶层窗口。禁止在 Popup 的 `Show`/`Resize` 事件内同步调用 `setMask`、`setStyleSheet` 或其它可能 repolish 子树的操作：Qt 此时可能仍在 `QWidgetPrivate::showChildren` 中遍历内部子对象，重入修改会留下悬空 child。Popup palette/QSS 必须用零延时 queued 更新并做幂等去重；圆角只保留 QSS 绘制，不再修改原生窗口 mask。
 - `UI/GlobalDialogTheme.cpp`：QApplication 事件过滤器给所有 QDialog 补主题（palette + 追加 QSS）；QMessageBox 由 `UI/ThemedMessageBox` 专管。
@@ -87,11 +89,13 @@ KSword 主程序位于 `Ksword5.1/Ksword5.1`（Qt 6.9.3 Widgets + Qt Advanced Do
 
 ## 通用表格交互
 
+- 进程列表顶部的历史利用率图共用 `ProcessDock::m_activitySamples` 中的完整进程快照；绘图与比例计算会遍历这些样本，不能只限制横轴显示而保留大量旧快照。2026-10-04 改为默认最近 50 次，上方下拉框可选不记录、全量、最近 N 次；齿轮设置中的旧“不记录历史”复选框已移除。不记录仅停止追加并保留已有历史；减少 N 或由全量切回最近模式立即裁剪。淘汰后必须按实际移除数量同步时间轴与快照下标，保留选中样本的身份；选中样本被淘汰则回到实时列表并吸附最新。此设置针对进程列表图，独立进程详情窗口仍有自己的图表缓存策略。
 - 全局滚轮只由 `UI/SmoothScrollSupport.cpp` 接管；`MainWindow.cpp` 的 `GlobalSliderWheelFilter` 仅管理数值滑块是否允许滚轮调值。不要重新加入另一套平滑滚动，否则关闭设置仍会滚动，或将同一事件交给不同单位的算法。
 - `CodeEditorWidget` 的 13 个工具图标须与真实状态同步：撤销/重做看文档历史，剪切/复制看选区，粘贴看剪贴板，换行用 checked 呈现。快捷键限定到 `WidgetWithChildrenShortcut`，包含 SaveAs，避免同窗口多个编辑器冲突；结构页的查找/跳转/换行先切到文本页，复制走结构控件当前选区或完整报告。SVG 必须按 palette 生成普通/悬停/禁用/选中状态，并在 palette 变化时重建，否则蓝色图标遇蓝色 hover 底会消失。新建/打开文件须清除旧的生成报告翻译缓存，全文替换应合成一个 undo edit block。
 - `QPlainTextEdit` 纵向滚动条的 value/pageStep 是视觉行（包含自动换行），禁止套用像素动画；普通视口沿用 Qt 的一页限幅。结构报告里被外层裁切的固定高度代码块要按真正露出的视觉行数限幅并保留小增量累积。像素视图按 viewport 的 `visibleRegion` 与 pageStep 限幅并保留重叠，连续滚轮的待滚终点也须限制在当前位置的一屏内；反向从当前位置立即反向，缩小视口时停止旧动画。验证必须覆盖 38px 文本视口、47px 实际报告属性树、裁切的 320px 代码块、换行、开关切换、连续/反向/像素滚轮、Ctrl/Shift、局部禁用与嵌套边界传播。
 - 周期性后台刷新（例如进程监视采样）不得注册为全局 `kPro` 任务；否则每轮采样都会进入“当前任务”和顶部进度通知。`kPro` 只用于有明确开始/结束、需要用户感知的有限操作，常驻监视状态应留在页面状态标签与诊断日志中。
 - 把系统枚举放进工作线程仍不足以保证主界面流畅：结果回到 UI 线程后，`QTableWidgetItem`、`QTreeWidgetItem` 与文件图标解析也可能形成长时间事件循环占用。启动项页把单阶段排序留在工作线程，每个枚举器完成后按固定顺序发布独立结果批次；UI 必须等上一批用零间隔单次 `QTimer`（目标 7ms、最多 24 单元）分时落表完成后再累计下一批，先填当前分类，未完成视图保持禁用，且只有“后端全部结束 + 阶段队列清空”才能结束同一刷新任务。后台枚举进度通过 UI 无关的稳定阶段枚举回调上报，翻译文案必须先在 UI 线程取得，不能从工作线程并发读取 `LanguageManager`。
+- FileDock 的大目录使用不可变枚举快照模型，按需提供单元格，排序与选区统计只读缓存；重解析点、磁盘状态及单项属性查询留在后台。详见 [FileDock 大目录响应性](ksword-filedock-latency.md)，不要恢复逐行 UI 查盘或整批 `QStandardItem` 回填。
 - 周期采集的缺失证据或查询失败若使用 `Warn`，必须按规范化错误集合做状态变化去重：首次出现或错误集合改变时记录一次，连续相同采样只更新页面状态；错误清除后再复发才允许重新通知。否则默认 Warn 通知阈值会把固定失败放大成通知卡和日志风暴。
 - `UI/TableInteractionSupport.cpp` 通过应用级事件过滤器统一接入 `QTableView/QTableWidget`；表头点击排序由 `UI/TableHeaderSortingSupport.*` 负责。
 - 通用复制/导出右键菜单只在实际 `ContextMenu` 事件且当前策略为 `Qt::DefaultContextMenu` 时由全局过滤器显示。禁止构造期把 Default 改成 Custom 并提前连接 `customContextMenuRequested`：表格设置列、样式时就可能触发全局配置，随后页面接入的业务菜单会被先弹出的通用菜单遮住（回调遍历已复现）。业务 Custom 菜单继续由页面处理，全局只补复制/导出动作与刷新屏障。

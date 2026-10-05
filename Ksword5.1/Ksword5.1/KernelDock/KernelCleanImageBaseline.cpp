@@ -42,9 +42,15 @@
 namespace
 {
     constexpr unsigned long kSystemModuleInformationClass = 11UL;
+    thread_local bool g_deferBaselineTranslation = false;
 
     QString baselineText(const QString& sourceText)
     {
+        // 扫描只生成源文案；结果回到 UI 后再翻译，避免并发读取语言包。
+        if (g_deferBaselineTranslation)
+        {
+            return sourceText;
+        }
         return ks::i18n::sourceText(sourceText);
     }
 
@@ -678,7 +684,8 @@ namespace
 
     std::vector<std::uint8_t> loadedHeaderBytes(
         std::uint64_t moduleBase,
-        QString& errorTextOut);
+        QString& errorTextOut,
+        ksword::memory_backend::MemoryAccessBackend backend);
 
     bool mapPeImage(
         const QByteArray& diskImage,
@@ -916,6 +923,8 @@ namespace
 
     struct PreparedTrustedImage
     {
+        ksword::memory_backend::MemoryAccessBackend backend =
+            ksword::memory_backend::MemoryAccessBackend::StandardDriver;
         LoadedModule module;
         PeIdentity identity;
         QByteArray diskImage;
@@ -931,9 +940,12 @@ namespace
         const LoadedModule& module,
         const bool requireTrustedDiskImage,
         PreparedTrustedImage& preparedOut,
-        QString& errorTextOut)
+        QString& errorTextOut,
+        const ksword::memory_backend::MemoryAccessBackend backend =
+            ksword::memory_backend::MemoryAccessBackend::StandardDriver)
     {
         preparedOut = {};
+        preparedOut.backend = backend;
         preparedOut.module = module;
         if (module.filePath.isEmpty()
             || !QFileInfo::exists(module.filePath))
@@ -992,7 +1004,7 @@ namespace
         }
 
         const std::vector<std::uint8_t> memoryHeader =
-            loadedHeaderBytes(module.base, errorTextOut);
+            loadedHeaderBytes(module.base, errorTextOut, backend);
         if (memoryHeader.empty())
         {
             return false;
@@ -1060,15 +1072,18 @@ namespace
 
     const PreparedTrustedImage* cachedTrustedImage(
         const LoadedModule& module,
-        QString& errorTextOut)
+        QString& errorTextOut,
+        const ksword::memory_backend::MemoryAccessBackend backend =
+            ksword::memory_backend::MemoryAccessBackend::StandardDriver)
     {
         thread_local std::vector<PreparedTrustedImage> cache;
         const auto existing = std::find_if(
             cache.cbegin(),
             cache.cend(),
-            [&module](const PreparedTrustedImage& candidate)
+            [&module, backend](const PreparedTrustedImage& candidate)
             {
-                return candidate.module.base == module.base
+                return candidate.backend == backend
+                    && candidate.module.base == module.base
                     && candidate.module.size == module.size
                     && candidate.module.filePath.compare(
                         module.filePath,
@@ -1084,7 +1099,8 @@ namespace
                 module,
                 false,
                 prepared,
-                errorTextOut))
+                errorTextOut,
+                backend))
         {
             return nullptr;
         }
@@ -1363,14 +1379,16 @@ namespace
 
     std::vector<std::uint8_t> loadedHeaderBytes(
         const std::uint64_t moduleBase,
-        QString& errorTextOut)
+        QString& errorTextOut,
+        const ksword::memory_backend::MemoryAccessBackend backend)
     {
         std::vector<std::uint8_t> bytes;
         if (!ks::kernel::KernelCleanImageBaseline::readKernelBytes(
             moduleBase,
             64U * 1024U,
             bytes,
-            errorTextOut))
+            errorTextOut,
+            backend))
         {
             return {};
         }
@@ -1692,7 +1710,8 @@ namespace ks::kernel
         const std::uint64_t kernelAddress,
         const std::uint32_t byteCount,
         std::vector<std::uint8_t>& bytesOut,
-        QString& errorTextOut)
+        QString& errorTextOut,
+        const ksword::memory_backend::MemoryAccessBackend backend)
     {
         bytesOut.clear();
         errorTextOut.clear();
@@ -1704,28 +1723,35 @@ namespace ks::kernel
             return false;
         }
 
-        const ksword::ark::DriverClient client;
-        const ksword::ark::VirtualMemoryReadResult read =
-            client.readVirtualMemory(
-                0U,
-                kernelAddress,
-                byteCount,
-                KSWORD_ARK_MEMORY_READ_FLAG_KERNEL_ADDRESS);
-        if (!read.io.ok || read.bytesRead != byteCount)
+        if (backend != ksword::memory_backend::MemoryAccessBackend::StandardDriver
+            && backend != ksword::memory_backend::MemoryAccessBackend::Hvm)
         {
-            errorTextOut = QStringLiteral(
-                "R0 内核读取失败：Win32=%1，NT=0x%2，读取=%3/%4。")
-                .arg(read.io.win32Error)
-                .arg(static_cast<unsigned long>(read.copyStatus),
-                    8,
-                    16,
-                    QChar('0'))
-                .arg(read.bytesRead)
-                .arg(byteCount);
+            errorTextOut = QStringLiteral("内核完整性扫描仅支持 R0 或 HVM 后端。");
             return false;
         }
-        bytesOut = read.data;
-        return bytesOut.size() == byteCount;
+
+        const auto read = ksword::memory_backend::readVirtual(
+            backend,
+            {},
+            0U,
+            kernelAddress,
+            byteCount,
+            backend == ksword::memory_backend::MemoryAccessBackend::Hvm);
+        if (!read.ok || read.partial
+            || read.bytesDone != byteCount
+            || read.data.size() != static_cast<qsizetype>(byteCount))
+        {
+            errorTextOut = QStringLiteral(
+                "%1 内核读取不完整：读取=%2/%3。%4")
+                .arg(ksword::memory_backend::backendDisplayName(backend))
+                .arg(read.bytesDone)
+                .arg(byteCount)
+                .arg(read.failureText);
+            return false;
+        }
+        const auto* begin = reinterpret_cast<const std::uint8_t*>(read.data.constData());
+        bytesOut.assign(begin, begin + byteCount);
+        return true;
     }
 
     CleanImageBaselineResult KernelCleanImageBaseline::compareAddress(
@@ -1854,6 +1880,13 @@ namespace ks::kernel
     KernelCleanImageBaseline::scanExecutableSections(
         const KernelTextScanOptions& options)
     {
+        // 只改变扫描调用树的翻译时机，保留其他基线调用方的原有行为。
+        struct SourceTextScope final
+        {
+            const bool previous = g_deferBaselineTranslation;
+            SourceTextScope() { g_deferBaselineTranslation = true; }
+            ~SourceTextScope() { g_deferBaselineTranslation = previous; }
+        } sourceTextScope;
         std::vector<KernelTextIntegrityResult> results;
 
         std::vector<LoadedModule> modules;
@@ -1861,7 +1894,12 @@ namespace ks::kernel
         if (!enumerateLoadedModules(modules, errorText))
         {
             KernelTextIntegrityResult failure;
+            failure.backend = options.backend;
             failure.statusText = errorText;
+            if (options.onModuleComplete)
+            {
+                options.onModuleComplete(failure);
+            }
             results.push_back(std::move(failure));
             return results;
         }
@@ -1890,6 +1928,7 @@ namespace ks::kernel
             }
 
             KernelTextIntegrityResult result;
+            result.backend = options.backend;
             result.moduleBase = module.base;
             result.moduleSize = module.size;
             result.moduleName = module.name;
@@ -1897,7 +1936,7 @@ namespace ks::kernel
 
             QString prepareError;
             const PreparedTrustedImage* prepared =
-                cachedTrustedImage(module, prepareError);
+                cachedTrustedImage(module, prepareError, options.backend);
             if (prepared == nullptr)
             {
                 result.statusText = prepareError;
@@ -1935,6 +1974,7 @@ namespace ks::kernel
             }
 
             bool cancelled = false;
+            QString firstReadError;
             for (const ExecutableSection& section : sections)
             {
                 std::uint32_t sectionOffset = 0U;
@@ -1960,10 +2000,15 @@ namespace ks::kernel
                             module.base + chunkRva,
                             readBytes,
                             observed,
-                            readError))
+                            readError,
+                            options.backend))
                     {
                         // 读不到的块只计量，不当作差异，避免把分页失败说成篡改。
                         result.unreadableBytes += readBytes;
+                        if (firstReadError.isEmpty())
+                        {
+                            firstReadError = readError;
+                        }
                         continue;
                     }
                     result.scannedBytes += readBytes;
@@ -2035,11 +2080,21 @@ namespace ks::kernel
                 }
             }
 
-            result.available = true;
+            result.available = result.scannedBytes != 0U;
+            result.complete = !cancelled
+                && result.unreadableBytes == 0U
+                && result.available;
             if (cancelled)
             {
                 result.statusText = baselineText(
                     QStringLiteral("扫描被取消，结果不完整。"));
+            }
+            else if (result.unreadableBytes != 0U)
+            {
+                result.statusText = baselineText(
+                    QStringLiteral("扫描覆盖不完整：%1 字节不可读，无法确认整体代码完整性。%2"))
+                    .arg(result.unreadableBytes)
+                    .arg(firstReadError);
             }
             else if (result.unexplainedRangeCount != 0U)
             {

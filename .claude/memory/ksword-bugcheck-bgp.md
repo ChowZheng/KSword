@@ -39,3 +39,14 @@
 - 技术参数只显示有文档语义或值非零的字段：保留字段始终隐藏，未知通用参数为零时隐藏，`PROCESS`、`READ`、`IRQL 0` 等有含义的零值仍需显示。动态文字必须在固定宽度内完整显示，不得因重复模块名或长内部说明出现省略号。完整页和紧凑页都优先显示已解析模块；`0xEF` 次优先显示关键进程；无归因时只补一个最有价值的参数。纯解码和画布边界由 `tools/bugcheck_layout_replay/run.ps1` 回放验证。
 - Release x64 驱动链接后，工程必须把最新 `KswordARK.sys/.pdb/.inf` 同步到 `Ksword5.1/x64/Release/KswordARKDriver/`；变体签名完成后再同步最终 `.sys`，避免测试包继续携带旧驱动。
 - 替换磁盘上的 `.sys` 不会更新已经加载的内核映像。实体机或虚拟机复测蓝屏重绘前，必须停止/卸载旧服务并重新加载驱动；无法安全卸载时重启系统，再核对目标 `.sys` 的哈希或加载日志。
+
+## Linux QR 扩展证据（2026-10-04）
+
+- Linux 模式固定左上角 ASCII 企鹅、中央二维码、下方模块名/数值与名称 Stop Code/`KSword ARK` 三行；两个后端继续使用预生成的非分页字形和 QR 模块资源。
+- `bugcheck_evidence.c` 在安装准备期取得 Windows build/UBR/产品类型、CI/Secure Boot/CPUID 和内核/驱动 PE/RSDS 身份，运行期维护固定映像与进程状态缓存。崩溃期只做有界无等待快照，不能把运行期 PE 解析或注册表查询移入回调。
+- `bugcheck_context.c` 仅解析系统 `KbDumpIoHeader` 提供的 PAGE/DU64 AMD64 头。按实际收到字节和 CONTEXT 分组位图逐寄存器发布；Offset=0 换代、非法签名/flags 必须清理旧有效位。系统头上下文不保证等于触发故障的现场；最近 IOCTL 操作栈在 PASSIVE_LEVEL 采集，保留所属线程与时间，不能命名为故障展开栈。
+- `bugcheck_trace.c` 保留最近六条 IOCTL、已启用 DbgPrint 与 Warn/Error/Fatal 摘要，单次 CAS 写入、提交序号前后核对，独立标记覆盖、整条丢弃与摘要截断。未启用 DbgPrint 是采集边界，不能解释成没有调试错误。
+- QR 使用 `KSQ2:` + Base45，版本化逐成员小端格式与 CRC32；包括完整诊断、BGP 固定数组及扩展快照，不复制 C padding，不在崩溃期压缩。2860 字节是单码硬上限，任何容量失败整体拒绝；schema 改动必须同步 `bugcheck_qr_codec.c` 与 `tools/bugcheck_layout_replay/decode_ksq2.py`。
+- SecondaryDumpData 版本 5 在原版本 4 前缀后追加完整扩展证据；解析时同时检查 Version 和 Size。公开 R0/R3 模式 IOCTL 布局没有随内部证据改变。
+- 驱动确定性构建禁用 `__DATE__/__TIME__`；用 PE timestamp/checksum 和 PDB GUID/Age 标识具体二进制，不能把确定性 PE timestamp 当作真实编译日期。
+- 验证入口：`tools/bugcheck_layout_replay/run.ps1`、独立 OpenCV 的 `validate_qr.py`、直接复用生产 context/trace 的 `tools/Invoke-BugcheckContextReplay.ps1`。2026-10-04 完成零警告驱动构建/API/Inf2Cat、六图扫码逐字节往返、479 项上下文/事件断言和目标测试签名验签；不代表真实 BGP/SVGA 蓝屏或手机拍摄已验收。所有回放产物进入既有 `output/`，Python 使用 `PYTHONDONTWRITEBYTECODE=1`。

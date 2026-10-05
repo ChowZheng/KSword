@@ -20,6 +20,7 @@ $fixtureSources = @(
     'Ksword5.1\Ksword5.1\UI\TableSearchSupport.cpp',
     'Ksword5.1\Ksword5.1\UI\CommandExecutionPopup.cpp',
     'Ksword5.1\Ksword5.1\UI\ThemeControlGlyphs.cpp',
+    'Ksword5.1\Ksword5.1\UI\ThemeItemForeground.cpp',
     'Ksword5.1\Ksword5.1\Internationalization\LanguageManager.cpp'
 ) | ForEach-Object { Join-Path $testRepository $_ }
 $fixtureHeaders = @(
@@ -54,10 +55,16 @@ $libArgs += '/LIBPATH:' + (Join-Path $testRepository 'Ksword5.1\Ksword5.1\lib')
 foreach ($testPart in @('ucrt', 'um')) {
     $libArgs += '/LIBPATH:' + (Join-Path $testSdkRoot ('Lib\' + $testSdkVersion + '\' + $testPart + '\x64'))
 }
-# 标题栏已有 Win32 拖动早返回后的 Qt fallback 会触发 C4702；仅夹具忽略此既有告警。
-& $testCompiler /nologo /std:c++latest /Zc:__cplusplus /permissive- /utf-8 /EHsc /MD /W4 /WX /wd4702 /O2 /external:W0 `
-    /DWIN32_LEAN_AND_MEAN /DNOMINMAX /DUNICODE /D_UNICODE @includeArgs @fixtureSources `
-    ('/Fo' + $testOutput + '\') ('/Fe' + $testExe) `
+# 标题栏既有 C4702 只在夹具忽略；各 object 使用独立前缀，避免与其它离屏回归同名源冲突。
+$fixtureObjects = @()
+foreach ($fixtureSource in $fixtureSources) {
+    $fixtureObject = Join-Path $testOutput ('search-history-' + [IO.Path]::GetFileNameWithoutExtension($fixtureSource) + '.obj')
+    & $testCompiler /nologo /c /std:c++latest /Zc:__cplusplus /permissive- /utf-8 /EHsc /MD /W4 /WX /wd4702 /O2 /external:W0 `
+        /DWIN32_LEAN_AND_MEAN /DNOMINMAX /DUNICODE /D_UNICODE @includeArgs $fixtureSource ('/Fo' + $fixtureObject)
+    if ($LASTEXITCODE -ne 0) { throw "Search fixture compilation failed: $fixtureSource" }
+    $fixtureObjects += $fixtureObject
+}
+& $testCompiler /nologo @fixtureObjects ('/Fe' + $testExe) `
     /link /SUBSYSTEM:CONSOLE /INCREMENTAL:NO @libArgs Qt6Core.lib Qt6Gui.lib Qt6Widgets.lib Qt6Svg.lib `
     qtadvanceddocking.lib user32.lib advapi32.lib
 if ($LASTEXITCODE -ne 0) { throw 'Search history fixture compilation or link failed.' }

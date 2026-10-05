@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QWidget>
+#include <QColor>
 #include <QFutureWatcher>
 #include <QMutex>
 
@@ -10,6 +11,7 @@
 
 class PerformanceNavCard;
 class QChartView;
+class QChart;
 class QGridLayout;
 class QHBoxLayout;
 class QLabel;
@@ -27,6 +29,10 @@ class HudPerformancePanel final : public QWidget
 public:
     explicit HudPerformancePanel(QWidget* parent = nullptr);
     ~HudPerformancePanel() override;
+    // 输入透明图片与配置背景合成后的颜色，更新文字和图表，不修改采样或布局。
+    void setEffectiveBackgroundColor(const QColor& colorValue);
+    // 对已有自有图表应用底色对比规则；无需初始化性能采样，方便离屏色彩验证。
+    static void applyChartColors(QChart* chart, const QColor& colorValue);
 
 protected:
     void resizeEvent(QResizeEvent* resizeEventPointer) override;

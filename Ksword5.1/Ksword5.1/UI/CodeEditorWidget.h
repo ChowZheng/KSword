@@ -22,7 +22,7 @@ class QVBoxLayout;
 class QHBoxLayout;
 class QWidget;
 
-class CodeTextEdit;
+class EmbeddedCodeTextEdit;
 
 namespace ks::ui
 {
@@ -338,7 +338,7 @@ private:
     ks::ui::ReportStructuredView* m_structuredView = nullptr;
 
     // m_editor：核心代码编辑器（行号 + 括号高亮）。
-    CodeTextEdit* m_editor = nullptr;
+    EmbeddedCodeTextEdit* m_editor = nullptr;
 
     // m_statusLabel：底部状态信息标签。
     QLabel* m_statusLabel = nullptr;
@@ -380,4 +380,7 @@ private:
     // - 输入/处理：析构函数置 true，所有延迟信号回调在刷新 UI 前检查；
     // - 返回行为：无返回值，用于避免 MainWindow 退出销毁链中访问已释放子控件。
     bool m_destroying = false;
+
+    // m_themeRefreshPending：合并排队的样式更新，避免setStyleSheet引发palette事件递归。
+    bool m_themeRefreshPending = false;
 };

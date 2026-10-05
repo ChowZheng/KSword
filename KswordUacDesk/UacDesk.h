@@ -22,6 +22,9 @@
 #include <optional>
 #include <thread>
 
+// Diagnostics are disabled in every configuration; arguments are not evaluated.
+#define KSWORD_UAC_DIAGNOSTIC_LOG(...) ((void)0)
+
 class QLabel;
 class QEvent;
 class QMouseEvent;
@@ -110,7 +113,6 @@ private:
 class PrivilegeStage final
 {
 public:
-    static void writeDiagnosticLog(const QString& message);
     static bool isProcessElevated();
     static bool isSystem();
     static bool hasUiAccess();
@@ -129,7 +131,7 @@ public:
 
     void start();
     void stop();
-    bool etwAvailable() const { return m_etwAvailable; }
+    bool etwAvailable() const { return m_etwAvailable.load(); }
     std::optional<UacOriginEvidence> readConsentOrigin(DWORD sessionId);
     std::optional<ProcessIdentity> takeUacOrigin(DWORD sessionId, quint64 uacObservedAtMs,
                                                   const QString& targetPath);
@@ -195,7 +197,7 @@ private:
     std::atomic_bool m_etwStop{false};
     std::thread m_etwThread;
     ULONG64 m_traceSession = 0;
-    TRACEHANDLE m_traceHandle = 0;
+    std::atomic<TRACEHANDLE> m_traceHandle{0};
     QString m_traceName;
     std::thread m_alpcThread;
     std::atomic_bool m_alpcStop{false};
@@ -203,7 +205,7 @@ private:
     std::atomic<TRACEHANDLE> m_alpcTraceHandle{0};
     std::atomic<ULONG> m_alpcLastStatus{ERROR_SUCCESS};
     QString m_alpcTraceName;
-    bool m_etwAvailable = false;
+    std::atomic_bool m_etwAvailable{false};
 };
 
 class UacWindowScanner final
@@ -223,7 +225,7 @@ public:
     explicit UacDeskWindow(QWidget* parent = nullptr);
     ~UacDeskWindow() override;
 
-    void setParentWatch(HANDLE processHandle, quint64 creationTime);
+    bool setParentWatch(HANDLE processHandle, quint64 creationTime);
     void setInitialStatus(const QString& status);
     void notifyUacActivity();
     void refreshNow();
@@ -239,8 +241,6 @@ private:
     void launchMainOnSecureDesktop();
     void launchPowerShellOnSecureDesktop();
     void runProcessAction(int action);
-    void checkParent();
-    static bool isAlive(HANDLE process);
     bool eventFilter(QObject* watched, QEvent* event) override;
     void changeEvent(QEvent* event) override;
 
@@ -253,7 +253,6 @@ private:
     QPushButton* m_powerShellButton = nullptr;
     QPushButton* m_launchMainButton = nullptr;
     QTimer m_refreshTimer;
-    QTimer m_parentTimer;
     QWidget* m_dragHandle = nullptr;
     bool m_dragging = false;
     QPoint m_dragOffset;
@@ -264,13 +263,12 @@ private:
     std::thread m_scanThread;
     std::atomic_bool m_actionRunning{false};
     std::atomic_bool m_launchRunning{false};
-    std::atomic_bool m_parentCheckRunning{false};
     std::thread m_actionThread;
     std::thread m_launchThread;
-    std::thread m_parentCheckThread;
+    std::thread m_parentWatchThread;
     quint64 m_fastPollUntilMs = 0;
     HANDLE m_parentProcess = nullptr;
-    quint64 m_parentCreationTime = 0;
+    HANDLE m_parentWatchStop = nullptr;
     ProcessActionState m_actionState;
     UacApplicationIdentity m_identity;
 };

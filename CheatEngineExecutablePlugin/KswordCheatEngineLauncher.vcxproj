@@ -99,6 +99,7 @@
   <ItemGroup>
     <ClInclude Include="LogSurface.h" />
     <ClInclude Include="..\DebuggerBackend\KswordDebuggerFileProtocol.h" />
+    <ClInclude Include="..\DebuggerBackend\KswordPluginTheme.h" />
   </ItemGroup>
   <ItemGroup>
     <None Include="integration\10_ksword_bridge.lua" />

@@ -769,7 +769,7 @@ QVariant LogDockWidget::getRowHighlightBrush(const kEvent& logItem, const int ro
         const QColor rowBackground = KswordTheme::ErrorBackgroundColor();
         return role == Qt::BackgroundRole
             ? QVariant(QBrush(rowBackground))
-            : QVariant(QBrush(KswordTheme::OnAccentColor()));
+            : QVariant(QBrush(KswordTheme::OnAccentColor(rowBackground)));
     }
 
     return {};

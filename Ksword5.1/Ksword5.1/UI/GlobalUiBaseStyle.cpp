@@ -28,7 +28,7 @@ namespace ks::ui
             "}"
             "QPushButton:pressed{"
             "  background-color:__ACCENT_PRESSED__;"
-            "  color:__ON_ACCENT__;"
+            "  color:__ON_ACCENT_PRESSED__;"
             "  border-color:__ACCENT_PRESSED__;"
             "}"
             "QPushButton:checked{"
@@ -255,6 +255,9 @@ namespace ks::ui
             QStringLiteral("__ON_ACCENT__"),
             KswordTheme::ThemeColorName(
                 KswordTheme::OnAccentColor(KswordTheme::ControlAccentColor())));
+        baseControlStyle.replace(
+            QStringLiteral("__ON_ACCENT_PRESSED__"),
+            KswordTheme::OnAccentHex(KswordTheme::ControlAccentPressedColor()));
         return baseControlStyle;
     }
 }

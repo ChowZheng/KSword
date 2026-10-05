@@ -15,6 +15,7 @@ Environment:
 --*/
 
 #include "ark/ark_driver.h"
+#include "../bugcheck/bugcheck_evidence.h" // 仅镜像已启用的真实调试输出，不注册额外回调。
 
 // DbgSetDebugPrintCallback 仅允许一个静态回调，因此保存当前控制设备上下文。
 static PDEVICE_CONTEXT volatile g_KswordArkDebugOutputContext = NULL;
@@ -52,6 +53,13 @@ static VOID KswordARKDebugPrintCallback(
         Output->Buffer == NULL) {
         return;
     }
+
+    KswordARKBugcheckTraceRecord( // 独立环在现有启用门槛之后接收真实 callback 内容。
+        KSWORD_BUGCHECK_TRACE_KIND_DBGPRINT, // 状态字段在此类别表示原始 DbgPrint 级别。
+        ComponentId, // 保存内核调试输出原始组件编号。
+        (NTSTATUS)Level, // 显式转换保留级别位图，不称为原操作 NTSTATUS。
+        Output->Buffer, // 使用当前 callback 已验证非空的内核缓冲。
+        (ULONG)Output->Length); // Length 是原始有界字节长度，不要求 NUL 终止。
 
     // 回调可在 DIRQL 执行，只做 try-lock；并发写入时宁可丢弃也绝不等待。
     if (InterlockedCompareExchange(&context->DebugOutputWriterLock, 1, 0) != 0) {
@@ -268,6 +276,14 @@ NTSTATUS KswordARKDebugOutputControl(
 
     context->DebugOutputLastStatus = status;
     KswordARKDebugOutputFillControlResponse(context, Response);
+    if (Request->action == KSWORD_ARK_DEBUG_OUTPUT_ACTION_START || Request->action == KSWORD_ARK_DEBUG_OUTPUT_ACTION_STOP) { // QUERY 不制造状态事件。
+        KswordARKBugcheckTraceRecord( // 镜像事务结束后的实际开关，不改变现有控制锁或所有权。
+            KSWORD_BUGCHECK_TRACE_KIND_DBGPRINT_STATE, // 即使没有输出，也能区分未启用与启用后无消息。
+            (Response->runtimeFlags & KSWORD_ARK_DEBUG_OUTPUT_RUNTIME_CAPTURING) != 0UL ? 1UL : 0UL, // 只依据实际启用位。
+            status, // 原样保留此次 START 或 STOP 的结果。
+            "DBGPRINT CAPTURE STATE", // 固定摘要由 Code 解释实际 ON/OFF 状态。
+            (ULONG)(sizeof("DBGPRINT CAPTURE STATE") - 1U)); // 不包含固定字符串的结尾 NUL。
+    } // 捕获状态镜像结束，正常释放既有控制锁。
     KswordARKReleasePushLockExclusive(&g_KswordArkDebugOutputControlLock);
     return status;
 }
@@ -414,6 +430,12 @@ VOID KswordARKDebugOutputUninitialize(VOID)
 
     InterlockedExchange(&context->DebugOutputCaptureEnabled, 0);
     status = DbgSetDebugPrintCallback(KswordARKDebugPrintCallback, FALSE);
+    KswordARKBugcheckTraceRecord( // 注销返回后镜像真实关闭位，保留异常注销状态。
+        KSWORD_BUGCHECK_TRACE_KIND_DBGPRINT_STATE, // 不改动既有 callback 生命周期。
+        0UL, // 现有捕获启用位已明确清零。
+        status, // 镜像真实注销结果，不虚构成功。
+        "DBGPRINT CAPTURE STOP", // 明确来源为卸载过程的关闭观察。
+        (ULONG)(sizeof("DBGPRINT CAPTURE STOP") - 1U)); // 固定文字长度，不读取外部缓冲。
     context->DebugOutputRegistrationStatus = status;
     context->DebugOutputLastStatus = status;
     if (NT_SUCCESS(status)) {

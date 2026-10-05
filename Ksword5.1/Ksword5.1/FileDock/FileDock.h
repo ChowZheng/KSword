@@ -23,6 +23,7 @@
 
 // Qt 前置声明：降低头文件耦合。
 class QCheckBox;
+class QAbstractTableModel;
 class QComboBox;
 class QDialog;
 class QEvent;
@@ -149,7 +150,7 @@ private:
         QTreeView* fileView = nullptr;         // 详情/树形视图，同时持有共享选区。
         QFileSystemModel* fsModel = nullptr;   // 原始文件系统模型。
         QSortFilterProxyModel* proxyModel = nullptr; // 过滤代理模型。
-        QStandardItemModel* manualModel = nullptr;   // 手动解析原始模型。
+        QAbstractTableModel* manualModel = nullptr;  // 直接持有枚举快照，按需提供单元格。
         QSortFilterProxyModel* manualProxyModel = nullptr; // 手动解析代理模型。
 
         QStatusBar* statusBar = nullptr;       // 面板状态栏。
@@ -165,6 +166,8 @@ private:
         QString manualLoadedPath;              // 手动解析模型当前已加载目录路径。
         QString panelNameText;                 // 面板名称（日志与提示使用）。
         QString lastStatusLogSignature;        // 状态栏日志去重签名。
+        int statusRequestSerial = 0;           // 异步状态查询的选区/路径代次。
+        bool statusQueryInProgress = false;    // 每个面板最多一个磁盘/属性查询。
         QString lastFilterLogSignature;        // 过滤参数日志去重签名。
         bool pathEditMode = false;             // 当前是否处于路径编辑模式。
         ks::file::ManualFsType lastManualFsType = ks::file::ManualFsType::Unknown; // 最近一次手动解析识别到的FS类型。
@@ -307,11 +310,6 @@ private:
     // - 处理：重建 QFileSystemModel 并重新挂到代理模型，绕开 QFileSystemModel 对 size/mtime 的缓存；
     // - 返回：无返回值。
     void recreateFileSystemModel(FilePanelWidgets& panel);
-
-    // reloadManualModel：
-    // - 作用：手动解析当前目录并填充模型。
-    // - 参数 showWarningMessage：是否在失败时弹框提示。
-    bool reloadManualModel(FilePanelWidgets& panel, bool showWarningMessage);
 
     // requestAsyncManualReload：
     // - 作用：异步执行手动解析，避免 UI 线程阻塞。

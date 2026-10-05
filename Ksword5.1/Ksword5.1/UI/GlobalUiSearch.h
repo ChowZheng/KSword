@@ -207,6 +207,11 @@ namespace ks::ui
         // - 作用：按命中列表重建弹层列表项（含富文本高亮与路径行）。
         void rebuildResultList();
 
+        // refreshResultHtmlColors 原地更新当前结果的富文本角色，保留列表对象、选择和查询快照。
+        void refreshResultHtmlColors();
+        // scheduleResultThemeRefresh 合并主题事件；不启动搜索、递增扫描代次或重设隐藏行。
+        void scheduleResultThemeRefresh();
+
         // showPopupPanel：
         // - 作用：应用当前主题样式、计算尺寸并显示/置前弹层。
         void showPopupPanel();
@@ -271,6 +276,7 @@ namespace ks::ui
         QLabel* m_searchProgressLabel = nullptr;  // m_searchProgressLabel：进度文案“正在搜索：Dock 名（n/N）”。
         QProgressBar* m_searchProgressBar = nullptr; // m_searchProgressBar：按 Dock 数推进的进度条。
         QTimer* m_searchDebounceTimer = nullptr;  // m_searchDebounceTimer：输入防抖定时器。
+        bool m_resultThemeRefreshScheduled = false; // 合并存量 HTML 重着色，避免 palette 传播栈重入。
 
         QString m_pendingQueryText;               // m_pendingQueryText：最近一次输入的查询文本。
         QString m_activeQueryText;                // m_activeQueryText：当前异步扫描采用的查询快照。

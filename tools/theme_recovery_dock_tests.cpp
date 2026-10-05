@@ -145,8 +145,8 @@ namespace
         }
     }
 
-    // NavigationColors 保存三态的底色、文字、图形及禁用图形；比较最终8位RGB避免存储格式差异。
-    using NavigationColors = std::array<QRgb, 10>;
+    // NavigationColors 保存三态底色、文字、图形、禁用图形及选中标记；按最终8位RGB比较。
+    using NavigationColors = std::array<QRgb, 11>;
     using ProviderStates = std::array<QImage, 24>; // 六种provider的四态真实像素。
     using NavigationSurfaces = std::array<QImage, 5>; // 普通、hover、选中、选中hover、整排标题栏。
 
@@ -163,7 +163,7 @@ namespace
     // 无参数；返回三态角色快照，失败交由Require统一汇总。
     NavigationColors navigationColors()
     {
-        NavigationColors colors{}; // 将各角色统一量化为RGBA以做背景独立性比较。
+        NavigationColors colors{}; // 将各角色统一量化为RGBA，分别比较普通底面与强调态。
         const std::array<KswordTheme::DockTabState, 3> states{
             KswordTheme::DockTabState::Inactive,
             KswordTheme::DockTabState::Hover,
@@ -190,7 +190,10 @@ namespace
         }
         const QColor disabled = KswordTheme::DockTabGlyphColor(
             KswordTheme::DockTabState::Inactive, true);
-        colors.back() = disabled.rgba();
+        colors[9] = disabled.rgba();
+        colors[10] = KswordTheme::DockTabHighlightColor().rgba(); // 选中标记也须跟随主体色且可读。
+        Require(KswordTheme::ContrastRatio(QColor::fromRgba(colors[10]), backgrounds[2]) >= 2.999,
+            "Selected navigation marker contrasts against the actual background");
         for (const QColor& background : backgrounds)
         {
             Require(KswordTheme::ContrastRatio(disabled, background) >= 2.999,
@@ -344,7 +347,7 @@ namespace
         }
     }
 
-    // checkDisabledTitleBarButton 隔离图标后检查真实禁用按钮底面，不能被业务背景种子填满。
+    // checkDisabledTitleBarButton 隔离图标后检查禁用按钮是否透出普通标题栏底面。
     // titleBar为真实ADS标题栏；恢复原图标与启用状态，不改变后续图标检查结果。
     void checkDisabledTitleBarButton(ads::CDockAreaTitleBar* titleBar)
     {
@@ -412,6 +415,15 @@ namespace
             Require(surfaceUsesColor(images[index], KswordTheme::DockTabBackgroundColor(states[index])),
                 "Real ADS navigation surface renders the production state color");
         }
+        // 活动标签悬停也必须保留主题色标记，避免仅前景角色改变而实际边框仍是旧色。
+        for (const std::size_t index : { std::size_t(2), std::size_t(3) })
+        {
+            const QImage& image = images[index]; // 实际QSS绘制的活动标签底面。
+            Require(!image.isNull() && image.height() >= 2
+                && image.pixelColor(image.width() / 2, image.height() - 1).rgba()
+                    == KswordTheme::DockTabHighlightColor().rgba(),
+                "Active navigation renders its theme marker with and without hover");
+        }
         return images;
     }
 
@@ -436,7 +448,7 @@ namespace
         drainDockEvents();
     }
 
-    // testDockNavigation 用生产QSS覆盖模拟透明兜底，验证主体色与用户背景色的独立性。
+    // testDockNavigation 用真实ADS验证三态背景跟随背景色，而强调前景/标记跟随主体色。
     // 无输入或返回；仅创建独立ADS对象，不构造MainWindow、不运行构建或业务后端。
     void testDockNavigation()
     {
@@ -481,33 +493,56 @@ namespace
             const ProviderStates icons = providerStates();
             const NavigationSurfaces surfaces = navigationSurfaces(first, second);
 
-            // backgrounds覆盖无自定义、极端黑白及相反色相，不能只测同一类中性色。
+            // backgrounds覆盖无自定义、极端黑白及相反色相；三态都须保持真实图标对比。
             const std::array<QString, 5> backgrounds{
                 QString(), QStringLiteral("#000000"), QStringLiteral("#ffffff"),
                 QStringLiteral("#bf2941"), QStringLiteral("#9bd8ef") };
+            NavigationColors blackColors{}; // 黑色种子下的三态底面与前景。
+            NavigationSurfaces blackSurfaces; // 黑色种子下的真实像素。
             for (const QString& background : backgrounds)
             {
                 KswordTheme::SetMainBackgroundColor(background);
                 applyDockNavigationStyle(manager, transparentFallback);
-                Require(navigationColors() == colors,
-                    "Fixed accent keeps all navigation background, text and glyph roles across background changes");
-                Require(providerStates() == icons,
-                    "Fixed accent keeps every ADS provider mode pixel across background changes");
-                Require(navigationSurfaces(first, second) == surfaces,
-                    "Fixed accent keeps real navigation surfaces across background changes");
+                const NavigationColors currentColors = navigationColors(); // 检查当前三态可读性。
+                const NavigationSurfaces currentSurfaces = navigationSurfaces(first, second); // 检查实际绘制。
+                providerImages(); // 前景可随背景校准，每个图标状态仍须可读。
+                if (background == QStringLiteral("#000000"))
+                {
+                    blackColors = currentColors;
+                    blackSurfaces = currentSurfaces;
+                }
+                else if (background == QStringLiteral("#ffffff"))
+                {
+                    // 只改变外围窗口不足以证明导航背景已接入，逐态比较黑白种子。
+                    for (std::size_t index = 0; index < 3; ++index)
+                    {
+                        Require(currentColors[index * 3] != blackColors[index * 3],
+                            "Background seed changes every navigation state background");
+                        Require(currentSurfaces[index] != blackSurfaces[index],
+                            "Background seed changes real navigation state surfaces");
+                    }
+                    Require(currentSurfaces[4] != blackSurfaces[4],
+                        "Background seed changes the real title bar surface");
+                }
             }
 
+            // 固定背景仅改变主体色，所有底面应保持，强调图标和标记应刷新。
+            KswordTheme::SetMainBackgroundColor(QString());
             KswordTheme::SetPrimaryAccentColor(QStringLiteral("#c08040"));
             applyDockNavigationStyle(manager, transparentFallback);
-            const NavigationColors changed = navigationColors();
-            const NavigationSurfaces changedSurfaces = navigationSurfaces(first, second);
+            const NavigationColors changed = navigationColors(); // 换主体色后的公开角色。
+            const NavigationSurfaces changedSurfaces = navigationSurfaces(first, second); // 实际背景及标记。
             for (std::size_t index = 0; index < 3; ++index)
             {
-                Require(changed[index * 3] != colors[index * 3],
-                    "Changing primary accent changes every ADS navigation state background");
-                Require(changedSurfaces[index] != surfaces[index],
-                    "Changing primary accent changes real ADS navigation state pixels");
+                Require(changed[index * 3] == colors[index * 3],
+                    "Accent changes preserve every navigation state background");
             }
+            Require(changedSurfaces[0] == surfaces[0] && changedSurfaces[1] == surfaces[1]
+                && changedSurfaces[4] == surfaces[4],
+                "Accent changes preserve ordinary and hovered tab and title bar surfaces");
+            Require(changed[10] != colors[10] && changedSurfaces[2] != surfaces[2]
+                && changedSurfaces[3] != surfaces[3],
+                "Accent changes refresh the selected marker including hovered active tabs");
             Require(providerStates() != icons,
                 "Changing primary accent changes real ADS navigation provider pixels");
 

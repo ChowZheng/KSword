@@ -6,6 +6,7 @@
 #include "../Internationalization/LanguageManager.h"
 
 #include <QCoreApplication>
+#include <QComboBox>
 #include <QGroupBox>
 #include <QLabel>
 #include <QMetaObject>
@@ -40,6 +41,23 @@ namespace
     QString bugcheckDiagnosticsInstallResultText(
         const ksword::ark::BugcheckDiagnosticsResult& result)
     {
+        // 旧协议响应已送达驱动；优先解释兼容要求，不把版本拒绝归类为传输失败。
+        if (result.unsupported ||
+            (result.io.ok &&
+             result.response.status == KSWORD_ARK_BUGCHECK_DIAGNOSTICS_STATUS_UNSUPPORTED))
+        {
+            return ks::i18n::text(
+                QStringLiteral("settings.features.bugcheck.status.unsupported"),
+                QStringLiteral("当前加载的 R0 驱动不支持蓝屏模式协议。请更新并重新加载驱动后重试。"));
+        }
+        if (!result.io.ok && result.io.message == "bugcheck_render_mode_not_applied")
+        {
+            return ks::i18n::text(
+                QStringLiteral("settings.features.bugcheck.status.mode_failed"),
+                QStringLiteral("渲染模式已保存，但当前驱动未应用此模式。Win32：%1，状态：%2。"))
+                .arg(result.io.win32Error)
+                .arg(result.response.status);
+        }
         if (!result.io.ok)
         {
             return ks::i18n::text(
@@ -52,12 +70,6 @@ namespace
             return ks::i18n::text(
                 QStringLiteral("settings.features.bugcheck.status.session_installed"),
                 QStringLiteral("本次蓝屏诊断已安装。驱动卸载或系统重启后失效。"));
-        }
-        if (result.response.status == KSWORD_ARK_BUGCHECK_DIAGNOSTICS_STATUS_UNSUPPORTED)
-        {
-            return ks::i18n::text(
-                QStringLiteral("settings.features.bugcheck.status.unsupported"),
-                QStringLiteral("当前 R0 驱动未包含蓝屏诊断安装能力。"));
         }
         if (result.response.status == KSWORD_ARK_BUGCHECK_DIAGNOSTICS_STATUS_BUSY)
         {
@@ -89,6 +101,9 @@ void SettingsDock::initializeBugcheckDiagnosticsControls(
         return;
     }
 
+    // 此分组早于整页配置载入；先取模式字段，确保初始选项不会回落到构造默认值。
+    m_currentAppearanceSettings.bugcheckDiagnosticsRenderMode =
+        ks::settings::loadAppearanceSettings().bugcheckDiagnosticsRenderMode;
     // 功能独立分组只承载配置与明确安装动作，不与危险 Guard 的一次性 Hook 混在一起。
     ks::i18n::LanguageManager& languageManager = ks::i18n::LanguageManager::instance();
     QGroupBox* const bugcheckGroupBox = new QGroupBox(
@@ -110,6 +125,47 @@ void SettingsDock::initializeBugcheckDiagnosticsControls(
         QStringLiteral("settings.features.bugcheck.hint"),
         QStringLiteral("仅在自动安装已配置或明确点击“本次安装”后，R0 才会扫描 BGP 私有函数、准备蓝屏绘制资源并注册转储回调。此操作曾在不兼容系统上造成异常，安装失败时会保留 Windows 原生蓝屏和转储路径。"));
     bugcheckLayout->addWidget(hintLabel);
+
+    // 模式项的业务值直接使用共享协议；翻译只改变可见文字，不改变模式值。
+    QLabel* const renderModeLabel = new QLabel(bugcheckGroupBox); // 模式控件的可访问标签。
+    languageManager.bindText(
+        renderModeLabel,
+        QStringLiteral("settings.features.bugcheck.render_mode"),
+        QStringLiteral("蓝屏渲染模式"));
+    bugcheckLayout->addWidget(renderModeLabel);
+    m_bugcheckDiagnosticsRenderModeCombo = new QComboBox(bugcheckGroupBox);
+    renderModeLabel->setBuddy(m_bugcheckDiagnosticsRenderModeCombo);
+    m_bugcheckDiagnosticsRenderModeCombo->addItem(
+        QStringLiteral("诊断面板（默认）"),
+        static_cast<int>(KSWORD_ARK_BUGCHECK_RENDER_MODE_DIAGNOSTIC));
+    m_bugcheckDiagnosticsRenderModeCombo->addItem(
+        QStringLiteral("Linux 风格（诊断二维码）"),
+        static_cast<int>(KSWORD_ARK_BUGCHECK_RENDER_MODE_LINUX_QR));
+    languageManager.bindComboBoxItem(
+        m_bugcheckDiagnosticsRenderModeCombo,
+        0,
+        QStringLiteral("settings.features.bugcheck.render_mode.diagnostic"),
+        QStringLiteral("诊断面板（默认）"));
+    languageManager.bindComboBoxItem(
+        m_bugcheckDiagnosticsRenderModeCombo,
+        1,
+        QStringLiteral("settings.features.bugcheck.render_mode.linux_qr"),
+        QStringLiteral("Linux 风格（诊断二维码）"));
+    languageManager.bindToolTip(
+        m_bugcheckDiagnosticsRenderModeCombo,
+        QStringLiteral("settings.features.bugcheck.render_mode.tooltip"),
+        QStringLiteral("选择后立即保存。已安装的诊断会切换模式；尚未安装时在下次安装生效。Linux 风格将已采集诊断信息写入中央二维码。"));
+    bugcheckLayout->addWidget(m_bugcheckDiagnosticsRenderModeCombo);
+    // activated 只响应用户操作，载入配置或切换语言不会误写磁盘/访问驱动。
+    connect(
+        m_bugcheckDiagnosticsRenderModeCombo,
+        QOverload<int>::of(&QComboBox::activated),
+        this,
+        [this](const int selectedIndex)
+        {
+            setBugcheckDiagnosticsRenderMode(
+                m_bugcheckDiagnosticsRenderModeCombo->itemData(selectedIndex).toInt());
+        });
 
     m_bugcheckDiagnosticsStatusLabel = new QLabel(bugcheckGroupBox);
     m_bugcheckDiagnosticsStatusLabel->setWordWrap(true);
@@ -191,6 +247,12 @@ void SettingsDock::initializeBugcheckDiagnosticsControls(
 
 void SettingsDock::refreshBugcheckDiagnosticsStatusText()
 {
+    if (m_bugcheckDiagnosticsRenderModeCombo != nullptr)
+    {
+        const int modeIndex = m_bugcheckDiagnosticsRenderModeCombo->findData(
+            m_currentAppearanceSettings.bugcheckDiagnosticsRenderMode); // 恢复持久化选择。
+        m_bugcheckDiagnosticsRenderModeCombo->setCurrentIndex(modeIndex >= 0 ? modeIndex : 0);
+    }
     if (m_bugcheckDiagnosticsStatusLabel == nullptr || m_bugcheckDiagnosticsInstallBusy)
     {
         return;
@@ -244,7 +306,52 @@ void SettingsDock::setBugcheckDiagnosticsAutoInstall(const bool enabled)
         << eol;
 }
 
+void SettingsDock::setBugcheckDiagnosticsRenderMode(const int renderMode)
+{
+    if (m_bugcheckDiagnosticsInstallBusy ||
+        (renderMode != static_cast<int>(KSWORD_ARK_BUGCHECK_RENDER_MODE_DIAGNOSTIC) &&
+         renderMode != static_cast<int>(KSWORD_ARK_BUGCHECK_RENDER_MODE_LINUX_QR)))
+    {
+        return;
+    }
+
+    // 只改最新磁盘快照中的模式字段，不提交外观页尚未应用的选项。
+    ks::settings::AppearanceSettings savedSettings = ks::settings::loadAppearanceSettings();
+    savedSettings.bugcheckDiagnosticsRenderMode = renderMode;
+    QString saveErrorText; // 保存失败说明回投状态标签，保留原模式选择。
+    if (!ks::settings::saveAppearanceSettings(savedSettings, &saveErrorText))
+    {
+        refreshBugcheckDiagnosticsStatusText();
+        m_bugcheckDiagnosticsStatusLabel->setText(
+            ks::i18n::text(
+                QStringLiteral("settings.features.bugcheck.status.mode_save_failed"),
+                QStringLiteral("蓝屏渲染模式保存失败：%1。"))
+                .arg(saveErrorText));
+        return;
+    }
+
+    // 保存成功同步当前页及主窗口快照，下次驱动启动始终使用同一模式。
+    m_currentAppearanceSettings.bugcheckDiagnosticsRenderMode = renderMode;
+    emit bugcheckDiagnosticsRenderModeChanged(renderMode);
+    if (!ks::ui::isCurrentProcessElevated())
+    {
+        m_bugcheckDiagnosticsStatusLabel->setText(
+            ks::i18n::text(
+                QStringLiteral("settings.features.bugcheck.status.mode_saved"),
+                QStringLiteral("渲染模式已保存，将在下次安装蓝屏诊断时使用。")));
+        return;
+    }
+    configureBugcheckDiagnosticsForCurrentSession(
+        KSWORD_ARK_BUGCHECK_DIAGNOSTICS_ACTION_SET_RENDER_MODE);
+}
+
 void SettingsDock::installBugcheckDiagnosticsForCurrentSession()
+{
+    configureBugcheckDiagnosticsForCurrentSession(
+        KSWORD_ARK_BUGCHECK_DIAGNOSTICS_ACTION_INSTALL);
+}
+
+void SettingsDock::configureBugcheckDiagnosticsForCurrentSession(const unsigned long action)
 {
     if (m_bugcheckDiagnosticsInstallBusy)
     {
@@ -258,16 +365,27 @@ void SettingsDock::installBugcheckDiagnosticsForCurrentSession()
         return;
     }
 
-    // 先通知主窗口显示入口，再开始后台调用，避免 R0 请求未完成时用户看不到诊断页面。
-    emit bugcheckDiagnosticsInstallationStarted();
+    // 仅安装动作请求显示诊断入口；模式切换不会隐式安装回调或扫描 BGP。
+    if (action == KSWORD_ARK_BUGCHECK_DIAGNOSTICS_ACTION_INSTALL)
+    {
+        emit bugcheckDiagnosticsInstallationStarted();
+    }
     setBugcheckDiagnosticsControlsBusy(true);
-    const QPointer<SettingsDock> guardedSettingsDock(this);
+    if (action == KSWORD_ARK_BUGCHECK_DIAGNOSTICS_ACTION_SET_RENDER_MODE)
+    {
+        m_bugcheckDiagnosticsStatusLabel->setText(
+            ks::i18n::text(
+                QStringLiteral("settings.features.bugcheck.status.mode_updating"),
+                QStringLiteral("正在更新蓝屏渲染模式。")));
+    }
+    const unsigned long renderMode = static_cast<unsigned long>(
+        m_currentAppearanceSettings.bugcheckDiagnosticsRenderMode); // 捕获本次操作的模式值。
+    const QPointer<SettingsDock> guardedSettingsDock(this); // 异步回投避免访问已关闭的设置页。
     QThreadPool::globalInstance()->start(
-        [guardedSettingsDock]()
+        [guardedSettingsDock, action, renderMode]()
         {
             const ksword::ark::BugcheckDiagnosticsResult result =
-                ksword::ark::DriverClient().configureBugcheckDiagnostics(
-                    KSWORD_ARK_BUGCHECK_DIAGNOSTICS_ACTION_INSTALL);
+                ksword::ark::DriverClient().configureBugcheckDiagnostics(action, renderMode);
             QCoreApplication* const application = QCoreApplication::instance();
             if (application == nullptr)
             {
@@ -278,7 +396,7 @@ void SettingsDock::installBugcheckDiagnosticsForCurrentSession()
             {
                 QMetaObject::invokeMethod(
                     guardedSettingsDock,
-                    [guardedSettingsDock, result]()
+                    [guardedSettingsDock, result, action, renderMode]()
                 {
                     if (guardedSettingsDock == nullptr)
                     {
@@ -286,6 +404,46 @@ void SettingsDock::installBugcheckDiagnosticsForCurrentSession()
                     }
 
                     guardedSettingsDock->setBugcheckDiagnosticsControlsBusy(false);
+                    // 切换结果区分“已保存”与“当前驱动已应用”，不把离线配置称为成功切换。
+                    if (action == KSWORD_ARK_BUGCHECK_DIAGNOSTICS_ACTION_SET_RENDER_MODE)
+                    {
+                        QString modeStatusText; // 当前模式请求的可见结果。
+                        if (result.unsupported ||
+                            (result.io.ok &&
+                             result.response.status == KSWORD_ARK_BUGCHECK_DIAGNOSTICS_STATUS_UNSUPPORTED))
+                        {
+                            modeStatusText = bugcheckDiagnosticsInstallResultText(result);
+                        }
+                        else if (result.io.ok &&
+                            result.response.status == KSWORD_ARK_BUGCHECK_DIAGNOSTICS_STATUS_OK &&
+                            result.response.renderMode == renderMode)
+                        {
+                            modeStatusText = ks::i18n::text(
+                                QStringLiteral("settings.features.bugcheck.status.mode_applied"),
+                                QStringLiteral("当前蓝屏渲染模式已更新。"));
+                        }
+                        else if ((result.io.ok &&
+                            result.response.status == KSWORD_ARK_BUGCHECK_DIAGNOSTICS_STATUS_INACTIVE) ||
+                            (!result.io.ok &&
+                             (result.io.win32Error == ERROR_FILE_NOT_FOUND ||
+                              result.io.win32Error == ERROR_PATH_NOT_FOUND ||
+                              result.io.win32Error == ERROR_SERVICE_NOT_ACTIVE)))
+                        {
+                            modeStatusText = ks::i18n::text(
+                                QStringLiteral("settings.features.bugcheck.status.mode_saved"),
+                                QStringLiteral("渲染模式已保存，将在下次安装蓝屏诊断时使用。"));
+                        }
+                        else
+                        {
+                            modeStatusText = ks::i18n::text(
+                                QStringLiteral("settings.features.bugcheck.status.mode_failed"),
+                                QStringLiteral("渲染模式已保存，但当前驱动未应用此模式。Win32：%1，状态：%2。"))
+                                .arg(result.io.win32Error)
+                                .arg(result.response.status);
+                        }
+                        guardedSettingsDock->m_bugcheckDiagnosticsStatusLabel->setText(modeStatusText);
+                        return;
+                    }
                     if (guardedSettingsDock->m_bugcheckDiagnosticsStatusLabel != nullptr)
                     {
                         guardedSettingsDock->m_bugcheckDiagnosticsStatusLabel->setText(
@@ -332,6 +490,10 @@ void SettingsDock::installBugcheckDiagnosticsForCurrentSession()
 void SettingsDock::setBugcheckDiagnosticsControlsBusy(const bool busy)
 {
     m_bugcheckDiagnosticsInstallBusy = busy;
+    if (m_bugcheckDiagnosticsRenderModeCombo != nullptr)
+    {
+        m_bugcheckDiagnosticsRenderModeCombo->setEnabled(!busy);
+    }
     if (m_enableBugcheckDiagnosticsAutoInstallButton != nullptr)
     {
         m_enableBugcheckDiagnosticsAutoInstallButton->setEnabled(!busy);

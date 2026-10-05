@@ -389,11 +389,13 @@ private:
     // dumpSelectedModuleMemory：
     // - 输入为进入右键菜单前捕获的模块名、路径和基址快照；
     // - 由 R0 校验已加载模块身份与映像大小；
+    // - useHvm 为真时要求每个读取分片使用 HVM 私有窗口，不接受回退或补零。
     // - 后台分页读取内核映像，只在完整成功后以不覆盖的原子重命名提交用户所选文件。
     void dumpSelectedModuleMemory(
         const QString& moduleName,
         const QString& rawPath,
-        std::uint64_t moduleBase);
+        std::uint64_t moduleBase,
+        bool useHvm = false);
 
     // stopDriverServiceFromServiceRow：
     // - 从服务列表选中行读取 SCM 服务名并通过 ControlService(SERVICE_CONTROL_STOP) 停止；

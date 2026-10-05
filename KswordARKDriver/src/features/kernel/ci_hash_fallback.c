@@ -49,6 +49,71 @@ typedef struct _KSW_CI_HASH_CANDIDATE
     ULONG SampleCount;
 } KSW_CI_HASH_CANDIDATE, *PKSW_CI_HASH_CANDIDATE;
 
+static VOID
+KswordARKCiHashSelectListCandidate(
+    _In_ const KSW_CI_HASH_CANDIDATE* Candidate,
+    _Inout_ KSW_CI_HASH_CANDIDATE* Best,
+    _Inout_ ULONG* BestScore,
+    _Inout_ BOOLEAN* Ambiguous
+    )
+/*++
+
+Routine Description:
+
+    Preserve tied conflicts across duplicate references to the same list and
+    layout. Only a strictly longer validated chain can remove the conflict.
+
+--*/
+{
+    if (Candidate->ChainLength < *BestScore) { // 较短链不改变当前最强候选或歧义状态。
+        return; // 保留先前已经成立的证据。
+    } // 结束较弱候选过滤。
+    if (Candidate->ChainLength == *BestScore && *BestScore != 0UL &&
+        (Candidate->ListGlobal != Best->ListGlobal ||
+         Candidate->NextOffset != Best->NextOffset ||
+         Candidate->NameOffset != Best->NameOffset)) { // 等长但不同链或布局形成真实歧义。
+        *Ambiguous = TRUE; // 歧义保持到出现严格更强的证据。
+        return; // 不用矛盾候选覆盖当前记录。
+    } // 结束同分矛盾候选处理。
+    if (Candidate->ChainLength > *BestScore) { // 只有更强的链证据可以消除既有等分歧义。
+        *Ambiguous = FALSE; // 同一全局的重复引用不能抹掉另一条矛盾链。
+    } // 结束严格更强候选的歧义重置。
+    *Best = *Candidate; // 保留最新的同一布局引用以供锁配对。
+    *BestScore = Candidate->ChainLength; // 更新当前最强链长度。
+}
+
+static VOID
+KswordARKCiHashSelectLockReference(
+    _In_ const KSW_RUNTIME_DATA_REFERENCE* Candidate,
+    _In_ ULONG PairScore,
+    _Inout_ const KSW_RUNTIME_DATA_REFERENCE** Best,
+    _Inout_ ULONG* BestScore,
+    _Inout_ BOOLEAN* Ambiguous
+    )
+/*++
+
+Routine Description:
+
+    Score lock identities without allowing duplicate references to clear a
+    tied conflict. A stronger list/lock association can establish a new best.
+
+--*/
+{
+    if (PairScore == 0UL || PairScore < *BestScore) { // 未关联或更弱的锁不影响选择结果。
+        return; // 保留原来的锁候选与歧义状态。
+    } // 结束无效或较弱配对过滤。
+    if (PairScore == *BestScore && *BestScore != 0UL && *Best != NULL &&
+        (*Best)->Address != Candidate->Address) { // 只比较真实锁地址，不把代码引用地址当锁身份。
+        *Ambiguous = TRUE; // 不同锁等分时必须拒绝后续 acquire。
+        return; // 不用矛盾锁替换已记录锁。
+    } // 结束同分锁身份冲突。
+    if (PairScore > *BestScore) { // 只有更高配对分数可以重新证明锁候选唯一。
+        *Ambiguous = FALSE; // 重复引用同一锁时保留此前的等分锁冲突。
+    } // 结束严格更强锁配对的歧义重置。
+    *Best = Candidate; // 保存当前候选引用，地址仍需通过系统 resource 身份验证。
+    *BestScore = PairScore; // 更新最强关联分数。
+}
+
 static BOOLEAN
 KswordARKCiHashIsKernelAddress(
     _In_ ULONG_PTR Address
@@ -538,7 +603,7 @@ KswordARKCiHashResolveRuntimeLayout(
         status = STATUS_INSUFFICIENT_RESOURCES;
         goto Exit;
     }
-    referenceCount = KswordARKRuntimeCollectAnchoredDataReferences(
+    referenceCount = KswordARKRuntimeCollectFunctionDataReferences( // PE 函数边界防止相邻例程引用污染 CI 候选集。
         &view,
         anchors,
         RTL_NUMBER_OF(anchors),
@@ -561,21 +626,11 @@ KswordARKCiHashResolveRuntimeLayout(
         if (!KswordARKCiHashInferListCandidate(
                 &view,
                 &references[referenceIndex],
-                &candidate) ||
-            candidate.ChainLength < bestChainLength) {
+                &candidate)) {
             continue;
         }
-        if (candidate.ChainLength == bestChainLength &&
-            bestChainLength != 0UL &&
-            (candidate.ListGlobal != bestList.ListGlobal ||
-             candidate.NextOffset != bestList.NextOffset ||
-             candidate.NameOffset != bestList.NameOffset)) {
-            listAmbiguous = TRUE;
-            continue;
-        }
-        bestList = candidate;
-        bestChainLength = candidate.ChainLength;
-        listAmbiguous = FALSE;
+        KswordARKCiHashSelectListCandidate(&candidate, &bestList,
+            &bestChainLength, &listAmbiguous); // 统一保留等分矛盾链的粘性歧义。
     }
     if (bestChainLength < 2UL || listAmbiguous) {
         status = STATUS_NOT_FOUND;
@@ -594,18 +649,8 @@ KswordARKCiHashResolveRuntimeLayout(
         pairScore = KswordARKCiHashPairScore(
             &bestList,
             &references[referenceIndex]);
-        if (pairScore == 0UL || pairScore < bestPairScore) {
-            continue;
-        }
-        if (pairScore == bestPairScore && bestPairScore != 0UL &&
-            bestLock != NULL &&
-            bestLock->Address != references[referenceIndex].Address) {
-            pairAmbiguous = TRUE;
-            continue;
-        }
-        bestLock = &references[referenceIndex];
-        bestPairScore = pairScore;
-        pairAmbiguous = FALSE;
+        KswordARKCiHashSelectLockReference(&references[referenceIndex], pairScore,
+            &bestLock, &bestPairScore, &pairAmbiguous); // 重复引用不得清除另一锁的等分冲突。
     }
     if (bestLock == NULL || bestPairScore < 2UL || pairAmbiguous) {
         status = STATUS_NOT_FOUND;

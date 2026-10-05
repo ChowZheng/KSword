@@ -20,6 +20,8 @@ $ucrtInclude = Join-Path $kitRoot 'ucrt'
 if ($Clean) {
     Remove-Item -LiteralPath @(
         $object,
+        (Join-Path $outputRoot 'bugcheck_linux_replay.obj'),
+        (Join-Path $outputRoot 'qrcodegen.obj'),
         $executable,
         $incrementalLink,
         $programDatabase
@@ -36,15 +38,17 @@ foreach ($required in @($vcvars, $kmInclude, $sharedInclude, $ucrtInclude, $sour
 $stubInclude = Join-Path $PSScriptRoot 'stubs'
 $compile = @(
     'call', ('"{0}"' -f $vcvars), '>', 'nul', '&&',
-    'cl.exe', '/nologo', '/W4', '/WX-', '/Od', '/Zi', '/TC',
+    'cl.exe', '/nologo', '/W4', '/WX', '/Od', '/Zi', '/TC', '/DNDEBUG',
     '/D_AMD64_', '/DAMD64',
     ('/I"{0}"' -f $stubInclude),
     ('/I"{0}"' -f $kmInclude),
     ('/I"{0}"' -f $sharedInclude),
     ('/I"{0}"' -f $ucrtInclude),
-    ('/Fo"{0}"' -f $object),
+    ('/Fo"{0}/"' -f $outputRoot),
     ('/Fe"{0}"' -f $executable),
-    ('"{0}"' -f $source)
+    ('"{0}"' -f $source),
+    ('"{0}"' -f (Join-Path $PSScriptRoot 'bugcheck_linux_replay.c')),
+    ('"{0}"' -f (Join-Path $repositoryRoot 'third_party\qrcodegen\qrcodegen.c'))
 ) -join ' '
 
 cmd.exe /d /s /c $compile

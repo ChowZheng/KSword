@@ -267,7 +267,7 @@ namespace ks::ui
                 .arg(QString::fromStdString(FormatTimeToString(eventItem.timestamp)).right(8)));
             m_bodyLabel->setText(localizedBackendText(eventItem.content));
             m_copyText = logCopyText(eventItem);
-            m_accentColor = levelColor(eventItem.level);
+            m_logLevel = eventItem.level;
             m_logHeightLimitEnabled = heightLimitEnabled;
             m_logMaximumLines = std::max(1, maximumLines);
             m_logExpanded = false;
@@ -299,7 +299,6 @@ namespace ks::ui
                 m_progressBar->setValue(std::clamp(static_cast<int>(std::lround(taskItem.progress * 100.0f)), 0, 100));
             }
             m_copyText = progressCopyText(taskItem);
-            m_accentColor = KswordTheme::PrimaryAccentColor();
             refreshVisuals();
             adjustToContent();
         }
@@ -308,19 +307,25 @@ namespace ks::ui
         {
             QColor backgroundColor = KswordTheme::SurfaceColor();
             backgroundColor.setAlpha(kCardBackgroundAlpha);
-            const QColor accent = m_accentColor.isValid()
-                ? m_accentColor
+            // 保存通知语义而不是创建时的像素色，连续切主题也从当前种子求色。
+            const QColor accent = m_kind == Kind::Log
+                ? levelColor(m_logLevel)
                 : KswordTheme::PrimaryAccentColor();
+            const QColor hoverBackground = KswordTheme::BlendColors(KswordTheme::SurfaceColor(), accent, 36);
+            const QString accentText = KswordTheme::ThemeColorName(
+                KswordTheme::EnsureTextContrast(accent, KswordTheme::SurfaceColor()));
+            const QString hoverText = KswordTheme::ThemeColorName(
+                KswordTheme::EnsureTextContrast(accent, hoverBackground));
             m_frame->setStyleSheet(QStringLiteral(
                 "#ksNotificationCardFrame{"
                 "background-color:%1;border:1px solid %2;border-left:4px solid %3;border-radius:8px;"
                 "}"
                 "#ksNotificationCardTitle{color:%4;font-weight:600;}"
                 "#ksNotificationCardBody{color:%4;}"
-                "#ksNotificationCardCopy{color:%3;border:1px solid transparent;border-radius:4px;padding:2px 5px;}"
-                "#ksNotificationCardCopy:hover{background:%5;border-color:%3;}"
-                "#ksNotificationCardExpand{color:%3;border:1px solid transparent;border-radius:4px;padding:2px;}"
-                "#ksNotificationCardExpand:hover{background:%5;border-color:%3;}"
+                "#ksNotificationCardCopy{color:%7;border:1px solid transparent;border-radius:4px;padding:2px 5px;}"
+                "#ksNotificationCardCopy:hover{background:%5;border-color:%3;color:%8;}"
+                "#ksNotificationCardExpand{color:%7;border:1px solid transparent;border-radius:4px;padding:2px;}"
+                "#ksNotificationCardExpand:hover{background:%5;border-color:%3;color:%8;}"
                 "#ksNotificationCardProgress{border:1px solid %2;border-radius:4px;text-align:center;color:%4;background:%6;height:16px;}"
                 "#ksNotificationCardProgress::chunk{background:%3;border-radius:3px;}")
                 .arg(backgroundColor.name(QColor::HexArgb))
@@ -328,7 +333,9 @@ namespace ks::ui
                 .arg(accent.name())
                 .arg(KswordTheme::TextPrimaryColorHex())
                 .arg(KswordTheme::RgbaColorName(accent, 36))
-                .arg(KswordTheme::SurfaceMutedColorHex()));
+                .arg(KswordTheme::SurfaceMutedColorHex())
+                .arg(accentText)
+                .arg(hoverText));
             m_controlsWindow->setStyleSheet(m_frame->styleSheet());
             updateControlSizes();
         }
@@ -499,7 +506,7 @@ namespace ks::ui
         QWidget* m_expandSlot = nullptr;
         QToolButton* m_copyButton = nullptr;
         QToolButton* m_expandButton = nullptr;
-        QColor m_accentColor;
+        kLogLevel m_logLevel = kLogLevel::Info;
         QString m_copyText;
         std::function<void()> m_layoutChangedCallback;
         bool m_logHeightLimitEnabled = true;

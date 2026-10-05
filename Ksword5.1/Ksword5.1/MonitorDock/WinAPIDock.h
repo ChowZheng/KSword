@@ -108,6 +108,10 @@ public:
         bool internalEvent = false;
     };
 
+protected:
+    // changeEvent 将主题重着色排队，不启动监控或改变任何会话状态。
+    void changeEvent(QEvent* event) override;
+
 private:
     void initializeUi();
     void initializeConnections();
@@ -235,6 +239,7 @@ private:
     QCheckBox* m_eventKeepBottomCheck = nullptr;       // m_eventKeepBottomCheck：是否自动滚动到底部。
     QLabel* m_eventFilterStatusLabel = nullptr;        // m_eventFilterStatusLabel：过滤结果状态文本。
     QTableWidget* m_eventTable = nullptr;              // m_eventTable：API 事件结果表。
+    bool m_itemThemeRefreshScheduled = false; // 主题事件合并标志；不会改变过滤关键词或可见行计数。
 
     QTabWidget* m_resultTabs = nullptr;
     QComboBox* m_coveragePidCombo = nullptr;
