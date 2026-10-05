@@ -6,6 +6,9 @@
 
 EXTERN_C_START
 
+// Close one enumerated user handle and separately report temporary-suspend recovery.
+NTSTATUS KswordARKDriverCloseHandle(_In_ const KSWORD_ARK_CLOSE_HANDLE_REQUEST* Request, _Out_ NTSTATUS* ResumeStatus);
+
 NTSTATUS
 KswordARKDriverEnumerateProcessHandles(
     _Out_writes_bytes_to_(OutputBufferLength, *BytesWrittenOut) PVOID OutputBuffer,

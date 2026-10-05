@@ -20,8 +20,76 @@ Environment:
 #include <ntstrsafe.h>
 #include <stdarg.h>
 
+// ntddk-based feature headers omit this ntifs export; mirror its WDK declaration.
+NTKERNELAPI ULONG IoGetRequestorProcessId(_In_ PIRP Irp);
+
 #define KSWORD_ARK_HANDLE_ENUM_RESPONSE_HEADER_SIZE \
     (sizeof(KSWORD_ARK_ENUM_PROCESS_HANDLES_RESPONSE) - sizeof(KSWORD_ARK_HANDLE_ENTRY))
+
+/* Mutation handler: preserve buffered input, check device access and explicit confirmation. */
+NTSTATUS
+KswordARKHandleIoctlCloseHandle(
+    _In_ WDFDEVICE Device,
+    _In_ WDFREQUEST Request,
+    _In_ size_t InputBufferLength,
+    _In_ size_t OutputBufferLength,
+    _Out_ size_t* BytesReturned
+    )
+{
+    KSWORD_ARK_CLOSE_HANDLE_REQUEST copy; /* Private input survives METHOD_BUFFERED output writes. */
+    KSWORD_ARK_CLOSE_HANDLE_RESPONSE* response = NULL; /* Fixed result includes recovery status. */
+    KSWORD_ARK_SAFETY_CONTEXT safety = { 0 }; /* Temporary suspension uses the existing suspend policy. */
+    PVOID input = NULL; /* WDF-owned request buffer. */
+    PVOID output = NULL; /* WDF-owned response buffer. */
+    size_t inputBytes = 0U; /* Actual WDF input capacity. */
+    size_t outputBytes = 0U; /* Actual WDF output capacity. */
+    NTSTATUS status = STATUS_SUCCESS; /* Validation failures complete through the dispatcher. */
+
+    UNREFERENCED_PARAMETER(InputBufferLength); /* Required-size helpers validate actual buffers. */
+    UNREFERENCED_PARAMETER(OutputBufferLength); /* Output retrieval validates actual response capacity. */
+    *BytesReturned = 0U; /* Do not advertise response bytes before output retrieval. */
+    status = KswordARKValidateDeviceIoControlWriteAccess(Request); /* Require a writable device handle. */
+    if (!NT_SUCCESS(status)) { /* Reject read-only clients before parsing mutation input. */
+        return status; /* Dispatcher completes the denied request. */
+    }
+    status = KswordARKRetrieveRequiredInputBuffer(Request, sizeof(copy), &input, &inputBytes); /* Require full identity. */
+    if (!NT_SUCCESS(status)) { /* Never interpret a partial packet. */
+        return status; /* Preserve the transport validation error. */
+    }
+    RtlCopyMemory(&copy, input, sizeof(copy)); /* Snapshot before touching the shared output allocation. */
+    if (copy.size != sizeof(copy) || copy.version != KSWORD_ARK_CLOSE_HANDLE_VERSION ||
+        copy.flags != KSWORD_ARK_CLOSE_HANDLE_FLAG_UI_CONFIRMED ||
+        copy.expectedCreateTime100ns == 0ULL || copy.expectedObjectAddress == 0ULL ||
+        copy.handleValue == 0ULL || copy.handleValue >= 0x80000000ULL) { /* Reject missing identity and kernel/pseudo handles. */
+        return STATUS_INVALID_PARAMETER; /* No backend side effects for malformed input. */
+    }
+    status = KswordARKValidateUserPid(copy.processId); /* Keep Idle/System out of this mutation path. */
+    if (!NT_SUCCESS(status)) { /* Invalid and protected PIDs cannot own an eligible user handle. */
+        return status; /* Leave the process unchanged. */
+    }
+    if (copy.processId == IoGetRequestorProcessId(WdfRequestWdmGetIrp(Request)) ||
+        ULongToHandle(copy.processId) == PsGetCurrentProcessId()) { /* Never suspend the requester or executing process. */
+        return STATUS_ACCESS_DENIED; /* Prevent self-suspension and closing the active driver channel. */
+    }
+    safety.Operation = KSWORD_ARK_SAFETY_OPERATION_PROCESS_SUSPEND; /* Close temporarily suspends the owner. */
+    safety.TargetProcessId = copy.processId; /* Central policy evaluates the selected owner. */
+    safety.ContextFlags = KSWORD_ARK_SAFETY_CONTEXT_FLAG_UI_CONFIRMED; /* Packet carried exact confirmation flags. */
+    status = KswordARKSafetyEvaluate(Device, &safety); /* Preserve established critical-process policy. */
+    if (!NT_SUCCESS(status)) { /* A policy-denied target must not reach the backend. */
+        return status; /* Preserve the denial for the client. */
+    }
+    status = KswordARKRetrieveRequiredOutputBuffer(Request, sizeof(*response), &output, &outputBytes); /* Require the recovery receipt. */
+    if (!NT_SUCCESS(status)) { /* Never mutate without room to return the actual outcome. */
+        return status; /* No close has occurred yet. */
+    }
+    response = (KSWORD_ARK_CLOSE_HANDLE_RESPONSE*)output; /* Output allocation is validated. */
+    RtlZeroMemory(response, sizeof(*response)); /* Do not expose stale buffered input. */
+    response->size = sizeof(*response); /* Advertise the exact fixed-layout response. */
+    response->version = KSWORD_ARK_CLOSE_HANDLE_VERSION; /* Independent mutation protocol version. */
+    response->closeStatus = KswordARKDriverCloseHandle(&copy, &response->resumeStatus); /* Backend owns cleanup. */
+    *BytesReturned = sizeof(*response); /* Both semantic statuses are valid even on close failure. */
+    return STATUS_SUCCESS; /* Semantic outcome is returned in the fixed receipt. */
+}
 
 static VOID
 KswordARKHandleIoctlLog(

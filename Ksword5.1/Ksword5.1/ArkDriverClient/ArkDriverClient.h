@@ -175,6 +175,8 @@ namespace ksword::ark
             unsigned long flags = KSWORD_ARK_WORK_QUEUE_FLAG_INCLUDE_ALL,
             unsigned long maxEntries = KSWORD_ARK_WORK_QUEUE_DEFAULT_MAX_ENTRIES) const;
         HandleEnumResult enumerateProcessHandles(std::uint32_t processId, unsigned long flags = KSWORD_ARK_ENUM_HANDLE_FLAG_INCLUDE_ALL) const;
+        // Close the enumerated PID/creation-time/object identity; never fall back to R3.
+        IoResult closeHandle(std::uint32_t processId, std::uint64_t handleValue, std::uint64_t expectedCreateTime100ns, std::uint64_t expectedObjectAddress) const;
         HandleObjectQueryResult queryHandleObject(std::uint32_t processId, std::uint64_t handleValue, unsigned long flags = KSWORD_ARK_QUERY_OBJECT_FLAG_INCLUDE_ALL, unsigned long requestedAccess = 0) const;
         AlpcPortQueryResult queryAlpcPort(std::uint32_t processId, std::uint64_t handleValue, unsigned long flags = KSWORD_ARK_ALPC_QUERY_FLAG_INCLUDE_ALL) const;
         ProcessSectionQueryResult queryProcessSection(std::uint32_t processId, unsigned long flags = KSWORD_ARK_SECTION_QUERY_FLAG_INCLUDE_ALL, unsigned long maxMappings = KSWORD_ARK_SECTION_MAPPING_LIMIT_DEFAULT) const;

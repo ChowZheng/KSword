@@ -269,6 +269,7 @@
     <ClCompile Include="src\features\handle\handle_object_query.c" />
     <ClCompile Include="src\features\handle\handle_query.c" />
     <ClCompile Include="src\features\handle\handle_ioctl.c" />
+    <ClCompile Include="src\features\handle\handle_close.c" />
     <ClCompile Include="src\features\alpc\alpc_support.c" />
     <ClCompile Include="src\features\alpc\alpc_runtime_fallback.c" />
     <ClCompile Include="src\features\alpc\alpc_query.c" />

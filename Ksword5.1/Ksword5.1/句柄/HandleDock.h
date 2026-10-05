@@ -531,11 +531,10 @@ private:
     void copyCurrentHandleRow();
 
     // closeCurrentHandle 作用：
-    // - 对选中句柄执行 DuplicateHandle(DUPLICATE_CLOSE_SOURCE)；
+    // - 对菜单捕获的独立句柄快照执行 R3 或 R0 关闭；
     // - 成功后自动触发刷新；
-    // - 当前默认 UI 不再暴露该入口。
-    // 传入/传出：无。
-    void closeCurrentHandle();
+    // 传入 row：独立行快照；useDriver：选择 R0。
+    void closeHandleRow(const HandleRow& row, bool useDriver);
 
     // closeSameTypeHandlesInCurrentProcess 作用：
     // - 关闭“同 PID + 同 TypeIndex”的一组句柄；

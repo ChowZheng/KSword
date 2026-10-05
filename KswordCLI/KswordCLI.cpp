@@ -6176,7 +6176,7 @@ namespace
             constexpr std::size_t headerSize = sizeof(KSWORD_ARK_ENUM_PROCESS_HANDLES_RESPONSE) - sizeof(KSWORD_ARK_HANDLE_ENTRY);
             const auto* response = reinterpret_cast<const KSWORD_ARK_ENUM_PROCESS_HANDLES_RESPONSE*>(buffer.data());
             std::size_t available = 0U;
-            try { available = validateVariable(io.bytesReturned, headerSize, response->entrySize, sizeof(KSWORD_ARK_HANDLE_ENTRY), L"handle enum"); }
+            try { available = validateVariable(io.bytesReturned, headerSize, response->entrySize, KSWORD_ARK_HANDLE_ENTRY_LEGACY_SIZE, L"handle enum"); }
             catch (...) { return 4; }
             printResponseBanner(response->version, response->overallStatus, response->lastStatus, io.bytesReturned);
             printCountHeader(response->version, response->totalCount, response->returnedCount, response->entrySize, io.bytesReturned);

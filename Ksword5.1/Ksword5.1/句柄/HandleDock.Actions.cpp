@@ -4,7 +4,7 @@
 // HandleDock.Actions.cpp
 // 作用：
 // - 承载句柄模块的交互动作实现；
-// - 仅保留对象类型详情展示、复制、跳转和只读辅助动作；
+// - 承载对象类型详情、复制、跳转和逐行 R3/R0 关闭动作；
 // - 与主 UI 文件拆开，控制单文件规模。
 // ============================================================
 
@@ -14,6 +14,9 @@
 #include <QStringList>
 #include <QTreeWidget>
 #include <QTreeWidgetItem>
+#include <QFutureWatcher>
+#include <QtConcurrent/QtConcurrentRun>
+#include "../ArkDriverClient/ArkDriverClient.h"
 
 namespace
 {
@@ -122,24 +125,22 @@ void HandleDock::copyCurrentHandleRow()
     QApplication::clipboard()->setText(textList.join('\t'));
 }
 
-void HandleDock::closeCurrentHandle()
+void HandleDock::closeHandleRow(const HandleRow& selectedRow, const bool useDriver)
 {
-    HandleRow* row = selectedHandleRow();
-    if (row == nullptr)
-    {
-        return;
-    }
+    // Menus and confirmation dialogs run nested event loops; hold values, never a pointer into m_allRows.
+    const HandleRow row = selectedRow;
+    const QString actionTitle = useDriver ? QStringLiteral("R0关闭句柄") : QStringLiteral("R3关闭句柄");
 
     const QString confirmText = QStringLiteral(
         "确认关闭目标句柄？\nPID=%1\nHandle=%2\nTypeIndex=%3\n类型=%4\n对象名=%5")
-        .arg(row->processId)
-        .arg(formatHex(row->handleValue, 0))
-        .arg(row->typeIndex)
-        .arg(row->typeName)
-        .arg(formatObjectNameDisplayText(*row));
+        .arg(row.processId)
+        .arg(formatHex(row.handleValue, 0))
+        .arg(row.typeIndex)
+        .arg(row.typeName)
+        .arg(formatObjectNameDisplayText(row));
     if (QMessageBox::question(
             this,
-            QStringLiteral("关闭句柄"),
+            actionTitle,
             confirmText,
             QMessageBox::Yes | QMessageBox::No,
             QMessageBox::No) != QMessageBox::Yes)
@@ -147,29 +148,44 @@ void HandleDock::closeCurrentHandle()
         return;
     }
 
-    std::string detailText;
-    const bool closeOk = closeRemoteHandle(*row, detailText);
-    kLogEvent closeEvent;
-    (closeOk ? info : err) << closeEvent
-        << "[HandleDock] closeCurrentHandle: pid="
-        << row->processId
-        << ", handle="
-        << formatHex(row->handleValue, 0).toStdString()
-        << ", typeIndex="
-        << row->typeIndex
-        << ", ok="
-        << (closeOk ? "true" : "false")
-        << ", detail="
-        << detailText
-        << eol;
-
-    if (closeOk)
+    // Native suspend/close and driver I/O may block. The worker owns only the captured identity.
+    using CloseResult = std::pair<bool, std::string>;
+    auto* watcher = new QFutureWatcher<CloseResult>(this);
+    connect(watcher, &QFutureWatcher<CloseResult>::finished, this, [this, watcher, row, actionTitle]()
     {
-        QMessageBox::information(this, QStringLiteral("关闭句柄"), QStringLiteral("句柄关闭成功。\n%1").arg(QString::fromStdString(detailText)));
+        const CloseResult result = watcher->result();
+        watcher->deleteLater();
+        kLogEvent closeEvent;
+        (result.first ? info : err) << closeEvent
+            << "[HandleDock] close: pid=" << row.processId
+            << ", handle=" << formatHex(row.handleValue, 0).toStdString()
+            << ", backend=" << actionTitle.toStdString()
+            << ", detail=" << result.second << eol;
+        // Refresh failures too: the handle may have disappeared, or close succeeded but resume failed.
         requestAsyncRefresh(true);
-        return;
-    }
-    QMessageBox::warning(this, QStringLiteral("关闭句柄"), QStringLiteral("句柄关闭失败。\n%1").arg(QString::fromStdString(detailText)));
+        if (result.first)
+        {
+            QMessageBox::information(this, actionTitle,
+                QStringLiteral("句柄关闭成功。\n%1").arg(QString::fromStdString(result.second)));
+        }
+        else
+        {
+            QMessageBox::warning(this, actionTitle,
+                QStringLiteral("句柄关闭操作未完整完成。\n%1").arg(QString::fromStdString(result.second)));
+        }
+    });
+    watcher->setFuture(QtConcurrent::run([row, useDriver]() -> CloseResult
+    {
+        if (useDriver)
+        {
+            const auto result = ksword::ark::DriverClient().closeHandle(
+                row.processId, row.handleValue, row.processCreationTime, row.objectAddress);
+            return { result.ok, result.message };
+        }
+        std::string detail;
+        const bool ok = closeRemoteHandle(row, detail);
+        return { ok, std::move(detail) };
+    }));
 }
 
 void HandleDock::closeSameTypeHandlesInCurrentProcess()

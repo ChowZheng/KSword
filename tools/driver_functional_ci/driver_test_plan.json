@@ -35,8 +35,9 @@
     ],
     "patternWaivers": {},
     "gapBudget": {
-      "no-cli-path": 20
+      "no-cli-path": 21
     },
+    "gapBudgetRationale": "2026-10-05 为 GUI 新增 CLOSE_HANDLE 单项缺口（20→21）；该动作需要专属远程句柄、进程创建时间与对象身份 fixture，现有 CLI harness 无关闭入口，不将任意机器句柄纳入测试。",
     "targetGuards": {
       "harness-owned-process": "命令里的 PID 必须等于本次运行 spawn 的一次性目标进程。",
       "harness-owned-path": "命令里的路径必须位于本次运行的临时目录。",
@@ -3232,6 +3233,11 @@
       "ioctl": "WRITE_RAW_DISK",
       "reason": "destroys-host-storage",
       "detail": "裸盘写入会破坏 CI 机器的卷结构。"
+    },
+    {
+      "ioctl": "CLOSE_HANDLE",
+      "reason": "no-cli-path",
+      "detail": "GUI 逐行远程句柄关闭，临时挂起目标并校验创建时间/对象身份；CLI 无入口，实机测试只能使用专属临时进程与句柄。"
     },
     {
       "ioctl": "WRITE_VIRTUAL_MEMORY",

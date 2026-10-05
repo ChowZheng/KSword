@@ -1995,6 +1995,11 @@ namespace ks::file
                     }
 
                     row->sourceMode = HandleEnumMode::KernelHandleTable;
+                    // New drivers bind this row to the referenced R0 process, including R3-inaccessible owners.
+                    if (kernelEntry.processCreationTime100ns != 0U)
+                    {
+                        row->processCreationTime = kernelEntry.processCreationTime100ns;
+                    }
                     row->typeIndex = static_cast<std::uint16_t>(kernelEntry.objectTypeIndex);
                     row->objectAddress = kernelEntry.objectAddress;
                     row->grantedAccess = kernelEntry.grantedAccess;

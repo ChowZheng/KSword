@@ -6,7 +6,7 @@
 // KswordArkHandleIoctl.h
 // 作用：
 // - 定义 R3/R0 进程 HandleTable 直接枚举协议；
-// - 只暴露诊断和差异分析所需字段，不把对象地址当作后续操作凭据；
+// - 对象地址用于诊断与关闭前的身份比较，不能作为可信内核指针解引用；
 // - 所有私有结构字段均由 DynData capability 门控。
 // ============================================================
 
@@ -14,6 +14,33 @@
 
 #define KSWORD_ARK_IOCTL_FUNCTION_ENUM_PROCESS_HANDLES 0x80CUL
 #define KSWORD_ARK_IOCTL_FUNCTION_QUERY_HANDLE_OBJECT 0x80DUL
+
+// Remote user-handle mutation has an independent version and requires a writable device.
+#define KSWORD_ARK_IOCTL_FUNCTION_CLOSE_HANDLE 0x8D4UL
+#define KSWORD_ARK_CLOSE_HANDLE_VERSION 1UL
+#define KSWORD_ARK_CLOSE_HANDLE_FLAG_UI_CONFIRMED 0x00000001UL
+#define IOCTL_KSWORD_ARK_CLOSE_HANDLE \
+    CTL_CODE(KSWORD_ARK_IOCTL_DEVICE_TYPE, KSWORD_ARK_IOCTL_FUNCTION_CLOSE_HANDLE, \
+        METHOD_BUFFERED, FILE_READ_ACCESS | FILE_WRITE_ACCESS)
+
+typedef struct _KSWORD_ARK_CLOSE_HANDLE_REQUEST
+{
+    unsigned long size; // Exact packet size.
+    unsigned long version; // Independent close protocol version.
+    unsigned long processId; // Target process, never the caller or System.
+    unsigned long flags; // Explicit user confirmation.
+    unsigned long long handleValue; // User handle, never a kernel/pseudo handle.
+    unsigned long long expectedCreateTime100ns; // Identity captured during enumeration.
+    unsigned long long expectedObjectAddress; // Compared to a referenced object; never dereferenced.
+} KSWORD_ARK_CLOSE_HANDLE_REQUEST;
+
+typedef struct _KSWORD_ARK_CLOSE_HANDLE_RESPONSE
+{
+    unsigned long size; // Exact response size.
+    unsigned long version; // Independent close protocol version.
+    long closeStatus; // Close result, including identity/validation failure.
+    long resumeStatus; // Temporary suspend recovery result, reported separately.
+} KSWORD_ARK_CLOSE_HANDLE_RESPONSE;
 
 #define IOCTL_KSWORD_ARK_ENUM_PROCESS_HANDLES \
     CTL_CODE( \
@@ -187,7 +214,12 @@ typedef struct _KSWORD_ARK_HANDLE_ENTRY
     unsigned long long handleCount;
     unsigned long long objectHeaderAddress;
     unsigned long long objectTypeAddress;
+    unsigned long long processCreationTime100ns; // Referenced process identity; appended for compatibility.
 } KSWORD_ARK_HANDLE_ENTRY;
+
+// v2 entries before the appended owner-identity field remain readable by updated clients.
+#define KSWORD_ARK_HANDLE_ENTRY_LEGACY_SIZE \
+    (sizeof(KSWORD_ARK_HANDLE_ENTRY) - sizeof(unsigned long long))
 
 typedef struct _KSWORD_ARK_ENUM_PROCESS_HANDLES_RESPONSE
 {

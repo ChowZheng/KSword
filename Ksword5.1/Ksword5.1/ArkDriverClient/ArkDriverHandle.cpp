@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cstddef>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -101,7 +102,7 @@ namespace ksword::ark
 
         const auto* responseHeader =
             reinterpret_cast<const KSWORD_ARK_ENUM_PROCESS_HANDLES_RESPONSE*>(responseBuffer.data());
-        if (responseHeader->entrySize < sizeof(KSWORD_ARK_HANDLE_ENTRY))
+        if (responseHeader->entrySize < offsetof(KSWORD_ARK_HANDLE_ENTRY, processCreationTime100ns))
         {
             enumResult.io.ok = false;
             enumResult.io.message =
@@ -134,6 +135,10 @@ namespace ksword::ark
             HandleEntry parsedEntry{};
 
             parsedEntry.processId = static_cast<std::uint32_t>(entry->processId);
+            if (responseHeader->entrySize >= sizeof(KSWORD_ARK_HANDLE_ENTRY))
+            {
+                parsedEntry.processCreationTime100ns = entry->processCreationTime100ns;
+            }
             parsedEntry.handleValue = static_cast<std::uint32_t>(entry->handleValue);
             parsedEntry.fieldFlags = static_cast<std::uint32_t>(entry->fieldFlags);
             parsedEntry.decodeStatus = static_cast<std::uint32_t>(entry->decodeStatus);
@@ -162,6 +167,60 @@ namespace ksword::ark
             << std::dec << ", bytesReturned=" << enumResult.io.bytesReturned;
         enumResult.io.message = stream.str();
         return enumResult;
+    }
+
+    IoResult DriverClient::closeHandle(
+        const std::uint32_t processId,
+        const std::uint64_t handleValue,
+        const std::uint64_t expectedCreateTime100ns,
+        const std::uint64_t expectedObjectAddress) const
+    {
+        IoResult result{};
+        if (processId <= 4U || processId == ::GetCurrentProcessId() ||
+            handleValue == 0U || handleValue >= 0x80000000ULL ||
+            expectedCreateTime100ns == 0U || expectedObjectAddress == 0U)
+        {
+            result.win32Error = ERROR_INVALID_PARAMETER;
+            result.ntStatus = kNtStatusInvalidParameter;
+            result.message = "invalid, protected, or unverifiable handle identity";
+            return result;
+        }
+        KSWORD_ARK_CLOSE_HANDLE_REQUEST request{};
+        KSWORD_ARK_CLOSE_HANDLE_RESPONSE response{};
+        request.size = sizeof(request);
+        request.version = KSWORD_ARK_CLOSE_HANDLE_VERSION;
+        request.processId = processId;
+        request.flags = KSWORD_ARK_CLOSE_HANDLE_FLAG_UI_CONFIRMED;
+        request.handleValue = handleValue;
+        request.expectedCreateTime100ns = expectedCreateTime100ns;
+        request.expectedObjectAddress = expectedObjectAddress;
+        result = deviceIoControl(IOCTL_KSWORD_ARK_CLOSE_HANDLE,
+            &request, sizeof(request), &response, sizeof(response));
+        if (!result.ok)
+        {
+            result.message = "R0 close transport failed, error=" + std::to_string(result.win32Error);
+            return result;
+        }
+        if (result.bytesReturned != sizeof(response) || response.size != sizeof(response) ||
+            response.version != KSWORD_ARK_CLOSE_HANDLE_VERSION)
+        {
+            result.ok = false;
+            result.win32Error = ERROR_INVALID_DATA;
+            result.message = "R0 close response invalid";
+            return result;
+        }
+        result.ntStatus = response.closeStatus;
+        result.ok = response.closeStatus >= 0 && response.resumeStatus >= 0;
+        std::ostringstream detail;
+        detail << "R0 closeStatus=0x" << std::hex << std::uppercase
+            << static_cast<std::uint32_t>(response.closeStatus)
+            << ", resumeStatus=0x" << static_cast<std::uint32_t>(response.resumeStatus);
+        if (response.closeStatus >= 0 && response.resumeStatus < 0)
+        {
+            detail << "; handle closed, but process resume failed";
+        }
+        result.message = detail.str();
+        return result;
     }
 
     HandleObjectQueryResult DriverClient::queryHandleObject(

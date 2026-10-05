@@ -18,6 +18,9 @@ Environment:
 
 #include "ark/ark_dyndata.h"
 #include "handle_support.h"
+
+// Read the identity from the same referenced process that owns the enumerated table.
+NTKERNELAPI LONGLONG NTAPI PsGetProcessCreateTimeQuadPart(_In_ PEPROCESS Process);
 #include "../kernel/object_header_fallback.h"
 #include "../../platform/pool_compat.h"
 
@@ -160,6 +163,7 @@ typedef struct _KSWORD_ARK_HANDLE_ENUM_CONTEXT
     KSWORD_ARK_ENUM_PROCESS_HANDLES_RESPONSE* Response;
     size_t EntryCapacity;
     ULONG ProcessId;
+    ULONG64 ProcessCreationTime100ns; // Captured before reading this process's handle table.
     ULONG RequestFlags;
     KSW_DYN_STATE DynState;
     NTSTATUS LastStatus;
@@ -415,6 +419,7 @@ Return Value:
     }
 
     Entry->processId = Context->ProcessId;
+    Entry->processCreationTime100ns = Context->ProcessCreationTime100ns; // Bind each row to its owner instance.
     Entry->handleValue = HandleToULong(Handle);
     Entry->decodeStatus = KSWORD_ARK_HANDLE_DECODE_STATUS_OK;
     Entry->grantedAccessDecodeStatus = KSWORD_ARK_HANDLE_DECODE_STATUS_UNAVAILABLE;
@@ -815,6 +820,7 @@ Routine Description:
             entry = &Response->entries[Response->returnedCount++];
             RtlZeroMemory(entry, sizeof(*entry));
             entry->processId = Request->processId;
+            entry->processCreationTime100ns = (ULONG64)PsGetProcessCreateTimeQuadPart(processObject); // Use the referenced fallback owner.
             entry->handleValue = (ULONG)source->HandleValue;
             entry->grantedAccess = source->GrantedAccess;
             entry->attributes = source->HandleAttributes;
@@ -934,7 +940,7 @@ KswordARKDriverEnumerateProcessHandles(
 Routine Description:
 
     Enumerate a target process HandleTable directly from kernel mode. 中文说明：
-    本函数只返回显示/差异分析字段；对象地址是诊断值，不是后续 IOCTL 的凭据。
+    返回显示/差异分析字段与进程创建时间；对象地址只能用于关闭前比较，不能作为可信指针。
 
 Arguments:
 
@@ -1003,6 +1009,7 @@ Return Value:
         return status;
     }
 
+    enumContext.ProcessCreationTime100ns = (ULONG64)PsGetProcessCreateTimeQuadPart(processObject); // Capture before table enumeration.
     status = KswordARKHandleReadProcessHandleTable(processObject, &enumContext.DynState, &handleTable);
     if (!NT_SUCCESS(status)) {
         response->overallStatus = (status == STATUS_NOT_FOUND) ?

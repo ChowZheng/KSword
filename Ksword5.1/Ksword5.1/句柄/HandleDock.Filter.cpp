@@ -1413,6 +1413,9 @@ void HandleDock::showHandleTableContextMenu(const QPoint& localPosition)
     QAction* openProcessAction = nullptr;
     QAction* gotoTypeAction = nullptr;
     QAction* refreshAction = nullptr;
+    QAction* closeR3Action = nullptr;
+    QAction* closeR0Action = nullptr;
+    HandleRow closeTarget{};
     if (itemKind == ks::handle::HandleTreeItemKind::LoadMore)
     {
         menu.addSeparator();
@@ -1433,6 +1436,26 @@ void HandleDock::showHandleTableContextMenu(const QPoint& localPosition)
     {
         menu.addSeparator();
         HandleRow* selectedRow = selectedHandleRow();
+        if (selectedRow != nullptr)
+        {
+            closeTarget = *selectedRow;
+        }
+        closeR3Action = menu.addAction(QStringLiteral("R3关闭句柄"));
+        closeR0Action = menu.addAction(QStringLiteral("R0关闭句柄"));
+        const bool hasCloseIdentity = selectedRow != nullptr && closeTarget.processId > 4U &&
+            closeTarget.processId != ::GetCurrentProcessId() && closeTarget.handleValue != 0U &&
+            closeTarget.handleValue < 0x80000000ULL && closeTarget.processCreationTime != 0U &&
+            closeTarget.objectAddress != 0U;
+        closeR3Action->setEnabled(hasCloseIdentity);
+        closeR0Action->setEnabled(hasCloseIdentity);
+        if (!hasCloseIdentity)
+        {
+            const QString reason = QStringLiteral("系统/自身进程或缺少进程创建时间、句柄对象身份，无法关闭。");
+            closeR3Action->setToolTip(reason);
+            closeR0Action->setToolTip(reason);
+            menu.setToolTipsVisible(true);
+        }
+        menu.addSeparator();
         openProcessAction = menu.addAction(
             QIcon(QStringLiteral(":/Icon/process_details.svg")),
             QStringLiteral("转到进程详细信息"));
@@ -1449,6 +1472,11 @@ void HandleDock::showHandleTableContextMenu(const QPoint& localPosition)
     if (selectedAction == copyCellAction)
     {
         copyCurrentHandleCell();
+        return;
+    }
+    if (selectedAction == closeR3Action || selectedAction == closeR0Action)
+    {
+        closeHandleRow(closeTarget, selectedAction == closeR0Action);
         return;
     }
     if (selectedAction == copyRowAction)

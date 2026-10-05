@@ -151,6 +151,8 @@ NTSTATUS KswordARKThreadIoctlQueryDetail(_In_ WDFDEVICE Device, _In_ WDFREQUEST 
 NTSTATUS KswordARKThreadIoctlQueryRuntimeFields(_In_ WDFDEVICE Device, _In_ WDFREQUEST Request, _In_ size_t InputBufferLength, _In_ size_t OutputBufferLength, _Out_ size_t* BytesReturned);
 NTSTATUS KswordARKHandleIoctlEnumProcessHandles(_In_ WDFDEVICE Device, _In_ WDFREQUEST Request, _In_ size_t InputBufferLength, _In_ size_t OutputBufferLength, _Out_ size_t* BytesReturned);
 NTSTATUS KswordARKHandleIoctlQueryHandleObject(_In_ WDFDEVICE Device, _In_ WDFREQUEST Request, _In_ size_t InputBufferLength, _In_ size_t OutputBufferLength, _Out_ size_t* BytesReturned);
+// Remote user-handle mutation is feature-owned and registered only here.
+NTSTATUS KswordARKHandleIoctlCloseHandle(_In_ WDFDEVICE Device, _In_ WDFREQUEST Request, _In_ size_t InputBufferLength, _In_ size_t OutputBufferLength, _Out_ size_t* BytesReturned);
 NTSTATUS KswordARKAlpcIoctlQueryAlpcPort(_In_ WDFDEVICE Device, _In_ WDFREQUEST Request, _In_ size_t InputBufferLength, _In_ size_t OutputBufferLength, _Out_ size_t* BytesReturned);
 NTSTATUS KswordARKSectionIoctlQueryProcessSection(_In_ WDFDEVICE Device, _In_ WDFREQUEST Request, _In_ size_t InputBufferLength, _In_ size_t OutputBufferLength, _Out_ size_t* BytesReturned);
 NTSTATUS KswordARKInjectionIoctlEnumerateProcessVad(_In_ WDFDEVICE Device, _In_ WDFREQUEST Request, _In_ size_t InputBufferLength, _In_ size_t OutputBufferLength, _Out_ size_t* BytesReturned);
@@ -379,6 +381,8 @@ static const KSWORD_ARK_IOCTL_ENTRY g_KswordArkIoctlTable[] = {
     // are redundant and can evict the real diagnostic lines from the log ring.
     { IOCTL_KSWORD_ARK_ENUM_PROCESS_HANDLES, KswordARKHandleIoctlEnumProcessHandles, "IOCTL_KSWORD_ARK_ENUM_PROCESS_HANDLES", KSWORD_ARK_IOCTL_CAPABILITY_NONE, KSWORD_ARK_IOCTL_FLAG_QUIET_SUCCESS | KSWORD_ARK_IOCTL_FLAG_QUIET_INVALID_CID },
     { IOCTL_KSWORD_ARK_QUERY_HANDLE_OBJECT, KswordARKHandleIoctlQueryHandleObject, "IOCTL_KSWORD_ARK_QUERY_HANDLE_OBJECT", KSWORD_ARK_IOCTL_CAPABILITY_NONE, KSWORD_ARK_IOCTL_FLAG_QUIET_SUCCESS },
+    // Close uses public object-manager APIs and owns identity/suspend validation.
+    { IOCTL_KSWORD_ARK_CLOSE_HANDLE, KswordARKHandleIoctlCloseHandle, "IOCTL_KSWORD_ARK_CLOSE_HANDLE", KSWORD_ARK_IOCTL_CAPABILITY_NONE, KSWORD_ARK_IOCTL_FLAG_NONE },
     { IOCTL_KSWORD_ARK_QUERY_ALPC_PORT, KswordARKAlpcIoctlQueryAlpcPort, "IOCTL_KSWORD_ARK_QUERY_ALPC_PORT", KSWORD_ARK_IOCTL_CAPABILITY_NONE, KSWORD_ARK_IOCTL_FLAG_NONE },
     // Section queries return public FILE_OBJECT/ControlArea evidence even when private mapping offsets are absent.
     { IOCTL_KSWORD_ARK_QUERY_PROCESS_SECTION, KswordARKSectionIoctlQueryProcessSection, "IOCTL_KSWORD_ARK_QUERY_PROCESS_SECTION", KSWORD_ARK_IOCTL_CAPABILITY_NONE, KSWORD_ARK_IOCTL_FLAG_NONE },

@@ -404,6 +404,7 @@ namespace ksword::ark
     // HandleEntry 是 R0 HandleTable 直接枚举的 R3 侧模型。
     struct HandleEntry
     {
+        std::uint64_t processCreationTime100ns = 0; // Present only in extended enumeration entries.
         std::uint32_t processId = 0;
         std::uint32_t handleValue = 0;
         std::uint32_t fieldFlags = 0;
