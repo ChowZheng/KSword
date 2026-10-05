@@ -852,6 +852,7 @@
     <ClInclude Include="OnlineScan\ThreatBookScan.h" />
     <ClInclude Include="OnlineScan\VirusTotalOnlineScan.h" />
     <QtMoc Include="OtherDock\OtherDock.h" />
+    <ClInclude Include="OtherDock\WindowListInteraction.h" />
     <ClInclude Include="OtherDock\WindowCaptureProtection.h" />
     <ClInclude Include="OtherDock\DwmZOrderClient.h" />
     <ClInclude Include="OtherDock\DwmAgentDeployment.h" />

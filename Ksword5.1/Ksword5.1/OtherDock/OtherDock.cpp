@@ -16,6 +16,8 @@
 #include "../ProcessDock/ProcessDetailWindow.h"
 #include "../OnlineScan/SandboxUploadActions.h"
 #include "WindowCaptureProtection.h"
+#include "WindowListInteraction.h"
+#include <QSignalBlocker>
 #include "WindowInputControl.h"
 #include "../theme.h"
 #include "../UI/CodeEditorWidget.h"
@@ -3161,7 +3163,7 @@ void OtherDock::initializeUi()
     m_unprotectCaptureButton->setFixedWidth(32);
 
     m_windowPickerHintLabel = new QLabel(
-        QStringLiteral("拖拽准星可定位窗口；选中窗口后可启用或取消防截图保护"),
+        QStringLiteral("拖拽准星可定位窗口；Ctrl/Shift 多选后可通过右键菜单批量操作"),
         m_windowListToolWidget);
     m_windowPickerHintLabel->setToolTip(QStringLiteral("防截图保护会对顶层窗口写入 DisplayAffinity，外部进程窗口会尝试远程调用"));
 
@@ -3172,16 +3174,14 @@ void OtherDock::initializeUi()
     m_windowListToolLayout->addWidget(m_windowPickerButton, 0);
     m_windowListToolLayout->addWidget(m_protectCaptureButton, 0);
     m_windowListToolLayout->addWidget(m_unprotectCaptureButton, 0);
-    auto* inputButton = new QPushButton(m_windowListToolWidget);
-    ks::i18n::LanguageManager::instance().bindText(inputButton,
+    m_windowInputButton = new QPushButton(m_windowListToolWidget);
+    ks::i18n::LanguageManager::instance().bindText(m_windowInputButton,
         QStringLiteral("window.input.tab"), QStringLiteral("窗口输入与顺序"));
-    m_windowListToolLayout->addWidget(inputButton);
-    connect(inputButton, &QPushButton::clicked, this, [this]
+    m_windowListToolLayout->addWidget(m_windowInputButton);
+    connect(m_windowInputButton, &QPushButton::clicked, this, [this]
     {
-        const auto* item = m_windowTree->currentItem();
-        if (!item || item->data(0, Qt::UserRole + 1).toBool()) return;
-        const auto* selected = findInfoByHwnd(item->data(0, Qt::UserRole).toULongLong());
-        if (selected) openWindowDetailDialog(*selected, true);
+        const auto windows = selectedWindowSnapshots();
+        if (windows.size() == 1) openWindowDetailDialog(windows.front(), true);
     });
     m_windowListToolLayout->addWidget(m_windowPickerHintLabel, 0);
     m_windowListToolLayout->addStretch(1);
@@ -3195,7 +3195,8 @@ void OtherDock::initializeUi()
     m_windowTree->setContextMenuPolicy(Qt::CustomContextMenu);
     m_windowTree->setRootIsDecorated(true);
     m_windowTree->setAlternatingRowColors(true);
-    m_windowTree->setSelectionMode(QAbstractItemView::SingleSelection);
+    m_windowTree->setSelectionMode(QAbstractItemView::ExtendedSelection);
+    m_windowTree->setSelectionBehavior(QAbstractItemView::SelectRows);
     m_windowTree->setUniformRowHeights(true);
     m_windowTree->setSortingEnabled(false);
     m_windowTree->header()->setStyleSheet(blueHeaderStyle());
@@ -3481,10 +3482,10 @@ void OtherDock::initializeConnections()
 
     // 防截图保护按钮：对当前选中窗口执行启用/取消操作。
     connect(m_protectCaptureButton, &QPushButton::clicked, this, [this]() {
-        setCaptureProtectionForSelectedWindow(true);
+        setCaptureProtectionForSelectedWindows(true);
     });
     connect(m_unprotectCaptureButton, &QPushButton::clicked, this, [this]() {
-        setCaptureProtectionForSelectedWindow(false);
+        setCaptureProtectionForSelectedWindows(false);
     });
 
     // 双击行：直接打开窗口详细信息。
@@ -3508,32 +3509,11 @@ void OtherDock::initializeConnections()
         }
     });
 
-    // 选中项变化：更新右侧预览与状态栏“选中”文本。
-    connect(m_windowTree, &QTreeWidget::currentItemChanged, this, [this](QTreeWidgetItem* current, QTreeWidgetItem*) {
-        const bool isLeaf = current != nullptr && !current->data(0, Qt::UserRole + 1).toBool();
-        if (!isLeaf)
-        {
-            updatePreviewPanel(nullptr);
-            m_selectedLabel->setText(QStringLiteral("选中: -"));
-            return;
-        }
-
-        const quint64 hwndValue = current->data(0, Qt::UserRole).toULongLong();
-        const WindowInfo* windowInfo = findInfoByHwnd(hwndValue);
-        updatePreviewPanel(windowInfo);
-        if (windowInfo != nullptr)
-        {
-            m_selectedLabel->setText(QStringLiteral("选中: %1  %2")
-                .arg(hwndToText(windowInfo->hwndValue), windowInfo->titleText));
-            kLogEvent event;
-            dbg << event
-                << "[OtherDock] 选中窗口变更, hwnd="
-                << hwndToText(windowInfo->hwndValue).toStdString()
-                << ", title="
-                << windowInfo->titleText.toStdString()
-                << eol;
-        }
-    });
+    // Preview follows the current selected leaf; the status counts the whole selection.
+    connect(m_windowTree, &QTreeWidget::currentItemChanged, this,
+        [this](QTreeWidgetItem*, QTreeWidgetItem*) { updateWindowSelectionUi(); });
+    connect(m_windowTree, &QTreeWidget::itemSelectionChanged, this,
+        [this] { updateWindowSelectionUi(); });
 
     // 截图按钮：把当前选中窗口抓图并保存到文件。
     connect(m_captureButton, &QPushButton::clicked, this, [this]() {
@@ -3884,6 +3864,14 @@ void OtherDock::rebuildWindowTreeFromSnapshot()
         << groupModeText(m_groupModeCombo->currentIndex()).toStdString()
         << eol;
 
+    if (ks::ui::DeferItemViewUiCommitIfContextMenuOpen(this,
+        QStringLiteral("window_tree_rebuild"), {m_windowTree},
+        [this] { rebuildWindowTreeFromSnapshot(); })) return;
+
+    // Items retain the identity captured when rendered, even after the snapshot
+    // has already been replaced. Do not restore selection onto a reused HWND.
+    const auto selection = ks::window::captureWindowSelection(m_windowTree);
+    const QSignalBlocker selectionBlocker(m_windowTree);
     m_windowTree->clear();
 
     // 进程图标缓存：
@@ -3933,6 +3921,9 @@ void OtherDock::rebuildWindowTreeFromSnapshot()
 
         item->setData(kWindowColumnTitle, Qt::UserRole, QVariant::fromValue(static_cast<qulonglong>(info.hwndValue)));
         item->setData(kWindowColumnTitle, Qt::UserRole + 1, false);
+        item->setData(0, Qt::UserRole + 2, info.processId);
+        item->setData(0, Qt::UserRole + 3, info.threadId);
+        item->setData(0, Qt::UserRole + 4, QVariant::fromValue<qulonglong>(info.processCreationTime100ns));
 
         // 叶子图标改为显示“进程 logo”，并放到进程列，避免标题列图标干扰阅读。
         item->setIcon(kWindowColumnProcessName, resolveProcessLogo(info));
@@ -4112,6 +4103,9 @@ void OtherDock::rebuildWindowTreeFromSnapshot()
             topItem->setExpanded(true);
         }
     }
+
+    ks::window::restoreWindowSelection(m_windowTree, selection);
+    updateWindowSelectionUi();
 
     dbg << rebuildEvent
         << "[OtherDock] 重建窗口树完成, topLevelCount="
@@ -4312,240 +4306,208 @@ void OtherDock::handleWindowPickerRelease(const QPoint& globalPos)
     openWindowDetailDialog(*pickedInfo);
 }
 
+std::vector<OtherDock::WindowInfo> OtherDock::selectedWindowSnapshots() const
+{
+    std::vector<WindowInfo> windows;
+    const auto selection = ks::window::captureWindowSelection(m_windowTree);
+    for (const quint64 hwnd : ks::window::selectedWindowHandles(m_windowTree))
+    {
+        const auto* window = findInfoByHwnd(hwnd);
+        if (window && selection.identities.contains(ks::window::windowIdentityKey(
+            window->hwndValue, window->processId, window->threadId, window->processCreationTime100ns)))
+            windows.push_back(*window);
+    }
+    return windows;
+}
+
+void OtherDock::updateWindowSelectionUi()
+{
+    const auto windows = selectedWindowSnapshots();
+    const auto* current = m_windowTree->currentItem();
+    const auto previewIt = std::find_if(windows.begin(), windows.end(), [current](const WindowInfo& window) {
+        return current && !current->data(0, Qt::UserRole + 1).toBool()
+            && window.hwndValue == current->data(0, Qt::UserRole).toULongLong();
+    });
+    const WindowInfo* preview = previewIt != windows.end() ? &*previewIt : nullptr;
+    updatePreviewPanel(preview);
+    if (windows.empty()) m_selectedLabel->setText(QStringLiteral("选中: -"));
+    else if (windows.size() == 1)
+        m_selectedLabel->setText(QStringLiteral("选中: %1  %2")
+            .arg(hwndToText(windows.front().hwndValue), windows.front().titleText));
+    else m_selectedLabel->setText(QStringLiteral("选中: %1 个窗口").arg(windows.size()));
+    m_protectCaptureButton->setEnabled(!windows.empty());
+    m_unprotectCaptureButton->setEnabled(!windows.empty());
+    m_captureButton->setEnabled(windows.size() == 1 && preview);
+    m_windowInputButton->setEnabled(windows.size() == 1);
+}
+
 void OtherDock::showWindowContextMenu(const QPoint& localPos)
 {
-    QTreeWidgetItem* item = m_windowTree->itemAt(localPos);
-    if (item == nullptr || item->data(0, Qt::UserRole + 1).toBool())
-    {
-        return;
-    }
-
-    const quint64 hwndValue = item->data(0, Qt::UserRole).toULongLong();
-    const WindowInfo* windowInfo = findInfoByHwnd(hwndValue);
-    if (windowInfo == nullptr)
-    {
-        return;
-    }
-
-    {
-        kLogEvent event;
-        dbg << event
-            << "[OtherDock] 打开右键菜单, hwnd="
-            << hwndToText(hwndValue).toStdString()
-            << ", pid="
-            << windowInfo->processId
-            << eol;
-    }
+    auto* item = m_windowTree->itemAt(localPos);
+    if (!item) return;
+    // Right-clicking within a selection must keep the other selected rows.
+    ks::window::selectContextWindow(m_windowTree, item);
+    // Copy before QMenu::exec: timers and asynchronous enumeration can replace
+    // snapshots while the menu or an operation feedback dialog is open.
+    const auto windows = selectedWindowSnapshots();
+    if (windows.empty()) return;
+    const bool multiple = windows.size() > 1;
 
     QMenu menu(this);
-    // 显式填充菜单背景，避免浅色模式下继承透明样式出现黑底。
     menu.setStyleSheet(KswordTheme::ContextMenuStyle());
-    QAction* activateAction = menu.addAction(QIcon(":/Icon/process_start.svg"), QStringLiteral("激活窗口"));
-    QAction* topMostAction = menu.addAction(QIcon(":/Icon/process_priority.svg"), QStringLiteral("置顶/取消置顶"));
-    QAction* showHideAction = menu.addAction(QIcon(":/Icon/process_pause.svg"), QStringLiteral("显示/隐藏"));
-    QAction* enableDisableAction = menu.addAction(QIcon(":/Icon/process_suspend.svg"), QStringLiteral("启用/禁用"));
-    const WindowInfo inputSnapshot = *windowInfo;
-    QAction* inputAction = menu.addAction(ks::i18n::text(
+    if (multiple)
+    {
+        auto* count = menu.addAction(QStringLiteral("已选中 %1 个窗口").arg(windows.size()));
+        count->setEnabled(false);
+        menu.addSeparator();
+    }
+    auto* activate = menu.addAction(QIcon(":/Icon/process_start.svg"), QStringLiteral("激活窗口"));
+    activate->setEnabled(!multiple);
+    auto* topMost = menu.addAction(QIcon(":/Icon/process_priority.svg"),
+        multiple ? QStringLiteral("置顶窗口") : QStringLiteral("置顶/取消置顶"));
+    auto* notTopMost = multiple ? menu.addAction(QStringLiteral("取消置顶")) : nullptr;
+    auto* show = menu.addAction(QIcon(":/Icon/process_pause.svg"),
+        multiple ? QStringLiteral("显示窗口") : QStringLiteral("显示/隐藏"));
+    auto* hide = multiple ? menu.addAction(QStringLiteral("隐藏窗口")) : nullptr;
+    auto* enable = menu.addAction(QIcon(":/Icon/process_suspend.svg"),
+        multiple ? QStringLiteral("启用窗口") : QStringLiteral("启用/禁用"));
+    auto* disable = multiple ? menu.addAction(QStringLiteral("禁用窗口")) : nullptr;
+    auto* input = menu.addAction(ks::i18n::text(
         QStringLiteral("window.input.tab"), QStringLiteral("窗口输入与顺序")));
-    QAction* flashAction = menu.addAction(QIcon(":/Icon/window_picker_target.svg"), QStringLiteral("闪烁窗口"));
-    QAction* protectCaptureAction = menu.addAction(QIcon(":/Icon/titlebar_capture_protected.svg"), QStringLiteral("启用防截图保护"));
-    QAction* unprotectCaptureAction = menu.addAction(QIcon(":/Icon/titlebar_capture_allowed.svg"), QStringLiteral("取消防截图保护"));
+    input->setEnabled(!multiple);
+    auto* markPosition = menu.addAction(QIcon(":/Icon/window_picker_target.svg"), QStringLiteral("标记位置"));
+    markPosition->setToolTip(QStringLiteral("在全屏透明层中标记所有选中窗口的位置与基本信息；按鼠标左键或右键关闭"));
+    auto* protect = menu.addAction(QIcon(":/Icon/titlebar_capture_protected.svg"), QStringLiteral("启用防截图保护"));
+    auto* unprotect = menu.addAction(QIcon(":/Icon/titlebar_capture_allowed.svg"), QStringLiteral("取消防截图保护"));
     menu.addSeparator();
-    QAction* processDetailAction = menu.addAction(QIcon(":/Icon/process_details.svg"), QStringLiteral("转到进程详细信息"));
-    QAction* windowDetailAction = menu.addAction(QIcon(":/Icon/process_details.svg"), QStringLiteral("在详细信息中打开"));
-    QAction* sendMessageAction = menu.addAction(QIcon(":/Icon/log_track.svg"), QStringLiteral("发送测试消息"));
-    QAction* uploadVirusTotalAction = ks::online_scan::addVirusTotalSandboxMenu(
-        &menu,
-        this,
-        [windowInfo]() -> ks::online_scan::SandboxUploadTarget
-        {
-            // 输入：窗口列表当前右键窗口快照。
-            // 处理：按 GUI 线程所属 PID 上传对应进程文件；窗口线程 ID 仅用于来源说明。
-            // 返回：VT 上传目标；PID 为空或进程路径无法解析时交由统一 helper 提示。
-            ks::online_scan::SandboxUploadTarget uploadTarget;
-            if (windowInfo == nullptr || windowInfo->processId == 0)
-            {
-                uploadTarget.errorText = QStringLiteral("当前窗口没有可解析的 GUI 线程进程 PID。");
-                return uploadTarget;
-            }
-            uploadTarget.filePath = QString::fromStdString(ks::process::QueryProcessPathByPid(windowInfo->processId));
-            uploadTarget.sourceText = QStringLiteral("窗口 GUI 线程 PID=%1 TID=%2")
-                .arg(windowInfo->processId)
-                .arg(windowInfo->threadId);
-            return uploadTarget;
+    auto* processDetail = menu.addAction(QIcon(":/Icon/process_details.svg"), QStringLiteral("转到进程详细信息"));
+    auto* windowDetail = menu.addAction(QIcon(":/Icon/process_details.svg"), QStringLiteral("在详细信息中打开"));
+    auto* sendMessage = menu.addAction(QIcon(":/Icon/log_track.svg"), QStringLiteral("发送测试消息"));
+    sendMessage->setEnabled(!multiple);
+    const WindowInfo uploadSnapshot = windows.front();
+    auto* upload = ks::online_scan::addVirusTotalSandboxMenu(&menu, this,
+        [uploadSnapshot]() -> ks::online_scan::SandboxUploadTarget {
+            ks::online_scan::SandboxUploadTarget target;
+            target.filePath = uploadSnapshot.processImagePathText;
+            target.sourceText = QStringLiteral("窗口 GUI 线程 PID=%1 TID=%2")
+                .arg(uploadSnapshot.processId).arg(uploadSnapshot.threadId);
+            return target;
         });
+    auto* uploadMenu = upload ? qobject_cast<QMenu*>(upload->parent()) : nullptr;
+    if (uploadMenu) uploadMenu->menuAction()->setEnabled(!multiple);
     menu.addSeparator();
-    QAction* terminateAction = menu.addAction(QIcon(":/Icon/process_terminate.svg"), QStringLiteral("结束进程"));
-
-    QAction* selectedAction = menu.exec(m_windowTree->viewport()->mapToGlobal(localPos));
-    if (selectedAction == nullptr)
+    auto* terminate = menu.addAction(QIcon(":/Icon/process_terminate.svg"), QStringLiteral("结束进程"));
+    auto* action = menu.exec(m_windowTree->viewport()->mapToGlobal(localPos));
+    if (!action || (uploadMenu && uploadMenu->actions().contains(action))) return;
+    if (action == protect || action == unprotect)
     {
-        kLogEvent event;
-        dbg << event
-            << "[OtherDock] 右键菜单取消, hwnd="
-            << hwndToText(hwndValue).toStdString()
-            << eol;
+        setCaptureProtectionForWindows(windows, action == protect);
         return;
     }
 
-    if (selectedAction == inputAction)
+    if (action == markPosition)
     {
-        openWindowDetailDialog(inputSnapshot, true);
-        return;
-    }
-    HWND windowHandle = toHwnd(windowInfo->hwndValue);
-    if (selectedAction == activateAction)
-    {
-        kLogEvent event;
-        info << event
-            << "[OtherDock] 执行操作：激活窗口, hwnd="
-            << hwndToText(hwndValue).toStdString()
-            << eol;
-        ::ShowWindow(windowHandle, SW_SHOW);
-        ::SetForegroundWindow(windowHandle);
-    }
-    else if (selectedAction == topMostAction)
-    {
-        kLogEvent event;
-        info << event
-            << "[OtherDock] 执行操作：切换置顶, hwnd="
-            << hwndToText(hwndValue).toStdString()
-            << eol;
-        const bool currentTopMost = (::GetWindowLongPtrW(windowHandle, GWL_EXSTYLE) & WS_EX_TOPMOST) != 0;
-        ::SetWindowPos(
-            windowHandle,
-            currentTopMost ? HWND_NOTOPMOST : HWND_TOPMOST,
-            0,
-            0,
-            0,
-            0,
-            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
-    }
-    else if (selectedAction == showHideAction)
-    {
-        kLogEvent event;
-        info << event
-            << "[OtherDock] 执行操作：显示/隐藏, hwnd="
-            << hwndToText(hwndValue).toStdString()
-            << eol;
-        const bool currentlyVisible = ::IsWindowVisible(windowHandle) != FALSE;
-        ::ShowWindow(windowHandle, currentlyVisible ? SW_HIDE : SW_SHOW);
-    }
-    else if (selectedAction == enableDisableAction)
-    {
-        kLogEvent event;
-        info << event
-            << "[OtherDock] 执行操作：启用/禁用, hwnd="
-            << hwndToText(hwndValue).toStdString()
-            << eol;
-        const bool currentlyEnabled = ::IsWindowEnabled(windowHandle) != FALSE;
-        ::EnableWindow(windowHandle, currentlyEnabled ? FALSE : TRUE);
-    }
-    else if (selectedAction == flashAction)
-    {
-        kLogEvent event;
-        info << event
-            << "[OtherDock] 执行操作：闪烁窗口, hwnd="
-            << hwndToText(hwndValue).toStdString()
-            << eol;
-        FLASHWINFO flashInfo{};
-        flashInfo.cbSize = sizeof(flashInfo);
-        flashInfo.hwnd = windowHandle;
-        flashInfo.dwFlags = FLASHW_ALL | FLASHW_TIMERNOFG;
-        flashInfo.uCount = 3;
-        flashInfo.dwTimeout = 0;
-        ::FlashWindowEx(&flashInfo);
-    }
-    else if (selectedAction == protectCaptureAction)
-    {
-        setCaptureProtectionForWindow(*windowInfo, true);
-    }
-    else if (selectedAction == unprotectCaptureAction)
-    {
-        setCaptureProtectionForWindow(*windowInfo, false);
-    }
-    else if (selectedAction == processDetailAction)
-    {
-        kLogEvent event;
-        info << event
-            << "[OtherDock] 执行操作：打开进程详情, pid="
-            << windowInfo->processId
-            << eol;
-        openProcessDetailWindow(this, windowInfo->processId);
-    }
-    else if (selectedAction == windowDetailAction)
-    {
-        kLogEvent event;
-        info << event
-            << "[OtherDock] 执行操作：打开窗口详情, hwnd="
-            << hwndToText(hwndValue).toStdString()
-            << eol;
-        openWindowDetailDialog(*windowInfo);
-    }
-    else if (selectedAction == sendMessageAction)
-    {
-        kLogEvent event;
-        dbg << event
-            << "[OtherDock] 执行操作：发送测试消息, hwnd="
-            << hwndToText(hwndValue).toStdString()
-            << eol;
-        DWORD_PTR resultValue = 0;
-        ::SendMessageTimeoutW(
-            windowHandle,
-            WM_NULL,
-            0,
-            0,
-            SMTO_ABORTIFHUNG,
-            1200,
-            &resultValue);
-        Q_UNUSED(resultValue);
-    }
-    else if (selectedAction == uploadVirusTotalAction)
-    {
-        return;
-    }
-    else if (selectedAction == terminateAction)
-    {
-        // 结束进程动作直接执行，结果继续通过统一日志记录。
-        kLogEvent actionEvent;
-        warn << actionEvent
-            << "[OtherDock] 执行操作：结束进程, pid="
-            << windowInfo->processId
-            << eol;
-
-        std::string terminateErrorText;
-        const bool terminateOk = ks::process::TerminateProcessByWin32IfCreationTimeMatches(
-            static_cast<std::uint32_t>(windowInfo->processId),
-            windowInfo->processCreationTime100ns,
-            &terminateErrorText);
-        if (!terminateOk)
+        QVector<ks::window::WindowPositionMark> marks;
+        QStringList failures;
+        for (const auto& window : windows)
         {
-            err << actionEvent
-                << "[OtherDock] 结束进程失败, pid="
-                << windowInfo->processId
-                << ", detail=" << terminateErrorText
-                << eol;
+            ks::window::WindowPositionMark mark;
+            if (!window.valid || !ks::window::windowIdentityMatches(window.hwndValue,
+                window.processId, window.threadId, window.processCreationTime100ns)
+                || !ks::window::queryWindowMarkRect(toHwnd(window.hwndValue), mark.physicalRect))
+            {
+                failures.push_back(hwndToText(window.hwndValue));
+                continue;
+            }
+            mark.information = {
+                window.titleText.isEmpty() ? ks::i18n::sourceText(QStringLiteral("<无标题>")) : window.titleText,
+                ks::i18n::sourceText(QStringLiteral("进程: %1  PID/TID: %2 / %3"))
+                    .arg(window.processNameText).arg(window.processId).arg(window.threadId),
+                ks::i18n::sourceText(QStringLiteral("类名: %1  句柄: %2"))
+                    .arg(window.classNameText, hwndToText(window.hwndValue)),
+                ks::i18n::sourceText(QStringLiteral("位置: (%1, %2)  大小: %3 × %4  状态: %5"))
+                    .arg(mark.physicalRect.x()).arg(mark.physicalRect.y())
+                    .arg(mark.physicalRect.width()).arg(mark.physicalRect.height())
+                    .arg(ks::i18n::sourceText(windowStateText(window.valid, window.minimized, window.maximized)))};
+            marks.push_back(std::move(mark));
         }
-        else
+        if (!failures.empty())
+            QMessageBox::warning(this, QStringLiteral("标记位置"),
+                ks::i18n::sourceText(QStringLiteral("以下窗口已失效或无法读取位置：\n%1")).arg(failures.join('\n')));
+        if (!marks.empty())
         {
-            warn << actionEvent
-                << "[OtherDock] 结束进程成功, pid="
-                << windowInfo->processId
-                << eol;
+            const QString hint = ks::i18n::sourceText(QStringLiteral("已标记 %1 个窗口；按鼠标左键或右键关闭"))
+                .arg(marks.size());
+            new ks::window::WindowPositionOverlay(std::move(marks), hint, this);
         }
-        dbg << actionEvent
-            << "[OtherDock] 结束进程操作处理完毕, pid="
-            << windowInfo->processId
-            << ", processName="
-            << windowInfo->processNameText.toStdString()
-            << eol;
+        return;
     }
 
-    // 任意状态类动作后都刷新一次，确保列表与真实状态一致。
-    if (selectedAction != protectCaptureAction && selectedAction != unprotectCaptureAction)
+    int succeeded = 0;
+    QStringList failures;
+    QSet<quint32> processedPids;
+    for (const auto& window : windows)
     {
+        HWND hwnd = toHwnd(window.hwndValue);
+        if ((action == terminate || action == processDetail) && processedPids.contains(window.processId)) continue;
+        const int failureCountBefore = failures.size();
+        bool ok = window.valid && ks::window::windowIdentityMatches(
+            window.hwndValue, window.processId, window.threadId, window.processCreationTime100ns);
+        if (ok && (action == terminate || action == processDetail)) processedPids.insert(window.processId);
+        if (ok && action == input) openWindowDetailDialog(window, true);
+        else if (ok && action == windowDetail) openWindowDetailDialog(window);
+        else if (ok && action == processDetail)
+        {
+            if (window.processCreationTime100ns != 0)
+                ks::ui::OpenProcessDetailByIdentity(window.processId, window.processCreationTime100ns);
+            else openProcessDetailWindow(this, window.processId);
+        }
+        else if (ok && action == terminate)
+        {
+            std::string errorText;
+            ok = ks::process::TerminateProcessByWin32IfCreationTimeMatches(
+                window.processId, window.processCreationTime100ns, &errorText);
+            if (!ok) failures.push_back(QStringLiteral("%1: %2")
+                .arg(hwndToText(window.hwndValue), QString::fromStdString(errorText)));
+        }
+        else if (ok && action == activate)
+        {
+            ::ShowWindowAsync(hwnd, ::IsIconic(hwnd) ? SW_RESTORE : SW_SHOW);
+            ok = ::SetForegroundWindow(hwnd) != FALSE;
+        }
+        else if (ok && (action == topMost || action == notTopMost))
+        {
+            const bool target = multiple ? action == topMost
+                : (::GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & WS_EX_TOPMOST) == 0;
+            ok = ks::window::setWindowTopMost(hwnd, target);
+        }
+        else if (ok && (action == show || action == hide))
+        {
+            const bool target = multiple ? action == show : !::IsWindowVisible(hwnd);
+            ok = ks::window::requestWindowVisible(hwnd, target);
+        }
+        else if (ok && (action == enable || action == disable))
+        {
+            const bool target = multiple ? action == enable : !::IsWindowEnabled(hwnd);
+            ok = ks::window::setWindowEnabled(hwnd, target);
+        }
+        else if (ok && action == sendMessage)
+        {
+            DWORD_PTR result = 0;
+            ok = ::SendMessageTimeoutW(hwnd, WM_NULL, 0, 0, SMTO_ABORTIFHUNG, 1200, &result) != 0;
+        }
+        if (ok) ++succeeded;
+        else if (failures.size() == failureCountBefore)
+            failures.push_back(hwndToText(window.hwndValue));
+    }
+    if (action != input && action != windowDetail && action != processDetail)
         refreshWindowListAsync();
-    }
+    m_statusBar->showMessage(QStringLiteral("操作：%1；成功：%2；失败或已失效：%3")
+        .arg(action->text()).arg(succeeded).arg(failures.size()), 5000);
+    if (!failures.empty())
+        QMessageBox::warning(this, QStringLiteral("窗口操作"),
+            QStringLiteral("操作：%1\n成功：%2\n失败或已失效：%3\n%4")
+                .arg(action->text()).arg(succeeded).arg(failures.size()).arg(failures.join('\n')));
 }
 
 void OtherDock::exportVisibleRowsToTsv()

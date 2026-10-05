@@ -1615,6 +1615,9 @@
     <QtMoc Include="OtherDock\OtherDock.h">
       <Filter>Header Files</Filter>
     </QtMoc>
+    <ClInclude Include="OtherDock\WindowListInteraction.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="OtherDock\WindowCaptureProtection.h">
       <Filter>Header Files</Filter>
     </ClInclude>

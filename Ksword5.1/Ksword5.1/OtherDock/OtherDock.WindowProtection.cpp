@@ -1,5 +1,6 @@
 #include "OtherDock.h"
 #include "WindowCaptureProtection.h"
+#include "WindowListInteraction.h"
 #include "../Framework/PrivilegeElevationPrompt.h"
 
 // ============================================================
@@ -78,44 +79,58 @@ namespace
     }
 }
 
-void OtherDock::setCaptureProtectionForSelectedWindow(const bool protectedState)
+void OtherDock::setCaptureProtectionForSelectedWindows(const bool protectedState)
 {
-    QTreeWidgetItem* item = m_windowTree != nullptr ? m_windowTree->currentItem() : nullptr;
-    if (item == nullptr || item->data(0, Qt::UserRole + 1).toBool())
+    const auto windows = selectedWindowSnapshots();
+    if (windows.empty())
     {
-        kLogEvent event;
-        warn << event
-            << "[OtherDock] 防截图保护操作失败：未选中有效窗口。"
-            << eol;
-        QMessageBox::information(
-            this,
-            QStringLiteral("窗口防截图保护"),
+        QMessageBox::information(this, QStringLiteral("窗口防截图保护"),
             QStringLiteral("请先选中一个窗口。"));
         return;
     }
-
-    const quint64 hwndValue = item->data(0, Qt::UserRole).toULongLong();
-    const WindowInfo* windowInfo = findInfoByHwnd(hwndValue);
-    if (windowInfo == nullptr)
-    {
-        kLogEvent event;
-        warn << event
-            << "[OtherDock] 防截图保护操作失败：选中 HWND 不在当前快照, hwnd="
-            << formatHwndText(hwndValue).toStdString()
-            << eol;
-        QMessageBox::warning(
-            this,
-            QStringLiteral("窗口防截图保护"),
-            QStringLiteral("当前窗口快照已失效，请刷新后重试。"));
-        return;
-    }
-
-    setCaptureProtectionForWindow(*windowInfo, protectedState);
+    setCaptureProtectionForWindows(windows, protectedState);
 }
 
-void OtherDock::setCaptureProtectionForWindow(
+void OtherDock::setCaptureProtectionForWindows(
+    const std::vector<WindowInfo>& windows, const bool protectedState)
+{
+    QSet<quint64> processedRoots;
+    int succeeded = 0;
+    QStringList failures;
+    for (const auto& window : windows)
+    {
+        if (!window.valid || !ks::window::windowIdentityMatches(
+            window.hwndValue, window.processId, window.threadId, window.processCreationTime100ns))
+        {
+            failures.push_back(formatHwndText(window.hwndValue));
+            continue;
+        }
+        const HWND hwnd = reinterpret_cast<HWND>(static_cast<quintptr>(window.hwndValue));
+        const HWND root = ::GetAncestor(hwnd, GA_ROOT);
+        const quint64 rootValue = root
+            ? static_cast<quint64>(reinterpret_cast<quintptr>(root)) : window.hwndValue;
+        if (processedRoots.contains(rootValue)) continue;
+        processedRoots.insert(rootValue);
+        // Keep the single-window diagnostic dialog, but batch feedback only once.
+        const bool ok = setCaptureProtectionForWindow(window, protectedState, windows.size() == 1);
+        if (ok) ++succeeded;
+        else failures.push_back(formatHwndText(window.hwndValue));
+    }
+    refreshWindowListAsync();
+    if (windows.size() > 1 || processedRoots.isEmpty())
+    {
+        const QString message = QStringLiteral("操作：%1\n成功：%2\n失败或已失效：%3\n%4")
+            .arg(protectedState ? QStringLiteral("启用防截图保护") : QStringLiteral("取消防截图保护"))
+            .arg(succeeded).arg(failures.size()).arg(failures.join('\n'));
+        if (failures.empty()) QMessageBox::information(this, QStringLiteral("窗口防截图保护"), message);
+        else QMessageBox::warning(this, QStringLiteral("窗口防截图保护"), message);
+    }
+}
+
+bool OtherDock::setCaptureProtectionForWindow(
     const WindowInfo& windowInfo,
-    const bool protectedState)
+    const bool protectedState,
+    const bool showFeedback)
 {
     kLogEvent actionEvent;
     info << actionEvent
@@ -145,7 +160,7 @@ void OtherDock::setCaptureProtectionForWindow(
             << result.appliedAffinity
             << std::dec
             << eol;
-        QMessageBox::information(
+        if (showFeedback) QMessageBox::information(
             this,
             QStringLiteral("窗口防截图保护"),
             messageText);
@@ -153,11 +168,11 @@ void OtherDock::setCaptureProtectionForWindow(
     else
     {
         // privilegePromptHandled：先消费结构化 Win32 错误，未命中时再检查文字详情。
-        bool privilegePromptHandled = ks::ui::promptForPrivilegeFailure(
+        bool privilegePromptHandled = showFeedback && ks::ui::promptForPrivilegeFailure(
             this,
             result.requestedProtection ? QStringLiteral("启用窗口防截图保护") : QStringLiteral("取消窗口防截图保护"),
             result.win32Error);
-        if (!privilegePromptHandled)
+        if (showFeedback && !privilegePromptHandled)
         {
             privilegePromptHandled = ks::ui::promptForPrivilegeFailure(
                 this,
@@ -176,7 +191,7 @@ void OtherDock::setCaptureProtectionForWindow(
             << ", detail="
             << result.detail
             << eol;
-        if (!privilegePromptHandled)
+        if (showFeedback && !privilegePromptHandled)
         {
             QMessageBox::warning(
                 this,
@@ -185,7 +200,7 @@ void OtherDock::setCaptureProtectionForWindow(
         }
     }
 
-    refreshWindowListAsync();
+    return result.success;
 }
 
 // WindowLayerDiagnostics.inl is intentionally included here so the feature is

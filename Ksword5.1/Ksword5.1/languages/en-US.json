@@ -25203,7 +25203,7 @@
     "长度=%1，掩码=%2...%3": "Length=%1, Mask=%2...%3",
     "长度=%1，掩码=<过短，已隐藏>": "Length=%1, Mask=<Too Short, Hidden>",
     "长度：%6 (%7 字节)\n": "Length: %6 (%7 bytes)\n",
-    "闪烁窗口": "Flashing Window",
+    "标记位置": "Mark position",
     "队列状态": "Queue Status",
     "防截图保护会对顶层窗口写入 DisplayAffinity，外部进程窗口会尝试远程调用": "Screenshot protection writes DisplayAffinity to the top-level window; external process windows attempt remote calls.",
     "防火墙": "Firewall",
@@ -35347,6 +35347,23 @@
     "正在读取文件偏移 0x%1 附近的数据...": "Reading data around file offset 0x%1...",
     "未跳转：%1": "Navigation failed: %1",
     "文件范围 [0x%1, 0x%2)；已加载 %3 字节，文件共 %4 字节。": "File range [0x%1, 0x%2); %3 bytes loaded, %4 bytes total.",
-    "请输入有效文件偏移：十进制，或以 0x 开头的十六进制。": "Enter a valid file offset: decimal, or hexadecimal starting with 0x."
+    "请输入有效文件偏移：十进制，或以 0x 开头的十六进制。": "Enter a valid file offset: decimal, or hexadecimal starting with 0x.",
+    "WindowListInteraction.h": "WindowListInteraction.h",
+    "取消置顶": "Remove always on top",
+    "启用窗口": "Enable windows",
+    "已选中 %1 个窗口": "%1 windows selected",
+    "拖拽准星可定位窗口；Ctrl/Shift 多选后可通过右键菜单批量操作": "Drag the crosshair to locate a window; use Ctrl/Shift to select multiple windows for batch actions in the context menu",
+    "操作：%1\n成功：%2\n失败或已失效：%3\n%4": "Action: %1\nSucceeded: %2\nFailed or no longer valid: %3\n%4",
+    "显示窗口": "Show windows",
+    "在全屏透明层中标记所有选中窗口的位置与基本信息；按鼠标左键或右键关闭": "Mark all selected windows and their basic information in one full-screen transparent overlay; press the left or right mouse button to close",
+    "禁用窗口": "Disable windows",
+    "窗口操作": "Window actions",
+    "选中: %1 个窗口": "Selected: %1 windows",
+    "操作：%1；成功：%2；失败或已失效：%3": "Action: %1; succeeded: %2; failed or no longer valid: %3",
+    "进程: %1  PID/TID: %2 / %3": "Process: %1  PID/TID: %2 / %3",
+    "类名: %1  句柄: %2": "Class: %1  Handle: %2",
+    "位置: (%1, %2)  大小: %3 × %4  状态: %5": "Position: (%1, %2)  Size: %3 × %4  State: %5",
+    "以下窗口已失效或无法读取位置：\n%1": "These windows are no longer valid or their positions could not be read:\n%1",
+    "已标记 %1 个窗口；按鼠标左键或右键关闭": "%1 windows marked; press the left or right mouse button to close"
   }
 }

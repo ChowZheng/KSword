@@ -84,6 +84,9 @@ KSword 主程序位于 `Ksword5.1/Ksword5.1`（Qt 6.9.3 Widgets + Qt Advanced Do
 
 ## 通用表格交互
 
+- 2026-10-05：窗口列表（`OtherDock`，含进程详情内嵌列表）支持 Ctrl/Shift 多选；批量置顶/取消置顶、显示/隐藏、启用/禁用采用统一目标状态，避免混合选区逐项反转。防截图操作按顶层 HWND 去重，进程操作按 PID 去重；菜单打开前复制窗口快照，不能持有异步枚举缓存的指针跨越 `QMenu::exec` 或反馈弹窗。树刷新使用通用菜单/Ctrl 提交屏障，并按 HWND/PID/TID/进程创建时间恢复选区；屏障期间新快照替换后也必须核验旧树项身份，不能仅凭 HWND 找到新快照就操作。
+- 2026-10-05 后续按用户要求将“闪烁窗口”改为“标记位置”：`OtherDock/WindowListInteraction.h` 的 `WindowPositionOverlay` 用一个原生透明窗口覆盖整个虚拟桌面，把所有选中窗口的物理矩形统一换算到该窗口的逻辑绘图坐标；全部淡主题色填充/边框先画，不透明信息卡片和文字最后画，卡片尽量避让。保持显示直到一次左/右键按下即销毁；没有计时闪烁、没有 `FlashWindowEx`、不改变目标显示或前台状态。空白像素必须有 1/255 alpha 以捕获整屏点击，不能设置 `WindowTransparentForInput`；顶层 Tool 必须显式复制 owner 的 palette/font，强调色取 Active Highlight，避免非活动窗口默认灰色调替代主题色。最小化顶层窗口取 `WINDOWPLACEMENT` 还原矩形并转换 workspace/screen 坐标；不实际恢复窗口。`tools/Invoke-WindowListTests.cmd` 在不切换输入桌面的测试桌面验证真实 Qt 多选、身份恢复、混合状态批量操作、单层覆盖多选、重叠填充不盖信息、主题色/透明点击区/前台保持、左/右键按下销毁，并输出绘制预览。Qt `grab()` 图像带 DPR，合成到 DPR=1 的 QA 图时需先清除图像 DPR，避免预览被再次缩小。多 DPI 查询显式使用可恢复的线程 `PER_MONITOR_AWARE_V2` 上下文，所有目标共用标记层 backing-store DPR；Qt DPR/屏幕变化后排队重设原生虚拟桌面范围。`--dpi-matrix` 已在两个物理显示器上通过原生缩放及 Qt 100%/125%/150%/200% 混合组合，还测试负坐标/跨屏的绘图不变式与 DPI-unaware 调用方的坐标虚拟化隔离。此回归不代表主程序 GUI 或更改真实 Windows 显示布局的验收。
+
 - 进程列表顶部的历史利用率图共用 `ProcessDock::m_activitySamples` 中的完整进程快照；绘图与比例计算会遍历这些样本，不能只限制横轴显示而保留大量旧快照。2026-10-04 改为默认最近 50 次，上方下拉框可选不记录、全量、最近 N 次；齿轮设置中的旧“不记录历史”复选框已移除。不记录仅停止追加并保留已有历史；减少 N 或由全量切回最近模式立即裁剪。淘汰后必须按实际移除数量同步时间轴与快照下标，保留选中样本的身份；选中样本被淘汰则回到实时列表并吸附最新。此设置针对进程列表图，独立进程详情窗口仍有自己的图表缓存策略。
 - 全局滚轮只由 `UI/SmoothScrollSupport.cpp` 接管；`MainWindow.cpp` 的 `GlobalSliderWheelFilter` 仅管理数值滑块是否允许滚轮调值。不要重新加入另一套平滑滚动，否则关闭设置仍会滚动，或将同一事件交给不同单位的算法。
 - `CodeEditorWidget` 的 13 个工具图标须与真实状态同步：撤销/重做看文档历史，剪切/复制看选区，粘贴看剪贴板，换行用 checked 呈现。快捷键限定到 `WidgetWithChildrenShortcut`，包含 SaveAs，避免同窗口多个编辑器冲突；结构页的查找/跳转/换行先切到文本页，复制走结构控件当前选区或完整报告。SVG 必须按 palette 生成普通/悬停/禁用/选中状态，并在 palette 变化时重建，否则蓝色图标遇蓝色 hover 底会消失。新建/打开文件须清除旧的生成报告翻译缓存，全文替换应合成一个 undo edit block。

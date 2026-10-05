@@ -151,22 +151,25 @@ private:
 
     // ===================== 交互操作 ======================
     void showWindowContextMenu(const QPoint& localPos);
+    std::vector<WindowInfo> selectedWindowSnapshots() const;
+    void updateWindowSelectionUi();
+    void setCaptureProtectionForWindows(const std::vector<WindowInfo>& windows, bool protectedState);
     void exportVisibleRowsToTsv();
     void openWindowDetailDialog(const WindowInfo& info, bool inputSettings = false);
     const WindowInfo* findInfoByHwnd(quint64 hwndValue) const;
-    // setCaptureProtectionForSelectedWindow：
-    // - 作用：对当前选中的窗口启用/取消防截图保护；
+    // setCaptureProtectionForSelectedWindows：
+    // - 作用：对当前选区中的窗口启用/取消防截图保护，并按顶层窗口去重；
     // - 调用：窗口列表工具栏按钮；
     // - 传入 protectedState：true=启用，false=取消；
     // - 传出：无，结果通过日志、消息框和列表刷新反馈。
-    void setCaptureProtectionForSelectedWindow(bool protectedState);
+    void setCaptureProtectionForSelectedWindows(bool protectedState);
 
     // setCaptureProtectionForWindow：
     // - 作用：对指定窗口快照执行防截图保护操作；
-    // - 调用：右键菜单和选中项工具栏；
+    // - 调用：选区批量操作；批量时只记日志，完成后统一反馈。
     // - 传入 info：目标窗口快照；
     // - 传入 protectedState：true=启用，false=取消。
-    void setCaptureProtectionForWindow(const WindowInfo& info, bool protectedState);
+    bool setCaptureProtectionForWindow(const WindowInfo& info, bool protectedState, bool showFeedback = true);
 
     // handleWindowPickerRelease：
     // - 作用：处理“准星拖拽拾取”释放事件，定位鼠标下窗口并弹出详情；
@@ -200,6 +203,7 @@ private:
     QPushButton* m_windowPickerButton = nullptr;  // 准星拖拽拾取按钮（释放时按鼠标位置打开窗口详情）。
     QPushButton* m_protectCaptureButton = nullptr; // 对选中窗口启用防截图保护按钮。
     QPushButton* m_unprotectCaptureButton = nullptr; // 对选中窗口取消防截图保护按钮。
+    QPushButton* m_windowInputButton = nullptr;   // 单个窗口的输入与顺序设置入口。
     QLabel* m_windowPickerHintLabel = nullptr;    // 准星按钮旁提示文案，说明拖拽用法。
 
     // 窗口列表页：左树右预览。
