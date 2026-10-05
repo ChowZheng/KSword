@@ -44,7 +44,7 @@
 //   Int3PatchLedger ledger;
 //   PatchTarget target{pid, createTime100ns, attachGeneration};
 //   const InstallResult installed = ledger.Install(target, address, store, nowTick);
-//   if (installed.status == InstallStatus::Installed) { /* installed.id 标识该条目 */ }
+//   if (installed.id != 0) { /* 安装或未证实回滚的恢复条目，保存 id */ }
 //   const RestoreResult restored = ledger.Restore(installed.id, target, store);
 //
 // 条目一律用 id 标识，绝不用表格行号：行号会随删除、排序而变，id 单调递增且永不
@@ -69,8 +69,8 @@ inline constexpr std::uint8_t kInt3PatchByte = 0xCC;
 //
 // 约定（两个函数都必须遵守，账本的回滚判断建立在它们之上）：
 //   * ReadByte  返回 false 表示没有读到，此时 valueOut 的内容无意义，账本不会使用；
-//   * WriteByte 返回 false 表示该字节**没有被改动**。返回 true 只表示"调用成功"，
-//     账本仍会回读验证，不会相信返回值就是事实。
+//   * WriteByte 返回 false 表示该字节**没有被改动**。返回 true 表示需要回读
+//     核对的写入已发生或调用已成功；后置失败不能抹掉已落地事实，账本仍会验证。
 class IPatchByteStore {
 public:
     virtual ~IPatchByteStore() = default;
@@ -78,7 +78,7 @@ public:
     // 读取 address 处的单个字节。成功返回 true 并写入 valueOut。
     virtual bool ReadByte(std::uint64_t address, std::uint8_t& valueOut) = 0;
 
-    // 把 value 写到 address 处。成功返回 true；失败返回 false 且目标字节未被改动。
+    // 把 value 写到 address 处。需回读核对时返回 true；false 保证字节未被改动。
     virtual bool WriteByte(std::uint64_t address, std::uint8_t value) = 0;
 };
 
@@ -113,13 +113,13 @@ enum class InstallStatus {
     ReadFailed,                 // 读不到原字节；未写任何东西
     AlreadyContainsPatchByte,   // 该地址上原本就是 0xCC；未写任何东西
     WriteFailed,                // WriteByte 返回失败；按约定目标字节未被改动，无需回滚
-    VerifyFailed,               // 写入后回读不等于 0xCC；已尝试写回原字节（见回滚字段）
+    VerifyFailed,               // 回读未确认 0xCC；已尝试恢复原字节，未证实恢复时保留条目
 };
 
-// InstallResult：Install 的返回值。只有 status==Installed 时 id 才非 0。
+// InstallResult：Installed 的 id 有效；VerifyFailed 未证实回滚时也带恢复条目 id。
 struct InstallResult {
     InstallStatus status = InstallStatus::None;     // 结果状态
-    std::uint64_t id = 0;                           // 成功时的条目 id；其余情形恒为 0
+    std::uint64_t id = 0;                           // 安装或未证实回滚的恢复条目 id；0 表示未留条目
     bool rollbackAttempted = false;                 // 仅 VerifyFailed：是否尝试了写回原字节
     bool rollbackWriteOk = false;                   // 仅 VerifyFailed：写回的 WriteByte 是否返回成功
 };
@@ -165,7 +165,8 @@ public:
     // 的地址读出来必然是 0xCC，若先读会被误判成 AlreadyContainsPatchByte）；
     // 读原字节 -> ReadFailed；原字节已是 0xCC -> AlreadyContainsPatchByte；
     // 写入 -> WriteFailed；回读验证 -> VerifyFailed（并尝试写回原字节）。
-    // 任一拒绝都不产生条目，也不消耗 id。
+    // 写入前拒绝不产生条目；VerifyFailed 只有回滚写成功且回读为原字节才不记账，
+    // 否则保留带有效 id 的恢复条目，仍返回 VerifyFailed，不冒充 Installed。
     InstallResult Install(
         const PatchTarget& target,
         std::uint64_t address,

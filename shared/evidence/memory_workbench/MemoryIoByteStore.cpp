@@ -204,10 +204,11 @@ namespace ksword::memwb
 
             if (outcome.needsApproval)
             {
-                // 约定：要求同意时端口必须尚未写入任何字节，所以 bytesDone 只
-                // 计之前已经成功的片。
+                // 端口的批准只覆盖当前片；前片已写时不能让上层批准后重试整块。
+                // totalDone 非零就报告部分失败，保留已落地字节并要求宿主重读。
                 result.ok = false;
-                result.needsExplicitApproval = true;
+                result.needsExplicitApproval = totalDone == 0;
+                result.partial = totalDone != 0;
                 result.bytesDone = totalDone;
                 result.failureText = outcome.failure;
                 return result;
@@ -218,11 +219,16 @@ namespace ksword::memwb
             // 写完了"继续切下一片。
             if (!outcome.ok || outcome.partial)
             {
-                totalDone += outcome.bytesDone;
+                // 当前片回滚不会撤回早先成功片；只统计仍留在目标上的字节。
+                const bool earlierBytesPersisted = totalDone != 0;
+                if (!outcome.rolledBack)
+                {
+                    totalDone += (std::min)(outcome.bytesDone, chunkLength);
+                }
                 result.ok = false;
                 result.bytesDone = totalDone;
-                result.partial = outcome.partial;
-                result.rolledBack = outcome.rolledBack;
+                result.partial = outcome.partial || earlierBytesPersisted;
+                result.rolledBack = outcome.rolledBack && !earlierBytesPersisted;
                 result.failureText = outcome.failure;
                 return result;
             }

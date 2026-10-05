@@ -246,10 +246,12 @@ namespace ksword::memwb
     // PrecheckTargets：(e) 对每个差异块读当前真实字节，与暂存时的 before 核对。
     // 全部块都核对完毕之前不会发出任何写。读失败、partial、不一致都算目标已变。
     // 传入：run 本次提交的局部状态。传出：true 表示全部一致；false 表示 TargetChanged，报告已填好。
-    bool MemoryWriteTransaction::PrecheckTargets(CommitRun& run)
+    bool MemoryWriteTransaction::PrecheckTargets(CommitRun& run, const std::size_t firstBlock)
     {
-        for (const DiffBlock& block : run.blocks)
+        for (std::size_t index = firstBlock; index < run.blocks.size(); ++index)
         {
+            // 批准框返回后只复核尚未写入块，已吸收块的 before 已不再是目标现值。
+            const DiffBlock& block = run.blocks[index];
             // 读当前真实字节。长度取 before 的长度，与块等长。
             const AccessResult current = store_.Read(block.address, static_cast<std::uint64_t>(block.before.size()));
             Absorb(run.report, current);
@@ -322,6 +324,15 @@ namespace ksword::memwb
         // 后端要求显式同意。
         if (result.needsExplicitApproval)
         {
+            // 需要批准的返回值必须没有持久写入；违约时禁止整块重试并如实计数。
+            if (!result.rolledBack && result.bytesDone != 0)
+            {
+                report.bytesWritten += (std::min)(result.bytesDone, length);
+                AbortWithFailure(run, CommitOutcome::WriteFailed,
+                    "backend requested approval after persisting part of the block", false);
+                return false;
+            }
+
             // 本次提交还没有"剩余块都同意"的授权，就必须问用户。
             // 这一步永远会问，不看 uiConfirmSuppressed_。
             if (!run.batchApproved)
@@ -352,6 +363,13 @@ namespace ksword::memwb
                         false);
                     return false;
                 }
+
+                // 显式批准也可能启动嵌套事件循环；重新核对身份、编辑代次和剩余
+                // 块的真实 before，禁止把窗口打开前的授权/字节用于变更后的目标。
+                if (!RecheckFreshness(run) || !PrecheckTargets(run, index))
+                {
+                    return false;
+                }
             }
 
             // 带同意标志重试同一块。同意只在这一次调用里有效，下一块重新从"不带标志"开始。
@@ -361,6 +379,11 @@ namespace ksword::memwb
             // 已经同意了后端还要求同意：不再询问，避免死循环，按写入失败处理。
             if (result.needsExplicitApproval)
             {
+                // 后端在重试后违约地边写边要求批准，也不能漏报已经留下的字节。
+                if (!result.rolledBack)
+                {
+                    report.bytesWritten += (std::min)(result.bytesDone, length);
+                }
                 AbortWithFailure(
                     run,
                     CommitOutcome::WriteFailed,
@@ -437,7 +460,9 @@ namespace ksword::memwb
     {
         run.report.outcome = outcome;
         run.report.failureText = text;
-        state_ = overlay_.HasPendingPatches() ? State::Staged : State::Idle;
+        // 普通确认前中止仍是待提交；晚到的批准确认若已有块落地则属于部分失败。
+        state_ = run.report.bytesWritten != 0 ? State::Failed
+            : (overlay_.HasPendingPatches() ? State::Staged : State::Idle);
     }
 
     // AbortWithFailure：写阶段的中止（拒绝同意、写失败、回读失败）。

@@ -118,6 +118,8 @@ struct WriteFault {
     std::uint64_t bytesDone = 0;
     // rolledBack：后端声明已回滚；此时任何字节都不落地。
     bool rolledBack = false;
+    // needsApproval：模拟违约适配器在部分落地后仍要求批准，检查上层拒绝整块重试。
+    bool needsApproval = false;
     // text：失败原因。
     std::string text = "scripted write fault";
 };
@@ -220,6 +222,7 @@ public:
             result.ok = !f.fail;
             result.bytesDone = f.bytesDone;
             result.rolledBack = f.rolledBack;
+            result.needsExplicitApproval = f.needsApproval;
             result.failureText = f.text;
             if (!f.rolledBack) {
                 for (std::uint64_t offset = 0; offset < f.bytesDone && offset < bytes.size(); ++offset) {
@@ -258,6 +261,8 @@ public:
     UiConfirmRequest lastUi;
     // approvalScript：按序给出的显式同意回答；用完后一律 Deny。
     std::vector<ApprovalAnswer> approvalScript;
+    // onApproval：模拟显式批准窗口的嵌套事件循环，验证批准后也必须重新核对目标。
+    std::function<void()> onApproval;
     // approvals：收到的全部同意请求。
     std::vector<ApprovalRequest> approvals;
 
@@ -279,6 +284,9 @@ public:
         approvals.push_back(request);
         if (log != nullptr) {
             log->push_back("APPROVE:" + std::to_string(request.blockIndex));
+        }
+        if (onApproval) {
+            onApproval();
         }
         return index < approvalScript.size() ? approvalScript[index] : ApprovalAnswer::Deny;
     }

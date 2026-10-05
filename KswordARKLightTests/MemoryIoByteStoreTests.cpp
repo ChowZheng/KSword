@@ -14,6 +14,7 @@
 #include "TestSupport.h"
 
 #include "MemoryIoTestSupport.h"
+#include "MemoryWriteTransactionTestSupport.h"
 #include "../shared/evidence/memory_workbench/MemoryIoByteStore.h"
 
 #include <cstdint>
@@ -190,10 +191,67 @@ void TestWriteNeedsApprovalStopsImmediately(KswordTests::Suite& suite) {
     MemoryIoByteStore store(port, session);
 
     const AccessResult result = store.Write(kAddr, MakePattern(0x00, 7), false);
-    suite.expect(!result.ok && result.needsExplicitApproval && result.bytesDone == 3,
-        L"io bytestore: needsApproval stops with bytesDone counting only the earlier successful chunk");
+    suite.expect(!result.ok && !result.needsExplicitApproval && result.partial && result.bytesDone == 3,
+        L"io bytestore: late approval is a partial failure, never an authorization to retry the persisted prefix");
     suite.expect(port.writeCalls.size() == 2,
         L"io bytestore: the third chunk is never attempted after needsApproval");
+}
+
+// 首片批准尚未写任何字节；后片回滚只能撤回自己，不能抹掉此前成功片的计数。
+void TestWriteApprovalAndRollbackScope(KswordTests::Suite& suite) {
+    const MemoryTargetSession session = MakeSessionWith(Scope::ProcessVirtual, Channel::UserMode);
+    FakeMemoryIoPort first;
+    first.limits.maxWriteBytes = 3;
+    first.writeScript = { MakeWriteNeedsApproval() };
+    MemoryIoByteStore firstStore(first, session);
+    const AccessResult approval = firstStore.Write(kAddr, MakePattern(0xA0, 7), false);
+    suite.expect(approval.needsExplicitApproval && !approval.partial && approval.bytesDone == 0
+        && first.writeCalls.size() == 1,
+        L"io bytestore: first-slice approval permits retry only because zero bytes persisted");
+
+    // rolledBack 只指当前端口调用；其声明的 bytesDone 已撤回，不加入持久计数。
+    IoWriteResult rolledBack = MakeWriteFailed("slice rolled back");
+    rolledBack.rolledBack = true;
+    rolledBack.bytesDone = 2;
+    FakeMemoryIoPort later;
+    later.limits.maxWriteBytes = 3;
+    later.writeScript = { MakeWriteOk(3), rolledBack };
+    MemoryIoByteStore laterStore(later, session);
+    const AccessResult partial = laterStore.Write(kAddr, MakePattern(0xA0, 7), false);
+    suite.expect(!partial.ok && !partial.rolledBack && partial.partial && partial.bytesDone == 3,
+        L"io bytestore: a late-slice rollback leaves the earlier three bytes persisted");
+
+    FakeMemoryIoPort only;
+    only.writeScript = { rolledBack };
+    MemoryIoByteStore onlyStore(only, session);
+    const AccessResult clean = onlyStore.Write(kAddr, MakePattern(0xA0, 3), false);
+    suite.expect(!clean.ok && clean.rolledBack && clean.bytesDone == 0,
+        L"io bytestore: a sole rolled-back slice leaves zero persisted bytes");
+}
+
+// 用真实字节存储接入写事务，防止各自单测通过却对批准/回滚的聚合语义理解不同。
+void TestChunkFailureThroughWriteTransaction(KswordTests::Suite& suite) {
+    for (const bool rollback : { false, true }) {
+        MemwbTxnTests::Rig rig;
+        FakeMemoryIoPort port;
+        port.limits.maxWriteBytes = 3;
+        port.script = { MakeOk(Bytes{0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88}) };
+        IoWriteResult second = rollback ? MakeWriteFailed("slice rolled back") : MakeWriteNeedsApproval();
+        second.rolledBack = rollback;
+        port.writeScript = { MakeWriteOk(3), second };
+        MemoryIoByteStore store(port, rig.session);
+        ksword::memwb::MemoryWriteTransaction transaction(
+            rig.overlay, rig.session, rig.revisions, store, rig.sink, rig.audit);
+        transaction.Stage(MemwbTxnTests::kA, MakePattern(0x01, 7));
+        const auto report = transaction.Commit();
+        suite.expect(report.outcome == ksword::memwb::CommitOutcome::WriteFailed
+            && report.bytesWritten == 3 && report.blocksWritten == 0 && report.needsReread,
+            L"io bytestore integration: chunk failure reports the persisted prefix and requires a re-read");
+        suite.expect(transaction.CurrentState() == ksword::memwb::MemoryWriteTransaction::State::Failed
+            && rig.overlay.PendingByteCount() == 7 && rig.sink.approvalCalls == 0
+            && port.writeCalls.size() == 2,
+            L"io bytestore integration: no whole-block retry or false rollback, pending edits are retained");
+    }
 }
 
 void TestWritePartialIsTreatedAsFailure(KswordTests::Suite& suite) {
@@ -364,6 +422,8 @@ int RunMemwbIoByteStoreTests() {
     TestWriteZeroBytesTrivial(suite);
     TestWriteMultiChunkSuccess(suite);
     TestWriteNeedsApprovalStopsImmediately(suite);
+    TestWriteApprovalAndRollbackScope(suite);
+    TestChunkFailureThroughWriteTransaction(suite);
     TestWritePartialIsTreatedAsFailure(suite);
     TestWritePlainFailureStops(suite);
     TestWriteAggregatesDirtyFlagsOnlySetting(suite);

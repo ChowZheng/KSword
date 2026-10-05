@@ -13,8 +13,8 @@
 //   物理范围、磁盘传输通道一律拒绝，且**不发起任何端口调用**——int3 补丁
 //   零摩擦换来的是"少一道核对"，不是"在高风险通道上也零摩擦"，这几类通道
 //   被排除是设计文档的明确决定，不是本类自己加的限制。
-// - 写入时 approved 固定传 false：端口如果要求显式同意（needsApproval），
-//   本类把它当成普通失败返回（Install/Restore 因此拒绝），不会自动继续重试
+// - 写入时 approved 固定传 false：端口零写入而要求显式同意（needsApproval），
+//   本类按未改动返回 false（Install/Restore 因此拒绝），不会自动继续重试
 //   带同意标志的那一次——零摩擦止步于"不弹二次核对框"，不延伸到"自动越权"。
 //
 // ============================================================
@@ -36,9 +36,9 @@
 //   时写入 valueOut 并返回 true；其余情况（Partial/Unreadable/Failed，或端口
 //   违反契约返回了别的长度）一律返回 false 且不碰 valueOut。
 // - WriteByte：调用 port.Write(session, address, {value}, /*approved=*/false)；
-//   ok 为真且 bytesDone==1 时返回 true；其余情况（含 needsApproval、
-//   partial、失败）一律返回 false——对调用方（Int3PatchLedger）而言这与
-//   "写入失败"没有区别，账本按它既有的 WriteFailed/VerifyFailed 规则处理。
+//   未回滚且 bytesDone==1 时返回 true，即使端口的后置步骤报告失败，仍交给
+//   Int3PatchLedger 回读验证和记账，避免把已写的字节说成未改动。
+//   零字节或已回滚时返回 false；needsApproval 不触发自动批准或重试。
 // ============================================================
 
 #include "Int3PatchLedger.h"

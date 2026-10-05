@@ -53,8 +53,10 @@ namespace ksword::memwb
 
         const std::vector<std::uint8_t> payload{ value };
         // approved 固定传 false：零摩擦止步于"不弹二次核对框"，端口如果要求
-        // 显式同意，这里不会自动带着同意标志重试，直接按失败返回。
+        // 显式同意，这里不会自动带着同意标志重试；返回值只按持久写入判断。
         const IoWriteResult outcome = port_.Write(session_, address, payload, /*approved=*/false);
-        return outcome.ok && outcome.bytesDone == 1U;
+        // 已落地但后置步骤失败（如刷新指令缓存）仍须让账本回读和记账。
+        // false 的契约是字节没有改动，不能仅凭端口 ok 来推断这一点。
+        return !outcome.rolledBack && outcome.bytesDone == 1U;
     }
 }

@@ -102,7 +102,7 @@ InstallResult Int3PatchLedger::Install(
     // 第五步：回读验证。WriteByte 返回 true 只说明调用成功，不说明字节真的变了
     // （只读映射、写时复制、被其它线程立刻改回都会造成这种情况）。回读失败和回读
     // 值不对一律视为验证失败：此时目标字节处于未知状态，尽力把原字节写回去，
-    // 避免留下一个账本里没有记录的 0xCC。回滚写的结果如实带回给调用方。
+    // 回滚写的结果如实带回；只有回读确认原字节已恢复，才可不保留恢复记录。
     std::uint8_t readBackByte = 0;
     const bool readBackOk = store.ReadByte(address, readBackByte);
     const bool verified = readBackOk && (readBackByte == kInt3PatchByte);
@@ -110,11 +110,15 @@ InstallResult Int3PatchLedger::Install(
         result.status = InstallStatus::VerifyFailed;
         result.rollbackAttempted = true;
         result.rollbackWriteOk = store.WriteByte(address, originalByte);
-        return result;
+        std::uint8_t restoredByte = 0;
+        if (result.rollbackWriteOk && store.ReadByte(address, restoredByte)
+            && restoredByte == originalByte) {
+            return result;
+        }
     }
 
-    // 第六步：验证通过，才真正发放 id 并记账。id 放到最后才消耗，所以任何拒绝路径
-    // 都不会在 id 序列里留下空洞；nextId_ 只增不减，所以已用过的 id 永不复用。
+    // 第六步：验证通过或未能证实回滚时发放 id 并记账。后者仍是 VerifyFailed，
+    // 但必须保留原字节和目标身份供恢复；nextId_ 只增不减，已用 id 永不复用。
     PatchEntry entry;
     entry.id = nextId_;
     entry.pid = target.pid;
@@ -127,7 +131,9 @@ InstallResult Int3PatchLedger::Install(
     entries_.push_back(entry);
     ++nextId_;
 
-    result.status = InstallStatus::Installed;
+    if (verified) {
+        result.status = InstallStatus::Installed;
+    }
     result.id = entry.id;
     return result;
 }

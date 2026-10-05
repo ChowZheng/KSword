@@ -65,9 +65,10 @@ void TestApprovalThisBlockOnly(KswordTests::Suite& suite) {
     const Log expected = {
         "AUDIT:CommitStarted", "UI", "AUDIT:UiConfirmAccepted",
         "R:1002+1", "R:1006+2", "R:100c+1",
-        "W:1002+1:a0", "APPROVE:0", "AUDIT:ApprovalAnswered", "W:1002+1:a1", "R:1002+1",
+        "W:1002+1:a0", "APPROVE:0", "AUDIT:ApprovalAnswered",
+        "R:1002+1", "R:1006+2", "R:100c+1", "W:1002+1:a1", "R:1002+1",
         "W:1006+2:a0", "R:1006+2",
-        "W:100c+1:a0", "APPROVE:2", "AUDIT:ApprovalAnswered", "W:100c+1:a1", "R:100c+1",
+        "W:100c+1:a0", "APPROVE:2", "AUDIT:ApprovalAnswered", "R:100c+1", "W:100c+1:a1", "R:100c+1",
         "AUDIT:CommitFinished",
     };
     suite.expect(rig.log == expected,
@@ -114,7 +115,8 @@ void TestApprovalRestOfBatch(KswordTests::Suite& suite) {
     const Log expected = {
         "AUDIT:CommitStarted", "UI", "AUDIT:UiConfirmAccepted",
         "R:1002+1", "R:1006+2", "R:100c+1",
-        "W:1002+1:a0", "APPROVE:0", "AUDIT:ApprovalAnswered", "W:1002+1:a1", "R:1002+1",
+        "W:1002+1:a0", "APPROVE:0", "AUDIT:ApprovalAnswered",
+        "R:1002+1", "R:1006+2", "R:100c+1", "W:1002+1:a1", "R:1002+1",
         "W:1006+2:a0", "R:1006+2",
         "W:100c+1:a0", "W:100c+1:a1", "R:100c+1",
         "AUDIT:CommitFinished",
@@ -243,7 +245,7 @@ void TestApprovalProtocolEdges(KswordTests::Suite& suite) {
     const Log expected = {
         "AUDIT:CommitStarted", "UI", "AUDIT:UiConfirmAccepted",
         "R:1002+1",
-        "W:1002+1:a0", "APPROVE:0", "AUDIT:ApprovalAnswered", "W:1002+1:a1",
+        "W:1002+1:a0", "APPROVE:0", "AUDIT:ApprovalAnswered", "R:1002+1", "W:1002+1:a1",
         "AUDIT:CommitFinished",
     };
     suite.expect(rig.log == expected, L"approval: a backend that keeps asking is asked about once and then fails the write");
@@ -590,6 +592,81 @@ void TestRetryAfterFailure(KswordTests::Suite& suite) {
         L"retry: the target ends up with all three edits");
 }
 
+// 批准框和普通确认框同样会运行嵌套事件循环；三个代次/身份轴和剩余块都要再核对。
+void TestApprovalRechecksFreshness(KswordTests::Suite& suite) {
+    for (int change = 0; change < 4; ++change) {
+        Rig rig;
+        rig.StageThree();
+        rig.store.needApproval = { kA };
+        rig.sink.approvalScript = { ApprovalAnswer::ThisBlockOnly };
+        rig.sink.onApproval = [&rig, change]() {
+            if (change == 0) {
+                ++rig.session.pid;
+            } else if (change == 1) {
+                rig.revisions.BumpSource();
+            } else if (change == 2) {
+                rig.txn.Stage(kA, Bytes{0x09});
+                rig.revisions.BumpContent();
+            } else {
+                // 当前块没变，后面的 C 块变化同样必须在第一块真正写入前拒绝。
+                rig.store.memory[kC] = 0x90;
+            }
+        };
+        const CommitReport report = rig.txn.Commit();
+        suite.expect(report.outcome == (change == 3 ? CommitOutcome::TargetChanged : CommitOutcome::Stale)
+            && report.bytesWritten == 0 && report.blocksWritten == 0 && report.needsReread,
+            L"approval freshness: changed identity, revisions or a remaining block prohibit the approved retry");
+        suite.expect(rig.store.writeCalls == 1 && rig.txn.CurrentState() == State::Staged
+            && rig.overlay.HasPendingPatches() && MemoryAt(rig, kA, 1) == Bytes{0x22},
+            L"approval freshness: the only write attempt requested approval, no target bytes or edits are lost");
+        if (change == 2) {
+            suite.expect(rig.overlay.EffectiveByte(kA) == Val(0x09),
+                L"approval freshness: the newer edit made during the prompt is retained");
+        }
+        ExpectAuditBracketed(suite, L"approval freshness", rig);
+    }
+
+    // B 的批准窗口变更目标时，A 已提交；不得把部分落地状态回退成尚未写入的 Staged。
+    Rig late;
+    late.StageThree();
+    late.store.needApproval = { kB };
+    late.sink.approvalScript = { ApprovalAnswer::ThisBlockOnly };
+    late.sink.onApproval = [&late]() { ++late.session.attachGeneration; };
+    const CommitReport report = late.txn.Commit();
+    suite.expect(report.outcome == CommitOutcome::Stale && report.bytesWritten == 1
+        && report.blocksWritten == 1 && report.needsReread && late.txn.CurrentState() == State::Failed,
+        L"approval freshness: a late stale target retains the first committed block and reports partial failure");
+    suite.expect(late.store.writeCalls == 2 && MemoryAt(late, kA, 1) == Bytes{0x01}
+        && MemoryAt(late, kB, 2) == (Bytes{0x66, 0x77})
+        && PatchAddresses(late) == std::vector<std::uint64_t>({kB, kC}),
+        L"approval freshness: the changed target is not retried and its remaining edits are retained");
+}
+
+// 契约违约时不依赖后端的“需要批准”标签来推断零写入，首次和批准重试都计事实。
+void TestApprovalAfterPartialWriteFailsClosed(KswordTests::Suite& suite) {
+    for (const bool retry : { false, true }) {
+        Rig rig;
+        rig.StageA();
+        WriteFault fault;
+        fault.fail = true;
+        fault.bytesDone = 1;
+        fault.needsApproval = true;
+        rig.store.writeFault[kA] = fault;
+        if (retry) {
+            // 首次按正常契约要求批准；只有批准重试才返回矛盾的部分写入结果。
+            rig.store.needApproval = { kA };
+            rig.sink.approvalScript = { ApprovalAnswer::ThisBlockOnly };
+        }
+        const CommitReport report = rig.txn.Commit();
+        suite.expect(report.outcome == CommitOutcome::WriteFailed && report.bytesWritten == 1
+            && report.blocksWritten == 0 && report.needsReread && MemoryAt(rig, kA, 1) == Bytes{0x01},
+            L"approval protocol: partial persistence is reported even if the backend still requests approval");
+        suite.expect(rig.store.writeCalls == (retry ? 2 : 1) && rig.sink.approvalCalls == (retry ? 1 : 0)
+            && rig.overlay.HasPendingPatches() && rig.txn.CurrentState() == State::Failed,
+            L"approval protocol: partial persistence never causes another approval or a whole-block retry");
+    }
+}
+
 } // namespace
 
 namespace MemwbTxnTests {
@@ -602,6 +679,8 @@ void RunWriteOutcomeGroups(KswordTests::Suite& suite) {
     TestApprovalDeny(suite);
     TestApprovalIgnoresUiSuppression(suite);
     TestApprovalProtocolEdges(suite);
+    TestApprovalRechecksFreshness(suite);
+    TestApprovalAfterPartialWriteFailsClosed(suite);
     TestWriteFailures(suite);
     TestVerifyFailures(suite);
     TestWarningBits(suite);

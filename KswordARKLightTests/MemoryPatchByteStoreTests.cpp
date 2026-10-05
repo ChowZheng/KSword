@@ -147,8 +147,8 @@ void TestReadByteMapsPortResults(KswordTests::Suite& suite) {
 }
 
 // ------------------------------------------------------------
-// 三、WriteByte：approved 永远传 false；needsApproval/partial/失败一律按
-// 失败处理；ok 且 bytesDone==1 才算成功。
+// 三、WriteByte：approved 永远传 false；已落地的一字节必须交账本回读，
+// 不能因后置失败抹掉事实；零字节批准请求不自动重试。
 // ------------------------------------------------------------
 void TestWriteByteAlwaysPassesUnapproved(KswordTests::Suite& suite) {
     FakeMemoryIoPort port;
@@ -197,6 +197,41 @@ void TestWriteBytePartialAndPlainFailureAreRejected(KswordTests::Suite& suite) {
     }
 }
 
+void TestPersistedByteSurvivesPostWriteFailure(KswordTests::Suite& suite) {
+    const MemoryTargetSession session = MakeSessionWith(Scope::ProcessVirtual, Channel::UserMode);
+    // 真实 R3 端口的形状：WriteProcessMemory 写了 1 字节，FlushInstructionCache
+    // 失败，因此 ok=false，但 bytesDone=1。账本必须保留可还原的原字节。
+    auto flushedFailed = MakeWriteFailed("instruction cache flush failed after write");
+    flushedFailed.bytesDone = 1;
+    FakeMemoryIoPort port;
+    port.script = { MakeOk(Bytes{0x55}), MakeOk(Bytes{0xCC}),
+        MakeOk(Bytes{0xCC}), MakeOk(Bytes{0x55}) };
+    port.writeScript = { flushedFailed, MakeWriteOk(1) };
+    MemoryPatchByteStore store(port, session);
+    ksword::memwb::Int3PatchLedger ledger;
+    const ksword::memwb::PatchTarget target{ session.pid, 19, 7 };
+    const auto installed = ledger.Install(target, kAddr, store, 1);
+    suite.expect(installed.status == ksword::memwb::InstallStatus::Installed
+        && installed.id == 1 && ledger.HasUnrestored()
+        && ledger.Entries()[0].originalByte == 0x55,
+        L"patch store integration: post-write failure cannot hide the persisted 0xCC or lose its original byte");
+    const auto restored = ledger.Restore(installed.id, target, store);
+    suite.expect(restored.status == ksword::memwb::RestoreStatus::Restored
+        && !ledger.HasUnrestored() && port.writeCalls.size() == 2
+        && !port.writeCalls[0].approved && !port.writeCalls[1].approved,
+        L"patch store integration: the saved original can be restored without an automatic approval retry");
+
+    for (const bool rolledBack : { false, true }) {
+        FakeMemoryIoPort other;
+        auto result = MakeWritePartial(1);
+        result.rolledBack = rolledBack;
+        other.writeScript = { result };
+        MemoryPatchByteStore otherStore(other, session);
+        suite.expect(otherStore.WriteByte(kAddr, 0xCC) == !rolledBack,
+            L"patch store: only an unrolled-back persisted byte enters ledger verification, even with partial status");
+    }
+}
+
 } // namespace
 
 int RunMemwbPatchStoreTests() {
@@ -209,6 +244,7 @@ int RunMemwbPatchStoreTests() {
     TestWriteByteAlwaysPassesUnapproved(suite);
     TestWriteByteNeedsApprovalIsRejectedNotRetried(suite);
     TestWriteBytePartialAndPlainFailureAreRejected(suite);
+    TestPersistedByteSurvivesPostWriteFailure(suite);
     suite.report();
     return suite.failures();
 }

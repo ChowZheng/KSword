@@ -43,6 +43,8 @@
 //         RestOfBatch   同意持续到本次 Commit 结束，局部变量保存，不带到下一次 Commit。
 //       同意标志只会附在"后端刚刚说需要同意"的那次重试上，不会预先附到别的写入上。
 //       未识别的 ApprovalAnswer 取值按 Deny 处理（失败即拒绝）。
+//       显式批准返回后同样重新核对会话、两个代次及所有尚未写入块的 before；
+//       已有块落地后的陈旧/复核失败属于 Failed，不能声称整批仍未写入。
 //   (g) 每块写完立即回读（状态 Verifying）：读失败、partial 或与 after 不一致即失败，
 //       返回 VerifyMismatch，且不再写后面的块。
 //   (h) 每块回读通过后立刻 overlay.AcceptWrite(块, 回读字节)；全部通过状态 Committed。
@@ -435,7 +437,8 @@ namespace ksword::memwb
         // 管线的各阶段，返回 false 表示已填好 run.report 并中止。
         bool ConfirmWithUser(CommitRun& run);
         bool RecheckFreshness(CommitRun& run);
-        bool PrecheckTargets(CommitRun& run);
+        // firstBlock：首次提交从 0 起复核，批准返回后只复核尚未写入的块。
+        bool PrecheckTargets(CommitRun& run, std::size_t firstBlock = 0);
         bool WriteAndVerifyAll(CommitRun& run);
         bool WriteOneBlock(CommitRun& run, std::size_t index);
         bool VerifyOneBlock(CommitRun& run, std::size_t index);

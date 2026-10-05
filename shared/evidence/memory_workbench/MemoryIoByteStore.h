@@ -93,12 +93,12 @@
 //       同意语义是驱动内部的 FORCE|UI_CONFIRMED，不经写事务的同意询问）。
 // - 其余范围 / 通道：按 port.Limits(session).maxWriteBytes 切片（0=不限，
 //   整段一片），依次调用 port.Write(session, 片地址, 片字节, approved)：
-//     - 某片 needsApproval 为真 -> 立即返回 {ok=false,
-//       needsExplicitApproval=true, bytesDone=之前已成功片的字节数之和}，
-//       不再处理后面的片（约定此时该片没有写入任何字节）。
+//     - 某片 needsApproval 为真 -> 立即停止；此前没有持久写入时返回
+//       needsExplicitApproval=true，允许批准后重试整块；此前已写入时返回
+//       partial=true 与已写字节数，不允许整块重试，宿主必须重读核对。
 //     - 某片 ok 为假（且非 needsApproval）-> 停止，{ok=false,
-//       bytesDone=之前已成功片之和, partial=该片的 partial,
-//       rolledBack=该片的 rolledBack, failureText=该片的 failureText}。
+//       bytesDone=此前成功片加当前片未回滚的实际字节；只有此前没有写入
+//       且当前片已回滚，rolledBack 才为真，避免把局部回滚说成整体回滚。
 //     - 某片成功 -> 累加 bytesDone，继续下一片；scratchAreaDirty /
 //       readModifyWriteWindow 全程只置位不清除；该片的 failureText 若非空
 //       （端口用来搬运"回退/降级"注记）保留为当前候选注记文本。
