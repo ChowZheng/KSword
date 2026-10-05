@@ -29,6 +29,27 @@
     { "name": "ADDR numeric text",   "minAssertions": 60 },
     { "name": "T memory tamper cross-view", "minAssertions": 40 },
     { "name": "DMA process op plan", "minAssertions": 35 },
-    { "name": "HOOK patch compose",  "minAssertions": 182 }
+    { "name": "HOOK patch compose",  "minAssertions": 182 },
+    { "name": "MEMWB session",       "minAssertions": 184 },
+    { "name": "MEMWB overlay",       "minAssertions": 202 },
+    { "name": "MEMWB addr expr",     "minAssertions": 451 },
+    { "name": "MEMWB viewport",      "minAssertions": 365 },
+    { "name": "MEMWB int3 ledger",   "minAssertions": 208 },
+    { "name": "MEMWB address book",  "minAssertions": 684 },
+    { "name": "MEMWB write txn",     "minAssertions": 493 },
+    { "name": "MEMWB value decode",  "minAssertions": 2820 },
+    { "name": "MEMWB byte search",   "minAssertions": 441 },
+    { "name": "MEMWB target tracker",   "minAssertions": 300 },
+    { "name": "MEMWB channel gate",     "minAssertions": 198 },
+    { "name": "MEMWB write policy",     "minAssertions": 144 },
+    { "name": "MEMWB process match",    "minAssertions": 179 },
+    { "name": "MEMWB module dir",       "minAssertions": 217 },
+    { "name": "MEMWB session resolver", "minAssertions": 184 },
+    { "name": "MEMWB baseline window",  "minAssertions": 147 },
+    { "name": "MEMWB edit journal",     "minAssertions": 189 },
+    { "name": "MEMWB page reader",      "minAssertions": 142 },
+    { "name": "MEMWB io bytestore",     "minAssertions": 33 },
+    { "name": "MEMWB kernel mutation",  "minAssertions": 35 },
+    { "name": "MEMWB patch store",      "minAssertions": 22 }
   ]
 }
