@@ -180,6 +180,8 @@ MemoryDock::~MemoryDock()
 
     // 析构前先取消扫描，避免后台线程继续使用已销毁控件。
     cancelCurrentScan();
+    // 内存工作台的设置在子对象（视图）销毁之前落盘；分离钩子仍要用到视图，所以保存之后才分离。
+    shutdownWorkbench();
     detachProcess();
 
     // 析构完成日志：标记控件资源回收流程结束。
@@ -421,6 +423,10 @@ void MemoryDock::initializeTabs()
     {
         m_tabWidget->setTabIcon(tabIndex, QIcon(QString::fromLatin1(tabIconAliases[tabIndex])));
     }
+
+    // 内存工作台页签必须在图标循环之后插入：上面的图标按下标对应原有页签顺序，
+    // 先插会让后面所有页签的图标整体错位。它自己的图标与语言键在 initializeWorkbenchTab 里设置。
+    initializeWorkbenchTab();
 
     // 后加的四个证据页原本漏了语义键绑定，这里补齐，让它们也能跟随语言切换。
     ks::i18n::LanguageManager& languageManager = ks::i18n::LanguageManager::instance();

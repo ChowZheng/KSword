@@ -177,6 +177,14 @@ namespace ks::ui
     // 路径上）。
     void MemoryWorkbenchView::onTargetAboutToDetach()
     {
+        // 用户刚在离开守卫里明确选择了"保留补丁继续"：尊重这个选择，不强制还原；记号一次性，
+        // 取走即清（下一次未经提示的分离才由安全网兜底）。
+        const bool keptByUser = int3KeptByLeaveGuard_;
+        int3KeptByLeaveGuard_ = false;
+        if (keptByUser)
+        {
+            return;
+        }
         auto& int3 = WorkbenchShared::Instance().Int3();
         if (int3.HasUnrestoredForCurrentTarget())
         {

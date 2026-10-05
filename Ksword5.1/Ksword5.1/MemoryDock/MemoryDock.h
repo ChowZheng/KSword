@@ -60,6 +60,8 @@ namespace ks::ui
 {
     class VisibleTableWidget;
     class MemoryEditorWidget;
+    class MemoryWorkbenchView; // 内存工作台视图：懒创建，只用指针。
+    struct NavRequest;         // 工作台跳转请求：navigateWorkbench 的参数类型。
 }
 
 // Windows 句柄类型前置声明。
@@ -104,6 +106,12 @@ public:
     // - 作用：把当前 Tab 切到 DDMA 子页；
     // - 调用方式：MainWindow::focusMemoryDockDdmaPage（右上角 DDMA 指示灯点击）。
     void focusDdmaPage();
+
+    // confirmWorkbenchQuit：
+    // - 作用：主窗口关闭前问一次内存工作台（暂存的未提交补丁、未还原的 int3 补丁）；
+    // - 调用方式：MainWindow::closeEvent 最前调用（其后半段会停 R0 驱动，晚了 int3 还原必失败）；
+    // - 返回：true=可以继续退出（工作台未创建时恒为 true）；false=用户取消，应放弃本次关闭。
+    bool confirmWorkbenchQuit();
 
 protected:
     // changeEvent：
@@ -665,10 +673,18 @@ private:
     void jumpToAddressFromUi();
 
     // jumpToAddress：
-    // - 作用：切换到指定地址并刷新一页十六进制视图。
+    // - 作用：统一的"跳到地址"分发器（实现在 MemoryDock.Workbench.cpp）：
+    //   routeJumps 为假（默认）或在内嵌窗口里时走 jumpToAddressLegacy（旧内存查看器），
+    //   为真时交给内存工作台。
     // - 参数 address：目标地址。
     // - 返回：无。
     void jumpToAddress(std::uint64_t address);
+
+    // jumpToAddressLegacy：
+    // - 作用：切换到指定地址并刷新一页十六进制视图（原 jumpToAddress 的函数体，原样保留）。
+    // - 参数 address：目标地址。
+    // - 返回：无。
+    void jumpToAddressLegacy(std::uint64_t address);
 
     // reloadMemoryViewerPage：
     // - 作用：从当前地址重新读取并重建十六进制表格。
@@ -1342,4 +1358,31 @@ private:
     std::uint64_t m_bookmarkContextDdmaGeneration = 0;
     bool m_bookmarkDdmaReadBlocked = false;           // 暂存还原失败后停止该 DDMA 会话的书签读取。
     std::uint64_t m_bookmarkDdmaFaultGeneration = 0;
+
+private:
+    // ========================================================
+    // 内存工作台页签（实现在 MemoryDock.Workbench.cpp）
+    // ========================================================
+
+    // initializeWorkbenchTab：在 initializeTabs 的图标循环之后调用，建空容器并插入页签。
+    // 视图本身懒创建（首次切到该页签时由 ensureWorkbenchView 创建），避免拖慢 Dock 构造。
+    void initializeWorkbenchTab();
+    // ensureWorkbenchView：幂等地创建视图并完成全部接线；内嵌窗口里恒为空操作。
+    void ensureWorkbenchView();
+    // 三个附加/分离钩子：转给视图的 WorkbenchTarget；视图尚未创建时是空操作。
+    void workbenchOnAttached();
+    void workbenchOnAboutToDetach();
+    void workbenchOnDetached();
+    // navigateWorkbench：确保视图存在并切到该页签后执行一次跳转；返回是否成功跳转。
+    bool navigateWorkbench(const ks::ui::NavRequest& request);
+    // workbenchAllowsProcessChange：附加/分离目标进程之前问一次工作台的离开守卫；
+    // 视图尚未创建返回 true，守卫被用户否决返回 false。
+    bool workbenchAllowsProcessChange();
+    // shutdownWorkbench：析构路径上先于子对象销毁调用：权威视图把设置落盘，并断开对视图的引用。
+    void shutdownWorkbench();
+
+    QWidget* m_tabWorkbench = nullptr;                    // 工作台页签的容器页。
+    ks::ui::MemoryWorkbenchView* m_workbenchView = nullptr; // 工作台视图（懒创建，容器页的子对象）。
+    bool m_workbenchRouteJumps = false;                   // 旧入口的跳转是否交给工作台（3a 默认假）。
+    bool m_workbenchEmbedded = false;                     // 是否是进程详情窗口里的内嵌实例（不创建视图）。
 };

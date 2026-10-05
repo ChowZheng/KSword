@@ -515,6 +515,9 @@
     <ClCompile Include="MemoryDock\WorkbenchIoMapping.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="MemoryDock\MemoryDock.Workbench.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="MemoryDock\WorkbenchServicesMapping.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>

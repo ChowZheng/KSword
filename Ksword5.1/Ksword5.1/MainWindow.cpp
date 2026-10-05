@@ -5180,6 +5180,17 @@ void MainWindow::closeEvent(QCloseEvent* event)
         return;
     }
 
+    // 内存工作台的退出守卫必须放在最前：本函数后半段会停 R0 驱动，守卫晚了 int3 补丁的还原必失败；
+    // 同时有暂存的未提交补丁时也要先问用户。用户取消则放弃本次关闭（内存页尚未加载时跳过）。
+    if (m_memoryWidget != nullptr && !m_memoryWidget->confirmWorkbenchQuit())
+    {
+        if (event != nullptr)
+        {
+            event->ignore();
+        }
+        return;
+    }
+
     // 退出时优先保存 ADS 布局，确保用户拖拽/浮动/激活 Tab 状态下次启动可恢复。
     saveDockLayoutToConfig();
     persistLogOutputWindowGeometry();

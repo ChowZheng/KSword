@@ -1550,6 +1550,9 @@ bool MemoryDock::attachToProcess(
     updateStatusBarText();
     syncTamperDetectionTargets();
 
+    // 句柄、PID、名称与读写标志都已就位：通知内存工作台目标已附加（视图未创建时是空操作）。
+    workbenchOnAttached();
+
     // 附加后立即刷新模块与区域，减少下一步等待。两者都在后台执行，
     // 附加按钮点下去之后界面立刻可用，不会因为目标进程地址空间庞大而白屏。
     refreshModuleListForPid(pid);
@@ -1643,6 +1646,10 @@ void MemoryDock::setProcessDetailMemoryScope()
         return;
     }
 
+    // 内嵌实例：内存工作台页签随下面的可见集被隐藏（它不在四个保留页之列），视图永不创建，
+    // 跳转分发器也恒走旧路径（3a 并存阶段内嵌窗口行为不变）。
+    m_workbenchEmbedded = true;
+
     for (int tabIndex = 0; tabIndex < m_tabWidget->count(); ++tabIndex)
     {
         QWidget* const tabPage = m_tabWidget->widget(tabIndex);
@@ -1668,6 +1675,10 @@ void MemoryDock::detachProcess()
         << "[MemoryDock] detachProcess: 开始分离, oldPid="
         << m_attachedPid
         << eol;
+
+    // 句柄仍然有效的最后时点：先让内存工作台处理"目标即将分离"（int3 补丁的未经提示安全网
+    // 需要在句柄关闭之前还原；视图未创建时是空操作）。
+    workbenchOnAboutToDetach();
 
     // 先取消并等待所有扫描协调线程退出，再关闭进程句柄，
     // 防止后台 ReadProcessMemory 使用已关闭或已复用的 HANDLE。
@@ -1758,6 +1769,9 @@ void MemoryDock::detachProcess()
     m_viewerStatusLabel->setText("未附加进程。");
 
     updateStatusBarText();
+
+    // 旧上下文已全部清零：通知内存工作台分离完成（视图未创建时是空操作）。
+    workbenchOnDetached();
 
     // 分离结束日志：确认缓存已清空。
     kLogEvent detachFinishEvent;

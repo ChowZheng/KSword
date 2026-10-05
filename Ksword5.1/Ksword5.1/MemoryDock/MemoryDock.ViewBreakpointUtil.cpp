@@ -33,10 +33,13 @@ void MemoryDock::jumpToAddressFromUi()
         QMessageBox::warning(this, "地址跳转", "地址格式无效。");
         return;
     }
-    jumpToAddress(targetAddress);
+    // 旧地址框只服务旧内存查看器，不经工作台分发器（3a 并存阶段旧入口保持原样）。
+    jumpToAddressLegacy(targetAddress);
 }
 
-void MemoryDock::jumpToAddress(const std::uint64_t address)
+// jumpToAddressLegacy：原 jumpToAddress 的函数体，原样保留；统一入口 jumpToAddress
+// （分发器）在 MemoryDock.Workbench.cpp。
+void MemoryDock::jumpToAddressLegacy(const std::uint64_t address)
 {
     if (!confirmDiscardMemoryViewerChanges())
     {
@@ -345,13 +348,18 @@ bool MemoryDock::confirmDiscardMemoryEditsForProcessChange()
 {
     const bool viewerChanged = m_viewerMemoryEditor != nullptr && m_viewerMemoryEditor->hasChanges();
     const bool driverChanged = m_driverMemoryEditor != nullptr && m_driverMemoryEditor->hasChanges();
-    if (!viewerChanged && !driverChanged)
+    if (viewerChanged || driverChanged)
     {
-        return true;
+        if (QMessageBox::question(this, QStringLiteral("内存编辑"),
+            QStringLiteral("丢弃已读取的缓存与未应用的改动"),
+            QMessageBox::Yes | QMessageBox::No, QMessageBox::No) != QMessageBox::Yes)
+        {
+            return false;
+        }
     }
-    return QMessageBox::question(this, QStringLiteral("内存编辑"),
-        QStringLiteral("丢弃已读取的缓存与未应用的改动"),
-        QMessageBox::Yes | QMessageBox::No, QMessageBox::No) == QMessageBox::Yes;
+    // 旧缓存检查通过之后再问一次内存工作台的离开守卫（暂存补丁/未还原 int3，只问一次）：
+    // 工作台视图尚未创建时没有任何东西要问，直接放行。
+    return workbenchAllowsProcessChange();
 }
 
 void MemoryDock::loadMemoryViewerSnapshot(const bool editable, const bool preserveArchitecture)

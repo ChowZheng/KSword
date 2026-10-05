@@ -79,6 +79,9 @@ namespace ksword::memwb
 
 namespace ks::ui
 {
+    // Int3LeaveScenario：定义在 Int3Controller.h（默认底层类型 int），这里只需要不透明声明。
+    enum class Int3LeaveScenario;
+
     class AddressBookPanel;
     class HexViewSegmented;
     class Int3PatchPanel;
@@ -185,6 +188,15 @@ namespace ks::ui
         // confirmDiscardMemoryEditsForProcessChange 等旧集成点直接调用（target.md
         // §2.2）。
         bool requestLeave(LeaveReason reason);
+
+        // confirmQuit：主窗口关闭前的最后一次询问（MemoryDock::confirmWorkbenchQuit 经
+        // MainWindow::closeEvent 最前调用——关闭路径的后半段会停 R0 驱动，守卫晚了 int3 还原必失败）。
+        // 与离开守卫共用同一条三阶段原子逻辑（见 runLeaveSequence）：暂存里有未提交补丁时先问
+        // "应用并离开/丢弃并离开/取消"，再问 int3 账本里当前目标未还原的补丁（全部还原后继续/
+        // 保留补丁继续/取消），两个都同意之后才真正应用或丢弃暂存。
+        // 传出：true=可以继续退出；false=用户取消（或应用失败），此时暂存与 int3 都原封不动。
+        // 无暂存、无未还原 int3 时不弹任何框，直接返回 true。只在 UI 线程调用。
+        bool confirmQuit();
 
         // ---- 装配接口文档 §8.0 审阅时补的三个注入点（新增，不改既有签名）----
 
@@ -310,6 +322,11 @@ namespace ks::ui
         // 两者都通过才放行；具体弹框顺序与"只问一次"的落实细节见装配接口文档 §4
         // 不变式 2/11。
         void installLeaveGuard();
+
+        // runLeaveSequence：离开守卫（installLeaveGuard 注册的回调）与 confirmQuit 共用的三阶段
+        // 原子逻辑。传入：reasonText 拼进"有未提交修改"确认框正文的原因短句；scenario 传给 int3
+        // 退出提示的场景。传出：true=可以离开/退出；false=用户取消或应用失败（暂存与 int3 不动）。
+        bool runLeaveSequence(const QString& reasonText, Int3LeaveScenario scenario);
 
         // handleIdentityChange / handleReloadOnly：onTargetSessionChanged 的两条分支
         // 实现，对应 SessionChangeHandling。
@@ -545,6 +562,10 @@ namespace ks::ui
         // 前后差值判断"身份是否真的变了"（而不是按请求里写了哪些字段猜），决定要不要
         // 压后退栈（第二轮复核 B2）。
         std::uint64_t identityChangeCount_ = 0;
+        // int3KeptByLeaveGuard_：Dock 附加/分离的离开守卫刚被放行，且用户在 int3 三选一里选了
+        // "保留补丁继续"（账本里当前目标仍有未还原条目）。onTargetAboutToDetach 据此跳过一次
+        // 强制还原（一次性，取走即清），避免安全网无视用户刚做的明确选择。
+        bool int3KeptByLeaveGuard_ = false;
         // inspectorUserOverride_：用户是否已经手动按过 Ctrl+I；一旦置真，
         // maybeAutoCollapseInspector 永久不再自作主张（见该函数注释）。
         bool inspectorUserOverride_ = false;

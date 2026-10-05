@@ -298,3 +298,30 @@ WorkbenchBaselineFeeder → WorkbenchWriteController → WorkbenchHexPane
 `Commit()` 管线，完全复用现有的确认/复核/写入/回读/审计逻辑，不依赖当前可见窗口。这
 不是"矛盾"（设计文档本身没有再谈这个细节），按任务规则"遇到设计文档与已有组件真实
 接口不符时，以已有组件的真实接口为准"处理，记录于此供审核时核对。
+
+## 9 波 4（3a 并存）MemoryDock 接线记录
+
+实现文件：`MemoryDock/MemoryDock.Workbench.cpp`（新）；改动的既有文件均为最小 Edit：`MemoryDock.h`
+（成员声明）、`MemoryDock.UiBuild.cpp`（图标循环之后 `initializeWorkbenchTab()`、析构先 `shutdownWorkbench()`）、
+`MemoryDock.ProcessRegion.cpp`（三个钩子 + 内嵌标志）、`MemoryDock.ViewBreakpointUtil.cpp`（`jumpToAddress`
+函数体原样改名 `jumpToAddressLegacy`、`confirmDiscardMemoryEditsForProcessChange` 末尾加工作台守卫）、
+`MainWindow.cpp`（`closeEvent` 最前的退出守卫）。
+
+- **页签与懒创建**：`insertTab(3, …)`（内存搜索之后、旧内存查看器之前），首次切到该页签才创建视图
+  （`ensureWorkbenchView()`：`ConfigureShared()` → 创建视图 → 注入七个服务 → `setSettingsAuthoritative(true)`
+  → `loadSettings()` → 连信号 → 回放创建之前已发生的附加）。内嵌进程详情窗口：页签随 `setProcessDetailMemoryScope`
+  的可见集被隐藏，`m_workbenchEmbedded` 置位，视图永不创建、分发器恒走旧路径。设置 `enabled`（默认真）为假时
+  根本不插页签。
+- **三个钩子**：`attachToProcess` 成功路径、`detachProcess` 最开头（句柄关闭之前，int3 安全网要求句柄仍有效）、
+  `detachProcess` 最末；视图未创建时都是空操作。附加前的离开守卫经 `confirmDiscardMemoryEditsForProcessChange`
+  末尾调用：只有 `WorkbenchTarget::wouldChangeOnDockAttach()` 为真才问（钉在别处时 Dock 的附加与它无关）。
+- **“保留补丁继续”必须被尊重**：守卫放行且用户在 int3 三选一里选了保留时，视图置一次性记号
+  `int3KeptByLeaveGuard_`，紧接着的 `aboutToDetach` 安全网据此跳过一次强制还原；未经提示的分离仍由安全网兜底。
+- **跳转分发器**：`MemoryDock::jumpToAddress`（`MemoryDock.Workbench.cpp`）在 `routeJumps`（默认假）为假、内嵌
+  或页签不存在时直接 `jumpToAddressLegacy`（旧函数体原样）；旧地址框直接调 `jumpToAddressLegacy`。3b 只改
+  `routeJumps` 的默认值。
+- **退出守卫**：`MainWindow::closeEvent` 在救援实例分支之后、`saveDockLayoutToConfig()` 之前调
+  `MemoryDock::confirmWorkbenchQuit()` → `MemoryWorkbenchView::confirmQuit()`；它与离开守卫共用
+  `runLeaveSequence`（三阶段原子：先问暂存、再问 int3、两个都同意才执行），原因文案固定“退出程序”，int3 场景
+  为 `MainWindowClose`。用户取消则放弃本次关闭（`event->ignore()`）。
+- **不在 3a**：模块表/区域表双击路由、搜索结果“加入地址簿”、`m_moduleCachePid`、旧页签标“（旧）”、删除旧页签。

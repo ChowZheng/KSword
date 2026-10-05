@@ -608,85 +608,109 @@ namespace ks::ui
     void MemoryWorkbenchView::installLeaveGuard()
     {
         target_->setLeaveGuard([this](LeaveReason reason) -> bool {
-            // 第二轮复核 B3：守卫必须"原子"——整件事被取消时，用户的未提交编辑不能
-            // 已经被丢弃/写入。所以分三个阶段：
-            //   阶段一 只"问"暂存补丁三选一（不执行任何动作）；
-            //   阶段二 问 int3（取消则整体拒绝，此时暂存原封不动）；
-            //   阶段三 两个都同意之后，才真正应用/丢弃暂存。
-            // 两个询问框都是嵌套事件循环，期间视图可能被外部同步销毁，每个框之后
-            // 先判 self 再碰任何成员（与 WorkbenchTarget::requestIdentity 的 N3 同理）。
-            const QPointer<MemoryWorkbenchView> self(this);
-
-            auto pendingDecision = ksword::memwb::ModeSwitchDecision::Cancel;
-            bool hasPendingDecision = false;
-            if (hexPane_ != nullptr && hexPane_->overlay().HasPendingPatches() && confirmations_)
-            {
-                // 修复缺陷 3（审核报告 wpJ6/wave3 发现 3）：原来这里误调用
-                // PromptModeSwitch，from/to 两个参数传同一个表达式——这个
-                // 调用点根本不是在切换写入模式，是用户正在触发身份变化
-                // （换目标/换范围/换通道）或离开视图，PromptModeSwitch
-                // 固定的"切换到「立即写入」前必须先处理"文案对用户是误导性
-                // 的（当前就是立即写入，写入模式从未变化）。改用专门的
-                // PromptLeaveWithPending，正文写清字节数/块数与离开原因
-                // （reason 翻译成人话短句），按钮语义也改成"应用并离开/
-                // 丢弃并离开/取消"——没有"切换"这件事。
-                pendingDecision = confirmations_->PromptLeaveWithPending(
-                    hexPane_->overlay().PendingByteCount(),
-                    static_cast<std::uint64_t>(hexPane_->overlay().DiffBlocks().size()),
-                    LeaveReasonDisplayText(reason));
-                if (self.isNull())
-                {
-                    return false;
-                }
-                if (pendingDecision != ksword::memwb::ModeSwitchDecision::ApplyThenSwitch &&
-                    pendingDecision != ksword::memwb::ModeSwitchDecision::DiscardThenSwitch)
-                {
-                    return false;
-                }
-                hasPendingDecision = true;
-            }
-
-            // Int3LeaveScenario 只有三个取值：DockDetach/ProcessChange/
-            // MainWindowClose；后者不经过这条 LeaveReason 路径（设计文档 §0
-            // 第 6 条：主窗口关闭由 MainWindow::closeEvent 最前直接调用
-            // RequestLeave(..., MainWindowClose)）。这里只需要区分"是不是
-            // Dock 的附加/分离事件"，其余三种 LeaveReason（ScopeChange/
-            // ChannelChange/PinChange）对 int3 账本而言都是同一类"目标可能
-            // 要变了"，统一按 ProcessChange 处理。
+            // Int3LeaveScenario 只有三个取值：DockDetach/ProcessChange/MainWindowClose；
+            // 后者不经过这条 LeaveReason 路径（主窗口关闭走 confirmQuit，见下）。这里只需要
+            // 区分"是不是 Dock 的附加/分离事件"，其余三种 LeaveReason（ScopeChange/
+            // ChannelChange/PinChange）对 int3 账本而言都是同一类"目标可能要变了"，统一按
+            // ProcessChange 处理。
             const auto scenario = (reason == LeaveReason::DockAttachChange)
                 ? Int3LeaveScenario::DockDetach
                 : Int3LeaveScenario::ProcessChange;
-            const bool int3Allowed = WorkbenchShared::Instance().Int3().RequestLeave(this, scenario);
-            if (self.isNull() || !int3Allowed)
+            // 每次询问都先清掉上一次的"用户已选择保留补丁"记号，只有这次明确选了才重新置位。
+            int3KeptByLeaveGuard_ = false;
+            const bool allowed = runLeaveSequence(LeaveReasonDisplayText(reason), scenario);
+            // Dock 的附加/分离是"先问守卫、再真正分离"两步：用户在守卫里选了"保留补丁继续"
+            // （放行之后账本里当前目标仍有未还原条目）时，紧接着发出的 aboutToDetach 安全网
+            // 不得再把补丁强制还原，否则等于无视用户刚做的明确选择（见 onTargetAboutToDetach）。
+            int3KeptByLeaveGuard_ = allowed && reason == LeaveReason::DockAttachChange
+                && WorkbenchShared::Instance().Int3().HasUnrestoredForCurrentTarget();
+            return allowed;
+        });
+    }
+
+    // confirmQuit：见头文件声明处的注释。主窗口关闭路径与"离开守卫"共用同一条三阶段原子逻辑，
+    // 只是原因文案固定为"退出程序"、int3 场景固定为 MainWindowClose。
+    bool MemoryWorkbenchView::confirmQuit()
+    {
+        return runLeaveSequence(QStringLiteral("退出程序"), Int3LeaveScenario::MainWindowClose);
+    }
+
+    // runLeaveSequence：离开守卫与 confirmQuit 共用的三阶段原子逻辑。
+    // 传入：reasonText 拼进"有未提交修改"确认框正文的原因短句；scenario 传给 int3 退出提示的场景。
+    // 传出：true=可以离开/退出（暂存已应用或丢弃、int3 已还原或用户选择保留）；
+    //       false=用户取消或应用失败，此时暂存与 int3 都原封不动（应用失败时暂存保留）。
+    bool MemoryWorkbenchView::runLeaveSequence(const QString& reasonText, const Int3LeaveScenario scenario)
+    {
+        // 第二轮复核 B3：守卫必须"原子"——整件事被取消时，用户的未提交编辑不能
+        // 已经被丢弃/写入。所以分三个阶段：
+        //   阶段一 只"问"暂存补丁三选一（不执行任何动作）；
+        //   阶段二 问 int3（取消则整体拒绝，此时暂存原封不动）；
+        //   阶段三 两个都同意之后，才真正应用/丢弃暂存。
+        // 两个询问框都是嵌套事件循环，期间视图可能被外部同步销毁，每个框之后
+        // 先判 self 再碰任何成员（与 WorkbenchTarget::requestIdentity 的 N3 同理）。
+        const QPointer<MemoryWorkbenchView> self(this);
+
+        auto pendingDecision = ksword::memwb::ModeSwitchDecision::Cancel;
+        bool hasPendingDecision = false;
+        if (hexPane_ != nullptr && hexPane_->overlay().HasPendingPatches() && confirmations_)
+        {
+            // 修复缺陷 3（审核报告 wpJ6/wave3 发现 3）：原来这里误调用
+            // PromptModeSwitch，from/to 两个参数传同一个表达式——这个
+            // 调用点根本不是在切换写入模式，是用户正在触发身份变化
+            // （换目标/换范围/换通道）或离开视图，PromptModeSwitch
+            // 固定的"切换到「立即写入」前必须先处理"文案对用户是误导性
+            // 的（当前就是立即写入，写入模式从未变化）。改用专门的
+            // PromptLeaveWithPending，正文写清字节数/块数与离开原因
+            // （reasonText 是人话短句），按钮语义也改成"应用并离开/
+            // 丢弃并离开/取消"——没有"切换"这件事。
+            pendingDecision = confirmations_->PromptLeaveWithPending(
+                hexPane_->overlay().PendingByteCount(),
+                static_cast<std::uint64_t>(hexPane_->overlay().DiffBlocks().size()),
+                reasonText);
+            if (self.isNull())
             {
                 return false;
             }
+            if (pendingDecision != ksword::memwb::ModeSwitchDecision::ApplyThenSwitch &&
+                pendingDecision != ksword::memwb::ModeSwitchDecision::DiscardThenSwitch)
+            {
+                return false;
+            }
+            hasPendingDecision = true;
+        }
 
-            if (!hasPendingDecision)
-            {
-                return true;
-            }
-            if (pendingDecision == ksword::memwb::ModeSwitchDecision::ApplyThenSwitch)
-            {
-                const auto attempt = writeController_->commitPendingNow();
-                if (self.isNull())
-                {
-                    return false;
-                }
-                return attempt.status != CommitEntryStatus::Busy &&
-                    (attempt.report.outcome == ksword::memwb::CommitOutcome::Committed ||
-                     attempt.report.outcome == ksword::memwb::CommitOutcome::NoChange);
-            }
-            // 丢弃并离开：叠加层清空后画布要重绘，会话条的"N 字节待写入"也要同步清掉
-            // （第二轮复核 B4：旧实现漏了后一步，芯片残留）。
-            hexPane_->overlay().DiscardAll();
-            if (hexPane_->canvas() != nullptr)
-            {
-                hexPane_->canvas()->notifyOverlayChanged();
-            }
-            refreshPendingPatchesDisplay();
+        // 阶段二：int3 账本里当前目标还有未还原补丁时弹三选一（没有则直接放行，不弹框）。
+        const bool int3Allowed = WorkbenchShared::Instance().Int3().RequestLeave(this, scenario);
+        if (self.isNull() || !int3Allowed)
+        {
+            return false;
+        }
+
+        // 阶段三：两个都同意之后才执行暂存的应用/丢弃。
+        if (!hasPendingDecision)
+        {
             return true;
-        });
+        }
+        if (pendingDecision == ksword::memwb::ModeSwitchDecision::ApplyThenSwitch)
+        {
+            const auto attempt = writeController_->commitPendingNow();
+            if (self.isNull())
+            {
+                return false;
+            }
+            return attempt.status != CommitEntryStatus::Busy &&
+                (attempt.report.outcome == ksword::memwb::CommitOutcome::Committed ||
+                 attempt.report.outcome == ksword::memwb::CommitOutcome::NoChange);
+        }
+        // 丢弃并离开：叠加层清空后画布要重绘，会话条的"N 字节待写入"也要同步清掉
+        // （第二轮复核 B4：旧实现漏了后一步，芯片残留）。
+        hexPane_->overlay().DiscardAll();
+        if (hexPane_->canvas() != nullptr)
+        {
+            hexPane_->canvas()->notifyOverlayChanged();
+        }
+        refreshPendingPatchesDisplay();
+        return true;
     }
 
     // wireActions：对 WorkbenchActionId 的每一项挂快捷键；Redo 同时挂主键与候补
