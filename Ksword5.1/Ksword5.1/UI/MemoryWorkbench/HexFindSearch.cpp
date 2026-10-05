@@ -1,0 +1,210 @@
+// HexFindSearch.cpp
+// 作用：HexFindSearch.h 的实现——模式解析、QByteArray 数据源、一次查找、可见范围命中列表。
+
+#include "HexFindSearch.h"
+
+#include "HexViewFormat.h"
+
+#include <algorithm>
+#include <cstring>
+
+namespace ks::ui::hexfind
+{
+    // 解析用户输入。
+    bool ParsePattern(
+        Mode mode,
+        const QString& text,
+        bool caseSensitive,
+        ksword::memwb::SearchPattern& patternOut,
+        ksword::memwb::ParseError& errorOut,
+        QByteArray* utf8Out)
+    {
+        // utf8：输入的 UTF-8 字节；解析器按字节偏移报告错误位置。
+        const QByteArray utf8 = text.toUtf8();
+        if (utf8Out != nullptr)
+        {
+            *utf8Out = utf8;
+        }
+        const std::string_view view(utf8.constData(), static_cast<std::size_t>(utf8.size()));
+
+        if (mode == Mode::Hex)
+        {
+            return ksword::memwb::ParseHexPattern(view, patternOut, errorOut);
+        }
+        const ksword::memwb::TextEncoding encoding = (mode == Mode::TextUtf16Le)
+            ? ksword::memwb::TextEncoding::Utf16Le
+            : ksword::memwb::TextEncoding::Utf8;
+        return ksword::memwb::ParseTextPattern(view, encoding, !caseSensitive, patternOut, errorOut);
+    }
+
+    // 错误描述：只给"哪里错了"，前缀由调用方加。
+    QString DescribeParseError(const ksword::memwb::ParseError& error, const QByteArray& utf8)
+    {
+        if (error.code == ksword::memwb::ParseErrorCode::Empty)
+        {
+            return QStringLiteral("输入为空");
+        }
+
+        // 位置换算成 1 起的字符序号；输入里有中文时字节偏移与字符序号不同。
+        const std::size_t charIndex = hexview_format::CharIndexFromUtf8Offset(utf8, error.position);
+        return QStringLiteral("第 %1 个字符处有误").arg(static_cast<qulonglong>(charIndex) + 1ULL);
+    }
+
+    // 构造：保存数据与基址。
+    ByteArraySource::ByteArraySource(const QByteArray& data, std::uint64_t base)
+        : m_data(data)
+        , m_base(base)
+    {
+    }
+
+    // 读取：与 StaticByteSource 同一套交集规则，但直接从 QByteArray 拷出，不持有第二份整块数据。
+    ksword::memwb::ReadStatus ByteArraySource::Read(
+        std::uint64_t address,
+        std::uint64_t length,
+        std::vector<std::uint8_t>& bytesOut,
+        std::vector<std::uint8_t>& validOut)
+    {
+        // 先整体清零：未覆盖的部分内容为 0 且无效。
+        bytesOut.assign(static_cast<std::size_t>(length), 0);
+        validOut.assign(static_cast<std::size_t>(length), 0);
+        if (length == 0)
+        {
+            return ksword::memwb::ReadStatus::Ok;
+        }
+        if (m_data.isEmpty())
+        {
+            return ksword::memwb::ReadStatus::Unreadable;
+        }
+
+        // 求请求区间与数据块的交集；请求末端可能越过 2^64，饱和处理。
+        const std::uint64_t maxAddress = 0xFFFFFFFFFFFFFFFFULL;
+        const std::uint64_t dataLast = m_base + (static_cast<std::uint64_t>(m_data.size()) - 1ULL);
+        const std::uint64_t requestLast = (length - 1ULL > maxAddress - address)
+            ? maxAddress
+            : (address + (length - 1ULL));
+        const std::uint64_t overlapLow = (std::max)(address, m_base);
+        const std::uint64_t overlapHigh = (std::min)(requestLast, dataLast);
+        if (overlapLow > overlapHigh)
+        {
+            return ksword::memwb::ReadStatus::Unreadable;
+        }
+
+        // 把交集拷到输出的对应位置并标有效。
+        const std::size_t count = static_cast<std::size_t>(overlapHigh - overlapLow) + 1U;
+        const std::size_t outOffset = static_cast<std::size_t>(overlapLow - address);
+        const std::size_t dataOffset = static_cast<std::size_t>(overlapLow - m_base);
+        std::memcpy(bytesOut.data() + outOffset, m_data.constData() + dataOffset, count);
+        std::memset(validOut.data() + outOffset, 1, count);
+        return (count == length) ? ksword::memwb::ReadStatus::Ok : ksword::memwb::ReadStatus::Partial;
+    }
+
+    // 一次查找。
+    Outcome RunSearch(
+        const QByteArray& data,
+        std::uint64_t base,
+        const ksword::memwb::SearchPattern& pattern,
+        std::uint64_t start,
+        ksword::memwb::SearchDirection direction,
+        bool wrap,
+        const std::atomic<bool>* cancel)
+    {
+        Outcome outcome;
+        if (data.isEmpty() || pattern.bytes.empty() || pattern.bytes.size() != pattern.mask.size())
+        {
+            outcome.invalid = true;
+            return outcome;
+        }
+
+        // range：缓冲覆盖的闭区间；缓冲贴着 2^64 末端时 base+size-1 恰好是最大地址，不会溢出。
+        ksword::memwb::SearchRange range;
+        range.first = base;
+        range.last = base + (static_cast<std::uint64_t>(data.size()) - 1ULL);
+
+        ByteArraySource source(data, base);
+        const ksword::memwb::SearchResult result = ksword::memwb::Find(
+            source, pattern, range, start, direction, wrap, cancel, kSearchChunkBytes);
+        outcome.found = result.found;
+        outcome.address = result.address;
+        outcome.wrapped = result.wrapped;
+        outcome.cancelled = result.cancelled;
+        outcome.invalid = result.invalidArguments;
+        return outcome;
+    }
+
+    // 可见范围内的全部命中。
+    std::vector<AddressRange> HitsInRange(
+        const QByteArray& data,
+        std::uint64_t base,
+        const ksword::memwb::SearchPattern& pattern,
+        std::uint64_t visibleFirst,
+        std::uint64_t visibleLast,
+        std::size_t cap)
+    {
+        std::vector<AddressRange> hits;
+        if (data.isEmpty() || pattern.bytes.empty() || pattern.bytes.size() != pattern.mask.size()
+            || visibleFirst > visibleLast || cap == 0)
+        {
+            return hits;
+        }
+
+        // 缓冲范围与模式长度；dataLast 是缓冲最后一个字节的地址。
+        const std::uint64_t dataFirst = base;
+        const std::uint64_t dataLast = base + (static_cast<std::uint64_t>(data.size()) - 1ULL);
+        const std::uint64_t length = static_cast<std::uint64_t>(pattern.bytes.size());
+
+        // 扫描范围：可见范围两侧各多看 length-1 字节再夹取到缓冲内——
+        // 向前多看：起点在可见范围之前、尾部延伸进来的命中也要算；
+        // 向后多看：引擎要求匹配整体落在范围内，起点在可见末字节、尾部越出可见范围的命中不多看就会漏。
+        const std::uint64_t lookAround = length - 1ULL;
+        std::uint64_t scanFirst = dataFirst;
+        if (visibleFirst > dataFirst)
+        {
+            // room：可见起点距缓冲起点的字节数；够一个 lookAround 才能往前退，否则退到缓冲起点。
+            const std::uint64_t room = visibleFirst - dataFirst;
+            scanFirst = (room >= lookAround) ? visibleFirst - lookAround : dataFirst;
+        }
+        const std::uint64_t reach = (visibleLast > 0xFFFFFFFFFFFFFFFFULL - lookAround)
+            ? 0xFFFFFFFFFFFFFFFFULL
+            : visibleLast + lookAround;
+        const std::uint64_t scanLast = (std::min)(reach, dataLast);
+        if (scanFirst > scanLast || visibleFirst > dataLast)
+        {
+            return hits;
+        }
+
+        // 逐个向前找：每次从上一个命中起点 + 1 开始（重叠命中都列出）。
+        ByteArraySource source(data, base);
+        ksword::memwb::SearchRange range;
+        range.first = scanFirst;
+        range.last = scanLast;
+        std::uint64_t start = scanFirst;
+        while (hits.size() < cap)
+        {
+            const ksword::memwb::SearchResult result = ksword::memwb::Find(
+                source, pattern, range, start, ksword::memwb::SearchDirection::Forward, false, nullptr, kSearchChunkBytes);
+            if (!result.found)
+            {
+                break;
+            }
+
+            // 命中的末字节；起点已经越过可见末字节就不用再找了，其余只保留与可见范围有交集的命中。
+            if (result.address > visibleLast)
+            {
+                break;
+            }
+            const std::uint64_t hitLast = result.address + (length - 1ULL);
+            if (hitLast >= visibleFirst)
+            {
+                AddressRange hit;
+                hit.first = result.address;
+                hit.last = hitLast;
+                hits.push_back(hit);
+            }
+            if (!ksword::memwb::AdvanceSearchStart(result.address, ksword::memwb::SearchDirection::Forward, start))
+            {
+                break;
+            }
+        }
+        return hits;
+    }
+}

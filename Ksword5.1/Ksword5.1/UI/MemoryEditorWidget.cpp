@@ -86,7 +86,7 @@ namespace ks::ui
         m_architecture->setCurrentIndex(1);
         m_architecture->setToolTip(trText(QStringLiteral("指令架构；可手动切换，物理地址和 CR3 无法自动判断目标位数。")));
         m_assemble = new QPushButton(trText(QStringLiteral("汇编编辑")), this);
-        m_assemble->setToolTip(trText(QStringLiteral("在选中地址编译 Intel 汇编并预览机器码，填入缓存后再应用差异。")));
+        m_assemble->setToolTip(trText(QStringLiteral("单击指令可直接编辑汇编；Enter 填入缓存，Esc 取消。右键汇编编辑可预览并调整覆盖长度。")));
         tools->addWidget(new QLabel(trText(QStringLiteral("指令架构")), this));
         tools->addWidget(m_architecture);
         tools->addWidget(m_assemble);
@@ -112,6 +112,7 @@ namespace ks::ui
         m_tabs = new QTabWidget(this);
         m_hex = new HexEditorWidget(m_tabs);
         m_hex->setBytesPerRow(16);
+        m_hex->setHexOnlyView(true);
         m_tabs->addTab(m_hex, trText(QStringLiteral("十六进制")));
         auto* codePage = new QWidget(m_tabs);
         auto* codeLayout = new QVBoxLayout(codePage);
@@ -343,10 +344,13 @@ namespace ks::ui
             m_syncing = false;
             emit currentAddressChanged(address);
         });
-        connect(m_instructions, &QTableWidget::cellDoubleClicked, this, [this]() { showAssemblyEditor(); });
+        initializeInlineAssemblyEditing();
         connect(m_instructions, &QTableWidget::customContextMenuRequested,
             this, &MemoryEditorWidget::showInstructionMenu);
-        connect(m_assemble, &QPushButton::clicked, this, &MemoryEditorWidget::showAssemblyEditor);
+        connect(m_assemble, &QPushButton::clicked, this, [this]() {
+            showDisassemblyAt(selectedAddress());
+            beginInlineAssemblyEdit(m_instructions->currentRow());
+        });
         updateState();
     }
 
@@ -530,6 +534,19 @@ namespace ks::ui
     {
         const bool loaded = m_hex->regionSize() != 0;
         m_hex->setEditable(m_editable && loaded);
+        // 只读快照和无法解码的行不能启动行内汇编编辑。
+        for (int row = 0; row < m_instructions->rowCount(); ++row)
+        {
+            for (int column = 2; column < 4; ++column)
+            {
+                auto* cell = m_instructions->item(row, column);
+                if (cell != nullptr)
+                {
+                    cell->setFlags(m_editable && loaded && cell->data(Qt::UserRole + 42).toBool()
+                        ? cell->flags() | Qt::ItemIsEditable : cell->flags() & ~Qt::ItemIsEditable);
+                }
+            }
+        }
         m_assemble->setEnabled(m_editable && loaded);
         m_undo->setEnabled(m_editable && loaded && m_history.canUndo());
         m_redo->setEnabled(m_editable && loaded && m_history.canRedo());
@@ -609,6 +626,11 @@ namespace ks::ui
             {
                 auto* cell = new QTableWidgetItem(fields.at(column));
                 cell->setData(kRowOffsetRole, QVariant::fromValue<qulonglong>(instruction.address - m_base));
+                cell->setData(Qt::UserRole + 42, instruction.decoded);
+                if (column < 2 || !m_editable || !instruction.decoded)
+                {
+                    cell->setFlags(cell->flags() & ~Qt::ItemIsEditable);
+                }
                 const auto start = static_cast<qsizetype>(instruction.address - m_base);
                 const bool changed = instruction.bytes != m_original.mid(start, instruction.bytes.size());
                 bool recent = false;
@@ -627,7 +649,7 @@ namespace ks::ui
             }
         }
         m_syncing = false;
-        m_decodeStatus->setText(trText(QStringLiteral("%1 | 从 %2 解码 %3 条指令；双击指令可编辑汇编。"))
+        m_decodeStatus->setText(trText(QStringLiteral("%1 | 从 %2 解码 %3 条指令；单击指令可直接编辑，Enter 填入缓存，Esc 取消。"))
             .arg(result.backendName).arg(addressText(m_anchor)).arg(result.rows.size())
             + (result.complete ? QString() : trText(QStringLiteral(" 已达到解码预算，可修改起点继续查看。"))));
         selectInstruction(contains(selection) ? selection : m_anchor);
@@ -773,6 +795,7 @@ namespace ks::ui
         const auto instruction = mnemonicItem->text() + QLatin1Char(' ') + operandItem->text();
         QMenu menu(this);
         auto* edit = menu.addAction(trText(QStringLiteral("汇编编辑")));
+        menu.setStyleSheet(KswordTheme::ContextMenuStyle());
         edit->setEnabled(m_editable);
         auto* copyAddress = menu.addAction(trText(QStringLiteral("复制地址")));
         auto* copyBytes = menu.addAction(trText(QStringLiteral("复制原始字节")));

@@ -34,6 +34,18 @@
     <Filter Include="Header Files\ArkDriverClient">
       <UniqueIdentifier>{00000000-0000-0000-0000-000000000000}</UniqueIdentifier>
     </Filter>
+    <Filter Include="Source Files\MemoryWorkbench">
+      <UniqueIdentifier>{2b89ce43-b217-416b-b90f-fe99af413ee9}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files\MemoryWorkbench">
+      <UniqueIdentifier>{94acc1a1-1ea5-40be-88a5-976e573f806b}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\MemoryWorkbench\Shared">
+      <UniqueIdentifier>{cb81ac7e-f2ce-47c0-8e90-15165956bbaf}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files\MemoryWorkbench\Shared">
+      <UniqueIdentifier>{a8a0d876-0ad9-417d-bfbe-2bff029a73d1}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="AppIcon.rc">
@@ -494,6 +506,15 @@
     <ClCompile Include="MemoryDock\MemoryAccessBackend.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="MemoryDock\WorkbenchIoPorts.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="MemoryDock\WorkbenchIoPorts.Kernel.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="MemoryDock\WorkbenchIoMapping.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="MemoryDock\DdmaPage.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -893,14 +914,275 @@
     <ClCompile Include="UI\HexEditorWidget.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="UI\HexEditorWidget.Selection.cpp">
-      <Filter>Source Files</Filter>
+    <ClCompile Include="UI\MemoryWorkbench\HexCanvas.cpp">
+      <Filter>Source Files\MemoryWorkbench</Filter>
     </ClCompile>
-    <ClCompile Include="UI\HexEditorWidget.Ui.cpp">
-      <Filter>Source Files</Filter>
+    <ClCompile Include="UI\MemoryWorkbench\HexCanvas.Edit.cpp">
+      <Filter>Source Files\MemoryWorkbench</Filter>
     </ClCompile>
-    <ClCompile Include="UI\HexEditorWidget.Tools.cpp">
-      <Filter>Source Files</Filter>
+    <ClCompile Include="UI\MemoryWorkbench\HexCanvas.Input.cpp">
+      <Filter>Source Files\MemoryWorkbench</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\MemoryWorkbench\HexCanvas.Layout.cpp">
+      <Filter>Source Files\MemoryWorkbench</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\MemoryWorkbench\HexCanvas.Menu.cpp">
+      <Filter>Source Files\MemoryWorkbench</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\MemoryWorkbench\HexCanvas.Paint.cpp">
+      <Filter>Source Files\MemoryWorkbench</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\MemoryWorkbench\HexCanvas.Scroll.cpp">
+      <Filter>Source Files\MemoryWorkbench</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\MemoryWorkbench\HexCanvasFormat.cpp">
+      <Filter>Source Files\MemoryWorkbench</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\MemoryWorkbench\HexExport.cpp">
+      <Filter>Source Files\MemoryWorkbench</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\MemoryWorkbench\HexFindBar.cpp">
+      <Filter>Source Files\MemoryWorkbench</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\MemoryWorkbench\HexFindSearch.cpp">
+      <Filter>Source Files\MemoryWorkbench</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\MemoryWorkbench\HexGotoBar.cpp">
+      <Filter>Source Files\MemoryWorkbench</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\MemoryWorkbench\HexInspectorPanel.cpp">
+      <Filter>Source Files\MemoryWorkbench</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\MemoryWorkbench\HexInspectorPanel.Edit.cpp">
+      <Filter>Source Files\MemoryWorkbench</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\MemoryWorkbench\HexInspectorPanel.Menu.cpp">
+      <Filter>Source Files\MemoryWorkbench</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\MemoryWorkbench\HexInspectorPanel.Rows.cpp">
+      <Filter>Source Files\MemoryWorkbench</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\MemoryWorkbench\HexInspectorRowView.cpp">
+      <Filter>Source Files\MemoryWorkbench</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\MemoryWorkbench\HexInspectorRowView.Paint.cpp">
+      <Filter>Source Files\MemoryWorkbench</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\MemoryWorkbench\HexInspectorWidgets.cpp">
+      <Filter>Source Files\MemoryWorkbench</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\MemoryWorkbench\HexView.cpp">
+      <Filter>Source Files\MemoryWorkbench</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\MemoryWorkbench\HexView.Compat.cpp">
+      <Filter>Source Files\MemoryWorkbench</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\MemoryWorkbench\HexView.Panels.cpp">
+      <Filter>Source Files\MemoryWorkbench</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\MemoryWorkbench\HexView.Toolbar.cpp">
+      <Filter>Source Files\MemoryWorkbench</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\MemoryWorkbench\HexViewFormat.cpp">
+      <Filter>Source Files\MemoryWorkbench</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\MemoryWorkbench\HexViewSettings.cpp">
+      <Filter>Source Files\MemoryWorkbench</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\MemoryWorkbench\HexViewWidgets.cpp">
+      <Filter>Source Files\MemoryWorkbench</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\MemoryWorkbench\HexViewWidgets.Text.cpp">
+      <Filter>Source Files\MemoryWorkbench</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\MemoryWorkbench\AddressBookModel.cpp">
+      <Filter>Source Files\MemoryWorkbench</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\MemoryWorkbench\AddressBookModel.StoreSync.cpp">
+      <Filter>Source Files\MemoryWorkbench</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\MemoryWorkbench\AddressBookPanel.cpp">
+      <Filter>Source Files\MemoryWorkbench</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\MemoryWorkbench\AddressBookPanel.Menu.cpp">
+      <Filter>Source Files\MemoryWorkbench</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\MemoryWorkbench\AddressBookPanel.RowActions.cpp">
+      <Filter>Source Files\MemoryWorkbench</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\MemoryWorkbench\AddressBookStore.cpp">
+      <Filter>Source Files\MemoryWorkbench</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\MemoryWorkbench\Int3Controller.cpp">
+      <Filter>Source Files\MemoryWorkbench</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\MemoryWorkbench\Int3PatchPanel.cpp">
+      <Filter>Source Files\MemoryWorkbench</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\MemoryWorkbench\WorkbenchActions.cpp">
+      <Filter>Source Files\MemoryWorkbench</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\MemoryWorkbench\WorkbenchCompareView.cpp">
+      <Filter>Source Files\MemoryWorkbench</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\MemoryWorkbench\WorkbenchConfirmations.cpp">
+      <Filter>Source Files\MemoryWorkbench</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\MemoryWorkbench\WorkbenchDisasmView.cpp">
+      <Filter>Source Files\MemoryWorkbench</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\MemoryWorkbench\WorkbenchDisasmView.Edit.cpp">
+      <Filter>Source Files\MemoryWorkbench</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\MemoryWorkbench\WorkbenchMessages.cpp">
+      <Filter>Source Files\MemoryWorkbench</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\MemoryWorkbench\WorkbenchSessionBar.cpp">
+      <Filter>Source Files\MemoryWorkbench</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\MemoryWorkbench\WorkbenchSettings.cpp">
+      <Filter>Source Files\MemoryWorkbench</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\MemoryWorkbench\WorkbenchStatusBar.cpp">
+      <Filter>Source Files\MemoryWorkbench</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\MemoryWorkbench\WorkbenchStringWriteDialog.cpp">
+      <Filter>Source Files\MemoryWorkbench</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\MemoryWorkbench\WorkbenchTarget.cpp">
+      <Filter>Source Files\MemoryWorkbench</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\MemoryWorkbench\WorkbenchTarget.Anchor.cpp">
+      <Filter>Source Files\MemoryWorkbench</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\MemoryWorkbench\WorkbenchTarget.Modules.cpp">
+      <Filter>Source Files\MemoryWorkbench</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\MemoryWorkbench\WorkbenchTextView.cpp">
+      <Filter>Source Files\MemoryWorkbench</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\MemoryWorkbench\WriteModeSwitch.cpp">
+      <Filter>Source Files\MemoryWorkbench</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\MemoryWorkbench\WorkbenchShared.cpp">
+      <Filter>Source Files\MemoryWorkbench</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\MemoryWorkbench\WorkbenchPageProvider.cpp">
+      <Filter>Source Files\MemoryWorkbench</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\MemoryWorkbench\WorkbenchPageProvider.Pool.cpp">
+      <Filter>Source Files\MemoryWorkbench</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\MemoryWorkbench\WorkbenchBaselineFeeder.cpp">
+      <Filter>Source Files\MemoryWorkbench</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\MemoryWorkbench\WorkbenchWriteController.cpp">
+      <Filter>Source Files\MemoryWorkbench</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\MemoryWorkbench\WorkbenchWriteController.PendingStage.cpp">
+      <Filter>Source Files\MemoryWorkbench</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\MemoryWorkbench\WorkbenchWriteController.Undo.cpp">
+      <Filter>Source Files\MemoryWorkbench</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\MemoryWorkbench\WorkbenchHexPane.cpp">
+      <Filter>Source Files\MemoryWorkbench</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\MemoryWorkbench\WorkbenchHexPane.Panels.cpp">
+      <Filter>Source Files\MemoryWorkbench</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\MemoryWorkbench\MemoryWorkbenchView.cpp">
+      <Filter>Source Files\MemoryWorkbench</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\MemoryWorkbench\MemoryWorkbenchView.Ui.cpp">
+      <Filter>Source Files\MemoryWorkbench</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\MemoryWorkbench\MemoryWorkbenchView.Session.cpp">
+      <Filter>Source Files\MemoryWorkbench</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\MemoryWorkbench\MemoryWorkbenchView.Nav.cpp">
+      <Filter>Source Files\MemoryWorkbench</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\MemoryWorkbench\WorkbenchDiagnosticsHost.cpp">
+      <Filter>Source Files\MemoryWorkbench</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\shared\evidence\memory_workbench\HexViewport.cpp">
+      <Filter>Source Files\MemoryWorkbench\Shared</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\shared\evidence\memory_workbench\HexViewport.Cache.cpp">
+      <Filter>Source Files\MemoryWorkbench\Shared</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\shared\evidence\memory_workbench\HexViewport.Selection.cpp">
+      <Filter>Source Files\MemoryWorkbench\Shared</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\shared\evidence\memory_workbench\MemoryAddressExpr.cpp">
+      <Filter>Source Files\MemoryWorkbench\Shared</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\shared\evidence\memory_workbench\MemoryByteSearch.cpp">
+      <Filter>Source Files\MemoryWorkbench\Shared</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\shared\evidence\memory_workbench\MemoryDiffOverlay.cpp">
+      <Filter>Source Files\MemoryWorkbench\Shared</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\shared\evidence\memory_workbench\MemoryDiffOverlay.Patches.cpp">
+      <Filter>Source Files\MemoryWorkbench\Shared</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\shared\evidence\memory_workbench\MemoryTargetSession.cpp">
+      <Filter>Source Files\MemoryWorkbench\Shared</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\shared\evidence\memory_workbench\MemoryValueDecode.cpp">
+      <Filter>Source Files\MemoryWorkbench\Shared</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\shared\evidence\memory_workbench\MemoryPageReader.cpp">
+      <Filter>Source Files\MemoryWorkbench\Shared</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\shared\evidence\memory_workbench\MemoryIoByteStore.cpp">
+      <Filter>Source Files\MemoryWorkbench\Shared</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\shared\evidence\memory_workbench\MemoryKernelMutation.cpp">
+      <Filter>Source Files\MemoryWorkbench\Shared</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\shared\evidence\memory_workbench\MemoryPatchByteStore.cpp">
+      <Filter>Source Files\MemoryWorkbench\Shared</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\shared\evidence\memory_workbench\Int3PatchLedger.cpp">
+      <Filter>Source Files\MemoryWorkbench\Shared</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\shared\evidence\memory_workbench\MemoryAddressBook.cpp">
+      <Filter>Source Files\MemoryWorkbench\Shared</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\shared\evidence\memory_workbench\MemoryAddressBook.Serialize.cpp">
+      <Filter>Source Files\MemoryWorkbench\Shared</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\shared\evidence\memory_workbench\MemoryChannelGate.cpp">
+      <Filter>Source Files\MemoryWorkbench\Shared</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\shared\evidence\memory_workbench\MemoryModuleDirectory.cpp">
+      <Filter>Source Files\MemoryWorkbench\Shared</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\shared\evidence\memory_workbench\MemoryProcessMatch.cpp">
+      <Filter>Source Files\MemoryWorkbench\Shared</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\shared\evidence\memory_workbench\MemoryTargetTracker.cpp">
+      <Filter>Source Files\MemoryWorkbench\Shared</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\shared\evidence\memory_workbench\MemoryWritePolicy.cpp">
+      <Filter>Source Files\MemoryWorkbench\Shared</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\shared\evidence\memory_workbench\MemoryWriteTransaction.cpp">
+      <Filter>Source Files\MemoryWorkbench\Shared</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\shared\evidence\memory_workbench\MemoryWriteTransaction.Commit.cpp">
+      <Filter>Source Files\MemoryWorkbench\Shared</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\shared\evidence\memory_workbench\SessionAddressResolver.cpp">
+      <Filter>Source Files\MemoryWorkbench\Shared</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\shared\evidence\memory_workbench\MemoryBaselineWindow.cpp">
+      <Filter>Source Files\MemoryWorkbench\Shared</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\shared\evidence\memory_workbench\MemoryEditJournal.cpp">
+      <Filter>Source Files\MemoryWorkbench\Shared</Filter>
     </ClCompile>
     <ClCompile Include="UI\CodeEditorWidget.cpp">
       <Filter>Source Files</Filter>
@@ -930,6 +1212,9 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="UI\MemoryEditorWidget.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\MemoryEditorWidget.InlineAssembly.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="..\..\third_party\zydis\Zydis.c">
@@ -1537,6 +1822,12 @@
     <ClInclude Include="MiscDock\ApplicationControlPage.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="MemoryDock\WorkbenchIoPorts.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="MemoryDock\WorkbenchIoMapping.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <QtMoc Include="MiscDock\ClipboardGuard\ClipboardGuardPage.h">
       <Filter>Header Files</Filter>
     </QtMoc>
@@ -1804,8 +2095,200 @@
     <QtMoc Include="UI\HexEditorWidget.h">
       <Filter>Header Files</Filter>
     </QtMoc>
-    <ClInclude Include="UI\HexEditorWidget.Internal.h">
-      <Filter>Header Files</Filter>
+    <QtMoc Include="UI\MemoryWorkbench\HexCanvas.h">
+      <Filter>Header Files\MemoryWorkbench</Filter>
+    </QtMoc>
+    <ClInclude Include="UI\MemoryWorkbench\HexCanvasFormat.h">
+      <Filter>Header Files\MemoryWorkbench</Filter>
+    </ClInclude>
+    <ClInclude Include="UI\MemoryWorkbench\HexExport.h">
+      <Filter>Header Files\MemoryWorkbench</Filter>
+    </ClInclude>
+    <QtMoc Include="UI\MemoryWorkbench\HexFindBar.h">
+      <Filter>Header Files\MemoryWorkbench</Filter>
+    </QtMoc>
+    <ClInclude Include="UI\MemoryWorkbench\HexFindSearch.h">
+      <Filter>Header Files\MemoryWorkbench</Filter>
+    </ClInclude>
+    <QtMoc Include="UI\MemoryWorkbench\HexGotoBar.h">
+      <Filter>Header Files\MemoryWorkbench</Filter>
+    </QtMoc>
+    <QtMoc Include="UI\MemoryWorkbench\HexInspectorPanel.h">
+      <Filter>Header Files\MemoryWorkbench</Filter>
+    </QtMoc>
+    <QtMoc Include="UI\MemoryWorkbench\HexInspectorRowView.h">
+      <Filter>Header Files\MemoryWorkbench</Filter>
+    </QtMoc>
+    <ClInclude Include="UI\MemoryWorkbench\HexInspectorWidgets.h">
+      <Filter>Header Files\MemoryWorkbench</Filter>
+    </ClInclude>
+    <QtMoc Include="UI\MemoryWorkbench\HexView.h">
+      <Filter>Header Files\MemoryWorkbench</Filter>
+    </QtMoc>
+    <ClInclude Include="UI\MemoryWorkbench\HexViewFormat.h">
+      <Filter>Header Files\MemoryWorkbench</Filter>
+    </ClInclude>
+    <ClInclude Include="UI\MemoryWorkbench\HexViewSettings.h">
+      <Filter>Header Files\MemoryWorkbench</Filter>
+    </ClInclude>
+    <QtMoc Include="UI\MemoryWorkbench\HexViewWidgets.h">
+      <Filter>Header Files\MemoryWorkbench</Filter>
+    </QtMoc>
+    <QtMoc Include="UI\MemoryWorkbench\AddressBookModel.h">
+      <Filter>Header Files\MemoryWorkbench</Filter>
+    </QtMoc>
+    <QtMoc Include="UI\MemoryWorkbench\AddressBookPanel.h">
+      <Filter>Header Files\MemoryWorkbench</Filter>
+    </QtMoc>
+    <QtMoc Include="UI\MemoryWorkbench\AddressBookStore.h">
+      <Filter>Header Files\MemoryWorkbench</Filter>
+    </QtMoc>
+    <QtMoc Include="UI\MemoryWorkbench\Int3Controller.h">
+      <Filter>Header Files\MemoryWorkbench</Filter>
+    </QtMoc>
+    <QtMoc Include="UI\MemoryWorkbench\Int3PatchPanel.h">
+      <Filter>Header Files\MemoryWorkbench</Filter>
+    </QtMoc>
+    <ClInclude Include="UI\MemoryWorkbench\WorkbenchActions.h">
+      <Filter>Header Files\MemoryWorkbench</Filter>
+    </ClInclude>
+    <QtMoc Include="UI\MemoryWorkbench\WorkbenchCompareView.h">
+      <Filter>Header Files\MemoryWorkbench</Filter>
+    </QtMoc>
+    <ClInclude Include="UI\MemoryWorkbench\WorkbenchConfirmations.h">
+      <Filter>Header Files\MemoryWorkbench</Filter>
+    </ClInclude>
+    <QtMoc Include="UI\MemoryWorkbench\WorkbenchDisasmView.h">
+      <Filter>Header Files\MemoryWorkbench</Filter>
+    </QtMoc>
+    <ClInclude Include="UI\MemoryWorkbench\WorkbenchMessages.h">
+      <Filter>Header Files\MemoryWorkbench</Filter>
+    </ClInclude>
+    <ClInclude Include="UI\MemoryWorkbench\WorkbenchNavigation.h">
+      <Filter>Header Files\MemoryWorkbench</Filter>
+    </ClInclude>
+    <ClInclude Include="UI\MemoryWorkbench\WorkbenchServices.h">
+      <Filter>Header Files\MemoryWorkbench</Filter>
+    </ClInclude>
+    <QtMoc Include="UI\MemoryWorkbench\WorkbenchSessionBar.h">
+      <Filter>Header Files\MemoryWorkbench</Filter>
+    </QtMoc>
+    <ClInclude Include="UI\MemoryWorkbench\WorkbenchSettings.h">
+      <Filter>Header Files\MemoryWorkbench</Filter>
+    </ClInclude>
+    <QtMoc Include="UI\MemoryWorkbench\WorkbenchStatusBar.h">
+      <Filter>Header Files\MemoryWorkbench</Filter>
+    </QtMoc>
+    <QtMoc Include="UI\MemoryWorkbench\WorkbenchStringWriteDialog.h">
+      <Filter>Header Files\MemoryWorkbench</Filter>
+    </QtMoc>
+    <QtMoc Include="UI\MemoryWorkbench\WorkbenchTarget.h">
+      <Filter>Header Files\MemoryWorkbench</Filter>
+    </QtMoc>
+    <QtMoc Include="UI\MemoryWorkbench\WorkbenchTextView.h">
+      <Filter>Header Files\MemoryWorkbench</Filter>
+    </QtMoc>
+    <QtMoc Include="UI\MemoryWorkbench\WriteModeSwitch.h">
+      <Filter>Header Files\MemoryWorkbench</Filter>
+    </QtMoc>
+    <QtMoc Include="UI\MemoryWorkbench\WorkbenchShared.h">
+      <Filter>Header Files\MemoryWorkbench</Filter>
+    </QtMoc>
+    <QtMoc Include="UI\MemoryWorkbench\WorkbenchPageProvider.h">
+      <Filter>Header Files\MemoryWorkbench</Filter>
+    </QtMoc>
+    <ClInclude Include="UI\MemoryWorkbench\WorkbenchPageProvider.Pool.h">
+      <Filter>Header Files\MemoryWorkbench</Filter>
+    </ClInclude>
+    <QtMoc Include="UI\MemoryWorkbench\WorkbenchBaselineFeeder.h">
+      <Filter>Header Files\MemoryWorkbench</Filter>
+    </QtMoc>
+    <QtMoc Include="UI\MemoryWorkbench\WorkbenchWriteController.h">
+      <Filter>Header Files\MemoryWorkbench</Filter>
+    </QtMoc>
+    <ClInclude Include="UI\MemoryWorkbench\WorkbenchWriteController.Undo.h">
+      <Filter>Header Files\MemoryWorkbench</Filter>
+    </ClInclude>
+    <ClInclude Include="UI\MemoryWorkbench\WorkbenchWriteController.Internal.h">
+      <Filter>Header Files\MemoryWorkbench</Filter>
+    </ClInclude>
+    <QtMoc Include="UI\MemoryWorkbench\WorkbenchHexPane.h">
+      <Filter>Header Files\MemoryWorkbench</Filter>
+    </QtMoc>
+    <QtMoc Include="UI\MemoryWorkbench\MemoryWorkbenchView.h">
+      <Filter>Header Files\MemoryWorkbench</Filter>
+    </QtMoc>
+    <ClInclude Include="UI\MemoryWorkbench\MemoryWorkbenchView.Internal.h">
+      <Filter>Header Files\MemoryWorkbench</Filter>
+    </ClInclude>
+    <QtMoc Include="UI\MemoryWorkbench\WorkbenchDiagnosticsHost.h">
+      <Filter>Header Files\MemoryWorkbench</Filter>
+    </QtMoc>
+    <ClInclude Include="..\..\shared\evidence\memory_workbench\HexViewport.h">
+      <Filter>Header Files\MemoryWorkbench\Shared</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\shared\evidence\memory_workbench\MemoryAddressExpr.h">
+      <Filter>Header Files\MemoryWorkbench\Shared</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\shared\evidence\memory_workbench\MemoryByteSearch.h">
+      <Filter>Header Files\MemoryWorkbench\Shared</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\shared\evidence\memory_workbench\MemoryDiffOverlay.h">
+      <Filter>Header Files\MemoryWorkbench\Shared</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\shared\evidence\memory_workbench\MemoryTargetSession.h">
+      <Filter>Header Files\MemoryWorkbench\Shared</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\shared\evidence\memory_workbench\MemoryValueDecode.h">
+      <Filter>Header Files\MemoryWorkbench\Shared</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\shared\evidence\memory_workbench\MemoryIoPort.h">
+      <Filter>Header Files\MemoryWorkbench\Shared</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\shared\evidence\memory_workbench\MemoryPageReader.h">
+      <Filter>Header Files\MemoryWorkbench\Shared</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\shared\evidence\memory_workbench\MemoryIoByteStore.h">
+      <Filter>Header Files\MemoryWorkbench\Shared</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\shared\evidence\memory_workbench\MemoryKernelMutation.h">
+      <Filter>Header Files\MemoryWorkbench\Shared</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\shared\evidence\memory_workbench\MemoryPatchByteStore.h">
+      <Filter>Header Files\MemoryWorkbench\Shared</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\shared\evidence\memory_workbench\Int3PatchLedger.h">
+      <Filter>Header Files\MemoryWorkbench\Shared</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\shared\evidence\memory_workbench\MemoryAddressBook.h">
+      <Filter>Header Files\MemoryWorkbench\Shared</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\shared\evidence\memory_workbench\MemoryChannelGate.h">
+      <Filter>Header Files\MemoryWorkbench\Shared</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\shared\evidence\memory_workbench\MemoryModuleDirectory.h">
+      <Filter>Header Files\MemoryWorkbench\Shared</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\shared\evidence\memory_workbench\MemoryProcessMatch.h">
+      <Filter>Header Files\MemoryWorkbench\Shared</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\shared\evidence\memory_workbench\MemoryTargetTracker.h">
+      <Filter>Header Files\MemoryWorkbench\Shared</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\shared\evidence\memory_workbench\MemoryWritePolicy.h">
+      <Filter>Header Files\MemoryWorkbench\Shared</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\shared\evidence\memory_workbench\MemoryWriteTransaction.h">
+      <Filter>Header Files\MemoryWorkbench\Shared</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\shared\evidence\memory_workbench\SessionAddressResolver.h">
+      <Filter>Header Files\MemoryWorkbench\Shared</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\shared\evidence\memory_workbench\MemoryBaselineWindow.h">
+      <Filter>Header Files\MemoryWorkbench\Shared</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\shared\evidence\memory_workbench\MemoryEditJournal.h">
+      <Filter>Header Files\MemoryWorkbench\Shared</Filter>
     </ClInclude>
     <ClInclude Include="UI\DockTabInteraction.h">
       <Filter>Header Files</Filter>

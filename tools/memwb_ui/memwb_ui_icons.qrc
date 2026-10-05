@@ -1,0 +1,23 @@
+<RCC>
+    <!-- 夹具专用的精简图标资源：别名与主程序 Ksword5.qrc 保持一致，让 HexCanvas 右键菜单图标在离屏截图里可见。
+         复制/粘贴沿用 codeeditor_* 别名；三种填充用 settings_background_reset.svg（斜线填充图案），
+         取代原先语义不对的循环箭头 codeeditor_replace.svg。
+         memwb_* 十一个别名对应工作台 Phase 3 新增的图标（写入模式、地址簿、int3 还原、汇编、四个子页签），
+         与主程序 Ksword5.qrc 里同名别名指向同一批 svg，夹具用它们核对"别名能解析成非空图标"。 -->
+    <qresource prefix="/Icon">
+        <file alias="codeeditor_copy.svg">../../Ksword5.1/Ksword5.1/Resource/Icon/file/copy_line.svg</file>
+        <file alias="codeeditor_paste.svg">../../Ksword5.1/Ksword5.1/Resource/Icon/file/paste_line.svg</file>
+        <file alias="settings_background_reset.svg">../../Ksword5.1/Ksword5.1/Resource/Icon/design/background_line.svg</file>
+        <file alias="memwb_mode_immediate.svg">../../Ksword5.1/Ksword5.1/Resource/Icon/device/flash_line.svg</file>
+        <file alias="memwb_mode_staged.svg">../../Ksword5.1/Ksword5.1/Resource/Icon/file/inbox_line.svg</file>
+        <file alias="memwb_bookmarks.svg">../../Ksword5.1/Ksword5.1/Resource/Icon/education/bookmarks_line.svg</file>
+        <file alias="memwb_bookmark_add.svg">../../Ksword5.1/Ksword5.1/Resource/Icon/education/bookmark_add_line.svg</file>
+        <file alias="memwb_restore.svg">../../Ksword5.1/Ksword5.1/Resource/Icon/system/restore_line.svg</file>
+        <file alias="memwb_restore_all.svg">../../Ksword5.1/Ksword5.1/Resource/Icon/system/history_anticlockwise_line.svg</file>
+        <file alias="memwb_assemble.svg">../../Ksword5.1/Ksword5.1/Resource/Icon/development/terminal_box_line.svg</file>
+        <file alias="memwb_tab_hex.svg">../../Ksword5.1/Ksword5.1/Resource/Icon/editor/hashtag_line.svg</file>
+        <file alias="memwb_tab_disasm.svg">../../Ksword5.1/Ksword5.1/Resource/Icon/development/code_line.svg</file>
+        <file alias="memwb_tab_text.svg">../../Ksword5.1/Ksword5.1/Resource/Icon/editor/text_line.svg</file>
+        <file alias="memwb_tab_compare.svg">../../Ksword5.1/Ksword5.1/Resource/Icon/development/git_compare_line.svg</file>
+    </qresource>
+</RCC>

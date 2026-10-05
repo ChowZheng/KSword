@@ -84,7 +84,11 @@ void MemoryDock::initializeConnections()
     // ========================================================
 
     connect(m_refreshButton, &QPushButton::clicked, this, [this]() {
-        // 刷新动作按当前 Tab 路由，减少无关页面刷新开销。
+        // 刷新动作按当前页签的"页面控件"路由（而不是数字下标），减少无关页面刷新开销；
+        // 这样日后在页签中间插入新页，刷新钮也不会错位到相邻的页面。
+        // currentPage：当前选中页签对应的页面控件；没有任何页签时为空指针。
+        QWidget* const currentPage = m_tabWidget->currentWidget();
+        // tabIndex：当前页签下标，只用于下面的日志，不参与路由判断。
         const int tabIndex = m_tabWidget->currentIndex();
         kLogEvent refreshClickEvent;
         info << refreshClickEvent
@@ -93,12 +97,18 @@ void MemoryDock::initializeConnections()
             << ", attachedPid="
             << m_attachedPid
             << eol;
-        if (m_tabWidget->currentWidget() == m_systemMemoryAuditPage)
+        // 没有任何页签时没有可刷新的页面；同时避免"空指针 == 尚未创建的页面成员(空指针)"的误匹配。
+        if (currentPage == nullptr)
+        {
+            return;
+        }
+        if (currentPage == m_systemMemoryAuditPage)
         {
             m_systemMemoryAuditPage->refreshSnapshot();
             return;
         }
-        if (tabIndex == 0)
+        // 进程与模块页：刷新进程列表，已附加时顺带刷新该进程的模块列表。
+        if (currentPage == m_tabProcessModule)
         {
             refreshProcessList(true);
             if (m_attachedPid != 0)
@@ -107,47 +117,56 @@ void MemoryDock::initializeConnections()
             }
             return;
         }
-        if (tabIndex == 1)
+        // 内存区域页：重新枚举内存区域。
+        if (currentPage == m_tabRegions)
         {
             refreshMemoryRegionList(true);
             return;
         }
-        if (tabIndex == 2)
+        // 内存搜索页：沿用原有行为，同样刷新内存区域列表。
+        if (currentPage == m_tabSearch)
         {
             refreshMemoryRegionList(true);
             return;
         }
-        if (tabIndex == 3)
+        // 内存查看器页：重读当前查看的内存。
+        if (currentPage == m_tabViewer)
         {
             reloadMemoryViewerPage();
             return;
         }
-        if (tabIndex == 4)
+        // 断点与书签页：刷新书签的当前值。
+        if (currentPage == m_tabBpBookmark)
         {
             refreshBookmarkValues();
             return;
         }
-        if (tabIndex == 5)
+        // 驱动内存读写页：执行一次驱动内存读取。
+        if (currentPage == m_tabDriverMemoryRw)
         {
             driverReadMemoryFromUi();
             return;
         }
-        if (tabIndex == 6)
+        // 内核可执行页：异步重新扫描。
+        if (currentPage == m_tabKernelExecutableMemory)
         {
             refreshKernelExecutableMemoryScanAsync();
             return;
         }
-        if (tabIndex == 7)
+        // 内核内存证据页：异步刷新证据。
+        if (currentPage == m_tabKernelMemoryEvidence)
         {
             refreshKernelMemoryEvidenceAsync();
             return;
         }
-        if (tabIndex == 8)
+        // PTE / VA 翻译页：异步重新翻译。
+        if (currentPage == m_tabProcessPteTranslate)
         {
             refreshProcessPteTranslateAsync();
             return;
         }
-        if (tabIndex == 9)
+        // 进程内存证据页：异步刷新证据。
+        if (currentPage == m_tabProcessMemoryEvidence)
         {
             refreshProcessMemoryEvidenceAsync();
         }

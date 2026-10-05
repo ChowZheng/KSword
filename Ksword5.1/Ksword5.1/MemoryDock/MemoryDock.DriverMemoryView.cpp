@@ -16,6 +16,27 @@ using namespace ksword::memory_dock_internal;
 
 namespace
 {
+    // 文本转储每行的字节数：保持地址、十六进制与 ASCII 三列对齐。
+    constexpr qsizetype kDriverMemoryTextViewLineWidth = 16;
+
+    // 将 bytes 中的可打印 ASCII 原样输出，其余字节替换为点号。
+    // 调用方传入单行快照字节，返回用于文本转储的等长字符串。
+    QString driverMemoryPrintableText(const QByteArray& bytes)
+    {
+        // resultText 保存输出文本；预留单行字节数以避免重复分配。
+        QString resultText;
+        resultText.reserve(bytes.size());
+        for (const char rawByte : bytes)
+        {
+            // byteValue 保留原始无符号字节；printable 标记 ASCII 可打印范围。
+            const std::uint8_t byteValue = static_cast<std::uint8_t>(rawByte);
+            const bool printable = byteValue >= 0x20U && byteValue <= 0x7EU;
+            resultText.append(printable ? QChar(QLatin1Char(static_cast<char>(byteValue)))
+                                        : QChar(QLatin1Char('.')));
+        }
+        return resultText;
+    }
+
     // driverMemoryBytesText 作用：
     // - 把一段原始字节渲染成反汇编表格里的“原始字节”列文本；
     // - 输入 bytes：单条指令的字节序列；
@@ -182,7 +203,7 @@ void MemoryDock::dumpDriverMemorySnapshotToFile()
                 .arg(driverMemoryHexAddressText(
                     m_driverMemoryBaseAddress + static_cast<std::uint64_t>(lineStart)))
                 .arg(driverMemoryBytesText(lineSlice), -47)
-                .arg(driverMemoryPrintableText(lineSlice, false));
+                .arg(driverMemoryPrintableText(lineSlice));
         }
         const QByteArray encodedText = dumpText.toUtf8();
         writtenBytes = outputFile.write(encodedText);

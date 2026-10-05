@@ -1,480 +1,225 @@
-#include "HexEditorWidget.Internal.h"
-#include "../Internationalization/LanguageManager.h"
+// ============================================================
+// HexEditorWidget.cpp
+// 作用：
+// - 实现 HexEditorWidget 门面：构造时在内部建一个 ks::ui::HexView 并铺满，
+//   公开 API 逐个转发给它，信号原样转发回来；
+// - 唯一有自己状态的地方是"变更参照"的本地记录（m_referenceOriginal / m_referencePrevious），
+//   用来复刻旧控件的两条行为：setByteArray 在基址与长度都不变时保留参照、
+//   setChangeReferences 在参数与上次相同时不做任何事；
+// - 本文件不依赖任何主程序专有头文件（Framework.h 等），只依赖 Qt 与 HexView，
+//   因此可以被离屏夹具 tools/memwb_ui 单独编译。
+// 语义对照与已知差异见 HexEditorWidget.h 文件头。
+// ============================================================
 
-#include <QSignalBlocker>
+#include "HexEditorWidget.h"
 
-namespace ksword::ui::hex_editor_internal
+#include "MemoryWorkbench/HexView.h"
+
+#include <QMenu>
+#include <QVBoxLayout>
+
+#include <algorithm>
+#include <cstdlib>
+
+namespace
 {
-    // kMinBytesPerRow：
-    // - 每行最小字节数限制；
-    // - 防止出现 0 或过小导致布局异常。
-    constexpr int kMinBytesPerRow = 4;
+    // kLegacyMinBytesPerRow / kLegacyMaxBytesPerRow：
+    // - 旧控件对每行字节数的夹取区间 [4, 64]；
+    // - 保留它，是为了让宿主传入的任何整数都有确定的结果。
+    constexpr int kLegacyMinBytesPerRow = 4;
+    constexpr int kLegacyMaxBytesPerRow = 64;
 
-    // kMaxBytesPerRow：
-    // - 每行最大字节数限制；
-    // - 限制过大列数导致表格性能恶化。
-    constexpr int kMaxBytesPerRow = 64;
+    // kSupportedBytesPerRow：
+    // - 新画布实际支持的行宽，按升序排列；
+    // - SnapBytesPerRow 在这几个值里取最近者。
+    constexpr int kSupportedBytesPerRow[] = { 8, 16, 32, 48, 64 };
 
-    // buildToolbarButtonStyle：
-    // - 统一工具按钮样式；
-    // - 常态无边框/透明背景，只在 hover/pressed 时才显示边框，减少视觉噪声。
-    QString buildToolbarButtonStyle()
+    // SnapBytesPerRow：
+    // - 作用：把宿主请求的每行字节数换算成画布支持的行宽；
+    // - 调用方式：setBytesPerRow 内部使用；
+    // - 传入 requested：宿主请求值，可为任意整数；
+    // - 传出：8/16/32/48/64 之一。先夹取到 [4, 64]，再取距离最近者，等距时取较大者。
+    int SnapBytesPerRow(const int requested)
     {
-        // 占位符编号必须与 arg() 调用一一对应：QString::arg 替换的是字符串里
-        // 编号最小的 %n，而不是固定的 %1，删掉占位符却留着 arg 会让颜色整体错位。
-        return QStringLiteral(
-            "QToolButton {"
-            "  border:1px solid transparent;"
-            "  border-radius:3px;"
-            "  padding:2px 6px;"
-            "  background:transparent;"
-            "  color:%1;"
-            "}"
-            "QToolButton:hover {"
-            "  border:1px solid %2;"
-            "  background:%3;"
-            "  color:%5;"
-            "}"
-            "QToolButton:pressed {"
-            "  border:1px solid %2;"
-            "  background:%4;"
-            "  color:%5;"
-            "}")
-            .arg(KswordTheme::TextPrimaryHex())      // %1
-            .arg(KswordTheme::PrimaryBlueHex)        // %2
-            .arg(KswordTheme::PrimaryBlueHoverHex)   // %3
-            .arg(KswordTheme::PrimaryBluePressedHex) // %4
-            .arg(QStringLiteral("palette(highlighted-text)")); // %5
-    }
+        // clamped：与旧控件相同的夹取结果，保证后面的距离比较有界。
+        const int clamped = std::clamp(requested, kLegacyMinBytesPerRow, kLegacyMaxBytesPerRow);
 
-    // buildInputStyle：
-    // - 查找/跳转输入框与下拉框统一样式。
-    QString buildInputStyle()
-    {
-        return QStringLiteral(
-            "QLineEdit {"
-            "  border:1px solid %1;"
-            "  border-radius:3px;"
-            "  padding:2px 6px;"
-            "  background:%2;"
-            "  color:%3;"
-            "}"
-            "QLineEdit:focus {"
-            "  border:1px solid %4;"
-            "}")
-            .arg(KswordTheme::BorderHex())
-            .arg(KswordTheme::SurfaceHex())
-            .arg(KswordTheme::TextPrimaryHex())
-            .arg(KswordTheme::PrimaryBlueHex)
-            + KswordTheme::ThemedComboBoxStyle();
-    }
-
-    // buildHeaderStyle：
-    // - 表头统一主题样式，保证深浅模式下视觉一致；
-    // - padding 压缩为 2px 上下 / 4px 左右，减少表头占高。
-    QString buildHeaderStyle()
-    {
-        return QStringLiteral(
-            "QHeaderView::section {"
-            "  color:%1;"
-            "  background:transparent; /* %2 */"
-            "  border:none;"
-            "  padding:2px 4px;"
-            "  font-weight:600;"
-            "}")
-            .arg(KswordTheme::PrimaryBlueHex)
-            .arg(KswordTheme::SurfaceHex());
-    }
-
-    // buildMenuStyle：
-    // - 为 HexEditor 内部右键菜单和导出菜单生成独立主题样式；
-    // - 修复深色模式下菜单仍然白底的问题。
-    QString buildMenuStyle()
-    {
-        return QStringLiteral(
-            "QMenu{"
-            "  background:%1;"
-            "  color:%2;"
-            "  border:1px solid %3;"
-            "}"
-            "QMenu::item{"
-            "  padding:6px 18px;"
-            "  background:transparent;"
-            "}"
-            "QMenu::item:selected{"
-            "  background:%4;"
-            "  color:%5;"
-            "}"
-            "QMenu::separator{"
-            "  height:1px;"
-            "  background:%3;"
-            "  margin:4px 8px;"
-            "}")
-            .arg(KswordTheme::SurfaceHex())
-            .arg(KswordTheme::TextPrimaryHex())
-            .arg(KswordTheme::BorderHex())
-            .arg(KswordTheme::AccentHex(KswordTheme::AccentRole::Blue))
-            .arg(KswordTheme::OnAccentDynamicHex());
-    }
-
-    // buildMatchColor：
-    // - 返回普通命中字节背景色；
-    // - 深色模式使用偏墨绿，浅色模式使用淡黄。
-    QColor buildMatchColor()
-    {
-        if (KswordTheme::IsDarkModeEnabled())
+        // 在升序数组里找最近值；"<="让等距时后面（较大）的候选胜出。
+        int best = kSupportedBytesPerRow[0];
+        int bestDistance = std::abs(clamped - best);
+        for (const int candidate : kSupportedBytesPerRow)
         {
-            return KswordTheme::EditorMatchColor();
+            const int distance = std::abs(clamped - candidate);
+            if (distance <= bestDistance)
+            {
+                best = candidate;
+                bestDistance = distance;
+            }
         }
-        return KswordTheme::EditorMatchColor();
+        return best;
     }
 
-    // buildCurrentMatchColor：
-    // - 返回当前命中字节背景色；
-    // - 颜色稍强，方便快速定位。
-    QColor buildCurrentMatchColor()
+    // SameBytes：
+    // - 作用：判断两个字节数组内容是否相同；
+    // - 调用方式：setChangeReferences 比较"这次的参照"与"已生效的参照"；
+    // - 传入：两个 QByteArray；
+    // - 传出：相同为 true。先比共享句柄（O(1)，宿主反复传同一份快照时命中），再比内容。
+    bool SameBytes(const QByteArray& left, const QByteArray& right)
     {
-        if (KswordTheme::IsDarkModeEnabled())
-        {
-            return KswordTheme::EditorCurrentMatchColor();
-        }
-        return KswordTheme::EditorCurrentMatchColor();
-    }
-
-    // buildSelectionColor：
-    // - 返回当前用户选区的高亮色；
-    // - 优先保证拖拽选区比查找高亮更显眼。
-    QColor buildSelectionColor()
-    {
-        if (KswordTheme::IsDarkModeEnabled())
-        {
-            return KswordTheme::EditorSelectionColor();
-        }
-        return KswordTheme::EditorSelectionColor();
-    }
-
-    // byteToHexText：
-    // - 把单字节转为两位大写 HEX 文本。
-    QString byteToHexText(const std::uint8_t byteValue)
-    {
-        return QStringLiteral("%1").arg(byteValue, 2, 16, QChar('0')).toUpper();
-    }
-
-    // normalizeBytesPerRow：
-    // - 对每行字节数进行安全夹取；
-    // - 防止非法值影响布局。
-    int normalizeBytesPerRow(const int requestedBytesPerRow)
-    {
-        return std::clamp(requestedBytesPerRow, kMinBytesPerRow, kMaxBytesPerRow);
+        return left.isSharedWith(right) || left == right;
     }
 }
-
-
-using namespace ksword::ui::hex_editor_internal;
 
 HexEditorWidget::HexEditorWidget(QWidget* parent)
     : QWidget(parent)
 {
-    initializeUi();
-    initializeConnections();
+    // 根布局：边距与间距都为 0，让内部 HexView 铺满本控件。
+    QVBoxLayout* rootLayout = new QVBoxLayout(this);
+    rootLayout->setContentsMargins(0, 0, 0, 0);
+    rootLayout->setSpacing(0);
 
-    // 初始化为空数据视图。
-    clearData();
+    // 内部 HexView：默认只读、每行 16 字节、工具栏与状态条显示、解释器面板按用户偏好。
+    m_view = new ks::ui::HexView(this);
+    rootLayout->addWidget(m_view, 1);
+
+    // 焦点代理：宿主对本控件 setFocus 时，焦点交给 HexView（它再交给画布）。
+    setFocusProxy(m_view);
+
+    // 信号转发：HexView 的信号与旧控件的信号参数完全一致（类型都是 64 位地址与字节），
+    // 直接信号到信号连接即可，不引入额外的转换层。
+    connect(m_view, &ks::ui::HexView::byteEdited, this, &HexEditorWidget::byteEdited);
+    connect(m_view, &ks::ui::HexView::caretMoved, this, &HexEditorWidget::currentAddressChanged);
+    connect(m_view, &ks::ui::HexView::selectionChanged, this, &HexEditorWidget::selectionChanged);
+    connect(m_view, &ks::ui::HexView::aboutToShowContextMenu, this, &HexEditorWidget::aboutToShowContextMenu);
 }
 
 HexEditorWidget::~HexEditorWidget() = default;
 
-void HexEditorWidget::setRegionData(
-    const void* regionPointer,
-    const std::size_t regionSize,
-    const std::uint64_t baseAddress)
+void HexEditorWidget::setHexOnlyView(const bool enabled)
 {
-    // 传入空指针或长度为 0 时，统一视为清空操作。
-    if (regionPointer == nullptr || regionSize == 0)
-    {
-        m_baseAddress = baseAddress;
-        m_buffer.clear();
-        m_changeBaseline.clear();
-        m_previousRead.clear();
-        m_recentChangeMask.clear();
-        ++m_bufferRevision;
-        clearSearchState();
-        m_selectionRangeValid = false;
-        m_selectionRangeStartOffset = 0;
-        m_selectionRangeEndOffset = 0;
-        m_selectionVisualAsciiColumn = false;
-        rebuildTable();
-        updateSummaryLabel();
-        updateSelectionInspector();
-        updateStatusLabel(QStringLiteral("当前区域为空。"));
-        return;
-    }
-
-    // 复制输入内存区域，避免外部缓冲区生命周期影响控件。
-    const QByteArray incomingBytes(
-        static_cast<const char*>(regionPointer),
-        static_cast<int>(regionSize));
-    setByteArray(incomingBytes, baseAddress);
+    // 统一编辑器自己有状态条：嵌入时隐藏 HexView 的状态条，避免重复；工具栏保留。
+    m_view->setStatusBarVisible(!enabled);
 }
 
 void HexEditorWidget::setByteArray(const QByteArray& bytes, const std::uint64_t baseAddress)
 {
-    if (baseAddress != m_baseAddress || bytes.size() != m_buffer.size())
+    // sameShape：基址与长度都和当前缓冲相同。旧控件在这种情况下保留变更参照，
+    // 不少回写路径（放弃修改、撤销）正是靠它在换回原始内容后继续显示着色。
+    const bool sameShape = baseAddress == m_view->baseAddress()
+        && static_cast<std::uint64_t>(bytes.size()) == m_view->bufferSize();
+
+    // 整块替换内容：HexView 会清选区、清暂存、清查找状态，并丢弃它自己的参照。
+    m_view->setBuffer(baseAddress, bytes);
+
+    // 形状变了：本地记录同步作废；形状没变：把保留的参照重新应用到新内容上。
+    if (!sameShape)
     {
-        m_changeBaseline.clear();
-        m_previousRead.clear();
-        m_recentChangeMask.clear();
+        m_referenceOriginal.clear();
+        m_referencePrevious.clear();
+        return;
     }
-    // 覆盖当前缓冲区，更新基址和版本号。
-    m_buffer = bytes;
-    m_baseAddress = baseAddress;
-    ++m_bufferRevision;
-
-    // 新数据进入后清空旧查找结果，避免高亮错位。
-    clearSearchState();
-    m_selectionRangeValid = false;
-    m_selectionRangeStartOffset = 0;
-    m_selectionRangeEndOffset = 0;
-    m_selectionVisualAsciiColumn = false;
-    rebuildTable();
-    updateSummaryLabel();
-    updateSelectionInspector();
-
-    updateStatusLabel(
-        QStringLiteral("加载完成：%1 字节。")
-        .arg(static_cast<qulonglong>(m_buffer.size())));
-}
-
-void HexEditorWidget::setChangeBaseline(const QByteArray& original)
-{
-    if (original.size() == m_changeBaseline.size() && original == m_changeBaseline) return;
-    m_changeBaseline = original.size() == m_buffer.size() ? original : QByteArray();
-    refreshChangeHighlights();
-}
-
-void HexEditorWidget::setRecentChangeMask(const QByteArray& changedMask)
-{
-    if (m_previousRead.isEmpty() && changedMask == m_recentChangeMask) return;
-    m_recentChangeMask = changedMask.size() == m_buffer.size() ? changedMask : QByteArray();
-    m_previousRead.clear();
-    refreshChangeHighlights();
+    if (!m_referenceOriginal.isEmpty())
+    {
+        applyStoredReference();
+    }
 }
 
 void HexEditorWidget::setChangeReferences(const QByteArray& original, const QByteArray& previousRead)
 {
-    // QByteArray sharing makes unchanged snapshot references a constant-time
-    // check in the editor's per-byte path. The edited row already repaints in
-    // byteEdited/setByteAtAbsoluteAddress; full replacements rebuild the table.
-    const QByteArray baseline = original.size() == m_buffer.size() ? original : QByteArray();
-    const QByteArray preceding = previousRead.size() == m_buffer.size() ? previousRead : QByteArray();
-    if (baseline == m_changeBaseline && preceding == m_previousRead) return;
-    m_changeBaseline = baseline;
-    m_previousRead = preceding;
-    m_recentChangeMask = QByteArray(m_buffer.size(), '\0');
-    const QByteArray& currentRead = original.size() == m_buffer.size() ? original : m_buffer;
-    if (!m_previousRead.isEmpty())
-        for (qsizetype i = 0; i < m_buffer.size(); ++i)
-            m_recentChangeMask[i] = m_previousRead.at(i) != currentRead.at(i) ? '\1' : '\0';
-    refreshChangeHighlights();
+    // size：当前缓冲长度；参照必须与它等长才有意义。
+    const qsizetype size = static_cast<qsizetype>(m_view->bufferSize());
+
+    // baseline / preceding：尺寸不符的一律当作"没有"（旧规则：不着色）。
+    // original 无效时 previousRead 也一并忽略——着色必须以 original 为基线。
+    const QByteArray baseline = (original.size() == size) ? original : QByteArray();
+    const QByteArray preceding = (!baseline.isEmpty() && previousRead.size() == size)
+        ? previousRead
+        : QByteArray();
+
+    // 与已生效的参照完全相同：什么都不做。宿主在每次 byteEdited 之后都会重复调用本函数，
+    // 这里必须是 O(1)（共享句柄命中），不能每次都重建 HexView 的基线与叠加层。
+    if (SameBytes(baseline, m_referenceOriginal) && SameBytes(preceding, m_referencePrevious))
+    {
+        return;
+    }
+
+    m_referenceOriginal = baseline;
+    m_referencePrevious = preceding;
+    applyStoredReference();
 }
 
 void HexEditorWidget::clearChangeHighlights()
 {
-    if (m_changeBaseline.isEmpty() && m_previousRead.isEmpty() && m_recentChangeMask.isEmpty()) return;
-    m_changeBaseline.clear();
-    m_previousRead.clear();
-    m_recentChangeMask.clear();
-    refreshChangeHighlights();
-}
-
-void HexEditorWidget::refreshChangeHighlights()
-{
-    if (!m_hexTable) return;
-    const QSignalBlocker blocker(m_hexTable);
-    const bool wasIgnoring = m_ignoreItemChanged;
-    m_ignoreItemChanged = true;
-    for (int row = 0; row < m_hexTable->rowCount(); ++row) updateRowHighlightByRow(row);
-    m_ignoreItemChanged = wasIgnoring;
-    m_hexTable->viewport()->update();
-}
-
-void HexEditorWidget::applyChangeHighlight(QTableWidgetItem* byteItem, std::uint64_t offset)
-{
-    if (!byteItem || offset >= static_cast<std::uint64_t>(m_buffer.size())) return;
-    const auto index = static_cast<qsizetype>(offset);
-    const bool pending = index < m_changeBaseline.size() && m_buffer.at(index) != m_changeBaseline.at(index);
-    const bool recent = index < m_recentChangeMask.size() && m_recentChangeMask.at(index) != 0;
-    QFont font = m_hexTable->font();
-    font.setBold(pending || recent);
-    byteItem->setFont(font);
-    QStringList tooltip;
-    if (pending || recent)
+    // 本来就没有生效的参照：与旧控件一样直接返回，不动用户已有的编辑显示。
+    if (m_referenceOriginal.isEmpty() && m_referencePrevious.isEmpty())
     {
-        const auto base = m_hexTable->palette().color(QPalette::Base);
-        const auto accent = KswordTheme::AccentColor(pending
-            ? KswordTheme::AccentRole::Orange : KswordTheme::AccentRole::Cyan);
-        byteItem->setBackground(KswordTheme::BlendColors(base, accent, 95));
-        if (index < m_changeBaseline.size())
-            tooltip.push_back(ks::i18n::sourceText(QStringLiteral("原始字节：%1"))
-                .arg(byteToHexText(static_cast<std::uint8_t>(m_changeBaseline.at(index)))));
-        if (index < m_previousRead.size())
-            tooltip.push_back(ks::i18n::sourceText(QStringLiteral("上次读取：%1"))
-                .arg(byteToHexText(static_cast<std::uint8_t>(m_previousRead.at(index)))));
-        tooltip.push_back(ks::i18n::sourceText(QStringLiteral("当前字节：%1"))
-            .arg(byteToHexText(static_cast<std::uint8_t>(m_buffer.at(index)))));
+        return;
     }
-    byteItem->setToolTip(tooltip.join(QChar('\n')));
+    m_referenceOriginal.clear();
+    m_referencePrevious.clear();
+    applyStoredReference();
 }
 
-void HexEditorWidget::changeEvent(QEvent* event)
+void HexEditorWidget::applyStoredReference()
 {
-    QWidget::changeEvent(event);
-    if (event && (event->type() == QEvent::PaletteChange
-        || event->type() == QEvent::ApplicationPaletteChange
-        || event->type() == QEvent::LanguageChange)) refreshChangeHighlights();
+    // 没有参照：让 HexView 的基线回到当前缓冲，橙色与冷色全部消失。
+    if (m_referenceOriginal.isEmpty())
+    {
+        m_referencePrevious.clear();
+        m_view->clearReference();
+        return;
+    }
+
+    // 有参照：交给 HexView 着色。被拒绝（尺寸不符、暂存超限）时 HexView 已自行清除参照，
+    // 本地记录跟着清空，保持"记录 == 实际生效的参照"。
+    if (!m_view->setReference(m_referenceOriginal, m_referencePrevious))
+    {
+        m_referenceOriginal.clear();
+        m_referencePrevious.clear();
+    }
 }
 
 void HexEditorWidget::clearData()
 {
-    // clearData 直接复用 setByteArray，保持行为一致。
-    setByteArray(QByteArray(), m_baseAddress);
+    // 清空缓冲但保留基址（旧控件语义）；复用 setByteArray 以同步作废参照记录。
+    setByteArray(QByteArray(), m_view->baseAddress());
 }
 
 void HexEditorWidget::setEditable(const bool editable)
 {
-    if (m_editable == editable)
-    {
-        return;
-    }
-
-    m_editable = editable;
-    rebuildTable();
-    updateSummaryLabel();
-    updateSelectionInspector();
+    m_view->setEditable(editable);
 }
 
 bool HexEditorWidget::isEditable() const
 {
-    return m_editable;
+    return m_view->isEditable();
 }
 
 void HexEditorWidget::setBytesPerRow(const int bytesPerRow)
 {
-    const int normalizedBytesPerRow = normalizeBytesPerRow(bytesPerRow);
-    if (normalizedBytesPerRow == m_bytesPerRow)
-    {
-        return;
-    }
-
-    m_bytesPerRow = normalizedBytesPerRow;
-    if (m_bytesPerRowCombo != nullptr)
-    {
-        const int comboIndex = m_bytesPerRowCombo->findData(m_bytesPerRow);
-        if (comboIndex >= 0)
-        {
-            m_bytesPerRowCombo->setCurrentIndex(comboIndex);
-        }
-    }
-
-    rebuildTable();
-    updateSummaryLabel();
-    updateSelectionInspector();
+    // 先换算成画布支持的行宽；换算结果恒合法，HexView 的返回值无需再检查。
+    m_view->setBytesPerRow(SnapBytesPerRow(bytesPerRow));
 }
 
 int HexEditorWidget::bytesPerRow() const
 {
-    return m_bytesPerRow;
+    return m_view->bytesPerRow();
 }
 
 bool HexEditorWidget::jumpToAbsoluteAddress(const std::uint64_t absoluteAddress)
 {
-    if (absoluteAddress < m_baseAddress)
-    {
-        updateStatusLabel(QStringLiteral("跳转失败：地址小于基址。"));
-        return false;
-    }
-
-    const std::uint64_t offset = absoluteAddress - m_baseAddress;
-    return jumpToOffset(offset);
-}
-
-bool HexEditorWidget::jumpToOffset(const std::uint64_t offset)
-{
-    if (m_buffer.isEmpty())
-    {
-        updateStatusLabel(QStringLiteral("跳转失败：当前无可显示数据。"));
-        return false;
-    }
-
-    if (offset >= static_cast<std::uint64_t>(m_buffer.size()))
-    {
-        updateStatusLabel(QStringLiteral("跳转失败：偏移超出范围。"));
-        return false;
-    }
-
-    int row = -1;
-    int column = -1;
-    if (!offsetToRowColumn(offset, row, column))
-    {
-        updateStatusLabel(QStringLiteral("跳转失败：目标单元格不可用。"));
-        return false;
-    }
-
-    m_hexTable->setCurrentCell(row, column);
-    m_hexTable->scrollToItem(m_hexTable->item(row, column), QAbstractItemView::PositionAtCenter);
-
-    updateStatusLabel(
-        QStringLiteral("已跳转到地址 %1。")
-        .arg(QStringLiteral("0x%1").arg(static_cast<qulonglong>(m_baseAddress + offset), 16, 16, QChar('0')).toUpper()));
-    return true;
-}
-
-bool HexEditorWidget::jumpToRow(const std::uint64_t rowIndex)
-{
-    if (m_buffer.isEmpty())
-    {
-        updateStatusLabel(QStringLiteral("跳转失败：当前无可显示数据。"));
-        return false;
-    }
-
-    const std::uint64_t offset = rowIndex * static_cast<std::uint64_t>(m_bytesPerRow);
-    if (offset >= static_cast<std::uint64_t>(m_buffer.size()))
-    {
-        updateStatusLabel(QStringLiteral("跳转失败：行号超出范围。"));
-        return false;
-    }
-
-    return jumpToOffset(offset);
+    // 范围内选中并居中；范围外或无数据时 HexView 会在状态条给出提示并返回 false。
+    return m_view->jumpToAddress(absoluteAddress);
 }
 
 void HexEditorWidget::openFindPanel()
 {
-    if (m_findPanel == nullptr)
-    {
-        return;
-    }
-
-    m_findPanel->setVisible(true);
-    if (m_findEdit != nullptr)
-    {
-        m_findEdit->setFocus(Qt::ShortcutFocusReason);
-        m_findEdit->selectAll();
-    }
+    m_view->openFind();
 }
 
 void HexEditorWidget::openJumpPanel()
 {
-    if (m_jumpPanel == nullptr)
-    {
-        return;
-    }
-
-    m_jumpPanel->setVisible(true);
-    if (m_jumpEdit != nullptr)
-    {
-        m_jumpEdit->setFocus(Qt::ShortcutFocusReason);
-        m_jumpEdit->selectAll();
-    }
+    m_view->openGoto();
 }
 
 bool HexEditorWidget::setByteAtAbsoluteAddress(
@@ -482,165 +227,52 @@ bool HexEditorWidget::setByteAtAbsoluteAddress(
     const std::uint8_t byteValue,
     const bool keepSelection)
 {
-    if (absoluteAddress < m_baseAddress)
+    // 静默改字节：缓冲与画面立即更新，不发 byteEdited（宿主的回滚路径依赖这一点）。
+    if (!m_view->setByteQuiet(absoluteAddress, byteValue))
     {
         return false;
     }
 
-    const std::uint64_t offset = absoluteAddress - m_baseAddress;
-    if (offset >= static_cast<std::uint64_t>(m_buffer.size()))
-    {
-        return false;
-    }
-
-    m_buffer[static_cast<int>(offset)] = static_cast<char>(byteValue);
-    ++m_bufferRevision;
-
-    int row = -1;
-    int column = -1;
-    if (!offsetToRowColumn(offset, row, column))
-    {
-        return false;
-    }
-
-    // 回填时屏蔽 itemChanged，避免触发编辑信号。
-    m_ignoreItemChanged = true;
-    QTableWidgetItem* byteItem = m_hexTable->item(row, column);
-    if (byteItem != nullptr)
-    {
-        byteItem->setText(byteToHexText(byteValue));
-    }
-    updateAsciiCellByRow(row);
-    refreshAsciiTabText();
-    updateRowHighlightByRow(row);
-    m_ignoreItemChanged = false;
-    updateSelectionInspector();
-
+    // 旧实现的真实行为：keepSelection 为 true 时才把当前单元格移到被改字节上（并保证可见），
+    // 为 false 时不动当前选择。参数名与行为相反是历史遗留，这里保持行为不变，见头文件第二节。
     if (keepSelection)
     {
-        m_hexTable->setCurrentCell(row, column);
+        m_view->canvas()->setCaretAddress(absoluteAddress, false, true);
     }
     return true;
 }
 
 QByteArray HexEditorWidget::data() const
 {
-    return m_buffer;
+    return m_view->buffer();
 }
 
 std::size_t HexEditorWidget::regionSize() const
 {
-    return static_cast<std::size_t>(m_buffer.size());
+    return static_cast<std::size_t>(m_view->bufferSize());
 }
 
 std::uint64_t HexEditorWidget::baseAddress() const
 {
-    return m_baseAddress;
+    return m_view->baseAddress();
 }
 
 std::uint64_t HexEditorWidget::selectedAbsoluteAddress() const
 {
-    return m_baseAddress + selectedOffset();
+    // 新画布有数据时恒有插入点；无数据（旧控件的"未选中有效字节"）时按旧语义回退为基址。
+    if (m_view->bufferSize() == 0)
+    {
+        return m_view->baseAddress();
+    }
+    return m_view->caretAddress();
 }
 
 std::uint64_t HexEditorWidget::selectedOffset() const
 {
-    if (m_hexTable == nullptr || m_hexTable->currentItem() == nullptr)
+    // 无数据时为 0；否则是插入点相对基址的偏移（先判空再相减，不会回绕）。
+    if (m_view->bufferSize() == 0)
     {
         return 0;
     }
-
-    const int currentRow = m_hexTable->currentItem()->row();
-    const int currentColumn = m_hexTable->currentItem()->column();
-
-    std::uint64_t offset = 0;
-    if (!rowColumnToOffset(currentRow, currentColumn, offset))
-    {
-        return 0;
-    }
-    return offset;
-}
-
-bool HexEditorWidget::eventFilter(QObject* watched, QEvent* event)
-{
-    if (m_hexTable == nullptr || event == nullptr)
-    {
-        return QWidget::eventFilter(watched, event);
-    }
-
-    // 仅拦截十六进制表格视口，其他对象交给基类处理。
-    if (watched != m_hexTable->viewport())
-    {
-        return QWidget::eventFilter(watched, event);
-    }
-
-    if (m_buffer.isEmpty())
-    {
-        return QWidget::eventFilter(watched, event);
-    }
-
-    // 鼠标按下：记录锚点并进入线性拖拽模式。
-    if (event->type() == QEvent::MouseButtonPress)
-    {
-        QMouseEvent* mouseEvent = static_cast<QMouseEvent*>(event);
-        if (mouseEvent->button() != Qt::LeftButton)
-        {
-            return QWidget::eventFilter(watched, event);
-        }
-
-        std::uint64_t clickedOffset = 0;
-        if (!viewportPosToOffset(mouseEvent->pos(), clickedOffset))
-        {
-            return true;
-        }
-
-        if (!(mouseEvent->modifiers() & Qt::ShiftModifier) || !m_linearSelectAnchorValid)
-        {
-            m_linearSelectAnchorOffset = clickedOffset;
-            m_linearSelectAnchorValid = true;
-        }
-
-        // 记录本次拖拽起点是否在 ASCII 列：
-        // - true：视觉高亮保留在 ASCII 列；
-        // - false：视觉高亮保留在十六进制字节列。
-        const int pressedColumnIndex = m_hexTable->columnAt(mouseEvent->pos().x());
-        m_selectionVisualAsciiColumn = (pressedColumnIndex == (m_bytesPerRow + 1));
-
-        m_linearSelectDragging = true;
-        selectLinearRange(m_linearSelectAnchorOffset, clickedOffset, false);
-        m_hexTable->setFocus(Qt::MouseFocusReason);
-        return true;
-    }
-
-    // 鼠标拖动：按“文本式连续字节区间”更新选区。
-    if (event->type() == QEvent::MouseMove)
-    {
-        QMouseEvent* mouseEvent = static_cast<QMouseEvent*>(event);
-        if (!m_linearSelectDragging || !(mouseEvent->buttons() & Qt::LeftButton))
-        {
-            return QWidget::eventFilter(watched, event);
-        }
-
-        std::uint64_t hoverOffset = 0;
-        if (!viewportPosToOffset(mouseEvent->pos(), hoverOffset))
-        {
-            return true;
-        }
-
-        selectLinearRange(m_linearSelectAnchorOffset, hoverOffset, true);
-        return true;
-    }
-
-    // 鼠标释放：结束拖拽状态。
-    if (event->type() == QEvent::MouseButtonRelease)
-    {
-        QMouseEvent* mouseEvent = static_cast<QMouseEvent*>(event);
-        if (mouseEvent->button() == Qt::LeftButton)
-        {
-            m_linearSelectDragging = false;
-            return true;
-        }
-    }
-
-    return QWidget::eventFilter(watched, event);
+    return m_view->caretAddress() - m_view->baseAddress();
 }

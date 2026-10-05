@@ -3,109 +3,112 @@
 // ============================================================
 // HexEditorWidget.h
 // 作用：
-// - 提供统一的十六进制查看/编辑控件；
-// - 支持查找、跳转、复制、导出等常用工具；
-// - 后续所有“显示字节数据”的界面都应复用该组件。
+// - 统一十六进制查看/编辑控件的"门面"：类名与公开 API 沿用旧控件，全仓调用点无需改动；
+// - 内部全部转发给 ks::ui::HexView（UI/MemoryWorkbench/HexView.h，自绘虚拟化画布 + 工具栏 + 查找/跳转条
+//   + 状态条 + 解释器面板），旧的 QTableWidget 单元格实现已整体退役；
+// - 后续所有"显示字节数据"的界面仍然复用本控件。
+//
+// ------------------------------------------------------------
+// 一、本头文件刻意不包含任何新组件头文件
+// ------------------------------------------------------------
+// - 只前向声明 ks::ui::HexView 并持有指针：本头文件被十几处宿主包含（含 MemoryDock.Internal.h /
+//   NetworkDock.InternalCommon.h 这类扇出很大的头），tools/Invoke-MemoryEditorUiTests.ps1 还会用
+//   /std:c++17 编译包含本头文件的测试，不能让它们被迫重编 HexView 的整条依赖链；
+// - 旧头文件里的私有成员（表格、查找状态、选区状态、一大堆 Qt 控件的前向声明）全部删除。
+//
+// ------------------------------------------------------------
+// 二、与旧控件的语义对照（离屏夹具 tools/memwb_ui/memwb_ui_tests.Facade*.cpp 逐条钉死）
+// ------------------------------------------------------------
+// - 默认：只读、每行 16 字节、工具栏与状态条显示、解释器面板隐藏（由 HexView 持久化其显隐）。
+// - setByteArray(bytes, base)：整块替换内容。基址与长度都与上一份相同时，保留上一次的变更参照
+//   （旧控件的行为，discardChanges 之类的回写路径依赖它）；基址或长度变了则参照作废。
+// - setChangeReferences(original, previousRead)：尺寸与缓冲不符的参照一律当作"没有"（旧规则：不着色）。
+//   参数与上一次实际生效的相同时 O(1) 返回——宿主在每次 byteEdited 之后都会重复调用它。
+// - setByteAtAbsoluteAddress(addr, value, keepSelection)：不发 byteEdited（回滚路径依赖），越界返回 false。
+//   注意 keepSelection 的真实旧语义与参数名相反：旧实现里它为 true 才把当前单元格移到被改的字节上
+//   （KvmHookWizard 逐字节写补丁时只对最后一个字节传 true，让焦点落在补丁末尾），为 false 不动当前选择。
+//   这里保持旧实现的行为，不按参数名"纠正"。
+// - setBytesPerRow(n)：旧控件夹取到 [4, 64]；新画布只支持 8/16/32/48/64，所以先夹取到 [4, 64]，
+//   再取最近的受支持值（等距时取较大者）。宿主传 16 / 32 照常；bytesPerRow() 返回实际生效值。
+// - selectedAbsoluteAddress()：有数据时是插入点的绝对地址（新画布恒有插入点），无数据时是基址；
+//   selectedOffset() 是它相对基址的偏移，无数据为 0。
+// - jumpToAbsoluteAddress(addr)：范围内选中该字节并居中，返回 true；范围外 / 无数据返回 false。
+// - 信号：byteEdited 仅在用户编辑使缓冲里的字节真的变了时发出，每个变化字节恰好一次
+//   （setByteArray / setByteAtAbsoluteAddress 不发）；currentAddressChanged 对应插入点移动；
+//   selectionChanged(起偏移, 止偏移（不含）, 是否有选区)；aboutToShowContextMenu 在右键菜单弹出前发出。
+// - setHexOnlyView(true)：隐藏 HexView 的状态条（统一编辑器自己有状态条），工具栏保留；false 恢复。
+//
+// ------------------------------------------------------------
+// 三、已知的、有意的行为差异
+// ------------------------------------------------------------
+// - 用户编辑过的字节恒显示为橙色"待提交"（HexView 的模型：叠加层补丁 == 缓冲与基线的差异），
+//   即使宿主从未设置过变更参照；旧控件没有参照时不着色。clearChangeHighlights() 之后继续编辑同样会显示橙色。
+// - 旧控件对"original 尺寸不符但 previousRead 尺寸相符"的组合仍会按 previousRead 着冷色；
+//   现在 original 不符就整体不着色。全仓唯一的调用者（MemoryEditorWidget）总是同时传尺寸相符的两者，不受影响。
+// - 旧的 ASCII 页签、选区检查器面板、摘要标签已由 HexView 自带的 ASCII 面板、解释器面板与状态条取代。
 // ============================================================
 
 #include <QByteArray>
 #include <QWidget>
 
-#include <atomic>
 #include <cstddef>
 #include <cstdint>
-#include <vector>
 
-class QObject;
-class QEvent;
-class QPoint;
-class QComboBox;
-class QGridLayout;
-class QHBoxLayout;
-class QLabel;
-class QLineEdit;
 class QMenu;
-class QPushButton;
-class QShortcut;
-class QTabWidget;
-class QTableWidget;
-class QTableWidgetItem;
-class QToolButton;
-class QWidget;
-class QVBoxLayout;
-class CodeEditorWidget;
+
+namespace ks::ui
+{
+    class HexView;
+}
 
 // HexEditorWidget：
-// - 统一十六进制查看器；
+// - 统一十六进制查看器（门面）；
 // - 支持只读和可编辑两种模式；
-// - 支持 Ctrl+F 异步查找、Ctrl+G 跳转。
+// - 内部由 ks::ui::HexView 承担全部显示、编辑、查找（Ctrl+F）、跳转（Ctrl+G）与导出。
 class HexEditorWidget final : public QWidget
 {
     Q_OBJECT
 
 public:
-    // SearchMode：
-    // - 定义查找模式；
-    // - HexBytes 支持“AA BB ??”格式。
-    enum class SearchMode : int
-    {
-        HexBytes = 0,
-        AsciiText,
-        Utf16Text
-    };
-
     // 构造函数：
-    // - parent：Qt 父控件，可空。
+    // - parent：Qt 父控件，可空；
+    // - 内部创建一个铺满本控件（布局边距为 0）的 HexView，默认只读、每行 16 字节。
     explicit HexEditorWidget(QWidget* parent = nullptr);
 
     // 析构函数：
-    // - 组件析构时仅释放 Qt 子控件；
-    // - 异步查找线程采用 ticket 机制自动丢弃过期结果。
+    // - 内部 HexView 是本控件的子控件，随 Qt 对象树销毁；
+    // - HexView 自己负责取消在途的后台查找，因此在查找进行中销毁本控件是安全的。
     ~HexEditorWidget() override;
 
-protected:
-    // eventFilter：
-    // - 作用：拦截十六进制表格视口鼠标事件；
-    // - 用于实现“文本式线性拖拽选择”，避免默认矩形框选。
-    // 调用方式：Qt 事件系统自动回调。
-    // 入参 watched：被监听对象（主要是 m_hexTable->viewport()）。
-    // 入参 event：事件对象。
-    // 返回：true 表示事件已处理，false 交给基类继续处理。
-    bool eventFilter(QObject* watched, QEvent* event) override;
-    void changeEvent(QEvent* event) override;
-
-public:
-
-    // setRegionData：
-    // - 作用：按“内存指针 + 长度”设置显示数据；
-    // - regionPointer：输入内存区域指针，可为 nullptr；
-    // - regionSize：输入内存区域长度（字节）；
-    // - baseAddress：该区域在逻辑上的起始地址。
-    void setRegionData(
-        const void* regionPointer,
-        std::size_t regionSize,
-        std::uint64_t baseAddress = 0);
+    // setHexOnlyView：
+    // - 作用：嵌入统一内存编辑器时隐藏重复的状态条（统一编辑器自己有状态条），保留工具栏；
+    // - enabled：true 隐藏状态条；false 恢复显示（其它独立使用者维持默认外观）。
+    void setHexOnlyView(bool enabled);
 
     // setByteArray：
-    // - 作用：按 QByteArray 直接设置显示数据；
+    // - 作用：按 QByteArray 整块设置显示数据；
     // - bytes：输入字节数据；
-    // - baseAddress：逻辑起始地址。
+    // - baseAddress：逻辑起始地址；
+    // - 清选区、清查找状态；基址与长度都不变时保留上一次的变更参照，否则参照作废。
     void setByteArray(const QByteArray& bytes, std::uint64_t baseAddress = 0);
 
-    // Optional references for memory editing. Missing/mismatched references do
-    // not highlight. Pending edits and changes since the previous read use
-    // separate colors; selection and search highlighting retain priority.
-    void setChangeBaseline(const QByteArray& original);
-    void setRecentChangeMask(const QByteArray& changedMask);
+    // setChangeReferences：
+    // - 作用：设置变更着色参照；尺寸与缓冲不符的参照被视为"没有"（不着色）；
+    // - original：原始字节，缓冲里与它不同的字节显示为橙色（待提交）；
+    // - previousRead：上一次读取，与 original 不同的字节显示为冷色（外部变化），可为空；
+    // - 与上一次实际生效的参照完全相同时直接返回，不重建任何显示状态。
     void setChangeReferences(const QByteArray& original, const QByteArray& previousRead = QByteArray());
+
+    // clearChangeHighlights：
+    // - 作用：清除变更参照，橙色与冷色着色全部消失（缓冲内容不变）。
     void clearChangeHighlights();
 
     // clearData：
-    // - 作用：清空组件中的字节数据与查找高亮。
+    // - 作用：清空缓冲、选区与查找高亮；基址保留（与旧控件一致）。
     void clearData();
 
     // setEditable：
-    // - 作用：设置是否允许编辑十六进制单元格；
+    // - 作用：设置是否允许编辑；该设置跨 setByteArray / clearData 保持；
     // - editable：true=可编辑，false=只读。
     void setEditable(bool editable);
 
@@ -114,53 +117,42 @@ public:
     bool isEditable() const;
 
     // setBytesPerRow：
-    // - 作用：设置每行显示字节数（建议 8/16/32）；
-    // - bytesPerRow：每行字节数，非法值会被夹取。
+    // - 作用：设置每行显示字节数；
+    // - bytesPerRow：先夹取到 [4, 64]，再取最近的受支持值（8/16/32/48/64，等距取较大者）。
     void setBytesPerRow(int bytesPerRow);
 
     // bytesPerRow：
-    // - 返回当前每行字节数。
+    // - 返回当前实际生效的每行字节数。
     int bytesPerRow() const;
 
     // jumpToAbsoluteAddress：
-    // - 作用：跳转到绝对地址；
+    // - 作用：选中并滚动到绝对地址；
     // - absoluteAddress：目标地址；
-    // - 返回：true=成功定位，false=超范围。
+    // - 返回：true=成功定位，false=超范围或无数据（状态条会给出提示）。
     bool jumpToAbsoluteAddress(std::uint64_t absoluteAddress);
 
-    // jumpToOffset：
-    // - 作用：按“相对偏移”定位；
-    // - offset：从 baseAddress 起算的字节偏移；
-    // - 返回：true=成功定位，false=超范围。
-    bool jumpToOffset(std::uint64_t offset);
-
-    // jumpToRow：
-    // - 作用：跳转到目标行；
-    // - rowIndex：0 基行号；
-    // - 返回：true=成功定位，false=超范围。
-    bool jumpToRow(std::uint64_t rowIndex);
-
     // openFindPanel：
-    // - 作用：显示查找面板并聚焦输入框。
+    // - 作用：显示查找条并聚焦输入框。
     void openFindPanel();
 
     // openJumpPanel：
-    // - 作用：显示跳转面板并聚焦输入框。
+    // - 作用：显示跳转条并聚焦输入框。
     void openJumpPanel();
 
     // setByteAtAbsoluteAddress：
-    // - 作用：外部主动修改指定地址字节（例如写入失败时回滚）；
+    // - 作用：外部主动修改指定地址字节（例如写入失败时回滚），不发 byteEdited；
     // - absoluteAddress：绝对地址；
     // - byteValue：目标字节值；
-    // - keepSelection：是否保留当前选择焦点；
-    // - 返回：true=修改成功，false=地址越界。
+    // - keepSelection：为 true 时把插入点移到被改的字节上并滚动到可见（旧实现的真实行为，见文件头第二节）；
+    //   为 false 时不动当前选择；
+    // - 返回：true=修改成功，false=地址越界或暂存超限。
     bool setByteAtAbsoluteAddress(
         std::uint64_t absoluteAddress,
         std::uint8_t byteValue,
         bool keepSelection = true);
 
     // data：
-    // - 返回当前组件持有的数据副本。
+    // - 返回当前组件持有的数据（含已应用的编辑；QByteArray 隐式共享，不是深拷贝）。
     QByteArray data() const;
 
     // regionSize：
@@ -172,31 +164,18 @@ public:
     std::uint64_t baseAddress() const;
 
     // selectedAbsoluteAddress：
-    // - 返回当前选中单元格对应的绝对地址；
-    // - 未选中有效字节时返回 baseAddress。
+    // - 返回插入点（当前选中字节）对应的绝对地址；
+    // - 无数据时返回 baseAddress。
     std::uint64_t selectedAbsoluteAddress() const;
 
     // selectedOffset：
-    // - 返回当前选中单元格的相对偏移；
-    // - 未选中有效字节时返回 0。
+    // - 返回插入点相对基址的字节偏移；
+    // - 无数据时返回 0。
     std::uint64_t selectedOffset() const;
-
-    // selectedBytes：
-    // - 作用：返回当前选区覆盖的字节副本，供外部（如内存搜索/回写）直接取用；
-    // - 内部直接复用选区收集逻辑，按偏移升序拼接，非连续选区同样会被压实为连续字节；
-    // - 返回：选区字节副本；无选区时返回空 QByteArray。
-    QByteArray selectedBytes() const;
-
-    // selectionRange：
-    // - 作用：取当前选区在缓冲区内的半开偏移区间，便于外部换算绝对地址；
-    // - 出参 startOffsetOut：命中时写入选区最小偏移（包含）；
-    // - 出参 endOffsetOut：命中时写入选区最大偏移加一（不包含）；
-    // - 返回：有选区返回 true；无选区返回 false，且两个出参保持原值不被修改。
-    bool selectionRange(std::uint64_t& startOffsetOut, std::uint64_t& endOffsetOut) const;
 
 signals:
     // byteEdited：
-    // - 作用：用户编辑字节后触发；
+    // - 作用：用户编辑使缓冲里的字节真的变了时触发，每个变化字节恰好一次；
     // - absoluteAddress：被修改字节的绝对地址；
     // - oldValue：修改前字节；
     // - newValue：修改后字节。
@@ -206,14 +185,15 @@ signals:
         std::uint8_t newValue);
 
     // currentAddressChanged：
-    // - 作用：用户切换选中单元格时触发。
+    // - 作用：插入点（当前选中字节）移动时触发；
+    // - absoluteAddress：新的插入点绝对地址。
     void currentAddressChanged(std::uint64_t absoluteAddress);
 
     // selectionChanged：
-    // - 作用：选区刷新时触发，让外部感知“选了哪一段字节”；
-    // - startOffset：选区最小偏移（包含），无选区时为 0；
-    // - endOffset：选区最大偏移加一（不包含），无选区时为 0；
-    // - hasSelection：true 表示当前存在有效选区，false 表示选区为空。
+    // - 作用：选区变化时触发，让外部感知"选了哪一段字节"；
+    // - startOffset：选区最小偏移（包含，相对基址），无选区时为 0；
+    // - endOffset：选区最大偏移加一（不包含，相对基址），无选区时为 0；
+    // - hasSelection：true 表示当前存在有效选区，false 表示无数据（没有选区）。
     void selectionChanged(
         std::uint64_t startOffset,
         std::uint64_t endOffset,
@@ -230,461 +210,19 @@ signals:
         bool hasByte);
 
 private:
-    // SearchPattern：
-    // - 作用：描述查找模式解析后的字节模板。
-    struct SearchPattern
-    {
-        QByteArray patternBytes;
-        QByteArray maskBytes;
-        QString normalizeText;
-    };
-
-    // NavigateDirection：
-    // - 作用：记录“异步查找完成后应如何自动定位”。
-    enum class NavigateDirection : int
-    {
-        None = 0,
-        Next,
-        Previous
-    };
+    // applyStoredReference：
+    // - 作用：把 m_referenceOriginal / m_referencePrevious 应用到 HexView；
+    // - 参照为空时清除 HexView 的参照；HexView 拒绝参照（暂存超限等）时同步清空本地记录，
+    //   保证"本地记录 == HexView 里实际生效的参照"这一不变式。
+    void applyStoredReference();
 
 private:
-    // initializeUi：
-    // - 作用：创建主布局、工具栏、查找面板、跳转面板和表格。
-    void initializeUi();
+    // m_view：内部的 HexView，本控件的子控件，生命周期由 Qt 对象树管理。
+    ks::ui::HexView* m_view = nullptr;
 
-    // initializeConnections：
-    // - 作用：连接编辑、右键、快捷键和工具按钮。
-    void initializeConnections();
+    // m_referenceOriginal：HexView 里当前生效的 original 参照；空表示没有生效的参照。
+    QByteArray m_referenceOriginal;
 
-    // rebuildTable：
-    // - 作用：按 m_buffer 当前内容重建整个十六进制表格。
-    void rebuildTable();
-
-    // updateHeaderText：
-    // - 作用：重建表头（地址 + 字节列 + ASCII）。
-    void updateHeaderText();
-
-    // updateSummaryLabel：
-    // - 作用：刷新顶部摘要文本（长度、基址、模式）。
-    void updateSummaryLabel();
-
-    // updateStatusLabel：
-    // - 作用：刷新底部状态文本。
-    void updateStatusLabel(const QString& statusText);
-
-    // initializeSelectionInspector：
-    // - 作用：创建底部“选区检查器”面板；
-    // - 展示起止地址、HEX/ASCII/UTF-16 和整数解释。
-    void initializeSelectionInspector();
-
-    // updateSelectionInspector：
-    // - 作用：按当前选区刷新检查器文本；
-    // - 无选区时回退显示当前字节或占位内容。
-    void updateSelectionInspector();
-
-    // buildSelectedByteArray：
-    // - 作用：把当前选区转换为连续展示用字节数组；
-    // - 按偏移升序输出，供各类预览格式复用。
-    QByteArray buildSelectedByteArray() const;
-
-    // formatSelectionHexPreview：
-    // - 作用：把选中字节格式化为 HEX 预览文本；
-    // - 过长时自动截断并标注省略。
-    QString formatSelectionHexPreview(const QByteArray& selectedBytes) const;
-
-    // formatSelectionAsciiPreview：
-    // - 作用：把选中字节格式化为 ASCII 预览文本；
-    // - 不可打印字符统一显示为 '.'，不做长度截断。
-    QString formatSelectionAsciiPreview(const QByteArray& selectedBytes) const;
-
-    // formatSelectionUtf16Preview：
-    // - 作用：按 UTF-16LE 尝试解码选区内容；
-    // - 长度不足两个字节时显示不可用提示。
-    QString formatSelectionUtf16Preview(const QByteArray& selectedBytes) const;
-
-    // formatSelectionIntegerPreview：
-    // - 作用：按首 1/2/4/8 字节解释整数与浮点；
-    // - 便于快速判断选区像不像数值字段。
-    QString formatSelectionIntegerPreview(const QByteArray& selectedBytes) const;
-
-    // updateAsciiCellByRow：
-    // - 作用：更新指定行的 ASCII 列显示。
-    void updateAsciiCellByRow(int rowIndex);
-
-    // refreshAsciiTabText：
-    // - 作用：把当前缓冲区完整 ASCII 文本同步到 ASCII 页编辑器。
-    void refreshAsciiTabText();
-
-    // updateRowHighlightByRow：
-    // - 作用：根据查找命中掩码刷新指定行背景色。
-    void updateRowHighlightByRow(int rowIndex);
-    void applyChangeHighlight(QTableWidgetItem* byteItem, std::uint64_t offset);
-    void refreshChangeHighlights();
-
-    // updateSelectionHighlightRange：
-    // - 作用：按“旧选区 + 新选区”的并集刷新受影响行；
-    // - 避免每次拖拽都重建整张表。
-    void updateSelectionHighlightRange(
-        bool oldRangeValid,
-        std::uint64_t oldStartOffset,
-        std::uint64_t oldEndOffset,
-        bool newRangeValid,
-        std::uint64_t newStartOffset,
-        std::uint64_t newEndOffset);
-
-    // parseAddressNumber：
-    // - 作用：解析十进制/十六进制数字文本。
-    bool parseAddressNumber(const QString& text, std::uint64_t& valueOut) const;
-
-    // parseSearchPattern：
-    // - 作用：按查找模式把输入文本解析为可匹配字节模板。
-    bool parseSearchPattern(
-        SearchMode mode,
-        const QString& text,
-        SearchPattern& patternOut,
-        QString& errorTextOut) const;
-
-    // parseHexPattern：
-    // - 作用：解析 HEX 模式输入（支持 ?? 通配）。
-    bool parseHexPattern(
-        const QString& text,
-        SearchPattern& patternOut,
-        QString& errorTextOut) const;
-
-    // parseAsciiPattern：
-    // - 作用：解析 ASCII/UTF-16 模式输入。
-    bool parseAsciiPattern(
-        SearchMode mode,
-        const QString& text,
-        SearchPattern& patternOut,
-        QString& errorTextOut) const;
-
-    // ensureSearchResultReady：
-    // - 作用：确保当前输入对应的查找结果可用；
-    // - direction：用户请求的导航方向；
-    // - startOffset：导航起点偏移；
-    // - 返回：true=结果可直接使用；false=已启动异步查找。
-    bool ensureSearchResultReady(
-        NavigateDirection direction,
-        std::uint64_t startOffset);
-
-    // startSearchAsync：
-    // - 作用：异步扫描当前缓冲区，避免阻塞 UI。
-    void startSearchAsync(
-        const SearchPattern& pattern,
-        SearchMode mode,
-        const QString& searchText,
-        NavigateDirection direction,
-        std::uint64_t startOffset);
-
-    // applySearchResult：
-    // - 作用：应用异步查找结果并执行待处理导航。
-    void applySearchResult(
-        std::uint64_t ticket,
-        const std::vector<std::uint64_t>& matchOffsets,
-        int matchLength,
-        SearchMode mode,
-        const QString& searchText,
-        const QString& normalizedText,
-        std::uint64_t dataRevision);
-
-    // clearSearchState：
-    // - 作用：清空查找缓存与高亮。
-    void clearSearchState();
-
-    // gotoMatchByDirection：
-    // - 作用：按方向跳转到上一个/下一个命中项。
-    void gotoMatchByDirection(
-        NavigateDirection direction,
-        std::uint64_t startOffset);
-
-    // setCurrentMatchIndex：
-    // - 作用：设置当前命中索引并滚动/选中。
-    void setCurrentMatchIndex(int matchIndex);
-
-    // selectRangeByOffset：
-    // - 作用：按偏移范围选中单元格。
-    void selectRangeByOffset(
-        std::uint64_t offset,
-        int length,
-        bool scrollToCenter);
-
-    // selectLinearRange：
-    // - 作用：按“文本式线性区间”选中字节；
-    // - 选区起点和终点都包含，跨行时保持连续字节语义。
-    void selectLinearRange(
-        std::uint64_t anchorOffset,
-        std::uint64_t currentOffset,
-        bool scrollToCurrent);
-
-    // rowColumnToOffset：
-    // - 作用：把“行列”转换为字节偏移；
-    // - 返回 true 表示该单元格对应有效字节。
-    bool rowColumnToOffset(
-        int row,
-        int column,
-        std::uint64_t& offsetOut) const;
-
-    // offsetToRowColumn：
-    // - 作用：把字节偏移转换为“行列”。
-    bool offsetToRowColumn(
-        std::uint64_t offset,
-        int& rowOut,
-        int& columnOut) const;
-
-    // viewportPosToOffset：
-    // - 作用：把视口坐标映射为字节偏移；
-    // - 支持越界坐标夹取，便于拖拽到边缘时保持连续选择。
-    bool viewportPosToOffset(
-        const QPoint& viewportPos,
-        std::uint64_t& offsetOut) const;
-
-    // collectSelectedOffsets：
-    // - 作用：收集当前选中的全部字节偏移。
-    std::vector<std::uint64_t> collectSelectedOffsets() const;
-
-    // copySelectedAsHex：
-    // - 作用：复制选中字节为十六进制文本。
-    void copySelectedAsHex();
-
-    // copySelectedAsAscii：
-    // - 作用：复制选中字节为 ASCII 文本。
-    void copySelectedAsAscii();
-
-    // copyCurrentAddress：
-    // - 作用：复制当前单元格地址。
-    void copyCurrentAddress();
-
-    // copyCurrentRowDump：
-    // - 作用：复制当前行“地址 + HEX + ASCII”文本。
-    void copyCurrentRowDump();
-
-    // exportBinaryFile：
-    // - 作用：导出当前缓冲区为二进制文件。
-    void exportBinaryFile();
-
-    // exportHexTextFile：
-    // - 作用：导出当前缓冲区为十六进制文本文件。
-    void exportHexTextFile();
-
-    // exportSelectedHexDataFile：
-    // - 作用：把当前选中区域导出为纯 HEX 字节文本文件。
-    void exportSelectedHexDataFile();
-
-    // buildRowDumpText：
-    // - 作用：构造指定行的转储文本。
-    QString buildRowDumpText(int rowIndex) const;
-
-    // buildFullDumpText：
-    // - 作用：构造全部数据的转储文本。
-    QString buildFullDumpText() const;
-
-private:
-    // m_rootLayout：根布局。
-    QVBoxLayout* m_rootLayout = nullptr;
-
-    // m_toolbarLayout：顶部工具区布局。
-    QHBoxLayout* m_toolbarLayout = nullptr;
-
-    // m_summaryLabel：显示当前数据长度、基址、行宽。
-    QLabel* m_summaryLabel = nullptr;
-
-    // m_bytesPerRowCombo：每行字节数选择框。
-    QComboBox* m_bytesPerRowCombo = nullptr;
-
-    // m_findButton：打开查找面板按钮。
-    QToolButton* m_findButton = nullptr;
-
-    // m_jumpButton：打开跳转面板按钮。
-    QToolButton* m_jumpButton = nullptr;
-
-    // m_exportButton：导出按钮。
-    QToolButton* m_exportButton = nullptr;
-
-    // m_findPanel：查找面板容器。
-    QWidget* m_findPanel = nullptr;
-
-    // m_findLayout：查找面板布局。
-    QHBoxLayout* m_findLayout = nullptr;
-
-    // m_findModeCombo：查找模式下拉框。
-    QComboBox* m_findModeCombo = nullptr;
-
-    // m_findEdit：查找输入框。
-    QLineEdit* m_findEdit = nullptr;
-
-    // m_findPrevButton：查找上一个按钮。
-    QToolButton* m_findPrevButton = nullptr;
-
-    // m_findNextButton：查找下一个按钮。
-    QToolButton* m_findNextButton = nullptr;
-
-    // m_findCloseButton：关闭查找面板按钮。
-    QToolButton* m_findCloseButton = nullptr;
-
-    // m_findResultLabel：显示查找结果统计。
-    QLabel* m_findResultLabel = nullptr;
-
-    // m_jumpPanel：跳转面板容器。
-    QWidget* m_jumpPanel = nullptr;
-
-    // m_jumpLayout：跳转面板布局。
-    QHBoxLayout* m_jumpLayout = nullptr;
-
-    // m_jumpModeCombo：跳转模式（绝对地址/偏移/行号）。
-    QComboBox* m_jumpModeCombo = nullptr;
-
-    // m_jumpEdit：跳转输入框。
-    QLineEdit* m_jumpEdit = nullptr;
-
-    // m_jumpApplyButton：执行跳转按钮。
-    QToolButton* m_jumpApplyButton = nullptr;
-
-    // m_jumpCloseButton：关闭跳转面板按钮。
-    QToolButton* m_jumpCloseButton = nullptr;
-
-    // m_viewTabWidget：主视图区 Tab（HEX / ASCII）。
-    QTabWidget* m_viewTabWidget = nullptr;
-
-    // m_hexViewPage：HEX 页面容器。
-    QWidget* m_hexViewPage = nullptr;
-
-    // m_asciiViewPage：ASCII 页面容器。
-    QWidget* m_asciiViewPage = nullptr;
-
-    // m_asciiEditor：ASCII 页使用的内置文本编辑器（只读）。
-    CodeEditorWidget* m_asciiEditor = nullptr;
-
-    // m_hexTable：十六进制数据表格（位于 HEX 页面）。
-    QTableWidget* m_hexTable = nullptr;
-
-    // m_selectionInspectorPanel：底部选区检查器容器。
-    QWidget* m_selectionInspectorPanel = nullptr;
-
-    // m_selectionInspectorLayout：选区检查器布局。
-    QGridLayout* m_selectionInspectorLayout = nullptr;
-
-    // m_selectionSummaryLabel：显示选区起止地址、长度等摘要。
-    QLabel* m_selectionSummaryLabel = nullptr;
-
-    // m_selectionHexPreviewLabel：显示 HEX 预览文本。
-    QLabel* m_selectionHexPreviewLabel = nullptr;
-
-    // m_selectionAsciiPreviewLabel：显示 ASCII 预览文本。
-    QLabel* m_selectionAsciiPreviewLabel = nullptr;
-
-    // m_selectionUtf16PreviewLabel：显示 UTF-16 预览文本。
-    QLabel* m_selectionUtf16PreviewLabel = nullptr;
-
-    // m_selectionIntegerPreviewLabel：显示整数/浮点解释文本。
-    QLabel* m_selectionIntegerPreviewLabel = nullptr;
-
-    // m_statusLabel：底部状态文本。
-    QLabel* m_statusLabel = nullptr;
-
-    // m_findShortcut：Ctrl+F 快捷键。
-    QShortcut* m_findShortcut = nullptr;
-
-    // m_jumpShortcut：Ctrl+G 快捷键。
-    QShortcut* m_jumpShortcut = nullptr;
-
-    // m_findNextShortcut：F3 快捷键。
-    QShortcut* m_findNextShortcut = nullptr;
-
-    // m_findPrevShortcut：Shift+F3 快捷键。
-    QShortcut* m_findPrevShortcut = nullptr;
-
-    // m_copyHexShortcut：Ctrl+C 复制 HEX。
-    QShortcut* m_copyHexShortcut = nullptr;
-
-    // m_copyAsciiShortcut：Ctrl+Shift+C 复制 ASCII。
-    QShortcut* m_copyAsciiShortcut = nullptr;
-
-    // m_buffer：当前显示的数据副本。
-    QByteArray m_buffer;
-    QByteArray m_changeBaseline;
-    QByteArray m_previousRead;
-    QByteArray m_recentChangeMask;
-
-    // m_baseAddress：当前数据基址。
-    std::uint64_t m_baseAddress = 0;
-
-    // m_editable：当前是否允许编辑字节。
-    bool m_editable = false;
-
-    // m_bytesPerRow：当前每行字节数。
-    int m_bytesPerRow = 16;
-
-    // m_ignoreItemChanged：程序内部回填时禁止触发编辑逻辑。
-    bool m_ignoreItemChanged = false;
-
-    // m_matchMask：查找高亮掩码（1=该字节命中）。
-    QByteArray m_matchMask;
-
-    // m_matchOffsets：查找命中的起始偏移列表。
-    std::vector<std::uint64_t> m_matchOffsets;
-
-    // m_currentMatchIndex：当前命中索引，-1 表示无命中。
-    int m_currentMatchIndex = -1;
-
-    // m_currentMatchLength：当前命中长度（字节）。
-    int m_currentMatchLength = 0;
-
-    // m_lastSearchMode：上次查找模式。
-    SearchMode m_lastSearchMode = SearchMode::HexBytes;
-
-    // m_lastSearchText：上次查找原始输入。
-    QString m_lastSearchText;
-
-    // m_lastSearchNormalizeText：上次查找标准化展示文本。
-    QString m_lastSearchNormalizeText;
-
-    // m_bufferRevision：数据版本号（数据变化时递增）。
-    std::uint64_t m_bufferRevision = 0;
-
-    // m_searchReadyRevision：查找结果对应的数据版本。
-    std::uint64_t m_searchReadyRevision = 0;
-
-    // m_searchTicket：异步查找票据（用于丢弃过期结果）。
-    std::atomic<std::uint64_t> m_searchTicket{ 0 };
-
-    // m_searchRunning：当前是否存在进行中的异步查找。
-    bool m_searchRunning = false;
-
-    // m_pendingDirection：查找完成后待执行导航方向。
-    NavigateDirection m_pendingDirection = NavigateDirection::None;
-
-    // m_pendingStartOffset：查找完成后待执行导航起点。
-    std::uint64_t m_pendingStartOffset = 0;
-
-    // m_linearSelectDragging：
-    // - 作用：标记当前是否处于鼠标左键拖拽选择流程。
-    bool m_linearSelectDragging = false;
-
-    // m_linearSelectAnchorOffset：
-    // - 作用：记录文本式拖拽选择锚点偏移。
-    std::uint64_t m_linearSelectAnchorOffset = 0;
-
-    // m_linearSelectAnchorValid：
-    // - 作用：标记锚点偏移是否有效。
-    bool m_linearSelectAnchorValid = false;
-
-    // m_selectionVisualAsciiColumn：
-    // - 作用：标记当前线性选区是否以 ASCII 列作为视觉高亮目标；
-    // - true 时只在 ASCII 列显示跨行选中，false 时在十六进制字节列显示。
-    bool m_selectionVisualAsciiColumn = false;
-
-    // m_selectionRangeValid：
-    // - 作用：标记当前是否存在自定义线性选区；
-    // - 选区本体始终以“字节偏移区间”保存，便于复制/解析逻辑复用。
-    bool m_selectionRangeValid = false;
-
-    // m_selectionRangeStartOffset：
-    // - 作用：记录当前选区起始偏移（包含）。
-    std::uint64_t m_selectionRangeStartOffset = 0;
-
-    // m_selectionRangeEndOffset：
-    // - 作用：记录当前选区结束偏移（包含）。
-    std::uint64_t m_selectionRangeEndOffset = 0;
+    // m_referencePrevious：HexView 里当前生效的 previousRead 参照；空表示没有。
+    QByteArray m_referencePrevious;
 };
