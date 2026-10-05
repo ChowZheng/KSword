@@ -217,7 +217,8 @@ namespace ks::file
     struct HandleUsageEntry
     {
         std::uint32_t processId = 0;
-        std::uint64_t processCreationTime = 0; // processCreationTime：GetProcessTimes 创建时间，防止 PID 复用。
+        std::uint64_t processCreationTime = 0; // R0 owner creation time, or GetProcessTimes fallback.
+        std::uint64_t objectAddress = 0; // Captured handle object identity; comparison only.
         std::wstring processName;
         std::wstring processImagePath;
         std::uint64_t handleValue = 0;
@@ -258,6 +259,7 @@ namespace ks::file
         bool kernelHandleTableAttempted = false; // kernelHandleTableAttempted：本轮是否先调用了 R0 HandleTable 路径。
         bool kernelHandleTableUsed = false;      // kernelHandleTableUsed：R0 路径是否可用并作为文件句柄结果来源。
         bool r3HandleFallbackUsed = false;       // r3HandleFallbackUsed：R0 不可用后是否回落到 R3 DuplicateHandle。
+        bool fileHandleScanIncomplete = false; // Timed out or exhausted bounded R3 query workers.
         std::uint64_t elapsedMs = 0;
         std::wstring diagnosticText;
     };

@@ -41,6 +41,8 @@ namespace
     constexpr std::uint32_t kFileHandleCount = 100;
     constexpr std::uint32_t kNonFileTypeIndex = 42;
     constexpr std::uint32_t kFileTypeIndex = 37;
+    constexpr std::uint64_t kCapturedCreationTime = 123456789ULL;
+    constexpr std::uint64_t kCapturedObjectAddress = 0xFFFF800012340000ULL;
     constexpr long kNtStatusInvalidCid =
         static_cast<long>(static_cast<std::int32_t>(0xC000000BU));
     constexpr wchar_t kTargetPath[] = L"C:\\ksword-regression\\occupied.dat";
@@ -148,6 +150,8 @@ namespace ksword::ark
                 HandleEntry entry{};
                 entry.processId = processId;
                 entry.handleValue = kHandleBase + index;
+                entry.processCreationTime100ns = kCapturedCreationTime;
+                entry.objectAddress = kCapturedObjectAddress + index;
                 entry.grantedAccess = 0x00120089;
                 entry.objectTypeIndex = index < kNonFileHandleCount
                     ? kNonFileTypeIndex
@@ -300,8 +304,71 @@ namespace ks::str
     }
 }
 
-int wmain()
+int wmain(int argc, wchar_t* argv[])
 {
+    if (argc == 4 && std::wstring(argv[1]) == L"--hold")
+    {
+        const std::wstring base = argv[3];
+        HANDLE ready = OpenEventW(EVENT_MODIFY_STATE, FALSE, (base + L"-ready").c_str());
+        HANDLE stop = OpenEventW(SYNCHRONIZE, FALSE, (base + L"-stop").c_str());
+        HANDLE file = CreateFileW(argv[2], GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE |
+            FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (!ready || !stop || file == INVALID_HANDLE_VALUE) { return 20; }
+        SetEvent(ready);
+        WaitForSingleObject(stop, 15000);
+        CloseHandle(file);
+        CloseHandle(stop);
+        CloseHandle(ready);
+        return 0;
+    }
+    if (argc == 2 && std::wstring(argv[1]) == L"--r3-live")
+    {
+        wchar_t tempDirectory[MAX_PATH]{};
+        wchar_t tempFile[MAX_PATH]{};
+        wchar_t executable[MAX_PATH]{};
+        if (!GetTempPathW(MAX_PATH, tempDirectory) ||
+            !GetTempFileNameW(tempDirectory, L"ksq", 0, tempFile) ||
+            !GetModuleFileNameW(nullptr, executable, MAX_PATH)) { return 21; }
+        const std::wstring base = L"Local\\KswordHandleScanTest-" + std::to_wstring(GetCurrentProcessId());
+        HANDLE ready = CreateEventW(nullptr, TRUE, FALSE, (base + L"-ready").c_str());
+        HANDLE stop = CreateEventW(nullptr, TRUE, FALSE, (base + L"-stop").c_str());
+        std::wstring command = L"\"" + std::wstring(executable) + L"\" --hold \"" + tempFile + L"\" \"" + base + L"\"";
+        STARTUPINFOW startup{};
+        startup.cb = sizeof(startup);
+        PROCESS_INFORMATION child{};
+        if (!CreateProcessW(executable, command.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW,
+            nullptr, nullptr, &startup, &child)) { return 22; }
+        const auto cleanup = [&]()
+        {
+            SetEvent(stop);
+            WaitForSingleObject(child.hProcess, 3000);
+            CloseHandle(child.hThread);
+            CloseHandle(child.hProcess);
+            CloseHandle(ready);
+            CloseHandle(stop);
+            DeleteFileW(tempFile);
+        };
+        if (WaitForSingleObject(ready, 3000) != WAIT_OBJECT_0) { cleanup(); return 23; }
+        ks::file::HandleUsageScanOptions options;
+        options.tryKernelHandleTable = false;
+        unsigned updates = 0;
+        options.progressCallback = [&updates](const std::string& stage, float progress)
+        {
+            if (stage == "扫描文件句柄" && progress > 35.0f && progress < 90.0f) { ++updates; }
+        };
+        const auto result = ks::file::ScanHandleUsageByPaths({tempFile}, options);
+        bool found = false;
+        for (const auto& entry : result.entries)
+        {
+            if (entry.processId == child.dwProcessId && entry.handleValue && entry.processCreationTime)
+                found = true;
+        }
+        std::cout << "LIVE_R3_FOUND=" << found << " FILE_LIKE_HANDLES=" << result.fileLikeHandleCount
+            << " MATCHED=" << result.matchedHandleCount << " PROGRESS_UPDATES=" << updates
+            << " INCOMPLETE=" << result.fileHandleScanIncomplete << " ELAPSED_MS=" << result.elapsedMs << '\n';
+        cleanup();
+        return found && result.fileLikeHandleCount >= result.matchedHandleCount ? 0 : 24;
+    }
     ks::file::HandleUsageScanOptions emptyOptions{};
     emptyOptions.tryKernelHandleTable = true;
     emptyOptions.progressCallback = [](const std::string& stepText, float)
@@ -423,6 +490,11 @@ int wmain()
     {
         return 6;
     }
+    if (result.entries.front().processCreationTime != kCapturedCreationTime ||
+        result.entries.front().objectAddress != kCapturedObjectAddress + kNonFileHandleCount)
+    {
+        return 25;
+    }
     if (!g_enumQuietFlagObserved.load(std::memory_order_acquire))
     {
         return 10;
@@ -436,7 +508,7 @@ int wmain()
     {
         return 13;
     }
-    if (!quietInvalidCid || nonQuietInvalidCid || quietAccessDenied)
+    if constexpr (!quietInvalidCid || nonQuietInvalidCid || quietAccessDenied)
     {
         return 14;
     }

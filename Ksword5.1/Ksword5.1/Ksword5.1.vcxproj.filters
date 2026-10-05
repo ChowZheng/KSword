@@ -2208,6 +2208,9 @@
     <ClInclude Include="ksword\file\file_handle_tools.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="ksword\file\file_handle_query_worker.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="ksword\file\file_metadata_transaction.h">
       <Filter>Header Files</Filter>
     </ClInclude>

@@ -75,6 +75,8 @@
 #include <QListView>
 #include <QMenu>
 #include <QMessageBox>
+#include <QFutureWatcher>
+#include <QtConcurrent/QtConcurrentRun>
 #include <QMetaObject>
 #include <QMimeDatabase>
 #include <QMimeType>
@@ -7457,6 +7459,7 @@ namespace
             std::uint32_t processId = 0;
             std::uint64_t processCreationTime = 0;
             std::uint64_t handleValue = 0;
+            std::uint64_t objectAddress = 0;
             QString processName;
             QString matchedTargetPath;
             bool matchedByDirectoryRule = false;
@@ -7467,6 +7470,7 @@ namespace
         static constexpr int usageHandleValueRole = Qt::UserRole + 2;
         static constexpr int usageMatchedTargetPathRole = Qt::UserRole + 3;
         static constexpr int usageDirectoryMatchRole = Qt::UserRole + 4;
+        static constexpr int usageObjectAddressRole = Qt::UserRole + 5;
 
         static bool readUsageSelection(QTreeWidget* table, UsageSelection& selectionOut)
         {
@@ -7482,6 +7486,7 @@ namespace
             selectionOut.processCreationTime =
                 item->data(0, usageProcessCreationTimeRole).toULongLong();
             selectionOut.handleValue = item->data(0, usageHandleValueRole).toULongLong();
+            selectionOut.objectAddress = item->data(0, usageObjectAddressRole).toULongLong();
             selectionOut.processName = item->text(1);
             selectionOut.matchedTargetPath = item->data(0, usageMatchedTargetPathRole).toString();
             selectionOut.matchedByDirectoryRule = item->data(0, usageDirectoryMatchRole).toBool();
@@ -7493,6 +7498,7 @@ namespace
             QLabel* statusLabel,
             QPushButton* refreshButton)
         {
+            if (m_usageCloseInProgress) { return; }
             UsageSelection selection;
             if (!readUsageSelection(table, selection))
             {
@@ -7527,12 +7533,70 @@ namespace
             refreshUsageTable(table, statusLabel, refreshButton);
         }
 
+        void closeSelectedUsageHandleR0(
+            QTreeWidget* table, QLabel* statusLabel, QPushButton* refreshButton,
+            const QList<QPushButton*>& actionButtons)
+        {
+            // Copy the selected identity before the confirmation's nested event loop.
+            UsageSelection selection;
+            if (m_usageCloseInProgress || m_usageScanInProgress ||
+                !readUsageSelection(table, selection) || selection.processId <= 4U ||
+                selection.processId == static_cast<std::uint32_t>(::GetCurrentProcessId()) ||
+                isCriticalProcessName(selection.processName) || selection.processCreationTime == 0U ||
+                selection.objectAddress == 0U || selection.handleValue == 0U ||
+                selection.handleValue >= 0x80000000ULL)
+            {
+                return;
+            }
+            QPointer<FileDetailDialog> guard(this);
+            const QString title = ks::i18n::sourceText(QStringLiteral("关闭句柄（R0）"));
+            const QString confirmation = ks::i18n::sourceText(QStringLiteral(
+                "确认由 R0 关闭选中的文件句柄？\nPID=%1\nHandle=%2\n文件=%3"))
+                .arg(selection.processId).arg(formatHex64(selection.handleValue)).arg(selection.matchedTargetPath);
+            const auto answer = QMessageBox::question(this, title, confirmation,
+                QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+            if (guard == nullptr || answer != QMessageBox::Yes || m_usageCloseInProgress || m_usageScanInProgress)
+                return;
+
+            m_usageCloseInProgress = true;
+            table->setEnabled(false);
+            refreshButton->setEnabled(false);
+            for (QPushButton* button : actionButtons) { button->setEnabled(false); }
+            statusLabel->setText(ks::i18n::sourceText(QStringLiteral("● 正在由 R0 关闭选中的文件句柄...")));
+
+            // Only value identity crosses into the worker; DriverClient owns all device access.
+            auto* watcher = new QFutureWatcher<ksword::ark::IoResult>(this);
+            connect(watcher, &QFutureWatcher<ksword::ark::IoResult>::finished, this,
+                [this, watcher, table, statusLabel, refreshButton, title]()
+                {
+                    const auto result = watcher->result();
+                    watcher->deleteLater();
+                    m_usageCloseInProgress = false;
+                    table->setEnabled(true);
+                    refreshButton->setEnabled(true);
+                    // Refresh failures too: close may have succeeded while process resume failed.
+                    refreshUsageTable(table, statusLabel, refreshButton);
+                    if (!result.ok)
+                    {
+                        QMessageBox::warning(this, title,
+                            ks::i18n::sourceText(QStringLiteral("句柄关闭操作未完整完成。\n%1"))
+                                .arg(QString::fromStdString(result.message)));
+                    }
+                });
+            watcher->setFuture(QtConcurrent::run([selection]()
+                {
+                    return ksword::ark::DriverClient().closeHandle(selection.processId, selection.handleValue,
+                        selection.processCreationTime, selection.objectAddress);
+                }));
+        }
+
         void terminateSelectedUsageProcess(
             QTreeWidget* table,
             QLabel* statusLabel,
             QPushButton* refreshButton,
             const bool useKernelDriver)
         {
+            if (m_usageCloseInProgress) { return; }
             UsageSelection selection;
             if (!readUsageSelection(table, selection))
             {
@@ -7593,7 +7657,7 @@ namespace
             // 用途：异步刷新属性页内的文件占用列表。
             // 处理：调用 FileHandleUsageScanner，结果显示 PID/Handle/GrantedAccess/来源。
             // 返回：无。
-            if (table == nullptr || statusLabel == nullptr || refreshButton == nullptr)
+            if (m_usageCloseInProgress || table == nullptr || statusLabel == nullptr || refreshButton == nullptr)
             {
                 return;
             }
@@ -7719,6 +7783,7 @@ namespace
                                     item->setData(0, usageHandleValueRole, static_cast<qulonglong>(entry.handleValue));
                                     item->setData(0, usageMatchedTargetPathRole, entry.matchedTargetPath);
                                     item->setData(0, usageDirectoryMatchRole, entry.matchedByDirectoryRule);
+                                    item->setData(0, usageObjectAddressRole, static_cast<qulonglong>(entry.objectAddress));
                                     tableGuard->addTopLevelItem(item);
                                 }
                                 tableGuard->setSortingEnabled(true);
@@ -7739,6 +7804,10 @@ namespace
                                     .arg(scanSnapshot->totalHandleCount)
                                     .arg(scanSnapshot->fileLikeHandleCount)
                                     .arg(scanSnapshot->matchedHandleCount);
+                                if (scanSnapshot->fileHandleScanIncomplete)
+                                {
+                                    statusText += ks::i18n::sourceText(QStringLiteral(" | 扫描不完整：部分文件句柄路径查询超时或阻塞。"));
+                                }
                                 if (!scanSnapshot->diagnosticText.trimmed().isEmpty())
                                 {
                                     statusText += QStringLiteral(
@@ -11540,6 +11609,7 @@ namespace
             //       Scanner 先调用 R0 HandleTable；R0 未启用时由全局入口提示用户，
             //       本轮回落 R3，服务启用成功后属性页再自动重扫一次。
             QWidget* page = new QWidget(this);
+            page->setAttribute(Qt::WA_AlwaysShowToolTips);
             QVBoxLayout* layout = new QVBoxLayout(page);
 
             QHBoxLayout* toolbarLayout = new QHBoxLayout();
@@ -11553,6 +11623,12 @@ namespace
             closeHandleButton->setIconSize(QSize(16, 16));
             closeHandleButton->setToolTip(QStringLiteral("校验选中记录后，从用户态关闭该远程文件句柄"));
             closeHandleButton->setEnabled(false);
+
+            QPushButton* closeHandleR0Button = new QPushButton(QStringLiteral("关闭句柄（R0）"), page);
+            closeHandleR0Button->setIcon(QIcon(QStringLiteral(":/Icon/handle_close.svg")));
+            closeHandleR0Button->setIconSize(QSize(16, 16));
+            closeHandleR0Button->setToolTip(QStringLiteral("校验进程和对象身份后，由 KswordARK 驱动关闭选中的文件句柄"));
+            closeHandleR0Button->setEnabled(false);
 
             QPushButton* terminateR3Button = new QPushButton(QStringLiteral("结束进程（R3）"), page);
             terminateR3Button->setIcon(QIcon(QStringLiteral(":/Icon/process_terminate.svg")));
@@ -11570,6 +11646,7 @@ namespace
             statusLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
             toolbarLayout->addWidget(refreshButton, 0);
             toolbarLayout->addWidget(closeHandleButton, 0);
+            toolbarLayout->addWidget(closeHandleR0Button, 0);
             toolbarLayout->addWidget(terminateR3Button, 0);
             toolbarLayout->addWidget(terminateR0Button, 0);
             toolbarLayout->addStretch(1);
@@ -11612,7 +11689,7 @@ namespace
                     refreshUsageTable(table, statusLabel, refreshButton);
                 });
             connect(table, &QTreeWidget::currentItemChanged, this,
-                [closeHandleButton, terminateR3Button, terminateR0Button](QTreeWidgetItem* currentItem)
+                [this, closeHandleButton, closeHandleR0Button, terminateR3Button, terminateR0Button](QTreeWidgetItem* currentItem)
                 {
                     const std::uint32_t processId = currentItem == nullptr
                         ? 0U
@@ -11624,10 +11701,33 @@ namespace
                         ? 0U
                         : currentItem->data(0, usageHandleValueRole).toULongLong();
                     const QString processName = currentItem == nullptr ? QString() : currentItem->text(1);
-                    const bool processActionAllowed = processId > 4U &&
+                    const std::uint64_t objectAddress = currentItem == nullptr ? 0U
+                        : currentItem->data(0, usageObjectAddressRole).toULongLong();
+                    const bool processActionAllowed = !m_usageCloseInProgress && processId > 4U &&
                         processId != static_cast<std::uint32_t>(::GetCurrentProcessId()) &&
                         creationTime != 0U && !isCriticalProcessName(processName);
                     closeHandleButton->setEnabled(processActionAllowed && handleValue != 0U);
+                    closeHandleR0Button->setEnabled(processActionAllowed && handleValue != 0U &&
+                        handleValue < 0x80000000ULL && objectAddress != 0U);
+                    QString closeReason = QStringLiteral("校验选中记录后，从用户态关闭该远程文件句柄");
+                    if (currentItem != nullptr && handleValue == 0U)
+                        closeReason = QStringLiteral("无句柄值：该来源可能是进程映像/模块映射，不能用 R3 关闭句柄处理");
+                    else if (processId == static_cast<std::uint32_t>(::GetCurrentProcessId()))
+                        closeReason = QStringLiteral("已保护：当前 Ksword 进程，不可关闭句柄");
+                    else if (currentItem != nullptr && (processId <= 4U || isCriticalProcessName(processName)))
+                        closeReason = QStringLiteral("已保护：关键系统进程，不可关闭句柄");
+                    else if (currentItem != nullptr && creationTime == 0U)
+                        closeReason = QStringLiteral("无法确认进程身份，请重新扫描后再关闭句柄。");
+                    closeHandleButton->setToolTip(ks::i18n::sourceText(closeReason));
+                    if (currentItem != nullptr)
+                        currentItem->setToolTip(2, ks::i18n::sourceText(closeReason));
+                    QString r0Reason = QStringLiteral("校验进程和对象身份后，由 KswordARK 驱动关闭选中的文件句柄");
+                    if (currentItem != nullptr && handleValue == 0U)
+                        r0Reason = QStringLiteral("模块或映像映射没有可关闭的文件句柄。");
+                    else if (!processActionAllowed) { r0Reason = closeReason; }
+                    else if (objectAddress == 0U || handleValue >= 0x80000000ULL)
+                        r0Reason = QStringLiteral("缺少可验证的用户句柄对象身份，请启用 R0 后重新扫描。");
+                    closeHandleR0Button->setToolTip(ks::i18n::sourceText(r0Reason));
                     terminateR3Button->setEnabled(processActionAllowed);
                     terminateR0Button->setEnabled(processActionAllowed);
                 });
@@ -11635,6 +11735,13 @@ namespace
                 [this, table, statusLabel, refreshButton]()
                 {
                     closeSelectedUsageHandle(table, statusLabel, refreshButton);
+                });
+            connect(closeHandleR0Button, &QPushButton::clicked, this,
+                [this, table, statusLabel, refreshButton, closeHandleButton, closeHandleR0Button,
+                    terminateR3Button, terminateR0Button]()
+                {
+                    closeSelectedUsageHandleR0(table, statusLabel, refreshButton,
+                        { closeHandleButton, closeHandleR0Button, terminateR3Button, terminateR0Button });
                 });
             connect(terminateR3Button, &QPushButton::clicked, this,
                 [this, table, statusLabel, refreshButton]()
@@ -12507,6 +12614,7 @@ namespace
         std::shared_ptr<std::atomic_bool> m_usageScanCancelRequested; // 文件占用扫描取消标记，关闭属性窗时置位。
         QProgressBar* m_usageScanProgressBar = nullptr; // 属性页文件占用扫描的阶段进度条。
         bool m_usageScanInProgress = false; // 属性页占用扫描是否仍在后台执行。
+        bool m_usageCloseInProgress = false; // R0 关闭期间禁止重入动作和覆盖所选快照。
         bool m_usageRetryAfterR0Start = false; // R3 回落结果是否等待下一次 R0 启动成功后重扫。
         bool m_usageR0StartedDuringScan = false; // R0 是否在当前 R3 回落扫描完成前已经启动。
         bool m_themeStyleApplying = false; // 避免 PaletteChange 触发样式重入。

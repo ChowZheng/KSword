@@ -692,6 +692,7 @@
     <ClInclude Include="ksword\ksword.h" />
     <ClInclude Include="ksword\file\file.h" />
     <ClInclude Include="ksword\file\file_handle_tools.h" />
+    <ClInclude Include="ksword\file\file_handle_query_worker.h" />
     <ClInclude Include="ksword\file\file_metadata_transaction.h" />
     <ClInclude Include="ksword\file\pe_analyzer.h" />
     <ClInclude Include="ksword\scanner\atomic_file_patch.h" />

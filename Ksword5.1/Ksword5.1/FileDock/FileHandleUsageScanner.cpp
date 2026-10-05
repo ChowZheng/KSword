@@ -50,6 +50,7 @@ namespace filedock::handleusage
             HandleUsageEntry entry{};
             entry.processId = backendEntry.processId;
             entry.processCreationTime = backendEntry.processCreationTime;
+            entry.objectAddress = backendEntry.objectAddress;
             entry.processName = ToQString(backendEntry.processName);
             entry.processImagePath = ToQString(backendEntry.processImagePath);
             entry.handleValue = backendEntry.handleValue;
@@ -84,6 +85,7 @@ namespace filedock::handleusage
             result.kernelHandleTableAttempted = backendResult.kernelHandleTableAttempted;
             result.kernelHandleTableUsed = backendResult.kernelHandleTableUsed;
             result.r3HandleFallbackUsed = backendResult.r3HandleFallbackUsed;
+            result.fileHandleScanIncomplete = backendResult.fileHandleScanIncomplete;
             result.elapsedMs = backendResult.elapsedMs;
             result.diagnosticText = ToQString(backendResult.diagnosticText);
             return result;

@@ -5944,6 +5944,16 @@
     "notification.copy.log_template": "%1\n%2\n%3\nFile: %4\nFunction: %5\nGUID: %6"
   },
   "source_translations": {
+    "关闭句柄（R0）": "Close Handle (R0)",
+    "校验进程和对象身份后，由 KswordARK 驱动关闭选中的文件句柄": "Verify the process and object identities, then close the selected file handle through the KswordARK driver",
+    "确认由 R0 关闭选中的文件句柄？\nPID=%1\nHandle=%2\n文件=%3": "Close the selected file handle through R0?\nPID=%1\nHandle=%2\nFile=%3",
+    "● 正在由 R0 关闭选中的文件句柄...": "● Closing the selected file handle through R0...",
+    "模块或映像映射没有可关闭的文件句柄。": "Module or image mappings have no file handle to close.",
+    "缺少可验证的用户句柄对象身份，请启用 R0 后重新扫描。": "The user handle lacks a verifiable object identity. Enable R0 and rescan.",
+    " | 扫描不完整：部分文件句柄路径查询超时或阻塞。": " | Incomplete scan: some file handle path queries timed out or stalled.",
+    "文件句柄扫描不完整：阻塞查询达到上限，已继续扫描映像和模块。": "File handle scan incomplete: blocked queries reached the limit; image and module scanning continued.",
+    "无法确认进程身份，请重新扫描后再关闭句柄。": "Cannot verify process identity. Rescan before closing the handle.",
+    "路径查询超时:": "Path query timeouts:",
     "以特殊权限运行": "Run with special privileges",
     "TrustedInstaller": "TrustedInstaller",
     "普通用户": "Standard user",

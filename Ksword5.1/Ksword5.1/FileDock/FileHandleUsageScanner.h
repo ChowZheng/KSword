@@ -29,6 +29,7 @@ namespace filedock::handleusage
     {
         std::uint32_t processId = 0;        // processId：所属进程 PID。
         std::uint64_t processCreationTime = 0; // processCreationTime：进程创建时间，用于破坏性操作前复核 PID 身份。
+        std::uint64_t objectAddress = 0;      // 扫描时的对象身份，只比较、不解引用。
         QString processName;                // processName：所属进程名。
         QString processImagePath;           // processImagePath：所属进程镜像路径。
         std::uint64_t handleValue = 0;      // handleValue：句柄值。
@@ -58,6 +59,7 @@ namespace filedock::handleusage
         bool kernelHandleTableAttempted = false; // kernelHandleTableAttempted：是否先调用了 R0 HandleTable 扫描。
         bool kernelHandleTableUsed = false;      // kernelHandleTableUsed：文件句柄结果是否来自 R0。
         bool r3HandleFallbackUsed = false;       // r3HandleFallbackUsed：R0 不可用后是否回落到 R3。
+        bool fileHandleScanIncomplete = false;  // 文件句柄路径查询超时/达到阻塞上限，结果不完整。
         std::uint64_t elapsedMs = 0;           // elapsedMs：扫描耗时毫秒。
         QString diagnosticText;                // diagnosticText：诊断文本（失败计数/降级信息）。
     };

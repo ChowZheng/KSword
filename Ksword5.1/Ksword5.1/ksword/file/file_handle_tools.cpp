@@ -1,4 +1,5 @@
 #include "file_handle_tools.h"
+#include "file_handle_query_worker.h"
 
 #include "../process/process.h"
 #include "../string/string.h"
@@ -2200,6 +2201,8 @@ namespace ks::file
 
                 HandleUsageEntry entry{};
                 entry.processId = handleEntry.processId;
+                entry.processCreationTime = handleEntry.processCreationTime100ns;
+                entry.objectAddress = handleEntry.objectAddress;
                 entry.processName = ProcessNameOf(processNameMap, entry.processId);
                 entry.handleValue = handleEntry.handleValue;
                 entry.typeIndex = static_cast<std::uint16_t>(objectResult.objectTypeIndex);
@@ -2438,6 +2441,39 @@ namespace ks::file
             std::size_t duplicateFailedCount = 0;
             std::size_t pathQueryFailedCount = 0;
             std::size_t nonDiskFileSkippedCount = 0;
+            std::size_t pathQueryTimeoutCount = 0;
+            std::size_t examinedFileCount = 0;
+            bool queryCapacityExhausted = false;
+            result.fileLikeHandleCount = static_cast<std::size_t>(std::count_if(
+                rawRecords.begin(), rawRecords.end(), [fileTypeIndex](const RawSystemHandle& row)
+                { return row.typeIndex == fileTypeIndex; }));
+            const auto queryFilePath = [](HANDLE handle)
+            {
+                detail::FilePathQueryResult queryResult;
+                if (::GetFileType(handle) != FILE_TYPE_DISK)
+                {
+                    queryResult.status = detail::FilePathQueryStatus::NonDisk;
+                    return queryResult;
+                }
+                // Query the opened NT path: avoid volume-name conversion and normalized
+                // component lookups for every unrelated system file/device handle.
+                DWORD bufferChars = 512;
+                for (int attempt = 0; attempt < 6; ++attempt)
+                {
+                    std::vector<wchar_t> buffer(bufferChars, L'\0');
+                    const DWORD length = ::GetFinalPathNameByHandleW(handle, buffer.data(), bufferChars,
+                        FILE_NAME_OPENED | VOLUME_NAME_NT);
+                    if (length == 0) { break; }
+                    if (length >= bufferChars) { bufferChars = length + 1; continue; }
+                    queryResult.path = NormalizeNativePath(std::wstring(buffer.data(), length));
+                    break;
+                }
+                queryResult.status = TrimWideCopy(queryResult.path).empty()
+                    ? detail::FilePathQueryStatus::Failed : detail::FilePathQueryStatus::Ready;
+                return queryResult;
+            };
+            auto queryWorker = std::make_unique<detail::FileHandleQueryWorker>(queryFilePath);
+            auto lastProgressTime = std::chrono::steady_clock::now();
             if (progressCallback) { progressCallback("扫描文件句柄", 35.0f); }
 
             for (const RawSystemHandle& row : rawRecords)
@@ -2451,6 +2487,19 @@ namespace ks::file
                 {
                     continue;
                 }
+                const auto now = std::chrono::steady_clock::now();
+                if (progressCallback && now - lastProgressTime >= std::chrono::milliseconds(100))
+                {
+                    progressCallback("扫描文件句柄", 35.0f + 54.0f *
+                        static_cast<float>(examinedFileCount) / static_cast<float>(result.fileLikeHandleCount));
+                    lastProgressTime = now;
+                }
+                if (!queryWorker->available())
+                {
+                    queryCapacityExhausted = true;
+                    break;
+                }
+                ++examinedFileCount;
                 const std::uint64_t handleKey = BuildHandleKey(row.processId, row.handleValue);
                 if (handleKey == helperHandleKey || emittedHandleKeySet.find(handleKey) != emittedHandleKeySet.end())
                 {
@@ -2469,23 +2518,33 @@ namespace ks::file
                     ++duplicateFailedCount;
                     continue;
                 }
-                UniqueHandle localHandle(localRawHandle);
-                if (::GetFileType(localHandle.get()) != FILE_TYPE_DISK)
+                const auto queryResult = queryWorker->run(localRawHandle, cancellationCallback);
+                if (queryResult.status == detail::FilePathQueryStatus::Cancelled)
+                {
+                    result.diagnosticText = L"扫描已取消。";
+                    return result;
+                }
+                if (queryResult.status == detail::FilePathQueryStatus::TimedOut)
+                {
+                    ++pathQueryTimeoutCount;
+                    queryWorker.reset();
+                    // Keep the scan bounded even when cancellations release each worker slot.
+                    if (pathQueryTimeoutCount >= 4U)
+                    {
+                        queryCapacityExhausted = true;
+                        break;
+                    }
+                    queryWorker = std::make_unique<detail::FileHandleQueryWorker>(queryFilePath);
+                    continue;
+                }
+                if (queryResult.status == detail::FilePathQueryStatus::NonDisk)
                 {
                     ++nonDiskFileSkippedCount;
                     continue;
                 }
 
-                std::wstring finalPathText;
-                if (!QueryFinalDosPathByHandle(localHandle.get(), finalPathText))
-                {
-                    std::wstring ntObjectPathText;
-                    if (QueryNtObjectText(apiSet, localHandle.get(), kObjectNameInformationClass, ntObjectPathText))
-                    {
-                        finalPathText = TrimWideCopy(ntObjectPathText);
-                    }
-                }
-                if (TrimWideCopy(finalPathText).empty())
+                const std::wstring& finalPathText = queryResult.path;
+                if (queryResult.status != detail::FilePathQueryStatus::Ready)
                 {
                     ++pathQueryFailedCount;
                     continue;
@@ -2504,6 +2563,7 @@ namespace ks::file
                 entry.processImagePath = QueryProcessImagePathCached(row.processId, processImagePathCache);
                 entry.handleValue = row.handleValue;
                 entry.typeIndex = fileTypeIndex;
+                entry.objectAddress = row.objectAddress;
                 entry.typeName = L"FileHandle";
                 entry.objectName = NormalizeNativePath(finalPathText);
                 entry.grantedAccess = row.grantedAccess;
@@ -2516,7 +2576,6 @@ namespace ks::file
                 result.entries.push_back(std::move(entry));
             }
 
-            result.fileLikeHandleCount = result.entries.size();
             result.matchedHandleCount = result.entries.size();
             std::vector<std::wstring> diagnosticList;
             diagnosticList.push_back(L"文件TypeIndex:" + std::to_wstring(fileTypeIndex));
@@ -2525,6 +2584,9 @@ namespace ks::file
             if (duplicateFailedCount > 0) { diagnosticList.push_back(L"DuplicateHandle失败:" + std::to_wstring(duplicateFailedCount)); }
             if (pathQueryFailedCount > 0) { diagnosticList.push_back(L"路径查询失败:" + std::to_wstring(pathQueryFailedCount)); }
             if (nonDiskFileSkippedCount > 0) { diagnosticList.push_back(L"非磁盘File跳过:" + std::to_wstring(nonDiskFileSkippedCount)); }
+            if (pathQueryTimeoutCount > 0) { diagnosticList.push_back(L"路径查询超时:" + std::to_wstring(pathQueryTimeoutCount)); }
+            result.fileHandleScanIncomplete = pathQueryTimeoutCount > 0 || queryCapacityExhausted;
+            if (queryCapacityExhausted) { diagnosticList.push_back(L"文件句柄扫描不完整：阻塞查询达到上限，已继续扫描映像和模块。"); }
             result.diagnosticText = JoinDiagnostic(diagnosticList);
             return result;
         }
@@ -2731,9 +2793,12 @@ namespace ks::file
                 finishCancelledScan();
                 return result;
             }
-            entry.processCreationTime = QueryProcessCreationTimeCached(
-                entry.processId,
-                processCreationTimeCache);
+            if (entry.processCreationTime == 0U)
+            {
+                entry.processCreationTime = QueryProcessCreationTimeCached(
+                    entry.processId,
+                    processCreationTimeCache);
+            }
         }
 
         std::sort(result.entries.begin(), result.entries.end(), [](const HandleUsageEntry& leftEntry, const HandleUsageEntry& rightEntry) {
