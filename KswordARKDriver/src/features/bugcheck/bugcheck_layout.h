@@ -3,6 +3,7 @@
 #include <ntddk.h>
 
 #include "bugcheck_internal.h"
+#include "bugcheck_bgp.h"
 
 #define KSWORD_ARK_BUGCHECK_LAYOUT_REQUIRED_WIDTH 640UL
 #define KSWORD_ARK_BUGCHECK_LAYOUT_REQUIRED_HEIGHT 480UL
@@ -40,6 +41,7 @@ typedef enum _KSWORD_ARK_BUGCHECK_LAYOUT_COLOR
     KswordArkBugcheckLayoutColorAccent,
     KswordArkBugcheckLayoutColorMuted,
     KswordArkBugcheckLayoutColorWarning,
+    KswordArkBugcheckLayoutColorLinuxText, // Linux 模式使用纯白文字和不透明蓝底字形。
     KswordArkBugcheckLayoutColorCount
 } KSWORD_ARK_BUGCHECK_LAYOUT_COLOR;
 
@@ -102,6 +104,14 @@ typedef struct _KSWORD_ARK_BUGCHECK_LAYOUT_CANVAS
     PKSWORD_ARK_BUGCHECK_LAYOUT_DRAW_TEXT DrawText;
     PKSWORD_ARK_BUGCHECK_LAYOUT_DRAW_FRAME DrawFrame;
     PKSWORD_ARK_BUGCHECK_LAYOUT_DRAW_VERDICT DrawVerdict;
+    ULONG RenderMode; // 本次绘制固定使用的共享协议模式，避免绘制中途切换。
+    const KSWORD_ARK_BGP_DUMP_STATE* BgpSnapshot; // 可选的已采集 BGP 状态，仅供二维码报告。
+    NTSTATUS (*DrawQr)(
+        PVOID Context,
+        LONG X,
+        LONG Y,
+        ULONG ModulePixels,
+        const UCHAR* QrCode); // 绘制 Nayuki packed 矩阵和四模块静区，无崩溃期分配。
 } KSWORD_ARK_BUGCHECK_LAYOUT_CANVAS,
   *PKSWORD_ARK_BUGCHECK_LAYOUT_CANVAS;
 

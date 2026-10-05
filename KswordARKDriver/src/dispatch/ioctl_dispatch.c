@@ -17,6 +17,7 @@ Environment:
 
 #include "ark/ark_driver.h"
 #include "ioctl_registry.h"
+#include "../features/bugcheck/bugcheck_evidence.h" // 统一记录最近真实 IOCTL 事件，不访问普通日志 ring。
 #include "ioctl_dispatch.tmh"
 
 #include <ntstrsafe.h>
@@ -166,7 +167,23 @@ Return Value:
         return;
     }
 
+    KswordARKBugcheckTraceRecord( // 先提交 BEGIN，handler 或后续上下文采集内部崩溃也保留操作身份。
+        KSWORD_BUGCHECK_TRACE_KIND_IOCTL_BEGIN, // 区分请求开始与实际 handler 返回。
+        IoControlCode, // 保留注册表实际请求编号。
+        STATUS_PENDING, // 开始阶段尚无返回值，trace 模块会标记 STATUS_UNAVAILABLE。
+        ioctlEntry->Name, // 注册表名称为只读内核文本，NULL 仍保留其他字段。
+        KSWORD_BUGCHECK_EVIDENCE_EVENT_TEXT); // 只允许读取最多 64 字节摘要。
+    KswordARKBugcheckContextOperation(); // 仅在正常 PASSIVE 上下文采集最近操作栈，崩溃端只读缓存。
     status = ioctlEntry->Handler(Device, Request, InputBufferLength, OutputBufferLength, &completeBytes);
+    if (!NT_SUCCESS(status) || // 失败的返回始终保留，不由普通日志开关决定。
+        (ioctlEntry->Flags & (KSWORD_ARK_IOCTL_FLAG_QUIET_SUCCESS | KSWORD_ARK_IOCTL_FLAG_QUIET_COMPLETION)) == 0UL) { // 安静轮询只省略成功返回。
+        KswordARKBugcheckTraceRecord( // END 表示 handler 返回；STATUS_PENDING 不等同异步完成。
+            KSWORD_BUGCHECK_TRACE_KIND_IOCTL_END, // 明确保存返回类别。
+            IoControlCode, // 与 BEGIN 共用真实请求编号。
+            status, // 原样保存 handler NTSTATUS，不从文字推断失败。
+            ioctlEntry->Name, // 保存与开始一致的有界请求名称。
+            KSWORD_BUGCHECK_EVIDENCE_EVENT_TEXT); // 摘要由固定非分页 ring 截断并标记。
+    } // 最近事件镜像结束，继续既有日志与 WDF 完成路径。
     if ((ioctlEntry->Flags & KSWORD_ARK_IOCTL_FLAG_QUIET_COMPLETION) == 0UL &&
         !((ioctlEntry->Flags & KSWORD_ARK_IOCTL_FLAG_QUIET_SUCCESS) != 0UL &&
         (NT_SUCCESS(status) || status == STATUS_PENDING)) &&

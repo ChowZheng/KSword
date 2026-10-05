@@ -452,6 +452,27 @@
     <ClInclude Include="src\features\bugcheck\bugcheck_layout.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="src\features\bugcheck\bugcheck_evidence.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="src\features\bugcheck\bugcheck_identity.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="src\features\bugcheck\bugcheck_qr_codec.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="src\features\bugcheck\bugcheck_linux.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\third_party\qrcodegen\qrcodegen.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\third_party\qrcodegen\kernel_compat.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\third_party\qrcodegen\kernel_include\stdint.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="src\features\bugcheck\bugcheck_layout_detailed.h">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -1026,6 +1047,21 @@
     <ClCompile Include="src\features\bugcheck\bugcheck_decode.c">
       <Filter>Source Files\Features\Bugcheck</Filter>
     </ClCompile>
+    <ClCompile Include="src\features\bugcheck\bugcheck_evidence.c">
+      <Filter>Source Files\Features\Bugcheck</Filter>
+    </ClCompile>
+    <ClCompile Include="src\features\bugcheck\bugcheck_identity.c">
+      <Filter>Source Files\Features\Bugcheck</Filter>
+    </ClCompile>
+    <ClCompile Include="src\features\bugcheck\bugcheck_context.c">
+      <Filter>Source Files\Features\Bugcheck</Filter>
+    </ClCompile>
+    <ClCompile Include="src\features\bugcheck\bugcheck_trace.c">
+      <Filter>Source Files\Features\Bugcheck</Filter>
+    </ClCompile>
+    <ClCompile Include="src\features\bugcheck\bugcheck_qr_codec.c">
+      <Filter>Source Files\Features\Bugcheck</Filter>
+    </ClCompile>
     <ClCompile Include="src\features\bugcheck\bugcheck_runtime.c">
       <Filter>Source Files\Features\Bugcheck</Filter>
     </ClCompile>
@@ -1039,6 +1075,12 @@
       <Filter>Source Files\Features\Bugcheck</Filter>
     </ClCompile>
     <ClCompile Include="src\features\bugcheck\bugcheck_layout.c">
+      <Filter>Source Files\Features\Bugcheck</Filter>
+    </ClCompile>
+    <ClCompile Include="src\features\bugcheck\bugcheck_linux.c">
+      <Filter>Source Files\Features\Bugcheck</Filter>
+    </ClCompile>
+    <ClCompile Include="..\third_party\qrcodegen\qrcodegen.c">
       <Filter>Source Files\Features\Bugcheck</Filter>
     </ClCompile>
     <ClCompile Include="src\features\bugcheck\bugcheck_layout_detailed.c">

@@ -7567,6 +7567,15 @@ void MainWindow::showSettingsPanelFromMenu(bool showLanguageTab)
         });
     connect(
         settingsPanel,
+        &SettingsDock::bugcheckDiagnosticsRenderModeChanged,
+        this,
+        [this](const int renderMode)
+        {
+            // 模式保存不改变诊断入口是否安装，只同步下一次自动安装的请求值。
+            m_currentAppearanceSettings.bugcheckDiagnosticsRenderMode = renderMode;
+        });
+    connect(
+        settingsPanel,
         &SettingsDock::bugcheckDiagnosticsInstallationStarted,
         this,
         [this]()
@@ -8918,13 +8927,16 @@ void MainWindow::installBugcheckDiagnosticsAfterServiceStart()
     }
 
     // BGP 解析和预生成可能耗时，自动安装与手动安装都在工作线程等待 R0 IOCTL。
+    const unsigned long renderMode = static_cast<unsigned long>(
+        m_currentAppearanceSettings.bugcheckDiagnosticsRenderMode); // 固定本次自动安装模式。
     const QPointer<MainWindow> guardedSelf(this);
     QThreadPool::globalInstance()->start(
-        [guardedSelf]()
+        [guardedSelf, renderMode]()
         {
             const ksword::ark::BugcheckDiagnosticsResult result =
                 ksword::ark::DriverClient().configureBugcheckDiagnostics(
-                    KSWORD_ARK_BUGCHECK_DIAGNOSTICS_ACTION_INSTALL);
+                    KSWORD_ARK_BUGCHECK_DIAGNOSTICS_ACTION_INSTALL,
+                    renderMode);
             QCoreApplication* const application = QCoreApplication::instance();
             if (application == nullptr)
             {

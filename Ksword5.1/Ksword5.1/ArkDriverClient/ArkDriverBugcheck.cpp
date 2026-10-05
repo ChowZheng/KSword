@@ -164,23 +164,51 @@ namespace ksword::ark
     }
 
     BugcheckDiagnosticsResult DriverClient::configureBugcheckDiagnostics(
-        const unsigned long action) const
+        const unsigned long action,
+        const unsigned long renderMode) const
     {
-        const auto sendRequest = [this](const unsigned long requestAction)
+        // 在 R3 拒绝未知动作/模式，避免把无效配置提交给 R0；查询不携带设置语义。
+        if ((action != KSWORD_ARK_BUGCHECK_DIAGNOSTICS_ACTION_QUERY &&
+             action != KSWORD_ARK_BUGCHECK_DIAGNOSTICS_ACTION_INSTALL &&
+             action != KSWORD_ARK_BUGCHECK_DIAGNOSTICS_ACTION_SET_RENDER_MODE) ||
+            (renderMode != KSWORD_ARK_BUGCHECK_RENDER_MODE_DIAGNOSTIC &&
+             renderMode != KSWORD_ARK_BUGCHECK_RENDER_MODE_LINUX_QR))
+        {
+            BugcheckDiagnosticsResult invalidResult{}; // 只返回参数错误，不访问设备。
+            invalidResult.io.win32Error = ERROR_INVALID_PARAMETER;
+            return invalidResult;
+        }
+
+        const auto sendRequest = [this, renderMode](const unsigned long requestAction)
         {
             BugcheckDiagnosticsResult current{};
             KSWORD_ARK_BUGCHECK_DIAGNOSTICS_REQUEST request{};
 
-            // 保留字段保持零以匹配 R0 严格校验；INSTALL 只排队，QUERY 读取终态和阶段。
+            // INSTALL 只排队，SET_RENDER_MODE 只改模式；QUERY 的模式字段维持零。
             request.size = sizeof(request);
             request.version = KSWORD_ARK_BUGCHECK_DIAGNOSTICS_PROTOCOL_VERSION;
             request.action = requestAction;
+            request.renderMode = requestAction == KSWORD_ARK_BUGCHECK_DIAGNOSTICS_ACTION_QUERY
+                ? KSWORD_ARK_BUGCHECK_RENDER_MODE_DIAGNOSTIC
+                : renderMode;
+            // 模式保存允许驱动不在线；静默探测失败直接返回，避免弹出启用驱动提示。
+            DriverHandle modeHandle; // SET 使用的短期设备句柄，不跨请求持有。
+            if (requestAction == KSWORD_ARK_BUGCHECK_DIAGNOSTICS_ACTION_SET_RENDER_MODE)
+            {
+                modeHandle = openSilently();
+                if (!modeHandle.isValid())
+                {
+                    current.io.win32Error = ::GetLastError();
+                    return current;
+                }
+            }
             current.io = deviceIoControl(
                 IOCTL_KSWORD_ARK_CONFIGURE_BUGCHECK_DIAGNOSTICS,
                 &request,
                 static_cast<unsigned long>(sizeof(request)),
                 &current.response,
-                static_cast<unsigned long>(sizeof(current.response)));
+                static_cast<unsigned long>(sizeof(current.response)),
+                modeHandle.isValid() ? &modeHandle : nullptr);
             current.unsupported = !current.io.ok &&
                 (current.io.win32Error == ERROR_INVALID_FUNCTION ||
                  current.io.win32Error == ERROR_NOT_SUPPORTED);
@@ -188,8 +216,12 @@ namespace ksword::ark
                 (current.io.bytesReturned < sizeof(current.response) ||
                  current.response.version !=
                      KSWORD_ARK_BUGCHECK_DIAGNOSTICS_PROTOCOL_VERSION ||
-                 current.response.size != sizeof(current.response)))
+                 current.response.size != sizeof(current.response) ||
+                 (current.response.renderMode != KSWORD_ARK_BUGCHECK_RENDER_MODE_DIAGNOSTIC &&
+                  current.response.renderMode != KSWORD_ARK_BUGCHECK_RENDER_MODE_LINUX_QR)))
             {
+                current.unsupported = current.io.bytesReturned >= sizeof(current.response) &&
+                    current.response.version != KSWORD_ARK_BUGCHECK_DIAGNOSTICS_PROTOCOL_VERSION;
                 current.io.ok = false;
                 current.io.win32Error = ERROR_INVALID_DATA;
             }
@@ -216,9 +248,26 @@ namespace ksword::ark
             if (!result.io.ok ||
                 result.response.status != KSWORD_ARK_BUGCHECK_DIAGNOSTICS_STATUS_BUSY)
             {
-                return result;
+                break;
             }
         } while (std::chrono::steady_clock::now() < pollDeadline);
+
+        // 本次请求可能等待了另一模式的并发安装；只补一次 SET，不重试安装或扫描。
+        if (result.io.ok &&
+            result.response.status == KSWORD_ARK_BUGCHECK_DIAGNOSTICS_STATUS_OK &&
+            result.response.renderMode != renderMode)
+        {
+            result = sendRequest(KSWORD_ARK_BUGCHECK_DIAGNOSTICS_ACTION_SET_RENDER_MODE);
+            // SET 响应必须明确回读目标模式；忙碌、失败或模式不符均不能报告安装成功。
+            if (!result.io.ok ||
+                result.response.status != KSWORD_ARK_BUGCHECK_DIAGNOSTICS_STATUS_OK ||
+                result.response.renderMode != renderMode)
+            {
+                result.io.ok = false;
+                result.io.win32Error = ERROR_INVALID_DATA;
+                result.io.message = "bugcheck_render_mode_not_applied";
+            }
+        }
 
         // 仅限制 R3 轮询线程；实际 R0 工作项拥有自己的 30 秒预算和卸载取消协议。
         return result;
