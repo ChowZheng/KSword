@@ -1,5 +1,6 @@
 #include "DriverDock.Internal.h"
 #include "DriverDock.ModuleDumpFile.h"
+#include "../MemoryDock/MemoryAccessBackend.h"
 #include "../Framework/PrivilegeElevationPrompt.h"
 #include "../OnlineScan/SandboxUploadActions.h"
 #include "../UI/IntegrityRiskPresentation.h"
@@ -196,7 +197,7 @@ namespace
         case DriverModuleDumpError::MemoryRead:
             return driverText(
                 "driver.dump_module.error.memory_read",
-                QStringLiteral("R0 内存读取响应的协议字段或数据长度未通过完整性校验，未保留无效数据。"));
+                QStringLiteral("内存读取失败或响应未通过完整性校验，未保留无效数据。"));
         case DriverModuleDumpError::PeValidation:
             return driverText(
                 "driver.dump_module.error.pe_validation",
@@ -563,10 +564,57 @@ namespace
         return QStringLiteral("\\\\?\\") + nativePath;
     }
 
+    // 两种读取共享 PE、身份、文件提交校验；HVM 只接受真实完整的私有窗口字节。
+    bool driverModuleDumpReadChunk(
+        const ksword::ark::DriverClient& client,
+        ksword::ark::DriverHandle& handle,
+        const bool useHvm,
+        const std::uint64_t address,
+        const std::uint32_t length,
+        std::vector<std::uint8_t>& bytesOut,
+        QString& errorTextOut,
+        bool& zeroFilledOut)
+    {
+        bytesOut.clear();
+        zeroFilledOut = false;
+        if (useHvm)
+        {
+            const auto read = ksword::memory_backend::readVirtual(
+                ksword::memory_backend::MemoryAccessBackend::Hvm,
+                {}, 0U, address, length, true);
+            if (!read.ok || read.partial || read.bytesDone != length ||
+                static_cast<std::uint64_t>(read.data.size()) != length)
+            {
+                errorTextOut = read.failureText.isEmpty()
+                    ? QStringLiteral("HVM 未完整读取模块分块，已取消导出。")
+                    : read.failureText;
+                return false;
+            }
+            const auto* begin = reinterpret_cast<const std::uint8_t*>(
+                read.data.constData());
+            bytesOut.assign(begin, begin + read.data.size());
+            return true;
+        }
+
+        const auto read = client.readVirtualMemory(
+            0U, address, length,
+            KSWORD_ARK_MEMORY_READ_FLAG_KERNEL_ADDRESS |
+                KSWORD_ARK_MEMORY_READ_FLAG_ZERO_FILL_UNREADABLE,
+            &handle);
+        if (!driverModuleDumpValidateRead(
+            read, address, length, errorTextOut, zeroFilledOut))
+        {
+            return false;
+        }
+        bytesOut = read.data;
+        return true;
+    }
+
     DriverModuleDumpResult driverModuleDumpToFile(
         const QString& ntPath,
         const std::uint64_t moduleBase,
-        const QString& targetPath)
+        const QString& targetPath,
+        const bool useHvm)
     {
         DriverModuleDumpResult dumpResult;
         dumpResult.targetPath = QFileInfo(targetPath).absoluteFilePath();
@@ -625,19 +673,13 @@ namespace
                 "The authoritative module image size is too small for a PE image.");
             return dumpResult;
         }
-        const ksword::ark::VirtualMemoryReadResult headerRead =
-            driverClient.readVirtualMemory(
-                0U,
-                moduleBase,
-                headerBytesToRead,
-                KSWORD_ARK_MEMORY_READ_FLAG_KERNEL_ADDRESS |
-                    KSWORD_ARK_MEMORY_READ_FLAG_ZERO_FILL_UNREADABLE,
-                &driverHandle);
+        std::vector<std::uint8_t> headerBytes;
         bool headerReadZeroFilled = false;
-        if (!driverModuleDumpValidateRead(
-            headerRead,
+        if (!driverModuleDumpReadChunk(
+            driverClient, driverHandle, useHvm,
             moduleBase,
             headerBytesToRead,
+            headerBytes,
             dumpResult.technicalDetail,
             headerReadZeroFilled))
         {
@@ -649,7 +691,7 @@ namespace
             ++dumpResult.zeroFilledChunkCount;
         }
         if (!driverModuleDumpValidatePeImage(
-            headerRead.data,
+            headerBytes,
             moduleSize,
             dumpResult.technicalDetail))
         {
@@ -691,7 +733,7 @@ namespace
                 }
                 return true;
             };
-        if (!writeChunk(headerRead.data))
+        if (!writeChunk(headerBytes))
         {
             return dumpResult;
         }
@@ -704,19 +746,13 @@ namespace
                     KSWORD_ARK_MEMORY_READ_MAX_BYTES,
                     static_cast<std::uint64_t>(moduleSize) - offset));
             const std::uint64_t chunkAddress = moduleBase + offset;
-            const ksword::ark::VirtualMemoryReadResult readResult =
-                driverClient.readVirtualMemory(
-                    0U,
-                    chunkAddress,
-                    chunkBytes,
-                    KSWORD_ARK_MEMORY_READ_FLAG_KERNEL_ADDRESS |
-                        KSWORD_ARK_MEMORY_READ_FLAG_ZERO_FILL_UNREADABLE,
-                    &driverHandle);
+            std::vector<std::uint8_t> chunkData;
             bool readZeroFilled = false;
-            if (!driverModuleDumpValidateRead(
-                readResult,
+            if (!driverModuleDumpReadChunk(
+                driverClient, driverHandle, useHvm,
                 chunkAddress,
                 chunkBytes,
+                chunkData,
                 dumpResult.technicalDetail,
                 readZeroFilled))
             {
@@ -727,7 +763,7 @@ namespace
             {
                 ++dumpResult.zeroFilledChunkCount;
             }
-            if (!writeChunk(readResult.data))
+            if (!writeChunk(chunkData))
             {
                 return dumpResult;
             }
@@ -2619,6 +2655,12 @@ void DriverDock::showModuleTableContextMenu(const QPoint& localPosition)
     dumpModuleMemoryAction->setToolTip(driverText(
         "driver.menu.dump_module_memory.tooltip",
         QStringLiteral("按已加载模块基址读取完整内存映像；不可读或已释放页面按 00 保留地址布局，并在协议、PE 与身份复核通过后原子保存。")));
+    QAction* dumpModuleHvmAction = contextMenu.addAction(
+        QIcon(":/Icon/disk_save.svg"),
+        driverText("driver.menu.dump_module_hvm", QStringLiteral("HVM Dump 模块内存…")));
+    dumpModuleHvmAction->setToolTip(driverText(
+        "driver.menu.dump_module_hvm.tooltip",
+        QStringLiteral("通过 HVM 私有页表窗口读取模块映像，保留 R0 模块身份及 PE 校验；任何分块失败、部分读取或回退均取消导出。")));
     QAction* queryKernelSignatureAction = contextMenu.addAction(
         driverText("driver.menu.query_kernel_signature", QStringLiteral("R0 读取内核签名证据")));
     QAction* uploadVirusTotalAction = ks::online_scan::addVirusTotalSandboxMenu(
@@ -2789,11 +2831,14 @@ void DriverDock::showModuleTableContextMenu(const QPoint& localPosition)
         selectedDriverObjectAddress != 0U;
     dumpModuleMemoryAction->setEnabled(
         selectedModuleBase != 0U && !m_moduleDumpRunning);
+    dumpModuleHvmAction->setEnabled(
+        selectedModuleBase != 0U && !m_moduleDumpRunning);
     if (m_moduleDumpRunning)
     {
         dumpModuleMemoryAction->setToolTip(driverText(
             "driver.menu.dump_module_memory.running",
             QStringLiteral("已有模块内存 Dump 正在后台运行，请等待完成。")));
+        dumpModuleHvmAction->setToolTip(dumpModuleMemoryAction->toolTip());
     }
     blindCommunicationAction->setEnabled(selectedModuleBase != 0U && exactTargetReady);
     restoreCommunicationAction->setEnabled(selectedModuleBase != 0U);
@@ -2840,12 +2885,13 @@ void DriverDock::showModuleTableContextMenu(const QPoint& localPosition)
         }
         return;
     }
-    if (selectedAction == dumpModuleMemoryAction)
+    if (selectedAction == dumpModuleMemoryAction || selectedAction == dumpModuleHvmAction)
     {
         dumpSelectedModuleMemory(
             selectedModuleName,
             selectedModulePath,
-            selectedModuleBase);
+            selectedModuleBase,
+            selectedAction == dumpModuleHvmAction);
         return;
     }
     if (selectedAction == queryKernelSignatureAction)
@@ -2939,12 +2985,17 @@ void DriverDock::showModuleTableContextMenu(const QPoint& localPosition)
 void DriverDock::dumpSelectedModuleMemory(
     const QString& moduleNameSnapshot,
     const QString& rawPathSnapshot,
-    const std::uint64_t moduleBase)
+    const std::uint64_t moduleBase,
+    const bool useHvm)
 {
     if (m_moduleDumpRunning)
     {
         return;
     }
+    const QString dumpTitle = useHvm
+        ? driverText("driver.dump_module.hvm_title", QStringLiteral("HVM Dump 模块内存"))
+        : driverText("driver.dump_module.title", QStringLiteral("R0 Dump 模块内存"));
+    const QString backendName = useHvm ? QStringLiteral("HVM") : QStringLiteral("R0");
     const QString moduleName = moduleNameSnapshot.trimmed();
     const QString rawPath = rawPathSnapshot.trimmed();
     const QString ntPath = buildKernelSignatureNtPath(rawPath);
@@ -2955,12 +3006,10 @@ void DriverDock::dumpSelectedModuleMemory(
     {
         QMessageBox::warning(
             this,
-            driverText(
-                "driver.dump_module.title",
-                QStringLiteral("R0 Dump 模块内存")),
+            dumpTitle,
             driverText(
                 "driver.dump_module.invalid_selection",
-                QStringLiteral("当前模块缺少有效的加载基址或映像路径，无法执行 R0 Dump。")));
+                QStringLiteral("当前模块缺少有效的加载基址或映像路径，无法执行内存 Dump。")));
         return;
     }
 
@@ -2986,6 +3035,12 @@ void DriverDock::dumpSelectedModuleMemory(
         return;
     }
 
+    // 保存对话框运行嵌套事件循环，另一个菜单可能已经启动导出。
+    if (m_moduleDumpRunning)
+    {
+        return;
+    }
+
     const QString normalizedTargetPath =
         QFileInfo(targetPath).absoluteFilePath();
     if (driverOperationHasUnsafeWin32PathSyntax(
@@ -2994,9 +3049,7 @@ void DriverDock::dumpSelectedModuleMemory(
     {
         QMessageBox::warning(
             this,
-            driverText(
-                "driver.dump_module.title",
-                QStringLiteral("R0 Dump 模块内存")),
+            dumpTitle,
             driverText(
                 "driver.dump_module.unsafe_path",
                 QStringLiteral("保存路径包含设备命名空间、备用数据流或其它不安全的 Win32 路径语法。请选择普通的本地或 UNC 文件路径。")));
@@ -3016,9 +3069,7 @@ void DriverDock::dumpSelectedModuleMemory(
         // 所有已存在目标（包括原始 .sys 及其硬链接）均拒绝，因此不存在覆盖窗口。
         QMessageBox::warning(
             this,
-            driverText(
-                "driver.dump_module.title",
-                QStringLiteral("R0 Dump 模块内存")),
+            dumpTitle,
             driverText(
                 "driver.dump_module.no_overwrite",
                 QStringLiteral("目标文件已经存在。为保护原始驱动及已有证据，本功能绝不覆盖文件；请选择新的文件名。")));
@@ -3030,22 +3081,22 @@ void DriverDock::dumpSelectedModuleMemory(
     {
         m_overviewStatusLabel->setText(driverText(
             "driver.dump_module.status.running",
-            QStringLiteral("状态：正在后台 R0 Dump 模块 %1…"))
-            .arg(moduleName));
+            QStringLiteral("状态：正在后台通过 %2 Dump 模块 %1…"))
+            .arg(moduleName).arg(backendName));
     }
     appendOperateLogLine(driverText(
         "driver.dump_module.log.started",
-        QStringLiteral("开始 R0 Dump 模块内存：%1，基址=%2，目标=%3"))
+        QStringLiteral("开始 %4 Dump 模块内存：%1，基址=%2，目标=%3"))
         .arg(moduleName)
         .arg(formatCompactAddress(moduleBase))
-        .arg(normalizedTargetPath));
+        .arg(normalizedTargetPath).arg(backendName));
 
     QPointer<DriverDock> guardThis(this);
     auto* dumpTask = QRunnable::create(
-        [guardThis, moduleName, ntPath, moduleBase, normalizedTargetPath]()
+        [guardThis, moduleName, ntPath, moduleBase, normalizedTargetPath, useHvm, dumpTitle, backendName]()
         {
             const DriverModuleDumpResult dumpResult =
-                driverModuleDumpToFile(ntPath, moduleBase, normalizedTargetPath);
+                driverModuleDumpToFile(ntPath, moduleBase, normalizedTargetPath, useHvm);
             QCoreApplication* application = QCoreApplication::instance();
             if (application == nullptr)
             {
@@ -3053,7 +3104,7 @@ void DriverDock::dumpSelectedModuleMemory(
             }
             QMetaObject::invokeMethod(
                 application,
-                [guardThis, moduleName, dumpResult]()
+                [guardThis, moduleName, dumpResult, dumpTitle, backendName]()
                 {
                     if (guardThis == nullptr)
                     {
@@ -3066,21 +3117,22 @@ void DriverDock::dumpSelectedModuleMemory(
                         {
                             guardThis->m_overviewStatusLabel->setText(driverText(
                                 "driver.dump_module.status.complete",
-                                QStringLiteral("状态：模块 %1 的 R0 Dump 已完成（%2 字节）"))
+                                QStringLiteral("状态：模块 %1 的 %3 Dump 已完成（%2 字节）"))
                                 .arg(moduleName)
-                                .arg(dumpResult.moduleSize));
+                                .arg(dumpResult.moduleSize).arg(backendName));
                         }
                         guardThis->appendOperateLogLine(driverText(
                             "driver.dump_module.log.complete",
-                            QStringLiteral("R0 Dump 模块内存完成：%1，%2 字节，补零分块=%3，保存到 %4"))
+                            QStringLiteral("%5 Dump 模块内存完成：%1，%2 字节，补零分块=%3，保存到 %4"))
                             .arg(moduleName)
                             .arg(dumpResult.moduleSize)
                             .arg(dumpResult.zeroFilledChunkCount)
-                            .arg(dumpResult.targetPath));
+                            .arg(dumpResult.targetPath).arg(backendName));
                         QString completionText = driverText(
                             "driver.dump_module.complete",
                             QStringLiteral(
                                 "模块内存 Dump 完成。\n\n"
+                                "读取后端：%5\n"
                                 "模块：%1\n"
                                 "基址：%2\n"
                                 "映像大小：%3 字节\n"
@@ -3090,7 +3142,7 @@ void DriverDock::dumpSelectedModuleMemory(
                             .arg(moduleName)
                             .arg(formatCompactAddress(dumpResult.moduleBase))
                             .arg(dumpResult.moduleSize)
-                            .arg(dumpResult.targetPath);
+                            .arg(dumpResult.targetPath).arg(backendName);
                         if (dumpResult.zeroFilledChunkCount > 0U)
                         {
                             completionText += QString::fromLatin1("\n\n") + driverText(
@@ -3101,9 +3153,7 @@ void DriverDock::dumpSelectedModuleMemory(
                         }
                         QMessageBox::information(
                             guardThis,
-                            driverText(
-                                "driver.dump_module.title",
-                                QStringLiteral("R0 Dump 模块内存")),
+                            dumpTitle,
                             completionText);
                         return;
                     }
@@ -3123,25 +3173,23 @@ void DriverDock::dumpSelectedModuleMemory(
                     if (!dumpResult.technicalDetail.trimmed().isEmpty())
                     {
                         failureDetail += QString::fromLatin1("\n\n") +
-                            dumpResult.technicalDetail.trimmed();
+                            ks::i18n::sourceText(dumpResult.technicalDetail.trimmed());
                     }
                     if (guardThis->m_overviewStatusLabel != nullptr)
                     {
                         guardThis->m_overviewStatusLabel->setText(driverText(
                             "driver.dump_module.status.failed",
-                            QStringLiteral("状态：模块 %1 的 R0 Dump 失败，未生成目标文件。"))
-                            .arg(moduleName));
+                            QStringLiteral("状态：模块 %1 的 %2 Dump 失败，未生成目标文件。"))
+                            .arg(moduleName).arg(backendName));
                     }
                     guardThis->appendOperateLogLine(driverText(
                         "driver.dump_module.log.failed",
-                        QStringLiteral("R0 Dump 模块内存失败：%1；%2"))
+                        QStringLiteral("%3 Dump 模块内存失败：%1；%2"))
                         .arg(moduleName)
-                        .arg(failureDetail));
+                        .arg(failureDetail).arg(backendName));
                     QMessageBox::critical(
                         guardThis,
-                        driverText(
-                            "driver.dump_module.title",
-                            QStringLiteral("R0 Dump 模块内存")),
+                        dumpTitle,
                         driverText(
                             "driver.dump_module.failed",
                             QStringLiteral(

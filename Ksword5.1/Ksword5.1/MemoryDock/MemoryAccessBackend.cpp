@@ -469,6 +469,8 @@ namespace ksword::memory_backend
         // usedDirectWindow 按**所有分片的与**汇总，不是取最后一片。任意一片退回
         // 了 MmCopyMemory，这一次访问作为整体就不再是"没走内存管理器"的——
         // 取最后一片会让一次半数退回的访问看上去完全没退回。
+        // 严格读取要求驱动逐片使用私有窗口，仍核验返回标记以防旧驱动忽略要求；
+        // 回退分片的字节与完成量均不计入结果，不自动改走标准 R0 通道。
         AccessOutcome hvmTransfer(
             const ksword::ark::DriverClient& client,
             const unsigned long readOperation,
@@ -476,7 +478,8 @@ namespace ksword::memory_backend
             const std::uint32_t processId,
             const std::uint64_t baseAddress,
             const QByteArray* payload,
-            const std::uint64_t lengthBytes)
+            const std::uint64_t lengthBytes,
+            const bool requireHvmDirectWindow = false)
         {
             AccessOutcome outcome;
             const bool isWrite = (payload != nullptr);
@@ -503,7 +506,7 @@ namespace ksword::memory_backend
                     isWrite
                         ? reinterpret_cast<const unsigned char*>(payload->constData() + offset)
                         : nullptr,
-                    /*requireWindow*/ isWrite,
+                    /*requireWindow*/ isWrite || requireHvmDirectWindow,
                     /*uiConfirmed*/ true,
                     processId);
 
@@ -529,6 +532,16 @@ namespace ksword::memory_backend
                     return outcome;
                 }
 
+                if (!isWrite && requireHvmDirectWindow && result.response.usedDirectWindow == 0U)
+                {
+                    outcome.failureText = QStringLiteral(
+                        "R-1 严格读取未使用私有页表窗口，已拒绝回退分片并停止访问；已读取 %1/%2 字节。")
+                        .arg(offset).arg(totalBytes);
+                    outcome.bytesDone = offset;
+                    outcome.partial = offset != 0ULL;
+                    outcome.data = collected;
+                    return outcome;
+                }
                 const unsigned long done = result.response.bytesTransferred;
                 if (done > chunk)
                 {
@@ -682,7 +695,8 @@ namespace ksword::memory_backend
         const MemoryAccessBackend backend,
         const DdmaSession& session,
         const std::uint64_t physicalAddress,
-        const std::uint64_t lengthBytes)
+        const std::uint64_t lengthBytes,
+        const bool requireHvmDirectWindow)
     {
         AccessOutcome outcome;
         if (lengthBytes == 0ULL)
@@ -709,7 +723,7 @@ namespace ksword::memory_backend
                 client,
                 KSWORD_ARK_HVM_MEMORY_OP_READ_PHYSICAL,
                 KSWORD_ARK_HVM_MEMORY_OP_WRITE_PHYSICAL,
-                0U, physicalAddress, nullptr, lengthBytes);
+                0U, physicalAddress, nullptr, lengthBytes, requireHvmDirectWindow);
         }
 
         if (backend == MemoryAccessBackend::StandardDriver)
@@ -929,7 +943,8 @@ namespace ksword::memory_backend
         const DdmaSession& session,
         const std::uint32_t processId,
         const std::uint64_t virtualAddress,
-        const std::uint64_t lengthBytes)
+        const std::uint64_t lengthBytes,
+        const bool requireHvmDirectWindow)
     {
         AccessOutcome outcome;
         if (lengthBytes == 0ULL)
@@ -956,7 +971,7 @@ namespace ksword::memory_backend
                 client,
                 KSWORD_ARK_HVM_MEMORY_OP_READ_VIRTUAL,
                 KSWORD_ARK_HVM_MEMORY_OP_WRITE_VIRTUAL,
-                processId, virtualAddress, nullptr, lengthBytes);
+                processId, virtualAddress, nullptr, lengthBytes, requireHvmDirectWindow);
         }
 
         if (backend == MemoryAccessBackend::StandardDriver)

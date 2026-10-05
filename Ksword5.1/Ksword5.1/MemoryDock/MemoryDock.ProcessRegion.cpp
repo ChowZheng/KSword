@@ -6,6 +6,7 @@
 #include <QImage>
 #include <QPixmap>
 #include <QRunnable>
+#include <QSaveFile>
 #include <QSet>
 #include <QThread> // QThread::idealThreadCount：CPU 占用率的分母要按逻辑核数归一化。
 #include <QVector>
@@ -92,6 +93,7 @@ namespace
     constexpr const char* kRegionRefreshPendingProperty = "kswordMemoryRegionRefreshPending";
     // 本次区域刷新是否由附加流程发起：附加按钮必须立即还控制权，禁止同步遍历地址空间。
     constexpr const char* kRegionRefreshFromAttachProperty = "kswordMemoryRegionRefreshFromAttach";
+    constexpr const char* kProcessDumpInFlightProperty = "ksword_memory_process_dump_in_flight";
 
     // 图标路径角色：进程表第 0 列与模块树路径列都用它记录图标来源路径，
     // 后台提取完成后按路径反查需要刷新的行。UserRole/UserRole+1 已被其它数据占用。
@@ -1919,6 +1921,13 @@ void MemoryDock::showProcessTableContextMenu(const QPoint& localPosition)
 
 void MemoryDock::requestDumpProcessMemoryByPid(const std::uint32_t pid, const QString& processName)
 {
+    if (readBoolProperty(this, kProcessDumpInFlightProperty))
+    {
+        QMessageBox::information(this, QStringLiteral("导出进程内存"),
+            QStringLiteral("已有进程内存导出正在进行，请等待完成。"));
+        return;
+    }
+
     // Dump 请求日志：记录 PID 与进程名，便于后续审计。
     kLogEvent dumpRequestEvent;
     info << dumpRequestEvent
@@ -1927,6 +1936,60 @@ void MemoryDock::requestDumpProcessMemoryByPid(const std::uint32_t pid, const QS
         << ", processName="
         << processName.toStdString()
         << eol;
+
+    // 保留选中 PID 对应的进程对象，模态选择期间退出也不会串到复用后的 PID。
+    const HANDLE targetHandle = ::OpenProcess(PROCESS_QUERY_INFORMATION | SYNCHRONIZE,
+        FALSE, toDwordPid(pid));
+    if (targetHandle == nullptr)
+    {
+        const QString errorText = QStringLiteral("OpenProcess 失败, error=%1").arg(::GetLastError());
+        if (!ks::ui::promptForPrivilegeFailure(this, QStringLiteral("导出进程内存"), errorText))
+        {
+            QMessageBox::warning(this, QStringLiteral("Dump失败"), errorText);
+        }
+        return;
+    }
+    const std::shared_ptr<void> targetProcess(targetHandle, [](void* handle) { ::CloseHandle(handle); });
+    FILETIME creation{}, exit{}, kernel{}, user{};
+    if (::GetProcessTimes(targetHandle, &creation, &exit, &kernel, &user) == FALSE)
+    {
+        QMessageBox::warning(this, QStringLiteral("Dump失败"),
+            QStringLiteral("无法读取目标进程创建时间，error=%1。").arg(::GetLastError()));
+        return;
+    }
+    const std::uint64_t creationTime =
+        (static_cast<std::uint64_t>(creation.dwHighDateTime) << 32U) | creation.dwLowDateTime;
+
+    using ksword::memory_backend::MemoryAccessBackend;
+    const QStringList backendNames{
+        ks::i18n::sourceText(ksword::memory_backend::backendDisplayName(MemoryAccessBackend::UserMode)),
+        ks::i18n::sourceText(ksword::memory_backend::backendDisplayName(MemoryAccessBackend::StandardDriver)),
+        ks::i18n::sourceText(ksword::memory_backend::backendDisplayName(MemoryAccessBackend::Hvm))
+    };
+    bool backendAccepted = false;
+    const QString backendName = QInputDialog::getItem(this,
+        QStringLiteral("导出进程内存"),
+        QStringLiteral("选择本次导出的读取后端（区域由 Windows 查询；HVM 必须使用私有页表窗口）："),
+        backendNames, 0, false, &backendAccepted);
+    if (!backendAccepted)
+    {
+        return;
+    }
+    const int backendIndex = backendNames.indexOf(backendName);
+    if (backendIndex < 0 || backendIndex > 2)
+    {
+        return;
+    }
+    const auto backend = static_cast<MemoryAccessBackend>(backendIndex);
+    if (backend == MemoryAccessBackend::Hvm)
+    {
+        QString reason;
+        if (!ksword::memory_backend::isHvmMemoryUsable(&reason))
+        {
+            QMessageBox::warning(this, QStringLiteral("Dump失败"), reason);
+            return;
+        }
+    }
 
     const QString defaultFileName = QStringLiteral("%1_pid%2_%3.kmdump")
         .arg(processName.isEmpty() ? QStringLiteral("process") : processName)
@@ -1942,31 +2005,43 @@ void MemoryDock::requestDumpProcessMemoryByPid(const std::uint32_t pid, const QS
     {
         return;
     }
+    // 模态对话框可触发重入；此处再查一次，避免两个导出共享同一进度任务。
+    if (readBoolProperty(this, kProcessDumpInFlightProperty))
+    {
+        return;
+    }
+    setProperty(kProcessDumpInFlightProperty, true);
 
     if (m_dumpMemoryProgressPid == 0)
     {
         m_dumpMemoryProgressPid = kPro.addReusable(this, "内存", "Dump进程内存");
     }
     kPro.set(m_dumpMemoryProgressPid, "准备读取内存区域", 0, 5.0f);
+    const int progressPid = m_dumpMemoryProgressPid;
 
     QPointer<MemoryDock> guardThis(this);
-    std::thread([guardThis, pid, processName, outputPath]() {
+    std::thread([guardThis, pid, processName, outputPath, targetProcess, creationTime,
+        backend, backendName, progressPid]() {
         if (guardThis == nullptr)
         {
             return;
         }
 
         QString errorText;
-        const bool dumpOk = guardThis->dumpProcessMemoryToFile(pid, outputPath, errorText);
-        QMetaObject::invokeMethod(qApp, [guardThis, dumpOk, pid, processName, outputPath, errorText]() {
+        // 工作函数是 static：不会借用 Dock 控件或可被分离操作关闭的进程句柄。
+        const bool dumpOk = MemoryDock::dumpProcessMemoryToFile(pid, targetProcess,
+            creationTime, backend, outputPath, progressPid, errorText);
+        QMetaObject::invokeMethod(qApp, [guardThis, dumpOk, pid, processName, outputPath,
+            backendName, progressPid, errorText]() {
             if (guardThis == nullptr)
             {
                 return;
             }
+            guardThis->setProperty(kProcessDumpInFlightProperty, false);
 
             if (dumpOk)
             {
-                kPro.set(guardThis->m_dumpMemoryProgressPid, "Dump完成", 0, 100.0f);
+                kPro.set(progressPid, "Dump完成", 0, 100.0f);
 
                 kLogEvent dumpFinishEvent;
                 info << dumpFinishEvent
@@ -1979,14 +2054,15 @@ void MemoryDock::requestDumpProcessMemoryByPid(const std::uint32_t pid, const QS
                 QMessageBox::information(
                     guardThis,
                     QStringLiteral("Dump完成"),
-                    QStringLiteral("进程 %1 (PID=%2) 内存已保存到：\n%3")
+                    QStringLiteral("进程 %1 (PID=%2) 内存已通过 %3 保存到：\n%4")
                     .arg(processName)
                     .arg(pid)
+                    .arg(backendName)
                     .arg(outputPath));
             }
             else
             {
-                kPro.set(guardThis->m_dumpMemoryProgressPid, "Dump失败", 0, 100.0f);
+                kPro.set(progressPid, "Dump失败", 0, 100.0f);
 
                 kLogEvent dumpFailEvent;
                 err << dumpFailEvent
@@ -2018,28 +2094,65 @@ void MemoryDock::requestDumpProcessMemoryByPid(const std::uint32_t pid, const QS
 
 bool MemoryDock::dumpProcessMemoryToFile(
     const std::uint32_t pid,
+    const std::shared_ptr<void>& targetProcess,
+    const std::uint64_t creationTime,
+    const ksword::memory_backend::MemoryAccessBackend backend,
     const QString& dumpFilePath,
+    const int progressPid,
     QString& errorTextOut)
 {
     errorTextOut.clear();
 
-    HANDLE processHandle = ::OpenProcess(
-        PROCESS_QUERY_INFORMATION | PROCESS_VM_READ,
-        FALSE,
-        toDwordPid(pid));
-    if (processHandle == nullptr)
+    using namespace ksword::memory_backend;
+    if (backend != MemoryAccessBackend::UserMode
+        && backend != MemoryAccessBackend::StandardDriver
+        && backend != MemoryAccessBackend::Hvm)
     {
-        errorTextOut = QString("OpenProcess 失败, error=%1").arg(::GetLastError());
+        errorTextOut = QStringLiteral("进程内存导出仅支持 R3、R0 或 HVM 后端。");
+        return false;
+    }
+    const HANDLE processHandle = targetProcess.get();
+    const auto identityCurrent = [processHandle, pid, creationTime]() {
+        if (processHandle == nullptr || ::GetProcessId(processHandle) != toDwordPid(pid)
+            || ::WaitForSingleObject(processHandle, 0) != WAIT_TIMEOUT)
+        {
+            return false;
+        }
+        FILETIME creation{}, exit{}, kernel{}, user{};
+        if (::GetProcessTimes(processHandle, &creation, &exit, &kernel, &user) == FALSE)
+        {
+            return false;
+        }
+        return ((static_cast<std::uint64_t>(creation.dwHighDateTime) << 32U)
+            | creation.dwLowDateTime) == creationTime;
+    };
+    if (!identityCurrent())
+    {
+        errorTextOut = QStringLiteral("目标进程已退出或身份已改变，导出已取消。");
         return false;
     }
 
-    QFile outputFile(dumpFilePath);
-    if (!outputFile.open(QIODevice::WriteOnly | QIODevice::Truncate))
+    // WOW64 目标的可查询上限可能低于宿主；非 LAA 目标的 2 GiB 上限还保留最后 64 KiB。
+    // 不预截断范围，仍保留 VirtualQueryEx 可见的高位原生映射。
+    BOOL targetIsWow64 = FALSE;
+    const bool targetIsKnownWow64 =
+        ::IsWow64Process(processHandle, &targetIsWow64) != FALSE && targetIsWow64 != FALSE;
+
+    QSaveFile outputFile(dumpFilePath);
+    outputFile.setDirectWriteFallback(false);
+    if (!outputFile.open(QIODevice::WriteOnly))
     {
-        ::CloseHandle(processHandle);
-        errorTextOut = QString("无法写入文件: %1").arg(dumpFilePath);
+        errorTextOut = QStringLiteral("无法写入文件: %1").arg(dumpFilePath);
         return false;
     }
+    const auto writeExact = [&outputFile, &errorTextOut](const char* bytes, const qint64 count) {
+        if (outputFile.write(bytes, count) == count)
+        {
+            return true;
+        }
+        errorTextOut = QStringLiteral("转储文件写入失败：%1").arg(outputFile.errorString());
+        return false;
+    };
 
     // Dump 文件头结构：
     // - magic：文件签名；
@@ -2080,20 +2193,28 @@ bool MemoryDock::dumpProcessMemoryToFile(
     fileHeader.pid = pid;
     fileHeader.timestamp100ns = fileTimeValue.QuadPart;
 
-    outputFile.write(reinterpret_cast<const char*>(&fileHeader), static_cast<qint64>(sizeof(fileHeader)));
+    if (!writeExact(reinterpret_cast<const char*>(&fileHeader), static_cast<qint64>(sizeof(fileHeader))))
+    {
+        return false;
+    }
 
     SYSTEM_INFO systemInfo{};
     ::GetSystemInfo(&systemInfo);
     const std::uint64_t minAddress = reinterpret_cast<std::uintptr_t>(systemInfo.lpMinimumApplicationAddress);
     const std::uint64_t maxAddress = reinterpret_cast<std::uintptr_t>(systemInfo.lpMaximumApplicationAddress);
 
-    constexpr SIZE_T kChunkSize = 256 * 1024;
-    std::vector<std::uint8_t> chunkBuffer(kChunkSize, 0);
+    constexpr SIZE_T kChunkSize = KSWORD_ARK_MEMORY_READ_MAX_BYTES;
+    const DdmaSession unusedDdmaSession{};
 
     std::uint64_t currentAddress = minAddress;
     std::uint32_t dumpedRegionCount = 0;
     while (currentAddress < maxAddress)
     {
+        if (!identityCurrent())
+        {
+            errorTextOut = QStringLiteral("目标进程已退出或身份已改变，导出已取消。");
+            return false;
+        }
         MEMORY_BASIC_INFORMATION mbi{};
         const SIZE_T querySize = ::VirtualQueryEx(
             processHandle,
@@ -2102,11 +2223,28 @@ bool MemoryDock::dumpProcessMemoryToFile(
             sizeof(mbi));
         if (querySize != sizeof(mbi))
         {
-            break;
+            const DWORD queryError = ::GetLastError();
+            if (querySize == 0U && queryError == ERROR_INVALID_PARAMETER
+                && targetIsKnownWow64 && currentAddress >= 0x7FFF0000ULL)
+            {
+                // 已连续到达至少非 LAA 的 32 位上限，INVALID_PARAMETER 表示超出目标最高地址。
+                // 仍在提交前复核句柄身份；更低地址、短响应及其他查询错误继续取消导出。
+                break;
+            }
+            errorTextOut = QStringLiteral("内存区域查询失败，地址=0x%1，error=%2。")
+                .arg(currentAddress, 0, 16).arg(queryError);
+            return false;
         }
 
         const std::uint64_t regionBase = reinterpret_cast<std::uintptr_t>(mbi.BaseAddress);
         const std::uint64_t regionSize = static_cast<std::uint64_t>(mbi.RegionSize);
+        if (regionSize == 0ULL || regionBase > currentAddress
+            || regionSize > (std::numeric_limits<std::uint64_t>::max)() - regionBase
+            || regionBase + regionSize <= currentAddress)
+        {
+            errorTextOut = QStringLiteral("内存区域范围无效，导出已取消。");
+            return false;
+        }
 
         if (mbi.State == MEM_COMMIT && isReadableProtect(static_cast<std::uint32_t>(mbi.Protect)))
         {
@@ -2118,36 +2256,57 @@ bool MemoryDock::dumpProcessMemoryToFile(
             regionHeader.type = static_cast<std::uint32_t>(mbi.Type);
 
             const qint64 headerPosition = outputFile.pos();
-            outputFile.write(reinterpret_cast<const char*>(&regionHeader), static_cast<qint64>(sizeof(regionHeader)));
+            if (!writeExact(reinterpret_cast<const char*>(&regionHeader), static_cast<qint64>(sizeof(regionHeader))))
+            {
+                return false;
+            }
 
             std::uint64_t offsetInRegion = 0;
             std::uint64_t dumpedBytes = 0;
             while (offsetInRegion < regionSize)
             {
                 const SIZE_T remainSize = static_cast<SIZE_T>(std::min<std::uint64_t>(regionSize - offsetInRegion, kChunkSize));
-                SIZE_T bytesRead = 0;
-                const BOOL readOk = ::ReadProcessMemory(
-                    processHandle,
-                    reinterpret_cast<LPCVOID>(static_cast<std::uintptr_t>(regionBase + offsetInRegion)),
-                    chunkBuffer.data(),
-                    remainSize,
-                    &bytesRead);
-
-                if (readOk == FALSE || bytesRead == 0)
+                if (!identityCurrent())
                 {
-                    break;
+                    errorTextOut = QStringLiteral("目标进程已退出或身份已改变，导出已取消。");
+                    return false;
                 }
-
-                outputFile.write(reinterpret_cast<const char*>(chunkBuffer.data()), static_cast<qint64>(bytesRead));
-                dumpedBytes += static_cast<std::uint64_t>(bytesRead);
-                offsetInRegion += static_cast<std::uint64_t>(bytesRead);
+                const AccessOutcome outcome = readVirtual(backend, unusedDdmaSession,
+                    pid, regionBase + offsetInRegion, static_cast<std::uint64_t>(remainSize),
+                    /*requireHvmDirectWindow*/ true);
+                if (!identityCurrent())
+                {
+                    errorTextOut = QStringLiteral("目标进程已退出或身份已改变，导出已取消。");
+                    return false;
+                }
+                if (!outcome.ok || outcome.partial || outcome.bytesDone != remainSize
+                    || static_cast<std::uint64_t>(outcome.data.size()) != remainSize)
+                {
+                    errorTextOut = QStringLiteral("内存读取未完成，地址=0x%1，实际=%2/%3 字节。%4")
+                        .arg(regionBase + offsetInRegion, 0, 16).arg(outcome.bytesDone)
+                        .arg(static_cast<std::uint64_t>(remainSize)).arg(outcome.failureText);
+                    return false;
+                }
+                if (!writeExact(outcome.data.constData(), outcome.data.size()))
+                {
+                    return false;
+                }
+                dumpedBytes += static_cast<std::uint64_t>(remainSize);
+                offsetInRegion += static_cast<std::uint64_t>(remainSize);
             }
 
             regionHeader.dumpedBytes = dumpedBytes;
             const qint64 endPosition = outputFile.pos();
-            outputFile.seek(headerPosition);
-            outputFile.write(reinterpret_cast<const char*>(&regionHeader), static_cast<qint64>(sizeof(regionHeader)));
-            outputFile.seek(endPosition);
+            if (!outputFile.seek(headerPosition)
+                || !writeExact(reinterpret_cast<const char*>(&regionHeader), static_cast<qint64>(sizeof(regionHeader)))
+                || !outputFile.seek(endPosition))
+            {
+                if (errorTextOut.isEmpty())
+                {
+                    errorTextOut = QStringLiteral("转储文件定位失败：%1").arg(outputFile.errorString());
+                }
+                return false;
+            }
 
             if (dumpedBytes > 0)
             {
@@ -2162,28 +2321,37 @@ bool MemoryDock::dumpProcessMemoryToFile(
                 std::min<std::uint64_t>(
                     95,
                     ((regionBase - minAddress) * 95ULL) / totalRange));
-            kPro.set(m_dumpMemoryProgressPid, "读取并写入内存区域中", 0, progressValue);
+            kPro.set(progressPid, "读取并写入内存区域中", 0, progressValue);
         }
 
         const std::uint64_t nextAddress = regionBase + regionSize;
-        if (nextAddress <= currentAddress)
-        {
-            break;
-        }
         currentAddress = nextAddress;
     }
 
-    // 回写区域数量到文件头。
-    fileHeader.regionCount = dumpedRegionCount;
-    outputFile.seek(0);
-    outputFile.write(reinterpret_cast<const char*>(&fileHeader), static_cast<qint64>(sizeof(fileHeader)));
-    outputFile.close();
-
-    ::CloseHandle(processHandle);
-
     if (dumpedRegionCount == 0)
     {
-        errorTextOut = "未读取到可导出的有效区域。";
+        errorTextOut = QStringLiteral("未读取到可导出的有效区域。");
+        return false;
+    }
+    if (!identityCurrent())
+    {
+        errorTextOut = QStringLiteral("目标进程已退出或身份已改变，导出已取消。");
+        return false;
+    }
+    // 保留 KMDUMP1 布局；只有完整读取、所有文件写入成功才原子提交到目标路径。
+    fileHeader.regionCount = dumpedRegionCount;
+    if (!outputFile.seek(0)
+        || !writeExact(reinterpret_cast<const char*>(&fileHeader), static_cast<qint64>(sizeof(fileHeader))))
+    {
+        if (errorTextOut.isEmpty())
+        {
+            errorTextOut = QStringLiteral("转储文件定位失败：%1").arg(outputFile.errorString());
+        }
+        return false;
+    }
+    if (!outputFile.commit())
+    {
+        errorTextOut = QStringLiteral("转储文件提交失败：%1").arg(outputFile.errorString());
         return false;
     }
     return true;
