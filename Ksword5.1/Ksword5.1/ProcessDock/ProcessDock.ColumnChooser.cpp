@@ -214,6 +214,10 @@ void ProcessDock::setProcessColumnVisible(
 
     // R0-only 列在扩展整轮不可用时不允许手动显示：整列都会是 Unavailable，没有信息量。
     const TableColumn column = static_cast<TableColumn>(columnIndex);
+    if (column == TableColumn::Ram)
+    {
+        return;
+    }
     if (visible &&
         m_autoHideUnavailableR0Columns &&
         processColumnGroupOf(column) == ProcessColumnGroup::Kernel)
@@ -298,6 +302,21 @@ void ProcessDock::loadProcessColumnLayoutFromSettings()
     }
     settings.endGroup();
 
+    // 旧 RAM 显隐迁移到两列；单独配置过的工作集/提交大小选择优先。
+    const int legacyRamColumn = toColumnIndex(TableColumn::Ram);
+    if (m_userColumnVisibilityOverride.contains(legacyRamColumn))
+    {
+        const bool visible = m_userColumnVisibilityOverride.take(legacyRamColumn);
+        for (const TableColumn column : { TableColumn::WorkingSet, TableColumn::CommitSize })
+        {
+            const int columnIndex = toColumnIndex(column);
+            if (!m_userColumnVisibilityOverride.contains(columnIndex))
+            {
+                m_userColumnVisibilityOverride.insert(columnIndex, visible);
+            }
+        }
+    }
+
     if (!m_userColumnVisibilityOverride.isEmpty())
     {
         kLogEvent logEvent;
@@ -352,7 +371,15 @@ void ProcessDock::loadCustomViewsFromSettings()
             {
                 continue;
             }
-            customView.visibleColumns.push_back(columnIndex);
+            if (columnIndex == toColumnIndex(TableColumn::Ram))
+            {
+                customView.visibleColumns.push_back(toColumnIndex(TableColumn::WorkingSet));
+                customView.visibleColumns.push_back(toColumnIndex(TableColumn::CommitSize));
+            }
+            else
+            {
+                customView.visibleColumns.push_back(columnIndex);
+            }
         }
 
         if (!customView.visibleColumns.empty())
@@ -643,6 +670,10 @@ void ProcessDock::showColumnChooserDialog()
         for (int columnIndex = 0; columnIndex < static_cast<int>(TableColumn::Count); ++columnIndex)
         {
             const TableColumn column = static_cast<TableColumn>(columnIndex);
+            if (column == TableColumn::Ram)
+            {
+                continue;
+            }
             if (processColumnGroupOf(column) != group)
             {
                 continue;

@@ -168,7 +168,7 @@ private:
         Name = 0,      // 进程名（含图标）。
         Pid,           // PID。
         Cpu,           // CPU 百分比。
-        Ram,           // RAM（MB）。
+        Ram,           // 旧合并 RAM 列：仅保留逻辑索引用于配置迁移，不再展示。
         Disk,          // DISK（MB/s）。
         Gpu,           // GPU 百分比（R3 PDH GPU Engine 聚合）。
         Net,           // Net（预留）。
@@ -181,7 +181,7 @@ private:
         IsAdmin,       // 是否管理员。
         PplLevel,      // 用户态手动刷新得到的 PPL 保护级别枚举。
         Protection,    // R0 读取的保护状态。
-        Ppl,           // R0 读取的 PPL 原始字节。
+        Ppl,           // R0 保护签名者名称（原始字节在 Protection 列）。
         HandleCount,   // 进程句柄数量。
         HandleTable,   // EPROCESS.ObjectTable 是否可用。
         SectionObject, // EPROCESS.SectionObject 是否可用。
@@ -198,13 +198,13 @@ private:
         JobObject,               // 作业对象 ID（归属判定）。
         CpuTime,                 // CPU 时间（内核态 + 用户态累计）。
         CycleTime,               // 周期（累计 CPU 周期数）。
-        WorkingSet,              // 工作集(内存)。
+        WorkingSet,              // 内存使用：总工作集（MB）。
         PeakWorkingSet,          // 峰值工作集(内存)。
         WorkingSetDelta,         // 工作集增量(内存)。
         ActivePrivateWorkingSet, // 内存(活动的专用工作集)。
         PrivateWorkingSet,       // 内存(专用工作集)。
         SharedWorkingSet,        // 内存(共享工作集)。
-        CommitSize,              // 提交大小。
+        CommitSize,              // 内存申请：私有提交量（MB）。
         PagedPool,               // 分页缓冲池。
         NonPagedPool,            // 非分页缓冲池。
         PageFaults,              // 页面错误。

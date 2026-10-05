@@ -437,13 +437,13 @@ namespace
         "作业对象 ID",
         "CPU 时间",
         "周期",
-        "工作集(内存)",
+        "内存使用",
         "峰值工作集(内存)",
         "工作集增量(内存)",
         "内存(活动的专用工作集)",
         "内存(专用工作集)",
         "内存(共享工作集)",
-        "提交大小",
+        "内存申请",
         "分页缓冲池",
         "非分页缓冲池",
         "页面错误",
@@ -3366,7 +3366,7 @@ namespace
 
     QString processProtectionText(const std::uint8_t protection)
     {
-        // PS_PROTECTION 的 Type/Audit/Signer 由共享协议定义，代码保留完整原始字节。
+        // PS_PROTECTION 的 Type/Audit/Signer 由共享协议定义，原始字节已在保护状态列显示。
         const unsigned int type = protection & 0x07U;
         if (type == KSWORD_PS_PROTECTED_TYPE_NONE)
         {
@@ -3388,7 +3388,7 @@ namespace
             default: break;
             }
         }
-        return QStringLiteral("%1(0x%2)").arg(signerName).arg(byteHexText(protection).mid(2));
+        return signerName;
     }
 
     bool resolvePplSignatureLevelsForUi(
@@ -3476,7 +3476,7 @@ namespace
         // 表格只显示实际地址；缺失字段与空指针均使用紧凑占位符。
         if (!available || addressValue == 0U)
         {
-            return QStringLiteral("-");
+            return ProcessColumnUnavailableText;
         }
         return QStringLiteral("0x%1").arg(QString::number(addressValue, 16).toUpper());
     }
@@ -5433,6 +5433,11 @@ void ProcessDock::initializeProcessTable()
     }
     QHeaderView* headerView = m_processTable->horizontalHeader();
     headerView->setSectionsMovable(true);
+    // 复用工作集/提交大小列，放在旧 RAM 的位置；保留逻辑索引以兼容保存的列配置。
+    headerView->moveSection(headerView->visualIndex(toColumnIndex(TableColumn::WorkingSet)),
+        toColumnIndex(TableColumn::Ram));
+    headerView->moveSection(headerView->visualIndex(toColumnIndex(TableColumn::CommitSize)),
+        toColumnIndex(TableColumn::Ram) + 1);
     headerView->setStretchLastSection(false);
     headerView->setContextMenuPolicy(Qt::CustomContextMenu);
     headerView->setStyleSheet(QStringLiteral(
@@ -6775,13 +6780,13 @@ void ProcessDock::applyDefaultColumnWidths()
     m_processTable->setColumnWidth(toColumnIndex(TableColumn::InjectionSurface), 170);
     m_processTable->setColumnWidth(toColumnIndex(TableColumn::CpuTime), 100);
     m_processTable->setColumnWidth(toColumnIndex(TableColumn::CycleTime), 140);
-    m_processTable->setColumnWidth(toColumnIndex(TableColumn::WorkingSet), 120);
+    m_processTable->setColumnWidth(toColumnIndex(TableColumn::WorkingSet), 180);
     m_processTable->setColumnWidth(toColumnIndex(TableColumn::PeakWorkingSet), 150);
     m_processTable->setColumnWidth(toColumnIndex(TableColumn::WorkingSetDelta), 150);
     m_processTable->setColumnWidth(toColumnIndex(TableColumn::ActivePrivateWorkingSet), 190);
     m_processTable->setColumnWidth(toColumnIndex(TableColumn::PrivateWorkingSet), 160);
     m_processTable->setColumnWidth(toColumnIndex(TableColumn::SharedWorkingSet), 160);
-    m_processTable->setColumnWidth(toColumnIndex(TableColumn::CommitSize), 110);
+    m_processTable->setColumnWidth(toColumnIndex(TableColumn::CommitSize), 180);
     m_processTable->setColumnWidth(toColumnIndex(TableColumn::PagedPool), 120);
     m_processTable->setColumnWidth(toColumnIndex(TableColumn::NonPagedPool), 130);
     m_processTable->setColumnWidth(toColumnIndex(TableColumn::PageFaults), 110);
@@ -6921,7 +6926,8 @@ std::vector<int> ProcessDock::defaultVisibleColumnsForViewMode(const ViewMode vi
     default:
         appendColumns({
             TableColumn::Cpu,
-            TableColumn::Ram,
+            TableColumn::WorkingSet,
+            TableColumn::CommitSize,
             TableColumn::Disk,
             TableColumn::Gpu,
             TableColumn::Net,
@@ -8782,7 +8788,8 @@ void ProcessDock::updateUsageSummaryInHeader()
     }
 
     double totalCpuPercent = 0.0;
-    double totalRamMB = 0.0;
+    double totalWorkingSetMB = 0.0;
+    double totalCommitMB = 0.0;
     double totalDiskMBps = 0.0;
     double totalGpuPercent = 0.0;
     double totalNetKBps = 0.0;
@@ -8790,7 +8797,8 @@ void ProcessDock::updateUsageSummaryInHeader()
 
     const auto accumulateRecord = [this,
         &totalCpuPercent,
-        &totalRamMB,
+        &totalWorkingSetMB,
+        &totalCommitMB,
         &totalDiskMBps,
         &totalGpuPercent,
         &totalNetKBps,
@@ -8810,7 +8818,11 @@ void ProcessDock::updateUsageSummaryInHeader()
             totalCpuPercent += processRecord.cpuPercent;
         }
 
-        totalRamMB += processRecord.ramMB;
+        totalWorkingSetMB += static_cast<double>(processRecord.rawWorkingSetBytes) / (1024.0 * 1024.0);
+        if (processRecord.memoryDetailKnown)
+        {
+            totalCommitMB += static_cast<double>(processRecord.commitSizeBytes) / (1024.0 * 1024.0);
+        }
         totalDiskMBps += processRecord.diskMBps;
         totalGpuPercent += processRecord.gpuPercent;
         totalNetKBps += processRecord.netKBps;
@@ -8849,7 +8861,8 @@ void ProcessDock::updateUsageSummaryInHeader()
 
     QStringList headerTexts = ProcessTableHeaders;
     headerTexts[toColumnIndex(TableColumn::Cpu)] = QString("CPU %1%").arg(totalCpuPercent, 0, 'f', 2);
-    headerTexts[toColumnIndex(TableColumn::Ram)] = QString("RAM %1 MB").arg(totalRamMB, 0, 'f', 1);
+    headerTexts[toColumnIndex(TableColumn::WorkingSet)] += QStringLiteral(" %1 MB").arg(totalWorkingSetMB, 0, 'f', 1);
+    headerTexts[toColumnIndex(TableColumn::CommitSize)] += QStringLiteral(" %1 MB").arg(totalCommitMB, 0, 'f', 1);
     headerTexts[toColumnIndex(TableColumn::Disk)] = QString("DISK %1 MB/s").arg(totalDiskMBps, 0, 'f', 2);
     headerTexts[toColumnIndex(TableColumn::Gpu)] = QString("GPU %1%").arg(totalGpuPercent, 0, 'f', 1);
     headerTexts[toColumnIndex(TableColumn::Net)] = QString("Net %1 KB/s").arg(totalNetKBps, 0, 'f', 2);
@@ -10125,6 +10138,16 @@ QVariant ProcessDock::processTableData(const ProcessTableRow& tableRow, const in
             "process.table.cell.section_object_source_tooltip",
             QStringLiteral("SectionObject 字段来源：%1"))
             .arg(processFieldSourceText(processRecord.r0SectionObjectSource));
+    }
+    if (role == Qt::ToolTipRole && tableColumn == TableColumn::WorkingSet)
+    {
+        return processContextText("process.table.cell.memory_used_tooltip",
+            QStringLiteral("内存使用：总工作集（含共享页）。"));
+    }
+    if (role == Qt::ToolTipRole && tableColumn == TableColumn::CommitSize)
+    {
+        return processContextText("process.table.cell.memory_committed_tooltip",
+            QStringLiteral("内存申请：私有提交量。"));
     }
     if (role == Qt::ToolTipRole && tableColumn == TableColumn::Name)
     {
@@ -12721,6 +12744,10 @@ void ProcessDock::showHeaderContextMenu(const QPoint& localPosition)
     columnActions.reserve(static_cast<std::size_t>(TableColumn::Count));
     for (int columnIndex = 0; columnIndex < static_cast<int>(TableColumn::Count); ++columnIndex)
     {
+        if (columnIndex == toColumnIndex(TableColumn::Ram))
+        {
+            continue;
+        }
         QAction* toggleAction = columnMenu.addAction(
             translatedProcessHeader(columnIndex, ProcessTableHeaders.at(columnIndex)));
         toggleAction->setCheckable(true);
@@ -13516,7 +13543,7 @@ QString ProcessDock::formatColumnText(const ks::process::ProcessRecord& processR
             ? processGroupedNumberText(processRecord.cycleTime)
             : ProcessColumnUnavailableText;
     case TableColumn::WorkingSet:
-        return processKilobyteText(processRecord.rawWorkingSetBytes);
+        return processMegabyteText(processRecord.rawWorkingSetBytes);
     case TableColumn::PeakWorkingSet:
         return processRecord.memoryDetailKnown
             ? processKilobyteText(processRecord.peakWorkingSetBytes)
@@ -13537,7 +13564,7 @@ QString ProcessDock::formatColumnText(const ks::process::ProcessRecord& processR
             : ProcessColumnUnavailableText;
     case TableColumn::CommitSize:
         return processRecord.memoryDetailKnown
-            ? processKilobyteText(processRecord.commitSizeBytes)
+            ? processMegabyteText(processRecord.commitSizeBytes)
             : ProcessColumnUnavailableText;
     case TableColumn::PagedPool:
         return processRecord.memoryDetailKnown

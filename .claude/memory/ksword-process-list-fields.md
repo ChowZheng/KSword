@@ -1,9 +1,15 @@
 # 进程列表 R0 字段显示
 
 - 保护状态列只显示原始字节；`Runtime pattern`、PDB 等字段来源保留在悬停提示中，用于诊断偏移来源。
-- PPL 列按 `shared/driver/KswordArkProcessIoctl.h` 的 PS_PROTECTION 位域解码：Type 位 0–2、Audit 位 3、Signer 位 4–7。Type=0 显示 `-`，PPL/PP 显示 signer 名称和完整原始代码（如 `WinTCB(0x61)` / `WinTCB(0x62)`）；未知类型或 signer 保留 `Unknown(代码)`，不能误报无保护。保护状态、PPL、HandleTable、SectionObject 未采集时均显示 `-`，字段来源保留在悬停提示中。
+- PPL 列按 `shared/driver/KswordArkProcessIoctl.h` 的 PS_PROTECTION 位域解码：Type 位 0–2、Audit 位 3、Signer 位 4–7。Type=0 显示 `-`；2026-10-05 按用户要求改为仅显示 signer 名称（如 `Antimalware` / `WinTCB`），完整原始代码在前面的保护状态列显示；未知类型或 signer 显示 `Unknown`，不能误报无保护。保护状态、PPL、HandleTable、SectionObject 未采集时均显示 `-`，字段来源保留在悬停提示中。
 - HandleTable、SectionObject 只显示实际地址，移除 `Available:` 与来源括号；字段不可用或地址为空都显示 `-`，字段来源放在提示中。
 - 显示入口在 `ProcessDock.cpp` 的 `formatColumnText` 与 `processTableData`。新增提示同时定点补充双语包的 `context_translations` 和 `source_translations`，两者缺一会使 i18n 审计失败。
+
+## 2026-10-05 内存列拆分
+
+- 复用既有 `WorkingSet` 与 `CommitSize` 列取代合并 RAM，名称分别为“内存使用”与“内存申请”，单元格及表头汇总均以 MB 显示。使用取 `rawWorkingSetBytes`，申请取 `commitSizeBytes`；申请未采集时显示 `-`，不纳入申请表头汇总。
+- 两列移动到旧 RAM 的视觉位置；旧 `Ram` 逻辑索引保留但不再出现在列选择入口。旧 RAM 显隐覆盖与自定义视图载入时迁移到两列，已保存的独立列覆盖优先，不能删除枚举项导致后续保存索引整体漂移。
+- 内存使用包含共享页，跨进程汇总可能重复统计共享页；表头是当前筛选进程的列汇总，不是系统物理内存利用率。
 
 ## SectionObject 实机核查（2026-10-03）
 
