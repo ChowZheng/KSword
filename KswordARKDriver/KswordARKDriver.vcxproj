@@ -31,6 +31,7 @@
     <ClCompile Include="src\features\callback\callback_remove_extended.c" />
     <ClCompile Include="src\features\callback\callback_registry_identity.c" />
     <ClCompile Include="src\features\callback\callback_enum.c" />
+    <ClCompile Include="src\features\callback\callback_global_fallback.c" />
     <ClCompile Include="src\features\callback\callback_snapshot.c" />
     <ClCompile Include="src\features\callback\callback_extended_support.c" />
     <ClCompile Include="src\features\callback\callback_extended_bugcheck.c" />
@@ -246,6 +247,7 @@
     <ClCompile Include="src\platform\kernel_cache_fallback.c" />
     <ClCompile Include="src\platform\kernel_object_probe.c" />
     <ClCompile Include="src\platform\runtime_signature_scan.c" />
+    <ClCompile Include="src\platform\process_accessor_decode.c" />
     <ClCompile Include="src\platform\kernel_module_identity.c" />
     <ClCompile Include="src\platform\pool_compat.c" />
     <ClCompile Include="src\features\dyndata\dyndata_loader.c" />
@@ -441,6 +443,8 @@
     <ClInclude Include="src\platform\kernel_cache_fallback.h" />
     <ClInclude Include="src\platform\kernel_object_probe.h" />
     <ClInclude Include="src\platform\runtime_signature_scan.h" />
+    <ClInclude Include="src\platform\process_accessor_decode.h" />
+    <ClInclude Include="src\features\callback\callback_global_fallback.h" />
     <ClInclude Include="src\platform\kernel_module_identity.h" />
     <ClInclude Include="src\platform\pool_compat.h" />
     <ClInclude Include="include\ark\ark_dyndata.h" />

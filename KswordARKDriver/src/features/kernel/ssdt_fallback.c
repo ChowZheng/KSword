@@ -269,7 +269,7 @@ Return Value:
     }
 
     RtlZeroMemory(references, sizeof(references));
-    referenceCount = KswordARKRuntimeCollectAnchoredDataReferences(
+    referenceCount = KswordARKRuntimeCollectFunctionDataReferences( // 防止锚点之后的邻接函数耗尽 Shadow SSDT 引用预算。
         &imageView,
         anchors,
         RTL_NUMBER_OF(anchors),

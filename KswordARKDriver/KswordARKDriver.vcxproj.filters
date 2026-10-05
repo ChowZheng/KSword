@@ -506,6 +506,12 @@
     <ClInclude Include="src\platform\runtime_signature_scan.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="src\platform\process_accessor_decode.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="src\features\callback\callback_global_fallback.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="src\platform\kernel_module_identity.h">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -698,6 +704,9 @@
       <Filter>Source Files\Features\Callback</Filter>
     </ClCompile>
     <ClCompile Include="src\features\callback\callback_enum.c">
+      <Filter>Source Files\Features\Callback</Filter>
+    </ClCompile>
+    <ClCompile Include="src\features\callback\callback_global_fallback.c">
       <Filter>Source Files\Features\Callback</Filter>
     </ClCompile>
     <ClCompile Include="src\features\callback\callback_snapshot.c">
@@ -1381,6 +1390,9 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="src\platform\runtime_signature_scan.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="src\platform\process_accessor_decode.c">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="src\platform\kernel_module_identity.c">

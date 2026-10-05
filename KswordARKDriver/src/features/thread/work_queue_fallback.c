@@ -1455,7 +1455,7 @@ KswordARKWorkQueueResolveRuntimeLayout(
     if (references == NULL) {
         return STATUS_INSUFFICIENT_RESOURCES;
     }
-    referenceCount = KswordARKRuntimeCollectAnchoredDataReferences(
+    referenceCount = KswordARKRuntimeCollectFunctionDataReferences( // 以 PE 函数边界约束 ExQueueWorkItem 调用链。
         &view,
         anchors,
         RTL_NUMBER_OF(anchors),

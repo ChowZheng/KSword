@@ -15,7 +15,9 @@ Environment:
 --*/
 
 #include <ntifs.h>
+#include <ntimage.h>
 #include "process_resolver.h"
+#include "process_accessor_decode.h"
 #include "token_layout_resolver.h"
 #include "runtime_signature_scan.h"
 
@@ -44,20 +46,10 @@ typedef UCHAR(NTAPI* KSWORD_PROCESS_SIGNATURE_ACCESSOR_FN)(
     _Out_opt_ PUCHAR SectionSignatureLevel
     );
 
-typedef enum _KSWORD_ACCESSOR_LOAD_KIND
-{
-    KswordAccessorLoadPointer,
-    KswordAccessorLoadUlong,
-    KswordAccessorLoadUshort,
-    KswordAccessorLoadUchar,
-    KswordAccessorAddress
-} KSWORD_ACCESSOR_LOAD_KIND;
-
-typedef struct _KSWORD_ACCESSOR_DISPLACEMENT
-{
-    LONG Offset;
-    KSWORD_ACCESSOR_LOAD_KIND LoadKind;
-} KSWORD_ACCESSOR_DISPLACEMENT;
+// 用途：按原始导出入口确定所属映像，入口跳转只能在该映像的代码区段内跟随。
+NTSYSAPI PVOID NTAPI RtlPcToFileHeader(
+    _In_ PVOID PcValue,
+    _Outptr_ PVOID* BaseOfImage);
 
 static BOOLEAN
 KswordARKDriverReadPointerGuarded(
@@ -82,66 +74,54 @@ KswordARKDriverInitializeRuntimeDynDataOffsets(
     }
 }
 
+// 用途：安全解析导出所属映像及可执行区段，供访问器入口和直接跳转目标验证。
 static BOOLEAN
-KswordARKDriverDecodeAccessorDisplacement(
-    _In_reads_bytes_(ByteCount) const UCHAR* Bytes,
-    _In_ SIZE_T ByteCount,
-    _Out_ KSWORD_ACCESSOR_DISPLACEMENT* DisplacementOut
-    )
+KswordARKDriverAccessorImageView(
+    _In_ PVOID Routine, // 已通过导出表确认的访问器入口。
+    _Out_ KSW_RUNTIME_IMAGE_VIEW* ViewOut) // 接收安全解析后的 PE 映像与区段边界。
 {
-    SIZE_T index = 0U;
+    PVOID imageBase = NULL; // 原始导出入口所属的加载映像基址。
+    IMAGE_DOS_HEADER dosHeader; // 安全读取的 DOS 头本地副本。
+    IMAGE_NT_HEADERS64 ntHeaders; // 安全读取的 x64 NT 头本地副本。
+    ULONG_PTR ntAddress = 0U; // 经溢出检查后计算的 NT 头地址。
 
-    if (Bytes == NULL || DisplacementOut == NULL) {
-        return FALSE;
+    // 先验证入口所属 PE，再做解码或跟随跳转；头地址与头内容都不能直接解引用。
+    if (Routine == NULL || ViewOut == NULL ||
+        RtlPcToFileHeader(Routine, &imageBase) == NULL || imageBase == NULL ||
+        !KswordARKRuntimeReadMemory(imageBase, &dosHeader, sizeof(dosHeader)) ||
+        dosHeader.e_magic != IMAGE_DOS_SIGNATURE || dosHeader.e_lfanew <= 0 ||
+        dosHeader.e_lfanew > 0x00100000L ||
+        (ULONG_PTR)imageBase > MAXULONG_PTR - (ULONG)dosHeader.e_lfanew) {
+        return FALSE; // 无法证明头地址和映像身份时保持字段不可用。
     }
-    DisplacementOut->Offset = -1;
-    DisplacementOut->LoadKind = KswordAccessorLoadPointer;
-
-    for (index = 0U; index + 7U <= ByteCount && index < 24U; ++index) {
-        LONG displacement = -1;
-        KSWORD_ACCESSOR_LOAD_KIND kind = KswordAccessorLoadPointer;
-        SIZE_T displacementIndex = 0U;
-
-        if (Bytes[index] == 0x48U &&
-            (Bytes[index + 1U] == 0x8BU || Bytes[index + 1U] == 0x8DU) &&
-            Bytes[index + 2U] == 0x81U) {
-            kind = (Bytes[index + 1U] == 0x8DU)
-                ? KswordAccessorAddress
-                : KswordAccessorLoadPointer;
-            displacementIndex = index + 3U;
-        }
-        else if (Bytes[index] == 0x8BU && Bytes[index + 1U] == 0x81U) {
-            kind = KswordAccessorLoadUlong;
-            displacementIndex = index + 2U;
-        }
-        else if (Bytes[index] == 0x0FU &&
-                 Bytes[index + 1U] == 0xB6U &&
-                 Bytes[index + 2U] == 0x81U) {
-            kind = KswordAccessorLoadUchar;
-            displacementIndex = index + 3U;
-        }
-        else if (Bytes[index] == 0x0FU &&
-                 Bytes[index + 1U] == 0xB7U &&
-                 Bytes[index + 2U] == 0x81U) {
-            kind = KswordAccessorLoadUshort;
-            displacementIndex = index + 3U;
-        }
-        else {
-            continue;
-        }
-
-        RtlCopyMemory(
-            &displacement,
-            Bytes + displacementIndex,
-            sizeof(displacement));
-        if (displacement <= 0 || displacement > 0x00003FFF) {
-            continue;
-        }
-        DisplacementOut->Offset = displacement;
-        DisplacementOut->LoadKind = kind;
-        return TRUE;
+    ntAddress = (ULONG_PTR)imageBase + (ULONG)dosHeader.e_lfanew; // 在已检查的范围内定位 NT 头。
+    if (!KswordARKRuntimeReadMemory(
+            (const VOID*)ntAddress, &ntHeaders, sizeof(ntHeaders)) ||
+        ntHeaders.Signature != IMAGE_NT_SIGNATURE ||
+        ntHeaders.OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR64_MAGIC ||
+        ntHeaders.OptionalHeader.SizeOfImage < 0x1000UL ||
+        !KswordARKRuntimeInitializeImageView(
+            imageBase, ntHeaders.OptionalHeader.SizeOfImage, ViewOut)) {
+        return FALSE; // 签名、体系结构或区段解析不一致时拒绝解码。
     }
-    return FALSE;
+    return KswordARKRuntimeAddressIsExecutable(ViewOut, (ULONG_PTR)Routine, 1U); // 入口本身也必须位于代码区段。
+}
+
+// 用途：为独立解码器提供同一映像代码区段中的完整单字节安全读取。
+static int
+KswordARKDriverAccessorReadCode(
+    void* Context, // 原始导出映像的已验证区段视图。
+    KSW_ACCESSOR_ADDRESS Address, // 本次代码字节或跳转目标的读取地址。
+    KSW_ACCESSOR_BYTE* ByteOut) // 完整复制成功时接收一个字节。
+{
+    const KSW_RUNTIME_IMAGE_VIEW* view = (const KSW_RUNTIME_IMAGE_VIEW*)Context; // 安全读取共用的映像边界。
+
+    // 逐字节检查代码区段；任何入口跳转目标都不能跨出原始 PE。
+    if (view == NULL || ByteOut == NULL ||
+        !KswordARKRuntimeAddressIsExecutable(view, (ULONG_PTR)Address, 1U)) {
+        return 0; // 缺少上下文或地址越界时不给解码器任何候选字节。
+    }
+    return KswordARKRuntimeReadMemory((const VOID*)Address, ByteOut, 1U) ? 1 : 0; // MmCopyMemory 完整读取才算成功。
 }
 
 static BOOLEAN
@@ -192,45 +172,45 @@ KswordARKDriverReadAccessorValue(
 
 static LONG
 KswordARKDriverResolveValidatedAccessorOffset(
-    _In_ PCWSTR RoutineName,
-    _In_ PVOID ValidationObject
+    _In_ PCWSTR RoutineName, // 用于取得公开导出地址的例程名称。
+    _In_ PVOID ValidationObject // 具有可信引用或当前上下文保证的现场对象。
     )
 {
-    UNICODE_STRING routineName;
-    KSWORD_OBJECT_ACCESSOR_FN accessor = NULL;
-    UCHAR code[32] = { 0 };
-    KSWORD_ACCESSOR_DISPLACEMENT displacement;
-    ULONG_PTR accessorValue = 0U;
-    ULONG_PTR fieldValue = 0U;
+    UNICODE_STRING routineName; // 提交给系统导出解析器的例程名称。
+    KSWORD_OBJECT_ACCESSOR_FN accessor = NULL; // 已确认导出身份的现场访问器。
+    KSW_RUNTIME_IMAGE_VIEW imageView; // 将解码与入口跳转约束在原始导出的 PE 映像内。
+    KSWORD_ACCESSOR_DISPLACEMENT displacement; // 严格指令解码确认的读取操作及字段偏移。
+    ULONG_PTR accessorValue = 0U; // 已确认导出在同一个现场对象上返回的语义依据。
+    ULONG_PTR fieldValue = 0U; // 候选字段经过完整安全读取后的本地值。
 
     if (RoutineName == NULL || ValidationObject == NULL) {
         return -1;
     }
-    RtlInitUnicodeString(&routineName, RoutineName);
-    accessor = (KSWORD_OBJECT_ACCESSOR_FN)MmGetSystemRoutineAddress(&routineName);
-    if (accessor == NULL) {
+    RtlInitUnicodeString(&routineName, RoutineName); // 构造不会改写调用者字符串的导出名称视图。
+    accessor = (KSWORD_OBJECT_ACCESSOR_FN)MmGetSystemRoutineAddress(&routineName); // 从系统导出表取得可信入口。
+    if (accessor == NULL ||
+        !KswordARKDriverAccessorImageView((PVOID)accessor, &imageView) ||
+        !KswordARKResolveAccessorDisplacement(
+            KswordARKDriverAccessorReadCode,
+            &imageView,
+            (KSW_ACCESSOR_ADDRESS)accessor,
+            &displacement) ||
+        !KswordARKDriverReadAccessorValue(
+            ValidationObject, &displacement, &fieldValue)) {
         return -1;
     }
 
+    // 已确认身份的导出仍作为现场语义依据；仅机器码形态匹配不能发布偏移。
     __try {
-        RtlCopyMemory(code, (const VOID*)accessor, sizeof(code));
-        accessorValue = accessor(ValidationObject);
+        accessorValue = accessor(ValidationObject); // 仅调用已确认身份的公开访问器，不调用候选代码地址。
     }
     __except (EXCEPTION_EXECUTE_HANDLER) {
         return -1;
     }
-    if (!KswordARKDriverDecodeAccessorDisplacement(
-            code,
-            sizeof(code),
-            &displacement) ||
-        !KswordARKDriverReadAccessorValue(
-            ValidationObject,
-            &displacement,
-            &fieldValue) ||
-        fieldValue != accessorValue) {
+    if (fieldValue != accessorValue) {
         return -1;
     }
-    return displacement.Offset;
+    return displacement.Offset; // 指令形态和现场语义一致后才发布偏移。
 }
 
 static LONG
@@ -439,14 +419,16 @@ Return Value:
         return -1;
     }
 
-    __try {
-        const ULONG flags = *(volatile const ULONG*)((const UCHAR*)Process + resolvedOffset);
+    {
+        ULONG flags = 0UL; // 候选 Flags 偏移对应的本地安全读取副本。
+        // 候选偏移可能落到对象外；SEH 不能兜住未映射内核地址，必须完整安全复制。
+        if (!KswordARKRuntimeReadMemory(
+                (const UCHAR*)Process + resolvedOffset, &flags, sizeof(flags))) {
+            return -1; // 无法完整读取时不发布 Flags 偏移。
+        }
         if ((((flags >> resolvedBit) & 1UL) != 0UL) != accessorValue) {
             return -1;
         }
-    }
-    __except (EXCEPTION_EXECUTE_HANDLER) {
-        return -1;
     }
 
     return resolvedOffset;
@@ -1428,11 +1410,10 @@ Return Value:
             LONG tableOffset = 0;
             BOOLEAN matched = FALSE;
 
-            __try {
-                handleTable = *(const UCHAR* const volatile*)
-                    ((const UCHAR*)sampleProcesses[sampleIndex] + candidateOffset);
-            }
-            __except (EXCEPTION_EXECUTE_HANDLER) {
+            // ObjectTable 偏移还未确认；只能安全复制候选指针，不能直接解引用。
+            if (!KswordARKRuntimeReadMemory(
+                    (const UCHAR*)sampleProcesses[sampleIndex] + candidateOffset,
+                    &handleTable, sizeof(handleTable))) {
                 candidateOk = FALSE;
                 break;
             }
@@ -1451,10 +1432,9 @@ Return Value:
                 if (agreedTableOffset >= 0 && tableOffset != agreedTableOffset) {
                     continue;
                 }
-                __try {
-                    tableValue = *(const volatile ULONG*)(handleTable + tableOffset);
-                }
-                __except (EXCEPTION_EXECUTE_HANDLER) {
+                // 表地址和表内偏移都来自候选，逐项完整安全读后再与公开 PID 比对。
+                if (!KswordARKRuntimeReadMemory(
+                        handleTable + tableOffset, &tableValue, sizeof(tableValue))) {
                     continue;
                 }
                 if (tableValue != samplePids[sampleIndex]) {
