@@ -336,6 +336,14 @@
     <ClCompile Include="MemoryDock\WorkbenchIoPorts.cpp" />
     <ClCompile Include="MemoryDock\WorkbenchIoPorts.Kernel.cpp" />
     <ClCompile Include="MemoryDock\WorkbenchIoMapping.cpp" />
+    <ClCompile Include="MemoryDock\WorkbenchServicesMapping.cpp" />
+    <ClCompile Include="MemoryDock\WorkbenchServicesAudit.cpp" />
+    <ClCompile Include="MemoryDock\WorkbenchServicesProbe.cpp" />
+    <ClCompile Include="MemoryDock\MemoryDock.WorkbenchServices.cpp" />
+    <ClCompile Include="MemoryDock\MemoryDock.WorkbenchServices.Impl.cpp" />
+    <ClCompile Include="MemoryDock\MemoryDock.WorkbenchServices.Gate.cpp" />
+    <ClCompile Include="MemoryDock\MemoryDock.WorkbenchServices.Audit.cpp" />
+    <ClCompile Include="MemoryDock\MemoryDock.WorkbenchServices.Disasm.cpp" />
     <ClCompile Include="MemoryDock\DdmaPage.cpp" />
     <ClCompile Include="MemoryDock\TamperDetectionPage.cpp" />
     <ClCompile Include="MemoryDock\DmaProcessOpPage.cpp" />
@@ -885,6 +893,11 @@
     <ClInclude Include="MemoryDock\MemoryAccessBackend.h" />
     <ClInclude Include="MemoryDock\WorkbenchIoPorts.h" />
     <ClInclude Include="MemoryDock\WorkbenchIoMapping.h" />
+    <ClInclude Include="MemoryDock\WorkbenchServicesMapping.h" />
+    <ClInclude Include="MemoryDock\WorkbenchServicesAudit.h" />
+    <ClInclude Include="MemoryDock\WorkbenchServicesProbe.h" />
+    <ClInclude Include="MemoryDock\MemoryDock.WorkbenchServices.h" />
+    <ClInclude Include="MemoryDock\MemoryDock.WorkbenchServices.Internal.h" />
     <ClInclude Include="MemoryDock\DdmaPage.h" />
     <ClInclude Include="MemoryDock\TamperDetectionPage.h" />
     <ClInclude Include="MemoryDock\DmaProcessOpPage.h" />

@@ -59,7 +59,10 @@ robocopy (Join-Path $repo 'Ksword5.1\Ksword5.1') (Join-Path $root 'Ksword5.1\Ksw
 # 装配层夹具借用 Light 测试里的假端口等支持头（Qt-free，只读）。
 robocopy (Join-Path $repo 'KswordARKLightTests') (Join-Path $root 'KswordARKLightTests') '*.h' /NFL /NDL /NJH /NJS /NP /R:1 /W:1 | Out-Null
 # 主程序 MemoryDock 下的真实端口与服务（头文件；以及 Workbench* 开头的实现，供链接它们的夹具使用）。
-robocopy (Join-Path $repo 'Ksword5.1\Ksword5.1\MemoryDock') (Join-Path $root 'Ksword5.1\Ksword5.1\MemoryDock') '*.h' 'Workbench*.cpp' /NFL /NDL /NJH /NJS /NP /R:1 /W:1 | Out-Null
+robocopy (Join-Path $repo 'Ksword5.1\Ksword5.1\MemoryDock') (Join-Path $root 'Ksword5.1\Ksword5.1\MemoryDock') '*.h' 'Workbench*.cpp' 'MemoryDock.Workbench*.cpp' /NFL /NDL /NJH /NJS /NP /R:1 /W:1 | Out-Null
+# 项目工具库头文件 + 日志实现（Win32 + std only）：MemoryDock 侧生产审计接收器的夹具要链接真实日志仓库。
+robocopy (Join-Path $repo 'Ksword5.1\Ksword5.1') (Join-Path $root 'Ksword5.1\Ksword5.1') '*.h' '*.hpp' /E /XD x64 Resource languages .vs Generated /NFL /NDL /NJH /NJS /NP /R:1 /W:1 | Out-Null
+robocopy (Join-Path $repo 'Ksword5.1\Ksword5.1\ksword\log') (Join-Path $root 'Ksword5.1\Ksword5.1\ksword\log') '*.cpp' /E /NFL /NDL /NJH /NJS /NP /R:1 /W:1 | Out-Null
 if ($Pkg -eq 'wpH' -or $Pkg -eq 'wpJ6') {
     # 这两个夹具链接 CodeEditorWidget 依赖链，需要 Zydis.c。
     robocopy (Join-Path $repo 'third_party\zydis') (Join-Path $root 'third_party\zydis') /E /NFL /NDL /NJH /NJS /NP /R:1 /W:1 | Out-Null
@@ -144,6 +147,9 @@ else {
 }
 $fails = ($logText -split "`n" | Where-Object { $_ -cmatch 'FAIL' } | Select-Object -First 3) -join ' | '
 Write-Output "RESULT=$result id=$Id exit=$exit pkg=$Pkg"
+# 附带输出该包最终汇总行（例如 "wpJ6_tests: 526 checks, 0 failures"），对照组时能直接看到断言总数。
+$summaryLine = $logText -split "`n" | Where-Object { $_ -match $finalPattern } | Select-Object -Last 1
+if ($summaryLine) { Write-Output ("  summary: " + $summaryLine.Trim()) }
 if ($result -in 'CAUGHT', 'CRASH_OR_NOSUMMARY', 'CONTROL_FAIL', 'COMPILE_ERROR') {
     Write-Output ("  首批失败行: " + $fails)
     if ($result -in 'CRASH_OR_NOSUMMARY', 'CONTROL_FAIL', 'COMPILE_ERROR') {
