@@ -10,6 +10,7 @@
 #include <vector>
 
 class QCheckBox;
+class QComboBox;
 class QLabel;
 class QLineEdit;
 class QPushButton;
@@ -50,6 +51,7 @@ private:
     QLabel* m_verdictLabel = nullptr;
     QLabel* m_statusLabel = nullptr;
     QLineEdit* m_moduleFilterEdit = nullptr;
+    QComboBox* m_backendCombo = nullptr;
     QCheckBox* m_unexplainedOnlyCheck = nullptr;
     QPushButton* m_scanButton = nullptr;
     QPushButton* m_cancelButton = nullptr;
@@ -60,6 +62,7 @@ private:
     std::shared_ptr<std::atomic_bool> m_cancelFlag;
     bool m_firstScanStarted = false;
     bool m_scanRunning = false;
+    bool m_scanCancelled = false;
     // HVCI 是否处于强制执行状态，决定「无法解释的差异」的定级。
     bool m_hvciEnforcing = false;
     bool m_hvciEvidenceUsable = false;

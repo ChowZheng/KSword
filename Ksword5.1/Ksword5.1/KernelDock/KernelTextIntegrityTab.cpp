@@ -2,11 +2,13 @@
 
 #include "KernelDock.h"
 #include "../ArkDriverClient/ArkDriverClient.h"
+#include "../Internationalization/LanguageManager.h"
 #include "../UI/VisibleTableWidget.h"
 #include "../theme.h"
 
 #include <QAbstractItemView>
 #include <QCheckBox>
+#include <QComboBox>
 #include <QHeaderView>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -36,6 +38,7 @@ namespace
     {
         ModuleColumnName = 0,
         ModuleColumnBase,
+        ModuleColumnBackend,
         ModuleColumnSections,
         ModuleColumnScanned,
         ModuleColumnUnreadable,
@@ -137,6 +140,19 @@ void KernelTextIntegrityTab::initializeUi()
         kernelText(
             "kernel.text_integrity.filter.placeholder",
             QStringLiteral("按模块名过滤，留空扫描全部已加载模块")));
+    m_backendCombo = new QComboBox(this);
+    for (const auto backend : {
+             ksword::memory_backend::MemoryAccessBackend::StandardDriver,
+             ksword::memory_backend::MemoryAccessBackend::Hvm})
+    {
+        m_backendCombo->addItem(
+            ks::i18n::sourceText(ksword::memory_backend::backendDisplayName(backend)),
+            static_cast<int>(backend));
+    }
+    m_backendCombo->setToolTip(
+        kernelText(
+            "kernel.text_integrity.backend.tooltip",
+            QStringLiteral("选择读取 PE 头与可执行节的后端；HVM 必须使用私有窗口，失败不回退到 R0。")));
     m_unexplainedOnlyCheck = new QCheckBox(
         kernelText(
             "kernel.text_integrity.unexplained_only",
@@ -158,6 +174,7 @@ void KernelTextIntegrityTab::initializeUi()
 
     toolbar->addWidget(m_scanButton);
     toolbar->addWidget(m_cancelButton);
+    toolbar->addWidget(m_backendCombo);
     toolbar->addWidget(m_moduleFilterEdit, 1);
     toolbar->addWidget(m_unexplainedOnlyCheck);
     toolbar->addWidget(m_statusLabel);
@@ -178,6 +195,7 @@ void KernelTextIntegrityTab::initializeUi()
     m_moduleTable->setHorizontalHeaderLabels({
         kernelText("kernel.text_integrity.module.name", QStringLiteral("模块")),
         kernelText("kernel.text_integrity.module.base", QStringLiteral("基址")),
+        kernelText("kernel.text_integrity.module.backend", QStringLiteral("访问后端")),
         kernelText("kernel.text_integrity.module.sections", QStringLiteral("可执行节")),
         kernelText("kernel.text_integrity.module.scanned", QStringLiteral("已比对字节")),
         kernelText("kernel.text_integrity.module.unreadable", QStringLiteral("不可读字节")),
@@ -193,7 +211,7 @@ void KernelTextIntegrityTab::initializeUi()
         ModuleColumnUnreadable,
         kernelText(
             "kernel.text_integrity.module.unreadable.tooltip",
-            QStringLiteral("分页换出导致的读取失败只计入这里，不会被算成篡改。")));
+            QStringLiteral("读取失败或不完整的块只计入这里，不会被算成篡改；这些缺口阻止完整性确认。")));
     setHeaderTip(
         m_moduleTable,
         ModuleColumnKnown,
@@ -254,12 +272,16 @@ void KernelTextIntegrityTab::startScan()
         return;
     }
     m_scanRunning = true;
+    m_scanCancelled = false;
+    m_hvciEvidenceUsable = false;
+    m_hvciEnforcing = false;
     m_results.clear();
     m_moduleTable->setRowCount(0);
     m_rangeTable->setRowCount(0);
     m_scanButton->setEnabled(false);
     m_cancelButton->setEnabled(true);
     m_moduleFilterEdit->setEnabled(false);
+    m_backendCombo->setEnabled(false);
     m_statusLabel->setText(
         kernelText(
             "kernel.text_integrity.status.scanning",
@@ -267,10 +289,13 @@ void KernelTextIntegrityTab::startScan()
 
     m_cancelFlag = std::make_shared<std::atomic_bool>(false);
     const QString filter = m_moduleFilterEdit->text().trimmed();
+    const auto backend = static_cast<ksword::memory_backend::MemoryAccessBackend>(
+        m_backendCombo->currentData().toInt());
     QPointer<KernelTextIntegrityTab> safeThis(this);
     auto cancelFlag = m_cancelFlag;
 
-    std::thread([safeThis, filter, cancelFlag]() {
+    updateVerdict();
+    std::thread([safeThis, filter, backend, cancelFlag]() {
         // HVCI 是否在强制执行决定了「无法解释的差异」该定成什么级别，
         // 因此在扫描线程里先取一次安全姿态。
         ksword::ark::DriverClient client;
@@ -304,6 +329,7 @@ void KernelTextIntegrityTab::startScan()
         }
 
         KernelTextScanOptions options;
+        options.backend = backend;
         options.moduleFilter = filter;
         options.cancelFlag = cancelFlag.get();
         options.onModuleComplete =
@@ -365,6 +391,11 @@ void KernelTextIntegrityTab::appendModuleResult(
     m_moduleTable->setItem(row, ModuleColumnBase, readOnlyItem(hex64(result.moduleBase)));
     m_moduleTable->setItem(
         row,
+        ModuleColumnBackend,
+        readOnlyItem(ks::i18n::sourceText(
+            ksword::memory_backend::backendDisplayName(result.backend))));
+    m_moduleTable->setItem(
+        row,
         ModuleColumnSections,
         readOnlyItem(QString::number(result.executableSectionCount)));
     m_moduleTable->setItem(
@@ -388,7 +419,7 @@ void KernelTextIntegrityTab::appendModuleResult(
         readOnlyItem(QString::number(result.unexplainedRangeCount));
     unexplainedItem->setForeground(
         result.unexplainedRangeCount == 0U
-            ? KswordTheme::SuccessColor()
+            ? (result.complete ? KswordTheme::SuccessColor() : KswordTheme::WarningColor())
             : KswordTheme::ErrorColor());
     m_moduleTable->setItem(row, ModuleColumnUnexplained, unexplainedItem);
 
@@ -399,7 +430,10 @@ void KernelTextIntegrityTab::appendModuleResult(
             result.diskTrustVerified
                 ? kernelText("kernel.text_integrity.trust.verified", QStringLiteral("已验证"))
                 : kernelText("kernel.text_integrity.trust.unverified", QStringLiteral("未验证"))));
-    m_moduleTable->setItem(row, ModuleColumnStatus, readOnlyItem(result.statusText));
+    m_moduleTable->setItem(
+        row,
+        ModuleColumnStatus,
+        readOnlyItem(ks::i18n::sourceText(result.statusText)));
 
     // 扫描过程中持续刷新差异表与总体结论，避免长时间没有任何反馈。
     rebuildRangeTable();
@@ -414,9 +448,11 @@ void KernelTextIntegrityTab::appendModuleResult(
 void KernelTextIntegrityTab::finishScan(const bool cancelled)
 {
     m_scanRunning = false;
+    m_scanCancelled = cancelled;
     m_scanButton->setEnabled(true);
     m_cancelButton->setEnabled(false);
     m_moduleFilterEdit->setEnabled(true);
+    m_backendCombo->setEnabled(true);
     m_cancelFlag.reset();
     m_statusLabel->setText(
         cancelled
@@ -480,10 +516,15 @@ void KernelTextIntegrityTab::updateVerdict()
     std::uint32_t known = 0U;
     std::uint32_t unparsedModules = 0U;
     std::uint32_t untrustedModules = 0U;
+    std::uint32_t incompleteModules = 0U;
     for (const KernelTextIntegrityResult& result : m_results)
     {
         unexplained += result.unexplainedRangeCount;
         known += result.knownRangeCount;
+        if (!result.complete)
+        {
+            ++incompleteModules;
+        }
         if (result.unparsedDynamicRelocations)
         {
             unparsedModules += 1U;
@@ -496,7 +537,17 @@ void KernelTextIntegrityTab::updateVerdict()
 
     QString verdict;
     QString color;
-    if (unexplained == 0U)
+    if (unexplained == 0U
+        && (m_scanRunning || m_scanCancelled || m_results.empty()
+            || incompleteModules != 0U))
+    {
+        verdict = kernelText(
+            "kernel.text_integrity.verdict.incomplete",
+            QStringLiteral("扫描覆盖尚不完整，无法确认整体代码完整性（动态重定位位点差异 %1 处）"))
+            .arg(known);
+        color = KswordTheme::WarningHex();
+    }
+    else if (unexplained == 0U)
     {
         verdict = kernelText(
             "kernel.text_integrity.verdict.clean",
@@ -522,6 +573,14 @@ void KernelTextIntegrityTab::updateVerdict()
     }
 
     QStringList notes;
+    if (incompleteModules != 0U)
+    {
+        notes.push_back(
+            kernelText(
+                "kernel.text_integrity.note.incomplete",
+                QStringLiteral("%1 个模块未完成完整比对，请查看不可读字节与模块结论"))
+                .arg(incompleteModules));
+    }
     if (unparsedModules != 0U)
     {
         notes.push_back(

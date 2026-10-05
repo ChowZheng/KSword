@@ -542,7 +542,7 @@ private:
     void showProcessTableContextMenu(const QPoint& localPosition);
 
     // requestDumpProcessMemoryByPid：
-    // - 作用：弹出保存文件对话框并异步执行目标进程内存转储。
+    // - 作用：选择 R3/R0/HVM 后端，捕获进程身份并异步执行内存转储。
     // - 参数 pid：要转储的目标进程 PID。
     // - 参数 processName：目标进程名（用于默认文件名和提示）。
     // - 返回：无。
@@ -550,13 +550,19 @@ private:
 
     // dumpProcessMemoryToFile：
     // - 作用：执行真正的内存区域遍历与文件写入。
-    // - 参数 pid：目标 PID。
+    // - 参数 pid / processHandle / creationTime：UI 线程捕获的目标身份及独立句柄租约。
+    // - 参数 backend：本次导出固定使用的 R3/R0/HVM 读取后端。
     // - 参数 dumpFilePath：输出文件路径。
+    // - 参数 progressPid：UI 线程捕获的进度任务编号。
     // - 参数 errorTextOut：失败时输出错误信息。
     // - 返回：true=成功；false=失败。
-    bool dumpProcessMemoryToFile(
+    static bool dumpProcessMemoryToFile(
         std::uint32_t pid,
+        const std::shared_ptr<void>& processHandle,
+        std::uint64_t creationTime,
+        ksword::memory_backend::MemoryAccessBackend backend,
         const QString& dumpFilePath,
+        int progressPid,
         QString& errorTextOut);
 
 private:
