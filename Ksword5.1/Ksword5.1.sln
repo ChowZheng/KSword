@@ -44,12 +44,24 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "KswordCheatEngineLauncher",
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "APIMonitor_x86", "..\APIMonitor_x86\APIMonitor_x86.vcxproj", "{250A09F6-9F1F-456A-A407-901BA91E3B3D}"
 EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "ZydisStatic", "..\third_party\zydis\ZydisStatic.vcxproj", "{4ABB357E-1521-4741-A151-EEF3F9CBE9C9}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "ZstdStatic", "..\third_party\zstd\ZstdStatic.vcxproj", "{48B3992C-9A72-4A62-9FA1-55EF23BA1CBD}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|x64 = Debug|x64
 		Release|x64 = Release|x64
 	EndGlobalSection
 	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{4ABB357E-1521-4741-A151-EEF3F9CBE9C9}.Debug|x64.ActiveCfg = Debug|x64
+		{4ABB357E-1521-4741-A151-EEF3F9CBE9C9}.Debug|x64.Build.0 = Debug|x64
+		{4ABB357E-1521-4741-A151-EEF3F9CBE9C9}.Release|x64.ActiveCfg = Release|x64
+		{4ABB357E-1521-4741-A151-EEF3F9CBE9C9}.Release|x64.Build.0 = Release|x64
+		{48B3992C-9A72-4A62-9FA1-55EF23BA1CBD}.Debug|x64.ActiveCfg = Debug|x64
+		{48B3992C-9A72-4A62-9FA1-55EF23BA1CBD}.Debug|x64.Build.0 = Debug|x64
+		{48B3992C-9A72-4A62-9FA1-55EF23BA1CBD}.Release|x64.ActiveCfg = Release|x64
+		{48B3992C-9A72-4A62-9FA1-55EF23BA1CBD}.Release|x64.Build.0 = Release|x64
 		{250A09F6-9F1F-456A-A407-901BA91E3B3D}.Debug|x64.ActiveCfg = Debug|Win32
 		{250A09F6-9F1F-456A-A407-901BA91E3B3D}.Debug|x64.Build.0 = Debug|Win32
 		{250A09F6-9F1F-456A-A407-901BA91E3B3D}.Release|x64.ActiveCfg = Release|Win32

@@ -563,9 +563,6 @@
     <ClCompile Include="MonitorDock\MonitorDock.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="..\..\third_party\zstd\zstd.c">
-      <Filter>Source Files</Filter>
-    </ClCompile>
     <ClCompile Include="MonitorDock\DirectKernelCallMonitorWidget.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -1260,9 +1257,6 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="UI\MemoryEditorWidget.InlineAssembly.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="..\..\third_party\zydis\Zydis.c">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="UI\GlobalDialogTheme.cpp">

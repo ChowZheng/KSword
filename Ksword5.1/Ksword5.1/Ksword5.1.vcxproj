@@ -485,9 +485,6 @@
     <ClCompile Include="UI\MemoryEditHistory.Core.cpp" />
     <ClCompile Include="UI\MemoryEditorWidget.cpp" />
     <ClCompile Include="UI\MemoryEditorWidget.InlineAssembly.cpp" />
-    <ClCompile Include="..\..\third_party\zydis\Zydis.c">
-      <CompileAs>CompileAsC</CompileAs>
-    </ClCompile>
     <ClCompile Include="UI\GlobalDialogTheme.cpp" />
     <ClCompile Include="UI\GlobalUiBaseStyle.cpp" />
     <ClCompile Include="UI\GlobalRefreshShortcut.cpp" />
@@ -736,11 +733,6 @@
     <ClCompile Include="ArkDriverClient\ArkDriverBugcheck.cpp" />
     <ClCompile Include="ArkDriverClient\ArkDriverSystemTime.cpp" />
     <ClCompile Include="ArkDriverClient\ArkDriverResearch.cpp" />
-    <ClCompile Include="..\..\third_party\zstd\zstd.c">
-      <CompileAs>CompileAsC</CompileAs>
-      <WarningLevel>TurnOffAllWarnings</WarningLevel>
-      <SDLCheck>false</SDLCheck>
-    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <QtMoc Include="MainWindow.h" />
@@ -1366,6 +1358,18 @@
     <Warning Condition="!Exists('$(KswordArkSignScript)')" Text="Ksword5.1 auto test-sign skipped because script was not found: $(KswordArkSignScript)" />
   </Target>
   <ItemGroup>
+    <ProjectReference Include="..\..\third_party\zydis\ZydisStatic.vcxproj">
+      <Project>{4ABB357E-1521-4741-A151-EEF3F9CBE9C9}</Project>
+      <LinkLibraryDependencies>true</LinkLibraryDependencies>
+      <UseLibraryDependencyInputs>false</UseLibraryDependencyInputs>
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+    </ProjectReference>
+    <ProjectReference Include="..\..\third_party\zstd\ZstdStatic.vcxproj">
+      <Project>{48B3992C-9A72-4A62-9FA1-55EF23BA1CBD}</Project>
+      <LinkLibraryDependencies>true</LinkLibraryDependencies>
+      <UseLibraryDependencyInputs>false</UseLibraryDependencyInputs>
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+    </ProjectReference>
     <ProjectReference Include="..\..\APIMonitor_x64\APIMonitor_x64.vcxproj">
       <Project>{CEF9AD14-A819-4792-AA6B-009DB21334EE}</Project>
       <LinkLibraryDependencies>false</LinkLibraryDependencies>
