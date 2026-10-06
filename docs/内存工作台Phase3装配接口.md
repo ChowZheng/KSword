@@ -366,6 +366,20 @@ WorkbenchBaselineFeeder → WorkbenchWriteController → WorkbenchHexPane
   （< 760）且侧栏可见时 `updateSidebarWidthCap` 给主体留底（`min(300, 可用宽/2)`）：设侧栏最大宽度，并显式 `setSizes`
   （只设最大宽度 QSplitter 不会收回已记住的尺寸）；宽屏不设上限，上限解除时侧栏回到偏好宽度。回归在
   `wpJ6_tests.Narrow.cpp`。未修（低于实用宽度）：`HexViewSegmented` 固定宽约 170px、文本子页工具钮 ≤240px 越界数像素。
+- **“深色下标签空白”（状态条摘要段）**：任务只给了一句话标题，先写探针而不是猜。`wpJ6_tests.DarkLabels.cpp` 渲染整个视图
+  （及真实确认弹窗、字符串写入对话框），对每个有文字的控件/表格单元格/表头判“文字与底色无差别”，在 9 条环境路径
+  （纯调色板 / 真实全局样式块 / 嵌进带主窗口 QSS 的 QMainWindow / 运行期切主题两个方向 / 自定义主背景色）× 约 40 个界面状态
+  上扫约五千个文字单元，**没有发现任何由颜色造成的空白**（所有文字/底色配对对比度 ≥ 3.14）。唯一真实的“空白标签”是
+  **窄宽度下状态条摘要段被布局压成 1px**（`R3 · 进程` 在 240px 时整段消失、360px 时只剩 `R`，读取结果被硬裁在“结论是当前不可”），
+  与主题无关（深浅两套一致）。修法在 `WorkbenchStatusBar.cpp`：通道·范围段（短且有界）恢复默认“最小宽度=自身文字宽度”，绝不压缩；
+  读取结果/窗口范围两段改用 `ElidedSegmentLabel`——`text()` 仍是完整原文（运行期整句翻译与 S1/N1 测试按它精确匹配），放不下时
+  **绘制**成右省略，最小宽度只够一个省略号（不是 setMinimumWidth(1)，也不是“最小=文字宽度”，后者会棘轮式撑大状态条，T13）；
+  写入结果段沿用原来的 Ignored + setText 省略。回归：`wpJ6_tests.Narrow.cpp::TestStatusBarSegmentsNeverBlank`（逐宽度断言 + 与普通
+  QLabel 渲染逐像素对照）。探针留作永久守卫（断言：零空白/塌缩/低对比，且每条路径必须扫到 ≥300 个文字单元）。**守卫的已知盲区**：
+  int3 面板“被改过”的警示行（需要 Diverged 状态）、地址簿的“已读取/过期”取值色（需要真实读值），这两处只有数值配对检查兜底。
+  变异验证：往状态条与探针覆盖的生产代码里注入“文字与底同色/不省略/省略方向反/Elastic 退回普通 QLabel”等 11 种变异，全部被
+  Narrow/DarkLabels/wpG T13 抓到，唯一幸存的是把 `OpaqueDialogStyle` 中 QDialog 自身 `color` 改成 `palette(window)`——等价变异
+  （Qt 样式表默认不把 color 继承给子控件；同规则里改 background 会被抓）。变异必须串行跑（并行同一夹具会假性 COMPILE_ERROR）。
 - **验证**：wpJ6 `wpJ6_tests.Entry3b.cpp`（两视图共用账本的右键/面板/显示/激活/分离安全网/退出询问、`focusAddress`、
   内嵌拒绝钉住、加入地址簿规则与 10000 上限）、wpK1 `TestModuleJumpPin`、wpG 默认值断言翻转。**真窗口未验证**：
   页签重排的实际外观、内嵌窗口里工作台的真实交互、搜索结果排序后双击与右键的真机行为、证据页菜单项。

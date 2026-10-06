@@ -30,8 +30,10 @@
 #include <QIcon>
 #include <QLabel>
 #include <QMouseEvent>
+#include <QPainter>
 #include <QResizeEvent>
 #include <QSizePolicy>
+#include <QStyle>
 #include <QToolButton>
 #include <QVBoxLayout>
 
@@ -40,6 +42,51 @@
 
 namespace ks::ui
 {
+    namespace
+    {
+        // ElidedSegmentLabel：状态条里"文字可能很长"的摘要段（读取结果、窗口范围）用的标签。
+        // - text() 始终是调用方给的完整原文：运行期整句翻译（LanguageManager）与测试都按它做精确匹配，
+        //   所以不能像写入结果段那样把省略后的文字 setText 回去；
+        // - 放不下时在绘制阶段做右省略（"已读 4096/40…"），不是被布局硬裁成半截；
+        // - 最小宽度只够画一个省略号：窗口再窄，这一段也缩成"…"，不会被压成 1px 的空白，
+        //   同时又不会像"最小宽度=文字宽度"那样把状态条的最小宽度越撑越大（T13 棘轮测试）。
+        // 没有信号槽，不需要 Q_OBJECT（因此也不进 moc）。
+        class ElidedSegmentLabel final : public QLabel
+        {
+        public:
+            explicit ElidedSegmentLabel(QWidget* parent) : QLabel(parent) {}
+
+            // minimumSizeHint：一个省略号的宽度加上标签自己的边距；高度沿用 QLabel 的。
+            QSize minimumSizeHint() const override
+            {
+                const QFontMetrics metrics(font());
+                const int ellipsisWidth = metrics.horizontalAdvance(QChar(0x2026));
+                return QSize(ellipsisWidth + 2 * margin() + 2 * frameWidth(), QLabel::minimumSizeHint().height());
+            }
+
+        protected:
+            // paintEvent：放得下就交给 QLabel 自己画（样式表颜色/字重、选中高亮全部保持原样）；
+            // 放不下才改画省略后的文字，颜色取控件当前调色板的前景角色（样式表的 color 就落在它上面）。
+            void paintEvent(QPaintEvent* event) override
+            {
+                const QString fullText = text();
+                const QRect area = contentsRect().adjusted(margin(), 0, -margin(), 0);
+                const QFontMetrics metrics(font());
+                if (fullText.isEmpty() || area.width() <= 0 || metrics.horizontalAdvance(fullText) <= area.width())
+                {
+                    QLabel::paintEvent(event);
+                    return;
+                }
+                QPainter painter(this);
+                painter.setFont(font());
+                const QString elided = metrics.elidedText(fullText, Qt::ElideRight, area.width());
+                style()->drawItemText(
+                    &painter, area, Qt::AlignLeft | Qt::AlignVCenter | Qt::TextSingleLine, palette(), isEnabled(),
+                    elided, foregroundRole());
+            }
+        };
+    }
+
     WorkbenchStatusBar::WorkbenchStatusBar(
         std::unique_ptr<IWorkbenchDiagnosticsHost> diagnosticsHost, QWidget* parent)
         : QWidget(parent)
@@ -58,48 +105,51 @@ namespace ks::ui
         ApplyStatusRole(m_protectionBadge, StatusRole::Idle);
         summaryRow->addWidget(m_protectionBadge);
 
-        // MakeSegmentLabel：四段摘要共用的构造逻辑——可选中复制、不自动换行。
-        // N1（第二轮修复）：原来四段统一用 QSizePolicy::Ignored，副作用是布局完全
-        // 不把"当前文字需要多宽"当成参考——前三段（通道·范围/读取结果/窗口范围）
-        // 从来不会被 applyElidedSummary 省略，结果在真实布局里连 sizeHint 都被无视，
-        // 实测宽度直接塌成 0（看不见文字，只剩 "RW | | | 已写入…"）。B4 真正要防的
-        // 棘轮效应只对"会被动态省略"的那一段成立——只有 m_writeResultLabel 需要
-        // Ignored；其余三段改回 Preferred（按内容给出 sizeHint）+
-        // setMinimumWidth(1)（显式最小值，用来打破"当前文字宽度即最小宽度"的棘轮，
-        // 1px 不是 0，Qt 仍认它是"设置过"，窗口变窄时才能真正跟着缩小）。
-        const auto makeSegmentLabel = [this](const bool elided) {
-            auto* label = new QLabel(this);
+        // 四段摘要的三种构造方式（全部可选中复制、不自动换行）：
+        //  - Fixed：通道·范围段。文字短且有界（"R3 · 进程"一类），用 QLabel 默认的"最小宽度=自身文字宽度"，
+        //    任何窗口宽度下都完整显示、绝不被压缩。
+        //    （历史：这里原先和读取结果/窗口范围两段一样 setMinimumWidth(1)，窗口一窄就被压到 1px——
+        //    240px 时整段消失、300~360px 时只剩半个字，与主题无关。）
+        //  - Elastic：读取结果/窗口范围两段。文字可能很长，必须能缩：用 ElidedSegmentLabel，
+        //    最小宽度只够一个省略号，放不下时绘制成"已读 4096/40…"。
+        //  - Tail：写入结果段。唯一可能携带任意长度失败详情的一段，沿用原来的做法——
+        //    Ignored 策略吃掉所有剩余空间，文字由 applyElidedSummary 估算宽度后 setText 省略。
+        // N1（第二轮修复，保留）：前三段不能用 Ignored——布局会完全无视"当前文字需要多宽"，
+        // 实测宽度直接塌成 0（只剩 "RW | | | 已写入…"）。B4 的棘轮效应（最小宽度被当前文字宽度顶住、
+        // 越撑越大）只对长文字段成立，所以只有 Elastic/Tail 不能用"最小=文字宽度"。
+        enum class SegmentKind { Fixed, Elastic, Tail };
+        const auto makeSegmentLabel = [this](const SegmentKind kind) {
+            QLabel* label = (kind == SegmentKind::Elastic) ? new ElidedSegmentLabel(this) : new QLabel(this);
             label->setTextInteractionFlags(Qt::TextSelectableByMouse);
-            if (elided)
+            if (kind == SegmentKind::Tail)
             {
+                // Ignored：吃掉所有剩余空间；显式最小宽度 1px 打破"当前文字宽度即最小宽度"的棘轮。
                 label->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+                label->setMinimumWidth(1);
             }
             else
             {
                 label->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Preferred);
-                label->setMinimumWidth(1);
             }
             return label;
         };
-        m_channelScopeLabel = makeSegmentLabel(false);
+        m_channelScopeLabel = makeSegmentLabel(SegmentKind::Fixed);
         summaryRow->addWidget(m_channelScopeLabel);
         m_separators[0] = new QLabel(QStringLiteral("|"), this);
         summaryRow->addWidget(m_separators[0]);
-        m_readResultLabel = makeSegmentLabel(false);
+        m_readResultLabel = makeSegmentLabel(SegmentKind::Elastic);
         summaryRow->addWidget(m_readResultLabel);
         m_separators[1] = new QLabel(QStringLiteral("|"), this);
         summaryRow->addWidget(m_separators[1]);
-        m_windowRangeLabel = makeSegmentLabel(false);
+        m_windowRangeLabel = makeSegmentLabel(SegmentKind::Elastic);
         summaryRow->addWidget(m_windowRangeLabel);
         m_separators[2] = new QLabel(QStringLiteral("|"), this);
         summaryRow->addWidget(m_separators[2]);
-        // 本轮自补变异 wpGN2-08 实测过：这里改成 makeSegmentLabel(false)（也走
-        // Preferred + setMinimumWidth(1)）不会让既有的 T13 棘轮回归测试报警——
-        // setMinimumWidth(1) 本身已经独立于 Ignored/Preferred 阻止了棘轮（它是
-        // 显式最小值，不会被当前文字宽度顶住），真正的差异只在"这一段的 sizeHint
-        // 要不要算进这一行的首选宽度"，不影响已有断言覆盖的收缩下限场景，属于
-        // 这批测试看不出来的等价行为，不是本函数仍然选 Ignored 的理由失效。
-        m_writeResultLabel = makeSegmentLabel(true);
+        // 本轮自补变异 wpGN2-08 实测过：这里改成按 Elastic 走（Preferred，不再是 Ignored）
+        // 不会让既有的 T13 棘轮回归测试报警——最小宽度本身已经独立于 Ignored/Preferred 阻止了棘轮，
+        // 真正的差异只在"这一段的 sizeHint 要不要算进这一行的首选宽度"，属于那批测试看不出来的
+        // 等价行为，不是本段仍然选 Tail（Ignored + 手动省略）的理由失效。
+        m_writeResultLabel = makeSegmentLabel(SegmentKind::Tail);
         summaryRow->addWidget(m_writeResultLabel, 1);
 
         m_expandButton = new QToolButton(this);

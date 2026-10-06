@@ -86,7 +86,7 @@ set "CLFLAGS=/nologo /std:c++latest /Zc:__cplusplus /permissive- /utf-8 /EHsc /M
 cl %CLFLAGS% ^
   "%FIX%\wpJ6_main.cpp" "%FIX%\wpJ6_common.cpp" ^
   "%FIX%\wpJ6_tests.Identity.cpp" "%FIX%\wpJ6_tests.Embedded.cpp" "%FIX%\wpJ6_tests.Actions.cpp" "%FIX%\wpJ6_tests.Gate.cpp" "%FIX%\wpJ6_tests.Write.cpp" "%FIX%\wpJ6_tests.Nav.cpp" "%FIX%\wpJ6_tests.Visual.cpp" ^
-  "%FIX%\wpJ6_tests.Review2A.cpp" "%FIX%\wpJ6_tests.Review2B.cpp" "%FIX%\wpJ6_tests.Review2C.cpp" "%FIX%\wpJ6_tests.Review2Fixes.cpp" "%FIX%\wpJ6_tests.Quit.cpp" "%FIX%\wpJ6_tests.Entry3b.cpp" "%FIX%\wpJ6_tests.Narrow.cpp" ^
+  "%FIX%\wpJ6_tests.Review2A.cpp" "%FIX%\wpJ6_tests.Review2B.cpp" "%FIX%\wpJ6_tests.Review2C.cpp" "%FIX%\wpJ6_tests.Review2Fixes.cpp" "%FIX%\wpJ6_tests.Quit.cpp" "%FIX%\wpJ6_tests.Entry3b.cpp" "%FIX%\wpJ6_tests.Narrow.cpp" "%FIX%\wpJ6_tests.DarkLabels.cpp" ^
   "%WPI%\memwb_wpI_common.cpp" ^
   "%UI%\MemoryWorkbenchView.cpp" "%UI%\MemoryWorkbenchView.Ui.cpp" "%UI%\MemoryWorkbenchView.Session.cpp" "%UI%\MemoryWorkbenchView.Nav.cpp" "%UI%\WorkbenchDiagnosticsHost.cpp" ^
   "%UI%\WorkbenchShared.cpp" ^
@@ -107,7 +107,7 @@ cl %CLFLAGS% ^
   "%UI%\WorkbenchMessages.cpp" "%UI%\WorkbenchSettings.cpp" "%UI%\WorkbenchActions.cpp" ^
   "%UI%\AddressBookStore.cpp" "%UI%\AddressBookModel.cpp" "%UI%\AddressBookModel.StoreSync.cpp" "%UI%\AddressBookPanel.cpp" "%UI%\AddressBookPanel.RowActions.cpp" "%UI%\AddressBookPanel.Menu.cpp" ^
   "%UI%\Int3Controller.cpp" "%UI%\Int3PatchPanel.cpp" "%UI%\WorkbenchBookIntake.cpp" ^
-  "%APP%\UI\FlowLayout.cpp" "%APP%\UI\ThemeStatusRole.cpp" ^
+  "%APP%\UI\FlowLayout.cpp" "%APP%\UI\ThemeStatusRole.cpp" "%APP%\UI\GlobalUiBaseStyle.cpp" "%APP%\UI\ThemeControlGlyphs.cpp" ^
   /Fo"%OBJ%\\"
 if errorlevel 1 exit /b %errorlevel%
 

@@ -41,6 +41,7 @@ namespace wpj6_test
     void RunQuitTests();
     void RunEntry3bTests();
     void RunNarrowTests();
+    void RunDarkLabelTests();
 
     namespace
     {
@@ -291,6 +292,7 @@ int main(int argc, char** argv)
     wpj6_test::RunQuitTests();
     wpj6_test::RunEntry3bTests();
     wpj6_test::RunNarrowTests();
+    wpj6_test::RunDarkLabelTests();
     wpj6_test::RunVisualTests();
     // 必须排在最后：initialize("en-US") 之后进程里再也不会切回中文。
     wpj6_test::RunI18nSmokeTest();

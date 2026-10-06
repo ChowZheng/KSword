@@ -128,9 +128,10 @@ namespace ks::ui
         // QLabel 后，每一段仍是调用方给出的那个原始字符串，才能被正确匹配到。
         void rebuildSummary();
 
-        // applyElidedSummary：只省略"写入结果"这一段（它是唯一可能携带任意长度
-        // 失败详情的段落），省略宽度按容器宽度减去其余可见控件估算；其余三段
-        // 长度有界，始终显示完整文字。
+        // applyElidedSummary：对"写入结果"这一段做 setText 级省略（它是唯一可能携带任意长度
+        // 失败详情的段落），省略宽度按容器宽度减去其余可见控件估算。其余三段不走这里：
+        // 通道·范围段文字短且有界，始终完整显示；读取结果/窗口范围两段是绘制级省略的标签
+        // （text() 仍是完整原文，窄时画成"…"，见 .cpp 的 ElidedSegmentLabel）。
         void applyElidedSummary();
 
         // m_summaryFullText：五段拼接后的完整摘要（未省略），resizeEvent 时据此重新省略。

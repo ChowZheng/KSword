@@ -14,8 +14,12 @@
 #include "../../../Ksword5.1/Ksword5.1/UI/MemoryWorkbench/HexCanvas.h"
 #include "../../../Ksword5.1/Ksword5.1/UI/MemoryWorkbench/WorkbenchHexPane.h"
 
+#include <QFontMetrics>
+#include <QLabel>
 #include <QSplitter>
 #include <QToolButton>
+
+#include <algorithm>
 
 namespace wpj6_test
 {
@@ -142,9 +146,120 @@ namespace wpj6_test
         }
     }
 
+    namespace
+    {
+        // ---- 状态条摘要段：窄宽度下任何一段都不得被压成空白 ----
+        // 缺陷：通道·范围/读取结果/窗口范围三个标签原先只有 setMinimumWidth(1)，窗口一窄就被布局压到
+        // 1px（"R3 · 进程"在 240px 时整段消失）或被硬裁成半截（360px 时只剩 "R"、"结论是当前不可"），
+        // 与主题无关（深浅两套截图一致）。要求：
+        //  ① 通道·范围段（短且有界）任何宽度下都完整显示；
+        //  ② 读取结果/窗口范围段（可能很长）窄时省略成"…"，宽度不得小于一个省略号，绝不是空白；
+        //  ③ 无论怎么省略，标签的 text() 始终是调用方给的原文（运行期整句翻译与 S1 测试按它精确匹配）。
+        void TestStatusBarSegmentsNeverBlank()
+        {
+            const QString channelText = QStringLiteral("R3 · 进程");
+            const QString readText = QStringLiteral("⚠ 读取失败（3 处可重试）");
+            const QString windowText = QStringLiteral("窗口 0x0–0x1FFF");
+            const QString writeText = QStringLiteral("已写入 int3（0x00000000000000B0）");
+
+            Harness harness;
+            harness.AttachProcess();
+            PumpUntil([]() { return true; }, 10);
+            auto* view = harness.view.get();
+            view->resize(900, 700);
+            view->show();
+            PumpFor(100);
+            auto* status = view->statusBarForTest();
+            status->setChannelScopeText(channelText);
+            status->setReadResultText(QStringLiteral("读取失败（3 处可重试）"), true);
+            status->setWindowRangeText(windowText);
+            status->setWriteResultText(writeText);
+
+            int elidedChecked = 0;   // 做过"绘制成右省略"对照的次数：必须 > 0，否则对照从来没执行过
+            for (const int width : {900, 600, 480, 420, 360, 300, 240, 200})
+            {
+                view->resize(width, 700);
+                PumpFor(80);
+                int checkedSegments = 0;
+                for (QLabel* label : status->findChildren<QLabel*>())
+                {
+                    if (!label->isVisibleTo(status) || label->text().isEmpty() || label->text() == QStringLiteral("|"))
+                    {
+                        continue;
+                    }
+                    const QFontMetrics metrics(label->font());
+                    const bool isChannel = label->text() == channelText;
+                    const bool isRead = label->text() == readText;
+                    const bool isWindow = label->text() == windowText;
+                    if (!isChannel && !isRead && !isWindow)
+                    {
+                        continue;   // 保护徽章/写入结果段/chip 不在本测试范围（写入结果段有自己的省略逻辑与测试）
+                    }
+                    ++checkedSegments;
+                    // ③ text() 必须原样。
+                    WPJ6_CHECK_NOTE(
+                        label->text() == (isChannel ? channelText : isRead ? readText : windowText),
+                        QStringLiteral("宽度 %1：段的 text() 被改动成了 %2").arg(width).arg(label->text()));
+                    const int fullWidth = metrics.horizontalAdvance(label->text());
+                    const int ellipsisWidth = metrics.horizontalAdvance(QChar(0x2026));
+                    if (isChannel)
+                    {
+                        // ① 通道·范围段完整显示。
+                        WPJ6_CHECK_NOTE(
+                            label->width() >= fullWidth,
+                            QStringLiteral("宽度 %1：通道·范围段宽 %2 小于文字宽 %3（被压缩/裁切）").arg(width).arg(label->width()).arg(fullWidth));
+                    }
+                    else
+                    {
+                        // ② 长段至少放得下一个省略号，不得是空白。
+                        WPJ6_CHECK_NOTE(
+                            label->width() >= std::min(fullWidth, ellipsisWidth),
+                            QStringLiteral("宽度 %1：段 '%2' 宽 %3 放不下一个省略号（%4px），渲染出来是空白")
+                                .arg(width).arg(label->text().left(8)).arg(label->width()).arg(ellipsisWidth));
+                        // ④ 放不下时必须画成"右省略"，而不是被硬裁成半截：拿一个不带选择交互的普通 QLabel，
+                        //    装上期望的省略文字、同字体同调色板同尺寸，两张渲染图逐像素相同。
+                        //    （普通 QLabel 与 ElidedSegmentLabel 的省略路径都走 QStyle::drawItemText，
+                        //    所以不是拿实现跟自己比；选择交互会让 QLabel 改走文本控件绘制，故对照图不设它。）
+                        if (fullWidth > label->contentsRect().width())
+                        {
+                            QLabel reference;
+                            reference.setFont(label->font());
+                            reference.setPalette(label->palette());
+                            reference.setMargin(label->margin());
+                            reference.setText(metrics.elidedText(label->text(), Qt::ElideRight, label->contentsRect().width()));
+                            reference.resize(label->size());
+                            // 统一成同一像素格式再比：QImage::operator== 连格式一起比，已显示/未显示控件的
+                            // grab() 格式可能不同（实测像素逐点完全一致却判不等）。
+                            const QImage actualImage = label->grab().toImage().convertToFormat(QImage::Format_ARGB32);
+                            const QImage expectedImage = reference.grab().toImage().convertToFormat(QImage::Format_ARGB32);
+                            if (actualImage != expectedImage)
+                            {
+                                // 失败时把两张图落盘，方便肉眼比较差在哪。
+                                const QString dir = qEnvironmentVariable("MEMWB_OUT");
+                                actualImage.save(dir + QStringLiteral("/elide_actual_%1_%2.png").arg(width).arg(isRead ? 'r' : 'w'));
+                                expectedImage.save(dir + QStringLiteral("/elide_expected_%1_%2.png").arg(width).arg(isRead ? 'r' : 'w'));
+                            }
+                            WPJ6_CHECK_NOTE(
+                                actualImage == expectedImage,
+                                QStringLiteral("宽度 %1：段 '%2' 放不下时没有画成右省略（与期望的省略文字渲染不一致；实际 %3x%4 期望 %5x%6）")
+                                    .arg(width).arg(label->text().left(8))
+                                    .arg(actualImage.width()).arg(actualImage.height())
+                                    .arg(expectedImage.width()).arg(expectedImage.height()));
+                            ++elidedChecked;
+                        }
+                    }
+                }
+                WPJ6_CHECK_NOTE(checkedSegments == 3, QStringLiteral("宽度 %1：应检查到三个摘要段，实际 %2").arg(width).arg(checkedSegments));
+            }
+            WPJ6_CHECK_NOTE(elidedChecked >= 4, QStringLiteral("省略绘制对照只执行了 %1 次，窄宽度场景没覆盖到").arg(elidedChecked));
+            view->hide();
+        }
+    }
+
     void RunNarrowTests()
     {
         TestSidebarManualOpenKeepsMainBody();
         TestEmbeddedHasNoSidebarCap();
+        TestStatusBarSegmentsNeverBlank();
     }
 }
