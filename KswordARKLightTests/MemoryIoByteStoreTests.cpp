@@ -18,6 +18,7 @@
 #include "../shared/evidence/memory_workbench/MemoryIoByteStore.h"
 
 #include <cstdint>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -409,6 +410,179 @@ void TestKernelRoutePartialPrefetchFailsSliceBeyondPrefix(KswordTests::Suite& su
         L"io bytestore: only the in-prefix slice ever reaches Prepare");
 }
 
+void TestWriteValidationRoutesAndEmptyCalls(KswordTests::Suite& suite) {
+    for (const auto channel : {Channel::UserMode, Channel::StandardDriver, Channel::Hvm, Channel::Ddma}) {
+        for (const bool approved : {false, true}) {
+            FakeMemoryIoPort port;
+            const auto session = MakeSessionWith(Scope::ProcessVirtual, channel);
+            MemoryIoByteStore store(port, session);
+            int validations = 0;
+            store.SetWriteValidationCallback([&](const MemoryTargetSession& target, std::uint64_t address,
+                                                std::uint64_t length, std::string& reason) {
+                ++validations;
+                suite.expect(&target == &session && address == kAddr && length == 2,
+                    L"write validation: receives actual session and fragment range");
+                reason = "chain changed";
+                return false;
+            });
+            const auto result = store.Write(kAddr, Bytes{0xAA, 0xBB}, approved);
+            suite.expect(!result.ok && !result.partial && result.bytesDone == 0 && result.failureText == "chain changed",
+                L"write validation: rejects both approved and ordinary writes in every process channel");
+            suite.expect(validations == 1 && port.writeCalls.empty(),
+                L"write validation: rejected fragment never reaches the underlying port");
+            const auto empty = store.Write(kAddr, {}, approved);
+            port.script = {MakeOk(Bytes{0x11})};
+            const auto read = store.Read(kAddr, 1);
+            suite.expect(empty.ok && read.ok && validations == 1,
+                L"write validation: empty writes and reads never invoke the validator");
+        }
+    }
+    FakeMemoryIoPort port;
+    FakeKernelMutationPort kernel;
+    const auto session = MakeSessionWith(Scope::KernelVirtual, Channel::StandardDriver);
+    MemoryIoByteStore store(port, session, &kernel);
+    store.SetWriteValidationCallback([](const MemoryTargetSession&, std::uint64_t, std::uint64_t, std::string& reason) {
+        reason = "kernel range rejected";
+        return false;
+    });
+    const auto rejected = store.Write(kKernelAddr, Bytes{0xAA}, true);
+    suite.expect(!rejected.ok && rejected.failureText == "kernel range rejected"
+        && port.calls.empty() && port.writeCalls.empty() && kernel.prepareCalls.empty(),
+        L"write validation: kernel route rejection occurs before prefetch or mutation entry");
+    store.SetWriteValidationCallback([](const MemoryTargetSession&, std::uint64_t, std::uint64_t, std::string&) {
+        return true;
+    });
+    port.script = {MakeOk(Bytes{0x11})};
+    kernel.prepareScript = {MakePrepared(44, Bytes{0x11})};
+    kernel.dryRunScript = {MakeStepOk()};
+    kernel.forceScript = {MakeStepOk()};
+    kernel.readBackScript = {MakeOk(Bytes{0xAA})};
+    suite.expect(store.Write(kKernelAddr, Bytes{0xAA}, true).ok && kernel.prepareCalls.size() == 1,
+        L"write validation: an accepting callback permits the normal kernel mutation route");
+}
+
+void TestWriteValidationFragmentsAndDynamicBindings(KswordTests::Suite& suite) {
+    FakeMemoryIoPort port;
+    port.limits.maxWriteBytes = 2;
+    port.writeScript = {MakeWriteOk(2), MakeWriteOk(2)};
+    const auto session = MakeSessionWith(Scope::ProcessVirtual, Channel::UserMode);
+    MemoryIoByteStore store(port, session);
+    std::vector<ReadCall> checks;
+    store.SetWriteValidationCallback([&](const MemoryTargetSession&, std::uint64_t address,
+                                        std::uint64_t length, std::string&) {
+        suite.expect(checks.size() == port.writeCalls.size(),
+            L"write validation: each successful fragment validates immediately before its port write");
+        checks.push_back({address, length});
+        return true;
+    });
+    const auto allowed = store.Write(kAddr, Bytes{1, 2, 3, 4}, false);
+    suite.expect(allowed.ok && allowed.bytesDone == 4 && checks.size() == 2
+        && checks[0].address == kAddr && checks[1].address == kAddr + 2
+        && checks[0].length == 2 && checks[1].length == 2,
+        L"write validation: allows valid fragments with exact ranges");
+
+    store.SetWriteValidationCallback([](const MemoryTargetSession&, std::uint64_t, std::uint64_t, std::string&) {
+        return false;
+    });
+    const auto updated = store.Write(kAddr, Bytes{9}, false);
+    suite.expect(!updated.ok && !updated.failureText.empty() && port.writeCalls.size() == 2,
+        L"write validation: replacing a live binding takes effect without recreating the store");
+    store.SetWriteValidationCallback({});
+    port.writeScript.push_back(MakeWriteOk(1));
+    suite.expect(store.Write(kAddr, Bytes{9}, true).ok && port.writeCalls.size() == 3,
+        L"write validation: clearing the binding restores unchanged ordinary write behavior");
+
+    FakeMemoryIoPort partialPort;
+    partialPort.limits.maxWriteBytes = 2;
+    auto first = MakeWriteOk(2); first.readModifyWriteWindow = true;
+    partialPort.writeScript = {first};
+    MemoryIoByteStore partialStore(partialPort, session);
+    partialStore.SetWriteValidationCallback([](const MemoryTargetSession&, std::uint64_t address,
+                                             std::uint64_t, std::string& reason) {
+        reason = "later fragment moved";
+        return address == kAddr;
+    });
+    const auto partial = partialStore.Write(kAddr, Bytes{1, 2, 3, 4}, false);
+    suite.expect(!partial.ok && partial.partial && partial.bytesDone == 2 && partial.readModifyWriteWindow
+        && !partial.needsExplicitApproval && !partial.rolledBack && partial.failureText == "later fragment moved"
+        && partialPort.writeCalls.size() == 1,
+        L"write validation: rejection preserves previously written bytes and flags without writing rejected fragment");
+}
+
+void TestWriteValidationExceptionsAndCallbackReplacement(KswordTests::Suite& suite) {
+    FakeMemoryIoPort port;
+    const auto session = MakeSessionWith(Scope::ProcessVirtual, Channel::UserMode);
+    MemoryIoByteStore store(port, session);
+    for (const bool standardException : {true, false}) {
+        store.SetWriteValidationCallback([standardException](const MemoryTargetSession&, std::uint64_t,
+                                                           std::uint64_t, std::string&) -> bool {
+            if (standardException) throw std::runtime_error("validator error");
+            throw 7;
+        });
+        const auto failure = store.Write(kAddr, Bytes{1}, false);
+        suite.expect(!failure.ok && !failure.failureText.empty() && port.writeCalls.empty(),
+            L"write validation: both standard and unknown exceptions become explicit zero-write failures");
+    }
+    FakeMemoryIoPort partialPort;
+    partialPort.limits.maxWriteBytes = 1;
+    partialPort.writeScript = {MakeWriteOk(1)};
+    MemoryIoByteStore partialStore(partialPort, session);
+    partialStore.SetWriteValidationCallback([](const MemoryTargetSession&, std::uint64_t address,
+                                             std::uint64_t, std::string&) {
+        if (address != kAddr) throw std::runtime_error("later validation failed");
+        return true;
+    });
+    const auto partial = partialStore.Write(kAddr, Bytes{1, 2}, false);
+    suite.expect(!partial.ok && partial.partial && partial.bytesDone == 1 && partialPort.writeCalls.size() == 1,
+        L"write validation: an exception in a later fragment preserves earlier persistent bytes");
+    store.SetWriteValidationCallback([&](const MemoryTargetSession&, std::uint64_t, std::uint64_t, std::string&) {
+        store.SetWriteValidationCallback({});
+        return true;
+    });
+    port.writeScript = {MakeWriteOk(1), MakeWriteOk(1)};
+    suite.expect(store.Write(kAddr, Bytes{1}, false).ok && store.Write(kAddr, Bytes{2}, false).ok,
+        L"write validation: callable remains alive when it clears its own binding");
+}
+
+void TestWriteValidationThroughTransactionModesAndApproval(KswordTests::Suite& suite) {
+    for (const auto mode : {ksword::memwb::WriteMode::Immediate, ksword::memwb::WriteMode::StagedThenApply}) {
+        MemwbTxnTests::Rig rig;
+        FakeMemoryIoPort port;
+        port.script = {MakeOk(Bytes{0x22})};
+        MemoryIoByteStore store(port, rig.session);
+        store.SetWriteValidationCallback([](const MemoryTargetSession&, std::uint64_t, std::uint64_t, std::string& reason) {
+            reason = "chain changed"; return false;
+        });
+        ksword::memwb::MemoryWriteTransaction transaction(
+            rig.overlay, rig.session, rig.revisions, store, rig.sink, rig.audit, mode);
+        transaction.Stage(MemwbTxnTests::kA, Bytes{0xAA});
+        auto automatic = transaction.OnEditCompleted();
+        const auto report = automatic ? *automatic : transaction.Commit();
+        suite.expect(report.outcome == ksword::memwb::CommitOutcome::WriteFailed
+            && report.bytesWritten == 0 && port.writeCalls.empty(),
+            L"write validation: both immediate and staged transactions honor the common store guard");
+    }
+    MemwbTxnTests::Rig rig;
+    FakeMemoryIoPort port;
+    port.script = {MakeOk(Bytes{0x22}), MakeOk(Bytes{0x22})};
+    port.writeScript = {MakeWriteNeedsApproval()};
+    MemoryIoByteStore store(port, rig.session);
+    bool valid = true;
+    int checks = 0;
+    store.SetWriteValidationCallback([&](const MemoryTargetSession&, std::uint64_t, std::uint64_t, std::string& reason) {
+        ++checks; reason = "chain changed during confirmation"; return valid;
+    });
+    rig.sink.approvalScript = {ksword::memwb::ApprovalAnswer::ThisBlockOnly};
+    rig.sink.onApproval = [&]() { valid = false; };
+    ksword::memwb::MemoryWriteTransaction transaction(
+        rig.overlay, rig.session, rig.revisions, store, rig.sink, rig.audit);
+    transaction.Stage(MemwbTxnTests::kA, Bytes{0xAA});
+    const auto report = transaction.Commit();
+    suite.expect(report.outcome == ksword::memwb::CommitOutcome::WriteFailed && report.bytesWritten == 0
+        && rig.sink.approvalCalls == 1 && checks == 2 && port.writeCalls.size() == 1,
+        L"write validation: confirmation retry revalidates and cannot bypass a newly rejected binding");
+}
+
 } // namespace
 
 int RunMemwbIoByteStoreTests() {
@@ -431,6 +605,10 @@ int RunMemwbIoByteStoreTests() {
     TestKernelRouteEndToEndSuccess(suite);
     TestKernelRoutePrefetchFailureNeverCallsKernelPort(suite);
     TestKernelRoutePartialPrefetchFailsSliceBeyondPrefix(suite);
+    TestWriteValidationRoutesAndEmptyCalls(suite);
+    TestWriteValidationFragmentsAndDynamicBindings(suite);
+    TestWriteValidationExceptionsAndCallbackReplacement(suite);
+    TestWriteValidationThroughTransactionModesAndApproval(suite);
     suite.report();
     return suite.failures();
 }

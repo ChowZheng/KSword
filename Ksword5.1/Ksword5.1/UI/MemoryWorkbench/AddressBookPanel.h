@@ -174,6 +174,10 @@ namespace ks::ui
         void jumpRequested(quint64 id);
         // openDisassemblyRequested：在反汇编子页打开该条目。
         void openDisassemblyRequested(quint64 id);
+        void pointerChainCreateRequested();
+        void pointerChainEditRequested(quint64 id);
+        void pointerChainResolveRequested(quint64 id);
+        void pointerChainCancelRequested();
         // promoteRequested：把条目升级为书签或监视；newKind 恒为 Bookmark 或 Watch
         // （本面板的菜单从不提供"降回搜索"这个选项，禁止降级是结构性的，不是运行期判断）。
         void promoteRequested(quint64 id, ksword::memwb::EntryKind newKind);
@@ -218,6 +222,8 @@ namespace ks::ui
         // ---- 行为实现（供菜单与快捷键共用，定义在 AddressBookPanel.cpp）----
         void jumpCurrentRow();
         void openDisassemblyCurrentRow();
+        void editPointerChainById(std::uint64_t id);
+        void resolvePointerChainById(std::uint64_t id);
         void promoteSelection(ksword::memwb::EntryKind newKind);
         void removeSelection();
         void editNoteCurrentRow();
@@ -265,6 +271,8 @@ namespace ks::ui
         QWidget* m_columnButtonsHost = nullptr;               // A/B 按钮的共同宿主（修复 C11，见下）。
         QPushButton* m_columnAButton = nullptr;
         QPushButton* m_columnBButton = nullptr;
+        QPushButton* m_pointerChainAddButton = nullptr;
+        QPushButton* m_pointerChainCancelButton = nullptr;
         HexViewMessageLabel* m_loadFailureLabel = nullptr;    // "第 N 行：原因"，默认隐藏。
         ColumnGroup m_columnGroup = ColumnGroup::PresetA;
         bool m_applyingColumnGroup = false;                   // 应用预设期间抑制表头菜单把状态打回 Custom。

@@ -112,6 +112,8 @@
 #include "MemoryWriteTransaction.h"
 
 #include <cstdint>
+#include <functional>
+#include <string>
 #include <vector>
 
 namespace ksword::memwb
@@ -120,6 +122,13 @@ namespace ksword::memwb
     class MemoryIoByteStore final : public IByteStore
     {
     public:
+        // Checked immediately before each port write fragment, and before a
+        // kernel mutation route. Empty writes and reads do not invoke it.
+        using WriteValidationFn = std::function<bool(
+            const MemoryTargetSession&, std::uint64_t address,
+            std::uint64_t length, std::string& reason)>;
+        void SetWriteValidationCallback(WriteValidationFn callback);
+
         // 构造。
         // 传入：port 真实或假的 I/O 端口；session 当前目标会话（只读引用，权威
         //       副本归调用方）；kernelMutationPort 内核分步字节事务端口，可为
@@ -144,6 +153,7 @@ namespace ksword::memwb
             bool explicitApproval) override;
 
     private:
+        bool ValidateWrite(std::uint64_t address, std::uint64_t length, std::string& reason) const;
         // WriteViaKernelMutation：内核范围+标准驱动通道分支的实现，被 Write 调用。
         AccessResult WriteViaKernelMutation(std::uint64_t address, const std::vector<std::uint8_t>& bytes);
 
@@ -162,5 +172,6 @@ namespace ksword::memwb
         const MemoryTargetSession& session_;
         // kernelMutationPort_：内核分步字节事务端口，可为空。
         IKernelMutationPort* kernelMutationPort_;
+        WriteValidationFn writeValidationCallback_;
     };
 }

@@ -331,6 +331,9 @@ namespace ks::ui
         // 本函数则无条件重新发起一次。
         void refreshModules();
 
+        // A copied snapshot for pointer-bookmark forms, with strict owner identity.
+        std::vector<ksword::memwb::ModuleRecord> pointerChainModules();
+
         // evaluate：求值一条地址表达式（回车提交时调用，绝不逐键调用）。
         // 内部用当前会话 + 两个模块目录 + 一个包装 services.readPointer 的读取器
         // 调用 SessionAddressResolver::EvaluateForSession。

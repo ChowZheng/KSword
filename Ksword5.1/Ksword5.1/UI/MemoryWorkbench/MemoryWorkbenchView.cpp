@@ -250,6 +250,12 @@ namespace ks::ui
         writeController_->setAuditSink(&shared.AuditSink());
         writeController_->setIoPortFactory([&shared]() { return shared.CreateIoPort(); });
         writeController_->setKernelMutationPortFactory([&shared]() { return shared.CreateKernelMutationPort(); });
+        const QPointer<MemoryWorkbenchView> pointerView(this);
+        writeController_->setWriteValidationCallback([pointerView](const auto& session,
+            std::uint64_t address, std::uint64_t length, std::string& reason) {
+            if (!pointerView) { reason = "pointer-view-closed"; return false; }
+            return pointerView->validatePointerChainWrite(session, address, length, reason);
+        });
         writeController_->setRereadRangeCallback([this](std::uint64_t address, std::uint64_t length) {
             if (pageProvider_)
             {
@@ -275,6 +281,9 @@ namespace ks::ui
         buildUi();
         connectPipelineSignals();
         connectPanelSignals();
+        connect(&shared.AddressBook(), &AddressBookStore::entryChanged, this, [this](quint64) { cancelPointerChainResolution(); });
+        connect(&shared.AddressBook(), &AddressBookStore::entryRemoved, this, [this](quint64) { cancelPointerChainResolution(); });
+        connect(&shared.AddressBook(), &AddressBookStore::reset, this, [this]() { cancelPointerChainResolution(); });
 
         // 7) 快捷键。
         wireActions();
@@ -320,6 +329,8 @@ namespace ks::ui
     // target_ 先于 writeController_ 声明，即 writeController_ 先于 target_ 销毁）。
     MemoryWorkbenchView::~MemoryWorkbenchView()
     {
+        pointerClosing_ = true;
+        cancelPointerChainResolution();
         if (hexPane_ != nullptr)
         {
             hexPane_->setPageProvider(nullptr);

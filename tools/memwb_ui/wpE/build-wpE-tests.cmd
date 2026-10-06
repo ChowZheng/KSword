@@ -83,6 +83,7 @@ cl /nologo /std:c++latest /Zc:__cplusplus /permissive- /utf-8 /EHsc /MD /W4 /WX 
   "%UI%\HexViewWidgets.cpp" "%UI%\HexViewWidgets.Text.cpp" "%UI%\HexViewFormat.cpp" "%FLOW%\FlowLayout.cpp" ^
   "%MOC%\moc_AddressBookStore.cpp" "%MOC%\moc_AddressBookModel.cpp" "%MOC%\moc_AddressBookPanel.cpp" "%MOC%\moc_HexViewWidgets.cpp" ^
   "%CORE%\MemoryAddressBook.cpp" "%CORE%\MemoryAddressBook.Serialize.cpp" ^
+  "shared\evidence\PointerChain.cpp" ^
   /Fo"%OBJ%\\" /Fe"%OUT%\wpE_tests.exe" ^
   /link /OPT:REF /LIBPATH:"%QT%\lib" Qt6Core.lib Qt6Gui.lib Qt6Widgets.lib Qt6Test.lib user32.lib ^
   "%OBJ2%\LanguageManager.obj"

@@ -137,7 +137,11 @@ namespace ks::ui
         const QModelIndex& index) const
     {
         Q_UNUSED(option);
-        Q_UNUSED(index);
+        const AddressBookModel* const model = m_owner->model();
+        if (model != nullptr && model->isPointerChain(model->idAt(m_owner->sourceIndexForProxy(index))))
+        {
+            return nullptr;
+        }
         // 单行文本框即可：ValueType 决定的只是"这串文本按什么类型编码"，编码本身发生在
         // 上层收到 valueEditRequested 之后，编辑器不需要按类型切换成不同的输入控件。
         QLineEdit* const editor = new QLineEdit(parent);
@@ -256,6 +260,13 @@ namespace ks::ui
         columnButtonsLayout->addWidget(m_columnBButton);
         m_toolbarFlow->addWidget(m_columnButtonsHost);
 
+        m_pointerChainAddButton = new QPushButton(
+            ks::i18n::sourceText(QStringLiteral("添加指针链")), toolbarHost);
+        m_toolbarFlow->addWidget(m_pointerChainAddButton);
+        m_pointerChainCancelButton = new QPushButton(
+            ks::i18n::sourceText(QStringLiteral("取消解析")), toolbarHost);
+        m_toolbarFlow->addWidget(m_pointerChainCancelButton);
+
         rootLayout->addWidget(toolbarHost);
 
         // 载入失败横幅：默认隐藏，由外层在 AddressBookStore::load() 失败后调用
@@ -319,6 +330,10 @@ namespace ks::ui
     {
         connect(m_columnAButton, &QPushButton::clicked, this, [this]() { applyColumnGroup(ColumnGroup::PresetA); });
         connect(m_columnBButton, &QPushButton::clicked, this, [this]() { applyColumnGroup(ColumnGroup::PresetB); });
+        connect(m_pointerChainAddButton, &QPushButton::clicked,
+            this, &AddressBookPanel::pointerChainCreateRequested);
+        connect(m_pointerChainCancelButton, &QPushButton::clicked,
+            this, &AddressBookPanel::pointerChainCancelRequested);
         connect(m_view, &QWidget::customContextMenuRequested, this, &AddressBookPanel::showRowContextMenu);
         connect(
             m_view->horizontalHeader(), &QWidget::customContextMenuRequested,
@@ -462,6 +477,14 @@ namespace ks::ui
             // "新文字是否真的不同"判断要不要真的重建控件，这里不需要绕过那个短路：切换
             // 语言后模板翻译结果本就会变，天然会被判定为"不同"而触发重建。
             refreshKindSegmentLabelsAndCounts();
+            if (m_pointerChainAddButton != nullptr)
+            {
+                m_pointerChainAddButton->setText(ks::i18n::sourceText(QStringLiteral("添加指针链")));
+            }
+            if (m_pointerChainCancelButton != nullptr)
+            {
+                m_pointerChainCancelButton->setText(ks::i18n::sourceText(QStringLiteral("取消解析")));
+            }
         }
     }
 
@@ -570,6 +593,8 @@ namespace ks::ui
             m_kindSegment = nullptr;
         }
         m_toolbarFlow->removeWidget(m_columnButtonsHost);
+        m_toolbarFlow->removeWidget(m_pointerChainAddButton);
+        m_toolbarFlow->removeWidget(m_pointerChainCancelButton);
 
         m_kindSegment = new HexViewSegmented(labels, this);
         // 修复 C13：HexViewSegmented::event 会接管 ToolTip 事件、只显示"逐段提示"，
@@ -590,6 +615,8 @@ namespace ks::ui
 
         m_toolbarFlow->addWidget(m_kindSegment);
         m_toolbarFlow->addWidget(m_columnButtonsHost);
+        m_toolbarFlow->addWidget(m_pointerChainAddButton);
+        m_toolbarFlow->addWidget(m_pointerChainCancelButton);
     }
 
     QModelIndex AddressBookPanel::sourceIndexForCurrent() const

@@ -2,6 +2,7 @@
 // 地址簿的条目管理、过滤、地址解析与枚举记号。序列化部分在 MemoryAddressBook.Serialize.cpp。
 
 #include "MemoryAddressBook.h"
+#include "../PointerChain.h"
 
 #include <algorithm>
 #include <utility>
@@ -30,6 +31,21 @@ bool MatchesFilter(const AddressEntry& entry, const AddressFilter& filter) {
         }
     }
     return true;
+}
+
+bool FullPath(const std::string_view path) noexcept {
+    if (path.empty() || path.size() > 32768 || path.find('\0') != std::string_view::npos) return false;
+    const auto slash = [](char ch) { return ch == '/' || ch == '\\'; };
+    if (path.size() > 3 && ((path[0] >= 'A' && path[0] <= 'Z') || (path[0] >= 'a' && path[0] <= 'z'))
+        && path[1] == ':' && slash(path[2])) return true;
+    if (path.size() > 2 && slash(path[0]) && slash(path[1])) {
+        const auto serverEnd = path.find_first_of("/\\", 2);
+        if (serverEnd == std::string_view::npos || serverEnd == 2) return false;
+        const auto shareEnd = path.find_first_of("/\\", serverEnd + 1);
+        return shareEnd != std::string_view::npos && shareEnd > serverEnd + 1 && shareEnd + 1 < path.size();
+    }
+    // Also allow POSIX full paths for portable offline callers.
+    return path.size() > 1 && path[0] == '/';
 }
 
 } // namespace
@@ -165,7 +181,7 @@ const char* DeserializeErrorText(const DeserializeError code) noexcept {
     case DeserializeError::RawCarriageReturn:
         return "raw carriage return in line (file converted to CRLF?)";
     case DeserializeError::WrongFieldCount:
-        return "entry line does not have exactly 8 tab-separated fields";
+        return "entry line field count does not match the address book version";
     case DeserializeError::BadId:
         return "entry id is not a decimal number in range";
     case DeserializeError::UnknownKind:
@@ -180,6 +196,10 @@ const char* DeserializeErrorText(const DeserializeError code) noexcept {
         return "module name and rva/absolute address contradict each other";
     case DeserializeError::DuplicateId:
         return "duplicate entry id";
+    case DeserializeError::BadPointerChain:
+        return "invalid pointer bookmark definition or root address";
+    case DeserializeError::InputTooLarge:
+        return "version 2 address book exceeds the text capacity limit";
     default:
         return "unknown error";
     }
@@ -199,10 +219,21 @@ void MemoryAddressBook::NormalizeAddressFields(AddressEntry& entry) noexcept {
     entry.rva = 0;
 }
 
+bool MemoryAddressBook::ValidPointerChain(const AddressEntry& entry) noexcept {
+    if (!entry.pointerChain) return true;
+    const auto& definition = *entry.pointerChain;
+    return entry.kind == EntryKind::Bookmark && !entry.moduleName.empty()
+        && entry.absoluteAddress == 0 && FullPath(definition.processPath) && FullPath(definition.modulePath)
+        && definition.moduleSize > 0 && definition.moduleFileSize > 0 && definition.moduleFileTime > 0
+        && (definition.pointerSize == 4 || definition.pointerSize == 8)
+        && !definition.offsets.empty() && definition.offsets.size() <= ksword::pointer_chain::MaxDepth
+        && entry.rva < definition.moduleSize && definition.pointerSize <= definition.moduleSize - entry.rva;
+}
+
 std::uint64_t MemoryAddressBook::Add(const AddressEntry& draft) {
     // 枚举取值越界（调用方 static_cast 出来的垃圾）与号段用尽都直接拒绝，
     // 此时不碰任何内部状态，nextId_ 也不推进。
-    if (!IsValidEntryKind(draft.kind) || !IsValidValueType(draft.valueType)) {
+    if (!IsValidEntryKind(draft.kind) || !IsValidValueType(draft.valueType) || !ValidPointerChain(draft)) {
         return 0;
     }
     if (nextId_ >= kAddressBookIdLimit) {
@@ -274,6 +305,20 @@ bool MemoryAddressBook::SetValueType(const std::uint64_t id, const ValueType val
     return true;
 }
 
+bool MemoryAddressBook::SetPointerChain(const std::uint64_t id, const PointerBookmarkDefinition& definition,
+                                      std::string moduleName, const std::uint64_t rootRva) {
+    const auto found = entries_.find(id);
+    if (found == entries_.end() || found->second.kind != EntryKind::Bookmark) return false;
+    AddressEntry updated = found->second;
+    updated.moduleName = std::move(moduleName);
+    updated.rva = rootRva;
+    updated.absoluteAddress = 0;
+    updated.pointerChain = definition;
+    if (!ValidPointerChain(updated)) return false;
+    found->second = std::move(updated);
+    return true;
+}
+
 bool MemoryAddressBook::Promote(const std::uint64_t id, const EntryKind newKind) {
     if (!IsValidEntryKind(newKind)) {
         return false;
@@ -283,6 +328,8 @@ bool MemoryAddressBook::Promote(const std::uint64_t id, const EntryKind newKind)
     if (found == entries_.end()) {
         return false;
     }
+
+    if (found->second.pointerChain && newKind != EntryKind::Bookmark) return false;
 
     // 禁止降级回 Search：Search 是临时的，降级会让用户保存的条目被下一轮搜索清掉。
     // 同 kind（包括 Search -> Search）视为幂等成功，不走这条拒绝。
@@ -329,6 +376,11 @@ ResolveResult MemoryAddressBook::ResolveAddress(
     const ModuleBaseLookup& lookup) {
     // result：返回值，默认 status==None、address==0，每条失败路径都原样带出这个安全初值。
     ResolveResult result;
+
+    if (entry.pointerChain) {
+        result.status = ResolveStatus::RequiresPointerResolution;
+        return result;
+    }
 
     // 无模块条目：绝对地址就是答案，根本不需要（也不会调用）查询回调。
     if (entry.moduleName.empty()) {

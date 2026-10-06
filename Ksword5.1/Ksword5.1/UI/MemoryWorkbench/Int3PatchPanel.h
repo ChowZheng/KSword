@@ -51,6 +51,11 @@ namespace ks::ui
         void SetAddressFormatter(AddressFormatter formatter);
         void SetTargetLabelFormatter(TargetLabelFormatter formatter);
 
+        using InstallValidationCallback = std::function<bool(std::uint64_t address, QString& reason)>;
+        // Silent install-only validation. Restores retain their ledger identity
+        // and original-address behavior regardless of current pointer paths.
+        void SetInstallValidationCallback(InstallValidationCallback callback);
+
         // SetInsertionPoint：外部（HexPane）告知当前插入点地址。hasPoint 为假时"写入"按钮禁用
         // 并给出对应 tooltip；地址本身在 hasPoint 为假时不会被使用。
         void SetInsertionPoint(std::uint64_t address, bool hasPoint);
@@ -125,6 +130,7 @@ namespace ks::ui
         Int3Controller* m_controller = nullptr;      // 不持有生命周期
         AddressFormatter m_addressFormatter;          // 地址展示回调（可空）
         TargetLabelFormatter m_targetLabelFormatter;  // 目标展示回调（可空）
+        InstallValidationCallback m_installValidationCallback;
         std::optional<std::uint64_t> m_insertionPoint; // 当前插入点；无则 nullopt
         std::unordered_set<std::uint64_t> m_divergedIds; // 曾经还原得到 Diverged 的 id 集合
 

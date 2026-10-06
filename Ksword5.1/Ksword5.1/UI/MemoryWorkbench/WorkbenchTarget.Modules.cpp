@@ -33,6 +33,17 @@
 
 namespace ks::ui
 {
+    std::vector<ksword::memwb::ModuleRecord> WorkbenchTarget::pointerChainModules()
+    {
+        const QPointer<WorkbenchTarget> self(this);
+        const auto snapshot = session();
+        if (!self) return {};
+        const auto owner = ksword::memwb::ModuleOwnerForSession(snapshot);
+        if (owner.scope != ksword::memwb::Scope::ProcessVirtual || owner.pid == 0 || owner.createTime == 0
+            || processDirectory_.GetState() != ksword::memwb::MemoryModuleDirectory::State::Ready
+            || processDirectory_.Owner() != owner) return {};
+        return processDirectory_.Records();
+    }
     // ModuleEnumTask：一次模块枚举任务。setAutoDelete(true)（默认值），交给
     // QThreadPool 后由线程池在 run() 返回时自动释放，调用方不持有也不需要释放它。
     class WorkbenchTarget::ModuleEnumTask final : public QRunnable

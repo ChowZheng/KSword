@@ -7,6 +7,7 @@
 #include "Int3PatchPanel.h"
 
 #include "../../theme.h"
+#include "../../Internationalization/LanguageManager.h"
 
 #include <QAbstractItemView>
 #include <QAction>
@@ -25,9 +26,14 @@
 #include <QVariant>
 
 #include <iterator>
+#include <utility>
 
 namespace ks::ui
 {
+    void Int3PatchPanel::SetInstallValidationCallback(InstallValidationCallback callback)
+    {
+        m_installValidationCallback = std::move(callback);
+    }
     using ksword::memwb::Channel;
     using ksword::memwb::InstallStatus;
     using ksword::memwb::PatchEntry;
@@ -417,7 +423,32 @@ namespace ks::ui
         {
             return;
         }
-        const Int3InstallOutcome outcome = m_controller->Install(m_controller->CurrentTarget(), address, nowTick);
+        const auto target = m_controller->CurrentTarget();
+        const auto scope = m_controller->CurrentScope();
+        const auto channel = m_controller->CurrentChannel();
+        QString reason;
+        bool allowed = true;
+        try
+        {
+            const auto validation = m_installValidationCallback;
+            if (validation) allowed = validation(address, reason);
+        }
+        catch (...)
+        {
+            allowed = false;
+        }
+        if (!self) return;
+        const auto current = m_controller->CurrentTarget();
+        if (current.pid != target.pid || current.processCreateTime100ns != target.processCreateTime100ns
+            || current.attachGeneration != target.attachGeneration || m_controller->CurrentScope() != scope
+            || m_controller->CurrentChannel() != channel) allowed = false;
+        if (!allowed)
+        {
+            emit resultMessage(reason.isEmpty()
+                ? ks::i18n::sourceText(QStringLiteral("写入未执行")) : reason, true);
+            return;
+        }
+        const Int3InstallOutcome outcome = m_controller->Install(target, address, nowTick);
         if (!self)
         {
             return;

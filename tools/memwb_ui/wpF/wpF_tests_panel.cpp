@@ -15,6 +15,7 @@
 #include <QDir>
 #include <QObject>
 #include <QRect>
+#include <QPointer>
 #include <QTableWidget>
 #include <QTableWidgetItem>
 #include <QTest>
@@ -23,6 +24,7 @@
 
 #include <iostream>
 #include <memory>
+#include <stdexcept>
 #include <vector>
 
 namespace wpf_test
@@ -94,6 +96,88 @@ namespace wpf_test
         const int failuresBefore = g_failures;
 
         QDir().mkpath(shotsDir);
+
+        // Pointer provenance rejects installs silently, while restoration must
+        // continue to use the original ledger address after a chain changes.
+        for (int mode = 0; mode < 4; ++mode)
+        {
+            FakeMemoryIoPort guardPort;
+            MemoryTargetSession guardSession;
+            Int3Controller guardController(MakeFactory(guardPort, guardSession));
+            guardController.SetCurrentContext(MakeTarget(4200, 100), Scope::ProcessVirtual, Channel::UserMode);
+            Int3PatchPanel guardPanel(&guardController);
+            guardPanel.SetInsertionPoint(0xA000, true);
+            guardPort.memory[0xA000] = 0x90;
+            int validations = 0;
+            QString status;
+            bool error = false;
+            QObject::connect(&guardPanel, &Int3PatchPanel::resultMessage,
+                [&status, &error](const QString& message, bool failed) { status = message; error = failed; });
+            guardPanel.SetInstallValidationCallback([&](std::uint64_t address, QString& reason) -> bool {
+                ++validations;
+                CHECK(address == 0xA000);
+                if (mode == 1) throw std::runtime_error("validation failed");
+                if (mode == 2) throw 7;
+                if (mode == 3)
+                {
+                    guardController.SetCurrentContext(MakeTarget(4300, 200), Scope::ProcessVirtual, Channel::Hvm);
+                    return true;
+                }
+                reason = QStringLiteral("chain changed");
+                return false;
+            });
+            const int modals = CountOpenMessageBoxes();
+            CHECK(QMetaObject::invokeMethod(&guardPanel, "onInstallClicked", Qt::DirectConnection));
+            CHECK(validations == 1 && error && !status.isEmpty());
+            CHECK(guardPort.readCalls == 0 && guardPort.writeCalls == 0 && guardController.Entries().empty());
+            CHECK(CountOpenMessageBoxes() == modals);
+        }
+        {
+            FakeMemoryIoPort guardPort;
+            MemoryTargetSession guardSession;
+            Int3Controller guardController(MakeFactory(guardPort, guardSession));
+            const auto guardedTarget = MakeTarget(4200, 100);
+            guardController.SetCurrentContext(guardedTarget, Scope::ProcessVirtual, Channel::UserMode);
+            Int3PatchPanel guardPanel(&guardController);
+            guardPanel.SetInsertionPoint(0xA000, true);
+            guardPort.memory[0xA000] = 0x90;
+            int validations = 0;
+            QObject::connect(&guardPanel, &Int3PatchPanel::aboutToAct, &guardPanel, [&]() {
+                guardController.SetCurrentContext(guardedTarget, Scope::ProcessVirtual, Channel::UserMode);
+            }, Qt::DirectConnection);
+            guardPanel.SetInstallValidationCallback([&](std::uint64_t, QString&) {
+                ++validations;
+                CHECK(guardController.CurrentTarget().pid == guardedTarget.pid);
+                guardPanel.SetInstallValidationCallback({});
+                return true;
+            });
+            const int modals = CountOpenMessageBoxes();
+            CHECK(QMetaObject::invokeMethod(&guardPanel, "onInstallClicked", Qt::DirectConnection));
+            CHECK(validations == 1 && guardPort.memory[0xA000] == 0xCC);
+            guardPanel.SetInstallValidationCallback([&](std::uint64_t, QString&) { ++validations; return false; });
+            CHECK(QMetaObject::invokeMethod(&guardPanel, "onRestoreAllClicked", Qt::DirectConnection));
+            CHECK(validations == 1 && guardPort.memory[0xA000] == 0x90 && guardController.Entries().empty());
+            guardPanel.SetInstallValidationCallback({});
+            CHECK(QMetaObject::invokeMethod(&guardPanel, "onInstallClicked", Qt::DirectConnection));
+            guardPanel.SetInstallValidationCallback([&](std::uint64_t, QString&) { ++validations; return false; });
+            guardPanel.TableForTest()->setCurrentCell(0, 0);
+            CHECK(QMetaObject::invokeMethod(&guardPanel, "onRestoreClicked", Qt::DirectConnection));
+            CHECK(validations == 1 && guardPort.memory[0xA000] == 0x90 && guardController.Entries().empty());
+            CHECK(CountOpenMessageBoxes() == modals);
+        }
+        {
+            FakeMemoryIoPort guardPort;
+            MemoryTargetSession guardSession;
+            Int3Controller guardController(MakeFactory(guardPort, guardSession));
+            guardController.SetCurrentContext(MakeTarget(4200, 100), Scope::ProcessVirtual, Channel::UserMode);
+            auto* destroyed = new Int3PatchPanel(&guardController);
+            const QPointer<Int3PatchPanel> safePanel(destroyed);
+            destroyed->SetInsertionPoint(0xA000, true);
+            guardPort.memory[0xA000] = 0x90;
+            destroyed->SetInstallValidationCallback([destroyed](std::uint64_t, QString&) { delete destroyed; return true; });
+            CHECK(QMetaObject::invokeMethod(destroyed, "onInstallClicked", Qt::DirectConnection));
+            CHECK(safePanel.isNull() && guardPort.readCalls == 0 && guardPort.writeCalls == 0);
+        }
 
         FakeMemoryIoPort port;
         MemoryTargetSession session;

@@ -87,6 +87,7 @@ cl /nologo /std:c++latest /Zc:__cplusplus /permissive- /utf-8 /EHsc /MD /W4 /WX 
   "%UI%\WorkbenchShared.cpp" "%UI%\AddressBookStore.cpp" "%UI%\AddressBookModel.cpp" "%UI%\AddressBookModel.StoreSync.cpp" "%UI%\Int3Controller.cpp" ^
   "%MOC%\moc_WorkbenchShared.cpp" "%MOC%\moc_AddressBookStore.cpp" "%MOC%\moc_AddressBookModel.cpp" "%MOC%\moc_Int3Controller.cpp" ^
   "%CORE%\MemoryAddressBook.cpp" "%CORE%\MemoryAddressBook.Serialize.cpp" ^
+  "shared\evidence\PointerChain.cpp" ^
   "%CORE%\Int3PatchLedger.cpp" "%CORE%\MemoryPatchByteStore.cpp" "%CORE%\MemoryTargetSession.cpp" "%CORE%\MemoryWritePolicy.cpp" ^
   /Fo"%OBJ%\\" /Fe"%OUT%\wpJ1_tests.exe" ^
   /link /OPT:REF /LIBPATH:"%QT%\lib" Qt6Core.lib Qt6Gui.lib Qt6Widgets.lib user32.lib ^

@@ -164,12 +164,33 @@ namespace ks::ui
         emit openDisassemblyRequested(static_cast<quint64>(id));
     }
 
+    void AddressBookPanel::editPointerChainById(const std::uint64_t id)
+    {
+        if (!m_model.isNull() && m_model->isPointerChain(id))
+        {
+            emit pointerChainEditRequested(static_cast<quint64>(id));
+        }
+    }
+
+    void AddressBookPanel::resolvePointerChainById(const std::uint64_t id)
+    {
+        if (!m_model.isNull() && m_model->isPointerChain(id))
+        {
+            emit pointerChainResolveRequested(static_cast<quint64>(id));
+        }
+    }
+
     void AddressBookPanel::promoteSelection(const ksword::memwb::EntryKind newKind)
     {
         // Promote/值类型改动作用于"整个选区"，不是"当前格"——与右键菜单按 hasSelection
         // 使能的判据一致，不受 C7 的 targetRowId 规则约束。
         for (const std::uint64_t id : selectedIds())
         {
+            if (!m_model.isNull() && m_model->isPointerChain(id)
+                && newKind != ksword::memwb::EntryKind::Bookmark)
+            {
+                continue;
+            }
             emit promoteRequested(static_cast<quint64>(id), newKind);
         }
     }
@@ -351,6 +372,10 @@ namespace ks::ui
         }
         const std::uint64_t id = m_model->idAt(sourceIndex);
         if (id == 0)
+        {
+            return;
+        }
+        if (m_model->isPointerChain(id))
         {
             return;
         }

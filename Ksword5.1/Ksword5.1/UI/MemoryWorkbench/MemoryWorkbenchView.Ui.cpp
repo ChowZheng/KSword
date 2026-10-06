@@ -314,6 +314,10 @@ namespace ks::ui
         connect(sessionBar_, &WorkbenchSessionBar::pickTargetRequested, this, &MemoryWorkbenchView::onSessionBarPickTargetRequested);
 
         connect(addressBookPanel_, &AddressBookPanel::jumpRequested, this, &MemoryWorkbenchView::onAddressBookJumpRequested);
+        connect(addressBookPanel_, &AddressBookPanel::pointerChainCreateRequested, this, &MemoryWorkbenchView::onPointerChainCreateRequested);
+        connect(addressBookPanel_, &AddressBookPanel::pointerChainEditRequested, this, &MemoryWorkbenchView::onPointerChainEditRequested);
+        connect(addressBookPanel_, &AddressBookPanel::pointerChainResolveRequested, this, &MemoryWorkbenchView::onPointerChainResolveRequested);
+        connect(addressBookPanel_, &AddressBookPanel::pointerChainCancelRequested, this, &MemoryWorkbenchView::cancelPointerChainResolution);
         connect(addressBookPanel_, &AddressBookPanel::openDisassemblyRequested, this,
             &MemoryWorkbenchView::onAddressBookOpenDisassemblyRequested);
         connect(addressBookPanel_, &AddressBookPanel::valueEditRequested, this,
@@ -335,6 +339,16 @@ namespace ks::ui
         // 面板操作账本"当前目标"之前先把本视图的会话声明为当前目标（直接连接，同步执行）。
         connect(int3Panel_, &Int3PatchPanel::aboutToAct, this, &MemoryWorkbenchView::syncInt3Context,
             Qt::DirectConnection);
+        const QPointer<MemoryWorkbenchView> pointerView(this);
+        int3Panel_->SetInstallValidationCallback([pointerView](std::uint64_t address, QString& reason) {
+            if (!pointerView || !pointerView->target_) return false;
+            const auto session = pointerView->target_->session();
+            if (!pointerView) return false;
+            std::string failure;
+            const bool allowed = pointerView->validatePointerChainWrite(session, address, 1, failure);
+            reason = QString::fromUtf8(failure.c_str());
+            return allowed;
+        });
 
         connect(hexPane_, &WorkbenchHexPane::insertionPointChanged, this, &MemoryWorkbenchView::onHexPaneInsertionPointChanged);
         connect(hexPane_, &WorkbenchHexPane::editRejected, this, &MemoryWorkbenchView::onHexPaneEditRejected);

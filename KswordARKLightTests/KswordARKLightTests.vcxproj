@@ -140,6 +140,8 @@
     <ClCompile Include="..\shared\evidence\memory_workbench\HexViewport.Selection.cpp" />
     <ClCompile Include="..\shared\evidence\memory_workbench\Int3PatchLedger.cpp" />
     <ClCompile Include="..\shared\evidence\memory_workbench\MemoryAddressBook.cpp" />
+    <ClCompile Include="..\shared\evidence\PointerChain.cpp" />
+    <ClCompile Include="..\shared\evidence\memory_workbench\PointerChainBindings.cpp" />
     <ClCompile Include="..\shared\evidence\memory_workbench\MemoryAddressBook.Serialize.cpp" />
     <ClCompile Include="..\shared\evidence\memory_workbench\MemoryWriteTransaction.cpp" />
     <ClCompile Include="..\shared\evidence\memory_workbench\MemoryWriteTransaction.Commit.cpp" />
@@ -200,6 +202,8 @@
     <ClInclude Include="..\shared\evidence\memory_workbench\HexViewport.h" />
     <ClInclude Include="..\shared\evidence\memory_workbench\Int3PatchLedger.h" />
     <ClInclude Include="..\shared\evidence\memory_workbench\MemoryAddressBook.h" />
+    <ClInclude Include="..\shared\evidence\PointerChain.h" />
+    <ClInclude Include="..\shared\evidence\memory_workbench\PointerChainBindings.h" />
     <ClInclude Include="..\shared\evidence\memory_workbench\MemoryWriteTransaction.h" />
     <ClInclude Include="..\shared\evidence\memory_workbench\MemoryValueDecode.h" />
     <ClInclude Include="..\shared\evidence\memory_workbench\MemoryByteSearch.h" />

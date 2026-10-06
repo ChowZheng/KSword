@@ -84,6 +84,10 @@ namespace ks::ui
     // chip/确认策略/状态条/保护段/撤销可用性/实时刷新开关。
     void MemoryWorkbenchView::handleIdentityChange(quint32 changeMask)
     {
+        cancelPointerChainResolution();
+        pointerBindings_->Clear();
+        pointerClearAfterPending_ = false;
+        pointerTraces_.clear();
         Q_UNUSED(changeMask);
         if (target_ == nullptr)
         {
@@ -203,11 +207,13 @@ namespace ks::ui
     // 被显示、窗口被激活时——别的视图（内嵌进程详情窗口）可能在这期间改过它。
     void MemoryWorkbenchView::syncInt3Context()
     {
+        const QPointer<MemoryWorkbenchView> self(this);
         if (target_ == nullptr)
         {
             return;
         }
-        applyInt3Context(target_->session());
+        const auto snapshot = target_->session();
+        if (self) applyInt3Context(snapshot);
     }
 
     // onTargetAboutToDetach：int3 未经提示路径的安全网——仅当确实存在"当前目标"
@@ -282,6 +288,11 @@ namespace ks::ui
     // onWriteControllerPendingPatchesChanged：刷新会话条"N 字节待写入"区域。
     void MemoryWorkbenchView::onWriteControllerPendingPatchesChanged(quint64 bytesPending, quint64 blocksPending)
     {
+        if (bytesPending == 0 && pointerClearAfterPending_)
+        {
+            pointerBindings_->ClearActive();
+            pointerClearAfterPending_ = false;
+        }
         if (sessionBar_ != nullptr)
         {
             sessionBar_->setPendingPatches(bytesPending, blocksPending);
@@ -524,6 +535,11 @@ namespace ks::ui
         {
             return;
         }
+        if (entry->pointerChain)
+        {
+            resolvePointerChain(id, true);
+            return;
+        }
         // 跳转与编辑共用目标边界；不将其他目标的绝对地址解释为当前进程地址。
         if (target_ == nullptr || entry->targetKey != currentAddressBookTargetKey())
         {
@@ -556,6 +572,12 @@ namespace ks::ui
 
     void MemoryWorkbenchView::onAddressBookOpenDisassemblyRequested(quint64 id)
     {
+        const auto pointerEntry = WorkbenchShared::Instance().AddressBook().find(id);
+        if (pointerEntry && pointerEntry->pointerChain)
+        {
+            resolvePointerChain(id, true, true);
+            return;
+        }
         const QPointer<MemoryWorkbenchView> self(this);
         onAddressBookJumpRequested(id);
         if (self && subTabStack_ != nullptr)

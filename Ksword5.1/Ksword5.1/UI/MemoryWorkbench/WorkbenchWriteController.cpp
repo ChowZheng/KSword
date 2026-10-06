@@ -169,6 +169,12 @@ namespace ks::ui
         kernelPortFactory_ = std::move(factory);
     }
 
+    void WorkbenchWriteController::setWriteValidationCallback(WriteValidationFn callback)
+    {
+        writeValidationCallback_ = std::move(callback);
+        if (byteStore_) byteStore_->SetWriteValidationCallback(writeValidationCallback_);
+    }
+
     void WorkbenchWriteController::setRereadRangeCallback(RereadRangeFn callback)
     {
         rereadRangeCallback_ = std::move(callback);
@@ -219,6 +225,7 @@ namespace ks::ui
         }
         byteStore_ = std::make_unique<MemoryIoByteStore>(
             *port_, target_->session(), kernelPort_.get());
+        byteStore_->SetWriteValidationCallback(writeValidationCallback_);
         return byteStore_.get();
     }
 
@@ -541,6 +548,11 @@ namespace ks::ui
         UndoReplayResult replay;
         {
             detail::CommitReadOnlyGuard guard(commitDepth_, canvasReadOnlyHook_, commitSuspendHook_);
+            const auto resetHistory = [self, previous = historyReplay_](WorkbenchWriteController*) {
+                if (self) self->historyReplay_ = previous;
+            };
+            const std::unique_ptr<WorkbenchWriteController, decltype(resetHistory)> historyGuard(this, resetHistory);
+            historyReplay_ = true;
             replay = undo_->undo();
         }
         if (replay.commitAttempted)
@@ -593,6 +605,11 @@ namespace ks::ui
         UndoReplayResult replay;
         {
             detail::CommitReadOnlyGuard guard(commitDepth_, canvasReadOnlyHook_, commitSuspendHook_);
+            const auto resetHistory = [self, previous = historyReplay_](WorkbenchWriteController*) {
+                if (self) self->historyReplay_ = previous;
+            };
+            const std::unique_ptr<WorkbenchWriteController, decltype(resetHistory)> historyGuard(this, resetHistory);
+            historyReplay_ = true;
             replay = undo_->redo();
         }
         if (replay.commitAttempted)

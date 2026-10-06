@@ -600,6 +600,10 @@
     <ClCompile Include="..\..\shared\evidence\memory_workbench\MemoryPatchByteStore.cpp" />
     <ClCompile Include="..\..\shared\evidence\memory_workbench\Int3PatchLedger.cpp" />
     <ClCompile Include="..\..\shared\evidence\memory_workbench\MemoryAddressBook.cpp" />
+    <ClCompile Include="..\..\shared\evidence\PointerChain.cpp" />
+    <ClCompile Include="..\..\shared\evidence\memory_workbench\PointerChainBindings.cpp" />
+    <ClCompile Include="MemoryDock\WorkbenchPointerChainAccess.cpp" />
+    <ClCompile Include="UI\MemoryWorkbench\MemoryWorkbenchView.PointerChains.cpp" />
     <ClCompile Include="..\..\shared\evidence\memory_workbench\MemoryAddressBook.Serialize.cpp" />
     <ClCompile Include="..\..\shared\evidence\memory_workbench\MemoryChannelGate.cpp" />
     <ClCompile Include="..\..\shared\evidence\memory_workbench\MemoryModuleDirectory.cpp" />
@@ -1085,6 +1089,9 @@
     <ClInclude Include="..\..\shared\evidence\memory_workbench\MemoryPatchByteStore.h" />
     <ClInclude Include="..\..\shared\evidence\memory_workbench\Int3PatchLedger.h" />
     <ClInclude Include="..\..\shared\evidence\memory_workbench\MemoryAddressBook.h" />
+    <ClInclude Include="..\..\shared\evidence\PointerChain.h" />
+    <ClInclude Include="..\..\shared\evidence\memory_workbench\PointerChainBindings.h" />
+    <ClInclude Include="MemoryDock\WorkbenchPointerChainAccess.h" />
     <ClInclude Include="..\..\shared\evidence\memory_workbench\MemoryChannelGate.h" />
     <ClInclude Include="..\..\shared\evidence\memory_workbench\MemoryModuleDirectory.h" />
     <ClInclude Include="..\..\shared\evidence\memory_workbench\MemoryProcessMatch.h" />

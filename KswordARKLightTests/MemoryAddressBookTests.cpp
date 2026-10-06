@@ -468,6 +468,104 @@ void TestPollPolicy(KswordTests::Suite& suite) {
     }
 }
 
+void TestPointerBookmarks(KswordTests::Suite& suite) {
+    using MemwbAddressBookTestSupport::PointerDraft;
+    using MemwbAddressBookTestSupport::SameList;
+    auto valid = PointerDraft();
+    MemoryAddressBook book;
+    const auto id = book.Add(valid);
+    suite.expect(id == 1 && book.Find(id)->pointerChain == valid.pointerChain,
+        L"pointer: Add preserves the complete definition");
+    auto copy = book.Find(id);
+    copy->pointerChain->offsets[0] = 99;
+    suite.expect(book.Find(id)->pointerChain->offsets[0] == 0, L"pointer: Find returns an independent definition");
+    const auto before = book.List();
+    const auto next = book.NextId();
+    std::vector<AddressEntry> invalid;
+    auto reject = [&](const auto& change) { auto draft = valid; change(draft); invalid.push_back(std::move(draft)); };
+    reject([](auto& e) { e.kind = EntryKind::Watch; });
+    reject([](auto& e) { e.kind = EntryKind::Search; });
+    reject([](auto& e) { e.moduleName.clear(); });
+    reject([](auto& e) { e.absoluteAddress = 0x1234; });
+    reject([](auto& e) { e.rva = 0x4000; });
+    reject([](auto& e) { e.rva = 0x3FF9; });
+    reject([](auto& e) { e.rva = kU64Max; });
+    reject([](auto& e) { e.pointerChain->moduleSize = 0; });
+    reject([](auto& e) { e.pointerChain->moduleFileSize = 0; });
+    reject([](auto& e) { e.pointerChain->moduleFileSize = -1; });
+    reject([](auto& e) { e.pointerChain->moduleFileTime = 0; });
+    reject([](auto& e) { e.pointerChain->moduleFileTime = -1; });
+    reject([](auto& e) { e.pointerChain->pointerSize = 0; });
+    reject([](auto& e) { e.pointerChain->pointerSize = 3; });
+    reject([](auto& e) { e.pointerChain->pointerSize = 16; });
+    reject([](auto& e) { e.pointerChain->offsets.clear(); });
+    reject([](auto& e) { e.pointerChain->offsets.resize(17); });
+    for (const auto* path : {"", "game.exe", "C:game.exe", "\\game.exe", "C:\\", "\\\\server\\share"}) {
+        reject([&](auto& e) { e.pointerChain->processPath = path; });
+        reject([&](auto& e) { e.pointerChain->modulePath = path; });
+    }
+    reject([](auto& e) { e.pointerChain->processPath = std::string("C:\\game\0.exe", 12); });
+    reject([](auto& e) { e.pointerChain->modulePath = "C:\\" + std::string(32766, 'a'); });
+    for (const auto& draft : invalid) {
+        suite.expect(book.Add(draft) == 0, L"pointer: malformed draft is rejected");
+        suite.expect(book.NextId() == next && SameList(book.List(), before),
+            L"pointer: failed Add is transactional including id counter");
+    }
+    for (const auto* path : {"C:\\Game\\game.dll", "\\\\server\\share\\game.dll", "/usr/game.dll",
+                            "\\\\?\\C:\\Game\\game.dll", "\\\\?\\UNC\\server\\share\\game.dll"}) {
+        auto draft = valid;
+        draft.pointerChain->processPath = path;
+        draft.pointerChain->modulePath = path;
+        suite.expect(book.Add(draft) != 0, L"pointer: full local, UNC, extended and portable paths are accepted");
+    }
+    auto boundary = valid;
+    boundary.rva = 0x3FF8;
+    boundary.pointerChain->offsets.resize(16, -1);
+    suite.expect(book.Add(boundary) != 0, L"pointer: 16 levels and last complete 64-bit root are accepted");
+    boundary.rva = 0x3FFC;
+    boundary.pointerChain->pointerSize = 4;
+    suite.expect(book.Add(boundary) != 0, L"pointer: last complete 32-bit root is accepted");
+
+    auto definition = *valid.pointerChain;
+    definition.offsets = {-0x20, 0x50};
+    suite.expect(book.SetPointerChain(id, definition, "other.dll", 0x200), L"pointer: existing bookmark can be edited");
+    const auto updated = book.Find(id);
+    suite.expect(updated->pointerChain == definition && updated->moduleName == "other.dll"
+        && updated->rva == 0x200 && updated->absoluteAddress == 0 && updated->note == valid.note
+        && updated->valueType == valid.valueType && updated->targetKey == valid.targetKey,
+        L"pointer: setter preserves id, note, value type and target while replacing root and definition");
+    const auto saved = book.List();
+    definition.offsets.clear();
+    suite.expect(!book.SetPointerChain(id, definition, "broken.dll", 0x300) && SameList(book.List(), saved),
+        L"pointer: invalid setter leaves the whole entry unchanged");
+    definition = *valid.pointerChain;
+    suite.expect(!book.SetPointerChain(99999, definition, "game.dll", 0x100), L"pointer: absent id cannot be edited");
+    for (const auto kind : {EntryKind::Search, EntryKind::Watch}) {
+        auto ordinary = valid;
+        ordinary.pointerChain.reset();
+        ordinary.kind = kind;
+        const auto other = book.Add(ordinary);
+        suite.expect(!book.SetPointerChain(other, definition, "game.dll", 0x100)
+            && !book.Find(other)->pointerChain, L"pointer: Search and Watch cannot acquire pointer definitions");
+    }
+    suite.expect(book.Promote(id, EntryKind::Bookmark), L"pointer: same-kind promotion is idempotent");
+    suite.expect(!book.Promote(id, EntryKind::Watch) && !book.Promote(id, EntryKind::Search)
+        && book.Find(id)->kind == EntryKind::Bookmark, L"pointer: explicit pointers cannot enter polling or temporary kinds");
+    suite.expect(book.SetNote(id, "edited note") && book.SetValueType(id, ValueType::I64)
+        && book.Find(id)->pointerChain == *updated->pointerChain, L"pointer: note/value type edits retain the chain");
+    int lookups = 0;
+    const auto lookup = [&](const std::string&, std::uint64_t& base) { ++lookups; base = 0x1000; return true; };
+    const auto resolved = MemoryAddressBook::ResolveAddress(*book.Find(id), lookup);
+    suite.expect(!resolved.ok() && resolved.status == ResolveStatus::RequiresPointerResolution
+        && resolved.address == 0 && lookups == 0, L"pointer: ordinary polling cannot resolve or read the root RVA");
+    auto malformed = valid;
+    malformed.moduleName.clear();
+    malformed.absoluteAddress = 0xBAD;
+    const auto malformedResult = MemoryAddressBook::ResolveAddress(malformed, lookup);
+    suite.expect(!malformedResult.ok() && malformedResult.address == 0 && lookups == 0,
+        L"pointer: even a malformed external draft cannot fall back to its absolute address");
+}
+
 } // namespace
 
 // RunMemwbAddressBookTests：套件入口。先跑本文件的条目管理 / 解析 / 轮询用例，
@@ -482,6 +580,7 @@ int RunMemwbAddressBookTests() {
     TestResolveAddress(suite);
     TestFromAbsolute(suite);
     TestPollPolicy(suite);
+    TestPointerBookmarks(suite);
     RunMemwbAddressBookSerializeTests(suite);
     suite.report();
     return suite.failures();

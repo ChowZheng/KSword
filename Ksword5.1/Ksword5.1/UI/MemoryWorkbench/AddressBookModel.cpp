@@ -17,6 +17,7 @@
 #include <QPointF>
 #include <QPolygonF>
 #include <QRectF>
+#include <QStringList>
 
 #include <algorithm>
 #include <set>
@@ -36,10 +37,43 @@ namespace ks::ui
             return QStringLiteral("0x%1").arg(value, 0, 16);
         }
 
-        // FormatAddressColumn："地址"列的统一展示文本：模块条目 "<模块>+0x<rva>"，
-        // 绝对地址条目 "0x<absolute>"。
+        QString FormatPointerOffsets(const ksword::memwb::PointerBookmarkDefinition& definition)
+        {
+            QStringList offsets;
+            for (const std::int64_t offset : definition.offsets)
+            {
+                const std::uint64_t magnitude = offset < 0
+                    ? static_cast<std::uint64_t>(-(offset + 1)) + 1U
+                    : static_cast<std::uint64_t>(offset);
+                offsets << (offset < 0 ? QStringLiteral("-") : QString()) + FormatHex(magnitude);
+            }
+            return offsets.join(QStringLiteral(", "));
+        }
+
+        QString FormatPointerChain(const ksword::memwb::AddressEntry& entry)
+        {
+            return ks::i18n::sourceText(QStringLiteral("指针链：%1+%2 → %3"))
+                .arg(QString::fromUtf8(entry.moduleName.c_str()), FormatHex(entry.rva),
+                    FormatPointerOffsets(*entry.pointerChain));
+        }
+
+        QString PointerChainToolTip(const ksword::memwb::AddressEntry& entry)
+        {
+            const auto& definition = *entry.pointerChain;
+            return ks::i18n::sourceText(QStringLiteral(
+                "基址模块：%1\n根指针偏移：%2\n逐级偏移（从根到目标）：%3\n绑定程序：%4\n指针宽度：%5 位\n仅按需解析，不自动刷新。"))
+                .arg(QString::fromUtf8(definition.modulePath.c_str()), FormatHex(entry.rva),
+                    FormatPointerOffsets(definition), QString::fromUtf8(definition.processPath.c_str()))
+                .arg(definition.pointerSize * 8U);
+        }
+
+        // A chain row shows its definition, never a root address posing as the target.
         QString FormatAddressColumn(const ksword::memwb::AddressEntry& entry)
         {
+            if (entry.pointerChain.has_value())
+            {
+                return FormatPointerChain(entry);
+            }
             if (!entry.moduleName.empty())
             {
                 return QStringLiteral("%1+%2")
@@ -53,6 +87,10 @@ namespace ks::ui
         // "—"（em dash），用于在 B 组一眼看出"这条是不是绑定着某个模块"。
         QString FormatModuleOffsetColumn(const ksword::memwb::AddressEntry& entry)
         {
+            if (entry.pointerChain.has_value())
+            {
+                return FormatPointerChain(entry);
+            }
             if (entry.moduleName.empty())
             {
                 return QStringLiteral("—");
@@ -83,6 +121,13 @@ namespace ks::ui
         // 不代表真实地址高低。
         QString FormatAddressSortKey(const ksword::memwb::AddressEntry& entry)
         {
+            if (entry.pointerChain.has_value())
+            {
+                return QStringLiteral("2:%1:%2:%3")
+                    .arg(QString::fromUtf8(entry.moduleName.c_str()))
+                    .arg(entry.rva, 16, 16, QChar(u'0'))
+                    .arg(FormatPointerOffsets(*entry.pointerChain));
+            }
             if (!entry.moduleName.empty())
             {
                 return QStringLiteral("1:%1:%2")
@@ -247,6 +292,7 @@ namespace ks::ui
             case ColumnValueType: return static_cast<int>(entry.valueType);
             case ColumnValue:
             {
+                if (entry.pointerChain.has_value()) return QString();
                 const auto cellIt = m_valueCells.find(entry.id);
                 return cellIt != m_valueCells.end() ? cellIt->second.text : QString();
             }
@@ -272,11 +318,17 @@ namespace ks::ui
             if (role == Qt::ToolTipRole)
             {
                 // 纯 UI 文案（"搜索结果/书签/监视"），不是用户/目标数据，经语言包翻译（C12）。
-                return ks::i18n::sourceText(KindDisplayName(entry.kind));
+                return entry.pointerChain.has_value()
+                    ? ks::i18n::sourceText(QStringLiteral("指针链书签"))
+                    : ks::i18n::sourceText(KindDisplayName(entry.kind));
             }
             return QVariant();
 
         case ColumnAddress:
+            if (role == Qt::ToolTipRole && entry.pointerChain.has_value())
+            {
+                return PointerChainToolTip(entry);
+            }
             // 地址是目标数据（模块名+RVA 或绝对地址），不翻译（C12 的决策明确排除此列）。
             if (role == Qt::DisplayRole || role == Qt::ToolTipRole)
             {
@@ -286,6 +338,16 @@ namespace ks::ui
 
         case ColumnValue:
         {
+            if (entry.pointerChain.has_value())
+            {
+                if (role == Qt::DisplayRole)
+                    return ks::i18n::sourceText(QStringLiteral("按需解析"));
+                if (role == Qt::ToolTipRole)
+                    return ks::i18n::sourceText(QStringLiteral("指针链仅按需解析，不自动刷新。"));
+                if (role == Qt::ForegroundRole) return KswordTheme::TextSecondaryColor();
+                if (role == ValueStateRole) return static_cast<int>(ValueState::NotRead);
+                return QVariant();
+            }
             // ValueCell：外部喂入的文本与状态；找不到（从未喂入过）时按 NotRead 显示占位。
             const auto cellIt = m_valueCells.find(entry.id);
             const ValueCell cell = cellIt != m_valueCells.end() ? cellIt->second : ValueCell{};
@@ -354,6 +416,10 @@ namespace ks::ui
             return QVariant();
 
         case ColumnModuleOffset:
+            if (role == Qt::ToolTipRole && entry.pointerChain.has_value())
+            {
+                return PointerChainToolTip(entry);
+            }
             if (role == Qt::DisplayRole || role == Qt::ToolTipRole)
             {
                 return FormatModuleOffsetColumn(entry);
@@ -454,7 +520,7 @@ namespace ks::ui
             const std::uint64_t id = idAt(index);
             const auto cellIt = m_valueCells.find(id);
             const bool readyForEdit = (cellIt != m_valueCells.end()) && (cellIt->second.state == ValueState::Read);
-            if (readyForEdit)
+            if (readyForEdit && !isPointerChain(id))
             {
                 // 允许触发"进入编辑态"（双击/F2/Enter 都靠这个标志才能叫出编辑器），但
                 // setData 对这一列恒返回 false——真正提交由 AddressBookPanel 的专用委托接管，
@@ -517,7 +583,8 @@ namespace ks::ui
         // 修复 C14：条目已经不在簿里（被删除，或从未存在过的 id）时直接忽略，不写入
         // m_valueCells——否则异步读回的结果晚到时会一直往这张表里累积从不清理的旧 id，
         // 号段被复用后（见 MemoryAddressBook.h 关于 id 复用的注释）旧值还会显示到新条目上。
-        if (m_store == nullptr || !m_store->find(id).has_value())
+        const auto entry = m_store != nullptr ? m_store->find(id) : std::nullopt;
+        if (!entry.has_value() || entry->pointerChain.has_value())
         {
             return;
         }
@@ -546,14 +613,22 @@ namespace ks::ui
 
     AddressBookModel::ValueState AddressBookModel::valueState(const std::uint64_t id) const
     {
+        if (isPointerChain(id)) return ValueState::NotRead;
         const auto it = m_valueCells.find(id);
         return it != m_valueCells.end() ? it->second.state : ValueState::NotRead;
     }
 
     QString AddressBookModel::valueText(const std::uint64_t id) const
     {
+        if (isPointerChain(id)) return QString();
         const auto it = m_valueCells.find(id);
         return it != m_valueCells.end() ? it->second.text : QString();
+    }
+
+    bool AddressBookModel::isPointerChain(const std::uint64_t id) const
+    {
+        const auto entry = m_store != nullptr ? m_store->find(id) : std::nullopt;
+        return entry.has_value() && entry->pointerChain.has_value();
     }
 
     std::uint64_t AddressBookModel::idAt(const QModelIndex& index) const

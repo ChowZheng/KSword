@@ -13,7 +13,7 @@
 //   -> 条目带 targetKey（按目标分组），并且地址优先存成 模块名 + RVA；
 //      ResolveAddress 在模块没加载时明确返回"模块未加载"，绝不拿旧绝对地址冒充。
 // - 旧书签不持久化。
-//   -> Serialize / Deserialize（v1 文本格式，见下）。
+//   -> Serialize / Deserialize（普通条目保留 v1；指针链使用 v2，见下）。
 // - 旧书签备注不可编辑、值只能显示 8 字节十六进制。
 //   -> SetNote / SetValueType（ValueType::Hex8 保留旧显示作默认值）。
 // - 旧搜索结果表按"行号"去缓存里取地址，一排序行号就和缓存错位，点中的是别的地址。
@@ -39,6 +39,7 @@
 //
 // Promote 规则：
 // - 允许 Search -> Bookmark / Watch，以及 Bookmark <-> Watch。
+// - 指针链条目只允许 Bookmark -> Bookmark，不进入 Watch 的周期读取。
 // - 禁止把 Bookmark / Watch 降回 Search：搜索结果是临时的，新一轮搜索会清掉它们，
 //   降级等于让用户保存的条目被下一次搜索悄悄删掉。
 //
@@ -65,6 +66,13 @@
 //   字段数不是 8、id 非法、未知 kind / valueType、地址文本非法、转义非法、
 //   moduleName 与 rva / absolute 互相矛盾、id 重复。
 // - 拒绝时传入的 MemoryAddressBook 保持原样：先解析到临时对象，全部通过才一次性替换。
+//
+// v2：标题为 "KSWORD-ADDRESS-BOOK 2"，每行在原有 8 字段后追加固定 8 字段：
+//   pointer \t processPath \t modulePath \t moduleSize \t fileSize \t fileTime \t width \t offsets
+// 普通条目的 8 个追加字段全部为空；指针条目的 marker 为 "pointer"，路径沿用转义，
+// 三个大小/时间为正十进制数，width 为 4/8，offsets 为逗号分隔的有符号 0x 十六进制。
+// 指针链只允许 Bookmark；moduleName/rva 是根模块与根 RVA，禁止缓存解析后的绝对地址。
+// v2 输入最多 kAddressBookV2TextLimit 字节；仅选中普通条目时仍写出 v1。
 //
 // 约束：命名空间 ksword::memwb，C++20，仅标准库，不含 Windows.h / Qt 头。
 // ============================================================
@@ -105,6 +113,7 @@ enum class ValueType : int {
 
 // 号段上限哨兵：id 必须严格小于它，UINT64_MAX 本身不会被分配出去。
 inline constexpr std::uint64_t kAddressBookIdLimit = ~0ULL;
+inline constexpr std::size_t kAddressBookV2TextLimit = 16U * 1024U * 1024U;
 
 // EntryKindName / ValueTypeName：枚举对应的持久化记号（见上面格式说明）。
 // 这些字符串属于 v1 文件格式的一部分，不得改名。传入非法枚举值返回 "unknown"。
@@ -121,6 +130,18 @@ bool ParseValueType(std::string_view text, ValueType& out) noexcept;
 bool IsValidEntryKind(EntryKind kind) noexcept;
 bool IsValidValueType(ValueType valueType) noexcept;
 
+struct PointerBookmarkDefinition {
+    std::string processPath;
+    std::string modulePath;
+    std::uint64_t moduleSize = 0;
+    std::int64_t moduleFileSize = 0;
+    std::int64_t moduleFileTime = 0;
+    std::uint32_t pointerSize = 8;
+    std::vector<std::int64_t> offsets;
+
+    friend bool operator==(const PointerBookmarkDefinition&, const PointerBookmarkDefinition&) = default;
+};
+
 // AddressEntry：地址簿中的一个条目。
 struct AddressEntry {
     std::uint64_t id = 0;                 // 条目 id；Add 时由簿分配，草稿里填什么都会被覆盖。
@@ -131,6 +152,7 @@ struct AddressEntry {
     std::uint64_t absoluteAddress = 0;    // 绝对地址；仅 moduleName 为空时有效。
     std::string note;                     // 用户备注，可为空，可编辑。
     ValueType valueType = ValueType::Hex8; // 值的解释类型，默认保持旧书签的 8 字节十六进制。
+    std::optional<PointerBookmarkDefinition> pointerChain; // 仅书签；根地址仍由 moduleName/rva 表达。
 };
 
 // AddressFilter：List / Serialize 的过滤条件。两个条件同时给出时取交集。
@@ -152,6 +174,7 @@ enum class ResolveStatus : int {
     Ok,                // 解析成功，address 有效。
     ModuleNotLoaded,   // 条目绑定的模块当前没有加载（或没提供查询回调）。
     Overflow,          // 模块基址 + rva 超出 64 位地址空间。
+    RequiresPointerResolution, // 只能由显式指针解析读取；普通查询/轮询不得使用根 RVA。
 };
 
 // ResolveResult：ResolveAddress 的输出。失败时 address 恒为 0。
@@ -176,10 +199,10 @@ enum class DeserializeError : int {
     None = 0,              // 成功。
     EmptyInput,            // 输入为空，连标题行都没有。
     BadHeader,             // 标题行不是 "KSWORD-ADDRESS-BOOK <版本>"。
-    UnsupportedVersion,    // 标题魔数正确但版本不是 1。
+    UnsupportedVersion,    // 标题魔数正确但版本不是 1/2。
     UnterminatedLine,      // 某行没有以 LF 结尾（文件被截断的典型表现）。
     RawCarriageReturn,     // 行内出现裸回车（文件被文本模式转成了 CRLF）。
-    WrongFieldCount,       // 字段数不是 8。
+    WrongFieldCount,       // 字段数与版本不符（v1 为 8；v2 为 16）。
     BadId,                 // id 不是十进制数、为 0、为上限哨兵或溢出。
     UnknownKind,           // kind 记号未知。
     UnknownValueType,      // valueType 记号未知。
@@ -187,6 +210,8 @@ enum class DeserializeError : int {
     BadEscape,             // 字符串字段里有非法的反斜杠序列。
     InconsistentAddress,   // moduleName 与 rva / absolute 互相矛盾。
     DuplicateId,           // 同一个 id 出现了两次。
+    BadPointerChain,       // 指针链标记、元数据、偏移或条目种类不合法。
+    InputTooLarge,         // v2 文本超出容量上限。
 };
 
 // DeserializeErrorText：错误码对应的简短英文诊断文本，成功码返回空串。
@@ -217,7 +242,7 @@ class MemoryAddressBook {
 public:
     // Add：添加一个条目。
     // 传入：草稿，其 id 字段被忽略；不适用的地址字段会被清零（见文件头）。
-    // 传出：分配到的新 id（>=1）。kind / valueType 不是已定义取值，或号段用尽时
+    // 传出：分配到的新 id（>=1）。kind / valueType 越界、指针定义非法，或号段用尽时
     //       返回 0，簿保持不变。
     std::uint64_t Add(const AddressEntry& draft);
 
@@ -233,6 +258,15 @@ public:
 
     // SetValueType：改值的解释类型。id 不存在或类型越界返回 false，条目保持不变。
     bool SetValueType(std::uint64_t id, ValueType valueType);
+
+    // 更新现有 Bookmark 的指针链及模块根位置；保留 id、目标、备注、值类型。
+    // 不接受 Search/Watch 或无效定义，失败时条目完全不变。
+    bool SetPointerChain(std::uint64_t id, const PointerBookmarkDefinition& definition,
+                         std::string moduleName, std::uint64_t rootRva);
+
+    // Shared validation for explicit pointer bindings/adapters; ordinary entries
+    // without a pointer definition are valid for this particular policy.
+    static bool ValidPointerChain(const AddressEntry& entry) noexcept;
 
     // Promote：改条目 kind（如 Search -> Bookmark），位置与其它字段都不变。
     // 目标 kind 与当前相同视为成功（幂等）。Bookmark / Watch -> Search 被拒绝，
@@ -252,6 +286,7 @@ public:
     // 传入：条目；模块基址查询回调（无模块条目用不到，可传空）。
     // 传出：见 ResolveStatus。有模块名的条目只走"基址 + rva"：回调找不到模块就是
     //       ModuleNotLoaded，加法溢出就是 Overflow，两种情况都不会回退到绝对地址。
+    //       指针书签恒返回 RequiresPointerResolution，查询回调不会被调用。
     static ResolveResult ResolveAddress(
         const AddressEntry& entry,
         const ModuleBaseLookup& lookup);
@@ -268,12 +303,12 @@ public:
         std::uint64_t address,
         const std::optional<ModuleLocation>& moduleInfo = std::nullopt);
 
-    // Serialize：按 v1 格式写成文本，条目按插入顺序，id 原样写出。
+    // Serialize：存在选中的指针书签时写 v2，否则仍写 v1；顺序与 id 保持原样。
     // 传入：可选过滤器（例如只保存 Bookmark / Watch，不保存临时的 Search 结果）。
     // 传出：以 LF 结尾的文本，至少含标题行。
     std::string Serialize(const AddressFilter& filter = AddressFilter{}) const;
 
-    // Deserialize：解析 v1 文本，成功时整体替换 out 的内容。
+    // Deserialize：解析 v1/v2 文本，成功时整体替换 out 的内容。
     // 传入：文本；输出簿。
     // 传出：见 DeserializeResult。失败时 out 完全不变（包括下一个 id）；成功后
     //       下一个 id = max(out 载入前的下一个 id, 文件中最大 id + 1)。

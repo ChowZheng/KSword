@@ -251,6 +251,7 @@ namespace ks::ui
         }
 
         clearScopeSwitchPrompt();
+        leavePointerChainNavigation();
         applyNavOutcome(request, NavStatus::Ok);
         return NavStatus::Ok;
     }
@@ -379,6 +380,7 @@ namespace ks::ui
         // 旧实现点后退后该按钮仍然可见，点了会跳到一个用户已经离开的地址）。
         clearScopeSwitchPrompt();
         hexPane_->jumpTo(destination);
+        leavePointerChainNavigation();
     }
 
     void MemoryWorkbenchView::onGoForwardRequested()
@@ -396,6 +398,7 @@ namespace ks::ui
         }
         clearScopeSwitchPrompt();
         hexPane_->jumpTo(destination);
+        leavePointerChainNavigation();
     }
 
     // onRerouteButtonClicked："切换并跳转"按钮——用户主动确认才真正切换范围。
@@ -506,13 +509,16 @@ namespace ks::ui
     // 处理函数），失败/成功都会在状态条留下一句话，不再无声无息。
     void MemoryWorkbenchView::onToggleInt3AtAddress(quint64 address)
     {
+        const QPointer<MemoryWorkbenchView> self(this);
         if (target_ == nullptr)
         {
             return;
         }
-        const auto& session = target_->session();
+        const auto session = target_->session();
+        if (!self) return;
         // Install/Restore 的路由预检与目标匹配都读账本的"当前目标"，先声明回本视图的会话。
         applyInt3Context(session);
+        if (!self) return;
         auto& int3 = WorkbenchShared::Instance().Int3();
         std::optional<std::uint64_t> existingId;
         for (const auto& entry : int3.Entries())
@@ -528,9 +534,26 @@ namespace ks::ui
         if (existingId.has_value())
         {
             const auto outcome = int3.Restore(*existingId);
+            if (!self) return;
             onInt3ResultMessage(
                 TranslateInt3RestoreOutcome(outcome),
                 outcome.status != ksword::memwb::RestoreStatus::Restored);
+            return;
+        }
+        std::string validationFailure;
+        const bool allowed = validatePointerChainWrite(session, address, 1, validationFailure);
+        if (!self) return;
+        if (!allowed)
+        {
+            onInt3ResultMessage(QString::fromUtf8(validationFailure.c_str()), true);
+            return;
+        }
+        const auto context = int3.CurrentTarget();
+        if (context.pid != session.pid || context.processCreateTime100ns != session.processCreateTime100ns
+            || context.attachGeneration != session.attachGeneration || int3.CurrentScope() != session.scope
+            || int3.CurrentChannel() != session.channel)
+        {
+            onInt3ResultMessage(ks::i18n::sourceText(QStringLiteral("目标身份与请求不一致")), true);
             return;
         }
         const ksword::memwb::PatchTarget patchTarget{
@@ -539,6 +562,7 @@ namespace ks::ui
         // 即可（与 Int3PatchPanel::onInstallClicked 同一取法）。
         const std::uint64_t nowTick = static_cast<std::uint64_t>(QDateTime::currentMSecsSinceEpoch());
         const auto outcome = int3.Install(patchTarget, address, nowTick);
+        if (!self) return;
         const bool isError = (outcome.routeReject != Int3RouteReject::None) ||
             (outcome.status != ksword::memwb::InstallStatus::Installed);
         onInt3ResultMessage(TranslateInt3InstallOutcome(outcome, address), isError);

@@ -17,6 +17,7 @@
 #include <QMenu>
 
 #include <array>
+#include <algorithm>
 #include <optional>
 
 namespace ks::ui
@@ -93,6 +94,9 @@ namespace ks::ui
         // 不一致：菜单显示可点，点了却作用在一条没被选中的行上。
         const std::uint64_t targetId = targetRowId();
         const bool hasTarget = targetId != 0;
+        const bool targetIsPointerChain = hasTarget && m_model->isPointerChain(targetId);
+        const bool selectionHasPointerChain = std::any_of(selection.begin(), selection.end(),
+            [this](const std::uint64_t id) { return m_model->isPointerChain(id); });
         const bool targetValueIsRead =
             hasTarget && (m_model->valueState(targetId) == AddressBookModel::ValueState::Read);
 
@@ -101,6 +105,19 @@ namespace ks::ui
         // 悬停释义依赖这个开关才会显示（AGENTS.md 要求悬停有释义；"复制值"被置灰时正是
         // 靠这条 tooltip 告诉用户为什么点不动，见下）。
         menu.setToolTipsVisible(true);
+
+        if (targetIsPointerChain)
+        {
+            QAction* const editChainAction = menu.addAction(
+                ks::i18n::sourceText(QStringLiteral("编辑指针链")));
+            connect(editChainAction, &QAction::triggered, this,
+                [this, targetId]() { editPointerChainById(targetId); });
+            QAction* const resolveChainAction = menu.addAction(
+                ks::i18n::sourceText(QStringLiteral("解析指针链")));
+            connect(resolveChainAction, &QAction::triggered, this,
+                [this, targetId]() { resolvePointerChainById(targetId); });
+            menu.addSeparator();
+        }
 
         QAction* const jumpAction = menu.addAction(QStringLiteral("跳转"));
         jumpAction->setEnabled(hasTarget);
@@ -121,7 +138,8 @@ namespace ks::ui
             connect(bookmarkAction, &QAction::triggered, this,
                 [this]() { promoteSelection(ksword::memwb::EntryKind::Bookmark); });
         }
-        if (!currentKind.has_value() || *currentKind != ksword::memwb::EntryKind::Watch)
+        if (!selectionHasPointerChain
+            && (!currentKind.has_value() || *currentKind != ksword::memwb::EntryKind::Watch))
         {
             QAction* const watchAction = menu.addAction(QStringLiteral("加入监视"));
             watchAction->setEnabled(hasSelection);

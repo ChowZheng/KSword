@@ -96,6 +96,10 @@ namespace ks::ui
         const int row = rowForId(id);
         const bool shouldBeVisible = entry.has_value()
             && (!m_kindFilter.has_value() || entry->kind == *m_kindFilter);
+        if (entry.has_value() && entry->pointerChain.has_value())
+        {
+            m_valueCells.erase(id);
+        }
 
         if (row >= 0 && shouldBeVisible)
         {
