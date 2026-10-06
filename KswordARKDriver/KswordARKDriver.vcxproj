@@ -869,6 +869,7 @@
     <ClInclude Include="src\features\hvm\hvm_svm_flightrecorder.h" />
     <ClInclude Include="src\features\hvm\hvm_svm_hotspots.h" />
     <ClInclude Include="src\features\hvm\hvm_svm_perf.h" />
+    <ClInclude Include="src\features\hvm\hvm_svm_fast.h" />
     <ClInclude Include="..\shared\driver\KswordArkHvmFlightRecorder.h" />
     <ClCompile Include="src\features\hvm\hvm_svm_flightrecorder.c">
       <EnableEnhancedInstructionSet>StreamingSIMDExtensions2</EnableEnhancedInstructionSet>
@@ -1005,6 +1006,13 @@
       <TreatWarningAsError>true</TreatWarningAsError>
       <ExcludedFromBuild Condition="'$(Platform)'=='ARM64'">true</ExcludedFromBuild>
     </ClCompile>
+    <ClCompile Include="src\features\hvm\hvm_svm_fast.c">
+      <TreatWarningAsError>true</TreatWarningAsError>
+      <BufferSecurityCheck>false</BufferSecurityCheck>
+      <AdditionalOptions>/Ob3 %(AdditionalOptions)</AdditionalOptions>
+      <WholeProgramOptimization>false</WholeProgramOptimization>
+      <ExcludedFromBuild Condition="'$(Platform)'=='ARM64'">true</ExcludedFromBuild>
+    </ClCompile>
     <ClCompile Include="src\features\hvm\hvm_svm_nested_general.c">
       <EnableEnhancedInstructionSet>StreamingSIMDExtensions2</EnableEnhancedInstructionSet>
       <TreatWarningAsError>true</TreatWarningAsError>
@@ -1066,4 +1074,7 @@
       <ExcludedFromBuild Condition="'$(Platform)'=='ARM64'">true</ExcludedFromBuild>
     </MASM>
   </ItemGroup>
+  <Target Name="KswordSvmIntegerLeafGate" BeforeTargets="Link" Condition="'$(Platform)'=='x64'">
+    <Exec Command="python &quot;$(ProjectDir)..\tools\hvm_lab\audit_svm_fast.py&quot; --object &quot;$(IntDir)hvm_svm_fast.obj&quot; --dumpbin &quot;$(VCToolsInstallDir)bin\HostX64\x64\dumpbin.exe&quot;" />
+  </Target>
 </Project>

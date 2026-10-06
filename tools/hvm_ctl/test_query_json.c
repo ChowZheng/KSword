@@ -58,6 +58,7 @@ static BOOL WINAPI FakeDeviceIoControl(HANDLE device, DWORD code, LPVOID input,
         cpu->perf.rows[0][0].stages[2] = 0x200000002ULL;
         cpu->perf.rows[0][0].details[KSW_HVM_PERF_FETCH] = 0x100000001ULL;
         cpu->perf.tlbIssued[2] = 0x100000003ULL;
+        cpu->perf.fastMsr[2][1] = 0x100000005ULL;
         cpu->flight.coherent = 1;
         cpu->flight.latched = 1;
         cpu->flight.reason = 1;

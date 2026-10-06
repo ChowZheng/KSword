@@ -25,6 +25,8 @@ typedef struct _KSWORD_HVM_PERF_METRICS {
     unsigned long long sequence, sampleMask;
     /* Actual hardware-entry TLB_CONTROL requests, distinct from virtual L1 requests. */
     unsigned long long tlbIssued[4];
+    /* Subset of ordinary hotspot counts: EFER/HSAVE/XSS by read/same-value write. */
+    unsigned long long fastMsr[3][2];
     /* Stable reason buckets, separately charged to the raw exiting L1/L2 level. */
     KSWORD_HVM_PERF_ROW rows[2][KSW_HVM_PERF_BUCKETS];
 } KSWORD_HVM_PERF_METRICS;

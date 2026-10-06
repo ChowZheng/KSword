@@ -268,7 +268,7 @@ NTSTATUS KswordSvmStart(KSW_HVM_RUNTIME* Runtime, ULONG Flags)
     /* Changing the command flags cannot convert a fixed probe preparation into ordinary residency. */
     if ((state->PreparedFlags & KSWORD_ARK_HVM_CONTROL_FLAG_SVM_NESTED_PROBE) ||
         ((Flags ^ state->PreparedFlags) & (KSWORD_ARK_HVM_CONTROL_FLAG_ENABLE_NESTED_SVM |
-            KSWORD_ARK_HVM_CONTROL_FLAG_SVM_PROFILE))) { return STATUS_INVALID_DEVICE_STATE; }
+            KSWORD_ARK_HVM_CONTROL_FLAG_SVM_PROFILE | KSWORD_ARK_HVM_CONTROL_FLAG_SVM_FAST_MSR))) { return STATUS_INVALID_DEVICE_STATE; }
     /* Never replace a live or uncertain ownership state. */
     if (Runtime->ResidentProcessorCount || (Runtime->StateFlags & (KSWORD_ARK_HVM_STATE_FAULTED | KSWORD_ARK_HVM_STATE_ROLLBACK_REQUIRED))) { return STATUS_INVALID_DEVICE_STATE; }
     /* Serialize against power and other hardware transitions. */

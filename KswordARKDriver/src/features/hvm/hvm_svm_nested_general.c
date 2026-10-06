@@ -265,8 +265,43 @@ NTSTATUS KswordSvmNestedInitializeGeneral(KSW_SVM_CPU* Cpu)
         KSWORD_ARK_HVM_CONTROL_FLAG_SVM_PROFILE) ? &nested->Perf : NULL;
     /* New residency starts its own zeroed hotspot epoch under lifecycle exclusion. */
     RtlZeroMemory(&nested->Hotspots, sizeof(nested->Hotspots));
+    /* Initialize stable fast MSR identity slots; no dynamic lookup is needed by the leaf. */
+    nested->Hotspots.levels[0].msrUsed = 3;
+    /* Zero observations do not imply these registers have executed. */
+    nested->Hotspots.levels[0].msrs[0].number = 0xc0000080U;
+    /* The virtual save-area register remains fully intercepted. */
+    nested->Hotspots.levels[0].msrs[1].number = 0xc0010117U;
+    /* An absent XSAVES feature is still refused by the integer leaf. */
+    nested->Hotspots.levels[0].msrs[2].number = 0xda0U;
     /* No count is readable until the first complete observation. */
     nested->HotSequence = 0;
+    /* Bind the optional scalar leaf before publishing its executable CPU pointer. */
+    RtlZeroMemory(&nested->Fast, sizeof(nested->Fast));
+    /* Every pointer names the same retained CPU-private resource lifetime. */
+    nested->Fast.HotSequence = (volatile KSW_SVM_U64*)&nested->HotSequence;
+    /* General metrics remain coherent across both dispatcher forms. */
+    nested->Fast.GeneralSequence = (volatile KSW_SVM_U64*)&nested->GeneralSequence;
+    /* Raw accounting is unchanged even though the general C bridge may be skipped. */
+    nested->Fast.Hot = &nested->Hotspots; nested->Fast.GeneralExits = &nested->GeneralHardwareExits;
+    /* Last-exit fields retain the real physical MSR exit code. */
+    nested->Fast.GeneralLastExit = &nested->GeneralLastHardwareExit;
+    /* CPU-local lifetime counters must include every fast return. */
+    nested->Fast.VmExits = &Cpu->Resource->Row.vmExitCount;
+    /* This protocol field is AMD-specific, never a VMX reason. */
+    nested->Fast.RawExit = &Cpu->Resource->Row.svmExitCode; nested->Fast.LegacyTlb = &Cpu->TlbRequests;
+    /* READY event-free returns preserve the existing overlay and machine diagnostics. */
+    nested->Fast.Transitions = &nested->GeneralMachine.Transitions;
+    /* A same-value EFER write still updates the software mirror's hardware-owned LMA. */
+    nested->Fast.VirtualEfer = &nested->Msrs.Efer;
+    /* The coordinator's last action must describe the latest physical return. */
+    nested->Fast.MachineLastExit = &nested->GeneralMachine.LastExit;
+    /* READY has the same numeric meaning in the scalar leaf and coordinator. */
+    nested->Fast.MachineLastAction = &nested->GeneralMachine.LastAction;
+    /* Timing/count storage remains embedded and allocated before root entry. */
+    nested->Fast.Perf = &nested->Perf;
+    /* Fast mode always includes profiling; ordinary general preparation stays unmodified. */
+    Cpu->Fast = (((KSW_SVM_STATE*)Cpu->Runtime->BackendContext)->PreparedFlags &
+        KSWORD_ARK_HVM_CONTROL_FLAG_SVM_FAST_MSR) ? &nested->Fast : NULL;
     /* Counters now describe this binding lifetime, matching the new machine transition counter. */
     nested->GeneralInitialized = 1;
     /* Assembly can observe this only after every platform callback and state owner has been initialized. */
@@ -300,6 +335,24 @@ ULONG KswordSvmNestedGeneralEntry(KSW_SVM_CPU* Cpu)
                 &Cpu->Nested->Shadow, (Cpu->Caps.Features & 64U) != 0);
     } else {
         Cpu->NestedTlbControl = 1U;
+    }
+    /* Recompute fast eligibility only after full event preparation succeeded. */
+    if (Cpu->Fast) {
+        /* No virtual execution owner or pending event can be hidden by the short bridge. */
+        KSW_NSVM_MACHINE* machine = &Cpu->Nested->GeneralMachine;
+        /* Zero disables the leaf on every failure, layer switch or state transition. */
+        Cpu->Fast->Enabled = 0;
+        /* Fixed virtual GIF and no injection/window make the current hardware overlay reusable. */
+        if (action == KSW_NSVM_MACHINE_READY && KswSvmFastEligible(machine, Cpu->NestedTlbControl)) {
+            /* Snapshot only virtual values, never physical SVM ownership registers. */
+            Cpu->Fast->Efer = Cpu->Nested->Msrs.Efer; Cpu->Fast->Hsave = Cpu->Nested->Msrs.Hsave;
+            /* Guest mask changes use the full path, then refresh this immutable entry snapshot. */
+            Cpu->Fast->Xss = Cpu->GuestXss; Cpu->Fast->XsaveFeatures = Cpu->Caps.XsaveFeatures;
+            /* A later CR8/control change causes the integer leaf to decline without mutation. */
+            Cpu->Fast->IntCtl = KswSvmRead64(Cpu->Guest, KSW_VMCB_INTCTL);
+            /* Physical priority is read while GIF/IF are closed on the owner CPU. */
+            Cpu->Fast->PhysicalTpr = __readcr8(); Cpu->Fast->Enabled = 1;
+        }
     }
     /* Publish the complete result, including a retained failure/window action. */
     InterlockedIncrement64(&Cpu->Nested->GeneralSequence);

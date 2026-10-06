@@ -9,6 +9,10 @@ if not exist "%VCVARS%" set "VCVARS=D:\Software\VS\VC\Auxiliary\Build\vcvars64.b
 if not exist "%VCVARS%" exit /b 2
 call "%VCVARS%" >nul
 if errorlevel 1 exit /b %errorlevel%
+cl /nologo /W4 /WX /O2 /Ob3 /GS- tools\hvm_lab\svm_fast_tests.c KswordARKDriver\src\features\hvm\hvm_svm_fast.c KswordARKDriver\src\features\hvm\hvm_svm_nested_register.c KswordARKDriver\src\features\hvm\hvm_svm_xstate.c /Fe:tools\hvm_lab\svm_fast_tests.exe /Fo:tools\hvm_lab\
+if errorlevel 1 exit /b %errorlevel%
+if "%KSW_RUN_TESTS%"=="1" tools\hvm_lab\svm_fast_tests.exe
+if errorlevel 1 exit /b %errorlevel%
 cl /nologo /W4 /WX /O2 tools\hvm_lab\svm_hotspot_tests.c /Fe:tools\hvm_lab\svm_hotspot_tests.exe /Fo:tools\hvm_lab\svm_hotspot_tests.obj
 if errorlevel 1 exit /b %errorlevel%
 if "%KSW_RUN_TESTS%"=="1" tools\hvm_lab\svm_hotspot_tests.exe

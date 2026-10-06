@@ -1616,6 +1616,7 @@
     <ClInclude Include="src\features\hvm\hvm_svm.h" />
     <ClInclude Include="src\features\hvm\hvm_svm_flightrecorder.h" />
     <ClInclude Include="src\features\hvm\hvm_svm_hotspots.h" />
+    <ClInclude Include="src\features\hvm\hvm_svm_fast.h" />
     <ClInclude Include="src\features\hvm\hvm_svm_perf.h" />
     <ClInclude Include="..\shared\driver\KswordArkHvmFlightRecorder.h" />
     <ClCompile Include="src\features\hvm\hvm_svm_flightrecorder.c" />
@@ -1668,6 +1669,7 @@
     <ClCompile Include="src\features\hvm\hvm_svm_nested_execute.c" />
     <ClCompile Include="src\features\hvm\hvm_svm_nested_reflect.c" />
     <ClCompile Include="src\features\hvm\hvm_svm_nested_iret.c" />
+    <ClCompile Include="src\features\hvm\hvm_svm_fast.c" />
     <ClCompile Include="src\features\hvm\hvm_svm_nested_general.c" />
     <ClCompile Include="src\features\hvm\hvm_svm_nested_window.c" />
     <ClCompile Include="src\features\hvm\hvm_svm_nested_machine.c" />

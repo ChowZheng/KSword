@@ -183,3 +183,8 @@ P0 已实现：虚拟 TLB_CONTROL 按 VMRUN 捕获一次，真实非 INVALID 返
 分析器完整读取 JSON/JSONL/PowerShell UTF16，每个相邻同代次 CPU 窗口做差，检查偶数序列、饱和、身份、总数和阶段闭合；NPF 被纳入退出图，生命周期不再混入，flight ring 时间不再冒充 CPU 周期图。旧 v9 窗口可计次数，但不会生成伪造的周期图。
 
 P0 证据：`tools/hvm_lab/build-tests.cmd` 23 目标通过（session 3366 项，含 8 host threads×100 模拟事务）；生产 JSON/PS5 CP936、85 命令目录和参数门通过；Python profile 5 项通过。`artifacts/amd-perf-20261006-profile/build.txt` 标准 64 位 WDK Build exit0、Universal、INF/CAT 无警告错误；SYS 未签名，尚未加载，不能宣称实测加速。GUI ABI 更新需后续一起构建，禁止旧 v9 GUI 查新 v10 metrics。
+
+
+P2 的可切换候选已实现（2026-10-07）：`prepare-svm-fast/resident-svm-fast` 单独加入 FAST_MSR；其 L1 entry 必须无租约、队列、注入、NMI/IRQ/IRET 窗口、待 flush，且下一次退出保持 INT_CTL/物理 CR8。固定 GIF=0/1 的遮罩都保留，不省略需要重新协调的事件。EFER/HSAVE/XSS 读和同值写通过专用 scalar C 叶，变值写全部回完整桥；XSS 无 XSAVES 则回完整架构拒绝。叶不使用宿主 GS/TLS/回调、真实 SVM MSR、不访问 guest RAM；EFER 的硬件 LMA 实时取 VMCB，并在同值写时同步虚拟镜像。汇编只在合格 MSR 退出时调用它，跳过 XSTATE/mask/VMLOAD 配对；其间 guest VMLOAD 状态和所有向量组件保持 live。Hotspots/逐 CPU退出/机器计数精确累计，快路 ring 不逐次记录，FastSubset 不额外加到 exit total。
+
+链接门直接反汇编完整 `hvm_svm_fast.obj`，闭集整数指令、仅本函数内直跳、无 call/向量/x87/FS/GS；Release 二进制 229 条指令通过。源码的 volatile scalar + compiler barriers 防止聚合复制和序列外重排，禁用该叶 LTCG；不依赖不受支持的编译器“禁 SIMD”选项。portable leaf/准入测试 208 项、全部24 C目标、分析器/机器码门6项通过；生产 JSON/PS5CP936、87 命令目录通过，WDK零警告/API/INF/CAT通过。尚无真实 XSTATE/事件/加速收益结果，不能据无SIMD代码证明完整硬件正确性。相同 SYS 可用 profile 与 fast 两种模式作阶段 A/B，不混 VLS/vGIF。

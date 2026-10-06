@@ -149,6 +149,8 @@ typedef struct _KSW_SVM_CPU {
     ULONG NestedTlbControl;
     /* 150: optional timing pointer; ordinary launches keep this null. */
     struct _KSW_SVM_PERF* Perf;
+    /* 158: optional scalar MSR leaf; null unless the separate fast mode was prepared. */
+    struct _KSW_SVM_FAST* Fast;
     /* Resource and runtime ownership beyond the assembly prefix. */
     KSW_HVM_RUNTIME* Runtime;
     /* Chosen under the common transition before the all-CPU resident launch. */
@@ -215,6 +217,8 @@ C_ASSERT(FIELD_OFFSET(KSW_SVM_CPU, NestedEntryEnabled) == 0x140);
 C_ASSERT(FIELD_OFFSET(KSW_SVM_CPU, NestedTlbControl) == 0x148);
 /* All earlier assembly anchors remain unchanged. */
 C_ASSERT(FIELD_OFFSET(KSW_SVM_CPU, Perf) == 0x150);
+/* MASM calls the scalar leaf only through this appended prepared pointer. */
+C_ASSERT(FIELD_OFFSET(KSW_SVM_CPU, Fast) == 0x158);
 /* MASM native restoration consumes these exact ordinary-VMCB offsets. */
 C_ASSERT(KSW_VMCB_S_CET == 0x5e0 && KSW_VMCB_SSP == 0x5e8 && KSW_VMCB_ISST == 0x5f0);
 

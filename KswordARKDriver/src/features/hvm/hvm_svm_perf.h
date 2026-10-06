@@ -6,7 +6,7 @@ typedef struct _KSW_SVM_PERF {
     /* Sampling configuration and monotonically selected exit ordinal. */
     KSW_SVM_U64 Mask, Ordinal;
     /* Odd while one selected root interval is being observed. */
-    KSW_SVM_U64 Sequence, Selected;
+    volatile KSW_SVM_U64 Sequence, Selected;
     /* Six boundaries span the five public root software stages. */
     KSW_SVM_U64 Timestamps[6];
     /* The destination row is bound before exit dispatch can change the running layer. */

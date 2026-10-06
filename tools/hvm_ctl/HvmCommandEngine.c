@@ -7755,6 +7755,10 @@ static int DoMetrics(HANDLE h, int asJson)
                 }
                 printf("],\"tlbIssued\":[");
                 for (stage = 0; stage < 4; ++stage) { printf("%s\"%llu\"", stage ? "," : "", row->perf.tlbIssued[stage]); }
+                printf("],\"fastMsr\":[");
+                for (stage = 0; stage < 3; ++stage) {
+                    printf("%s[\"%llu\",\"%llu\"]", stage ? "," : "", row->perf.fastMsr[stage][0], row->perf.fastMsr[stage][1]);
+                }
                 printf("]}");
             }
             printf("}");

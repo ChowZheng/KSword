@@ -24,6 +24,7 @@
 #include "hvm_svm_flightrecorder.h"
 #include "hvm_svm_hotspots.h"
 #include "hvm_svm_perf.h"
+#include "hvm_svm_fast.h"
 /* Enough sparse tables for the bounded probe; exhaustion returns a failed test. */
 #define KSW_NSVM_PROBE_PAGES 64U
 /* Private markers distinguish the inner exit from the final outer continuation. */
@@ -50,6 +51,8 @@ typedef struct _KSW_SVM_NESTED {
     ULONG FirstEntryFlush;
     /* Timing buffers are allocated with the nested resource, never during VMEXIT. */
     KSW_SVM_PERF Perf;
+    /* Stable prepared binding used before the assembly bridge saves guest XSTATE. */
+    KSW_SVM_FAST Fast;
     /* Bracket every root-side general mutation independently of the bounded probe sequence. */
     volatile LONG64 GeneralSequence;
     /* A prepared attempt and an observed physical exit are deliberately different counters. */

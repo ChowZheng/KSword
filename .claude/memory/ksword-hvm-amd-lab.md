@@ -4,7 +4,13 @@
 
 P1 已本地提交 `8646bd5c`，未推送：双页批量取指、VMRUN 首遍 identity-only、权限图清零减负及有限 writeback ranges。P0 增加一次性 TLB pending/成功硬件返回消费、NPT12 源账本重新验证（512 PTE 上限、溢出/变化保守 reset）、可选每64退出周期采样，metrics 升 v10，CLI `prepare-svm-profile/resident-svm-profile`。五段 root 软件周期、七个叶 detail、硬件 TLB0/1/3/7 完成计数；不测纯硬件 VMEXIT/VMRUN 和 guest 时间。分析器已改完整 JSONL/UTF16读取和相邻同代次差值，剔除无效/饱和/拓扑改变；去除 flight 时间伪权重，退出图含 NPF，不混生命周期。
 
-驱动标准64位MSVC/WDK Release /WX + x64 API Universal/INF/CAT通过；CLI/JSON/PS5CP936/命令门通过，宿主23测试目标及profile5项通过。候选 `artifacts/amd-perf-20261006-profile` 未签名未加载；GUI需要后续同步构建ABI v10。P2整数MSR快路、VLS、vGIF、稳定01/02+clean未实装。用户暂时不能UAC，未触碰驱动/VM/启动配置。细节见性能计划末尾实施记录。
+驱动标准64位MSVC/WDK Release /WX + x64 API Universal/INF/CAT通过；CLI/JSON/PS5CP936/命令门通过，宿主23测试目标及profile5项通过。候选 `artifacts/amd-perf-20261006-profile` 未签名未加载；GUI需要后续同步构建ABI v10。P2整数MSR快路已实装，见后述；VLS、vGIF、稳定01/02+clean未实装。用户暂时不能UAC，未触碰驱动/VM/启动配置。细节见性能计划末尾实施记录。
+
+## 2026-10-07 P2 整数叶续接（尚无动态结果）
+
+`prepare-svm-fast/resident-svm-fast`：独立 FAST_MSR=0x40000，强制 general+profile，prepare/start模式相等。Fast pointer CPU158h、Perf150h有C_ASSERT；eligible须L1idle无租约/队列/注入/NMI IRQ IRET窗口/TLB，保留固定GIF=0/1遮罩并核对完整INT_CTL/真实CR8。scalar叶仅EFER/HSAVE/XSS读及同值写，XSS仍查XSAVES；不取消MSRPM也不物理HSAVE passthrough，变值/不符/任何非MSR慢路。EFER读实时硬件LMA+虚拟SVME，同值写同步软件镜像。跳过XSTATE/mask和host/guest VMLOAD配对仅因叶不修改guest非自动状态；FastSubset计数包含在普通Hotspots内，ring只记录慢路。
+
+`audit_svm_fast.py` 是Link前必过机器码门：完整叶229整数指令，call/vector/x87/TLS=0、只能函数内部直跳；闭集禁止编译器后来引入 helper/SIMD。叶单独关闭LTCG/GS，无聚合复制，volatile scalar+compiler barrier保护读侧序列。24 C目标/208 fast准入与架构等价用例/6 profile+机器码门用例通过，87命令和生产JSON/PS5CP936通过。标准WDK Release /WX/x64ApiValidator/INF/CAT通过，候选仍在 `artifacts/amd-perf-20261006-profile`，未签未加载。动态测试必须对同一签后SYS分别profile/fast，先1核正常boot后8核；验证XSTATE、GF事件和native停止后状态，不把二进制无SIMD门当硬件PASS。
 
 ## 2026-10-06 下一阶段性能研究（无实机操作）
 

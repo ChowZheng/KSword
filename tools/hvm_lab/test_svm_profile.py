@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from analyze_svm_profile import analyze, load, cycle_delta
+from audit_svm_fast import inspect
 
 
 def snapshot(tick, n):
@@ -19,6 +20,12 @@ def snapshot(tick, n):
 
 
 class ProfileTests(unittest.TestCase):
+    def test_integer_machine_code_gate(self):
+        head = 'KswSvmFastTry:\n  0000000000000000: '
+        self.assertEqual(inspect(head+'mov rax,rcx\n  0000000000000003: ret'), 2)
+        for instruction in ('call 0000000000000003', 'mov xmm0,xmm1', 'mov rax,gs:[10h]', 'jmp rax', 'fld qword ptr [rcx]'):
+            with self.assertRaises(ValueError):
+                inspect(head+instruction+'\n  0000000000000003: ret')
     def test_delta_not_cumulative(self):
         result, counts, cycles = analyze([snapshot(100, 10), snapshot(200, 13), snapshot(300, 15)])
         self.assertEqual(result['totalExits'], 10)

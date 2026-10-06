@@ -2977,7 +2977,7 @@ KswordARKHvmControl(
             KSWORD_ARK_HVM_CONTROL_FLAG_SVM_NESTED_PROBE |
             KSWORD_ARK_HVM_CONTROL_FLAG_ENABLE_NESTED_SVM |
             /* Optional AMD root profiling retains the same lifecycle admission. */
-            KSWORD_ARK_HVM_CONTROL_FLAG_SVM_PROFILE;
+            KSWORD_ARK_HVM_CONTROL_FLAG_SVM_PROFILE | KSWORD_ARK_HVM_CONTROL_FLAG_SVM_FAST_MSR;
         /* Stop after selecting the prepare flag set. */
         break;
     case KSWORD_ARK_HVM_CONTROL_SELF_TEST:
@@ -3057,7 +3057,7 @@ KswordARKHvmControl(
             /* AMD general dispatch is independent of the Intel nested VMX option. */
             KSWORD_ARK_HVM_CONTROL_FLAG_ENABLE_NESTED_SVM |
             /* Optional AMD root profiling retains the same lifecycle admission. */
-            KSWORD_ARK_HVM_CONTROL_FLAG_SVM_PROFILE;
+            KSWORD_ARK_HVM_CONTROL_FLAG_SVM_PROFILE | KSWORD_ARK_HVM_CONTROL_FLAG_SVM_FAST_MSR;
         /* Stop after selecting the resident-start flag set. */
         break;
     case KSWORD_ARK_HVM_CONTROL_SOAK:
@@ -3146,7 +3146,7 @@ KswordARKHvmControl(
      * instead of a half-built runtime.
      */
     if ((Request->flags & (KSWORD_ARK_HVM_CONTROL_FLAG_SVM_NESTED_PROBE |
-        KSWORD_ARK_HVM_CONTROL_FLAG_ENABLE_NESTED_SVM | KSWORD_ARK_HVM_CONTROL_FLAG_SVM_PROFILE)) &&
+        KSWORD_ARK_HVM_CONTROL_FLAG_ENABLE_NESTED_SVM | KSWORD_ARK_HVM_CONTROL_FLAG_SVM_PROFILE | KSWORD_ARK_HVM_CONTROL_FLAG_SVM_FAST_MSR)) &&
         g_KswordHvm.BackendId != KSWORD_ARK_HVM_BACKEND_SVM) {
         /* Never reinterpret the AMD test flag as an Intel preparation option. */
         Response->status = KSWORD_ARK_HVM_CONTROL_STATUS_UNSUPPORTED_CPU;

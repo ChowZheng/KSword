@@ -2,6 +2,7 @@
 option casemap:none
 extern KswordSvmExit:proc
 extern KswordSvmGeneralPrepareEntry:proc
+extern KswSvmFastTry:proc
 .code
 
 ; Save the non-VMCB general registers. RAX is hardware-saved in the VMCB.
@@ -270,12 +271,54 @@ KswSvmHostIfReady:
     KSW_LOAD_GPRS                ; Restore all non-VMCB guest registers.
     mov rax, [rax]               ; Physical VMCB operand, not guest RAX.
     vmload rax                   ; Restore guest extended segment/syscall state.
+KswSvmHardwareRun:
     vmrun rax                    ; Hardware switches RIP/RSP/RAX and core state.
     cli                          ; VMEXIT cleared GIF; close restored host IF before any C/acknowledgement.
     mov rax, [rsp+20h]           ; VMEXIT restored the hardware host stack.
     KSW_SAVE_GPRS                ; Preserve guest GPRs before using scratch registers.
     mov rcx, rax                 ; Context for XSAVE and exit dispatch.
     KSW_PERF_BEGIN               ; Start only after every clobbered guest GPR has safe storage.
+    cmp dword ptr [rcx+0d0h], 0 ; Any lifecycle stop uses the full state/event bridge.
+    jne KswSvmSlowExit           ; Do not indefinitely delay the private stop rendezvous.
+    cmp qword ptr [rcx+158h], 0 ; Fast mode is a separately admitted prepared option.
+    je KswSvmSlowExit            ; Ordinary/probe launches preserve the original path.
+    mov r8, [rcx+158h]          ; A full coordinator already revoked eligibility for L2/events.
+    cmp qword ptr [r8], 0      ; Do not call even the scalar leaf when its entry contract is absent.
+    je KswSvmSlowExit            ; Recompute event ownership through the original bridge.
+    mov rdx, [rcx+10h]          ; Reject non-MSR raw reasons before any additional call overhead.
+    cmp qword ptr [rdx+70h], 7ch ; IRQ/NMI/NPF/SVM instructions always use full restoration.
+    jne KswSvmSlowExit           ; No first-fault or exception evidence is skipped.
+    mov r9, cr8                 ; The scalar gate refuses changed physical APIC priority.
+    lea r8, [rcx+48h]           ; GPRs are already safe; no vector register has been touched.
+    mov rdx, [rcx+10h]          ; Prepared aligned VMCB kernel mapping.
+    mov rcx, [rcx+158h]         ; Leaf touches only explicit prepared pointers, never GS/TLS.
+    call KswSvmFastTry           ; Build gate rejects calls, SIMD, x87 and FS/GS in this leaf.
+    mov rcx, [rsp+20h]          ; Restore the fixed anchor after the Windows x64 ABI call.
+    test eax, eax               ; Declined exits retain the raw instruction and all guest state.
+    jz KswSvmSlowExit            ; Full host/XSTATE restoration still precedes arbitrary C.
+    mov r8, [rcx+150h]          ; Fast mode requires the independently admitted profile buffer.
+    cmp qword ptr [r8+18h], 0  ; Unselected fast exits do not incur timestamp reads.
+    je KswSvmFastTimed           ; Exact counts were already published by the scalar leaf.
+    mov rax, [r8+20h]          ; No XSTATE or host VMLOAD work occurred in this interval.
+    mov [r8+28h], rax          ; Save-stage cost is exactly zero on this bridge.
+    mov [r8+30h], rax          ; Host-state restore stage was also skipped.
+    KSW_PERF_POINT 38h         ; Attribute gate/emulation/accounting to dispatch.
+    mov rax, [r8+38h]          ; No coordinator or event ownership changed.
+    mov [r8+40h], rax          ; Entry coordination is zero for the unchanged overlay.
+KswSvmFastTimed:
+    mov rbx, [rcx+10h]         ; Hardware automatic guest state remains in its own VMCB.
+    mov byte ptr [rbx+5ch], 0  ; Fast admission requires a previously consumed flush request.
+    mov dword ptr [rbx+0c0h], 0 ; Keep clean-bit optimization separate from this experiment.
+    cmp qword ptr [rcx+138h], 0 ; Match the same host IF contract as the retained overlay.
+    je KswSvmFastIfReady         ; VMEXIT CLI already closed host IF.
+    sti                         ; Physical GIF remains closed throughout this root window.
+KswSvmFastIfReady:
+    KSW_PERF_FINISH              ; Only integers are used while guest XSTATE remains live.
+    mov rax, [rsp+20h]          ; Original GPR bank includes any zero-extended RDMSR result.
+    KSW_LOAD_GPRS               ; No guest register is lost to telemetry or leaf ABI temporaries.
+    mov rax, [rax]              ; Physical VMCB, never virtual HSAVE or the guest accumulator.
+    jmp KswSvmHardwareRun        ; Guest VMLOAD state is still live: neither VMSAVE nor VMLOAD ran.
+KswSvmSlowExit:
     mov rdx, [rcx+10h]           ; Guest VMCB virtual address.
     mov rax, [rdx+5f8h]          ; Guest RAX is saved by hardware, not in host RAX.
     mov [rcx+48h], rax           ; Retain it for native stop continuation.

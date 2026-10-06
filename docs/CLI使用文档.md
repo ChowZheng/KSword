@@ -528,3 +528,6 @@ v10 驱动需配套重新构建的 v10 CLI 与主程序；旧客户端明确拒�
 AMD metrics v10 增加可选 `perf`。命令 `prepare-svm-profile → self-test → resident-svm-profile → stop → teardown` 在通用嵌套模式上添加 `SVM_PROFILE=0x00020000`；普通 general 命令不采样。每 64 次硬件退出选择一次，分别统计原始 L1/L2 和 MSR、XSETBV、VMLOAD、VMSAVE、STGI、CLGI、VMRUN、CPUID、NPF、IO、IRQ、other 十二种退出桶。每桶包含样本数、根态周期总和/最大值及五段周期：扩展状态保存、宿主状态恢复、退出分派、进入协调、来宾状态恢复。分派内部七个 details 依次为取指、VMCB 捕获、权限图、NPT12 同步、写回、页表遍历、影子发布；它们已包含在分派周期内，不能再次加到总周期。其余分派周期包含事件协调、路由、诊断及计时开销，不能称为纯事件处理成本。
 
 计时不含纯硬件 VMEXIT/VMRUN 延迟、来宾执行、最前面的 GPR 保存和最终 guest VMLOAD。`valid=1`、偶数 sequence 且 saturated=0 才可使用；只能比较同一资源代次、CPU/ASID/VMCB 身份和 sampleMask。`tlbIssued[0..3]` 是全部成功硬件进入的 TLB_CONTROL=0/1/3/7 次数，不是采样次数，也不是虚拟 L1 请求数。异常 INVALID 不证明请求已消费。客户端与驱动必须同步重新构建。
+
+
+`prepare-svm-fast → self-test → resident-svm-fast → stop → teardown` 在采样模式上增加 `SVM_FAST_MSR=0x00040000`。仅无 L2/租约/事件/注入/窗口且 GIF 遮罩、物理 CR8、完整 INT_CTL 不变时，EFER/HSAVE/XSS 的读取和同值写入通过纯整数叶完成；XSS 仍要求 XSAVES。变值写入、状态不符、IRQ/NMI/NPF/SVM 指令及 stop 请求使用完整状态桥。快路不取消 MSRPM 拦截、不转发真实 HSAVE。它跳过 XSAVE/XRSTOR、XCR0/XSS 切换及 host/guest VMLOAD/VMSAVE 配对（来宾非自动状态全程未被 host 修改），同时保留全量 hotspot 和生命周期计数；诊断 ring 只记录慢路。`perf.fastMsr[3][2]` 是 EFER/HSAVE/XSS 读取/同值写入的快路子集，不能再加到 hotspot 总数。构建在 Link 前检查完整叶机器码，无 call/SIMD/x87/FS/GS 或间接跳转，否则拒绝链接；硬件 XSTATE 和事件验证仍需单独完成。
