@@ -1,5 +1,14 @@
 # AMD 实验后端与重启续接
 
+## 2026-10-06 下一阶段性能研究（无实机操作）
+
+- 基线 `2c3d08c9`；与 `a5d7a2a7` 比较，SVM 算法源码和 metrics 结构没有差异。10 月 1 日主要为 GUI/准入接线。详细阶段方案在 `docs/next/ksword-amd-nested-performance-plan.md`。本轮只研究/写文档，不加载、重启、启动 VM 或请求 UAC；用户洗澡期间不可依赖其操作。
+- 重新计算 `artifacts/build-npt-transfer-v8-live/a.json,b.json`：10.3365066 秒、32 对有效 CPU。L1 total=1681507、MSR(0x7c)=885086，全部为 EFER/HSAVE/XSS；XSETBV161047、VMLOAD160807、VMSAVE80419、STGI/CLGI262551、VMRUN131038、CPUID559。L2 total137636、NPF21468。L1占退出次数92.43%，MSR占L1次数52.64%；不是耗时比例。NPT lookups131038/hits131031/resets7/跨CPU54/poolRecycle0。离线复算在忽略目录 `artifacts/amd-perf-research-20261006`，检验总数归属、版本/CPU集合、热点有效/偶数sequence/饱和/单调。
+- 更正历史 native-msr-v9 试验：0x80是VMRUN，不是MSR；从merged MSRPM抹掉L1-owned读取拦截违反嵌套归属，已在a5d7a2a7回滚，不能重用。v9样本NPF8852581/poolRecycle15925/epochChanged15222；不同guest阶段不能单凭对比下根因，Vix10054不单独证明VM崩溃。TSC/P-state不是v8的L1 MSR热点。
+- 优先路线：P0完整汇编/C阶段采样计时与分析器修正（现profile脚本只读首行并相加累计计数）；P1批量取指、VMRUN第一遍只resolve、位图清零/合并与白名单扫描减负；P2可证明仅用整数的L1短路径才可跳过XSTATE保存；P3 Virtual VMLOAD/VMSAVE；P4 vGIF；P5稳定VMCB01/02及dirty/clean。实体机历史CPUID bit5/15/16存在，VMware克隆bit15/16缺失，保留软件路径；不能把物理加速与对L1公开扩展混为一谈。
+- 开发前核对TLB：GeneralEntry反复读取捕获的VMCB12请求，可能在L0内部重入重复flush；按虚拟VMRUN建立一次性pending并正确消费。NPT01固定不证明NPT12固定；virtual flush需要源NPT12同步或保守失效，不能只清硬件TLB保留未经验证的NPT02。现TlbRequests在退出入口无条件递增，是退出/执行计数，不是实际flush次数。
+- Linux KVM固定69f80fef、NoirVisor固定08dd5ec6关键源码/版本hash在本机临时参考目录 `E:/Temp/ksword-amd-research-20261006`。KVM参考OR归属、virtual SVME控制VLS/vGIF、pending event与MMU同步；Noir嵌套STGI/CLGI仍有GIF FIXME，不当完整中断依据。以后1核通过直接8核，性能以同guest工作量/正常桌面和root周期判断，无新的硬件成功证据。
+
 ## 2026-10-01 AMD/Intel Dock 与常驻准入统一（离线交付）
 
 - GUI 已接通现有通用嵌套 SVM：AMD 的 PREPARE/START_RESIDENT 显式发送 ENABLE_NESTED_SVM，自检复用 SVM 路径；Intel 请求与偏好保持原后端语义。AMD 不携带 Intel EPT/VMFUNC/#VE/身份隐藏标志，旧驱动缺少能力位时关闭 AMD 嵌套入口。新增共享 featureFlags 位 54–58，不改协议版本或结构布局；支持、准备和全核实际启用分别由驱动资源/运行状态发布，Intel 嵌套与身份隐藏也读回实际运行状态。
