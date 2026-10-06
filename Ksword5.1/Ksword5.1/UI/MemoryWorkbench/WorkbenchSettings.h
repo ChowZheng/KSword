@@ -102,8 +102,9 @@ namespace ks::ui::workbench_settings
     bool LoadEnabled();
     void SaveEnabled(bool enabled);
 
-    // LoadRouteJumps / SaveRouteJumps："routeJumps" 键，默认 false——3a 阶段新旧
-    // 查看器并存，新查看器默认不接管旧查看器现有的跳转入口。
+    // LoadRouteJumps / SaveRouteJumps："routeJumps" 键，默认 true——3b 入口切换：
+    // 模块表/区域表/搜索结果等旧入口的跳转默认交给工作台；用户在"内存扫描设置"里
+    // 取消勾选即可回退到旧内存查看器（无需发版）。
     bool LoadRouteJumps();
     void SaveRouteJumps(bool routeJumps);
 

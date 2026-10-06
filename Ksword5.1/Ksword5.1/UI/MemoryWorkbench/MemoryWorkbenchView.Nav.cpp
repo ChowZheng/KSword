@@ -489,6 +489,8 @@ namespace ks::ui
             return;
         }
         const auto& session = target_->session();
+        // Install/Restore 的路由预检与目标匹配都读账本的"当前目标"，先声明回本视图的会话。
+        applyInt3Context(session);
         auto& int3 = WorkbenchShared::Instance().Int3();
         std::optional<std::uint64_t> existingId;
         for (const auto& entry : int3.Entries())

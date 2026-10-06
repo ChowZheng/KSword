@@ -409,6 +409,8 @@ namespace ks::ui
         const std::uint64_t address = *m_insertionPoint;
         // nowTick：int3 账本要求调用方给定时钟读数以保持可测；界面侧用系统时钟即可。
         const std::uint64_t nowTick = static_cast<std::uint64_t>(QDateTime::currentMSecsSinceEpoch());
+        // 先让宿主声明"当前目标"，再读 CurrentTarget()——两者的先后顺序就是本信号存在的理由。
+        emit aboutToAct();
         const Int3InstallOutcome outcome = m_controller->Install(m_controller->CurrentTarget(), address, nowTick);
         if (outcome.status == InstallStatus::Installed && IsCollapsed())
         {
@@ -426,6 +428,7 @@ namespace ks::ui
         {
             return;
         }
+        emit aboutToAct();
         const Int3RestoreOutcome outcome = m_controller->Restore(*id);
         EmitRestoreMessage(outcome, *id);
     }
@@ -437,6 +440,7 @@ namespace ks::ui
         {
             return;
         }
+        emit aboutToAct();
         const std::vector<ksword::memwb::PatchRestoreOutcome> outcomes = m_controller->RestoreAll();
         int restoredCount = 0;
         int divergedCount = 0;

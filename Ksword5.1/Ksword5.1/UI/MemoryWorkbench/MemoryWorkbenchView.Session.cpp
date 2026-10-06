@@ -138,10 +138,7 @@ namespace ks::ui
         // "N 字节待写入"必须同步（第二轮复核 B4）。
         refreshPendingPatchesDisplay();
 
-        WorkbenchShared::Instance().Int3().SetCurrentContext(
-            ksword::memwb::PatchTarget{session.pid, session.processCreateTime100ns, session.attachGeneration},
-            session.scope,
-            session.channel);
+        applyInt3Context(session);
 
         refreshChannelGateDisplay();
         refreshConfirmationsAndSuppression();
@@ -172,6 +169,42 @@ namespace ks::ui
         refreshStatusBarChannelScopeText();
     }
 
+    // applyInt3Context：把给定会话写成 int3 账本的"当前目标"。
+    // 传入：session 本视图当前会话（调用方已取得，避免在 handleIdentityChange 里再次触发
+    //       session() 的 DDMA 代次拉取）。
+    // 说明：Int3Controller 全进程只有一份"当前目标"，主 Dock 的视图与内嵌进程详情窗口的视图
+    // 都往里写；内容与账本现状完全一致时不再写（SetCurrentContext 每次都会发 changed，
+    // 面板会因此重建表格）。
+    void MemoryWorkbenchView::applyInt3Context(const ksword::memwb::MemoryTargetSession& session)
+    {
+        auto& int3 = WorkbenchShared::Instance().Int3();
+        const auto& current = int3.CurrentTarget();
+        if (current.pid == session.pid
+            && current.processCreateTime100ns == session.processCreateTime100ns
+            && current.attachGeneration == session.attachGeneration
+            && int3.CurrentScope() == session.scope
+            && int3.CurrentChannel() == session.channel)
+        {
+            return;
+        }
+        int3.SetCurrentContext(
+            ksword::memwb::PatchTarget{session.pid, session.processCreateTime100ns, session.attachGeneration},
+            session.scope,
+            session.channel);
+    }
+
+    // syncInt3Context：把"本视图的会话"重新声明为 int3 账本的当前目标。
+    // 调用时机：任何依赖"当前目标"的 int3 操作之前（还原/写入/离开询问/分离安全网），以及视图
+    // 被显示、窗口被激活时——别的视图（内嵌进程详情窗口）可能在这期间改过它。
+    void MemoryWorkbenchView::syncInt3Context()
+    {
+        if (target_ == nullptr)
+        {
+            return;
+        }
+        applyInt3Context(target_->session());
+    }
+
     // onTargetAboutToDetach：int3 未经提示路径的安全网——仅当确实存在"当前目标"
     // 未还原的补丁时才强制 RestoreAll，不弹任何框（真正的提示在 requestLeave
     // 路径上）。
@@ -185,6 +218,9 @@ namespace ks::ui
         {
             return;
         }
+        // 账本的"当前目标"可能被别的视图（内嵌进程详情窗口）改走：先声明回本视图的目标，
+        // 否则 HasUnrestoredForCurrentTarget 查的是别人的目标，本视图的补丁会被漏还原。
+        syncInt3Context();
         auto& int3 = WorkbenchShared::Instance().Int3();
         if (int3.HasUnrestoredForCurrentTarget())
         {

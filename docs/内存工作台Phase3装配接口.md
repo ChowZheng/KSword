@@ -325,3 +325,41 @@ WorkbenchBaselineFeeder → WorkbenchWriteController → WorkbenchHexPane
   `runLeaveSequence`（三阶段原子：先问暂存、再问 int3、两个都同意才执行），原因文案固定“退出程序”，int3 场景
   为 `MainWindowClose`。用户取消则放弃本次关闭（`event->ignore()`）。
 - **不在 3a**：模块表/区域表双击路由、搜索结果“加入地址簿”、`m_moduleCachePid`、旧页签标“（旧）”、删除旧页签。
+
+## 10 波 4（3b 入口切换）MemoryDock 接线记录
+
+新增：`MemoryDock/MemoryDock.WorkbenchEntry.cpp`（本 Dock 一侧的全部入口）、`UI/MemoryWorkbench/WorkbenchBookIntake.{h,cpp}`
+（“加入地址簿”规则，不碰控件与共享单例，夹具可直接测）、`MemoryDock/WorkbenchServicesMapping` 的 `DecideModuleJumpPin`
+（模块表是否钉住预览进程的纯函数，wpK1 逐分支断言）。回退开关：设置对话框“由内存工作台接管跳转”取消勾选（键
+`memwb/workbench/routeJumps`，无需发版）；整体开关 `enabled` 仍可彻底关掉工作台。
+
+- **routeJumps 默认真**（`WorkbenchSettings::LoadRouteJumps`）。`jumpToAddress` 分发器的请求范围固定为进程（原先沿用
+  会话当前范围：工作台停在内核范围时双击模块会得到“地址不在当前范围内”）；`pid=0` 表示跟随 Dock，工作台若钉在别处会被带回跟随。
+- **模块表**：双击/右键走 `jumpToModuleBase`。模块表可以预览未附加的进程，所以缓存落地时记 `m_moduleCachePid` +
+  `m_moduleCacheCreateTime`（工作线程里用 `AcquireAnchorForPid`——与工作台锚点同一取法——读创建时间，pid==0 与分离时清零）。
+  `DecideModuleJumpPin`：预览进程非空且不同于附加进程 → 钉住它（带创建时间核对进程实例）；相同或缓存为空 → 不钉住。
+  内嵌窗口的工作台 `lockToDock`，钉住请求被策略拒绝（`Unavailable`，状态条报告），不会静默去看错误的进程。
+- **区域表**：双击/“查看此区域”走 `jumpToAddress`；“R0读取此区域”走 `viewRegionViaDriver`——路由开启时显式
+  `channel=StandardDriver` 在工作台打开区域起点，关闭时仍是旧 `prepareDriverMemoryReadAtAddress`。
+- **搜索结果表**：表格启用了排序，旧代码按 `row` 当 `m_searchResultCache` 下标是错的（排序后双击会跳到别的地址，右键菜单里的
+  “添加到书签/复制值”也读错行）。现在地址一律取自第 0 列单元格的 `Qt::UserRole`，其余字段按地址回查缓存；
+  新增右键“加入地址簿”（该行）与“全部加入地址簿”（表中显示的全部行）：种类=搜索结果（不落盘，用户在地址簿里提升为书签才保存），
+  地址簿总数上限 10000，按（目标键, 绝对地址）去重，一次批量 `addMany`（整表只重建一次）。目标键与视图同一函数生成
+  （`pid:<pid>@<创建时间>`）。**绝不自动灌入**：只有用户点了才加。
+- **证据页**：进程内存证据、PTE/VA 翻译、内核内存证据、内核可执行页四张表右键增加“在内存工作台打开”
+  （`addOpenInWorkbenchAction`，沿父链找到所属 Dock；地址取第 0 列文本；进程类按附加进程、内核类切内核范围）。PTE 页的默认
+  地址取 `workbenchFocusAddress()`（工作台路由开启且跟随本 Dock 的附加进程时的插入点），否则退回旧查看器地址。
+- **旧页签**：内存查看器、断点与书签、驱动内存读写改名“（旧）”（新语言键 `memory.tab.*_legacy`）并经 `QTabBar::moveTab`
+  后移到页签栏末尾；`showLegacyTabs`（默认真）为假时一并隐藏。所有页签引用都按页面控件指针而非下标，所以重排不影响刷新钮等路由。
+- **内嵌进程详情窗口**：`ensureWorkbenchView` 不再因内嵌而跳过——视图在 `loadSettings()` 之后切 `setEmbeddedProcessMode(true)`
+  （恒跟随本 Dock、禁内核/物理、侧栏隐藏、**不落盘设置**）。`applyProcessDetailTabVisibility` 在路由开启时把“看内存”那一页
+  换成工作台（旧查看器隐藏），路由关闭时仍是旧查看器；设置对话框切换路由时内嵌实例会重新应用。
+  窗口关闭 → `~MemoryDock` → `detachProcess` → `aboutToDetach` 安全网还原该视图自己的 int3 补丁。
+- **int3 账本“当前目标”是全进程唯一一份**，主 Dock 的视图与内嵌窗口的视图共用它。视图新增 `syncInt3Context()`
+  （与 `applyInt3Context` 内容一致时不重复写，免得面板无谓重建），在这些时刻重新声明本视图的会话：右键写入/还原 int3、
+  侧栏面板三个按钮（`Int3PatchPanel::aboutToAct` 直接连接）、`runLeaveSequence`（离开守卫与退出守卫共用）、
+  `onTargetAboutToDetach` 安全网、`showEvent`、窗口激活。**多目标退出时的“全部还原”仍只处理当前目标**（已记录的局限，
+  账本层没有“按所有目标退出询问”的接口）。
+- **验证**：wpJ6 `wpJ6_tests.Entry3b.cpp`（两视图共用账本的右键/面板/显示/激活/分离安全网/退出询问、`focusAddress`、
+  内嵌拒绝钉住、加入地址簿规则与 10000 上限）、wpK1 `TestModuleJumpPin`、wpG 默认值断言翻转。**真窗口未验证**：
+  页签重排的实际外观、内嵌窗口里工作台的真实交互、搜索结果排序后双击与右键的真机行为、证据页菜单项。

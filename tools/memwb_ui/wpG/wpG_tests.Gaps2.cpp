@@ -56,7 +56,7 @@ namespace wpg_test
             WPG_CHECK(ws::LoadSidebarWidth() == 300 && ws::LoadBytesPerRow() == 16 && ws::LoadLiveIntervalMs() == 1000);
             WPG_CHECK(ws::LoadAddrBookKind() == -1);
             WPG_CHECK(ws::LoadEnabled());                             // S10：三个新键的默认值
-            WPG_CHECK(!ws::LoadRouteJumps());
+            WPG_CHECK(ws::LoadRouteJumps());                          // 3b：routeJumps 默认真
             WPG_CHECK(ws::LoadShowLegacyTabs());
             ws::SaveSubTab(3);                                        // 上界合法
             WPG_CHECK(ws::LoadSubTab() == 3);
@@ -68,6 +68,8 @@ namespace wpg_test
             WPG_CHECK(ws::LoadLiveIntervalMs() == 1000);
             ws::SaveEnabled(false);                                   // S10 三个新键的读写往返
             WPG_CHECK(!ws::LoadEnabled());
+            ws::SaveRouteJumps(false);                                // 默认已是真：往返必须用假才有区分力
+            WPG_CHECK(!ws::LoadRouteJumps());
             ws::SaveRouteJumps(true);
             WPG_CHECK(ws::LoadRouteJumps());
             ws::SaveShowLegacyTabs(false);

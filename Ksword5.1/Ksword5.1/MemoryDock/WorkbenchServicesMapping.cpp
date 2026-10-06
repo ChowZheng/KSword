@@ -483,4 +483,29 @@ namespace ksword::memwb_services_detail
         session.addressBits = 64U;
         return session;
     }
+
+    // ------------------------------------------------------------
+    // 八、旧入口跳转的目标决议
+    // ------------------------------------------------------------
+
+    ModuleJumpPin DecideModuleJumpPin(
+        const std::uint32_t previewPid,
+        const std::uint64_t previewCreateTime100ns,
+        const std::uint32_t attachedPid) noexcept
+    {
+        ModuleJumpPin decision;
+        // 缓存为空：没有"预览进程"可钉，保持不钉住。
+        if (previewPid == 0U)
+        {
+            return decision;
+        }
+        // 预览的就是附加的进程：不钉住，工作台跟随 Dock（若它此前钉在别处会被带回跟随）。
+        if (previewPid == attachedPid)
+        {
+            return decision;
+        }
+        decision.pid = previewPid;
+        decision.createTime100ns = previewCreateTime100ns;
+        return decision;
+    }
 }

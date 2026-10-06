@@ -5,7 +5,9 @@
 // 作用：
 // - MemoryWorkbenchView 的私有卫星头，只供 MemoryWorkbenchView.cpp /.Ui.cpp /
 //   .Session.cpp /.Nav.cpp 四个实现文件内部共享几个纯函数帮助器，不是公开接口
-//   的一部分，外部文件不应 #include 它（仿 WorkbenchWriteController.Internal.h
+//   的一部分，外部文件不应 #include 它——唯一例外是 WorkbenchBookIntake.cpp：它必须
+//   生成与本视图逐字相同的地址簿目标键，所以直接复用 BuildAddressBookTargetKey，
+//   而不是再抄一份格式串（仿 WorkbenchWriteController.Internal.h
 //   "detail:: 自由函数"的写法，只是这里的函数都不需要访问类的私有成员，纯粹按
 //   值/引用计算，因此放在命名空间作用域而不是类的私有静态方法）。
 // - 三个函数都不做任何 I/O、不碰任何 Qt 控件状态，可以被夹具直接单独调用测试。

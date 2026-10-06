@@ -73,6 +73,12 @@ namespace ks::ui
         // resultMessage：一次操作结束后要交给状态条的文案；isError 为真时状态条应标红。
         void resultMessage(const QString& text, bool isError);
 
+        // aboutToAct：用户点了"写入/还原/全部还原"、真正调用账本之前同步发出一次。宿主据此
+        // 把"本面板所在视图的目标"声明为账本的当前目标——账本全进程只有一份当前目标，
+        // 多个视图（主 Dock、内嵌进程详情窗口）共用面板时，不先声明就会作用在别的视图的目标上。
+        // 必须用直接连接（同线程同步调用）才有意义。
+        void aboutToAct();
+
     private slots:
         // onLedgerChanged：响应 Int3Controller::changed，重建表格并刷新工具钮可用性。
         void onLedgerChanged();

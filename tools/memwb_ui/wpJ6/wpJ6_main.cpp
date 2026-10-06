@@ -39,6 +39,7 @@ namespace wpj6_test
     void RunReview2FixTests();
     // 波 4：confirmQuit（主窗口关闭前的最后一次询问）专项测试。
     void RunQuitTests();
+    void RunEntry3bTests();
 
     namespace
     {
@@ -287,6 +288,7 @@ int main(int argc, char** argv)
     wpj6_test::RunReview2TestsC();
     wpj6_test::RunReview2FixTests();
     wpj6_test::RunQuitTests();
+    wpj6_test::RunEntry3bTests();
     wpj6_test::RunVisualTests();
     // 必须排在最后：initialize("en-US") 之后进程里再也不会切回中文。
     wpj6_test::RunI18nSmokeTest();

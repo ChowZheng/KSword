@@ -49,6 +49,7 @@
 #include <QIcon>
 #include <QLineEdit>
 #include <QResizeEvent>
+#include <QShowEvent>
 #include <QSizePolicy>
 #include <QSplitter>
 #include <QStackedWidget>
@@ -318,6 +319,9 @@ namespace ks::ui
         });
 
         connect(int3Panel_, &Int3PatchPanel::resultMessage, this, &MemoryWorkbenchView::onInt3ResultMessage);
+        // 面板操作账本"当前目标"之前先把本视图的会话声明为当前目标（直接连接，同步执行）。
+        connect(int3Panel_, &Int3PatchPanel::aboutToAct, this, &MemoryWorkbenchView::syncInt3Context,
+            Qt::DirectConnection);
 
         connect(hexPane_, &WorkbenchHexPane::insertionPointChanged, this, &MemoryWorkbenchView::onHexPaneInsertionPointChanged);
         connect(hexPane_, &WorkbenchHexPane::editRejected, this, &MemoryWorkbenchView::onHexPaneEditRejected);
@@ -377,6 +381,25 @@ namespace ks::ui
         maybeAutoCollapseSidebar();
         applySidebarWidthIfPossible();
         maybeAutoCollapseInspector();
+    }
+
+    // showEvent：视图被显示（页签切到前台、窗口首次弹出）时，把本视图的会话重新声明为
+    // int3 账本的当前目标，见头文件声明处的注释。
+    void MemoryWorkbenchView::showEvent(QShowEvent* event)
+    {
+        QWidget::showEvent(event);
+        syncInt3Context();
+    }
+
+    // changeEvent：窗口激活变化时重新声明一次。内嵌进程详情窗口与主窗口同时可见时，
+    // 用户点到哪个窗口，面板上的 int3 操作就应该作用在哪个窗口的目标上。
+    void MemoryWorkbenchView::changeEvent(QEvent* event)
+    {
+        QWidget::changeEvent(event);
+        if (event != nullptr && event->type() == QEvent::ActivationChange && isActiveWindow())
+        {
+            syncInt3Context();
+        }
     }
 
     // updateSessionBarHeightForWidth：见头文件声明处的注释。直接问会话条自己的

@@ -65,7 +65,9 @@
 class QCheckBox;
 class QLineEdit;
 class QMenu;
+class QEvent;
 class QResizeEvent;
+class QShowEvent;
 class QStackedWidget;
 class QSplitter;
 class QTimer;
@@ -198,6 +200,11 @@ namespace ks::ui
         // 无暂存、无未还原 int3 时不弹任何框，直接返回 true。只在 UI 线程调用。
         bool confirmQuit();
 
+        // focusAddress：十六进制子页当前的插入点地址，供旧页面取"用户正在看哪里"当默认值
+        // （例如 PTE 页的默认地址）。没有可用目标（进程范围且未附加）或画布无数据时返回空，
+        // 调用方应回退到自己的默认。只读，不改变任何状态。
+        std::optional<std::uint64_t> focusAddress() const;
+
         // ---- 装配接口文档 §8.0 审阅时补的三个注入点（新增，不改既有签名）----
 
         // setGateInputsProvider：Gate 可用性判定所需的运行期输入（驱动是否已加载、
@@ -289,6 +296,12 @@ namespace ks::ui
         // 侧栏宽度（applySidebarWidthIfPossible）。都是"主动量一次、手动应用结果"。
         void resizeEvent(QResizeEvent* event) override;
 
+        // showEvent / changeEvent：把"本视图的会话"重新声明为 int3 账本的当前目标。账本全进程
+        // 只有一份当前目标，主 Dock 的视图与内嵌进程详情窗口的视图共用它；视图被切到前台、
+        // 窗口被激活时重新声明一次，面板上的"写入/还原"才会作用在用户眼前这个目标上。
+        void showEvent(QShowEvent* event) override;
+        void changeEvent(QEvent* event) override;
+
     private slots:
         // onTargetSessionChanged：WorkbenchTarget::sessionChanged 的槛，按
         // IsIdentityChange(mask) 分派到 handleIdentityChange/handleReloadOnly
@@ -327,6 +340,12 @@ namespace ks::ui
         // 原子逻辑。传入：reasonText 拼进"有未提交修改"确认框正文的原因短句；scenario 传给 int3
         // 退出提示的场景。传出：true=可以离开/退出；false=用户取消或应用失败（暂存与 int3 不动）。
         bool runLeaveSequence(const QString& reasonText, Int3LeaveScenario scenario);
+
+        // applyInt3Context / syncInt3Context：把会话声明为 int3 账本的当前目标（内容一致时不重复写，
+        // 免得面板无谓重建）；前者收已取得的会话引用，后者自己取 target_->session()。
+        // 见 MemoryWorkbenchView.Session.cpp 的实现注释。
+        void applyInt3Context(const ksword::memwb::MemoryTargetSession& session);
+        void syncInt3Context();
 
         // handleIdentityChange / handleReloadOnly：onTargetSessionChanged 的两条分支
         // 实现，对应 SessionChangeHandling。

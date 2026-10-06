@@ -337,6 +337,7 @@
     <ClCompile Include="MemoryDock\WorkbenchIoPorts.Kernel.cpp" />
     <ClCompile Include="MemoryDock\WorkbenchIoMapping.cpp" />
     <ClCompile Include="MemoryDock\MemoryDock.Workbench.cpp" />
+    <ClCompile Include="MemoryDock\MemoryDock.WorkbenchEntry.cpp" />
     <ClCompile Include="MemoryDock\WorkbenchServicesMapping.cpp" />
     <ClCompile Include="MemoryDock\WorkbenchServicesAudit.cpp" />
     <ClCompile Include="MemoryDock\WorkbenchServicesProbe.cpp" />
@@ -560,6 +561,7 @@
     <ClCompile Include="UI\MemoryWorkbench\WorkbenchDisasmView.cpp" />
     <ClCompile Include="UI\MemoryWorkbench\WorkbenchDisasmView.Edit.cpp" />
     <ClCompile Include="UI\MemoryWorkbench\WorkbenchMessages.cpp" />
+    <ClCompile Include="UI\MemoryWorkbench\WorkbenchBookIntake.cpp" />
     <ClCompile Include="UI\MemoryWorkbench\WorkbenchSessionBar.cpp" />
     <ClCompile Include="UI\MemoryWorkbench\WorkbenchSettings.cpp" />
     <ClCompile Include="UI\MemoryWorkbench\WorkbenchStatusBar.cpp" />
@@ -1049,6 +1051,7 @@
     <ClInclude Include="UI\MemoryWorkbench\WorkbenchMessages.h" />
     <ClInclude Include="UI\MemoryWorkbench\WorkbenchNavigation.h" />
     <ClInclude Include="UI\MemoryWorkbench\WorkbenchServices.h" />
+    <ClInclude Include="UI\MemoryWorkbench\WorkbenchBookIntake.h" />
     <QtMoc Include="UI\MemoryWorkbench\WorkbenchSessionBar.h" />
     <ClInclude Include="UI\MemoryWorkbench\WorkbenchSettings.h" />
     <QtMoc Include="UI\MemoryWorkbench\WorkbenchStatusBar.h" />

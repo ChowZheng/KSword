@@ -1,6 +1,7 @@
 #include "MemoryDock.Internal.h"
 #include "../Framework/PrivilegeElevationPrompt.h"
 #include "../UI/TableInteractionSupport.h"
+#include "../UI/MemoryWorkbench/WorkbenchTarget.h" // AcquireAnchorForPid：与工作台锚点同一取法读进程创建时间。
 
 #include <QCoreApplication>
 #include <QImage>
@@ -1271,6 +1272,8 @@ bool MemoryDock::refreshModuleListForPid(const std::uint32_t pid)
     {
         // pid 为 0 表示当前无有效目标，直接清空缓存和表格。
         m_moduleCache.clear();
+        m_moduleCachePid = 0U;
+        m_moduleCacheCreateTime = 0U;
         rebuildModuleTableFromCache();
         if (m_moduleStatusLabel != nullptr)
         {
@@ -1315,6 +1318,12 @@ bool MemoryDock::refreshModuleListForPid(const std::uint32_t pid)
         }
 
         // 后台线程仅执行耗时枚举和数据转换，不直接操作任何 Qt 控件。
+        // 先读一次目标进程的创建时间（与工作台锚点同一取法，取不到为 0）：缓存落地后它与 pid 一起
+        // 记在 m_moduleCachePid / m_moduleCacheCreateTime，供模块表预览"未附加的进程"时核对进程实例。
+        const ks::ui::AnchorInfo creationAnchor = ks::ui::AcquireAnchorForPid(pid);
+        const std::uint64_t moduleCreateTime = creationAnchor.createTime100ns;
+        ks::ui::ReleaseAnchorHandle(creationAnchor.handle);
+
         const auto refreshStartTime = std::chrono::steady_clock::now();
         const ks::process::ProcessModuleSnapshot moduleSnapshot =
             ks::process::EnumerateProcessModulesAndThreads(pid, includeSignatureCheck);
@@ -1350,6 +1359,7 @@ bool MemoryDock::refreshModuleListForPid(const std::uint32_t pid)
         // 结果回到主线程落地，确保 Qt 视图更新线程安全。
         QMetaObject::invokeMethod(selfGuard.data(), [selfGuard,
             pid,
+            moduleCreateTime,
             includeSignatureCheck,
             refreshTicket,
             elapsedMs,
@@ -1380,6 +1390,7 @@ bool MemoryDock::refreshModuleListForPid(const std::uint32_t pid)
                 auto commitModuleSnapshot = [
                     selfGuard,
                     pid,
+                    moduleCreateTime,
                     includeSignatureCheck,
                     refreshTicket,
                     elapsedMs,
@@ -1396,6 +1407,8 @@ bool MemoryDock::refreshModuleListForPid(const std::uint32_t pid)
 
                     // 缓存和树必须原子落地；菜单打开时不能先换缓存再保留旧节点。
                     selfGuard->m_moduleCache = std::move(*moduleCacheSnapshot);
+                    selfGuard->m_moduleCachePid = pid;
+                    selfGuard->m_moduleCacheCreateTime = moduleCreateTime;
                     selfGuard->rebuildModuleTableFromCache();
                     selfGuard->syncTamperDetectionTargets();
 
@@ -1646,10 +1659,26 @@ void MemoryDock::setProcessDetailMemoryScope()
         return;
     }
 
-    // 内嵌实例：内存工作台页签随下面的可见集被隐藏（它不在四个保留页之列），视图永不创建，
-    // 跳转分发器也恒走旧路径（3a 并存阶段内嵌窗口行为不变）。
+    // 内嵌实例：内存工作台视图以内嵌模式创建（恒跟随本 Dock、禁内核/物理、不落盘设置）。
     m_workbenchEmbedded = true;
 
+    applyProcessDetailTabVisibility();
+
+    if (m_tabRegions != nullptr)
+    {
+        m_tabWidget->setCurrentWidget(m_tabRegions);
+    }
+}
+
+void MemoryDock::applyProcessDetailTabVisibility()
+{
+    // 内嵌实例的可见页签集：进程与模块、内存区域、内存搜索，加上"看内存"的那一页——
+    // 工作台路由开启时是内存工作台（旧查看器隐藏），关闭时仍是旧内存查看器。
+    if (m_tabWidget == nullptr)
+    {
+        return;
+    }
+    const bool useWorkbench = workbenchRoutingActive();
     for (int tabIndex = 0; tabIndex < m_tabWidget->count(); ++tabIndex)
     {
         QWidget* const tabPage = m_tabWidget->widget(tabIndex);
@@ -1657,13 +1686,8 @@ void MemoryDock::setProcessDetailMemoryScope()
             tabPage == m_tabProcessModule ||
             tabPage == m_tabRegions ||
             tabPage == m_tabSearch ||
-            tabPage == m_tabViewer;
+            (useWorkbench ? (tabPage == m_tabWorkbench) : (tabPage == m_tabViewer));
         m_tabWidget->setTabVisible(tabIndex, visibleInProcessDetail);
-    }
-
-    if (m_tabRegions != nullptr)
-    {
-        m_tabWidget->setCurrentWidget(m_tabRegions);
     }
 }
 
@@ -1729,6 +1753,8 @@ void MemoryDock::detachProcess()
 
     // 分离时清理依赖上下文的数据缓存。
     m_moduleCache.clear();
+    m_moduleCachePid = 0U;
+    m_moduleCacheCreateTime = 0U;
     m_regionCache.clear();
     m_searchResultCache.clear();
     m_searchResultVisibleCount = 0;

@@ -436,7 +436,7 @@ namespace ks::ui::workbench_settings
 
     bool LoadRouteJumps()
     {
-        return ReadBool(QStringLiteral("memwb/workbench/routeJumps"), false);
+        return ReadBool(QStringLiteral("memwb/workbench/routeJumps"), true);
     }
 
     void SaveRouteJumps(const bool routeJumps)

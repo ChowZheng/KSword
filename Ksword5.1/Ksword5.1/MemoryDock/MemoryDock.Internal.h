@@ -131,4 +131,17 @@ namespace ksword::memory_dock_internal
     bool isReadableProtect(std::uint32_t protectValue);
     bool parseHexByte(const QString& text, std::uint8_t& valueOut);
     QIcon resolveIconByPath(const QString& absolutePath, QHash<QString, QIcon>& cache);
+
+    // addOpenInWorkbenchAction：给证据页右键菜单追加"在内存工作台打开"（实现在 MemoryDock.WorkbenchEntry.cpp）。
+    // 传入：menu 要追加动作的菜单；table 证据表（用来沿父链找到所属 MemoryDock）；
+    //       row 被点击的行（无效行则动作置灰）；addressColumn 地址文本所在的列；
+    //       kernelAddress 该表的地址是否为内核虚拟地址（真则切到内核范围，否则按 Dock 附加进程的地址处理）。
+    // 传出：已连接好点击处理的动作；找不到所属 Dock 或工作台不可用时返回空指针且不追加任何东西。
+    // 调用方法：在 menu.exec() 之前调用即可，不需要再比较 exec 的返回值。
+    QAction* addOpenInWorkbenchAction(
+        QMenu& menu,
+        QTableWidget* table,
+        int row,
+        int addressColumn,
+        bool kernelAddress);
 }

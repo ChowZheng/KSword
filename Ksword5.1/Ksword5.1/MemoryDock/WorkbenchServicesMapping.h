@@ -27,6 +27,7 @@
 //   JoinPath / ChooseWritableDirectory    地址簿文件路径选择
 //   KernelModuleQueryStatusName           内核模块枚举状态值 -> 英文状态名
 //   IsPatchChannelAllowed / BuildPatchSession  int3 补丁的通道准入与会话构造
+//   DecideModuleJumpPin                   模块表跳转要不要钉住预览进程（3b 入口切换）
 // ============================================================
 
 #include "../UI/MemoryWorkbench/WorkbenchServices.h"
@@ -279,4 +280,29 @@ namespace ksword::memwb_services_detail
     ksword::memwb::MemoryTargetSession BuildPatchSession(
         const ksword::memwb::PatchTarget& target,
         ksword::memwb::Channel channel);
+
+    // ------------------------------------------------------------
+    // 八、旧入口跳转的目标决议（3b 入口切换）
+    // ------------------------------------------------------------
+
+    // ModuleJumpPin：模块表跳转要不要钉住某个进程，以及钉哪个。
+    struct ModuleJumpPin
+    {
+        // pid：要钉住的进程号；0 表示不钉住（工作台跟随 Dock 附加的进程）。
+        std::uint32_t pid = 0;
+        // createTime100ns：钉住时用来核对"仍是同一个进程实例"的创建时间；pid 为 0 时恒为 0。
+        std::uint64_t createTime100ns = 0;
+    };
+
+    // DecideModuleJumpPin：模块表双击某个模块基址时的目标决议。
+    // 背景：模块表可以预览一个并未附加的进程（选中进程行即列出它的模块），所以模块基址属于
+    //       "预览进程"，不一定属于 Dock 附加的进程；把它当成附加进程里的地址去看会看到别人的内存。
+    // 传入：previewPid 模块缓存对应的进程（0=缓存为空）；previewCreateTime100ns 它在缓存落地时的创建时间；
+    //       attachedPid Dock 当前附加的进程（0=未附加）。
+    // 传出：预览进程非空且与附加进程不同 → 钉住预览进程（连同创建时间）；
+    //       预览进程为空，或与附加进程相同 → 不钉住（跟随 Dock，保持"看的就是附加的那个"）。
+    ModuleJumpPin DecideModuleJumpPin(
+        std::uint32_t previewPid,
+        std::uint64_t previewCreateTime100ns,
+        std::uint32_t attachedPid) noexcept;
 }

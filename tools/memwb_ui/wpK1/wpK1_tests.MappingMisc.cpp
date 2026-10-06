@@ -2,7 +2,7 @@
 // wpK1_tests.MappingMisc.cpp
 // 作用：WorkbenchServicesMapping 里其余几组纯函数的逐分支断言：
 //       候选进程取名、页保护徽章、反汇编/汇编后端结果判据、地址簿路径选择、
-//       int3 补丁的通道准入与会话构造。
+//       int3 补丁的通道准入与会话构造、模块表跳转要不要钉住预览进程（3b）。
 // ============================================================
 
 #include "wpK1_common.h"
@@ -239,6 +239,44 @@ namespace
     }
 }
 
+namespace
+{
+    // TestModuleJumpPin（3b）：模块表双击模块基址时要不要钉住预览进程。
+    // 模块表可以预览一个并未附加的进程，基址属于预览进程；预览进程不同于附加进程时必须钉住它
+    // （连同创建时间用于核对进程实例），否则会把别人的模块基址当成附加进程里的地址去看。
+    void TestModuleJumpPin()
+    {
+        constexpr std::uint64_t kCreateTime = 0x01DB000000000123ULL;
+
+        // 预览的是另一个进程：钉住它，带上创建时间。
+        svc::ModuleJumpPin pin = svc::DecideModuleJumpPin(200U, kCreateTime, 100U);
+        WPK1_CHECK(pin.pid == 200U);
+        WPK1_CHECK(pin.createTime100ns == kCreateTime);
+
+        // 没有附加任何进程、只是在预览：同样要钉住预览进程（附加 pid 为 0 不能当成"相同"）。
+        pin = svc::DecideModuleJumpPin(200U, kCreateTime, 0U);
+        WPK1_CHECK(pin.pid == 200U);
+        WPK1_CHECK(pin.createTime100ns == kCreateTime);
+
+        // 预览的就是附加的进程：不钉住（跟随 Dock），创建时间也不带。
+        pin = svc::DecideModuleJumpPin(100U, kCreateTime, 100U);
+        WPK1_CHECK(pin.pid == 0U);
+        WPK1_CHECK(pin.createTime100ns == 0U);
+
+        // 模块缓存为空（pid 为 0）：没有可钉的目标，恒不钉住，不论附加了谁。
+        pin = svc::DecideModuleJumpPin(0U, kCreateTime, 100U);
+        WPK1_CHECK(pin.pid == 0U);
+        WPK1_CHECK(pin.createTime100ns == 0U);
+        pin = svc::DecideModuleJumpPin(0U, 0U, 0U);
+        WPK1_CHECK(pin.pid == 0U);
+
+        // 创建时间没取到（0）时照样钉住，只是不带可核对的时间。
+        pin = svc::DecideModuleJumpPin(300U, 0U, 100U);
+        WPK1_CHECK(pin.pid == 300U);
+        WPK1_CHECK(pin.createTime100ns == 0U);
+    }
+}
+
 namespace wpK1_test
 {
     void RunMappingMiscTests()
@@ -249,5 +287,6 @@ namespace wpK1_test
         TestAssembleJudgement();
         TestPathHelpers();
         TestPatchSession();
+        TestModuleJumpPin();
     }
 }

@@ -1,5 +1,6 @@
 #include "MemoryDock.Internal.h"
 #include "SystemMemoryAuditPage.h"
+#include "../UI/MemoryWorkbench/WorkbenchSettings.h" // LoadRouteJumps/SaveRouteJumps：设置对话框里的"工作台接管跳转"开关。
 
 // 说明：由原聚合式实现迁移为独立 .cpp，成员函数实现保持原样。
 using namespace ksword::memory_dock_internal;
@@ -368,8 +369,16 @@ void MemoryDock::initializeConnections()
         buttonLayout->addWidget(okButton);
         buttonLayout->addWidget(cancelButton);
 
+        // 工作台接管跳转：这是 3b 入口切换的回退开关。取消勾选后，模块表/区域表/搜索结果等旧入口
+        // 的跳转回到旧内存查看器（无需发版）；工作台整体开关关闭（页签不存在）时该项置灰。
+        QCheckBox* routeJumpsCheck = new QCheckBox("由内存工作台接管跳转", &dialog);
+        routeJumpsCheck->setChecked(m_workbenchRouteJumps);
+        routeJumpsCheck->setEnabled(m_tabWorkbench != nullptr);
+        routeJumpsCheck->setToolTip("勾选：双击模块/区域/搜索结果等入口时，在内存工作台里打开地址；取消勾选：回到旧内存查看器。设置会保存，下次启动仍然有效。");
+
         formLayout->addRow("扫描线程数", threadSpin);
         formLayout->addRow("读取块大小", chunkSpin);
+        formLayout->addRow(routeJumpsCheck);
         formLayout->addRow(buttonLayout);
 
         connect(okButton, &QPushButton::clicked, &dialog, &QDialog::accept);
@@ -379,6 +388,21 @@ void MemoryDock::initializeConnections()
         {
             m_scanThreadCount = static_cast<std::uint32_t>(threadSpin->value());
             m_scanChunkSizeKB = static_cast<std::uint32_t>(chunkSpin->value());
+            if (m_tabWorkbench != nullptr && routeJumpsCheck->isChecked() != m_workbenchRouteJumps)
+            {
+                // 路由开关变化：立即生效并持久化；内嵌实例还要重新决定"看内存"那一页显示哪个。
+                m_workbenchRouteJumps = routeJumpsCheck->isChecked();
+                ks::ui::workbench_settings::SaveRouteJumps(m_workbenchRouteJumps);
+                if (m_workbenchEmbedded)
+                {
+                    applyProcessDetailTabVisibility();
+                }
+                kLogEvent routeJumpsEvent;
+                info << routeJumpsEvent
+                    << "[MemoryDock] 工作台接管跳转开关已更新, routeJumps="
+                    << (m_workbenchRouteJumps ? "true" : "false")
+                    << eol;
+            }
             m_scanStatusLabel->setText(
                 QString("设置已更新：线程=%1, 块=%2KB")
                 .arg(m_scanThreadCount)
@@ -569,7 +593,7 @@ void MemoryDock::initializeConnections()
             << "[MemoryDock] 模块表双击跳转查看器, address="
             << formatAddress(baseAddress).toStdString()
             << eol;
-        jumpToAddress(baseAddress);
+        jumpToModuleBase(baseAddress);
         });
 
     connect(m_moduleTable, &QTreeWidget::customContextMenuRequested, this, [this](const QPoint& localPosition) {
@@ -623,7 +647,7 @@ void MemoryDock::initializeConnections()
                 << "[MemoryDock] 模块表右键跳转查看器, address="
                 << baseText.toStdString()
                 << eol;
-            jumpToAddress(baseAddress);
+            jumpToModuleBase(baseAddress);
         }
         });
 
@@ -750,8 +774,9 @@ void MemoryDock::initializeConnections()
         {
             // R0 读取此区域：
             // - 输入：区域表当前行的 base/size UserRole；
-            // - 处理：填充驱动读写页为“从区域基址向后读”，最多单次读取 4KB；
-            // - 返回：无返回值，读取结果由驱动读写页状态栏和 HexEditor 展示。
+            // - 处理：工作台路由开启时在内存工作台里用标准驱动通道打开区域起点；
+            //   关闭时填充旧驱动读写页为“从区域基址向后读”，最多单次读取 4KB；
+            // - 返回：无返回值，结果由工作台状态条或旧驱动读写页状态栏和 HexEditor 展示。
             const QTableWidgetItem* baseItem = m_regionTable->item(row, 0);
             const QTableWidgetItem* sizeItem = m_regionTable->item(row, 1);
             if (baseItem != nullptr && sizeItem != nullptr)
@@ -768,7 +793,7 @@ void MemoryDock::initializeConnections()
                     << ", bytes="
                     << bytesToRead
                     << eol;
-                prepareDriverMemoryReadAtAddress(regionBase, bytesToRead, true);
+                viewRegionViaDriver(regionBase, bytesToRead);
             }
             return;
         }
@@ -870,9 +895,46 @@ void MemoryDock::initializeConnections()
         cancelCurrentScan();
         });
 
-    connect(m_searchResultTable, &QTableWidget::cellDoubleClicked, this, [this](int row, int column) {
-        Q_UNUSED(column);
+    // 结果表启用了排序：表格的 row 与 m_searchResultCache 的下标不再等价（点表头排序后第 0 行
+    // 不再是缓存里的第 0 条）。所以地址一律取自该行地址列单元格自带的数值（Qt::UserRole，
+    // 重建结果表时写入），其余字段再按地址回查缓存。
+    // searchRowAddress：读某一行的地址；传入 row 表格行；addressOut 地址输出；返回是否读到。
+    const auto searchRowAddress = [this](const int row, std::uint64_t& addressOut) -> bool {
         if (row < 0 || row >= static_cast<int>(m_searchResultVisibleCount))
+        {
+            return false;
+        }
+        const QTableWidgetItem* const addressItem = m_searchResultTable->item(row, 0);
+        if (addressItem == nullptr)
+        {
+            return false;
+        }
+        bool converted = false;
+        const qulonglong value = addressItem->data(Qt::UserRole).toULongLong(&converted);
+        if (!converted)
+        {
+            return false;
+        }
+        addressOut = static_cast<std::uint64_t>(value);
+        return true;
+    };
+    // findSearchEntry：按地址在可见缓存里回查结果行；找不到返回空指针。
+    const auto findSearchEntry = [this](const std::uint64_t address) -> const SearchResultEntry* {
+        const std::size_t visibleCount = std::min(m_searchResultVisibleCount, m_searchResultCache.size());
+        for (std::size_t index = 0; index < visibleCount; ++index)
+        {
+            if (m_searchResultCache[index].address == address)
+            {
+                return &m_searchResultCache[index];
+            }
+        }
+        return nullptr;
+    };
+
+    connect(m_searchResultTable, &QTableWidget::cellDoubleClicked, this, [this, searchRowAddress](int row, int column) {
+        Q_UNUSED(column);
+        std::uint64_t resultAddress = 0;
+        if (!searchRowAddress(row, resultAddress))
         {
             return;
         }
@@ -880,11 +942,14 @@ void MemoryDock::initializeConnections()
         info << resultDoubleClickEvent
             << "[MemoryDock] 搜索结果双击跳转, row="
             << row
+            << ", address="
+            << formatAddress(resultAddress).toStdString()
             << eol;
-        jumpToAddress(m_searchResultCache[static_cast<std::size_t>(row)].address);
+        jumpToAddress(resultAddress);
         });
 
-    connect(m_searchResultTable, &QTableWidget::customContextMenuRequested, this, [this](const QPoint& localPosition) {
+    connect(m_searchResultTable, &QTableWidget::customContextMenuRequested, this,
+        [this, searchRowAddress, findSearchEntry](const QPoint& localPosition) {
         QTableWidgetItem* clickedItem = m_searchResultTable->itemAt(localPosition);
         if (clickedItem == nullptr)
         {
@@ -892,7 +957,8 @@ void MemoryDock::initializeConnections()
         }
 
         const int row = clickedItem->row();
-        if (row < 0 || row >= static_cast<int>(m_searchResultVisibleCount))
+        std::uint64_t rowAddress = 0;
+        if (!searchRowAddress(row, rowAddress))
         {
             return;
         }
@@ -903,6 +969,14 @@ void MemoryDock::initializeConnections()
         menu.setStyleSheet(KswordTheme::ContextMenuStyle());
         QAction* viewAction = menu.addAction("查看此地址");
         QAction* addBookmarkAction = menu.addAction("添加到书签");
+        // 地址簿入口：只有用户在这里明确点了才会加入，搜索结果从不自动灌入地址簿。
+        QAction* addAddressBookAction = menu.addAction("加入地址簿");
+        addAddressBookAction->setToolTip("把这一行的地址加入内存工作台的地址簿（种类：搜索结果，地址簿总数上限 10000）");
+        QAction* addAllAddressBookAction = menu.addAction("全部加入地址簿");
+        addAllAddressBookAction->setToolTip("把当前结果表显示的全部地址加入内存工作台的地址簿（总数上限 10000，已有的地址不重复加入）");
+        // 工作台整体开关关闭时没有地方查看地址簿，这两项不提供。
+        addAddressBookAction->setVisible(canOpenInWorkbench());
+        addAllAddressBookAction->setVisible(canOpenInWorkbench());
         QAction* copyAddressAction = menu.addAction("复制地址");
         QAction* copyValueAction = menu.addAction("复制值");
         QAction* copyRowAction = menu.addAction("复制当前行");
@@ -912,7 +986,53 @@ void MemoryDock::initializeConnections()
             return;
         }
 
-        const SearchResultEntry& entry = m_searchResultCache[static_cast<std::size_t>(row)];
+        // 菜单是模态的：期间结果缓存可能被新一轮扫描重建，回查必须在菜单返回之后做，
+        // 用 rowAddress（点击当时读到的地址）作键；缓存里已没有这个地址时按"该行已失效"处理。
+        const SearchResultEntry* const foundEntry = findSearchEntry(rowAddress);
+        if (selectedAction == addAddressBookAction)
+        {
+            addSearchResultsToAddressBook(std::vector<std::uint64_t>{ rowAddress });
+            return;
+        }
+        if (selectedAction == addAllAddressBookAction)
+        {
+            // 全部可见行的地址取自表格自身（与用户看到的行一致，不依赖缓存下标）。
+            std::vector<std::uint64_t> visibleAddresses;
+            visibleAddresses.reserve(static_cast<std::size_t>(m_searchResultTable->rowCount()));
+            for (int visibleRow = 0; visibleRow < m_searchResultTable->rowCount(); ++visibleRow)
+            {
+                std::uint64_t visibleAddress = 0;
+                if (searchRowAddress(visibleRow, visibleAddress))
+                {
+                    visibleAddresses.push_back(visibleAddress);
+                }
+            }
+            addSearchResultsToAddressBook(visibleAddresses);
+            return;
+        }
+        if (foundEntry == nullptr)
+        {
+            // 地址仍在表格里但缓存已换代：只有"查看地址/复制地址"这类只需要地址的动作还能继续。
+            if (selectedAction == viewAction)
+            {
+                jumpToAddress(rowAddress);
+            }
+            else if (selectedAction == copyAddressAction)
+            {
+                QApplication::clipboard()->setText(formatAddress(rowAddress));
+            }
+            else if (selectedAction == addBookmarkAction)
+            {
+                addBookmarkByAddress(rowAddress, "来自内存搜索结果");
+                rebuildBookmarkTable();
+            }
+            else if (selectedAction == copyRowAction)
+            {
+                copyMemoryTableRow(m_searchResultTable, row);
+            }
+            return;
+        }
+        const SearchResultEntry& entry = *foundEntry;
         if (selectedAction == viewAction)
         {
             kLogEvent resultViewActionEvent;

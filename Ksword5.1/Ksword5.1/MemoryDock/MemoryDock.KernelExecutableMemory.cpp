@@ -294,6 +294,9 @@ namespace
                 QIcon(QStringLiteral(":/Icon/process_copy_row.svg")),
                 QStringLiteral("复制当前行"));
             copyRowAction->setEnabled(rowIndex >= 0 && rowIndex < table->rowCount());
+            // 内核可执行页的 VA 是内核虚拟地址：在工作台里切到内核范围打开。
+            (void)addOpenInWorkbenchAction(
+                menu, table, rowIndex, kernelExecutableColumnIndex(KernelExecutableColumn::Va), true);
 
             /*
              * 三种访问各给一项，而不是一个"监视"再弹二级菜单。

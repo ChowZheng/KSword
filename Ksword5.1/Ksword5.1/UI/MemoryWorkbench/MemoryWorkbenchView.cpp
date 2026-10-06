@@ -359,6 +359,29 @@ namespace ks::ui
         refreshChannelGateDisplay();
     }
 
+    // focusAddress：见头文件声明处的注释。进程范围且未附加（pid 为 0）时没有可用目标，
+    // 画布插入点恒为 0，此时返回空而不是把 0 当成"用户在看地址 0"。
+    std::optional<std::uint64_t> MemoryWorkbenchView::focusAddress() const
+    {
+        if (target_ == nullptr || hexPane_ == nullptr)
+        {
+            return std::nullopt;
+        }
+        const auto& session = target_->session();
+        const bool hasUsableTarget =
+            (session.scope != ksword::memwb::Scope::ProcessVirtual) || (session.pid != 0);
+        if (!hasUsableTarget)
+        {
+            return std::nullopt;
+        }
+        const std::uint64_t address = hexPane_->insertionAddress();
+        if (address == 0)
+        {
+            return std::nullopt;
+        }
+        return address;
+    }
+
     // setDisasmBackends：注入点，直接转发给反汇编子页；本类不碰解码/汇编逻辑。
     void MemoryWorkbenchView::setDisasmBackends(DecodeOneFn decodeBackend, AssembleOneFn assembleBackend)
     {
@@ -649,6 +672,10 @@ namespace ks::ui
         // 两个询问框都是嵌套事件循环，期间视图可能被外部同步销毁，每个框之后
         // 先判 self 再碰任何成员（与 WorkbenchTarget::requestIdentity 的 N3 同理）。
         const QPointer<MemoryWorkbenchView> self(this);
+
+        // int3 阶段按"账本当前目标"判断有无未还原补丁：先把它声明回本视图的目标，
+        // 否则内嵌进程详情窗口改过它之后，本视图的补丁会被漏问。
+        syncInt3Context();
 
         auto pendingDecision = ksword::memwb::ModeSwitchDecision::Cancel;
         bool hasPendingDecision = false;

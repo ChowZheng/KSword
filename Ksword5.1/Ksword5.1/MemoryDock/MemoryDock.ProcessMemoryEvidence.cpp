@@ -222,6 +222,10 @@ namespace
             menu.setStyleSheet(evidenceMenuStyle());
             QAction* copyRowAction = menu.addAction(QIcon(QStringLiteral(":/Icon/process_copy_row.svg")), QStringLiteral("复制当前行"));
             copyRowAction->setEnabled(table->currentRow() >= 0);
+            // 进程内存证据的虚拟地址属于 Dock 附加的进程：提供"在内存工作台打开"。
+            (void)addOpenInWorkbenchAction(
+                menu, table, table->currentRow(),
+                evidenceColumnIndex(ProcessMemoryEvidenceColumn::VirtualAddress), false);
             if (menu.exec(table->viewport()->mapToGlobal(localPosition)) == copyRowAction)
             {
                 copyEvidenceCurrentRow(table);

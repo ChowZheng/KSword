@@ -24,6 +24,7 @@
 #include <functional>  // std::function：下拉框展开期间被推迟的 UI 提交。
 #include <memory>      // std::shared_ptr：扫描任务状态在后台线程退出前保持有效。
 #include <mutex>       // std::mutex：保护扫描任务计数。
+#include <optional>    // std::optional：工作台插入点等"可能没有"的返回值。
 #include <string>      // std::string：日志与 Win32 调用时的字符串桥接。
 #include <vector>      // std::vector：缓存进程/模块/区域/扫描结果。
 
@@ -99,7 +100,8 @@ public:
 
     // setProcessDetailMemoryScope：
     // - 供进程详情窗口内嵌时使用；
-    // - 仅保留进程与模块、内存区域、内存搜索、内存查看器四个页面。
+    // - 仅保留进程与模块、内存区域、内存搜索、内存工作台四个页面（工作台路由被用户关闭时，
+    //   第四个页面仍是旧内存查看器）。
     void setProcessDetailMemoryScope();
 
     // focusDdmaPage：
@@ -112,6 +114,19 @@ public:
     // - 调用方式：MainWindow::closeEvent 最前调用（其后半段会停 R0 驱动，晚了 int3 还原必失败）；
     // - 返回：true=可以继续退出（工作台未创建时恒为 true）；false=用户取消，应放弃本次关闭。
     bool confirmWorkbenchQuit();
+
+    // canOpenInWorkbench：
+    // - 作用：内存工作台当前是否可用（整体开关开启、页签已创建）；
+    // - 调用方式：各证据页的右键菜单据此决定是否提供"在内存工作台打开"。
+    bool canOpenInWorkbench() const;
+
+    // openAddressInWorkbench：
+    // - 作用：切到内存工作台页签并跳到指定地址（证据页右键"在内存工作台打开"的落点）；
+    // - 参数 address：目标地址；
+    // - 参数 kernelAddress：true=内核虚拟地址（切到内核范围），false=本 Dock 附加进程的地址
+    //   （工作台跟随 Dock；若它钉在别的进程上会被带回跟随）；
+    // - 返回：true=已跳转；false=工作台不可用或被拒绝（原因在工作台状态条里）。
+    bool openAddressInWorkbench(std::uint64_t address, bool kernelAddress = false);
 
 protected:
     // changeEvent：
@@ -674,11 +689,39 @@ private:
 
     // jumpToAddress：
     // - 作用：统一的"跳到地址"分发器（实现在 MemoryDock.Workbench.cpp）：
-    //   routeJumps 为假（默认）或在内嵌窗口里时走 jumpToAddressLegacy（旧内存查看器），
-    //   为真时交给内存工作台。
-    // - 参数 address：目标地址。
+    //   routeJumps 为真（默认）时交给内存工作台，为假（用户在设置里取消勾选）时走
+    //   jumpToAddressLegacy（旧内存查看器）。
+    // - 参数 address：目标地址（本 Dock 附加进程的用户态地址）。
     // - 返回：无。
     void jumpToAddress(std::uint64_t address);
+
+    // jumpToModuleBase：
+    // - 作用：模块表双击/右键的跳转（实现在 MemoryDock.WorkbenchEntry.cpp）。模块表预览的进程
+    //   可能不是附加的进程：预览进程与附加进程不同时，请求会带上预览进程的 pid（与创建时间）
+    //   钉住它，而不是把它的模块基址当成附加进程里的地址去看；
+    // - 参数 baseAddress：模块基址；
+    // - 返回：无。routeJumps 为假时与旧行为一致（走旧查看器）。
+    void jumpToModuleBase(std::uint64_t baseAddress);
+
+    // viewRegionViaDriver：
+    // - 作用：区域表"R0读取此区域"的落点：强制标准驱动通道、在工作台里打开区域起点；
+    // - 参数 regionBase：区域基址；bytesToRead：旧路径一次读取的字节数（仅用于日志与旧路径）；
+    // - 返回：无。routeJumps 为假时走旧的驱动读写页。
+    void viewRegionViaDriver(std::uint64_t regionBase, std::uint64_t bytesToRead);
+
+    // addSearchResultsToAddressBook：
+    // - 作用：把用户明确选中的搜索结果地址加入共享地址簿（种类=搜索结果，上限见
+    //   WorkbenchBookIntake.h，绝不自动灌入）；结果写入搜索页状态栏；
+    // - 参数 addresses：要加入的地址（顺序即新增顺序）；
+    // - 返回：无。
+    void addSearchResultsToAddressBook(const std::vector<std::uint64_t>& addresses);
+
+    // workbenchRoutingActive：旧入口的跳转当前是否交给工作台（整体开关开启且 routeJumps 为真）。
+    bool workbenchRoutingActive() const;
+
+    // workbenchFocusAddress：工作台十六进制页当前的插入点（仅当工作台跟随本 Dock 的附加进程时有值），
+    // 供 PTE 页等取"用户正在看哪里"作为默认地址。
+    std::optional<std::uint64_t> workbenchFocusAddress() const;
 
     // jumpToAddressLegacy：
     // - 作用：切换到指定地址并刷新一页十六进制视图（原 jumpToAddress 的函数体，原样保留）。
@@ -1380,9 +1423,21 @@ private:
     bool workbenchAllowsProcessChange();
     // shutdownWorkbench：析构路径上先于子对象销毁调用：权威视图把设置落盘，并断开对视图的引用。
     void shutdownWorkbench();
+    // arrangeLegacyTabs：把旧的内存查看器、断点与书签、驱动内存读写三个页签改名为"（旧）"并移到
+    // 页签栏末尾（实现在 MemoryDock.WorkbenchEntry.cpp）；设置里关闭"显示旧页签"时一并隐藏。
+    void arrangeLegacyTabs();
+    // applyProcessDetailTabVisibility：按"内嵌进程详情窗口"的规则重新设置各页签的显隐
+    // （进程与模块/内存区域/内存搜索 + 内存工作台或旧内存查看器）；路由设置变化后需再调用一次。
+    void applyProcessDetailTabVisibility();
 
-    QWidget* m_tabWorkbench = nullptr;                    // 工作台页签的容器页。
+    QWidget* m_tabWorkbench = nullptr;                   // 工作台页签的容器页。
     ks::ui::MemoryWorkbenchView* m_workbenchView = nullptr; // 工作台视图（懒创建，容器页的子对象）。
-    bool m_workbenchRouteJumps = false;                   // 旧入口的跳转是否交给工作台（3a 默认假）。
-    bool m_workbenchEmbedded = false;                     // 是否是进程详情窗口里的内嵌实例（不创建视图）。
+    bool m_workbenchRouteJumps = true;                    // 旧入口的跳转是否交给工作台（3b 起默认真）。
+    bool m_workbenchEmbedded = false;                     // 是否是进程详情窗口里的内嵌实例（视图以内嵌模式创建）。
+
+    // 模块表当前缓存对应的进程：模块表可以预览一个并未附加的进程，双击模块基址时必须按
+    // 它所属的进程去看（见 jumpToModuleBase）。0 表示缓存为空。
+    std::uint32_t m_moduleCachePid = 0;
+    // 上面那个进程在缓存落地时的创建时间（100ns，0=没取到）：钉住预览进程时用它核对"仍是同一个进程实例"。
+    std::uint64_t m_moduleCacheCreateTime = 0;
 };
