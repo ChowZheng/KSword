@@ -58,6 +58,15 @@ int main(void)
     unsigned op, np, offset;
     for (op = 1; op <= 3; ++op) {
         for (np = 0; np < 2; ++np) {
+            unsigned cursor = KswSvmNestedWritebackNext(0, op, np), selected = 0;
+            for (offset = 0; offset < 4096; offset += 8) {
+                if (KswSvmNestedWritebackMask(offset, op, np)) {
+                    CHECK(cursor == offset); ++selected;
+                    cursor = KswSvmNestedWritebackNext(cursor + 8, op, np);
+                } else { CHECK(cursor != offset); }
+            }
+            CHECK(cursor == 4096 && selected > 0);
+            if (op == 3) { CHECK(selected == 16); }
             reset();
             CHECK(KswSvmNestedWriteback(&io, 0x9000, 0x6000, &source, op, np, commit, &result) == 0);
             CHECK(calls == 1 && result.HostPa == 0x6000 && result.GuestPa == 0x9000 && result.Words);

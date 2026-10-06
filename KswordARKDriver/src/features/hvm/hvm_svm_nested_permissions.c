@@ -53,10 +53,16 @@ unsigned int KswSvmNestedCapturePermissions(KSW_NSVM_PERMISSION_IMAGE* Image,
         ((Image->Flags & KSW_NSVM_IOIO_PROT) &&
             !KswSvmNestedMapAddress(IoPa, KSW_NSVM_IOPM_BYTES, PhysicalBits, &io)) ||
         (Image->Flags && !Read)) { return 0; }
-    /* No disabled/previous map bytes may leak into a subsequent combined image. */
-    for (offset = 0; offset < KSW_NSVM_MSRPM_BYTES; ++offset) { Image->Msr[offset] = 0; }
-    /* Clear the full hardware IOPM allocation, including its tail page. */
-    for (offset = 0; offset < KSW_NSVM_IOPM_BYTES; ++offset) { Image->Io[offset] = 0; }
+    /* Enabled maps are overwritten in full; only disabled maps need clearing. */
+    if (!(Image->Flags & KSW_NSVM_MSR_PROT)) {
+        /* Disabled-map bytes cannot leak from a previous capture. */
+        for (offset = 0; offset < KSW_NSVM_MSRPM_BYTES; ++offset) { Image->Msr[offset] = 0; }
+    }
+    /* Include the IOPM tail page when retiring a disabled map. */
+    if (!(Image->Flags & KSW_NSVM_IOIO_PROT)) {
+        /* An incomplete enabled-map read remains inaccessible through Ready=0. */
+        for (offset = 0; offset < KSW_NSVM_IOPM_BYTES; ++offset) { Image->Io[offset] = 0; }
+    }
     /* Each callback must translate L1 physical memory rather than using it as host PA. */
     if (Image->Flags & KSW_NSVM_MSR_PROT) {
         /* Copy a page into owned memory, never retain the callback's transient mapping. */

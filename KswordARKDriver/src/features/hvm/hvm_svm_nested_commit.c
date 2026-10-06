@@ -21,8 +21,9 @@ int KswordSvmNestedCommitVmcb(void* Context, KSW_SVM_U64 HostPa,
         Operation < KSW_NSVM_SAVE_VMEXIT || Operation > KSW_NSVM_SAVE_VMSAVE ||
         !KswordSvmNestedRamRange(nested, HostPa, 4096) ||
         KswordARKHvmPhysWindowMap(nested->Window, HostPa, 4096, &mapped) != KSW_HVM_PHYS_WINDOW_OK) { return 0; }
-    /* Fixed page size ensures no write can escape the validated mapping. */
-    for (offset = 0; offset < 4096; offset += 8) {
+    /* Enumerate selected output words rather than scanning reserved VMCB space. */
+    for (offset = KswSvmNestedWritebackNext(0, Operation, NestedPaging); offset < 4096;
+        offset = KswSvmNestedWritebackNext(offset + 8, Operation, NestedPaging)) {
         /* The driver, not the inner VMM, chooses the writable fields. */
         ULONGLONG mask = KswSvmNestedWritebackMask(offset, Operation, NestedPaging);
         /* Reserved fields and all hardware pointer controls are untouched. */

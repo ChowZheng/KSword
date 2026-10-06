@@ -123,9 +123,8 @@ unsigned int KswSvmNestedSessionEnter(KSW_NSVM_SESSION* Session,
     }
     /* Old permission evidence is invalid even if the next operand capture fails. */
     Session->Permissions.Ready = 0;
-    /* Capture a complete VMCB using the trusted outer physical/cache contract. */
-    status = KswSvmNestedReadOperandPage(&Io->Operand, OperandPa,
-        (unsigned char*)&Session->Vmcb12, &Session->OperandResult);
+    /* Resolve only identity before leasing; executable state is captured after acquisition. */
+    status = KswSvmNestedResolveOperand(&Io->Operand, OperandPa, &Session->OperandResult);
     /* This is a monitor memory failure, not an invented architectural INVALID. */
     if (status != KSW_NNPT_OK) { return KswNsvmSessionFault(Session); }
     /* Save identities independently from later map reads or writeback diagnostics. */
