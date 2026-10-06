@@ -14,6 +14,12 @@
 
 namespace Ksword::Ui {
 
+namespace detail {
+// Shared by every Result specialization: recycled HWNDs can receive another
+// task's completion message, including one with a different Result type.
+inline std::atomic_uintptr_t asyncSnapshotTaskIdentity{0};
+} // namespace detail
+
 // AsyncSnapshotTask runs one value-producing operation away from the UI thread.
 // Repeated requests are coalesced: only the newest request is delivered after an
 // in-flight operation completes. The owner must call cancel() from WM_NCDESTROY
@@ -79,19 +85,15 @@ public:
         }
     }
 
-    // consume takes ownership of lParam when it belongs to this task. Call it
-    // only for the completion message supplied to the constructor.
-    bool consume(HWND owner, WPARAM, LPARAM lParam) {
-        std::unique_ptr<Completion> completion(reinterpret_cast<Completion*>(lParam));
-        if (!completion) {
-            return false;
-        }
-
-        const std::shared_ptr<State> state = completion->state.lock();
-        if (!state || !state->alive.load(std::memory_order_acquire)) {
+    // Messages carry task identity and generation, never a Result pointer.
+    // Call only for the completion message supplied to the constructor.
+    bool consume(HWND owner, WPARAM taskIdentity, LPARAM generation) {
+        const std::shared_ptr<State> state = state_;
+        if (!state) {
             return true;
         }
 
+        std::unique_ptr<Completion> completion;
         Deliver deliver;
         Work nextWork;
         std::uint64_t nextGeneration = 0;
@@ -99,9 +101,13 @@ public:
         bool startNext = false;
         {
             std::scoped_lock lock(state->mutex);
-            if (!state->alive.load(std::memory_order_acquire) || state->owner != owner) {
+            if (!state->alive.load(std::memory_order_acquire) || state->owner != owner
+                || state->identity != static_cast<std::uintptr_t>(taskIdentity)
+                || !state->completion
+                || state->completion->generation != static_cast<std::uint64_t>(generation)) {
                 return true;
             }
+            completion = std::move(state->completion);
 
             deliverCurrent = completion->generation == state->latestGeneration;
             deliver = state->deliver;
@@ -138,6 +144,9 @@ public:
         state->pending = false;
         state->work = {};
         state->deliver = {};
+        // A queued message may be discarded when its window is destroyed.
+        // The task, rather than the message queue, owns the completed result.
+        state->completion.reset();
     }
 
     bool running() const noexcept {
@@ -150,12 +159,19 @@ public:
     }
 
 private:
+    struct Completion final {
+        std::uint64_t generation = 0;
+        std::optional<Result> result;
+        std::exception_ptr error;
+    };
+
     struct State final {
         State(HWND target, UINT message)
             : owner(target), completionMessage(message), alive(target != nullptr) {
         }
 
         std::mutex mutex;
+        const std::uintptr_t identity = detail::asyncSnapshotTaskIdentity.fetch_add(1, std::memory_order_relaxed) + 1U;
         HWND owner = nullptr;
         UINT completionMessage = 0;
         std::atomic_bool alive = false;
@@ -165,19 +181,12 @@ private:
         std::uint64_t runningGeneration = 0;
         Work work;
         Deliver deliver;
-    };
-
-    struct Completion final {
-        std::weak_ptr<State> state;
-        std::uint64_t generation = 0;
-        std::optional<Result> result;
-        std::exception_ptr error;
+        std::unique_ptr<Completion> completion;
     };
 
     static void startWorker(const std::shared_ptr<State>& state, Work work, const std::uint64_t generation) {
         std::thread([state, work = std::move(work), generation]() mutable {
             auto completion = std::make_unique<Completion>();
-            completion->state = state;
             completion->generation = generation;
             try {
                 completion->result.emplace(work());
@@ -185,19 +194,18 @@ private:
                 completion->error = std::current_exception();
             }
 
-            HWND owner = nullptr;
-            UINT message = 0;
-            bool shouldPost = false;
             {
                 std::scoped_lock lock(state->mutex);
-                shouldPost = state->alive.load(std::memory_order_acquire);
-                owner = state->owner;
-                message = state->completionMessage;
-            }
-
-            if (shouldPost && owner && ::PostMessageW(owner, message, static_cast<WPARAM>(generation), reinterpret_cast<LPARAM>(completion.get()))) {
-                completion.release();
-                return;
+                if (state->alive.load(std::memory_order_acquire) && state->owner) {
+                    state->completion = std::move(completion);
+                    // Serialize publishing with cancel() so a retiring worker
+                    // cannot post to a window after cancellation returns.
+                    if (::PostMessageW(state->owner, state->completionMessage,
+                        static_cast<WPARAM>(state->identity), static_cast<LPARAM>(generation))) {
+                        return;
+                    }
+                    state->completion.reset();
+                }
             }
 
             finishWithoutDelivery(state, generation);

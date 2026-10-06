@@ -9,6 +9,7 @@
 // ============================================================
 
 #include "../Framework.h"
+#include "../UI/AsyncUiDispatcher.h"
 
 #include <QWidget>
 
@@ -275,6 +276,7 @@ private:
     std::atomic_bool m_searchRunning{ false };   // 搜索线程是否运行中。
     std::atomic_bool m_searchStopFlag{ false };  // 搜索线程停止标志。
     std::unique_ptr<std::thread> m_searchThread; // 搜索线程对象。
+    std::shared_ptr<ks::ui::AsyncUiDispatcher> m_uiDispatcher; // 晚到的导入/导出与搜索消息受页面关闭门禁保护。
     std::mutex m_pendingMutex;                   // 待刷入搜索结果队列锁。
     std::deque<PendingSearchRow> m_pendingRows;  // 有界待刷入搜索结果 FIFO 队列。
     QTimer* m_searchFlushTimer = nullptr;        // UI 节流刷新定时器。

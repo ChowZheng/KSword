@@ -60,17 +60,23 @@ std::wstring Basename(const std::wstring& path) {
     return separator == std::wstring::npos ? path : path.substr(separator + 1);
 }
 
-DWORD RvaToFileOffset(const BYTE* image, size_t imageSize, DWORD rva, const IMAGE_NT_HEADERS64* headers) {
-    (void)image;
+bool RvaToFileOffset(size_t imageSize, DWORD rva, size_t length, const IMAGE_NT_HEADERS64* headers, size_t* fileOffset) {
+    // The caller validates the complete section table before any section is read.
     const IMAGE_SECTION_HEADER* section = IMAGE_FIRST_SECTION(headers);
     for (WORD index = 0; index < headers->FileHeader.NumberOfSections; ++index, ++section) {
-        const DWORD sectionSize = (std::max)(section->Misc.VirtualSize, section->SizeOfRawData);
-        if (rva >= section->VirtualAddress && rva - section->VirtualAddress < sectionSize) {
-            const ULONGLONG offset = static_cast<ULONGLONG>(section->PointerToRawData) + (rva - section->VirtualAddress);
-            return offset < imageSize ? static_cast<DWORD>(offset) : 0;
+        if (rva >= section->VirtualAddress && rva - section->VirtualAddress < section->SizeOfRawData) {
+            const size_t delta = rva - section->VirtualAddress;
+            if (length > section->SizeOfRawData - delta) return false;
+            const size_t offset = static_cast<size_t>(section->PointerToRawData) + delta;
+            if (offset > imageSize || length > imageSize - offset) return false;
+            *fileOffset = offset;
+            return true;
         }
     }
-    return rva < imageSize ? rva : 0;
+    if (rva > headers->OptionalHeader.SizeOfHeaders || length > headers->OptionalHeader.SizeOfHeaders - rva ||
+        rva > imageSize || length > imageSize - rva) return false;
+    *fileOffset = rva;
+    return true;
 }
 
 int ModuleClassForName(const std::wstring& name, const SupportManifest* manifest) {
@@ -107,25 +113,32 @@ bool ProbePeIdentity(const std::wstring& path, PeIdentity* identity) {
     std::vector<BYTE> bytes;
     if (!ReadFileBytes(path, &bytes) || bytes.size() < sizeof(IMAGE_DOS_HEADER)) { identity->error = "PE file could not be read"; return false; }
     const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(bytes.data());
-    if (dos->e_magic != IMAGE_DOS_SIGNATURE || dos->e_lfanew <= 0 || static_cast<size_t>(dos->e_lfanew) + sizeof(DWORD) + sizeof(IMAGE_FILE_HEADER) > bytes.size()) { identity->error = "invalid DOS/PE header"; return false; }
+    if (dos->e_magic != IMAGE_DOS_SIGNATURE || dos->e_lfanew <= 0 || static_cast<size_t>(dos->e_lfanew) > bytes.size() ||
+        sizeof(DWORD) + sizeof(IMAGE_FILE_HEADER) > bytes.size() - static_cast<size_t>(dos->e_lfanew)) { identity->error = "invalid DOS/PE header"; return false; }
     const auto* signature = reinterpret_cast<const DWORD*>(bytes.data() + dos->e_lfanew);
     if (*signature != IMAGE_NT_SIGNATURE) { identity->error = "invalid PE signature"; return false; }
     const auto* fileHeader = reinterpret_cast<const IMAGE_FILE_HEADER*>(signature + 1);
     if (fileHeader->SizeOfOptionalHeader != sizeof(IMAGE_OPTIONAL_HEADER64)) { identity->error = "not an amd64 PE image"; return false; }
+    const size_t optionalOffset = static_cast<size_t>(dos->e_lfanew) + sizeof(DWORD) + sizeof(IMAGE_FILE_HEADER);
+    if (sizeof(IMAGE_OPTIONAL_HEADER64) > bytes.size() - optionalOffset) { identity->error = "invalid amd64 optional header"; return false; }
     const auto* optional = reinterpret_cast<const IMAGE_OPTIONAL_HEADER64*>(fileHeader + 1);
-    if (reinterpret_cast<const BYTE*>(optional) + sizeof(*optional) > bytes.data() + bytes.size() || optional->Magic != IMAGE_NT_OPTIONAL_HDR64_MAGIC) { identity->error = "invalid amd64 optional header"; return false; }
+    if (optional->Magic != IMAGE_NT_OPTIONAL_HDR64_MAGIC) { identity->error = "invalid amd64 optional header"; return false; }
+    const size_t sectionOffset = optionalOffset + sizeof(*optional);
+    if (fileHeader->NumberOfSections > (bytes.size() - sectionOffset) / sizeof(IMAGE_SECTION_HEADER)) { identity->error = "section table is outside the image"; return false; }
     const auto* headers = reinterpret_cast<const IMAGE_NT_HEADERS64*>(signature);
     identity->machine = fileHeader->Machine;
     identity->timeDateStamp = fileHeader->TimeDateStamp;
     identity->sizeOfImage = optional->SizeOfImage;
+    if (optional->NumberOfRvaAndSizes <= IMAGE_DIRECTORY_ENTRY_DEBUG) { identity->error = "CodeView debug directory is missing"; return false; }
     const IMAGE_DATA_DIRECTORY& debugDirectory = optional->DataDirectory[IMAGE_DIRECTORY_ENTRY_DEBUG];
     if (debugDirectory.VirtualAddress == 0 || debugDirectory.Size < sizeof(IMAGE_DEBUG_DIRECTORY)) { identity->error = "CodeView debug directory is missing"; return false; }
-    const DWORD debugOffset = RvaToFileOffset(bytes.data(), bytes.size(), debugDirectory.VirtualAddress, headers);
-    if (debugOffset == 0 || debugOffset + debugDirectory.Size > bytes.size()) { identity->error = "debug directory is outside the image"; return false; }
+    size_t debugOffset = 0;
+    if (!RvaToFileOffset(bytes.size(), debugDirectory.VirtualAddress, debugDirectory.Size, headers, &debugOffset)) { identity->error = "debug directory is outside the image"; return false; }
     const size_t count = debugDirectory.Size / sizeof(IMAGE_DEBUG_DIRECTORY);
     const auto* entries = reinterpret_cast<const IMAGE_DEBUG_DIRECTORY*>(bytes.data() + debugOffset);
     for (size_t index = 0; index < count; ++index) {
-        if (entries[index].Type != IMAGE_DEBUG_TYPE_CODEVIEW || entries[index].PointerToRawData == 0 || entries[index].SizeOfData < 24 || entries[index].PointerToRawData + entries[index].SizeOfData > bytes.size()) continue;
+        if (entries[index].Type != IMAGE_DEBUG_TYPE_CODEVIEW || entries[index].PointerToRawData == 0 || entries[index].SizeOfData < 24 ||
+            entries[index].PointerToRawData > bytes.size() || entries[index].SizeOfData > bytes.size() - entries[index].PointerToRawData) continue;
         const auto* record = reinterpret_cast<const RsdsRecord*>(bytes.data() + entries[index].PointerToRawData);
         if (record->signature != 'SDSR') continue;
         char guid[33] = {};
