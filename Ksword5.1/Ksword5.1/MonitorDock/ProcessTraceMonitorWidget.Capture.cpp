@@ -1076,8 +1076,7 @@ bool ProcessTraceMonitorWidget::buildRelevantEventRow(
     // - 监听列表变更统一回到 UI 线程，避免并发写 m_targetProcessList。
     if (shouldSyncAutoAddTargetList && autoAddPidValue != 0)
     {
-        QMetaObject::invokeMethod(
-            this,
+        m_uiDispatcher->post(
             [this,
              autoAddPidValue,
              autoAddParentPidValue,
@@ -1090,20 +1089,17 @@ bool ProcessTraceMonitorWidget::buildRelevantEventRow(
                     autoAddProcessNameText,
                     autoAddProcessPathText,
                     autoAddCreationTime100ns);
-            },
-            Qt::QueuedConnection);
+            });
     }
 
     if (shouldAutoRemoveTargetList && autoRemovePidValue != 0)
     {
-        QMetaObject::invokeMethod(
-            this,
+        m_uiDispatcher->post(
             [this, autoRemovePidValue]() {
                 removeTrackedProcessFromTargetListByPid(
                     autoRemovePidValue,
                     QStringLiteral("ETW 进程退出事件"));
-            },
-            Qt::QueuedConnection);
+            });
     }
 
     if (displayPidValue != 0 && !shouldAutoRemoveTargetList)

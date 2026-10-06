@@ -2,8 +2,10 @@
 #include "../ksword/network/network_connection_tools.h"
 
 #include <algorithm>
+#include <atomic>
+#include <mutex>
 
-#include <QtCore/QCoreApplication>
+#include <QtCore/QMetaObject>
 #include <QtCore/QCryptographicHash>
 #include <QtCore/QDateTime>
 #include <QtCore/QDir>
@@ -35,6 +37,61 @@
 
 namespace ks::network
 {
+    // close 与 post 使用同一把锁，接收器析构后晚线程只看到关闭状态。
+    class HttpsProxyUiDispatcher final
+    {
+    public:
+        explicit HttpsProxyUiDispatcher(QObject* receiver) : m_receiver(receiver) {}
+
+        void close()
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            m_receiver = nullptr;
+        }
+
+        void post(std::function<void()> callback)
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            if (m_receiver != nullptr)
+            {
+                QMetaObject::invokeMethod(m_receiver, std::move(callback), Qt::QueuedConnection);
+            }
+        }
+
+    private:
+        std::mutex m_mutex;
+        QObject* m_receiver;
+    };
+
+    // 会话证书工作不依赖 QObject；慢任务可以安全地晚于服务退出。
+    class HttpsProxyCertificateStore final
+    {
+    public:
+        HttpsProxyCertificateStore();
+        bool ensureRootCertificate(bool installToTrustStore, QString* errorTextOut);
+        bool isRootTrusted() const;
+        bool isRootCertificateReady() const;
+        bool loadHostCertificateBundle(const QString& hostName, QSslCertificate* certificateOut,
+            QSslKey* privateKeyOut, QString* errorTextOut);
+        QString rootCertificatePfxPath() const;
+        QString rootCertificateCerPath() const;
+        void markRootCertificatePrepared() { m_rootCertificatePrepared.store(true); }
+
+    private:
+        QString certificateWorkspaceDir() const;
+        bool runPowerShellScript(const QString& scriptText, QString* standardOutputOut,
+            QString* standardErrorOut, QString* errorTextOut) const;
+        QString hostCertificatePfxPath(const QString& hostName) const;
+        QString hostCertificatePemPath(const QString& hostName) const;
+        QString hostPrivateKeyPemPath(const QString& hostName) const;
+        bool ensureHostCertificateFile(const QString& hostName, QString* errorTextOut);
+        QString normalizedHostForFileName(const QString& hostName) const;
+        QByteArray rootPfxPassword() const;
+        QString m_workspaceDirectory;
+        mutable std::recursive_mutex m_certificateMutex;
+        std::atomic_bool m_rootCertificatePrepared{ false };
+    };
+
     namespace
     {
         // kRootSubjectText 用途：统一根证书 Subject 文本。
@@ -982,24 +1039,23 @@ namespace ks::network
             bool m_closing = false;                  // m_closing：是否正在结束会话，防止重复发出错误或汇总。
         };
 
-        // ProxySessionRegistry：集中保存活动会话线程，保证代理停止和析构会同步收尾。
+        // ProxySessionRegistry：停止快照持有线程对象，避免 finished/deleteLater 与后台等待竞态。
         class ProxySessionRegistry final
         {
         public:
             struct SessionWorker
             {
-                QPointer<ProxySession> session; // session：会话对象，销毁后自动置空。
-                QPointer<QThread> thread;       // thread：承载会话事件循环的线程。
+                std::shared_ptr<QThread> thread; // 等待快照持有强引用，最后释放时在所属线程排队删除。
             };
 
-            bool add(ProxySession* sessionValue, QThread* threadValue)
+            bool add(const std::shared_ptr<QThread>& threadValue)
             {
                 std::lock_guard<std::mutex> lock(m_mutex);
                 if (m_stopping)
                 {
                     return false;
                 }
-                m_sessionWorkerList.push_back(SessionWorker{ sessionValue, threadValue });
+                m_sessionWorkerList.push_back(SessionWorker{ threadValue });
                 return true;
             }
 
@@ -1012,7 +1068,7 @@ namespace ks::network
                         m_sessionWorkerList.end(),
                         [threadValue](const SessionWorker& worker)
                         {
-                            return worker.thread.isNull() || worker.thread.data() == threadValue;
+                            return worker.thread.get() == threadValue;
                         }),
                     m_sessionWorkerList.end());
             }
@@ -1028,27 +1084,10 @@ namespace ks::network
 
                 for (const SessionWorker& worker : sessionWorkerList)
                 {
-                    const QPointer<ProxySession> session = worker.session;
-                    if (!session.isNull())
+                    if (worker.thread != nullptr)
                     {
-                        const bool queued = QMetaObject::invokeMethod(
-                            session.data(),
-                            [session]()
-                            {
-                                if (!session.isNull())
-                                {
-                                    session->requestStop();
-                                }
-                            },
-                            Qt::QueuedConnection);
-                        if (queued)
-                        {
-                            continue;
-                        }
-                    }
-
-                    if (!worker.thread.isNull())
-                    {
+                        // 两个 QThread 入口可跨线程调用，不借用会话 QObject 指针。
+                        worker.thread->requestInterruption();
                         worker.thread->quit();
                     }
                 }
@@ -1058,7 +1097,7 @@ namespace ks::network
                 // 绝不允许调用方（含析构路径）在这里无限期挂死。
                 for (const SessionWorker& worker : sessionWorkerList)
                 {
-                    if (worker.thread.isNull() || worker.thread.data() == QThread::currentThread())
+                    if (worker.thread == nullptr || worker.thread.get() == QThread::currentThread())
                     {
                         continue;
                     }
@@ -1071,8 +1110,8 @@ namespace ks::network
                     worker.thread->wait(kSessionStopFinalWaitMs);
                 }
 
-                std::lock_guard<std::mutex> lock(m_mutex);
-                m_sessionWorkerList.clear();
+                // 超时线程继续由登记表持有，到 finished 的 remove 才释放。
+                // finished 回调持有登记表，外部服务销毁不会触发运行中 QThread 的析构。
             }
 
         private:
@@ -1107,20 +1146,23 @@ namespace ks::network
             void incomingConnection(qintptr socketDescriptor) override
             {
                 const std::uint64_t sessionId = m_sessionIdProvider ? m_sessionIdProvider() : 0;
-                QThread* sessionThread = new QThread();
+                const auto sessionThreadOwner = std::shared_ptr<QThread>(new QThread(), [](QThread* thread)
+                {
+                    thread->deleteLater();
+                });
+                QThread* sessionThread = sessionThreadOwner.get();
                 ProxySession* session = new ProxySession(
                     sessionId,
                     socketDescriptor,
                     m_hostCertLoader,
                     m_parsedEmitter,
                     m_statusEmitter);
-                if (m_sessionRegistry != nullptr && !m_sessionRegistry->add(session, sessionThread))
+                if (m_sessionRegistry != nullptr && !m_sessionRegistry->add(sessionThreadOwner))
                 {
                     QTcpSocket rejectedSocket;
                     rejectedSocket.setSocketDescriptor(socketDescriptor);
                     rejectedSocket.abort();
                     delete session;
-                    delete sessionThread;
                     return;
                 }
                 session->moveToThread(sessionThread);
@@ -1139,7 +1181,7 @@ namespace ks::network
                         }
                     },
                     Qt::DirectConnection);
-                connect(sessionThread, &QThread::finished, sessionThread, &QObject::deleteLater);
+                // registry 和 stop 快照共同持有线程；不能 finished 后立刻删除正在被 wait 的对象。
                 sessionThread->start();
             }
 
@@ -1154,11 +1196,14 @@ namespace ks::network
 
     HttpsMitmProxyService::HttpsMitmProxyService()
         : QObject(nullptr)
+        , m_certificateStore(std::make_shared<HttpsProxyCertificateStore>())
+        , m_uiDispatcher(std::make_shared<HttpsProxyUiDispatcher>(this))
     {
     }
 
     HttpsMitmProxyService::~HttpsMitmProxyService()
     {
+        m_uiDispatcher->close();
         stop();
     }
 
@@ -1178,7 +1223,7 @@ namespace ks::network
 
         // 正常流程里 UI 已经先调用 ensureRootCertificateAsync 在后台备妥根证书，
         // 这里只做一次无锁快速校验；只有证书文件被外部删除等异常情况才退回同步生成。
-        if (!isRootCertificateReady())
+        if (!m_certificateStore->isRootCertificateReady())
         {
             QString errorText;
             if (!ensureRootCertificate(false, &errorText))
@@ -1195,31 +1240,30 @@ namespace ks::network
 
         const QPointer<HttpsMitmProxyService> safeThis(this);
 
-        auto hostCertLoader = [safeThis](const QString& hostName, QSslCertificate* certificateOut, QSslKey* privateKeyOut, QString* certErrorOut)
+        // 会话可能在 stop 的等待上限之后仍生成证书，只借用独立共享状态。
+        auto hostCertLoader = [certificateStore = m_certificateStore](const QString& hostName, QSslCertificate* certificateOut, QSslKey* privateKeyOut, QString* certErrorOut)
             {
-                if (safeThis.isNull())
+                return certificateStore->loadHostCertificateBundle(hostName, certificateOut, privateKeyOut, certErrorOut);
+            };
+        auto parsedEmitter = [safeThis, dispatcher = m_uiDispatcher](const HttpsProxyParsedEntry& parsedEntry)
+            {
+                dispatcher->post([safeThis, parsedEntry]()
                 {
-                    if (certErrorOut != nullptr)
+                    if (!safeThis.isNull())
                     {
-                        *certErrorOut = QStringLiteral("HTTPS代理服务已销毁。");
+                        safeThis->emitParsedEntry(parsedEntry);
                     }
-                    return false;
-                }
-                return safeThis->loadHostCertificateBundle(hostName, certificateOut, privateKeyOut, certErrorOut);
+                });
             };
-        auto parsedEmitter = [safeThis](const HttpsProxyParsedEntry& parsedEntry)
+        auto statusEmitter = [safeThis, dispatcher = m_uiDispatcher](const QString& statusText)
             {
-                if (!safeThis.isNull())
+                dispatcher->post([safeThis, statusText]()
                 {
-                    safeThis->emitParsedEntry(parsedEntry);
-                }
-            };
-        auto statusEmitter = [safeThis](const QString& statusText)
-            {
-                if (!safeThis.isNull())
-                {
-                    safeThis->emitStatus(statusText);
-                }
+                    if (!safeThis.isNull())
+                    {
+                        safeThis->emitStatus(statusText);
+                    }
+                });
             };
         auto sessionIdProvider = [safeThis]() -> std::uint64_t
             {
@@ -1267,11 +1311,11 @@ namespace ks::network
             m_server->close();
             m_server.reset();
         }
-        // 若上一轮走的是 stopAsync，先回收那个后台收尾线程；它内部的等待都带超时，不会挂死。
+        // 若上一轮走的是 stopAsync，先回收那个后台收尾线程；它内部的等待都带超时。
         joinStopWorkerThread();
         if (m_stopSessionWorkers)
         {
-            // 会话线程会持有 service 回调；必须先等它们退出，再允许服务对象析构。
+            // 有界等待会话退出；晚退出会话只持有独立证书状态和投递到 UI 的守卫回调。
             const std::function<void()> stopSessionWorkers = std::move(m_stopSessionWorkers);
             m_stopSessionWorkers = {};
             stopSessionWorkers();
@@ -1316,18 +1360,13 @@ namespace ks::network
         // stopSessionWorkers 只持有会话登记表的 shared_ptr，不触碰本服务对象，
         // 因此即便服务先于后台线程析构，后台等待本身也是安全的。
         const QPointer<HttpsMitmProxyService> guardedSelf(this);
+        const auto dispatcher = m_uiDispatcher;
         m_stopWorkerThread = std::make_unique<std::thread>(
-            [guardedSelf, stopSessionWorkers = std::move(stopSessionWorkers), completionCallback, hadActiveProxy]()
+            [guardedSelf, dispatcher, stopSessionWorkers = std::move(stopSessionWorkers), completionCallback, hadActiveProxy]()
             {
                 stopSessionWorkers();
 
-                QCoreApplication* const appInstance = QCoreApplication::instance();
-                if (appInstance == nullptr)
-                {
-                    return;
-                }
-                QMetaObject::invokeMethod(
-                    appInstance,
+                dispatcher->post(
                     [guardedSelf, completionCallback, hadActiveProxy]()
                     {
                         if (!guardedSelf.isNull())
@@ -1343,8 +1382,7 @@ namespace ks::network
                         {
                             completionCallback();
                         }
-                    },
-                    Qt::QueuedConnection);
+                    });
             });
     }
 
@@ -1373,6 +1411,23 @@ namespace ks::network
     }
 
     bool HttpsMitmProxyService::ensureRootCertificate(const bool installToTrustStore, QString* errorTextOut)
+    {
+        return m_certificateStore->ensureRootCertificate(installToTrustStore, errorTextOut);
+    }
+
+    bool HttpsMitmProxyService::isRootTrusted() const
+    {
+        return m_certificateStore->isRootTrusted();
+    }
+
+    bool HttpsMitmProxyService::loadHostCertificateBundle(
+        const QString& hostName, QSslCertificate* certificateOut,
+        QSslKey* privateKeyOut, QString* errorTextOut)
+    {
+        return m_certificateStore->loadHostCertificateBundle(hostName, certificateOut, privateKeyOut, errorTextOut);
+    }
+
+    bool HttpsProxyCertificateStore::ensureRootCertificate(const bool installToTrustStore, QString* errorTextOut)
     {
         std::lock_guard<std::recursive_mutex> guard(m_certificateMutex);
 
@@ -1406,30 +1461,27 @@ namespace ks::network
         const bool installToTrustStore,
         std::function<void(bool, QString)> completionCallback)
     {
-        QCoreApplication* const appInstance = QCoreApplication::instance();
+        const auto certificateStore = m_certificateStore;
+        const auto dispatcher = m_uiDispatcher;
 
         // 快速路径：证书文件齐备、信任状态也满足要求时不必拉起 powershell.exe。
-        // 这里刻意不去抢 m_certificateMutex，避免会话线程正在生成叶子证书时把 UI 线程一起拖住。
-        if (isRootCertificateReady() && (!installToTrustStore || isRootTrusted()))
+        // 这里刻意不去抢证书状态锁，避免会话线程正在生成叶子证书时把 UI 线程一起拖住。
+        if (certificateStore->isRootCertificateReady() && (!installToTrustStore || certificateStore->isRootTrusted()))
         {
-            if (completionCallback && appInstance != nullptr)
+            if (completionCallback)
             {
                 // 统一成“回调总是稍后在 UI 线程触发”，调用方不必区分快慢两条路径。
-                QMetaObject::invokeMethod(
-                    appInstance,
-                    [completionCallback]() { completionCallback(true, QString()); },
-                    Qt::QueuedConnection);
+                dispatcher->post([completionCallback]() { completionCallback(true, QString()); });
             }
             return;
         }
 
         const QString scriptText = buildRootCertificateScriptText(
-            rootCertificatePfxPath(),
-            rootCertificateCerPath(),
+            certificateStore->rootCertificatePfxPath(),
+            certificateStore->rootCertificateCerPath(),
             installToTrustStore);
-        const QPointer<HttpsMitmProxyService> guardedSelf(this);
         QThreadPool::globalInstance()->start(
-            [guardedSelf, scriptText, completionCallback]()
+            [certificateStore, dispatcher, scriptText, completionCallback]()
             {
                 // 后台线程只处理值类型入参与 QProcess，不触碰本服务对象的任何成员。
                 QString standardOutputText;
@@ -1441,29 +1493,23 @@ namespace ks::network
                     &standardErrorText,
                     &errorText);
 
-                QCoreApplication* const workerAppInstance = QCoreApplication::instance();
-                if (workerAppInstance == nullptr)
+                if (executed)
                 {
-                    return;
+                    certificateStore->markRootCertificatePrepared();
                 }
-                QMetaObject::invokeMethod(
-                    workerAppInstance,
-                    [guardedSelf, executed, errorText, completionCallback]()
+
+                dispatcher->post(
+                    [executed, errorText, completionCallback]()
                     {
-                        if (executed && !guardedSelf.isNull())
-                        {
-                            guardedSelf->m_rootCertificatePrepared = true;
-                        }
                         if (completionCallback)
                         {
                             completionCallback(executed, errorText);
                         }
-                    },
-                    Qt::QueuedConnection);
+                    });
             });
     }
 
-    bool HttpsMitmProxyService::isRootTrusted() const
+    bool HttpsProxyCertificateStore::isRootTrusted() const
     {
         // 只需要一个布尔值，没必要为此拉起 powershell.exe：
         // 直接读导出的根证书 DER，再按 SHA-1 指纹查当前用户 ROOT 存储。
@@ -1493,14 +1539,14 @@ namespace ks::network
         return isThumbprintInCurrentUserRootStore(rootCertificate.digest(QCryptographicHash::Sha1));
     }
 
-    bool HttpsMitmProxyService::isRootCertificateReady() const
+    bool HttpsProxyCertificateStore::isRootCertificateReady() const
     {
         return m_rootCertificatePrepared.load()
             && QFile::exists(rootCertificatePfxPath())
             && QFile::exists(rootCertificateCerPath());
     }
 
-    bool HttpsMitmProxyService::loadHostCertificateBundle(
+    bool HttpsProxyCertificateStore::loadHostCertificateBundle(
         const QString& hostName,
         QSslCertificate* certificateOut,
         QSslKey* privateKeyOut,
@@ -1621,7 +1667,7 @@ namespace ks::network
 
     QString HttpsMitmProxyService::rootCertificatePath() const
     {
-        return rootCertificateCerPath();
+        return m_certificateStore->rootCertificateCerPath();
     }
 
     void HttpsMitmProxyService::emitParsedEntry(const HttpsProxyParsedEntry& parsedEntry) const
@@ -1640,7 +1686,7 @@ namespace ks::network
         }
     }
 
-    QString HttpsMitmProxyService::certificateWorkspaceDir() const
+    HttpsProxyCertificateStore::HttpsProxyCertificateStore()
     {
         QString baseDirectoryText = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
         if (baseDirectoryText.isEmpty())
@@ -1650,10 +1696,15 @@ namespace ks::network
 
         QDir workspaceDirectory(baseDirectoryText);
         workspaceDirectory.mkpath(QStringLiteral("HttpsProxy"));
-        return workspaceDirectory.filePath(QStringLiteral("HttpsProxy"));
+        m_workspaceDirectory = workspaceDirectory.filePath(QStringLiteral("HttpsProxy"));
     }
 
-    bool HttpsMitmProxyService::runPowerShellScript(
+    QString HttpsProxyCertificateStore::certificateWorkspaceDir() const
+    {
+        return m_workspaceDirectory;
+    }
+
+    bool HttpsProxyCertificateStore::runPowerShellScript(
         const QString& scriptText,
         QString* standardOutputOut,
         QString* standardErrorOut,
@@ -1664,35 +1715,35 @@ namespace ks::network
         return executePowerShellScript(scriptText, standardOutputOut, standardErrorOut, errorTextOut);
     }
 
-    QString HttpsMitmProxyService::hostCertificatePfxPath(const QString& hostName) const
+    QString HttpsProxyCertificateStore::hostCertificatePfxPath(const QString& hostName) const
     {
         return QDir(certificateWorkspaceDir()).filePath(
             QStringLiteral("leaf_%1.pfx").arg(normalizedHostForFileName(hostName)));
     }
 
-    QString HttpsMitmProxyService::hostCertificatePemPath(const QString& hostName) const
+    QString HttpsProxyCertificateStore::hostCertificatePemPath(const QString& hostName) const
     {
         return QDir(certificateWorkspaceDir()).filePath(
             QStringLiteral("leaf_%1_cert.pem").arg(normalizedHostForFileName(hostName)));
     }
 
-    QString HttpsMitmProxyService::hostPrivateKeyPemPath(const QString& hostName) const
+    QString HttpsProxyCertificateStore::hostPrivateKeyPemPath(const QString& hostName) const
     {
         return QDir(certificateWorkspaceDir()).filePath(
             QStringLiteral("leaf_%1_key.pem").arg(normalizedHostForFileName(hostName)));
     }
 
-    QString HttpsMitmProxyService::rootCertificatePfxPath() const
+    QString HttpsProxyCertificateStore::rootCertificatePfxPath() const
     {
         return QDir(certificateWorkspaceDir()).filePath(QStringLiteral("root_ca.pfx"));
     }
 
-    QString HttpsMitmProxyService::rootCertificateCerPath() const
+    QString HttpsProxyCertificateStore::rootCertificateCerPath() const
     {
         return QDir(certificateWorkspaceDir()).filePath(QStringLiteral("root_ca.cer"));
     }
 
-    bool HttpsMitmProxyService::ensureHostCertificateFile(const QString& hostName, QString* errorTextOut)
+    bool HttpsProxyCertificateStore::ensureHostCertificateFile(const QString& hostName, QString* errorTextOut)
     {
         if (hostName.trimmed().isEmpty())
         {
@@ -1786,7 +1837,7 @@ namespace ks::network
             && QFile::exists(hostKeyPemPath);
     }
 
-    QString HttpsMitmProxyService::normalizedHostForFileName(const QString& hostName) const
+    QString HttpsProxyCertificateStore::normalizedHostForFileName(const QString& hostName) const
     {
         const QByteArray hashBytes = QCryptographicHash::hash(
             hostName.trimmed().toLower().toUtf8(),
@@ -1794,7 +1845,7 @@ namespace ks::network
         return QString::fromLatin1(hashBytes.toHex());
     }
 
-    QByteArray HttpsMitmProxyService::rootPfxPassword() const
+    QByteArray HttpsProxyCertificateStore::rootPfxPassword() const
     {
         return QByteArrayLiteral(kPfxPasswordText);
     }

@@ -16,9 +16,12 @@ Environment:
 
 #include "ark/ark_driver.h"
 #include "../../dispatch/ioctl_validation.h"
+#include "../../platform/pool_compat.h" // 大型固定规则请求的快照必须离开有限的内核栈。
 
 #include <ntstrsafe.h>
 #include <stdarg.h>
+
+#define KSWORD_ARK_REDIRECT_IOCTL_TAG_SNAPSHOT 0x7352734BUL // sRsK：规则请求快照的独立池标签。
 
 static VOID
 KswordARKRedirectIoctlLog(
@@ -87,8 +90,8 @@ Return Value:
 --*/
 {
     KSWORD_ARK_REDIRECT_SET_RULES_REQUEST* setRequest = NULL;
-    // requestSnapshot 在后端清零共用 SystemBuffer 前保存完整请求。
-    KSWORD_ARK_REDIRECT_SET_RULES_REQUEST requestSnapshot;
+    // 完整请求超过 33KB；快照放在非分页池，不能作为 IOCTL 线程的局部栈结构。
+    KSWORD_ARK_REDIRECT_SET_RULES_REQUEST* requestSnapshot = NULL;
     PVOID outputBuffer = NULL;
     size_t actualInputLength = 0U;
     size_t actualOutputLength = 0U;
@@ -123,9 +126,6 @@ Return Value:
      * RtlZeroMemory 输出再按 ruleCount 遍历并拷贝 rules[]，不做快照就会
      * 把响应头字节当规则数和重定向路径装进运行时表。
      */
-    RtlCopyMemory(&requestSnapshot, setRequest, sizeof(requestSnapshot));
-    setRequest = &requestSnapshot;
-
     status = KswordARKRetrieveRequiredOutputBuffer(
         Request,
         sizeof(KSWORD_ARK_REDIRECT_SET_RULES_RESPONSE),
@@ -135,6 +135,14 @@ Return Value:
         KswordARKRedirectIoctlLog(Device, "Error", "R0 redirect set-rules output invalid, status=0x%08X.", (unsigned int)status);
         return status;
     }
+
+    requestSnapshot = (KSWORD_ARK_REDIRECT_SET_RULES_REQUEST*)KswordARKAllocateNonPagedPool(
+        sizeof(*requestSnapshot), KSWORD_ARK_REDIRECT_IOCTL_TAG_SNAPSHOT); // 完整 METHOD_BUFFERED 请求以池副本保持稳定。
+    if (requestSnapshot == NULL) { // 不能建立独立快照时不得进入会改配置或清零共用输入的后端。
+        return STATUS_INSUFFICIENT_RESOURCES; // 旧规则和完成字节数保持不变。
+    }
+    RtlCopyMemory(requestSnapshot, setRequest, sizeof(*requestSnapshot)); // 输出尚未写入，先复制全部已验证容量的输入。
+    setRequest = requestSnapshot; // 后端与响应日志期间均使用独立且不可被 SystemBuffer 覆盖的快照。
 
     status = KswordARKRedirectSetRules(
         setRequest,
@@ -154,6 +162,7 @@ Return Value:
             (unsigned int)response->lastStatus);
     }
 
+    ExFreePoolWithTag(requestSnapshot, KSWORD_ARK_REDIRECT_IOCTL_TAG_SNAPSHOT); // 所有后端成功/失败结果都归还唯一池快照。
     return status;
 }
 

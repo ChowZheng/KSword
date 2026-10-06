@@ -6,6 +6,7 @@
 
 #include <QAbstractItemView>
 #include <QAbstractScrollArea>
+#include <QCoreApplication>
 #include <QDateTime>
 #include <QEasingCurve>
 #include <QFrame>
@@ -25,6 +26,7 @@
 #include <QShowEvent>
 #include <QStackedWidget>
 #include <QTimer>
+#include <QThreadPool>
 #include <QVariantAnimation>
 #include <QVector>
 #include <QVBoxLayout>
@@ -33,7 +35,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <thread>
 
 #ifndef WINVER
 #define WINVER 0x0601
@@ -2627,19 +2628,22 @@ void HudPerformancePanel::requestAsyncStaticInfoRefresh()
         return;
     }
 
-    QPointer<HudPerformancePanel> safeThis(this);
-    std::thread([safeThis]()
+    QObject* const applicationContext = QCoreApplication::instance();
+    if (applicationContext == nullptr)
+    {
+        m_staticInfoRefreshing.store(false);
+        return;
+    }
+
+    const QPointer<HudPerformancePanel> safeThis(this);
+    QThreadPool::globalInstance()->start([applicationContext, safeThis]()
     {
         const MemoryHardwareSummarySnapshot memorySummary = queryMemoryHardwareSummarySnapshot();
         const GpuHardwareSummarySnapshot gpuSummary = queryGpuHardwareSummarySnapshot();
 
-        if (safeThis.isNull())
-        {
-            return;
-        }
-
-        const bool invokeOk = QMetaObject::invokeMethod(
-            safeThis.data(),
+        // 应用析构等待全局线程池；页面可随时销毁，页面指针只在 UI 回调内访问。
+        QMetaObject::invokeMethod(
+            applicationContext,
             [safeThis, memorySummary, gpuSummary]()
             {
                 if (safeThis.isNull())
@@ -2660,11 +2664,7 @@ void HudPerformancePanel::requestAsyncStaticInfoRefresh()
             },
             Qt::QueuedConnection);
 
-        if (!invokeOk && !safeThis.isNull())
-        {
-            safeThis->m_staticInfoRefreshing.store(false);
-        }
-    }).detach();
+    });
 }
 
 void HudPerformancePanel::requestAsyncSensorRefresh()
@@ -2675,20 +2675,23 @@ void HudPerformancePanel::requestAsyncSensorRefresh()
         return;
     }
 
-    QPointer<HudPerformancePanel> safeThis(this);
-    std::thread([safeThis]()
+    QObject* const applicationContext = QCoreApplication::instance();
+    if (applicationContext == nullptr)
+    {
+        m_sensorRefreshing.store(false);
+        return;
+    }
+
+    const QPointer<HudPerformancePanel> safeThis(this);
+    QThreadPool::globalInstance()->start([applicationContext, safeThis]()
     {
         const QString sensorText = QStringLiteral("%1|%2")
             .arg(queryCpuTemperatureText())
             .arg(queryCpuVoltageText());
 
-        if (safeThis.isNull())
-        {
-            return;
-        }
-
-        const bool invokeOk = QMetaObject::invokeMethod(
-            safeThis.data(),
+        // 后台采集不使用页面接收器，排队结果在 UI 线程确认页面仍然有效。
+        QMetaObject::invokeMethod(
+            applicationContext,
             [safeThis, sensorText]()
             {
                 if (safeThis.isNull())
@@ -2701,11 +2704,7 @@ void HudPerformancePanel::requestAsyncSensorRefresh()
             },
             Qt::QueuedConnection);
 
-        if (!invokeOk && !safeThis.isNull())
-        {
-            safeThis->m_sensorRefreshing.store(false);
-        }
-    }).detach();
+    });
 }
 
 void HudPerformancePanel::refreshCpuTopologyStaticInfo()

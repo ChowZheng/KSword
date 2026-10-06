@@ -228,7 +228,8 @@ void ProcessTraceMonitorWidget::startMonitoring()
         << eol;
 
     QPointer<ProcessTraceMonitorWidget> guardThis(this);
-    m_captureThread = std::make_unique<std::thread>([guardThis]() {
+    const auto dispatcher = m_uiDispatcher;
+    m_captureThread = std::make_unique<std::thread>([guardThis, dispatcher]() {
         if (guardThis == nullptr)
         {
             return;
@@ -307,7 +308,7 @@ void ProcessTraceMonitorWidget::startMonitoring()
 
         if (selectedProviders.empty())
         {
-            QMetaObject::invokeMethod(qApp, [guardThis]() {
+            dispatcher->post([guardThis]() {
                 if (guardThis == nullptr)
                 {
                     return;
@@ -330,7 +331,7 @@ void ProcessTraceMonitorWidget::startMonitoring()
                     QStringLiteral("未解析到任何可用的 ETW Provider，监控无法启动。"));
                 guardThis->updateActionState();
                 guardThis->updateStatusLabel();
-            }, Qt::QueuedConnection);
+            });
             return;
         }
 
@@ -378,7 +379,7 @@ void ProcessTraceMonitorWidget::startMonitoring()
 
         if (startStatus != ERROR_SUCCESS)
         {
-            QMetaObject::invokeMethod(qApp, [guardThis, startStatus]() {
+            dispatcher->post([guardThis, startStatus]() {
                 if (guardThis == nullptr)
                 {
                     return;
@@ -401,7 +402,7 @@ void ProcessTraceMonitorWidget::startMonitoring()
                     QStringLiteral("StartTraceW 失败，错误码=%1。").arg(startStatus));
                 guardThis->updateActionState();
                 guardThis->updateStatusLabel();
-            }, Qt::QueuedConnection);
+            });
             return;
         }
 
@@ -445,7 +446,7 @@ void ProcessTraceMonitorWidget::startMonitoring()
         {
             ::ControlTraceW(sessionHandle, loggerNamePointer, properties, EVENT_TRACE_CONTROL_STOP);
             guardThis->m_sessionHandle.store(0);
-            QMetaObject::invokeMethod(qApp, [guardThis]() {
+            dispatcher->post([guardThis]() {
                 if (guardThis == nullptr)
                 {
                     return;
@@ -468,7 +469,7 @@ void ProcessTraceMonitorWidget::startMonitoring()
                     QStringLiteral("固定 Provider 集合全部启用失败，监控已停止。"));
                 guardThis->updateActionState();
                 guardThis->updateStatusLabel();
-            }, Qt::QueuedConnection);
+            });
             return;
         }
 
@@ -485,7 +486,7 @@ void ProcessTraceMonitorWidget::startMonitoring()
             guardThis->m_sessionHandle.store(0);
 
             const ULONG lastError = ::GetLastError();
-            QMetaObject::invokeMethod(qApp, [guardThis, lastError]() {
+            dispatcher->post([guardThis, lastError]() {
                 if (guardThis == nullptr)
                 {
                     return;
@@ -508,7 +509,7 @@ void ProcessTraceMonitorWidget::startMonitoring()
                     QStringLiteral("OpenTraceW 失败，错误码=%1。").arg(lastError));
                 guardThis->updateActionState();
                 guardThis->updateStatusLabel();
-            }, Qt::QueuedConnection);
+            });
             return;
         }
 
@@ -532,7 +533,7 @@ void ProcessTraceMonitorWidget::startMonitoring()
                 EVENT_TRACE_CONTROL_STOP);
         }
 
-        QMetaObject::invokeMethod(qApp, [guardThis, processStatus]() {
+        dispatcher->post([guardThis, processStatus]() {
             if (guardThis == nullptr)
             {
                 return;
@@ -573,7 +574,7 @@ void ProcessTraceMonitorWidget::startMonitoring()
                     QStringLiteral("进程定向监控"),
                     QStringLiteral("ProcessTrace 结束，状态码=%1。").arg(processStatus));
             }
-        }, Qt::QueuedConnection);
+        });
     });
 }
 
@@ -683,10 +684,11 @@ void ProcessTraceMonitorWidget::refreshTrackedProcessSnapshotAsync()
     }
 
     QPointer<ProcessTraceMonitorWidget> guardThis(this);
-    std::thread([guardThis]() {
+    const auto dispatcher = m_uiDispatcher;
+    std::thread([guardThis, dispatcher]() {
         std::vector<ks::process::ProcessRecord> processList = ks::process::EnumerateProcesses(
             ks::process::ProcessEnumStrategy::Auto);
-        QMetaObject::invokeMethod(qApp, [guardThis, processList = std::move(processList)]() {
+        dispatcher->post([guardThis, processList = std::move(processList)]() {
             if (guardThis == nullptr)
             {
                 return;
@@ -696,7 +698,7 @@ void ProcessTraceMonitorWidget::refreshTrackedProcessSnapshotAsync()
             guardThis->syncTrackedProcessTree(processList);
             guardThis->refreshTargetTable();
             guardThis->updateStatusLabel();
-        }, Qt::QueuedConnection);
+        });
     }).detach();
 }
 

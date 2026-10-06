@@ -255,8 +255,10 @@ Return Value:
         return -1;
     }
     RtlZeroMemory(code, sizeof(code));
+    if (!KswordARKRuntimeReadMemory((const VOID*)accessor, code, sizeof(code))) { // 导出代码先安全复制，失败不执行候选解码。
+        return -1; // 代码不可完整读取时该偏移不可用。
+    }
     __try {
-        RtlCopyMemory(code, (const VOID*)accessor, sizeof(code));
         accessorValue = accessor();
     }
     __except (EXCEPTION_EXECUTE_HANDLER) {
@@ -374,8 +376,10 @@ Return Value:
         return -1;
     }
 
+    if (!KswordARKRuntimeReadMemory((const VOID*)accessor, code, sizeof(code))) { // 访问器机器码快照不能依赖异常保护直接复制。
+        return -1; // 未完整读取时不尝试匹配标志字段。
+    }
     __try {
-        RtlCopyMemory(code, (const VOID*)accessor, sizeof(code));
         accessorValue = accessor(Process) ? TRUE : FALSE;
     }
     __except (EXCEPTION_EXECUTE_HANDLER) {
@@ -1000,8 +1004,10 @@ KswordARKDriverResolveProcessSignatureOffsets(
         return FALSE;
     }
     RtlZeroMemory(code, sizeof(code));
+    if (!KswordARKRuntimeReadMemory((const VOID*)accessor, code, sizeof(code))) { // 安全建立签名访问器的完整本地机器码快照。
+        return FALSE; // 未完整读取时输出继续为 unavailable。
+    }
     __try {
-        RtlCopyMemory(code, (const VOID*)accessor, sizeof(code));
         signatureValue = accessor(process, &sectionValue);
     }
     __except (EXCEPTION_EXECUTE_HANDLER) {
@@ -1037,12 +1043,11 @@ KswordARKDriverResolveProcessSignatureOffsets(
         signatureOffset == sectionOffset) {
         return FALSE;
     }
-    __try {
-        signatureField = *((volatile const UCHAR*)process + signatureOffset);
-        sectionField = *((volatile const UCHAR*)process + sectionOffset);
-    }
-    __except (EXCEPTION_EXECUTE_HANDLER) {
-        return FALSE;
+    if (!KswordARKRuntimeReadMemory((const UCHAR*)process + signatureOffset,
+            &signatureField, sizeof(signatureField)) || // 猜测偏移只读取完整一字节；未映射页不会直接解引用。
+        !KswordARKRuntimeReadMemory((const UCHAR*)process + sectionOffset,
+            &sectionField, sizeof(sectionField))) { // 第二字段单独安全读取，不依赖第一字段所在页。
+        return FALSE; // 任一候选不可读时均不得发布签名偏移。
     }
     if (signatureField != signatureValue || sectionField != sectionValue) {
         return FALSE;
@@ -1075,8 +1080,10 @@ KswordARKDriverResolveProcessProtectionOffset(
         return -1;
     }
     RtlZeroMemory(code, sizeof(code));
+    if (!KswordARKRuntimeReadMemory((const VOID*)accessor, code, sizeof(code))) { // 先安全建立保护级别访问器代码快照。
+        return -1; // 机器码不可读时不解析偏移。
+    }
     __try {
-        RtlCopyMemory(code, (const VOID*)accessor, sizeof(code));
         accessorValue = accessor(process);
     }
     __except (EXCEPTION_EXECUTE_HANDLER) {
@@ -1086,11 +1093,9 @@ KswordARKDriverResolveProcessProtectionOffset(
     if (offset <= 0) {
         return -1;
     }
-    __try {
-        fieldValue = *((volatile const UCHAR*)process + offset);
-    }
-    __except (EXCEPTION_EXECUTE_HANDLER) {
-        return -1;
+    if (!KswordARKRuntimeReadMemory((const UCHAR*)process + offset,
+            &fieldValue, sizeof(fieldValue))) { // 解码候选地址仍可能不可映射，统一完整安全读取。
+        return -1; // 读取失败保持保护字段偏移不可用。
     }
     return fieldValue == accessorValue ? offset : -1;
 }
@@ -1137,27 +1142,17 @@ KswordARKDriverResolveProcessSectionSignatureLevelOffset(
 
 //
 // ============================================================================
-// EPROCESS.SectionObject / EPROCESS.ObjectTable 的运行时解析
+// EPROCESS.SectionObject / EPROCESS.ObjectTable 的偏移来源边界
 // ----------------------------------------------------------------------------
 // 这两个偏移原本只有 System Informer 偏移表一个来源，而该表按 ntoskrnl 的
 // TimeDateStamp + SizeOfImage 精确匹配，新内核往往不在表内，于是进程列表的
-// 「HandleTable」「SectionObject」两列恒为 Unavailable。这里补一条不依赖
-// PDB、不依赖打包 profile 的运行时来源。
+// 「HandleTable」「SectionObject」两列可能为 Unavailable。ObjectTable 保留
+// 有界安全读取的运行时来源；SectionObject 没有独立引用锚点时只用精确 profile。
 //
-// 手法与既有的 EpProtection/EpSignatureLevel 解析一致：反汇编导出访问器取
-// 偏移，再回读校验；不做无锚点的内核内存扫描。
+// ObjectTable 从导出访问器解出锚点后逐字段安全读取并验证多进程一致性，
+// 不把任何猜测的 SectionObject 指针交给内核对象 API。
 // ============================================================================
 //
-
-// ntifs.h 未导出这两个符号的声明，按本代码库既有做法就地声明。
-NTKERNELAPI
-POBJECT_TYPE
-NTAPI
-ObGetObjectType(
-    _In_ PVOID Object
-    );
-
-extern POBJECT_TYPE* MmSectionObjectType;
 
 // KswordARKDriverDecodeSingleFieldAccessorOffset 作用：
 // - 输入：一个形如 `mov rax, [rcx+disp32]; ret` 的导出访问器名；
@@ -1180,11 +1175,8 @@ KswordARKDriverDecodeSingleFieldAccessorOffset(
     }
 
     RtlZeroMemory(code, sizeof(code));
-    __try {
-        RtlCopyMemory(code, routineAddress, sizeof(code));
-    }
-    __except (EXCEPTION_EXECUTE_HANDLER) {
-        return -1;
+    if (!KswordARKRuntimeReadMemory(routineAddress, code, sizeof(code))) { // 导出访问器代码通过统一安全读取器建立快照。
+        return -1; // 代码不完整时拒绝给 ObjectTable 搜索提供锚点。
     }
 
     // 48 8B 81 <disp32> C3 = mov rax, [rcx+disp32] / ret
@@ -1201,8 +1193,8 @@ KswordARKDriverDecodeSingleFieldAccessorOffset(
 // KswordARKDriverIsProbableKernelPointer 作用：
 // - 输入：候选内核指针与需要试读的字节数；
 // - 处理：只接受 8 字节对齐的规范内核地址，并要求首尾字节当前均已驻留；
-// - 返回：可以在 __try 保护下试读时为 TRUE。
-// 说明：MmIsAddressValid 只降低触发概率，真正的兜底仍是调用方的 __try。
+// - 返回：只通过数值/驻留初筛时为 TRUE，不能证明对象类型或生命周期。
+// 说明：实际候选读取仍须使用 KswordARKRuntimeReadMemory，不能据此直接读对象头。
 static BOOLEAN
 KswordARKDriverIsProbableKernelPointer(
     _In_opt_ const VOID* Pointer,
@@ -1234,89 +1226,18 @@ KswordARKDriverResolveProcessSectionObjectOffset(
 
 Routine Description:
 
-    解析 EPROCESS.SectionObject 偏移。
-
-    PsReferenceProcessFilePointer 先对 Process->RundownProtect 取地址（lea，
-    48 8D），拿到 rundown 保护后立刻加载 Process->SectionObject 并判空。因此在
-    其前若干字节里第一条带 disp32 的 REX.W 内存加载（48 8B）就是 SectionObject。
-
-    候选偏移必须通过对象类型校验：读出的指针须是一个 MmSectionObjectType 对象。
-    这一步让错误解码几乎不可能通过。
+    SectionObject 的运行期猜测保持不可用。访问器指令扫描不能证明读出的
+    候选是一个存活 Section 对象，且没有独立公开 ID 查询可获得精确引用。
+    ObGetObjectType 会直接访问对象头，MmIsAddressValid 和 SEH 不能为猜测
+    地址建立对象生命周期，因此只能消费匹配 profile 提供的字段偏移。
 
 Return Value:
 
-    成功返回偏移；无法确定时返回 -1，调用方据此保持该字段不可用。
+    返回 -1，调用方保留已有精确 profile 偏移；缺失时继续报告不可用。
 
 --*/
 {
-    UNICODE_STRING routineName;
-    const UCHAR* routineAddress = NULL;
-    PEPROCESS process = PsGetCurrentProcess();
-    UCHAR code[64];
-    SIZE_T index = 0U;
-
-    if (process == NULL || MmSectionObjectType == NULL) {
-        return -1;
-    }
-
-    RtlInitUnicodeString(&routineName, L"PsReferenceProcessFilePointer");
-    routineAddress = (const UCHAR*)MmGetSystemRoutineAddress(&routineName);
-    if (routineAddress == NULL) {
-        return -1;
-    }
-
-    RtlZeroMemory(code, sizeof(code));
-    __try {
-        RtlCopyMemory(code, routineAddress, sizeof(code));
-    }
-    __except (EXCEPTION_EXECUTE_HANDLER) {
-        return -1;
-    }
-
-    for (index = 0U; index + 7U <= sizeof(code); ++index) {
-        LONG candidateOffset = -1;
-        const VOID* candidateObject = NULL;
-        POBJECT_TYPE candidateType = NULL;
-
-        // REX.W + 8B /r，要求 modrm.mod == 10b（disp32）。
-        if (code[index] != 0x48U || code[index + 1U] != 0x8BU) {
-            continue;
-        }
-        if ((code[index + 2U] & 0xC0U) != 0x80U) {
-            continue;
-        }
-        if ((code[index + 2U] & 0x07U) == 0x04U) {
-            // r/m == 100b 表示后随 SIB 字节，disp32 位置不同，跳过不做猜测。
-            continue;
-        }
-        RtlCopyMemory(&candidateOffset, code + index + 3U, sizeof(candidateOffset));
-        if (candidateOffset < 0x100 || candidateOffset > 0x0FFF) {
-            continue;
-        }
-
-        __try {
-            candidateObject = *(const VOID* const volatile*)
-                ((const UCHAR*)process + candidateOffset);
-        }
-        __except (EXCEPTION_EXECUTE_HANDLER) {
-            continue;
-        }
-        if (!KswordARKDriverIsProbableKernelPointer(candidateObject, (ULONG)sizeof(VOID*))) {
-            continue;
-        }
-
-        __try {
-            candidateType = ObGetObjectType((PVOID)candidateObject);
-        }
-        __except (EXCEPTION_EXECUTE_HANDLER) {
-            continue;
-        }
-        if (candidateType != *MmSectionObjectType) {
-            continue;
-        }
-        return candidateOffset;
-    }
-    return -1;
+    return -1; // 没有可独立引用并验证的 Section 锚点时，拒绝对猜测对象调用内核对象 API。
 }
 
 LONG

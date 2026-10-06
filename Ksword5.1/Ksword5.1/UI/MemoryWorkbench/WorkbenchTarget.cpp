@@ -231,6 +231,8 @@ namespace ks::ui
 
     void WorkbenchTarget::onDockAttached(const DockAttach& attach)
     {
+        // 存活状态通知可同步关闭宿主；通知返回后不能继续使用已销毁的目标。
+        const QPointer<WorkbenchTarget> self(this);
         // 先锚定身份（复制 Dock 句柄、取创建时间/位数），再喂给 tracker；
         // 旧的 dock 锚点句柄（上一个被附加的进程）先释放，避免句柄泄漏。
         const AnchorInfo info = AcquireAnchorFromDockHandle(attach.handle);
@@ -251,6 +253,10 @@ namespace ks::ui
             || ksword::memwb::HasChange(mask, ksword::memwb::TargetChange::Policy))
         {
             updateLiveness(LivenessState::Unknown);
+            if (!self)
+            {
+                return;
+            }
         }
         applyMaskSideEffects(mask);
     }
@@ -274,6 +280,8 @@ namespace ks::ui
 
     void WorkbenchTarget::onDockDetached()
     {
+        // 与附加入口共用相同的同步通知生命周期边界。
+        const QPointer<WorkbenchTarget> self(this);
         ReleaseAnchorHandle(dockAnchorHandle_);
         dockAnchorHandle_ = nullptr;
         // N2 修复：同 onDockAttached，先算 mask 再按"是否真的换了探测句柄的
@@ -284,6 +292,10 @@ namespace ks::ui
             || ksword::memwb::HasChange(mask, ksword::memwb::TargetChange::Policy))
         {
             updateLiveness(LivenessState::Unknown);
+            if (!self)
+            {
+                return;
+            }
         }
         applyMaskSideEffects(mask);
     }
@@ -455,8 +467,7 @@ namespace ks::ui
         if (predictsIdentityChange(request, havePinAnchor ? &pinAnchor : nullptr))
         {
             const bool leaveApproved = requestLeave(reason);
-            // N3 修复：守卫返回之后立刻判空——这是本函数里唯一一处可能嵌套事件
-            // 循环的调用，被销毁只会发生在这里。
+            // N3 修复：守卫返回之后立刻判空，禁止在宿主关闭后继续改目标。
             if (!self)
             {
                 if (havePinAnchor)
@@ -509,6 +520,11 @@ namespace ks::ui
                 || ksword::memwb::HasChange(pinMask, ksword::memwb::TargetChange::Policy))
             {
                 updateLiveness(LivenessState::Unknown);
+                // 同步 livenessChanged 的订阅者也可销毁目标；新锚点已交由对象持有并释放。
+                if (!self)
+                {
+                    return false;
+                }
             }
         }
         if (request.channel)

@@ -11,6 +11,7 @@
 
 #include "ProcessTraceTimelineWidget.h"
 #include "../Framework.h"
+#include "../UI/AsyncUiDispatcher.h"
 
 #include <QWidget>
 
@@ -420,4 +421,5 @@ private:
     bool m_timelineUserSelectionActive = false;                     // m_timelineUserSelectionActive：用户是否已启用时间框选。
     qint64 m_lastTimelineRefreshMs = 0;                             // m_lastTimelineRefreshMs：上次向时间轴复制事件点的时间。
     QString m_sessionName;                                          // m_sessionName：本轮 ETW 会话名。
+    std::shared_ptr<ks::ui::AsyncUiDispatcher> m_uiDispatcher;        // 辅助快照晚完成时不借用已释放控件或应用。
 };

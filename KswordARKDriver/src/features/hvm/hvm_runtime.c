@@ -895,6 +895,28 @@ KswordARKHvmReleaseResidentTransition(
         oldIrql);
 }
 
+/* Drain any stop reader before mutating AMD allocation ownership at PASSIVE_LEVEL. */
+static NTSTATUS
+KswordARKHvmBeginBackendContextMutation(
+    _Inout_ KSW_HVM_RUNTIME* Runtime
+    )
+{
+    NTSTATUS status = STATUS_SUCCESS;
+
+    /* New power callbacks must skip the allocation ledger before it can change. */
+    InterlockedExchange(&Runtime->ResidentContextPreparing, 1L);
+    /* A stop that selected the old ledger before the marker must finish first. */
+    status = KswordARKHvmAcquireResidentTransition(Runtime);
+    if (!NT_SUCCESS(status)) {
+        /* No allocation ownership changed when the reader could not be drained. */
+        InterlockedExchange(&Runtime->ResidentContextPreparing, 0L);
+        return status;
+    }
+    /* Do not hold the hardware phase across pageable allocation/free helpers. */
+    KswordARKHvmReleaseResidentTransition(Runtime);
+    return STATUS_SUCCESS;
+}
+
 static NTSTATUS
 KswordARKHvmCompleteDeferredPowerResumeLocked(
     _Inout_ KSW_HVM_RUNTIME* Runtime
@@ -1060,8 +1082,18 @@ KswordARKHvmFreeResourcesLocked(
     }
     /* AMD owns separate resources and must not enter Intel cleanup helpers. */
     if (KswordHvmBackend(Runtime->BackendId) != NULL) {
-        /* Stop above already proved that hardware ownership was returned. */
+        /* Drain a power stop that already selected the backend allocation ledger. */
+        residentStatus = KswordARKHvmBeginBackendContextMutation(Runtime);
+        if (!NT_SUCCESS(residentStatus)) {
+            /* Keep the complete ledger alive when its readers could not drain. */
+            Runtime->LastStatus = residentStatus;
+            KswordARKHvmStateSet(Runtime, KSWORD_ARK_HVM_STATE_ROLLBACK_REQUIRED);
+            return;
+        }
+        /* Stop above proved hardware ownership returned; callbacks now skip this ledger. */
         KswordHvmBackend(Runtime->BackendId)->ReleaseResources(Runtime);
+        /* Publish the completed free only after all backend pointers are cleared. */
+        InterlockedExchange(&Runtime->ResidentContextPreparing, 0L);
         return;
     }
     /* Retire debugger pins only after every resident CPU returned ownership. */
@@ -1594,8 +1626,12 @@ KswordARKHvmPrepareLocked(
 
     /* Capture a durable host address space before allocating any SVM resources. */
     if (KswordHvmBackend(Runtime->BackendId) != NULL) {
-        /* Preparation is visible to the existing power-transition guard. */
-        InterlockedExchange(&Runtime->ResidentContextPreparing, 1);
+        /* Drain old stop readers and keep callbacks off the partial allocation ledger. */
+        status = KswordARKHvmBeginBackendContextMutation(Runtime);
+        if (!NT_SUCCESS(status)) {
+            /* No AMD allocation changed before the stop-reader barrier completed. */
+            return status;
+        }
         status = KswordARKHvmCaptureSystemDirectoryBase(&Runtime->HostCr3);
         /* Vendor preparation validates every CPU and its complete NPT coverage. */
         if (NT_SUCCESS(status)) { status = KswordHvmBackend(Runtime->BackendId)->PrepareResources(Runtime, Request->flags); }

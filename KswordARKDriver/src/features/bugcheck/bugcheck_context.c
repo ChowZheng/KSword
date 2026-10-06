@@ -142,7 +142,12 @@ VOID KswordARKBugcheckContextOperation(VOID) // 正常 IOCTL 执行前记录可�
     USHORT count = 0; // 默认未取得。
     ULONG index; // 固定栈项索引。
     NTSTATUS status = STATUS_NOT_FOUND; // 默认无帧可用。
-    if (KeGetCurrentIrql() != PASSIVE_LEVEL || InterlockedCompareExchange(&gStackWriter, 1, 0) != 0) return; // 不在受限现场捕栈、不等待。
+    if (KeGetCurrentIrql() != PASSIVE_LEVEL || !KswordARKBugcheckTrackingAcquire()) return; // 重装期间不接触会被 ContextReset 清零的写者位和缓存。
+    if (InterlockedCompareExchange(&gStackWriter, 1, 0) != 0) // 正常采样只尝试一次 CAS，不能等待其他写者。
+    { // 抢占失败仍须对称释放本次运行期引用。
+        KswordARKBugcheckTrackingRelease(); // 控制层可继续等待实际写者，而不是失败采样。
+        return; // 不采集竞争中的操作栈。
+    } // 单写者占用失败处理结束。
     InterlockedIncrement(&gStackSequence); // 写入期间不允许快照接受混合字段。
     __try // 正常期捕栈仍可能遇到已损坏栈。
     { // 系统例程最多返回固定数量。
@@ -162,6 +167,7 @@ VOID KswordARKBugcheckContextOperation(VOID) // 正常 IOCTL 执行前记录可�
     KeMemoryBarrier(); // 值先于偶数序号可见。
     InterlockedIncrement(&gStackSequence); // 完成发布。
     InterlockedExchange(&gStackWriter, 0); // 允许下一正常操作采样。
+    KswordARKBugcheckTrackingRelease(); // 所有可重置字段和 CAS 状态访问完毕后才允许下一代初始化。
 } // 正常操作栈采集结束。
 
 VOID KswordARKBugcheckContextSnapshot(_Inout_ KSWORD_BUGCHECK_EVIDENCE* Evidence) // 崩溃阶段只读取固定缓存。

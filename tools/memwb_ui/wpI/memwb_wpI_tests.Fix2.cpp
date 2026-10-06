@@ -27,6 +27,7 @@
 //       "这次刚好没踩中脚"的机器/编译器/CRT 版本上假通过。源码形态闸门不依赖
 //       内存分配时机：直接核对 WorkbenchTarget.cpp 里 `if (!self)` 这一判空
 //       写法恰好出现在 session()/isStale()/requestIdentity 三处。
+//   F9  livenessChanged 同步销毁：Dock 附加/分离与钉住请求返回后不再访问目标。
 
 #include "memwb_wpI_common.h"
 
@@ -339,6 +340,44 @@ namespace memwb_wpI_test
             WPI_CHECK(afterContent.source == afterReload.source);
             WPI_CHECK(afterContent.content != afterReload.content);
             WPI_CHECK(afterContent == target.capture().rev);
+        }
+
+        // ==== F9：存活通知的同步订阅者可以销毁目标，三个身份入口必须停止收尾 ====
+        for (int operation = 0; operation < 3; ++operation)
+        {
+            auto target = std::make_unique<ks::ui::WorkbenchTarget>(std::make_unique<FakeWorkbenchServices>());
+            const std::uint32_t pid = static_cast<std::uint32_t>(::GetCurrentProcessId());
+            ks::ui::WorkbenchTarget::DockAttach attach;
+            attach.handle = reinterpret_cast<void*>(::GetCurrentProcess());
+            attach.pid = pid;
+            attach.attachGeneration = 1;
+            target->onDockAttached(attach);
+            target->checkLiveness(); // 先得到 Alive，后面的 Unknown 才会真的发出信号。
+            bool deletedByNotification = false;
+            QObject::connect(target.get(), &ks::ui::WorkbenchTarget::livenessChanged,
+                [&](int state) {
+                    if (state == static_cast<int>(ks::ui::LivenessState::Unknown))
+                    {
+                        deletedByNotification = true;
+                        target.reset();
+                    }
+                });
+            auto* selected = target.get();
+            if (operation == 0)
+            {
+                attach.attachGeneration = 2;
+                selected->onDockAttached(attach);
+            }
+            else if (operation == 1)
+            {
+                selected->onDockDetached();
+            }
+            else
+            {
+                WPI_CHECK(!selected->requestPin(pid));
+            }
+            WPI_CHECK(deletedByNotification);
+            WPI_CHECK(target == nullptr);
         }
 
         // ==== F8（N3 静态兜底闸门）：session()/isStale()/requestIdentity 三处

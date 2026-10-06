@@ -342,12 +342,22 @@ NTSTATUS KswordSvmStart(KSW_HVM_RUNTIME* Runtime, ULONG Flags)
 /* Called both by controls and by the existing power/unload guards. */
 NTSTATUS KswordSvmStop(KSW_HVM_RUNTIME* Runtime)
 {
-    /* Retain private state until the complete operation finishes. */
-    KSW_SVM_STATE* state = Runtime->BackendContext;
+    /* Select private state only after its reader lifetime has been acquired. */
+    KSW_SVM_STATE* state = NULL;
     /* The common phase is required even for a currently empty runtime. */
     NTSTATUS status = KswordARKHvmAcquireResidentTransition(Runtime);
     /* Preserve the callback's busy/fail-closed behavior. */
     if (!NT_SUCCESS(status)) { return status; }
+    /* Prepare and release can publish a partial or retiring ledger at PASSIVE_LEVEL. */
+    if (InterlockedCompareExchange(&Runtime->ResidentContextPreparing, 0L, 0L) != 0L) {
+        /* Such a ledger owns no hardware; a contradictory resident count stays unsafe. */
+        status = Runtime->ResidentProcessorCount == 0 ? STATUS_SUCCESS : STATUS_DEVICE_BUSY;
+        /* No callback may follow backend pointers while their allocation owner mutates them. */
+        KswordARKHvmReleaseResidentTransition(Runtime);
+        return status;
+    }
+    /* The mutation barrier drains this phase before replacing or freeing the ledger. */
+    state = Runtime->BackendContext;
     /* Publish the stop transition before sending any private hypercalls. */
     KswordARKHvmStateSet(Runtime, KSWORD_ARK_HVM_STATE_RESIDENT_STOPPING);
     /* An absent context needs no IPI, but still needs unload-guard handling. */

@@ -94,7 +94,6 @@
 #include <limits>
 #include <mutex>
 #include <string>
-#include <thread>
 #include <unordered_set>
 #include <vector>
 
@@ -11575,8 +11574,15 @@ void HardwareDock::requestAsyncR0HardwareHealthRefresh()
         return;
     }
 
-    QPointer<HardwareDock> safeThis(this);
-    std::thread([safeThis, nowMs]() {
+    QObject* const applicationContext = QCoreApplication::instance();
+    if (applicationContext == nullptr)
+    {
+        m_r0HardwareHealthRefreshing.store(false);
+        return;
+    }
+
+    const QPointer<HardwareDock> safeThis(this);
+    QThreadPool::globalInstance()->start([applicationContext, safeThis, nowMs]() {
         // r0QueryLock 用途：健康查询与按需设备审计共用一条串行 R0 请求通道。
         const std::lock_guard<std::mutex> r0QueryLock(hardwareR0QueryMutex);
         const ksword::ark::DriverClient client;
@@ -11586,13 +11592,9 @@ void HardwareDock::requestAsyncR0HardwareHealthRefresh()
         const ksword::ark::CpuHardwareSnapshotResult cpuHardwareResult = client.queryCpuHardwareSnapshot();
         const ksword::ark::PhysicalMemoryLayoutResult physicalMemoryResult = client.queryPhysicalMemoryLayout();
 
-        if (safeThis.isNull())
-        {
-            return;
-        }
-
-        const bool invokeOk = QMetaObject::invokeMethod(
-            safeThis.data(),
+        // 页面可在采集期间销毁；只投递到应用线程，页面指针仅在 UI 回调内检查。
+        QMetaObject::invokeMethod(
+            applicationContext,
             [safeThis, nowMs, capabilityResult, dynDataResult, integrityResult, cpuHardwareResult, physicalMemoryResult]()
             {
                 if (safeThis.isNull())
@@ -11838,11 +11840,7 @@ void HardwareDock::requestAsyncR0HardwareHealthRefresh()
             },
             Qt::QueuedConnection);
 
-        if (!invokeOk && !safeThis.isNull())
-        {
-            safeThis->m_r0HardwareHealthRefreshing.store(false);
-        }
-    }).detach();
+    });
 }
 
 void HardwareDock::refreshStaticHardwareTexts(const bool forceRefresh)
@@ -11944,14 +11942,16 @@ void HardwareDock::requestAsyncStaticInfoRefresh()
         return;
     }
 
-    const bool includeHardwareDetails = m_hardwareDetailsSamplingEnabled;
-    QPointer<HardwareDock> safeThis(this);
-    std::thread([safeThis, includeHardwareDetails]() {
-        if (safeThis.isNull())
-        {
-            return;
-        }
+    QObject* const applicationContext = QCoreApplication::instance();
+    if (applicationContext == nullptr)
+    {
+        m_staticInfoRefreshing.store(false);
+        return;
+    }
 
+    const bool includeHardwareDetails = m_hardwareDetailsSamplingEnabled;
+    const QPointer<HardwareDock> safeThis(this);
+    QThreadPool::globalInstance()->start([applicationContext, safeThis, includeHardwareDetails]() {
         const QString overviewBaseText = buildOverviewStaticTextSnapshot();
         const QString peripheralOverviewText = buildOverviewPeripheralTextSnapshot(includeHardwareDetails);
         const QString overviewText = overviewBaseText
@@ -11965,13 +11965,9 @@ void HardwareDock::requestAsyncStaticInfoRefresh()
         const GpuHardwareSummarySnapshot gpuSummary = includeHardwareDetails
             ? queryGpuHardwareSummarySnapshot() : GpuHardwareSummarySnapshot{};
 
-        if (safeThis.isNull())
-        {
-            return;
-        }
-
-        const bool invokeOk = QMetaObject::invokeMethod(
-            safeThis.data(),
+        // 线程池由 QCoreApplication 析构等待，应用接收器比后台任务活得更久。
+        QMetaObject::invokeMethod(
+            applicationContext,
             [safeThis, includeHardwareDetails, overviewText, gpuWmiText, memoryText, memorySummary, gpuSummary]()
             {
                 if (safeThis.isNull())
@@ -12002,6 +11998,11 @@ void HardwareDock::requestAsyncStaticInfoRefresh()
                     }
                 }
                 emit safeThis->staticOverviewChanged(safeThis->m_cachedOverviewStaticText);
+                // 同步信号接收者可能销毁 Dock，不能继续访问已失效的页面。
+                if (safeThis.isNull())
+                {
+                    return;
+                }
                 safeThis->refreshStaticHardwareTexts(false);
                 safeThis->m_staticInfoRefreshing.store(false);
                 if (!includeHardwareDetails && safeThis->m_hardwareDetailsSamplingEnabled)
@@ -12012,11 +12013,7 @@ void HardwareDock::requestAsyncStaticInfoRefresh()
             },
             Qt::QueuedConnection);
 
-        if (!invokeOk && !safeThis.isNull())
-        {
-            safeThis->m_staticInfoRefreshing.store(false);
-        }
-        }).detach();
+    });
 }
 
 void HardwareDock::requestAsyncDeviceAuditRefresh(const std::uint32_t refreshMask)
@@ -12193,17 +12190,19 @@ void HardwareDock::requestAsyncSensorRefresh()
 
     // event 用途：串联本次 CPU 传感器读取与日志输出，便于追踪失败原因。
     kLogEvent event;
-    QPointer<HardwareDock> safeThis(this);
-    std::thread([safeThis, event]() {
+    QObject* const applicationContext = QCoreApplication::instance();
+    if (applicationContext == nullptr)
+    {
+        m_sensorRefreshing.store(false);
+        return;
+    }
+
+    const QPointer<HardwareDock> safeThis(this);
+    QThreadPool::globalInstance()->start([applicationContext, safeThis, event]() {
         const SensorProbeResult temperatureProbeResult = queryCpuTemperatureProbeResult();
         const SensorProbeResult voltageProbeResult = queryCpuVoltageProbeResult();
-        if (safeThis.isNull())
-        {
-            return;
-        }
-
         const bool invokeOk = QMetaObject::invokeMethod(
-            safeThis.data(),
+            applicationContext,
             [safeThis, event, temperatureProbeResult, voltageProbeResult]()
             {
                 if (safeThis.isNull())
@@ -12278,12 +12277,11 @@ void HardwareDock::requestAsyncSensorRefresh()
             },
             Qt::QueuedConnection);
 
-        if (!invokeOk && !safeThis.isNull())
+        if (!invokeOk)
         {
             warn << event << "[HardwareDock] CPU传感器结果回投UI线程失败。" << eol;
-            safeThis->m_sensorRefreshing.store(false);
         }
-        }).detach();
+    });
 }
 
 QString HardwareDock::buildOverviewStaticText() const

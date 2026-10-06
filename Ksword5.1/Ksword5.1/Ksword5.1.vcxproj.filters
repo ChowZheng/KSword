@@ -2499,6 +2499,9 @@
     <ClInclude Include="UI\UI_All.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="UI\AsyncUiDispatcher.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="UI\FlatTableModel.h">
       <Filter>Header Files</Filter>
     </ClInclude>

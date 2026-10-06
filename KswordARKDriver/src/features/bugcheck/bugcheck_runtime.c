@@ -340,15 +340,20 @@ KswordARKBugcheckTrackLoadedImage(
     CHAR name[KSWORD_ARK_BUGCHECK_MODULE_NAME_CHARS];
 
     UNREFERENCED_PARAMETER(ProcessId);
-    if (InterlockedCompareExchange(&g_KswordArkBugcheckState.TrackingReady, 0, 0) == 0 || // 未完成证据初始化或正在卸载时不接受新映像。
-        ImageInfo == NULL || !ImageInfo->SystemModeImage ||
+    if (ImageInfo == NULL || !ImageInfo->SystemModeImage ||
         ImageInfo->ImageBase == NULL || ImageInfo->ImageSize == 0 ||
-        ImageInfo->ImageSize > MAXULONG ||
-        !KswordARKBugcheckCopyUnicodeBaseNameA(
+        ImageInfo->ImageSize > MAXULONG) { // 只接受当前通知拥有的合法系统映像信息。
+        return; // 参数失败不需要取得运行期缓存引用。
+    }
+    if (!KswordARKBugcheckTrackingAcquire()) { // 旧通知必须在清零状态和重置锁之前排空。
+        return; // 安装未完成或正在停止时不访问缓存。
+    }
+    if (!KswordARKBugcheckCopyUnicodeBaseNameA(
             FullImageName,
             name,
             (ULONG)RTL_NUMBER_OF(name))) {
-        return;
+        KswordARKBugcheckTrackingRelease(); // 路径不可用时对称释放已取得的引用。
+        return; // 不发布没有名称的映像缓存。
     }
     KswordARKBugcheckPublishModule(
         (ULONG_PTR)ImageInfo->ImageBase,
@@ -356,6 +361,7 @@ KswordARKBugcheckTrackLoadedImage(
         name);
     KswordARKBugcheckEvidenceImage((ULONG_PTR)ImageInfo->ImageBase, // 正常加载通知解析 PE，崩溃回调只读取其副本。
         (ULONG)ImageInfo->ImageSize, FullImageName); // 回调拥有路径生命周期，立即复制且不保留指针。
+    KswordARKBugcheckTrackingRelease(); // evidence 锁和身份解析均已结束，之后不再访问重装状态。
 }
 
 static VOID
@@ -439,10 +445,14 @@ KswordARKBugcheckTrackProcess(
     _Inout_opt_ PPS_CREATE_NOTIFY_INFO CreateInfo
     )
 {
+    if (!KswordARKBugcheckTrackingAcquire()) { // 公开进程通知先取得跨缓存/evidence 的完整访问引用。
+        return; // 初次初始化前或停止期间不访问重置中的缓存。
+    }
     KswordARKBugcheckPublishProcess(
         Process,
         ProcessId,
         CreateInfo == NULL ? TRUE : FALSE);
+    KswordARKBugcheckTrackingRelease(); // 所有缓存和 evidence 写入结束后才允许重装排空完成。
 }
 
 static VOID
@@ -1046,6 +1056,7 @@ KswordARKBugcheckInitialize(
         return abortStatus;
     }
 
+    KswordARKBugcheckTrackingStop(); // 即使前次安装失败，清零旧缓存前也必须等待已经进入的运行期写者。
     RtlZeroMemory(&g_KswordArkBugcheckState, sizeof(g_KswordArkBugcheckState));
     RtlZeroMemory(
         &g_KswordArkBugcheckSecondaryData,
@@ -1061,7 +1072,7 @@ KswordARKBugcheckInitialize(
     if (!NT_SUCCESS(abortStatus)) { // 不在准备中止后发布通知门禁。
         return abortStatus; // 控制层负责既有资源回收。
     }
-    InterlockedExchange(&g_KswordArkBugcheckState.TrackingReady, 1);
+    KswordARKBugcheckTrackingStart(); // 运行期锁和 evidence 初始化完成后重开 rundown，最后发布准入。
 
     panelStatus = STATUS_DEVICE_NOT_READY;
     bgpStatus = KswordARKBugcheckBgpInitialize();
@@ -1171,7 +1182,7 @@ KswordARKBugcheckUninitialize(
 #if !KSWORD_ARK_BUGCHECK_DIAGNOSTICS_ENABLED
     return;
 #else
-    InterlockedExchange(&g_KswordArkBugcheckState.TrackingReady, 0);
+    KswordARKBugcheckTrackingStop(); // 清理或失败重试前等待所有已准入通知与操作栈写者退场。
     KeMemoryBarrier();
     InterlockedExchange(&g_KswordArkBugcheckState.Active, 0);
     InterlockedExchange(&g_KswordArkBugcheckState.Bitmap.Valid, 0);

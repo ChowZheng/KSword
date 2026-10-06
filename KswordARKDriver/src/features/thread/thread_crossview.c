@@ -988,7 +988,7 @@ Arguments:
     CandidateObject - Decoded thread object body pointer.
     CandidateId - ID observed from the source, used for a protected lookup.
     ExpectedObjectType - Required object type, such as PsThreadType.
-    TypeMatchedOut - Receives whether ObGetObjectType matched ExpectedObjectType.
+    TypeMatchedOut - TRUE only after a protected reference confirms the type.
     ReferencedOut - Receives whether the reference was taken.
 
 Return Value:
@@ -996,14 +996,13 @@ Return Value:
     STATUS_SUCCESS when a reference was taken; otherwise a validation or read
     status.
 
-    A failed ID lookup or pointer comparison does not establish object lifetime.
-    TypeMatchedOut remains only a guarded type observation on such a failure;
-    retain unconfirmed evidence without dereferencing CandidateObject.
+    A failed ID lookup or pointer comparison does not establish object lifetime
+    or type. Retain source-specific unconfirmed evidence without passing the
+    candidate to an object-manager API or dereferencing its object header.
 
 --*/
 {
-    POBJECT_TYPE objectType = NULL;
-    NTSTATUS status = STATUS_SUCCESS;
+    NTSTATUS status = STATUS_SUCCESS; // 透传安全查询与精确地址比较的原始失败状态。
 
     if (TypeMatchedOut == NULL || ReferencedOut == NULL) {
         return STATUS_INVALID_PARAMETER;
@@ -1016,44 +1015,15 @@ Return Value:
         return STATUS_INVALID_PARAMETER;
     }
 
-    __try {
-        objectType = ObGetObjectType(CandidateObject);
-    }
-    __except (EXCEPTION_EXECUTE_HANDLER) {
-        return GetExceptionCode();
-    }
-
-    if (objectType != ExpectedObjectType) {
-        return STATUS_OBJECT_TYPE_MISMATCH;
-    }
-    *TypeMatchedOut = TRUE;
-
-    /* The type read is observational. Only a matching ID-based reference
-       establishes storage lifetime; a failed lookup remains read-only evidence. */
+    // 已退出线程或错误解码地址不能交给 ObGetObjectType；先取得精确 ID 引用。
     status = KswordARKObjectHeaderReferenceObjectSafe(
-        CandidateObject, CandidateId, ExpectedObjectType);
+        CandidateObject, CandidateId, ExpectedObjectType); // helper 只读取被查询引用保活的对象头。
     if (!NT_SUCCESS(status)) {
-        return status;
+        return status; // 失败时引用和对象类型均未被证明。
     }
-
-    //
-    // Re-read the type now that deletion is blocked, so a body recycled between
-    // the first read and the reference cannot be reported as a thread.
-    //
-    __try {
-        objectType = ObGetObjectType(CandidateObject);
-    }
-    __except (EXCEPTION_EXECUTE_HANDLER) {
-        objectType = NULL;
-    }
-    if (objectType != ExpectedObjectType) {
-        ObDereferenceObject(CandidateObject);
-        *TypeMatchedOut = FALSE;
-        return STATUS_OBJECT_TYPE_MISMATCH;
-    }
-
-    *ReferencedOut = TRUE;
-    return status;
+    *TypeMatchedOut = TRUE; // 安全 helper 已在持有引用后核对类型。
+    *ReferencedOut = TRUE; // 调用者仅对成功返回的候选归还引用。
+    return status; // 保持原有成功状态与平衡引用契约。
 }
 
 static ULONG
@@ -1518,7 +1488,7 @@ Return Value:
             }
             ObDereferenceObject(threadObject);
         }
-        else if (typeMatched) {
+        else { // ThreadListHead 来源明确；失败候选保留为未确认的只读证据。
             (VOID)KswordARKThreadCrossViewReadCidFields(Context, candidateThread, &cidProcessId, &cidThreadId);
             (VOID)KswordARKCrossViewReadPointerField(
                 candidateThread,
@@ -1531,7 +1501,7 @@ Return Value:
                 cidProcessId,
                 KSWORD_ARK_CROSSVIEW_SOURCE_THREAD_LIST,
                 referenceStatus,
-                "ThreadListHead candidate type matched but could not be referenced.");
+                "ThreadListHead candidate could not be safely referenced; object type is unconfirmed.");
             if (ownerProcessByField != NULL && ownerProcessByField != ProcessObject) {
                 KSWORD_ARK_THREAD_CROSSVIEW_ROW* row = KswordARKThreadCrossViewFindRow(
                     Context,

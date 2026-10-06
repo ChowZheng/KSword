@@ -838,6 +838,7 @@
     <ClInclude Include="ksword\startup\startup_internal.h" />
     <ClInclude Include="ksword\string\string.h" />
     <ClInclude Include="theme.h" />
+    <ClInclude Include="UI\AsyncUiDispatcher.h" />
     <ClInclude Include="UI\FlatTableModel.h" />
     <ClInclude Include="UI\DockTabInteraction.h" />
     <ClInclude Include="UI\FlowLayout.h" />
