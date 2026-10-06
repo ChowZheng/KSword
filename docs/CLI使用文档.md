@@ -418,7 +418,7 @@ DDMA 借助磁盘控制器的 DMA 通道传输物理页；后端有 ATA 与 SCSI
 | `r0 debug-output` | `KswordCLI.exe r0 debug-output [--after-sequence N] [--max-records N] [--limit N]` | 读取内核调试输出环。 | 可选：--after-sequence、--max-records、--limit。 | `IOCTL_KSWORD_ARK_DEBUG_OUTPUT_DRAIN`，不改变捕获状态。 |
 | `r0 hvm-status` | `KswordCLI.exe r0 hvm-status` | 查询 HVM v6 的 VMX/EPT 或实验性 SVM/NPT 生命周期与能力状态。 | 无。 | `IOCTL_KSWORD_ARK_QUERY_HVM`。 |
 | `r0 debugger-status` | `KswordCLI.exe r0 debugger-status` | 查询原生调试后端协议和线程/内存能力。 | 无。 | `IOCTL_KSWORD_ARK_DEBUGGER` 的只读 QUERY；不启动 HVM 或修改目标。 |
-| `r0 hvm-metrics` | `KswordCLI.exe r0 hvm-metrics` | 查询转换计时有效性及 INVEPT、替换页资源计数。 | 无。 | `IOCTL_KSWORD_ARK_HVM_METRICS` v9；完整逐核 JSON：`hvm_ctl --json metrics`，包括 Intel 影子 EPT 与 AMD NPT 缓存计数。 |
+| `r0 hvm-metrics` | `KswordCLI.exe r0 hvm-metrics` | 查询转换计时有效性及 INVEPT、替换页资源计数。 | 无。 | `IOCTL_KSWORD_ARK_HVM_METRICS` v10；完整逐核 JSON：`hvm_ctl --json metrics`，包括 Intel 影子 EPT 与 AMD NPT 缓存计数。 |
 | `r0 hvm-events` | `KswordCLI.exe r0 hvm-events [--after-sequence N] [--max-rows N]` | 读取 HVM 事件环，不清空事件。 | 可选：--after-sequence、--max-rows。 | `IOCTL_KSWORD_ARK_HVM_EVENTS`。 |
 | `r0 hvm-platform` | `KswordCLI.exe r0 hvm-platform` | 查询 CR4、CPUID 与 CET MSR 平台校准证据。 | 无。 | `IOCTL_KSWORD_ARK_HVM_PLATFORM`；不进入 VMX。 |
 | `r0 ioctl-registry` | `KswordCLI.exe r0 ioctl-registry [--flags 0xN] [--max-entries N]` | 查询驱动已注册的 IOCTL 分发表。 | 可选：--flags、--max-entries。 | `IOCTL_KSWORD_ARK_QUERY_IOCTL_REGISTRY`。 |
@@ -468,7 +468,7 @@ DDMA 借助磁盘控制器的 DMA 通道传输物理页；后端有 ATA 与 SCSI
 | `hvm_ctl --json nested-page-digest` | 返回已发布区间与源区间的内容摘要；会读取整个区间两次，适合按需核验。只给摘要，不返回任意物理内存字节。 |
 | `hvm_ctl --json resident-nested-fullsnapshot` | 与 `resident-nested-hidehv` 相同的嵌套和身份策略，但保留 CPUID 的完整诊断 VMREAD，供同一驱动二进制内的性能对照。普通模式省略无关的 qualification 和 instruction-error 字段读取。 |
 | `hvm_ctl --json nested-page-remove` | 取消发布、全核失效、回收；失败时保留 backing，不能仅凭 `active=0` 判断已经释放。 |
-| `hvm_ctl --json metrics` | 当前 metrics ABI v9 返回 Intel 的 `shadowEpt` 与 AMD 的 `svmProcessors` 等逐核证据。计数在资源重建时清零，查询是时间区间内的观察值，不是所有 CPU 的同时快照。 |
+| `hvm_ctl --json metrics` | 当前 metrics ABI v10 返回 Intel 的 `shadowEpt` 与 AMD 的 `svmProcessors` 等逐核证据。计数在资源重建时清零，查询是时间区间内的观察值，不是所有 CPU 的同时快照。 |
 
 旧 page v1/v2/v3 或旧 metrics 客户端不能搭配此驱动使用；同时更新主程序、
 `KswordCLI.exe` 和 `hvm_ctl.exe`。普通 HVM 状态查询 ABI 不变。
@@ -476,7 +476,7 @@ DDMA 借助磁盘控制器的 DMA 通道传输物理页；后端有 ATA 与 SCSI
 调用者须在这些操作前移除映射，并在控制期间保留目标页。
 
 
-### AMD SVM/NPT 实验后端（HVM v6 / metrics v9）
+### AMD SVM/NPT 实验后端（HVM v6 / metrics v10）
 
 HVM v6 在 `status.svmProbe` 增加 `rejectReason`/`rejectReasonName`、`stateValidMask`、`cpuid1Ecx`、`xsaveFeatures`、`cr4`、`xcr0`、`xss`。状态有效位 1/2/4/8/16 分别对应 CR4、CPUID.1、CPUID.D.1、XCR0、XSS；无有效位的零值不代表状态关闭。拒绝码 7 是非零 HSAVE、8 是 CR4 中未支持的状态、9 是 XSAVE/OSXSAVE 不可用、10 是扩展状态读取异常、11 是非零 XSS、12 是物理地址宽度不支持。该查询不修改寄存器、不进入 SVM；SYS、主程序与 CLI 必须同步更新，旧 v5 请求拒绝。
 
@@ -494,7 +494,7 @@ AMD 的普通模式不暴露嵌套 SVM；通用嵌套实验另有专用命令，
 新增 `prepare-svm-probe`、`self-test-svm-nested` 专用命令：前者分配每核嵌套探针资源，后者执行驱动拥有的固定内层 VMRUN→CPUID→退出反射→原生返回序列。两者只能用于 AMD；先从已释放状态准备，完成后使用 `teardown`。该准备配置禁止 `resident`，不会向正常 Windows 宣传可运行任意内层 VMM。
 
 实验性通用 AMD 路径使用独立命令 `prepare-svm-general → self-test → resident-svm-general → stop → teardown`，共享标志 `ENABLE_NESTED_SVM=0x00010000`，HVM v6 结构不变。准备与启动模式必须一致；普通 `prepare/resident` 仍隐藏 SVM，探针准备不能通过省略标志改为常驻。Intel 明确拒绝该 AMD 标志。通用模式逐核绑定当前 Windows 状态和退出协调器，采用相同全核启动/回滚和停止互锁；有虚拟 SVM 所有权、L2 执行或未完成事件时停止返回忙，不能直接卸载。嵌套实现报告 PARTIAL；这些命令是后续实验入口，**没有完整 L2 OS/内层并发通过证据**，不应在日常实体机上直接试运行。
-以下 v4～v9 是 metrics 结构的演进记录，当前请求统一使用 v9，不应逐节切换客户端。metrics v4 在每条 `svmProcessors` 中增加 `nestedProbe`：valid、sequence、status、entries、reflections、faults、64 位 exit/marker。仅 valid=1、偶数且递增 sequence、status=0、entries/reflections=1、faults>0、exit=0x72、marker=0x4B534E31 才算该核完整探针通过。此结果不等于内层操作系统启动或两小时压力通过。驱动、主程序与 CLI 必须一起更新。
+以下 v4～v10 是 metrics 结构的演进记录，当前请求统一使用 v10，不应逐节切换客户端。metrics v4 在每条 `svmProcessors` 中增加 `nestedProbe`：valid、sequence、status、entries、reflections、faults、64 位 exit/marker。仅 valid=1、偶数且递增 sequence、status=0、entries/reflections=1、faults>0、exit=0x72、marker=0x4B534E31 才算该核完整探针通过。此结果不等于内层操作系统启动或两小时压力通过。驱动、主程序与 CLI 必须一起更新。
 环境脚本、克隆与调试步骤见 [AMD 实验工具](../tools/hvm_lab/README.md)。硬件验收仍以该目录记录为准。
 
 AMD metrics v5 的 `svmProcessors[].general` 使用独立64位序列校验。`valid=1` 只表示整个诊断快照一致；`preparedEntries` 是软件进入准备次数，`hardwareExits` 才是该通用入口收到的物理VMEXIT次数，两者都不证明完整内层操作系统启动。`nestedProbe` 仍只记录有界探针。`phase/action/gif/pending/nmiCaptured/leaseToken/armedToken/retryToken` 用于解释停止/事件窗口；无通用绑定时 general.valid=0。旧metrics客户端必须重编译，不与v5结构混用。
@@ -515,11 +515,16 @@ AMD metrics v7 增加 `svmProcessors[].hotspots`，按原始硬件退出时的 L
 该记录使用独立短序列，不依赖 `general.valid` 或 `flight.coherent`，也不等于 L2 已成功启动。
 v7驱动必须配套重新构建的CLI/主程序；导出脚本继续支持历史v6，不能用v7 CLI向v6驱动查询metrics。
 
-AMD metrics v9 增加 `svmProcessors[].nptCache`，与 `general` 共用有效位和序列。
+AMD metrics v10 增加 `svmProcessors[].nptCache`，与 `general` 共用有效位和序列。
 `lookups/hits/resets/resetFailures` 分别统计进入阶段的缓存检查、命中、成功清空和清空失败；`ownerTransitions/ownerCpuTransitions` 分别统计重复接手和跨 Windows group:number 接手；`tlbRequests` 统计硬件 TLB_CONTROL 请求，它不会单独清空稳定的 NPT02 页表。
 `reasons` 区分未启用复用、冷缓存、epoch、所有权令牌、TLB 请求及 13 个配置键变化。
 同一次未命中可能包含多个原因，不能把原因次数相加当作清空总数。`ownerChanged` 不直接证明 Windows 线程迁移。
 `invlpgaCount/poolRecycles` 分别统计虚拟 INVLPGA 和页表池回收；它们可能同时造成下一次检查的 `epochChanged`。
 只有同一运行代次、`valid=1`、稳定偶数序列且 `saturated=0` 的成对记录可计算差值；无效记录不当作零增长。
 `python tools/hvm_lab/analyze_npt_cache.py first/metrics.json second/metrics.json --output delta.json` 会报告有效 CPU 覆盖率和排除原因。
-v9 驱动需配套重新构建的 v9 CLI 与主程序；旧客户端明确拒绝版本不匹配。源码中的协议版本不能证明已下载或已发布二进制同步完成。
+v10 驱动需配套重新构建的 v10 CLI 与主程序；旧客户端明确拒绝版本不匹配。源码中的协议版本不能证明已下载或已发布二进制同步完成。
+
+
+AMD metrics v10 增加可选 `perf`。命令 `prepare-svm-profile → self-test → resident-svm-profile → stop → teardown` 在通用嵌套模式上添加 `SVM_PROFILE=0x00020000`；普通 general 命令不采样。每 64 次硬件退出选择一次，分别统计原始 L1/L2 和 MSR、XSETBV、VMLOAD、VMSAVE、STGI、CLGI、VMRUN、CPUID、NPF、IO、IRQ、other 十二种退出桶。每桶包含样本数、根态周期总和/最大值及五段周期：扩展状态保存、宿主状态恢复、退出分派、进入协调、来宾状态恢复。分派内部七个 details 依次为取指、VMCB 捕获、权限图、NPT12 同步、写回、页表遍历、影子发布；它们已包含在分派周期内，不能再次加到总周期。其余分派周期包含事件协调、路由、诊断及计时开销，不能称为纯事件处理成本。
+
+计时不含纯硬件 VMEXIT/VMRUN 延迟、来宾执行、最前面的 GPR 保存和最终 guest VMLOAD。`valid=1`、偶数 sequence 且 saturated=0 才可使用；只能比较同一资源代次、CPU/ASID/VMCB 身份和 sampleMask。`tlbIssued[0..3]` 是全部成功硬件进入的 TLB_CONTROL=0/1/3/7 次数，不是采样次数，也不是虚拟 L1 请求数。异常 INVALID 不证明请求已消费。客户端与驱动必须同步重新构建。

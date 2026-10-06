@@ -54,6 +54,33 @@ static VOID KswSvmHotMetrics(KSW_SVM_NESTED* Nested, KSWORD_HVM_HOTSPOTS* Output
     RtlZeroMemory(Output, sizeof(*Output));
 }
 
+/* Optional timings use an independent writer sequence spanning the full sampled root interval. */
+static VOID KswSvmPerfMetrics(KSW_SVM_CPU* Cpu, KSWORD_HVM_PERF_METRICS* Output)
+{
+    /* Query retries are bounded; the owning CPU never waits for metrics collection. */
+    ULONG attempt;
+    /* A null pointer is an explicit unprofiled launch. */
+    if (!Cpu->Perf) { return; }
+    /* Copy only an even, completed sampled interval. */
+    for (attempt = 0; attempt < 3; ++attempt) {
+        /* Acquire loads order all following public row observations. */
+        LONG64 before = InterlockedCompareExchange64((volatile LONG64*)&Cpu->Perf->Sequence, 0, 0);
+        /* Uninitialized or busy timing records cannot be interpreted as zero activity. */
+        if (!before || (before & 1)) { continue; }
+        /* Output storage is owned by the buffered IOCTL, not the root CPU. */
+        RtlCopyMemory(Output, &Cpu->Perf->Metrics, sizeof(*Output));
+        /* Bind public settings to this same prepared timing allocation. */
+        Output->sampleMask = Cpu->Perf->Mask; Output->saturated = (ULONG)Cpu->Perf->Saturated;
+        /* A changed writer sequence invalidates every field copied above. */
+        if (before == InterlockedCompareExchange64((volatile LONG64*)&Cpu->Perf->Sequence, 0, 0)) {
+            /* Reader validity does not authorize any hardware execution. */
+            Output->valid = 1; Output->sequence = (ULONGLONG)before; return;
+        }
+    }
+    /* Explicit invalidity prevents fabricated zero-cost deltas. */
+    RtlZeroMemory(Output, sizeof(*Output));
+}
+
 /* No root CPU waits for telemetry: the reader makes at most three optimistic copies. */
 static VOID KswSvmGeneralMetrics(KSW_SVM_CPU* Cpu, KSWORD_ARK_HVM_SVM_GENERAL_METRICS* Output)
 {
@@ -154,6 +181,8 @@ VOID KswordSvmMetrics(KSW_HVM_RUNTIME* Runtime, KSWORD_ARK_HVM_METRICS_RESPONSE*
         KswSvmFlightMetrics(cpu->Nested, &output->flight);
         /* Hot counters remain queryable even when the broader general snapshot is busy. */
         KswSvmHotMetrics(cpu->Nested, &output->hotspots);
+        /* Exact root-stage ticks are available only for explicitly profiled launches. */
+        KswSvmPerfMetrics(cpu, &output->perf);
         /* Prepared immutable resource addresses aid dump attribution. */
         output->vmcbPa = cpu->GuestPa; output->hsavePa = cpu->HsavePa; output->nptRootPa = state->Npt.RootPa;
         /* Observed VMRUN completions requested the baseline full flush. */

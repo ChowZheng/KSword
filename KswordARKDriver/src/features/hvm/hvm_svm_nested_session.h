@@ -5,6 +5,7 @@
 #include "hvm_svm_nested_shadow.h"
 #include "hvm_svm_nested_owner.h"
 #include "../../../../shared/driver/KswordArkHvmNptCacheStats.h"
+#include "../../../../shared/driver/KswordArkHvmPerf.h"
 
 /* Phases describe retained ownership, not public resident capability. */
 #define KSW_NSVM_SESSION_IDLE 0U
@@ -42,6 +43,8 @@ typedef struct _KSW_NSVM_SESSION {
     KSW_SVM_U64 CacheKey[13], CacheEpoch, CacheOwnerToken;
     unsigned CacheValid;
     KSWORD_HVM_NPT_CACHE_STATS CacheStats;
+    /* A virtual VMRUN flush request remains pending until a real successful hardware entry. */
+    unsigned PendingTlbControl;
 } KSW_NSVM_SESSION;
 
 typedef struct _KSW_NSVM_SESSION_IO {
@@ -66,7 +69,42 @@ typedef struct _KSW_NSVM_SESSION_IO {
     KSW_NSHADOW* Shadow;
     KSW_NMMU_CONFIG* Mmu;
     unsigned ReuseNpt;
+    /* Optional root clock and sampled row; unset in ordinary execution and portable fixtures. */
+    KSW_SVM_U64 (*PerfClock)(void* Context);
+    /* Output belongs to the current odd per-CPU sample sequence, never a retained guest pointer. */
+    KSWORD_HVM_PERF_ROW* PerfRow;
+    /* Diagnostic saturation cannot affect architectural execution. */
+    KSW_SVM_U64* PerfSaturated;
 } KSW_NSVM_SESSION_IO;
+
+/* No timestamp instruction executes when profiling is disabled or this exit is unselected. */
+static __inline KSW_SVM_U64 KswSvmPerfBegin(const KSW_NSVM_SESSION_IO* Io)
+{
+    /* The callback uses the same CPU-private context as the operand transport. */
+    return Io && Io->PerfRow && Io->PerfClock ? Io->PerfClock(Io->Operand.Context) : 0;
+}
+
+/* Detail sums are nested in dispatch; consumers must not add them to the five root stages. */
+static __inline void KswSvmPerfEnd(const KSW_NSVM_SESSION_IO* Io, unsigned Detail, KSW_SVM_U64 Begin)
+{
+    /* Missing optional telemetry does not modify the instruction result. */
+    KSW_SVM_U64 end, delta;
+    /* Only complete descriptors can invoke the clock or address a public row. */
+    if (!Io || !Io->PerfRow || !Io->PerfClock || Detail >= KSW_HVM_PERF_DETAILS) { return; }
+    /* Serializing boundaries are supplied by the platform, not by portable transaction logic. */
+    end = Io->PerfClock(Io->Operand.Context);
+    /* Reject counter wrap and backwards clocks rather than publishing misleading durations. */
+    delta = end - Begin;
+    /* Overflow flags invalidate timing evidence but never fault the guest. */
+    if (end < Begin || Io->PerfRow->details[Detail] > ~0ULL - delta) {
+        /* Saturation remains sticky for the prepared lifetime. */
+        if (Io->PerfSaturated) { *Io->PerfSaturated = 1; }
+        /* Preserve the last valid total. */
+        return;
+    }
+    /* One selected leaf operation contributes exactly once. */
+    Io->PerfRow->details[Detail] += delta;
+}
 
 /* Virtual instruction legality/EFER/HSAVE/GIF are checked by the dispatcher first.
    Session must start zeroed. On FAULT, preserve current image and all resources. */
@@ -84,3 +122,26 @@ unsigned int KswSvmNestedSessionTransfer(KSW_NSVM_SESSION* Session,
    discards every cached composition on this virtual CPU, independently of guest ASID. */
 unsigned int KswSvmNestedSessionInvalidate(KSW_NSVM_SESSION* Session,
     KSW_NSVM_SESSION_IO* Io, KSW_SVM_U64 Linear, unsigned Asid);
+
+/* Select an owned physical flush without consuming virtual or shadow requests prematurely. */
+unsigned KswSvmNestedSessionTlbSelect(const KSW_NSVM_SESSION* Session,
+    const KSW_NSHADOW* Shadow, unsigned FlushByAsid);
+/* Only a non-INVALID hardware VMEXIT proves the selected entry and flush completed. */
+void KswSvmNestedSessionTlbComplete(KSW_NSVM_SESSION* Session,
+    KSW_NSHADOW* Shadow, unsigned Issued, KSW_SVM_U64 ExitCode);
+
+/* Bound writeback timing includes failed physical commits without changing ownership policy. */
+static __inline unsigned KswSvmPerfWriteback(const KSW_NSVM_SESSION_IO* Io,
+    KSW_SVM_U64 Pa, KSW_SVM_U64 HostPa, const KSW_SVM_VMCB* Source,
+    unsigned Operation, KSW_NSVM_OPERAND_RESULT* Result)
+{
+    /* A disabled profile produces no clock reads. */
+    KSW_SVM_U64 tick = KswSvmPerfBegin(Io);
+    /* Reuse the exact architectural whitelist and commit callbacks. */
+    unsigned status = KswSvmNestedWriteback(&Io->Operand, Pa, HostPa, Source,
+        Operation, 1, Io->Commit, Result);
+    /* Failed and partial commits are retained in the timing evidence. */
+    KswSvmPerfEnd(Io, KSW_HVM_PERF_WRITEBACK, tick);
+    /* The caller still decides whether the owner must remain retained. */
+    return status;
+}

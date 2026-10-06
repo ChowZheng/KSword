@@ -56,8 +56,8 @@ unsigned int KswSvmNestedSessionTransfer(KSW_NSVM_SESSION* Session,
         /* Merge just VMLOAD-managed state into a private snapshot for whitelist writeback. */
         KswSvmNestedCopyVmload(&Session->Vmcb12, Current);
         /* The generic writer keeps controls, other state and reserved bits untouched. */
-        status = KswSvmNestedWriteback(&Io->Operand, OperandPa, Session->OperandHostPa,
-            &Session->Vmcb12, KSW_NSVM_SAVE_VMSAVE, 1, Io->Commit, &Session->OperandResult);
+        status = KswSvmPerfWriteback(Io, OperandPa, Session->OperandHostPa,
+            &Session->Vmcb12, KSW_NSVM_SAVE_VMSAVE, &Session->OperandResult);
         /* A partial output retains the same lease and its written-word progress. */
         if (status != KSW_NNPT_OK) { return KswNsvmTransferFault(Session); }
     }

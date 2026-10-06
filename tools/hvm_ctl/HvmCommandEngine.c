@@ -7735,7 +7735,29 @@ static int DoMetrics(HANDLE h, int asJson)
                    row->general.armedToken, row->general.retryToken, row->general.delivered, row->general.retried,
                    row->general.cacheRecycles, row->general.virtualEfer, row->general.virtualHsave, row->general.guestXcr0, row->general.guestXss);
             PrintNptCacheJson(&row->general);
-            PrintFlightJson(&row->flight); PrintHotspotsJson(&row->hotspots); printf("}");
+            PrintFlightJson(&row->flight); PrintHotspotsJson(&row->hotspots);
+            {
+                unsigned level, bucket, stage;
+                printf(",\"perf\":{\"valid\":%lu,\"saturated\":%lu,\"sequence\":\"%llu\",\"sampleMask\":\"%llu\",\"levels\":[",
+                    row->perf.valid, row->perf.saturated, row->perf.sequence, row->perf.sampleMask);
+                for (level = 0; level < 2; ++level) {
+                    printf("%s[", level ? "," : "");
+                    for (bucket = 0; bucket < KSW_HVM_PERF_BUCKETS; ++bucket) {
+                        const KSWORD_HVM_PERF_ROW* sample = &row->perf.rows[level][bucket];
+                        printf("%s{\"samples\":\"%llu\",\"cycles\":\"%llu\",\"maximum\":\"%llu\",\"stages\":[",
+                            bucket ? "," : "", sample->samples, sample->cycles, sample->maximum);
+                        for (stage = 0; stage < KSW_HVM_PERF_STAGES; ++stage) { printf("%s\"%llu\"", stage ? "," : "", sample->stages[stage]); }
+                        printf("],\"details\":[");
+                        for (stage = 0; stage < KSW_HVM_PERF_DETAILS; ++stage) { printf("%s\"%llu\"", stage ? "," : "", sample->details[stage]); }
+                        printf("]}");
+                    }
+                    printf("]");
+                }
+                printf("],\"tlbIssued\":[");
+                for (stage = 0; stage < 4; ++stage) { printf("%s\"%llu\"", stage ? "," : "", row->perf.tlbIssued[stage]); }
+                printf("]}");
+            }
+            printf("}");
         } else {
             printf("SVM cpu=%u:%u stage=%lu valid=%lu exit=0x%016llX info1=0x%016llX info2=0x%016llX flush=%llu\n",
                    (unsigned)row->group, (unsigned)row->number, row->stage, row->valid,

@@ -11,6 +11,12 @@
 #include "../../shared/driver/KswordArkHvmIoctl.h"
 
 static const HVM_COMMAND_SPEC g_commands[] = {
+    { "prepare-svm-profile", "准备 AMD 周期采样", "生命周期", "准备通用嵌套 SVM，显式启用每 64 次退出一次的根路径周期采样。", HvmControl, 0, KSWORD_ARK_HVM_CONTROL_PREPARE,
+      KSWORD_ARK_HVM_CONTROL_FLAG_UI_CONFIRMED | KSWORD_ARK_HVM_CONTROL_FLAG_ALLOW_NESTED | KSWORD_ARK_HVM_CONTROL_FLAG_ENABLE_NESTED_SVM | KSWORD_ARK_HVM_CONTROL_FLAG_SVM_PROFILE, 0,
+      { { NULL, HvmDecimal32, NULL } } },
+    { "resident-svm-profile", "启动 AMD 周期采样", "生命周期", "需要 prepare-svm-profile 和逐核自检；周期描述软件根路径，不是纯硬件 VMEXIT 延迟。", HvmControl, 0, KSWORD_ARK_HVM_CONTROL_START_RESIDENT,
+      KSWORD_ARK_HVM_CONTROL_FLAG_UI_CONFIRMED | KSWORD_ARK_HVM_CONTROL_FLAG_FORCE | KSWORD_ARK_HVM_CONTROL_FLAG_ALLOW_NESTED | KSWORD_ARK_HVM_CONTROL_FLAG_ENABLE_NESTED_SVM | KSWORD_ARK_HVM_CONTROL_FLAG_SVM_PROFILE, 0,
+      { { NULL, HvmDecimal32, NULL } } },
     { "prepare-svm-general", "准备 AMD 通用嵌套实验", "生命周期", "预分配通用 SVM/NPT 资源；与有界探针配置互斥，尚未完成操作系统验收。", HvmControl, 0, KSWORD_ARK_HVM_CONTROL_PREPARE,
       KSWORD_ARK_HVM_CONTROL_FLAG_UI_CONFIRMED | KSWORD_ARK_HVM_CONTROL_FLAG_ALLOW_NESTED | KSWORD_ARK_HVM_CONTROL_FLAG_ENABLE_NESTED_SVM, 0,
       { { NULL, HvmDecimal32, NULL } } },

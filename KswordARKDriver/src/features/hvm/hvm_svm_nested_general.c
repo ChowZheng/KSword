@@ -2,6 +2,19 @@
 #include "hvm_svm_nested_runtime.h"
 #include <intrin.h>
 
+/* Optional detail clock runs only while the bridge has saved the guest extended state. */
+static KSW_SVM_U64 KswNsvmPerfClock(void* Context)
+{
+    /* All timestamp attribution is CPU-local; no Windows clock service is required. */
+    KSW_SVM_U64 tick;
+    /* The root transport context is unused by the clock. */
+    UNREFERENCED_PARAMETER(Context);
+    /* Serialize prior root work before sampling the invariant counter. */
+    _mm_lfence(); tick = __rdtsc();
+    /* Prevent following work from crossing the timestamp. */
+    _mm_lfence(); return tick;
+}
+
 /* Called inside GeneralSequence while this processor exclusively owns both images. */
 static VOID KswNsvmObserve(KSW_SVM_CPU* Cpu, ULONG Kind, ULONG Reason, ULONG Timing)
 {
@@ -241,6 +254,15 @@ NTSTATUS KswordSvmNestedInitializeGeneral(KSW_SVM_CPU* Cpu)
     if (KswSvmNestedMachineInitialize(&nested->GeneralMachine) != KSW_NSVM_MACHINE_READY) { return STATUS_NOT_SUPPORTED; }
     /* This is bound-resource readiness; public activation and hardware success are separate evidence. */
     nested->GeneralHardwareExits = nested->GeneralLastHardwareExit = 0;
+    /* Physical ASIDs may contain translations from a prior prepared resource lifetime. */
+    nested->FirstEntryFlush = 1;
+    /* Reset sampled timings before publishing any executable pointer. */
+    RtlZeroMemory(&nested->Perf, sizeof(nested->Perf));
+    /* Profiling is an explicit prepared-mode option, never enabled by a query. */
+    nested->Perf.Mask = 63;
+    /* Earlier prefixes are stable; assembly only follows this pointer when nonnull. */
+    Cpu->Perf = (((KSW_SVM_STATE*)Cpu->Runtime->BackendContext)->PreparedFlags &
+        KSWORD_ARK_HVM_CONTROL_FLAG_SVM_PROFILE) ? &nested->Perf : NULL;
     /* New residency starts its own zeroed hotspot epoch under lifecycle exclusion. */
     RtlZeroMemory(&nested->Hotspots, sizeof(nested->Hotspots));
     /* No count is readable until the first complete observation. */
@@ -272,22 +294,10 @@ ULONG KswordSvmNestedGeneralEntry(KSW_SVM_CPU* Cpu)
     if (action == KSW_NSVM_MACHINE_READY) { Cpu->HostInterruptsAllowed = Cpu->Nested->GeneralMachine.Overlay.HostIf; }
     /* Flush only after NPT02 publication/reset or an L1 TLB_CONTROL request. */
     if (action == KSW_NSVM_MACHINE_READY) {
-        /* Preserve the virtual VMCB's architectural flush request without rebuilding NPT02. */
-        unsigned char requested = 0;
-        if (Cpu->Nested->Session.Phase == KSW_NSVM_SESSION_L2) {
-            requested = ((const unsigned char*)&Cpu->Nested->Session.Vmcb12)[KSW_VMCB_TLB];
-        }
-        /* This L0 gives the nested context one private ASID on this CPU. */
-        if (requested == 7U) {
-            Cpu->NestedTlbControl = requested;
-        } else if (requested == 1U || requested == 3U || Cpu->Nested->Shadow.FlushPending) {
-            /* Hardware TLB_CONTROL is expensive; flush only after an explicit
-               L1 request or publication/reset of the shadow NPT root. */
-            Cpu->NestedTlbControl = (Cpu->Caps.Features & 64U) ? 3U : 1U;
-        } else {
-            Cpu->NestedTlbControl = 0U;
-        }
-        Cpu->Nested->Shadow.FlushPending = 0;
+        /* Selection is separate from completion: INVALID preserves all pending work. */
+        Cpu->NestedTlbControl = Cpu->Nested->FirstEntryFlush ? 1U :
+            KswSvmNestedSessionTlbSelect(&Cpu->Nested->Session,
+                &Cpu->Nested->Shadow, (Cpu->Caps.Features & 64U) != 0);
     } else {
         Cpu->NestedTlbControl = 1U;
     }
@@ -317,6 +327,36 @@ ULONG KswordSvmNestedGeneralExit(KSW_SVM_CPU* Cpu)
     ++Cpu->Nested->GeneralHardwareExits;
     /* Preserve raw hardware input even if a missing overlay makes machine dispatch fail before classification. */
     Cpu->Nested->GeneralLastHardwareExit = KswSvmRead64(Cpu->Guest, KSW_VMCB_EXITCODE);
+    /* Charge a sampled interval to its original level and reason before any reflection. */
+    if (Cpu->Perf && Cpu->Perf->Selected && Cpu->Nested->Session.Phase <= KSW_NSVM_SESSION_L2) {
+        /* This writes no SIMD state and the full bridge has already saved guest XSTATE. */
+        Cpu->Perf->Row = &Cpu->Perf->Metrics.rows[Cpu->Nested->Session.Phase]
+            [KswSvmPerfBucket(Cpu->Nested->GeneralLastHardwareExit)];
+    }
+    /* Clear the previous sampled destination even when the new exit was not selected. */
+    Cpu->Nested->GeneralIo.PerfRow = Cpu->Perf ? Cpu->Perf->Row : NULL;
+    /* Callbacks are harmless when the destination row is absent. */
+    Cpu->Nested->GeneralIo.PerfClock = Cpu->Perf ? KswNsvmPerfClock : NULL;
+    /* Any counter exhaustion invalidates only profiling evidence. */
+    Cpu->Nested->GeneralIo.PerfSaturated = Cpu->Perf ? &Cpu->Perf->Saturated : NULL;
+    /* Count actual successfully entered hardware flush controls, not merely requested virtual flushes. */
+    if (Cpu->Perf && Cpu->Nested->GeneralLastHardwareExit != KSW_SVM_EXIT_INVALID) {
+        /* Unselected exits borrow a short telemetry sequence; selected exits already own it. */
+        ULONG index = Cpu->NestedTlbControl == 1 ? 1U : Cpu->NestedTlbControl == 3 ? 2U : Cpu->NestedTlbControl == 7 ? 3U : 0U;
+        /* A selected full-interval writer is already odd. */
+        if (!Cpu->Perf->Selected) { InterlockedIncrement64((volatile LONG64*)&Cpu->Perf->Sequence); }
+        /* Never wrap a public flush count into apparent idle evidence. */
+        if (Cpu->Perf->Metrics.tlbIssued[index] == ~0ULL) { Cpu->Perf->Saturated = 1; }
+        /* Only real non-INVALID hardware returns prove consumption. */
+        else { ++Cpu->Perf->Metrics.tlbIssued[index]; }
+        /* Short unselected updates publish before ordinary dispatch begins. */
+        if (!Cpu->Perf->Selected) { InterlockedIncrement64((volatile LONG64*)&Cpu->Perf->Sequence); }
+    }
+    /* Retire the request before dispatch can install a new NPT02 leaf or change the running level. */
+    KswSvmNestedSessionTlbComplete(&Cpu->Nested->Session, &Cpu->Nested->Shadow,
+        Cpu->NestedTlbControl, Cpu->Nested->GeneralLastHardwareExit);
+    /* A non-INVALID hardware return proves the initial resource-lifetime flush executed. */
+    if (Cpu->Nested->GeneralLastHardwareExit != KSW_SVM_EXIT_INVALID) { Cpu->Nested->FirstEntryFlush = 0; }
     /* Publish raw per-level counters before the dispatcher mutates RCX, RIP or session ownership. */
     InterlockedIncrement64(&Cpu->Nested->HotSequence);
     /* The shared short transaction does no guest memory access or root event processing. */

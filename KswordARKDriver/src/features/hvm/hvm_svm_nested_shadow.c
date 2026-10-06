@@ -1,6 +1,62 @@
 /* Preallocated AMD NPT02 construction; all paths are bounded and nonblocking. */
 #include "hvm_svm_nested_shadow.h"
 
+/* Track committed source paths without allocating or assuming that NPT12 is immutable. */
+static void KswNshadowTrackSources(KSW_NSHADOW* Shadow, const KSW_NMMU_RESULT* Result)
+{
+    /* Each resolved source path has at most four architectural words. */
+    unsigned path, source;
+    /* Synthetic/untracked paths require a conservative reset on the next invalidation. */
+    if (!Result->Inner.Count || Result->Inner.Count > 4U) { Shadow->SourceUntracked = 1; return; }
+    /* Duplicate source words are stored once for the complete sparse root. */
+    for (path = 0; path < Result->Inner.Count; ++path) {
+        /* A previously recorded frame must retain the same committed interpretation. */
+        for (source = 0; source < Shadow->SourceCount; ++source) {
+            /* Ignore Accessed, but include Dirty: clearing D requires write-fault accounting again. */
+            if (Shadow->SourceAddress[source] == Result->Inner.EntryAddress[path]) {
+                /* Conflicting provenance cannot be overwritten while old leaves remain published. */
+                if ((Shadow->SourceValue[source] ^ Result->Inner.EntryValue[path]) & ~0x20ULL) { Shadow->SourceUntracked = 1; }
+                /* This exact source GPA already belongs to the ledger. */
+                break;
+            }
+        }
+        /* The fixed ledger is bounded independently from the page-table allocation pool. */
+        if (source == Shadow->SourceCount) {
+            /* Overflow loses optimization eligibility, never mapping correctness. */
+            if (source == KSW_NSHADOW_SOURCE_WORDS) { Shadow->SourceUntracked = 1; return; }
+            /* Preserve committed source identity and all architectural permission/cache bits. */
+            Shadow->SourceAddress[source] = Result->Inner.EntryAddress[path];
+            /* Source values describe the mapping currently held by this root's leaves. */
+            Shadow->SourceValue[source] = Result->Inner.EntryValue[path];
+            /* Readers never inspect uninitialized array entries. */
+            ++Shadow->SourceCount;
+        }
+    }
+}
+
+/* Reuse requires complete source provenance and successful fresh observations. */
+int KswSvmNestedShadowSourcesMatch(const KSW_NSHADOW* Shadow,
+    KSW_NNPT_READ ReadGuestWord, void* Context)
+{
+    /* Observations are private and never retain a temporary physical-window mapping. */
+    unsigned source;
+    /* An incomplete ledger or missing translator cannot prove stable NPT12. */
+    if (!Shadow || !ReadGuestWord || Shadow->SourceUntracked ||
+        Shadow->SourceCount > KSW_NSHADOW_SOURCE_WORDS) { return 0; }
+    /* An empty root has no source translations to retire. */
+    if (!Shadow->SourceCount) { return Shadow->Used == 1U; }
+    /* Every source entry affecting a published 4K/large/prefilled mapping is revalidated. */
+    for (source = 0; source < Shadow->SourceCount; ++source) {
+        /* Do not treat an unreadable source word as a matching zero. */
+        KSW_SVM_U64 value = 0;
+        /* Read callbacks translate the L1 physical source through the retained NPT01. */
+        if (!ReadGuestWord(Context, Shadow->SourceAddress[source], &value) ||
+            ((value ^ Shadow->SourceValue[source]) & ~0x20ULL)) { return 0; }
+    }
+    /* Hardware invalidation remains independently pending even when page-table bytes match. */
+    return 1;
+}
+
 /* Clear one owned hardware page without calling an allocator or memory manager. */
 static void KswNshadowClear(KSW_SVM_U64* Words)
 {
@@ -96,6 +152,8 @@ unsigned int KswSvmNestedShadowInitialize(KSW_NSHADOW* Shadow,
     Shadow->AddressMask = mask;
     /* First use must not inherit translations from an earlier ASID owner. */
     Shadow->FlushPending = 1;
+    /* Newly empty roots have no source dependencies. */
+    Shadow->SourceCount = Shadow->SourceUntracked = 0;
     /* No guest entry may observe allocator residue. */
     KswNshadowClear(Pages[0].Words);
     /* Unused child pages are cleared just before they are linked. */
@@ -115,6 +173,8 @@ unsigned int KswSvmNestedShadowReset(KSW_NSHADOW* Shadow)
     ++Shadow->Epoch;
     /* The owner must issue a real hardware flush before using this root again. */
     Shadow->FlushPending = 1;
+    /* Disconnected mappings no longer own any recorded NPT12 source paths. */
+    Shadow->SourceCount = Shadow->SourceUntracked = 0;
     /* Resource ownership remains unchanged. */
     return KSW_NSHADOW_OK;
 }
@@ -164,7 +224,7 @@ unsigned int KswSvmNestedShadowInstall(KSW_NSHADOW* Shadow, const KSW_NMMU_RESUL
             (Result->Leaf & (0x7ULL | 0x18ULL | 0x60ULL | KSW_NNPT_NX)) |
             (KswNptLeafFlags(3U, pat) & ~7ULL);
         int largeStatus = KswNshadowTryLarge(Shadow, indices, 1U, large);
-        if (largeStatus >= 0) { return (unsigned int)largeStatus; }
+        if (largeStatus >= 0) { KswNshadowTrackSources(Shadow, Result); return (unsigned int)largeStatus; }
         if (largeStatus == -3) { return KSW_NSHADOW_FULL; }
         if (largeStatus == -2) { return KSW_NSHADOW_INVALID; }
     }
@@ -178,7 +238,7 @@ unsigned int KswSvmNestedShadowInstall(KSW_NSHADOW* Shadow, const KSW_NMMU_RESUL
             (Result->Leaf & (0x7ULL | 0x18ULL | 0x60ULL | KSW_NNPT_NX)) |
             (KswNptLeafFlags(2U, pat) & ~7ULL);
         int largeStatus = KswNshadowTryLarge(Shadow, indices, 2U, large);
-        if (largeStatus >= 0) { return (unsigned int)largeStatus; }
+        if (largeStatus >= 0) { KswNshadowTrackSources(Shadow, Result); return (unsigned int)largeStatus; }
         if (largeStatus == -3) { return KSW_NSHADOW_FULL; }
         if (largeStatus == -2) { return KSW_NSHADOW_INVALID; }
     }
@@ -245,5 +305,6 @@ unsigned int KswSvmNestedShadowInstall(KSW_NSHADOW* Shadow, const KSW_NMMU_RESUL
     }
     /* New leaves are visible on the next walk; reset/replacement paths already request a flush. */
     /* No source A/D work or memory allocation remains in this installation. */
+    KswNshadowTrackSources(Shadow, Result);
     return KSW_NSHADOW_OK;
 }

@@ -4,9 +4,10 @@
 #include "KswordArkHvmFlightRecorder.h"
 #include "KswordArkHvmHotspots.h"
 #include "KswordArkHvmNptCacheStats.h"
+#include "KswordArkHvmPerf.h"
 
 /* Independent versioning keeps existing HVM query clients ABI-compatible. */
-#define KSWORD_ARK_HVM_METRICS_VERSION 9UL
+#define KSWORD_ARK_HVM_METRICS_VERSION 10UL
 
 /* General execution observations are independent of bounded-probe completion evidence. */
 typedef struct _KSWORD_ARK_HVM_SVM_GENERAL_METRICS {
@@ -53,6 +54,8 @@ typedef struct _KSWORD_ARK_HVM_SVM_METRICS {
     KSWORD_HVM_FLIGHT_RECORDER flight;
     /* Version seven provides independently coherent L1/L2 exit and MSR counts. */
     KSWORD_HVM_HOTSPOTS hotspots;
+    /* Version ten reports sampled root-stage cycles without calling them hardware exit latency. */
+    KSWORD_HVM_PERF_METRICS perf;
 } KSWORD_ARK_HVM_SVM_METRICS;
 #define KSWORD_ARK_IOCTL_FUNCTION_HVM_METRICS 0x916UL
 #define IOCTL_KSWORD_ARK_HVM_METRICS \

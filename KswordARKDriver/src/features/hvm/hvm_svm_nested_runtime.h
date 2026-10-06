@@ -23,6 +23,7 @@
 #include "hvm_svm_nested_machine.h"
 #include "hvm_svm_flightrecorder.h"
 #include "hvm_svm_hotspots.h"
+#include "hvm_svm_perf.h"
 /* Enough sparse tables for the bounded probe; exhaustion returns a failed test. */
 #define KSW_NSVM_PROBE_PAGES 64U
 /* Private markers distinguish the inner exit from the final outer continuation. */
@@ -45,6 +46,10 @@ typedef struct _KSW_SVM_NESTED {
     KSW_NSVM_MACHINE GeneralMachine;
     /* Initialization does not publish a public nested-virtualization capability. */
     ULONG GeneralInitialized;
+    /* A fresh NPT01/ASID lifetime always flushes before its first successful hardware entry. */
+    ULONG FirstEntryFlush;
+    /* Timing buffers are allocated with the nested resource, never during VMEXIT. */
+    KSW_SVM_PERF Perf;
     /* Bracket every root-side general mutation independently of the bounded probe sequence. */
     volatile LONG64 GeneralSequence;
     /* A prepared attempt and an observed physical exit are deliberately different counters. */

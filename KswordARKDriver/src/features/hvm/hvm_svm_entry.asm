@@ -56,6 +56,86 @@ StandardSave:
 Saved:
 endm
 
+; Profile one selected root interval using integer registers only; guest GPRs are already saved.
+KSW_PERF_POINT macro Offset
+    LOCAL Done
+    mov r8, [rcx+150h]           ; Null keeps ordinary residency uninstrumented.
+    test r8, r8                 ; Never follow a dormant optional allocation.
+    jz Done
+    cmp qword ptr [r8+18h], 0   ; All checkpoints share the one sampled exit decision.
+    je Done
+    lfence                      ; Serialize prior work before the timestamp observation.
+    rdtsc                       ; EDX:EAX contains invariant-TSC ticks, not retired instructions.
+    shl rdx, 32                 ; Compose a complete 64-bit timestamp.
+    or rax, rdx
+    mov [r8+Offset], rax        ; Store only in prepared CPU-private nonpaged memory.
+    lfence                      ; Bound subsequent work after the observation.
+Done:
+endm
+
+; Begin after saving guest GPRs, before XSTATE/context switching can dominate the interval.
+KSW_PERF_BEGIN macro
+    LOCAL Done, Skip
+    mov r8, [rcx+150h]           ; The optional pointer is fixed throughout this launch.
+    test r8, r8
+    jz Done
+    inc qword ptr [r8+8]        ; Per-CPU ordinal selects exactly one in Mask+1 exits.
+    mov rax, [r8+8]
+    test rax, [r8]              ; Mask is a prepared power-of-two interval minus one.
+    jnz Skip
+    inc qword ptr [r8+10h]      ; Odd sequence excludes concurrent metrics readers.
+    mov qword ptr [r8+18h], 1  ; Every later checkpoint belongs to this same selected exit.
+    mov qword ptr [r8+50h], 0  ; General exit dispatch binds the destination before reflection.
+    KSW_PERF_POINT 20h          ; First timestamp follows only the mandatory GPR save.
+    jmp Done
+Skip:
+    mov qword ptr [r8+18h], 0  ; Unselected exits do not write sample or public counters.
+Done:
+endm
+
+; Complete after restoring guest XSTATE; do not call C or use vector instructions here.
+KSW_PERF_FINISH macro
+    LOCAL Done, Reject, StageLoop, Publish, NoMaximum
+    KSW_PERF_POINT 48h          ; Final boundary includes guest XSTATE/control restoration.
+    mov r8, [rcx+150h]
+    test r8, r8
+    jz Done
+    cmp qword ptr [r8+18h], 0
+    je Done
+    mov r9, [r8+50h]           ; Pointer targets one raw-level/reason row in this allocation.
+    test r9, r9
+    jz Reject
+    mov rax, [r8+48h]
+    sub rax, [r8+20h]          ; Root interval excludes guest execution and hardware transition.
+    jc Reject                  ; A backwards clock cannot become a huge unsigned duration.
+    inc qword ptr [r9]         ; Public sample count belongs to the same interval as all stages.
+    jz Reject                  ; Saturation makes subsequent delta analysis invalid.
+    add [r9+8], rax            ; Accumulate total root ticks exactly once.
+    jc Reject
+    cmp rax, [r9+10h]
+    jbe NoMaximum
+    mov [r9+10h], rax          ; Retain the largest observed full root interval.
+NoMaximum:
+    xor r10d, r10d             ; Five adjacent differences form the complete interval.
+StageLoop:
+    mov rax, [r8+r10*8+28h]
+    sub rax, [r8+r10*8+20h]    ; Stage sums telescope to the full root duration.
+    jc Reject
+    add [r9+r10*8+18h], rax
+    jc Reject
+    inc r10d
+    cmp r10d, 5
+    jb StageLoop
+    jmp Publish
+Reject:
+    mov qword ptr [r8+58h], 1  ; Publish unusable/saturated telemetry without changing execution.
+Publish:
+    mov qword ptr [r8+18h], 0
+    mov qword ptr [r8+50h], 0
+    inc qword ptr [r8+10h]     ; Even sequence publishes all aggregate row writes.
+Done:
+endm
+
 ; Restore the complete currently supported XSTATE mask.
 KSW_LOAD_XSTATE macro
     LOCAL StandardLoad, Loaded
@@ -164,6 +244,7 @@ KswSvmRun:
     call KswordSvmGeneralPrepareEntry ; Only a READY event/control transaction returns to this point.
 KswSvmPreparedEntry:
     mov rcx, [rsp+20h]           ; Restore processor context after any C call.
+    KSW_PERF_POINT 40h          ; Entry/event coordinator finished for this root interval.
     mov rbx, [rcx+10h]           ; VMCB virtual address.
     cmp qword ptr [rcx+140h], 0  ; General nested entries use the shadow-cache decision.
     je KswSvmFullTlbFlush        ; Baseline residency and bounded probes retain the full flush.
@@ -184,6 +265,7 @@ KswSvmHostIfReady:
     KSW_LOAD_XSTATE              ; Undo host C code's SIMD modifications.
     KSW_SWITCH_XSS 130h          ; The guest sees its current supervisor save enablement.
     KSW_SWITCH_XCR0 120h         ; Install guest enablement after restoring the fixed full state image.
+    KSW_PERF_FINISH              ; Integer aggregation cannot corrupt the restored SIMD/CET state.
     mov rax, [rsp+20h]           ; Context for GPR restoration.
     KSW_LOAD_GPRS                ; Restore all non-VMCB guest registers.
     mov rax, [rax]               ; Physical VMCB operand, not guest RAX.
@@ -193,26 +275,35 @@ KswSvmHostIfReady:
     mov rax, [rsp+20h]           ; VMEXIT restored the hardware host stack.
     KSW_SAVE_GPRS                ; Preserve guest GPRs before using scratch registers.
     mov rcx, rax                 ; Context for XSAVE and exit dispatch.
+    KSW_PERF_BEGIN               ; Start only after every clobbered guest GPR has safe storage.
     mov rdx, [rcx+10h]           ; Guest VMCB virtual address.
     mov rax, [rdx+5f8h]          ; Guest RAX is saved by hardware, not in host RAX.
     mov [rcx+48h], rax           ; Retain it for native stop continuation.
     KSW_SWITCH_XSS 128h          ; Restore fixed XSAVES component ownership before saving guest state.
     KSW_SWITCH_XCR0 118h         ; Reenable prepared components before XSAVE and any root SIMD use.
     KSW_SAVE_XSTATE              ; Save every prepared component in the unchanged full-mask layout.
+    KSW_PERF_POINT 28h          ; Root XSTATE save/switch stage is complete.
     mov rcx, [rsp+20h]           ; Reload stable context.
     mov rax, [rcx]               ; Guest physical VMCB operand.
     vmsave rax                   ; Capture current guest FS/GS/TR/LDTR/syscall state.
     mov rax, [rcx+8]             ; Explicit host image.
     vmload rax                   ; C now sees the host's KPCR/GS and segment state.
     cld                          ; Windows C ABI requires forward string operations.
+    KSW_PERF_POINT 30h          ; Host VMLOAD/segment restoration is complete.
     call KswordSvmExit           ; Returns zero to resume, one to return natively.
+    mov r11d, eax               ; Timestamp instructions must not destroy the dispatch decision.
+    mov rcx, [rsp+20h]           ; C may clobber the context argument register.
+    KSW_PERF_POINT 38h          ; Exit dispatch completed, including guest-memory operations.
+    mov eax, r11d               ; Preserve the existing native/resume branch exactly.
     test eax, eax                ; Dispatchers never silently ignore unknown exits.
     jz KswSvmRun                 ; Resume the same guest VMCB.
     mov r15, [rsp+20h]           ; Native continuation anchor; no further C calls.
     mov rcx, r15                 ; Restore all guest XSTATE first.
+    KSW_PERF_POINT 40h          ; Native return has no later entry coordinator.
     KSW_LOAD_XSTATE              ; Guest CR0.TS/EM is restored only after XRSTOR.
     KSW_SWITCH_XSS 130h          ; Native return preserves current guest XSS rather than a launch snapshot.
     KSW_SWITCH_XCR0 120h         ; Native continuation inherits current guest enablement, not root policy.
+    KSW_PERF_FINISH              ; Close the sampled interval before restoring the native stack.
     mov rbx, [r15+10h]           ; Guest state image for native restoration.
     mov rax, [rbx+5d8h]          ; Exact current guest RSP, not launch-time RSP.
     mov [r15+0f0h], rax          ; Retain until final stack switch.

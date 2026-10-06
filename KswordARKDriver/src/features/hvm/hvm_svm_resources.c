@@ -220,9 +220,12 @@ NTSTATUS KswordSvmValidateFlags(KSW_HVM_RUNTIME* Runtime, ULONG Flags)
     /* Only baseline lifecycle flags have AMD implementations. */
     const ULONG allowed = KSWORD_ARK_HVM_CONTROL_FLAG_UI_CONFIRMED | KSWORD_ARK_HVM_CONTROL_FLAG_FORCE |
         KSWORD_ARK_HVM_CONTROL_FLAG_ALLOW_NESTED | KSWORD_ARK_HVM_CONTROL_FLAG_SVM_NESTED_PROBE |
-        KSWORD_ARK_HVM_CONTROL_FLAG_ENABLE_NESTED_SVM;
+        KSWORD_ARK_HVM_CONTROL_FLAG_ENABLE_NESTED_SVM | KSWORD_ARK_HVM_CONTROL_FLAG_SVM_PROFILE;
     /* Unknown/Intel-specific features must not silently degrade to baseline. */
     if (Flags & ~allowed) { return STATUS_NOT_SUPPORTED; }
+    /* Timing cannot silently change the baseline/probe execution contract. */
+    if ((Flags & KSWORD_ARK_HVM_CONTROL_FLAG_SVM_PROFILE) &&
+        !(Flags & KSWORD_ARK_HVM_CONTROL_FLAG_ENABLE_NESTED_SVM)) { return STATUS_INVALID_PARAMETER; }
     /* Bounded probe and arbitrary VMM execution have different continuation contracts. */
     if ((Flags & KSWORD_ARK_HVM_CONTROL_FLAG_SVM_NESTED_PROBE) &&
         (Flags & KSWORD_ARK_HVM_CONTROL_FLAG_ENABLE_NESTED_SVM)) { return STATUS_INVALID_PARAMETER; }

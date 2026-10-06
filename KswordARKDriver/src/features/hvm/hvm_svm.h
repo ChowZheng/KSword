@@ -147,6 +147,8 @@ typedef struct _KSW_SVM_CPU {
     ULONGLONG NestedEntryEnabled;
     /* 148: per-entry AMD TLB_CONTROL selected by the nested shadow cache. */
     ULONG NestedTlbControl;
+    /* 150: optional timing pointer; ordinary launches keep this null. */
+    struct _KSW_SVM_PERF* Perf;
     /* Resource and runtime ownership beyond the assembly prefix. */
     KSW_HVM_RUNTIME* Runtime;
     /* Chosen under the common transition before the all-CPU resident launch. */
@@ -211,6 +213,8 @@ C_ASSERT(FIELD_OFFSET(KSW_SVM_CPU, HostInterruptsAllowed) == 0x138);
 C_ASSERT(FIELD_OFFSET(KSW_SVM_CPU, NestedEntryEnabled) == 0x140);
 /* MASM reads the nested TLB decision without dereferencing the appended runtime. */
 C_ASSERT(FIELD_OFFSET(KSW_SVM_CPU, NestedTlbControl) == 0x148);
+/* All earlier assembly anchors remain unchanged. */
+C_ASSERT(FIELD_OFFSET(KSW_SVM_CPU, Perf) == 0x150);
 /* MASM native restoration consumes these exact ordinary-VMCB offsets. */
 C_ASSERT(KSW_VMCB_S_CET == 0x5e0 && KSW_VMCB_SSP == 0x5e8 && KSW_VMCB_ISST == 0x5f0);
 

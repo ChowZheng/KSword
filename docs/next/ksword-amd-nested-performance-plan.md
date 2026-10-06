@@ -172,3 +172,14 @@ XSTATE专项覆盖SSE/AVX/AVX-512已启用部分、x87/MXCSR、guest XCR0/XSS切
 - [devirtz-kernel](https://github.com/meowdiocre/devirtz-kernel)：用作辨识退出减少策略。其修改含native CPUID/PMU/MSR、宽松XSTATE检查；与本项目的guest能力合同和L1-owned退出不同，不再直接照搬。尤其不能撤销L1的设备/MSR拦截来提速。
 
 推荐下一次编码从P0和P1开始；第一项需要周期证据才能决定的软件深度优化是P2，第一项真正减少SVM退出的硬件功能是P3。P4/P5随后独立验证。
+
+
+## 2026-10-06 实施记录（静态验证）
+
+P1 已提交 `8646bd5c`：单次取指复用两个页的源 walk 和对齐 word，读取后重验所有源路径；三字节样本物理读次数 189→63。VMRUN 首遍只解析身份，租约之后完整捕获；VMSAVE 从扫描 512 个 word 改为枚举 16 个可写 word，权限图只清零禁用侧。23 个宿主测试目标、驱动 Release x64 /WX 与 x64 WDK API/INF/CAT 通过，未执行硬件候选。
+
+P0 已实现：虚拟 TLB_CONTROL 按 VMRUN 捕获一次，真实非 INVALID 返回才消费；合并 shadow publication 与虚拟 1/3/7 的完整性要求，未消费请求不会被进入准备清除。缓存记录至多 512 个源 PTE；虚拟 flush 时通过 NPT01 重新读源，仅容忍 Accessed 变化，frame/权限/PS/缓存/NX/Dirty 改变或账本溢出则失效。新增硬件 flush 计数及每 64 次退出一次的汇编周期采样，metrics v10/配套 CLI 输出五个 root 阶段和七个内部叶操作。软件事件协调的进入阶段独立计时；退出侧剩余成本包含事件、路由、诊断，不能把它全称事件成本。计时排除纯硬件转移和来宾执行。
+
+分析器完整读取 JSON/JSONL/PowerShell UTF16，每个相邻同代次 CPU 窗口做差，检查偶数序列、饱和、身份、总数和阶段闭合；NPF 被纳入退出图，生命周期不再混入，flight ring 时间不再冒充 CPU 周期图。旧 v9 窗口可计次数，但不会生成伪造的周期图。
+
+P0 证据：`tools/hvm_lab/build-tests.cmd` 23 目标通过（session 3366 项，含 8 host threads×100 模拟事务）；生产 JSON/PS5 CP936、85 命令目录和参数门通过；Python profile 5 项通过。`artifacts/amd-perf-20261006-profile/build.txt` 标准 64 位 WDK Build exit0、Universal、INF/CAT 无警告错误；SYS 未签名，尚未加载，不能宣称实测加速。GUI ABI 更新需后续一起构建，禁止旧 v9 GUI 查新 v10 metrics。

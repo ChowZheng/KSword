@@ -12,6 +12,8 @@
 #define KSW_NSHADOW_STALE 3U
 /* Bound lookup cost and table memory to one MiB per prepared CPU. */
 #define KSW_NSHADOW_MAX_PAGES 256U
+/* Distinct committed NPT12 source words; overflow falls back to whole-root synchronization. */
+#define KSW_NSHADOW_SOURCE_WORDS 512U
 
 /* The allocator owns these pages; this module neither allocates nor frees them. */
 typedef struct _KSW_NSHADOW_PAGE {
@@ -33,6 +35,10 @@ typedef struct _KSW_NSHADOW {
     KSW_SVM_U64 Epoch;
     /* Physical and GPA widths are deliberately limited to four-level NPT. */
     KSW_SVM_U64 AddressMask;
+    /* Source GPA/value pairs preserve the provenance of every published leaf. */
+    KSW_SVM_U64 SourceAddress[KSW_NSHADOW_SOURCE_WORDS], SourceValue[KSW_NSHADOW_SOURCE_WORDS];
+    /* Untracked provenance can never authorize reuse across a virtual invalidation. */
+    unsigned SourceCount, SourceUntracked;
 } KSW_NSHADOW;
 
 /* Preparation only: verifies all mappings/physical frames and creates an empty root. */
@@ -42,3 +48,6 @@ unsigned int KswSvmNestedShadowInitialize(KSW_NSHADOW* Shadow,
 unsigned int KswSvmNestedShadowReset(KSW_NSHADOW* Shadow);
 /* Installs a fully committed MMU result; a full pool leaves the tables unchanged. */
 unsigned int KswSvmNestedShadowInstall(KSW_NSHADOW* Shadow, const KSW_NMMU_RESULT* Result);
+/* Revalidate all captured NPT12 words; unchanged mappings may survive an ASID flush. */
+int KswSvmNestedShadowSourcesMatch(const KSW_NSHADOW* Shadow,
+    KSW_NNPT_READ ReadGuestWord, void* Context);

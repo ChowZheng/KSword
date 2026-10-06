@@ -107,4 +107,6 @@ if errorlevel 1 exit /b %errorlevel%
 if "%KSW_RUN_TESTS%"=="1" tools\hvm_lab\svm_flightrecorder_tests.exe
 if errorlevel 1 exit /b %errorlevel%
 if "%KSW_RUN_TESTS%"=="0" echo TEST_EXECUTION=NOT_RUN
+if "%KSW_RUN_TESTS%"=="1" python tools\hvm_lab\test_svm_profile.py
+if errorlevel 1 exit /b %errorlevel%
 exit /b 0

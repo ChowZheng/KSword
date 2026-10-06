@@ -251,13 +251,6 @@ static int test_cache_lifetime(void)
         CHECK(cache_roundtrip(m) == 0);
         {
             static const unsigned expected[17] = {4,4,4,7,6,9,12,10,11,8,13,14,15,0,3,2,2};
-            if (scenario < 3) {
-                CHECK(m->session.CacheStats.lookups == 10 && m->session.CacheStats.hits == 9);
-                CHECK(m->session.CacheStats.resets == 1 && m->session.CacheStats.tlbRequests == 1);
-                CHECK(m->shadow.Epoch == epoch && m->shadow.Used == 4);
-                ((unsigned char*)operand)[KSW_VMCB_TLB] = 0;
-                continue;
-            }
             CHECK(m->session.CacheStats.lookups == 10 && m->session.CacheStats.hits == 8);
             CHECK(m->session.CacheStats.resets == 2 && !m->session.CacheStats.resetFailures);
             CHECK(m->session.CacheStats.lastMissMask == (1U << expected[scenario]));
@@ -342,10 +335,6 @@ static int test_cache_transfer_chain(void)
             KswSvmWrite64((KSW_SVM_VMCB*)m->ram[6], KSW_VMCB_NCR3, 0x8000);
         }
         CHECK(cache_roundtrip(m) == 0);
-        if (scenario == 4) {
-            CHECK(m->shadow.Epoch == epoch && m->shadow.Used == 4);
-            continue;
-        }
         CHECK(m->shadow.Epoch > epoch && m->shadow.Used == 1 && !m->pages[0].Words[0]);
         CHECK(KswSvmNestedShadowInstall(&m->shadow, &mapping) == KSW_NSHADOW_STALE);
     }
@@ -363,7 +352,7 @@ static int test_cache_counter_edges(void)
     CHECK(cache_roundtrip(m) == 0);
     CHECK(stats->resets == 2 && stats->tlbRequests == 1);
     CHECK(stats->reasons[KSW_HVM_NPT_CACHE_KEY_BASE + 1] == 1);
-    CHECK(stats->lastMissMask == (1U << (KSW_HVM_NPT_CACHE_KEY_BASE + 1)));
+    CHECK(stats->lastMissMask == ((1U << (KSW_HVM_NPT_CACHE_KEY_BASE + 1)) | (1U << KSW_HVM_NPT_CACHE_TLB)));
     KswSvmWrite64((KSW_SVM_VMCB*)m->ram[6], KSW_VMCB_NCR3, 0x9000);
     stats->lookups = stats->resets = stats->reasons[KSW_HVM_NPT_CACHE_KEY_BASE + 1] = ~0ULL;
     epoch = m->shadow.Epoch;
@@ -379,6 +368,76 @@ static int test_cache_counter_edges(void)
     CHECK(enter(m) == KSW_NSVM_ACTION_FAULT);
     CHECK(stats->lookups == 1 && stats->resetFailures == 1 && stats->resets == 0 && stats->hits == 0);
     CHECK(m->session.Lease.Token && m->session.Phase == KSW_NSVM_SESSION_FAULTED);
+    return 0;
+}
+static int test_npt_source_sync(void)
+{
+    MODEL* m = &model[0];
+    KSW_NMMU_RESULT mapping = {0};
+    static const KSW_SVM_U64 changes[] = {0,0x20,0x1000,2,0x80,8,1ULL<<63,0x40};
+    unsigned scenario;
+    for (scenario = 0; scenario < sizeof(changes) / sizeof(changes[0]); ++scenario) {
+        KSW_SVM_U64 epoch;
+        CHECK(initialize(m, 0)); m->io.ReuseNpt = m->mmu.OuterImmutable = 1;
+        m->ram[4][7] = 0x7007; m->ram[7][7] = 0x3067;
+        CHECK(cache_roundtrip(m) == 0); epoch = m->shadow.Epoch;
+        mapping.Status = KSW_NNPT_OK; mapping.Gpa = 0x1000; mapping.Epoch = epoch; mapping.Leaf = 0x3067;
+        mapping.Inner.Complete = mapping.Outer.Complete = 1;
+        mapping.Inner.InputAddress = mapping.Gpa; mapping.Inner.Address = mapping.Outer.InputAddress = mapping.Outer.Address = 0x3000;
+        mapping.Inner.Permissions = mapping.Outer.Permissions = 7;
+        mapping.Inner.Count = 1; mapping.Inner.EntryAddress[0] = 0x7038; mapping.Inner.EntryValue[0] = 0x3067;
+        CHECK(KswSvmNestedShadowInstall(&m->shadow, &mapping) == KSW_NSHADOW_OK);
+        CHECK(m->shadow.SourceCount == 1 && !m->shadow.SourceUntracked);
+        ((unsigned char*)m->ram[6])[KSW_VMCB_TLB] = 3;
+        m->ram[7][7] ^= changes[scenario];
+        CHECK(cache_roundtrip(m) == 0);
+        if (scenario < 2) {
+            CHECK(m->shadow.Epoch == epoch && m->shadow.Used == 4);
+            CHECK(m->session.CacheStats.hits == 1 && m->session.CacheStats.resets == 1);
+        } else {
+            CHECK(m->shadow.Epoch == epoch + 1 && m->shadow.Used == 1);
+            CHECK(m->session.CacheStats.resets == 2 && !m->shadow.SourceCount);
+        }
+        CHECK(m->session.CacheStats.tlbRequests == 1);
+    }
+    CHECK(initialize(m, 0));
+    mapping.Epoch = m->shadow.Epoch;
+    for (scenario = 0; scenario <= KSW_NSHADOW_SOURCE_WORDS; ++scenario) {
+        mapping.Inner.EntryAddress[0] = 0x7000 + 8ULL * scenario;
+        CHECK(KswSvmNestedShadowInstall(&m->shadow, &mapping) == KSW_NSHADOW_OK);
+    }
+    CHECK(m->shadow.SourceCount == KSW_NSHADOW_SOURCE_WORDS && m->shadow.SourceUntracked);
+    CHECK(!KswSvmNestedShadowSourcesMatch(&m->shadow, read_word, m));
+    CHECK(KswSvmNestedShadowReset(&m->shadow) == KSW_NSHADOW_OK && !m->shadow.SourceCount && !m->shadow.SourceUntracked);
+    return 0;
+}
+static int test_tlb_consumption(void)
+{
+    MODEL* m = &model[0];
+    unsigned request, pending, asid;
+    static const unsigned requests[] = {0,1,3,7};
+    CHECK(initialize(m, 0));
+    for (request = 0; request < 4; ++request) {
+        for (pending = 0; pending < 2; ++pending) {
+            for (asid = 0; asid < 2; ++asid) {
+                unsigned issued, expected;
+                m->session.Phase = KSW_NSVM_SESSION_L2;
+                m->session.PendingTlbControl = requests[request]; m->shadow.FlushPending = pending;
+                expected = requests[request] == 1 ? 1 : (pending || requests[request] == 3) ? (asid ? 3 : 1) : requests[request] ? (asid ? 7 : 1) : 0;
+                issued = KswSvmNestedSessionTlbSelect(&m->session, &m->shadow, asid);
+                CHECK(issued == expected);
+                KswSvmNestedSessionTlbComplete(&m->session, &m->shadow, issued, KSW_SVM_EXIT_INVALID);
+                CHECK(m->session.PendingTlbControl == requests[request] && m->shadow.FlushPending == pending);
+                KswSvmNestedSessionTlbComplete(&m->session, &m->shadow, issued, KSW_SVM_EXIT_CPUID);
+                CHECK(m->session.PendingTlbControl == 0 && m->shadow.FlushPending == 0);
+                CHECK(KswSvmNestedSessionTlbSelect(&m->session, &m->shadow, asid) == 0);
+                m->session.Phase = KSW_NSVM_SESSION_IDLE; m->shadow.FlushPending = 1;
+                CHECK(KswSvmNestedSessionTlbSelect(&m->session, &m->shadow, asid) == 0);
+                KswSvmNestedSessionTlbComplete(&m->session, &m->shadow, 1, KSW_SVM_EXIT_CPUID);
+                CHECK(m->shadow.FlushPending == 1);
+            }
+        }
+    }
     return 0;
 }
 static DWORD WINAPI run_parallel(void* argument)
@@ -399,10 +458,31 @@ static DWORD WINAPI run_parallel(void* argument)
     }
     return 0;
 }
+static KSW_SVM_U64 test_clock(void* context)
+{
+    KSW_SVM_U64* clock = context;
+    *clock += 10; return *clock;
+}
+static int test_perf_boundaries(void)
+{
+    KSW_NSVM_SESSION_IO io = {0}; KSWORD_HVM_PERF_ROW row = {0};
+    KSW_SVM_U64 clock = 100, saturated = 0, begin;
+    io.Operand.Context = &clock; io.PerfClock = test_clock;
+    CHECK(KswSvmPerfBegin(&io) == 0 && clock == 100);
+    io.PerfRow = &row; io.PerfSaturated = &saturated;
+    begin = KswSvmPerfBegin(&io); KswSvmPerfEnd(&io, KSW_HVM_PERF_FETCH, begin);
+    CHECK(row.details[KSW_HVM_PERF_FETCH] == 10 && clock == 120 && !saturated);
+    row.details[KSW_HVM_PERF_FETCH] = ~0ULL;
+    begin = KswSvmPerfBegin(&io); KswSvmPerfEnd(&io, KSW_HVM_PERF_FETCH, begin);
+    CHECK(saturated == 1 && row.details[KSW_HVM_PERF_FETCH] == ~0ULL);
+    saturated = 0; KswSvmPerfEnd(&io, KSW_HVM_PERF_MAPS, 1000);
+    CHECK(saturated == 1 && row.details[KSW_HVM_PERF_MAPS] == 0);
+    return 0;
+}
 int main(void)
 {
     HANDLE threads[8]; unsigned i; DWORD resultCode;
-    if (test_transitions() || test_event_consumption() || test_cache_lifetime() || test_cache_transfer_chain() || test_cache_counter_edges()) { return 1; }
+    if (test_transitions() || test_event_consumption() || test_cache_lifetime() || test_cache_transfer_chain() || test_cache_counter_edges() || test_npt_source_sync() || test_tlb_consumption() || test_perf_boundaries()) { return 1; }
     for (i = 0; i < 8; ++i) { CHECK(initialize(&model[i], i)); threads[i] = CreateThread(NULL, 0, run_parallel, &model[i], 0, NULL); CHECK(threads[i]); }
     CHECK(WaitForMultipleObjects(8, threads, TRUE, 30000) == WAIT_OBJECT_0);
     for (i = 0; i < 8; ++i) {

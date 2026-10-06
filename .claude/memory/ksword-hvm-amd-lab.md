@@ -1,8 +1,14 @@
 # AMD 实验后端与重启续接
 
+## 2026-10-06 P0/P1 实施续接（无实机操作）
+
+P1 已本地提交 `8646bd5c`，未推送：双页批量取指、VMRUN 首遍 identity-only、权限图清零减负及有限 writeback ranges。P0 增加一次性 TLB pending/成功硬件返回消费、NPT12 源账本重新验证（512 PTE 上限、溢出/变化保守 reset）、可选每64退出周期采样，metrics 升 v10，CLI `prepare-svm-profile/resident-svm-profile`。五段 root 软件周期、七个叶 detail、硬件 TLB0/1/3/7 完成计数；不测纯硬件 VMEXIT/VMRUN 和 guest 时间。分析器已改完整 JSONL/UTF16读取和相邻同代次差值，剔除无效/饱和/拓扑改变；去除 flight 时间伪权重，退出图含 NPF，不混生命周期。
+
+驱动标准64位MSVC/WDK Release /WX + x64 API Universal/INF/CAT通过；CLI/JSON/PS5CP936/命令门通过，宿主23测试目标及profile5项通过。候选 `artifacts/amd-perf-20261006-profile` 未签名未加载；GUI需要后续同步构建ABI v10。P2整数MSR快路、VLS、vGIF、稳定01/02+clean未实装。用户暂时不能UAC，未触碰驱动/VM/启动配置。细节见性能计划末尾实施记录。
+
 ## 2026-10-06 下一阶段性能研究（无实机操作）
 
-- 基线 `2c3d08c9`；与 `a5d7a2a7` 比较，SVM 算法源码和 metrics 结构没有差异。10 月 1 日主要为 GUI/准入接线。详细阶段方案在 `docs/next/ksword-amd-nested-performance-plan.md`。本轮只研究/写文档，不加载、重启、启动 VM 或请求 UAC；用户洗澡期间不可依赖其操作。
+- 基线 `2c3d08c9`；与 `a5d7a2a7` 比较，SVM 算法源码和 metrics 结构没有差异。10 月 1 日主要为 GUI/准入接线。详细阶段方案在 `docs/next/ksword-amd-nested-performance-plan.md`。研究阶段只写文档，后续P0/P1静态实施见上节；不加载、重启、启动 VM 或请求 UAC；用户洗澡期间不可依赖其操作。
 - 重新计算 `artifacts/build-npt-transfer-v8-live/a.json,b.json`：10.3365066 秒、32 对有效 CPU。L1 total=1681507、MSR(0x7c)=885086，全部为 EFER/HSAVE/XSS；XSETBV161047、VMLOAD160807、VMSAVE80419、STGI/CLGI262551、VMRUN131038、CPUID559。L2 total137636、NPF21468。L1占退出次数92.43%，MSR占L1次数52.64%；不是耗时比例。NPT lookups131038/hits131031/resets7/跨CPU54/poolRecycle0。离线复算在忽略目录 `artifacts/amd-perf-research-20261006`，检验总数归属、版本/CPU集合、热点有效/偶数sequence/饱和/单调。
 - 更正历史 native-msr-v9 试验：0x80是VMRUN，不是MSR；从merged MSRPM抹掉L1-owned读取拦截违反嵌套归属，已在a5d7a2a7回滚，不能重用。v9样本NPF8852581/poolRecycle15925/epochChanged15222；不同guest阶段不能单凭对比下根因，Vix10054不单独证明VM崩溃。TSC/P-state不是v8的L1 MSR热点。
 - 优先路线：P0完整汇编/C阶段采样计时与分析器修正（现profile脚本只读首行并相加累计计数）；P1批量取指、VMRUN第一遍只resolve、位图清零/合并与白名单扫描减负；P2可证明仅用整数的L1短路径才可跳过XSTATE保存；P3 Virtual VMLOAD/VMSAVE；P4 vGIF；P5稳定VMCB01/02及dirty/clean。实体机历史CPUID bit5/15/16存在，VMware克隆bit15/16缺失，保留软件路径；不能把物理加速与对L1公开扩展混为一谈。
