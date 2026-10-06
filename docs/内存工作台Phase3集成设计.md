@@ -42,7 +42,7 @@ MemoryWorkbenchView(会话条|地址条|子页|侧栏|状态条)
 
 **读路径**
 - R1 画布 `PlanFetch/MarkInFlight`→`provider.RequestPages(ranges, canvasRev)`；取值快照 `TargetCapture`；Gate 判不可用→`cancelPages`+状态条标红（不标不可读，不换通道）。
-- R2 单线程读通道，worker 只持值，`MemoryPageReader`：虚拟 ≤1 MiB、物理 ≤64 KiB（由端口 `Limits()` 给）；整段失败按页二分；`ok&&!partial` 才全有效，部分读按前缀置掩码，零填充/翻译失败=不可读（不变式 5/6）。
+- R2 单线程读通道，worker 只持值，`MemoryPageReader`：虚拟 ≤1 MiB、物理 ≤64 KiB（由端口 `Limits()` 给）；正常范围批量读取，跨页零字节 `Unreadable` 后同址开始按整页读取本块剩余部分，下一块恢复批量。每块最多增加一次失败的批量请求，单页确认失败才标不可读；通道 `Failed`、取消或脏暂存区立即停止，不切换后端。`ok&&!partial` 才全有效，部分读按真实前缀置掩码（不变式 5/6）。
 - R3 排队回 UI 线程，`isSourceStale` 通过才 `deliverPage/Unreadable`，否则 `cancelPages`；随后 `contentChanged`→Feeder。
 - R4 重读（F5/实时/写后）=`requestReload()`+`reread(窗口∪可见页)`，用画布当前代次原位替换；换目标才 `setAddressSpace`。
 

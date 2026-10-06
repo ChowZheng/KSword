@@ -49,7 +49,7 @@
     { "name": "MEMWB session resolver", "minAssertions": 184 },
     { "name": "MEMWB baseline window",  "minAssertions": 147 },
     { "name": "MEMWB edit journal",     "minAssertions": 189 },
-    { "name": "MEMWB page reader",      "minAssertions": 142 },
+    { "name": "MEMWB page reader",      "minAssertions": 287 },
     { "name": "MEMWB io bytestore",     "minAssertions": 33 },
     { "name": "MEMWB kernel mutation",  "minAssertions": 35 },
     { "name": "MEMWB patch store",      "minAssertions": 22 }

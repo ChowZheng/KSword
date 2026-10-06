@@ -6,7 +6,7 @@
 // FakeMemoryIoPort 把每次 Read / Write 调用按发生顺序记进 calls / writeCalls，
 // 并按序消费 script / writeScript 里预先编排好的返回值——这正是测试要断言
 // "端口被调用的 (address,length) 序列与手算一致"（钉死 MemoryPageReader 的
-// "不探测、不重读"，以及 MemoryIoByteStore 的切块/聚合规则）的基础：被测代码
+// 批量失败后有限单页核验，以及 MemoryIoByteStore 的切块/聚合规则）的基础：被测代码
 // 每发起一次调用，假端口就记一笔，脚本用完还没结束则说明测试脚本没编排够，
 // 报出一个能立刻定位到"不是被测对象的缺陷而是脚本缺口"的失败文案，不会悄悄
 // 返回一个看起来正常的空结果掩盖过去。
