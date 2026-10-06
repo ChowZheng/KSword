@@ -360,6 +360,12 @@ WorkbenchBaselineFeeder → WorkbenchWriteController → WorkbenchHexPane
   侧栏面板三个按钮（`Int3PatchPanel::aboutToAct` 直接连接）、`runLeaveSequence`（离开守卫与退出守卫共用）、
   `onTargetAboutToDetach` 安全网、`showEvent`、窗口激活。**多目标退出时的“全部还原”仍只处理当前目标**（已记录的局限，
   账本层没有“按所有目标退出询问”的接口）。
+- **窄宽度硬下限（侧栏）**：视图本身可收窄到 160px 以下无硬下限，残留的是侧栏——窄窗口里手动展开侧栏后，侧栏容器的
+  `minimumSizeHint`（约 244px）让 QSplitter 不肯把它压窄，画布被挤到 1px。（不是 root 那种 `SetDefaultConstraint` 回灌：
+  它只作用于顶层窗口，侧栏容器是子控件，变异实测对它加 `SetNoConstraint` 没有任何差别，所以没加。）现在窄宽度
+  （< 760）且侧栏可见时 `updateSidebarWidthCap` 给主体留底（`min(300, 可用宽/2)`）：设侧栏最大宽度，并显式 `setSizes`
+  （只设最大宽度 QSplitter 不会收回已记住的尺寸）；宽屏不设上限，上限解除时侧栏回到偏好宽度。回归在
+  `wpJ6_tests.Narrow.cpp`。未修（低于实用宽度）：`HexViewSegmented` 固定宽约 170px、文本子页工具钮 ≤240px 越界数像素。
 - **验证**：wpJ6 `wpJ6_tests.Entry3b.cpp`（两视图共用账本的右键/面板/显示/激活/分离安全网/退出询问、`focusAddress`、
   内嵌拒绝钉住、加入地址簿规则与 10000 上限）、wpK1 `TestModuleJumpPin`、wpG 默认值断言翻转。**真窗口未验证**：
   页签重排的实际外观、内嵌窗口里工作台的真实交互、搜索结果排序后双击与右键的真机行为、证据页菜单项。

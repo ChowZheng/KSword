@@ -465,6 +465,13 @@ namespace ks::ui
         // sidebarExpandButton_ 是唯一的展开入口（内嵌模式除外）。
         void maybeAutoCollapseSidebar();
 
+        // updateSidebarWidthCap：窄宽度（< kSidebarAutoCollapseWidth）下侧栏只会因为用户手动展开而
+        // 可见，此时按"主体至少拿到 min(kMinMainBodyWidth, 可用宽度/2)"给侧栏设宽度上限，避免侧栏的
+        // 内容最小宽度（约 244px）把十六进制画布挤到 1px；宽屏或侧栏隐藏时不设上限
+        // （QWIDGETSIZE_MAX）。上限解除时复位 sidebarWidthApplied_，让侧栏回到偏好宽度。
+        // 由 maybeAutoCollapseSidebar 末尾调用（resizeEvent/手动切换/内嵌切换/加载设置都经过它）。
+        void updateSidebarWidthCap();
+
         // applySidebarWidthIfPossible：把偏好侧栏宽度（sidebarPreferredWidth_）落到
         // 分割条上。只在侧栏可见、分割条已有真实宽度（装得下偏好宽度 + 最小主体宽度）
         // 时执行一次（sidebarWidthApplied_ 置真）；否则什么都不做，等后面的

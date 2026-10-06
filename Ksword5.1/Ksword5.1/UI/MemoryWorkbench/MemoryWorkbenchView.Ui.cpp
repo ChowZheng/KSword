@@ -17,6 +17,12 @@
 //      撤掉，完整夹具套件仍然全绿，即这两处当前没有可观测效果。
 //   ② 侧栏可见性由 maybeAutoCollapseSidebar 统一裁决，偏好宽度由
 //      applySidebarWidthIfPossible 在分割条有真实宽度之后落地。
+//   ③ 窄宽度（< kSidebarAutoCollapseWidth）下由 updateSidebarWidthCap 给主体留底：用户手动展开
+//      侧栏时，侧栏的 minimumSizeHint（约 244px）不再把十六进制画布挤到 1px
+//      （wpJ6_tests.Narrow.cpp）。注意这里不是 SetDefaultConstraint 回灌：它只作用于顶层窗口，
+//      侧栏容器是子控件（变异实测：对它再加 SetNoConstraint 没有任何差别，所以没加）。
+//      仍然存在、但低于任何实际使用宽度的下限：分段钮 HexViewSegmented 是固定宽度（约 170px），
+//      文本子页的工具钮在 ≤240px 时越界几个像素。
 //   WorkbenchSessionBar 内部用 FlowLayout 作自己的顶层布局，FlowLayout 正确实现了
 //   hasHeightForWidth()/heightForWidth()（见 FlowLayout.cpp 文件头）；保留
 //   heightForWidth 相关两处是为了让"遵守该协议"的宿主在会话条换行时拿到正确高度。
@@ -56,6 +62,8 @@
 #include <QTimer>
 #include <QToolButton>
 #include <QVBoxLayout>
+
+#include <algorithm>
 
 namespace ks::ui
 {
@@ -194,6 +202,11 @@ namespace ks::ui
         auto* sidebarLayout = new QVBoxLayout(sidebarContainer_);
         sidebarLayout->setContentsMargins(0, 0, 0, 0);
         sidebarLayout->setSpacing(4);
+        // 窄宽度硬下限（侧栏版）：这里**不需要**像 root 那样关 SetDefaultConstraint 回灌——默认约束
+        // 只会给顶层窗口写最小尺寸，侧栏容器是子控件，变异实测去掉/保留该行结果一致。真正把画布
+        // 挤到 1px 的是容器的 minimumSizeHint（约 244px，含 FlowLayout/分段钮的固定宽度）：
+        // QSplitter 不会把子控件压到它的 minimumSizeHint 以下。解法见 updateSidebarWidthCap
+        // （窄宽度下给侧栏设宽度上限并显式落尺寸，上限会把 minimumSizeHint 一并压下来）。
         sidebarLayout->addWidget(addressBookPanel_, 1);
         sidebarLayout->addWidget(int3Panel_);
 
@@ -455,6 +468,55 @@ namespace ks::ui
         if (sidebarExpandButton_ != nullptr)
         {
             sidebarExpandButton_->setVisible(!embedded_ && sidebarContainer_->isHidden());
+        }
+        // 可见性定下来之后再裁决侧栏的宽度上限：上限只在"窄宽度且侧栏可见"时存在。
+        updateSidebarWidthCap();
+    }
+
+    // updateSidebarWidthCap：见头文件声明处的注释。
+    // 窄宽度（< kSidebarAutoCollapseWidth）下侧栏只会因为用户手动展开而可见；此时给主体留底：
+    // 主体至少拿到 min(kMinMainBodyWidth, 可用宽度的一半)，侧栏被限制在剩下的宽度内（它的内容
+    // 放不下就被裁掉，比把画布压成 1px 更可用）。宽屏（>= 760）不加任何上限——用户拖分割条的
+    // 自由保持原样。窗口重新变宽、上限解除时，侧栏要回到偏好宽度，所以把 sidebarWidthApplied_
+    // 复位让 applySidebarWidthIfPossible 再落一次。
+    void MemoryWorkbenchView::updateSidebarWidthCap()
+    {
+        if (sidebarContainer_ == nullptr || mainSplitter_ == nullptr || layout() == nullptr)
+        {
+            return;
+        }
+        const bool narrow = width() < kSidebarAutoCollapseWidth;
+        int cap = QWIDGETSIZE_MAX;
+        if (narrow && !sidebarContainer_->isHidden())
+        {
+            const QMargins margins = layout()->contentsMargins();
+            const int total = width() - margins.left() - margins.right();
+            const int floor = std::min(kMinMainBodyWidth, total / 2);
+            cap = std::max(1, total - mainSplitter_->handleWidth() - floor);
+        }
+        const bool wasCapped = sidebarContainer_->maximumWidth() != QWIDGETSIZE_MAX;
+        if (sidebarContainer_->maximumWidth() != cap)
+        {
+            sidebarContainer_->setMaximumWidth(cap);
+        }
+        if (cap != QWIDGETSIZE_MAX)
+        {
+            // 只改最大宽度不够：QSplitter 重新布局时沿用它已记住的各子控件尺寸（实测侧栏仍保持 300，
+            // 超出上限，主体照样被挤到 1px；刚从隐藏变可见时它记的尺寸还是旧值/0，同样不会自己收回），
+            // 必须显式落一次尺寸：侧栏取"已有宽度（在上限内且非 0）"，否则取 min(上限, 偏好宽度)，
+            // 剩下的全部还给主体。
+            const QList<int> sizes = mainSplitter_->sizes();
+            const int current = sizes.size() == 2 ? sizes.at(1) : 0;
+            const int target = (current > 0 && current <= cap) ? current : std::min(cap, sidebarPreferredWidth_);
+            const int mainWidth = std::max(0, mainSplitter_->width() - mainSplitter_->handleWidth() - target);
+            if (sizes.size() != 2 || sizes.at(0) != mainWidth || current != target)
+            {
+                mainSplitter_->setSizes(QList<int>{mainWidth, target});
+            }
+        }
+        if (wasCapped && cap == QWIDGETSIZE_MAX)
+        {
+            sidebarWidthApplied_ = false;
         }
     }
 

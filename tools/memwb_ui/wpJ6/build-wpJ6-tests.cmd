@@ -86,7 +86,7 @@ set "CLFLAGS=/nologo /std:c++latest /Zc:__cplusplus /permissive- /utf-8 /EHsc /M
 cl %CLFLAGS% ^
   "%FIX%\wpJ6_main.cpp" "%FIX%\wpJ6_common.cpp" ^
   "%FIX%\wpJ6_tests.Identity.cpp" "%FIX%\wpJ6_tests.Embedded.cpp" "%FIX%\wpJ6_tests.Actions.cpp" "%FIX%\wpJ6_tests.Gate.cpp" "%FIX%\wpJ6_tests.Write.cpp" "%FIX%\wpJ6_tests.Nav.cpp" "%FIX%\wpJ6_tests.Visual.cpp" ^
-  "%FIX%\wpJ6_tests.Review2A.cpp" "%FIX%\wpJ6_tests.Review2B.cpp" "%FIX%\wpJ6_tests.Review2C.cpp" "%FIX%\wpJ6_tests.Review2Fixes.cpp" "%FIX%\wpJ6_tests.Quit.cpp" "%FIX%\wpJ6_tests.Entry3b.cpp" ^
+  "%FIX%\wpJ6_tests.Review2A.cpp" "%FIX%\wpJ6_tests.Review2B.cpp" "%FIX%\wpJ6_tests.Review2C.cpp" "%FIX%\wpJ6_tests.Review2Fixes.cpp" "%FIX%\wpJ6_tests.Quit.cpp" "%FIX%\wpJ6_tests.Entry3b.cpp" "%FIX%\wpJ6_tests.Narrow.cpp" ^
   "%WPI%\memwb_wpI_common.cpp" ^
   "%UI%\MemoryWorkbenchView.cpp" "%UI%\MemoryWorkbenchView.Ui.cpp" "%UI%\MemoryWorkbenchView.Session.cpp" "%UI%\MemoryWorkbenchView.Nav.cpp" "%UI%\WorkbenchDiagnosticsHost.cpp" ^
   "%UI%\WorkbenchShared.cpp" ^
