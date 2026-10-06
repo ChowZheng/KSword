@@ -18,6 +18,7 @@ Environment:
 #include "../kernel/hook_scan_support.h"
 #include "../kernel/object_header_fallback.h" // 通过公开 ID 查询取得与候选地址精确匹配的线程引用。
 #include "keyboard_internal.h"
+#include "../../platform/pool_compat.h" // 声明非分页池分配器，确保状态快照分配使用正确的指针返回类型。
 
 #include <ntstrsafe.h>
 
