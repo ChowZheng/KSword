@@ -8,6 +8,7 @@
 
 #include "HexCanvasFormat.h"
 
+#include "../../Internationalization/LanguageManager.h"
 #include "../../theme.h"
 
 #include <QCheckBox>
@@ -202,6 +203,24 @@ namespace ks::ui
             {
                 showInlineEditError(editor->geometry(), result.error);
                 return result.error;
+            }
+            // 行内只接受一条完整指令：先复核未填充的机器码，不能把多条指令或尾部残片
+            // 当成一条短指令补 NOP；右键汇编编辑仍使用自己的多行预览与边界校验。
+            // decodedInstruction：按编辑开始时冻结的真实地址和架构解出的首条指令。
+            std::optional<DecodedRow> decodedInstruction;
+            if (m_decodeOne && !result.bytes.isEmpty())
+            {
+                decodedInstruction = m_decodeOne(
+                    reinterpret_cast<const std::uint8_t*>(result.bytes.constData()),
+                    static_cast<std::size_t>(result.bytes.size()), address, x64);
+            }
+            if (!decodedInstruction.has_value() || !decodedInstruction->decoded
+                || decodedInstruction->bytes != result.bytes)
+            {
+                const QString error = ks::i18n::sourceText(QStringLiteral(
+                    "行内编辑只接受一条完整指令；多行汇编请使用右键汇编编辑。"));
+                showInlineEditError(editor->geometry(), error);
+                return error;
             }
             if (result.bytes.size() > oldBytes.size())
             {
