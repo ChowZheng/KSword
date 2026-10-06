@@ -111,7 +111,8 @@ typedef struct _KSWORD_ARK_BUGCHECK_VERDICT_RESOURCE_ENTRY
 // v2 changes INSTALL from a synchronous operation to an enqueue-and-query contract.
 // The version bump makes a new R3 client fail fast against a loaded v1 driver instead of
 // entering that driver's unbounded synchronous installation path.
-#define KSWORD_ARK_BUGCHECK_DIAGNOSTICS_PROTOCOL_VERSION 2UL
+// v3 在保持报文尺寸不变的前提下增加渲染模式及实际模式回读，旧驱动必须拒绝新协议。
+#define KSWORD_ARK_BUGCHECK_DIAGNOSTICS_PROTOCOL_VERSION 3UL
 #define KSWORD_ARK_IOCTL_FUNCTION_CONFIGURE_BUGCHECK_DIAGNOSTICS 0x8FDUL
 
 #define IOCTL_KSWORD_ARK_CONFIGURE_BUGCHECK_DIAGNOSTICS \
@@ -123,6 +124,12 @@ typedef struct _KSWORD_ARK_BUGCHECK_VERDICT_RESOURCE_ENTRY
 
 #define KSWORD_ARK_BUGCHECK_DIAGNOSTICS_ACTION_QUERY   0UL
 #define KSWORD_ARK_BUGCHECK_DIAGNOSTICS_ACTION_INSTALL 1UL
+// SET_RENDER_MODE 只切换显示布局，不安装回调，也不触发蓝屏。
+#define KSWORD_ARK_BUGCHECK_DIAGNOSTICS_ACTION_SET_RENDER_MODE 2UL
+
+// 模式值由 R3 设置与 R0 两个绘图后端共同使用；原诊断面板仍为默认值。
+#define KSWORD_ARK_BUGCHECK_RENDER_MODE_DIAGNOSTIC 0UL
+#define KSWORD_ARK_BUGCHECK_RENDER_MODE_LINUX_QR   1UL
 
 #define KSWORD_ARK_BUGCHECK_DIAGNOSTICS_STATUS_OK                 0UL
 #define KSWORD_ARK_BUGCHECK_DIAGNOSTICS_STATUS_INACTIVE           1UL
@@ -136,14 +143,14 @@ typedef struct _KSWORD_ARK_BUGCHECK_VERDICT_RESOURCE_ENTRY
 #define KSWORD_ARK_BUGCHECK_DIAGNOSTICS_STATE_BGP_BACKEND_READY  0x00000004UL
 #define KSWORD_ARK_BUGCHECK_DIAGNOSTICS_STATE_PANEL_READY        0x00000008UL
 
-// 固定长度请求仅区分查询和本次驱动生命周期内的安装，不提供常驻卸载动作。
+// 固定长度请求区分查询、安装与模式切换；renderMode 使用 v2 的首个保留字段。
 typedef struct _KSWORD_ARK_BUGCHECK_DIAGNOSTICS_REQUEST
 {
     unsigned long size;
     unsigned long version;
     unsigned long action;
     unsigned long flags;
-    unsigned long reserved0;
+    unsigned long renderMode; // INSTALL/SET_RENDER_MODE 选择的布局；QUERY 必须为零。
     unsigned long reserved1;
 } KSWORD_ARK_BUGCHECK_DIAGNOSTICS_REQUEST;
 
@@ -160,7 +167,7 @@ typedef struct _KSWORD_ARK_BUGCHECK_DIAGNOSTICS_RESPONSE
     unsigned long bgpPreparationStage;
     long bgpPreparationStatus;
     long panelStatus;
-    unsigned long reserved0;
+    unsigned long renderMode; // 驱动实际选择的布局，失败响应也可用于 R3 回读。
     unsigned long reserved1;
 } KSWORD_ARK_BUGCHECK_DIAGNOSTICS_RESPONSE;
 

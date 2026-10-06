@@ -42,6 +42,7 @@
 #include <QTextBlock>
 #include <QTextDocument>
 #include <QTextStream>
+#include <QTimer>
 #include <QToolButton>
 #include <QVBoxLayout>
 #include <QXmlStreamReader>
@@ -186,18 +187,20 @@ namespace
             "  background:%2;"
             "  color:%4;"
             "}"
-            "QToolButton:pressed{"
+            "QToolButton:pressed,QToolButton:checked:pressed{"
             "  background:%3;"
-            "  color:%4;"
+            "  color:%5;"
             "}"
             "QToolButton:checked{"
             "  background:%2;"
             "  color:%4;"
             "}")
             .arg(KswordTheme::TextPrimaryHex())
-            .arg(KswordTheme::PrimaryBlueHex)
+            .arg(KswordTheme::ThemeColorName(KswordTheme::PrimaryAccentColor()))
             .arg(KswordTheme::AccentHex(KswordTheme::AccentRole::Blue, -14, -40))
-            .arg(KswordTheme::OnAccentDynamicHex());
+            .arg(KswordTheme::OnAccentHex())
+            .arg(KswordTheme::OnAccentHex(
+                KswordTheme::AccentColor(KswordTheme::AccentRole::Blue, -14, -40)));
     }
 
     // buildFloatingSwitchStyle：
@@ -248,7 +251,7 @@ namespace
     // buildToolbarSvgIcon：
     // - 从 SVG 资源生成工具栏图标；
     // - 分别生成普通、悬停、禁用和选中配色，避免图标与强调背景同色。
-    QIcon buildToolbarSvgIcon(const QString& resourcePath, const QPalette& palette,
+    QIcon buildToolbarSvgIcon(const QString& resourcePath, const QToolButton* button,
         const QSize& iconSize = QSize(22, 22))
     {
         QSvgRenderer renderer(resourcePath);
@@ -275,12 +278,22 @@ namespace
             colorPainter.end();
             icon.addPixmap(coloredPixmap, mode, state);
         };
+        const QColor surface = KswordTheme::SurfaceColor();
+        const QColor checkedBackground = KswordTheme::PrimaryAccentColor();
+        const QColor pressedBackground = KswordTheme::AccentColor(KswordTheme::AccentRole::Blue, -14, -40);
+        const bool pressed = button != nullptr && button->isDown();
+        // Active同时覆盖悬停和按下；键盘按下时Qt可能仍请求Normal，按实际down状态补齐。
+        const QColor activeForeground = pressed
+            ? KswordTheme::ControlGlyphColor(pressedBackground)
+            : KswordTheme::ControlGlyphColor(checkedBackground);
         for (QIcon::State state : { QIcon::Off, QIcon::On })
         {
-            addColoredPixmap(palette.color(state == QIcon::On
-                ? QPalette::HighlightedText : QPalette::Highlight), QIcon::Normal, state);
-            addColoredPixmap(palette.color(QPalette::HighlightedText), QIcon::Active, state);
-            addColoredPixmap(palette.color(QPalette::Disabled, QPalette::Text), QIcon::Disabled, state);
+            const QColor normalBackground = pressed ? pressedBackground
+                : (state == QIcon::On ? checkedBackground : surface);
+            addColoredPixmap(KswordTheme::ControlGlyphColor(normalBackground), QIcon::Normal, state);
+            addColoredPixmap(activeForeground, QIcon::Active, state);
+            addColoredPixmap(activeForeground, QIcon::Selected, state);
+            addColoredPixmap(KswordTheme::ControlGlyphColor(surface, true), QIcon::Disabled, state);
         }
         return icon;
     }
@@ -697,11 +710,11 @@ namespace ks::ui
     }
 }
 
-class BracketHighlighter final : public QSyntaxHighlighter
+class EmbeddedBracketHighlighter final : public QSyntaxHighlighter
 {
 public:
     // 构造函数：绑定目标文本文档。
-    explicit BracketHighlighter(QTextDocument* document)
+    explicit EmbeddedBracketHighlighter(QTextDocument* document)
         : QSyntaxHighlighter(document)
     {
     }
@@ -740,13 +753,13 @@ protected:
     }
 };
 
-class CodeTextEdit;
+class EmbeddedCodeTextEdit;
 
-class LineNumberArea final : public QWidget
+class EmbeddedLineNumberArea final : public QWidget
 {
 public:
     // 构造函数：保存主编辑器指针。
-    explicit LineNumberArea(CodeTextEdit* owner);
+    explicit EmbeddedLineNumberArea(EmbeddedCodeTextEdit* owner);
 
     // sizeHint：返回行号区域宽度。
     QSize sizeHint() const override;
@@ -757,14 +770,14 @@ protected:
 
 private:
     // m_owner：主代码编辑器。
-    CodeTextEdit* m_owner = nullptr;
+    EmbeddedCodeTextEdit* m_owner = nullptr;
 };
 
-class CodeTextEdit final : public QPlainTextEdit
+class EmbeddedCodeTextEdit final : public QPlainTextEdit
 {
 public:
     // 构造函数：初始化行号、字体和括号匹配高亮。
-    explicit CodeTextEdit(QWidget* parent = nullptr)
+    explicit EmbeddedCodeTextEdit(QWidget* parent = nullptr)
         : QPlainTextEdit(parent)
     {
         QFont fixedFont = QFontDatabase::systemFont(QFontDatabase::FixedFont);
@@ -776,8 +789,8 @@ public:
         setLineWrapMode(QPlainTextEdit::WidgetWidth);
         setFrameShape(QFrame::NoFrame);
 
-        m_lineNumberArea = new LineNumberArea(this);
-        m_bracketHighlighter = new BracketHighlighter(document());
+        m_lineNumberArea = new EmbeddedLineNumberArea(this);
+        m_bracketHighlighter = new EmbeddedBracketHighlighter(document());
 
         connect(this, &QPlainTextEdit::blockCountChanged, this, [this](int)
             {
@@ -815,7 +828,7 @@ public:
     }
 
     // 析构函数：释放括号高亮对象。
-    ~CodeTextEdit() override
+    ~EmbeddedCodeTextEdit() override
     {
         delete m_bracketHighlighter;
         m_bracketHighlighter = nullptr;
@@ -888,6 +901,28 @@ public:
     }
 
 protected:
+    // 排队合并palette通知；只重算格式，不重置正文、光标、滚动位置或撤销历史。
+    void changeEvent(QEvent* event) override
+    {
+        QPlainTextEdit::changeEvent(event);
+        if (event == nullptr || (event->type() != QEvent::PaletteChange
+            && event->type() != QEvent::ApplicationPaletteChange) || m_themeRefreshPending)
+        {
+            return;
+        }
+        m_themeRefreshPending = true;
+        QTimer::singleShot(0, this, [this]()
+        {
+            // 格式刷新不代表内容编辑，避免业务监听误标记文件或重建结构视图。
+            const QSignalBlocker themeSignalBlocker(this);
+            if (m_bracketHighlighter != nullptr) m_bracketHighlighter->rehighlight();
+            refreshExtraSelections();
+            if (m_lineNumberArea != nullptr) m_lineNumberArea->update();
+            viewport()->update();
+            m_themeRefreshPending = false;
+        });
+    }
+
     // resizeEvent：窗口变化时同步行号区域几何。
     void resizeEvent(QResizeEvent* event) override
     {
@@ -990,12 +1025,14 @@ private:
     QWidget* m_lineNumberArea = nullptr;
 
     // m_bracketHighlighter：括号着色器。
-    BracketHighlighter* m_bracketHighlighter = nullptr;
+    EmbeddedBracketHighlighter* m_bracketHighlighter = nullptr;
 
-    friend class LineNumberArea;
+    bool m_themeRefreshPending = false; // 合并一轮主题变化中的多个palette事件。
+
+    friend class EmbeddedLineNumberArea;
 };
 
-QSize LineNumberArea::sizeHint() const
+QSize EmbeddedLineNumberArea::sizeHint() const
 {
     if (m_owner == nullptr)
     {
@@ -1004,13 +1041,13 @@ QSize LineNumberArea::sizeHint() const
     return QSize(m_owner->lineNumberAreaWidth(), 0);
 }
 
-LineNumberArea::LineNumberArea(CodeTextEdit* owner)
+EmbeddedLineNumberArea::EmbeddedLineNumberArea(EmbeddedCodeTextEdit* owner)
     : QWidget(owner)
     , m_owner(owner)
 {
 }
 
-void LineNumberArea::paintEvent(QPaintEvent* event)
+void EmbeddedLineNumberArea::paintEvent(QPaintEvent* event)
 {
     if (m_owner != nullptr)
     {
@@ -1112,7 +1149,15 @@ void CodeEditorWidget::changeEvent(QEvent* event)
     if (!m_destroying && m_editor != nullptr && event != nullptr &&
         (event->type() == QEvent::PaletteChange || event->type() == QEvent::ApplicationPaletteChange))
     {
-        applyThemeStyle();
+        if (!m_themeRefreshPending)
+        {
+            m_themeRefreshPending = true;
+            QTimer::singleShot(0, this, [this]()
+            {
+                if (!m_destroying) applyThemeStyle();
+                m_themeRefreshPending = false;
+            });
+        }
     }
     if (event == nullptr || event->type() != QEvent::LanguageChange ||
         !m_localizedTextActive || m_editor == nullptr)
@@ -1214,7 +1259,18 @@ void CodeEditorWidget::initializeUi()
         {
             QToolButton* button = new QToolButton(m_toolbarWidget);
             button->setProperty("ksword_editor_icon_path", iconPath);
-            button->setIcon(buildToolbarSvgIcon(iconPath, button->palette()));
+            // 自管各状态，禁止全局SVG扫描把反色/禁用图标再次压成单态主体色。
+            button->setProperty("ksword_theme_icon_managed", true);
+            const auto refreshIcon = [button, iconPath]()
+            {
+                button->setProperty("ksword_editor_glyph_down", button->isDown());
+                button->setIcon(buildToolbarSvgIcon(iconPath, button));
+            };
+            connect(button, &QToolButton::pressed, button, refreshIcon);
+            connect(button, &QToolButton::released, button, refreshIcon);
+            connect(button, &QToolButton::toggled, button, refreshIcon);
+            button->installEventFilter(this);
+            refreshIcon();
             button->setIconSize(QSize(22, 22));
             button->setToolTip(tip);
             button->setAutoRaise(true);
@@ -1313,7 +1369,7 @@ void CodeEditorWidget::initializeUi()
     m_gotoPanel->setVisible(false);
     m_rootLayout->addWidget(m_gotoPanel);
 
-    m_editor = new CodeTextEdit(this);
+    m_editor = new EmbeddedCodeTextEdit(this);
     m_editor->setPlaceholderText(QStringLiteral("即时窗口：支持行号、括号匹配、查找替换、跳转行。"));
 
     // 纯文本与结构视图叠在同一位置：切换只换页，不改变外层布局和分隔器比例。
@@ -1558,21 +1614,27 @@ void CodeEditorWidget::applyThemeStyle()
     {
         if (button != nullptr)
         {
-            button->setStyleSheet(toolStyle);
+            if (button->styleSheet() != toolStyle) button->setStyleSheet(toolStyle);
             const QString iconPath = button->property("ksword_editor_icon_path").toString();
-            if (!iconPath.isEmpty()) button->setIcon(buildToolbarSvgIcon(iconPath, palette()));
+            if (!iconPath.isEmpty())
+            {
+                button->setProperty("ksword_editor_glyph_down", button->isDown());
+                button->setIcon(buildToolbarSvgIcon(iconPath, button));
+            }
         }
     }
 
     // 悬浮切换框不在上面那批里：它压在正文之上，用的是自带底色和边框的另一套样式。
     if (m_structuredCombo != nullptr)
     {
-        m_structuredCombo->setStyleSheet(buildFloatingSwitchStyle());
+        const QString comboStyle = buildFloatingSwitchStyle();
+        if (m_structuredCombo->styleSheet() != comboStyle) m_structuredCombo->setStyleSheet(comboStyle);
     }
 
-    m_findEdit->setStyleSheet(inputStyle);
-    m_replaceEdit->setStyleSheet(inputStyle);
-    m_gotoLineEdit->setStyleSheet(inputStyle);
+    for (QLineEdit* input : { m_findEdit, m_replaceEdit, m_gotoLineEdit })
+    {
+        if (input->styleSheet() != inputStyle) input->setStyleSheet(inputStyle);
+    }
 }
 
 void CodeEditorWidget::refreshReadOnlyUiState()
@@ -1627,6 +1689,19 @@ void CodeEditorWidget::activateTextView()
 
 bool CodeEditorWidget::eventFilter(QObject* watchedObject, QEvent* eventObject)
 {
+    // setDown(false)、失焦等取消路径未必发released；绘制前只在down改变时修正Normal图标。
+    if (!m_destroying && eventObject != nullptr && eventObject->type() == QEvent::Paint)
+    {
+        if (auto* button = qobject_cast<QToolButton*>(watchedObject))
+        {
+            const QString path = button->property("ksword_editor_icon_path").toString();
+            if (!path.isEmpty() && button->property("ksword_editor_glyph_down").toBool() != button->isDown())
+            {
+                button->setProperty("ksword_editor_glyph_down", button->isDown());
+                button->setIcon(buildToolbarSvgIcon(path, button));
+            }
+        }
+    }
     if (!m_destroying &&
         watchedObject == m_viewStack &&
         eventObject != nullptr &&

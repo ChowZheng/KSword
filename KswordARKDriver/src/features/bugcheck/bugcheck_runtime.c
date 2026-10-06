@@ -16,6 +16,7 @@ Abstract:
 #include "bugcheck_bgp.h"
 #include "bugcheck_panel.h"
 #include "bugcheck_preparation_log.h"
+#include "bugcheck_evidence.h" // 扩展证据仅运行期准备，崩溃阶段读取固定非分页副本。
 #include "../../platform/pool_compat.h"
 
 #include <aux_klib.h>
@@ -44,6 +45,7 @@ typedef struct _KSWORD_ARK_BUGCHECK_SECONDARY_DATA
     ULONG Reserved;
     KSWORD_ARK_BUGCHECK_DIAGNOSTICS Diagnostics;
     KSWORD_ARK_BGP_DUMP_STATE BgpState;
+    KSWORD_BUGCHECK_EVIDENCE Evidence; // V5 在既有 V4 前缀后追加完整固定证据副本。
 } KSWORD_ARK_BUGCHECK_SECONDARY_DATA;
 
 #define KSWORD_ARK_BUGCHECK_CALLBACK_CLASSIC   0x00000001UL
@@ -89,7 +91,7 @@ KswordARKBugcheckUpdateSecondaryData(
 {
     g_KswordArkBugcheckSecondaryData.Signature =
         KSWORD_ARK_BUGCHECK_SECONDARY_SIGNATURE;
-    g_KswordArkBugcheckSecondaryData.Version = 4UL;
+    g_KswordArkBugcheckSecondaryData.Version = 5UL; // V5 保留 V4 前缀，解析者必须结合 Size 判断扩展证据是否完整。
     g_KswordArkBugcheckSecondaryData.Size =
         sizeof(g_KswordArkBugcheckSecondaryData);
     RtlCopyMemory(
@@ -98,6 +100,9 @@ KswordARKBugcheckUpdateSecondaryData(
         sizeof(g_KswordArkBugcheckSecondaryData.Diagnostics));
     KswordARKBugcheckBgpSnapshot(
         &g_KswordArkBugcheckSecondaryData.BgpState);
+    RtlCopyMemory(&g_KswordArkBugcheckSecondaryData.Evidence, // 大结构直接复制到静态非分页转储区，避免占用内核栈。
+        KswordARKBugcheckEvidenceSnapshot(), // 来源为已发布的固定崩溃证据副本。
+        sizeof(g_KswordArkBugcheckSecondaryData.Evidence)); // 不执行额外解析、分配或文件访问。
 }
 
 static CHAR
@@ -335,7 +340,8 @@ KswordARKBugcheckTrackLoadedImage(
     CHAR name[KSWORD_ARK_BUGCHECK_MODULE_NAME_CHARS];
 
     UNREFERENCED_PARAMETER(ProcessId);
-    if (ImageInfo == NULL || !ImageInfo->SystemModeImage ||
+    if (InterlockedCompareExchange(&g_KswordArkBugcheckState.TrackingReady, 0, 0) == 0 || // 未完成证据初始化或正在卸载时不接受新映像。
+        ImageInfo == NULL || !ImageInfo->SystemModeImage ||
         ImageInfo->ImageBase == NULL || ImageInfo->ImageSize == 0 ||
         ImageInfo->ImageSize > MAXULONG ||
         !KswordARKBugcheckCopyUnicodeBaseNameA(
@@ -348,6 +354,8 @@ KswordARKBugcheckTrackLoadedImage(
         (ULONG_PTR)ImageInfo->ImageBase,
         (ULONG)ImageInfo->ImageSize,
         name);
+    KswordARKBugcheckEvidenceImage((ULONG_PTR)ImageInfo->ImageBase, // 正常加载通知解析 PE，崩溃回调只读取其副本。
+        (ULONG)ImageInfo->ImageSize, FullImageName); // 回调拥有路径生命周期，立即复制且不保留指针。
 }
 
 static VOID
@@ -420,6 +428,8 @@ KswordARKBugcheckPublishProcess(
     KeMemoryBarrier();
     (VOID)InterlockedIncrement(&entry->Sequence);
     KeReleaseSpinLock(&g_KswordArkBugcheckState.ProcessCacheLock, oldIrql);
+    KswordARKBugcheckEvidenceProcess((ULONG_PTR)Process, // 先释放原缓存锁，避免跨模块嵌套写锁。
+        (ULONG_PTR)ProcessId, Exiting); // 只发布数值身份、退出状态和更新时间。
 }
 
 VOID
@@ -599,6 +609,9 @@ KswordARKBugcheckRefreshModuleCache(
     ULONG index;
     PAUX_MODULE_EXTENDED_INFO modules;
     PCSTR name;
+    WCHAR fullPath[AUX_KLIB_MODULE_PATH_LEN + 1UL]; // 固定小型运行期栈缓冲，不增加分配。
+    UNICODE_STRING imagePath; // AuxKlib 路径只在当前枚举生命周期内转换并复制。
+    ULONG pathIndex; // 固定路径长度内的转换下标。
 
     status = AuxKlibInitialize();
     if (!NT_SUCCESS(status)) {
@@ -644,6 +657,16 @@ KswordARKBugcheckRefreshModuleCache(
             (ULONG_PTR)modules[index].BasicInfo.ImageBase,
             modules[index].ImageSize,
             name);
+        for (pathIndex = 0UL; pathIndex < AUX_KLIB_MODULE_PATH_LEN && // 严格限制 AuxKlib 固定路径数组范围。
+            modules[index].FullPathName[pathIndex] != 0U; ++pathIndex) { // 正常运行期只复制有效字节前缀。
+            fullPath[pathIndex] = (WCHAR)modules[index].FullPathName[pathIndex]; // 系统模块路径按 AuxKlib 返回的有界字节保存。
+        }
+        fullPath[pathIndex] = L'\0'; // 所有路径强制 NUL 结尾。
+        imagePath.Buffer = fullPath; // 不保留枚举缓冲地址。
+        imagePath.Length = (USHORT)(pathIndex * sizeof(WCHAR)); // 固定 256 字节路径不会超出 USHORT。
+        imagePath.MaximumLength = (USHORT)sizeof(fullPath); // 向身份转换提供真实缓冲上界。
+        KswordARKBugcheckEvidenceImage((ULONG_PTR)modules[index].BasicInfo.ImageBase, // 复用已有 AuxKlib 基线，不新增全模块枚举。
+            modules[index].ImageSize, &imagePath); // 读取仍经过已有 RuntimeReadMemory 安全接口。
     }
     ExFreePoolWithTag(modules, KSWORD_ARK_BUGCHECK_POOL_TAG);
 }
@@ -899,6 +922,7 @@ KswordARKBugcheckCaptureData(
     KswordARKBugcheckResolveProcessContext(diagnostics);
     KswordARKBugcheckResolveCandidate(diagnostics);
     InterlockedExchange(&diagnostics->Captured, 1);
+    KswordARKBugcheckEvidenceCapture(diagnostics); // 只进行固定缓存、事件和上下文的有界非等待快照。
 
     KswordARKBugcheckUpdateSecondaryData();
 }
@@ -975,6 +999,7 @@ KswordARKBugcheckReasonCallback(
             return;
         }
         dumpIoData = (PKBUGCHECK_DUMP_IO)ReasonSpecificData;
+        KswordARKBugcheckEvidenceDumpIo(dumpIoData); // 先拼接系统提供的转储头，再采集上下文并绘制二维码。
         KswordARKBugcheckCaptureData(
             NULL,
             Reason,
@@ -1031,6 +1056,11 @@ KswordARKBugcheckInitialize(
     g_KswordArkBugcheckState.Bitmap.BrandColorRgb = 0x0078D4UL;
     KeInitializeSpinLock(&g_KswordArkBugcheckState.ModuleCacheLock);
     KeInitializeSpinLock(&g_KswordArkBugcheckState.ProcessCacheLock);
+    KswordARKBugcheckEvidenceInitialize(DriverObject); // PASSIVE_LEVEL 完成环境与本驱动身份准备，通知门禁尚未开启。
+    abortStatus = KswordARKBugcheckControlCheckAbort(); // 环境查询结束后及时尊重安装预算与取消。
+    if (!NT_SUCCESS(abortStatus)) { // 不在准备中止后发布通知门禁。
+        return abortStatus; // 控制层负责既有资源回收。
+    }
     InterlockedExchange(&g_KswordArkBugcheckState.TrackingReady, 1);
 
     panelStatus = STATUS_DEVICE_NOT_READY;

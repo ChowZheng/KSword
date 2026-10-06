@@ -10,11 +10,13 @@
 
 #include "../theme.h"
 
+#include <QEvent>
 #include <QFontDatabase>
 #include <QFrame>
 #include <QPaintEvent>
 #include <QPainter>
 #include <QResizeEvent>
+#include <QSignalBlocker>
 #include <QSyntaxHighlighter>
 #include <QTextBlock>
 #include <QTextDocument>
@@ -269,6 +271,28 @@ void CodeTextEdit::resizeEvent(QResizeEvent* event)
     QPlainTextEdit::resizeEvent(event);
     const QRect rect = contentsRect();
     m_lineNumberArea->setGeometry(rect.left(), rect.top(), lineNumberAreaWidth(), rect.height());
+}
+
+void CodeTextEdit::changeEvent(QEvent* event)
+{
+    QPlainTextEdit::changeEvent(event);
+    if (event == nullptr || (event->type() != QEvent::PaletteChange
+        && event->type() != QEvent::ApplicationPaletteChange) || m_themeRefreshPending)
+    {
+        return;
+    }
+    // 上下文绑定控件生命周期；关闭窗口时排队任务自动取消，不访问销毁中的文档。
+    m_themeRefreshPending = true;
+    QTimer::singleShot(0, this, [this]()
+    {
+        // QSyntaxHighlighter的格式更新也会触发textChanged；纯配色不通知业务内容监听。
+        const QSignalBlocker themeSignalBlocker(this);
+        if (m_bracketHighlighter != nullptr) m_bracketHighlighter->rehighlight();
+        refreshExtraSelections();
+        if (m_lineNumberArea != nullptr) m_lineNumberArea->update();
+        viewport()->update();
+        m_themeRefreshPending = false;
+    });
 }
 
 void CodeTextEdit::scheduleRefreshExtraSelections()

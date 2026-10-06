@@ -20,6 +20,7 @@ Environment:
 #include <ntstrsafe.h>
 
 #include "KswordArkLogProtocol.h"
+#include "../bugcheck/bugcheck_evidence.h" // 独立镜像有严重度的原始日志，不从崩溃路径读取 WDF 队列。
 
 // Increment ring index and wrap around at queue capacity.
 static ULONG
@@ -77,6 +78,7 @@ KswordARKDriverEnqueueLogLine(
     PDEVICE_CONTEXT deviceContext = NULL;
     size_t lineLengthBytes = 0;
     ULONG slotIndex = 0;
+    ULONG traceSeverity = 0UL; // 文字日志严重度：1=Warn、2=Error、3=Fatal，零不镜像。
 
     if (Device == WDF_NO_HANDLE || FormattedLogLine == NULL) {
         return STATUS_INVALID_PARAMETER;
@@ -94,6 +96,22 @@ KswordARKDriverEnqueueLogLine(
         lineLengthBytes = KSWORD_ARK_LOG_ENTRY_MAX_BYTES - 1U;
     }
 
+    // 只镜像有真实日志级别前缀的 Warn/Error/Fatal；文字不提供原操作 NTSTATUS。
+    if (lineLengthBytes >= 6U && RtlCompareMemory(FormattedLogLine, "[Warn]", 6U) == 6U) { // 固定前缀比较不读取声明范围之外。
+        traceSeverity = 1UL; // 警告日志由类别和 Code 表达，不推断驱动故障。
+    } else if (lineLengthBytes >= 7U && RtlCompareMemory(FormattedLogLine, "[Error]", 7U) == 7U) { // 只识别项目实际 Error 文本格式。
+        traceSeverity = 2UL; // 错误文字日志单独保留，其原操作状态仍缺失。
+    } else if (lineLengthBytes >= 7U && RtlCompareMemory(FormattedLogLine, "[Fatal]", 7U) == 7U) { // 严重日志同样保存原文来源。
+        traceSeverity = 3UL; // 不将 Fatal 等同当前 BugCheck 根因。
+    } // 普通 Info/Debug 不挤占最近六条诊断事件。
+    if (traceSeverity != 0UL) { // 仅对上述三个实际日志级别执行镜像。
+        KswordARKBugcheckTraceRecord( // 在 WDF 队列锁之外调用，trace 自身只有一次 CAS 尝试。
+            KSWORD_BUGCHECK_TRACE_KIND_DRIVER_LOG, // 明确为文字日志，不冒充 IOCTL 返回或寄存器现场。
+            traceSeverity, // 保存原始文本级别的稳定映射。
+            STATUS_NOT_SUPPORTED, // 文本日志无法提供原操作 NTSTATUS，事件标志会说明缺失。
+            FormattedLogLine, // 使用既有长度校验通过的真实日志文本。
+            (ULONG)lineLengthBytes); // 原字节上限由 log ring 常量限定，不做额外全长格式化。
+    } // 镜像完成后仍执行原有日志入队与所有权流程。
     WdfSpinLockAcquire(deviceContext->LogQueueLock);
 
     slotIndex = deviceContext->LogQueueTailIndex;

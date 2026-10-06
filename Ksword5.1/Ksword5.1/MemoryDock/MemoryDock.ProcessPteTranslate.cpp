@@ -153,6 +153,10 @@ namespace
             // 菜单项也补上 tooltip：与页面内其它按钮保持一致的可发现性。
             copyRowAction->setToolTip(QStringLiteral("把选中行的全部列以制表符分隔复制到剪贴板"));
             copyRowAction->setEnabled(table->currentRow() >= 0);
+            // PTE/VA 翻译的虚拟地址属于 Dock 附加的进程：提供"在内存工作台打开"。
+            (void)addOpenInWorkbenchAction(
+                menu, table, table->currentRow(),
+                pteTranslateColumnIndex(PteTranslateColumn::VirtualAddress), false);
             if (menu.exec(table->viewport()->mapToGlobal(localPosition)) == copyRowAction)
             {
                 copyPteCurrentRow(table);
@@ -429,7 +433,9 @@ void MemoryDock::refreshProcessPteTranslateAsync()
     }
     if (baseAddress == 0ULL)
     {
-        baseAddress = m_currentViewerAddress;
+        // 默认地址：用户在内存工作台里正看着的位置（工作台跟随本 Dock 的附加进程时）；
+        // 工作台不可用或没有插入点时退回旧内存查看器的当前地址。
+        baseAddress = workbenchFocusAddress().value_or(m_currentViewerAddress);
     }
     const std::uint32_t pageCount = m_processPteTranslatePageCountSpin != nullptr
         ? static_cast<std::uint32_t>(m_processPteTranslatePageCountSpin->value())

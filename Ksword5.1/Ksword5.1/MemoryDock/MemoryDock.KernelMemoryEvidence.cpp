@@ -277,6 +277,9 @@ namespace
                 QIcon(QStringLiteral(":/Icon/process_copy_row.svg")),
                 QStringLiteral("复制当前行"));
             copyRowAction->setEnabled(rowIndex >= 0 && rowIndex < table->rowCount());
+            // 内核内存证据的 VA 是内核虚拟地址：在工作台里切到内核范围打开。
+            (void)addOpenInWorkbenchAction(
+                menu, table, rowIndex, evidenceColumnIndex(EvidenceColumn::Address), true);
             if (menu.exec(table->viewport()->mapToGlobal(localPosition)) == copyRowAction)
             {
                 QClipboard* clipboard = QApplication::clipboard();

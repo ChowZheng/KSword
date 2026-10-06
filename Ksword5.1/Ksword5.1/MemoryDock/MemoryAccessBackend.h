@@ -153,14 +153,18 @@ namespace ksword::memory_backend
     bool isHvmMemoryUsable(QString* reasonOut);
 
     // readPhysical：
-    // - 输入：后端、DDMA 会话、物理起始地址与长度；
+    // - 输入：后端、DDMA 会话、物理起始地址与长度、是否要求 HVM 私有窗口；
     // - 处理：标准后端一次最多 64KB 直接调驱动；DDMA 后端按页切片逐页 DMA；
+    //   requireHvmDirectWindow 仅影响 HVM：逐片要求并核验 usedDirectWindow，
+    //   拒绝回退分片且不改走 R0，仅保留此前已确认的直接读取前缀。
+    //   默认 false 保留旧调用允许回退并报告告警的行为。
     // - 返回：AccessOutcome，data 为读回字节。
     AccessOutcome readPhysical(
         MemoryAccessBackend backend,
         const DdmaSession& session,
         std::uint64_t physicalAddress,
-        std::uint64_t lengthBytes);
+        std::uint64_t lengthBytes,
+        bool requireHvmDirectWindow = false);
 
     // writePhysical：
     // - 输入：后端、DDMA 会话、物理起始地址、待写字节、是否已获得强制写入同意；
@@ -175,17 +179,21 @@ namespace ksword::memory_backend
         bool forceApproved);
 
     // readVirtual：
-    // - 输入：后端、DDMA 会话、目标 PID（0 表示内核地址空间）、虚拟地址与长度；
+    // - 输入：后端、DDMA 会话、目标 PID（0 表示内核地址空间）、虚拟地址与长度、
+    //   是否要求 HVM 私有窗口（仅影响 HVM，默认 false）；
     // - 处理：标准后端直接调 R0 虚拟读；DDMA 后端逐页走 VA → PA 翻译再 DMA，
     //   翻译不出物理页时停止并返回失败，不用零值伪造不可读内容；
-    // - 返回：AccessOutcome，DDMA 失败时 data 仅保留真实读取的前缀，
+    //   HVM 严格读取逐片要求并核验 usedDirectWindow；回退分片即使报告成功也
+    //   不采纳其数据，且不自动改走 R0。
+    // - 返回：AccessOutcome，DDMA 或 HVM 严格读取失败时 data 仅保留真实读取的前缀，
     //   bytesDone 表示完成数量，partial 表示已完成部分。
     AccessOutcome readVirtual(
         MemoryAccessBackend backend,
         const DdmaSession& session,
         std::uint32_t processId,
         std::uint64_t virtualAddress,
-        std::uint64_t lengthBytes);
+        std::uint64_t lengthBytes,
+        bool requireHvmDirectWindow = false);
 
     // writeVirtual：
     // - 输入：后端、DDMA 会话、目标 PID（0 表示内核地址空间）、虚拟地址、待写

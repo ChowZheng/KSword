@@ -76,6 +76,10 @@ namespace
     constexpr int kProgressContentHeight = 44;
     constexpr int kSearchOptionsRowHeight = 36;
     constexpr int kResultHtmlRole = Qt::UserRole + 41;
+    // HTML 只缓存文本与语义占位，实际绘制时按该行真实底色求色，避免跨主题保存 RGB。
+    constexpr auto kResultPrimaryColorToken = "__KS_SEARCH_PRIMARY_COLOR__";
+    constexpr auto kResultSecondaryColorToken = "__KS_SEARCH_SECONDARY_COLOR__";
+    constexpr auto kResultAccentColorToken = "__KS_SEARCH_ACCENT_COLOR__";
 
     // normalizeUiText：
     // - 作用：把控件原始文本压成适合匹配与单行展示的纯文本；
@@ -614,10 +618,13 @@ namespace
             const QRect itemRect = option.rect.adjusted(4, 2, -4, -2);
             const bool selectedState = option.state.testFlag(QStyle::State_Selected);
             const bool hoveredState = option.state.testFlag(QStyle::State_MouseOver);
+            QColor actualBackground = option.palette.color(QPalette::Base); // 当前 viewport 的真实基底。
             if (selectedState || hoveredState)
             {
                 QColor rowBackgroundColor = KswordTheme::PrimaryAccentColor();
                 rowBackgroundColor.setAlpha(selectedState ? 52 : 26);
+                actualBackground = KswordTheme::BlendColors(
+                    actualBackground, rowBackgroundColor, rowBackgroundColor.alpha());
                 painter->setPen(Qt::NoPen);
                 painter->setBrush(rowBackgroundColor);
                 painter->drawRoundedRect(itemRect, 4, 4);
@@ -629,7 +636,22 @@ namespace
             noWrapOption.setWrapMode(QTextOption::NoWrap);
             contentDocument.setDefaultTextOption(noWrapOption);
             contentDocument.setDocumentMargin(0.0);
-            contentDocument.setHtml(index.data(kResultHtmlRole).toString());
+            // 每个选态单独求 4.5:1；中灰自定义底可能不存在跨三态都可读的单一前景。
+            QString itemHtml = index.data(kResultHtmlRole).toString();
+            const auto actualTextColor = [&actualBackground](const QColor& preferredColor) {
+                return KswordTheme::ThemeColorName(
+                    KswordTheme::EnsureTextContrast(preferredColor, actualBackground, 4.5));
+            };
+            // 只替换完整样式属性前缀；正文/path 已 HTML 转义，字面量占位名称仍原样显示。
+            const auto resolveColorAttribute = [&itemHtml, &actualTextColor](
+                const char* token, const QColor& preferredColor) {
+                itemHtml.replace(QStringLiteral("style=\"color:%1;").arg(QString::fromLatin1(token)),
+                    QStringLiteral("style=\"color:%1;").arg(actualTextColor(preferredColor)));
+            };
+            resolveColorAttribute(kResultPrimaryColorToken, KswordTheme::TextPrimaryColor());
+            resolveColorAttribute(kResultSecondaryColorToken, KswordTheme::TextSecondaryColor());
+            resolveColorAttribute(kResultAccentColorToken, KswordTheme::PrimaryAccentColor());
+            contentDocument.setHtml(itemHtml);
 
             painter->translate(itemRect.left() + 8, itemRect.top() + 4);
             contentDocument.drawContents(
@@ -811,7 +833,7 @@ namespace ks::ui
         }
         if (qApp != nullptr)
         {
-            // 应用级过滤只用于“点击弹层外区域收起”，弹层隐藏时直接透传。
+            // 应用级过滤监听弹层外点击和主题变化；切色只重着色既有结果，不触发搜索。
             qApp->installEventFilter(this);
         }
         QTimer::singleShot(0, this, [this]() {
@@ -991,22 +1013,62 @@ namespace ks::ui
     {
         const QEvent::Type eventType = eventObject->type();
 
+        if (eventType == QEvent::ApplicationPaletteChange
+            || (eventType == QEvent::PaletteChange
+                && (watchedObject == m_popupHostWindow || watchedObject == m_popupPanel
+                    || watchedObject == m_resultListWidget)))
+        {
+            scheduleResultThemeRefresh();
+        }
+
         if (watchedObject == m_searchInputEdit)
         {
-            if (eventType == QEvent::KeyPress && m_searchModeActive)
+            if (eventType == QEvent::KeyPress)
             {
+                // keyEvent 用途：仅在标题输入框截获四节点循环，弹层内字段保留正常焦点导航。
                 auto* keyEvent = static_cast<QKeyEvent*>(eventObject);
+                // isScopeCycleKey 用途：普通 Tab/Shift+Tab；不拦截 Ctrl/Alt/Meta 组合快捷键。
+                const bool isScopeCycleKey = (keyEvent->key() == Qt::Key_Tab
+                    || keyEvent->key() == Qt::Key_Backtab)
+                    && !keyEvent->modifiers().testFlag(Qt::ControlModifier)
+                    && !keyEvent->modifiers().testFlag(Qt::AltModifier)
+                    && !keyEvent->modifiers().testFlag(Qt::MetaModifier);
+                if (isScopeCycleKey)
+                {
+                    // direction 用途：兼容 Key_Backtab 和带 Shift 的 Key_Tab 两种反向事件。
+                    const int direction = keyEvent->key() == Qt::Key_Backtab
+                        || keyEvent->modifiers().testFlag(Qt::ShiftModifier)
+                        ? -1
+                        : 1;
+                    if (m_searchModeActive)
+                    {
+                        cycleSearchScope(direction);
+                    }
+                    else
+                    {
+                        // 从 CMD 进入当前表格时重新采用最近交互上下文，不复用旧显式目标。
+                        if (direction < 0)
+                        {
+                            m_targetTableView.clear();
+                        }
+                        setSearchScope(direction < 0
+                            ? UiSearchScope::CurrentTable
+                            : UiSearchScope::Global);
+                        emit requestSearchInputActivation(true);
+                    }
+                    keyEvent->accept();
+                    return true;
+                }
+
+                // CMD 回车/Esc 继续由 CommandExecutionPopup 处理校验和关闭，不在搜索层消费。
+                if (!m_searchModeActive)
+                {
+                    return false;
+                }
+
                 const bool popupVisible = m_popupPanel != nullptr && m_popupPanel->isVisible();
                 switch (keyEvent->key())
                 {
-                case Qt::Key_Tab:
-                    cycleSearchScope(1);
-                    keyEvent->accept();
-                    return true;
-                case Qt::Key_Backtab:
-                    cycleSearchScope(-1);
-                    keyEvent->accept();
-                    return true;
                 case Qt::Key_Down:
                     if (popupVisible)
                     {
@@ -1526,37 +1588,16 @@ namespace ks::ui
             return;
         }
 
-        // 用扫描时的查询快照做高亮：防抖期间的新输入会另起一轮扫描。
-        const QString queryText = m_activeQueryText;
-        // 这两个颜色进的是结果项的 HTML（<div style="color:...">），不是 QSS：
-        // QTextDocument 不认 palette(...)，动态角色会被忽略、文字退回继承色，
-        // 因此必须用 *ColorHex() 求出具体色。结果列表每轮搜索都会重建，主题切换后跟随。
-        const QString textPrimaryHex = KswordTheme::TextPrimaryColorHex();
-        const QString textSecondaryHex = KswordTheme::TextSecondaryColorHex();
-        const QString accentTextHex = KswordTheme::ThemeColorName(
-            KswordTheme::EnsureTextContrast(
-                KswordTheme::PrimaryAccentColor(),
-                KswordTheme::SurfaceColor(),
-                3.0));
-
         m_resultListWidget->clear();
         for (const UiSearchHit& hitEntry : m_currentHitList)
         {
             auto* listItem = new QListWidgetItem(m_resultListWidget);
-            const QString itemHtml = QStringLiteral(
-                "<div style=\"color:%1;\">%2</div>"
-                "<div style=\"color:%3;margin-top:3px;\">%4</div>")
-                .arg(
-                    textPrimaryHex,
-                    buildSnippetHtml(hitEntry.matchedText, queryText, accentTextHex),
-                    textSecondaryHex,
-                    hitEntry.pagePathText.toHtmlEscaped());
-            listItem->setData(kResultHtmlRole, itemHtml);
             listItem->setToolTip(
                 hitEntry.matchedText
                 + QStringLiteral("\n")
                 + hitEntry.pagePathText);
         }
+        refreshResultHtmlColors();
 
         const bool hasResults = !m_currentHitList.isEmpty();
         m_resultListWidget->setVisible(hasResults);
@@ -1568,6 +1609,45 @@ namespace ks::ui
         {
             m_resultListWidget->setCurrentRow(0);
         }
+    }
+
+    void GlobalUiSearchController::refreshResultHtmlColors()
+    {
+        if (m_resultListWidget == nullptr)
+        {
+            return;
+        }
+        // 对原列表项保存文本 markup 和颜色语义；RGB 只在 delegate 按实际绘制选态解析。
+        // 不 clear/插入，不改变当前行、滚动位置和表格隐藏快照。
+        const int itemCount = std::min(m_resultListWidget->count(),
+            static_cast<int>(m_currentHitList.size()));
+        for (int row = 0; row < itemCount; ++row)
+        {
+            QListWidgetItem* const listItem = m_resultListWidget->item(row);
+            const UiSearchHit& hitEntry = m_currentHitList.at(row);
+            const QString itemHtml = QStringLiteral(
+                "<div style=\"color:%1;\">%2</div>"
+                "<div style=\"color:%3;margin-top:3px;\">%4</div>")
+                .arg(QString::fromLatin1(kResultPrimaryColorToken),
+                    buildSnippetHtml(hitEntry.matchedText, m_activeQueryText,
+                        QString::fromLatin1(kResultAccentColorToken)),
+                    QString::fromLatin1(kResultSecondaryColorToken), hitEntry.pagePathText.toHtmlEscaped());
+            listItem->setData(kResultHtmlRole, itemHtml);
+        }
+        m_resultListWidget->viewport()->update();
+    }
+
+    void GlobalUiSearchController::scheduleResultThemeRefresh()
+    {
+        if (m_resultThemeRefreshScheduled)
+        {
+            return;
+        }
+        m_resultThemeRefreshScheduled = true;
+        QTimer::singleShot(0, this, [this]() {
+            refreshResultHtmlColors();
+            m_resultThemeRefreshScheduled = false;
+        });
     }
 
     void GlobalUiSearchController::showPopupPanel()
@@ -1818,6 +1898,14 @@ namespace ks::ui
         constexpr int kScopeCount = 3;
         const int currentScopeIndex = static_cast<int>(m_searchScope);
         const int normalizedDirection = direction < 0 ? -1 : 1;
+        // 第四节点是独立 CMD 模式：搜索边界不再三取模回到另一端，先收起在途搜索。
+        if ((normalizedDirection > 0 && m_searchScope == UiSearchScope::CurrentTable)
+            || (normalizedDirection < 0 && m_searchScope == UiSearchScope::Global))
+        {
+            dismissPopup();
+            emit requestCommandInputActivation(true);
+            return;
+        }
         const int nextScopeIndex =
             (currentScopeIndex + normalizedDirection + kScopeCount) % kScopeCount;
         if (static_cast<UiSearchScope>(nextScopeIndex) == UiSearchScope::CurrentTable)

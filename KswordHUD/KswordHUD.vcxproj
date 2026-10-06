@@ -129,6 +129,7 @@
     <ClCompile Include="main.cpp" />
     <ClCompile Include="PerformanceNavCard.cpp" />
     <ClInclude Include="HudProcessListPanel.h" />
+    <ClInclude Include="HudColors.h" />
     <ClInclude Include="..\shared\ui\KsPainterChart.h" />
     <ClInclude Include="HudPerformancePanel.h" />
     <ClInclude Include="hGet.h" />

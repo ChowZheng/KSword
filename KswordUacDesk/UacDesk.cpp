@@ -934,7 +934,8 @@ namespace
             "QWidget#kswordUacDeskRoot{background:palette(window);color:palette(window-text);}"
             "QLabel{background:transparent;color:palette(window-text);}"
             "QLabel#uacIdentityLabel{color:palette(window-text);}"
-            "QLabel#uacProcessDetailsLabel{color:#000000;}"
+            // 详情正文继承系统主题文字角色，避免深色安全桌面出现黑字深底。
+            "QLabel#uacProcessDetailsLabel{color:palette(window-text);}"
             "QPushButton{min-height:24px;max-height:24px;padding:1px 7px;background:palette(button);color:palette(button-text);"
             "border:1px solid palette(highlight);border-radius:0;}"
             "QPushButton#uacTerminateButton{background:palette(highlight);color:palette(highlighted-text);}"

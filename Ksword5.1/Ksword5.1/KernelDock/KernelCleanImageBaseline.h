@@ -1,5 +1,7 @@
 #pragma once
 
+#include "../MemoryDock/MemoryAccessBackend.h"
+
 #include <QString>
 
 #include <atomic>
@@ -84,6 +86,10 @@ namespace ks::kernel
     struct KernelTextIntegrityResult
     {
         bool available = false;
+        // 只有未取消且每个可执行节块都完整读取，才代表完整覆盖。
+        bool complete = false;
+        ksword::memory_backend::MemoryAccessBackend backend =
+            ksword::memory_backend::MemoryAccessBackend::StandardDriver;
         bool identityMatched = false;
         bool diskTrustVerified = false;
         bool relocationApplied = false;
@@ -107,6 +113,9 @@ namespace ks::kernel
 
     struct KernelTextScanOptions
     {
+        // 选择对 PE 身份头与可执行节读取均生效，失败不回退到另一后端。
+        ksword::memory_backend::MemoryAccessBackend backend =
+            ksword::memory_backend::MemoryAccessBackend::StandardDriver;
         // 空表示扫描全部已加载模块；否则按基名子串（不区分大小写）过滤。
         QString moduleFilter;
         // 每个模块最多保留的差异区间数量，超出部分只计数不保留字节。
@@ -134,7 +143,9 @@ namespace ks::kernel
             std::uint64_t kernelAddress,
             std::uint32_t byteCount,
             std::vector<std::uint8_t>& bytesOut,
-            QString& errorTextOut);
+            QString& errorTextOut,
+            ksword::memory_backend::MemoryAccessBackend backend =
+                ksword::memory_backend::MemoryAccessBackend::StandardDriver);
 
         static std::vector<TrustedIdtBaselineResult>
         compareIdtHandlers(

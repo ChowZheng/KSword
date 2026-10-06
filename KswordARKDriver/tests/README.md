@@ -128,6 +128,18 @@ powershell -ExecutionPolicy Bypass -File KswordARKDriver\tests\DriverFunctionalM
 这验证离线地址发现与合成记录布局，不证明其它内核版本兼容或实机卸载表可读。
 产物写入 `.codex-build-logs/runtime-unloaded-scan-regression/`。
 
+## PDB 特征码回退离线回归
+
+`ProcessAccessorDecodeRegression.ps1` 编译生产访问器 decoder，验证 disp8/disp32、明确入口前缀、
+两级直跳、完整返回语义，以及截断、错误寄存器、变换、读取失败、循环和溢出的拒绝行为。
+`RuntimeSignatureRegression.ps1` 原样提取生产扫描器，以合成 PE 验证五组消费者采用的函数边界、
+相邻代码诱饵、无 unwind 入口跳板、重定位和安全读取门禁。
+`CiHashSelectionRegression.ps1` 原样提取生产候选选择 helper，验证重复引用保留歧义和更强证据重新收敛。
+`tools/CallbackGlobalFallbackRegression.ps1` 使用生产回调全局回退与有界合成容器验证通知数组、注册表链和候选唯一性。
+
+四套测试均使用 x64 MSVC `/W4 /WX`，独立产物位于已有 `output/`，不加载驱动或读取实际回调容器。
+具体覆盖和实机边界见 `docs/PDB特征码回退增量适配.md`。
+
 ## 新增 IOCTL 时要做什么
 
 在 `shared/driver/` 加协议、在 `ioctl_registry.c` 登记之后，`plan_gate.py` 会立刻失败并点名

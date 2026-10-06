@@ -363,9 +363,8 @@ namespace ks::ui
         // RewritePaletteColors 作用：改写一个控件自己设过的 QPalette。
         // 只遍历 isBrushSet 为真的 group/role：未显式设置的角色仍然继承 QApplication
         // 调色板，本来就会跟随主题，重写反而会把继承关系固化下来。
-        bool RewritePaletteColors(const QHash<QRgb, QRgb>& colorMapping, QWidget* const widget)
+        bool RewritePaletteColors(const QHash<QRgb, QRgb>& colorMapping, QPalette& widgetPalette)
         {
-            QPalette widgetPalette = widget->palette();
             bool paletteChanged = false;
             for (int groupIndex = 0; groupIndex < QPalette::NColorGroups; ++groupIndex)
             {
@@ -402,10 +401,6 @@ namespace ks::ui
                     paletteChanged = true;
                 }
             }
-            if (paletteChanged)
-            {
-                widget->setPalette(widgetPalette);
-            }
             return paletteChanged;
         }
     }
@@ -433,6 +428,34 @@ namespace ks::ui
         const QHash<QRgb, QRgb> colorMapping =
             BuildColorMapping(previousSnapshot.colorTexts, CollectThemeColors(), nullptr);
         return RewriteColorsInText(colorMapping, styleText);
+    }
+
+    QColor RemapStaleThemeColor(const ThemeColorSnapshot& previousSnapshot, const QColor& color)
+    {
+        if (previousSnapshot.colorTexts.isEmpty() || !color.isValid())
+        {
+            return color;
+        }
+        const QHash<QRgb, QRgb> colorMapping =
+            BuildColorMapping(previousSnapshot.colorTexts, CollectThemeColors(), nullptr);
+        const auto iterator = colorMapping.constFind(qRgb(color.red(), color.green(), color.blue()));
+        return iterator == colorMapping.constEnd()
+            ? color
+            : QColor(qRed(iterator.value()), qGreen(iterator.value()), qBlue(iterator.value()), color.alpha());
+    }
+
+    QPalette RemapStaleThemeColorsInPalette(
+        const ThemeColorSnapshot& previousSnapshot,
+        const QPalette& palette)
+    {
+        QPalette updatedPalette = palette;
+        if (!previousSnapshot.colorTexts.isEmpty())
+        {
+            const QHash<QRgb, QRgb> colorMapping =
+                BuildColorMapping(previousSnapshot.colorTexts, CollectThemeColors(), nullptr);
+            RewritePaletteColors(colorMapping, updatedPalette);
+        }
+        return updatedPalette;
     }
 
     ThemeColorRemapResult RemapStaleThemeColors(const ThemeColorSnapshot& previousSnapshot)
@@ -472,9 +495,11 @@ namespace ks::ui
                 continue;
             }
             // 显式 setPalette 过的控件不再接受 QApplication 调色板更新，必须单独改写。
+            QPalette widgetPalette = widget->palette();
             if (widget->testAttribute(Qt::WA_SetPalette)
-                && RewritePaletteColors(colorMapping, widget))
+                && RewritePaletteColors(colorMapping, widgetPalette))
             {
+                widget->setPalette(widgetPalette);
                 ++result.rewrittenPaletteWidgetCount;
             }
 

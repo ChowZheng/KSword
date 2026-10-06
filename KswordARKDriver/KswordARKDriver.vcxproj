@@ -31,6 +31,7 @@
     <ClCompile Include="src\features\callback\callback_remove_extended.c" />
     <ClCompile Include="src\features\callback\callback_registry_identity.c" />
     <ClCompile Include="src\features\callback\callback_enum.c" />
+    <ClCompile Include="src\features\callback\callback_global_fallback.c" />
     <ClCompile Include="src\features\callback\callback_snapshot.c" />
     <ClCompile Include="src\features\callback\callback_extended_support.c" />
     <ClCompile Include="src\features\callback\callback_extended_bugcheck.c" />
@@ -209,14 +210,34 @@
     <ClCompile Include="src\features\debug_output\debug_output_ioctl.c" />
     <ClCompile Include="src\features\bugcheck\bugcheck_decode.c" />
     <ClCompile Include="src\features\bugcheck\bugcheck_runtime.c" />
+    <ClCompile Include="src\features\bugcheck\bugcheck_evidence.c" />
+    <ClCompile Include="src\features\bugcheck\bugcheck_identity.c" />
+    <ClCompile Include="src\features\bugcheck\bugcheck_context.c" />
+    <ClCompile Include="src\features\bugcheck\bugcheck_trace.c" />
+    <ClCompile Include="src\features\bugcheck\bugcheck_qr_codec.c">
+      <AdditionalIncludeDirectories>$(ProjectDir)..\third_party\qrcodegen\kernel_include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
     <ClCompile Include="src\features\bugcheck\bugcheck_control.c" />
     <ClCompile Include="src\features\bugcheck\bugcheck_bgp.c" />
     <ClCompile Include="src\features\bugcheck\bugcheck_bgp_lifecycle.c" />
     <ClCompile Include="src\features\bugcheck\bugcheck_layout.c" />
+    <ClCompile Include="src\features\bugcheck\bugcheck_linux.c">
+      <AdditionalIncludeDirectories>$(ProjectDir)..\third_party\qrcodegen\kernel_include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
+    <ClCompile Include="..\third_party\qrcodegen\qrcodegen.c">
+      <!-- 上游编码器使用固定缓冲；禁用 CRT assert 并以内联绝对值替代用户态 CRT。 -->
+      <PreprocessorDefinitions>NDEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <ForcedIncludeFiles>$(ProjectDir)..\third_party\qrcodegen\kernel_compat.h;%(ForcedIncludeFiles)</ForcedIncludeFiles>
+      <AdditionalIncludeDirectories>$(ProjectDir)..\third_party\qrcodegen\kernel_include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
     <ClCompile Include="src\features\bugcheck\bugcheck_layout_detailed.c" />
-    <ClCompile Include="src\features\bugcheck\bugcheck_panel.c" />
+    <ClCompile Include="src\features\bugcheck\bugcheck_panel.c">
+      <AdditionalIncludeDirectories>$(ProjectDir)..\third_party\qrcodegen\kernel_include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
     <ClCompile Include="src\features\bugcheck\bugcheck_preparation_log.c" />
-    <ClCompile Include="src\features\bugcheck\bugcheck_svga.c" />
+    <ClCompile Include="src\features\bugcheck\bugcheck_svga.c">
+      <AdditionalIncludeDirectories>$(ProjectDir)..\third_party\qrcodegen\kernel_include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
     <ClCompile Include="src\features\bugcheck\bugcheck_ioctl.c" />
     <ClCompile Include="src\features\bugcheck\bugcheck_guard.c" />
     <ClCompile Include="src\features\bugcheck\bugcheck_shield.c" />
@@ -246,6 +267,7 @@
     <ClCompile Include="src\platform\kernel_cache_fallback.c" />
     <ClCompile Include="src\platform\kernel_object_probe.c" />
     <ClCompile Include="src\platform\runtime_signature_scan.c" />
+    <ClCompile Include="src\platform\process_accessor_decode.c" />
     <ClCompile Include="src\platform\kernel_module_identity.c" />
     <ClCompile Include="src\platform\pool_compat.c" />
     <ClCompile Include="src\features\dyndata\dyndata_loader.c" />
@@ -414,6 +436,13 @@
     <ClInclude Include="src\features\bugcheck\bugcheck_bgp.h" />
     <ClInclude Include="src\features\bugcheck\bugcheck_bgp_internal.h" />
     <ClInclude Include="src\features\bugcheck\bugcheck_layout.h" />
+    <ClInclude Include="src\features\bugcheck\bugcheck_linux.h" />
+    <ClInclude Include="src\features\bugcheck\bugcheck_evidence.h" />
+    <ClInclude Include="src\features\bugcheck\bugcheck_identity.h" />
+    <ClInclude Include="src\features\bugcheck\bugcheck_qr_codec.h" />
+    <ClInclude Include="..\third_party\qrcodegen\qrcodegen.h" />
+    <ClInclude Include="..\third_party\qrcodegen\kernel_compat.h" />
+    <ClInclude Include="..\third_party\qrcodegen\kernel_include\stdint.h" />
     <ClInclude Include="src\features\bugcheck\bugcheck_layout_detailed.h" />
     <ClInclude Include="src\features\bugcheck\bugcheck_panel.h" />
     <ClInclude Include="src\features\bugcheck\bugcheck_preparation_log.h" />
@@ -442,6 +471,8 @@
     <ClInclude Include="src\platform\kernel_cache_fallback.h" />
     <ClInclude Include="src\platform\kernel_object_probe.h" />
     <ClInclude Include="src\platform\runtime_signature_scan.h" />
+    <ClInclude Include="src\platform\process_accessor_decode.h" />
+    <ClInclude Include="src\features\callback\callback_global_fallback.h" />
     <ClInclude Include="src\platform\kernel_module_identity.h" />
     <ClInclude Include="src\platform\pool_compat.h" />
     <ClInclude Include="include\ark\ark_dyndata.h" />

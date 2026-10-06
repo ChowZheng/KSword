@@ -4,6 +4,7 @@
 #include "ProcessCpuCapacityCell.h"
 #include "../UI/TableInteractionSupport.h"
 #include "../UI/VisibleTableWidget.h"
+#include "../UI/ThemeAccentIcon.h"
 
 #include "../theme.h"
 #include "ProcessDetailWindow.h"
@@ -13687,7 +13688,8 @@ QString ProcessDock::formatColumnText(const ks::process::ProcessRecord& processR
 
 QIcon ProcessDock::blueTintedIcon(const char* iconPath, const QSize& iconSize) const
 {
-    return tintedProcessTabIcon(iconPath, KswordTheme::PrimaryBlueColor, iconSize);
+    // 按钮、动作和普通标签源图固定默认蓝，动态引擎在绘制时派生当前主题色。
+    return ks::ui::MakeThemeAccentIcon(tintedProcessTabIcon(iconPath, KswordTheme::DefaultPrimaryAccentColor(), iconSize));
 }
 
 QIcon ProcessDock::tintedProcessTabIcon(

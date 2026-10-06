@@ -149,6 +149,11 @@ void KButton::draw() {
         }
     }
 
+    // 背景已经按真实交互状态解析；此时校准前景，避免亮悬停底上的固定白字。
+    if (active())
+    {
+        fg = KThemeReadableText(fg, bg);
+    }
     fl_push_clip(x(), y(), w(), h());
     fl_color(bg);
     fl_rectf(x(), y(), w(), h());

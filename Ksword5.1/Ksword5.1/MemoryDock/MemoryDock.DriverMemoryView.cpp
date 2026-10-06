@@ -16,19 +16,25 @@ using namespace ksword::memory_dock_internal;
 
 namespace
 {
+    // 文本转储每行的字节数：保持地址、十六进制与 ASCII 三列对齐。
     constexpr qsizetype kDriverMemoryTextViewLineWidth = 16;
 
-    // 文本导出仍需 ASCII 列，不能依赖已移除的旧文本视图辅助函数。
+    // 将 bytes 中的可打印 ASCII 原样输出，其余字节替换为点号。
+    // 调用方传入单行快照字节，返回用于文本转储的等长字符串。
     QString driverMemoryPrintableText(const QByteArray& bytes)
     {
-        QString text;
-        text.reserve(bytes.size());
-        for (const char byte : bytes)
+        // resultText 保存输出文本；预留单行字节数以避免重复分配。
+        QString resultText;
+        resultText.reserve(bytes.size());
+        for (const char rawByte : bytes)
         {
-            const auto value = static_cast<unsigned char>(byte);
-            text += value >= 0x20 && value <= 0x7e ? QChar(value) : QChar('.');
+            // byteValue 保留原始无符号字节；printable 标记 ASCII 可打印范围。
+            const std::uint8_t byteValue = static_cast<std::uint8_t>(rawByte);
+            const bool printable = byteValue >= 0x20U && byteValue <= 0x7EU;
+            resultText.append(printable ? QChar(QLatin1Char(static_cast<char>(byteValue)))
+                                        : QChar(QLatin1Char('.')));
         }
-        return text;
+        return resultText;
     }
 
     // driverMemoryBytesText 作用：

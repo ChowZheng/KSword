@@ -15,6 +15,10 @@ KSword 主程序位于 `Ksword5.1/Ksword5.1`（Qt 6.9.3 Widgets + Qt Advanced Do
 
 ## UI 主题架构
 
+- 顶部ADS导航使用独立的`DockTabState`角色（`theme.h::DockTabBackgroundColor/TextColor/GlyphColor`）：三态背景分别沿用背景种子的`SurfaceColor/SurfaceMutedColor/SurfaceAltColor`偏移，只有强调文字、图形与`DockTabHighlightColor`选中底边从主题色派生；底边两像素同时扣减底部padding，保持既有高度。`DockNavigationStyleSheet`最后追加，覆盖旧基础属性hover和背景图透明兜底；普通业务QTabBar不受影响。自绘hover必须补回选中底边，局部文字共用`UI/DockThemeIcons::ApplyDockTabTextColor`，自有工厂在选中/hover/主题事件后调用。Qt在选中标签上仍可能请求Normal图标，导航图形需要对三态都保持对比，背景变化后允许前景做对比度校准。2026-10-04本次背景/强调分离回归5921条断言通过，覆盖主体色变化时三态背景不变、背景种子驱动真实三态底面、选中/选中悬停标记及图标对比；日志`.codex-build-logs/titlebar-background-offset-ui.log`。MainWindow自绘工厂仅静态核对，未启动生产GUI。本次两次主程序Build尝试均在i18n门禁被并行MemoryWorkbench持续新增的文本缺项阻断（已定点补齐11条双语提示）；最新失败日志`.codex-build-logs/ksword-build-check-20261004-213558.raw.log`，不报告整库编译通过。
+- 2026-10-04全项目配色审计见`docs/全项目配色审计.md`，后续修复及验证见`docs/配色问题修复记录.md`：全局旧色补偿只改QWidget显式palette/QSS，不覆盖item brush、QTextCharFormat/ExtraSelection、模型HTML或成员缓存；已有颜色角色也不能证明存量内容会随主题刷新。独立产品的固定设计/状态语义/数据原色不自动算缺陷。
+- 表格交替底/搜索normal-hover-selected的多底组合可能没有共同达到4.5:1的单一文字色，要按实际绘制选项求前景，不能降低门槛或猜model row奇偶。`ThemeItemForeground`专属语义角色仅用于明确标记项，换色不重新枚举、不reset模型或隐藏/选择快照。自有插件日志页的热主题通过`DebuggerBackend/KswordPluginTheme.h`颜色快照传递，Qt宿主排队限时发送、Win32接收页更换成对画刷；第三方调试器主窗口保持独立。
+
 - `theme.h`（KswordTheme 命名空间）：design-token 中心。中性表面色（Window/Surface/SurfaceAlt/SurfaceMuted/Border）由 RGB 偏移从种子色派生；强调色 PrimaryBlueColor 可由用户自定义；提供 EnsureTextContrast 等 WCAG 对比度工具。
 - `theme.h` 的颜色访问器分两族，名字只差一个词，用错编译器和 Qt 都不报错：**动态** token（`SurfaceHex()`、`TextPrimaryHex()`、`PrimaryBlueHex` 等，共 14 个）返回 `palette(base)` 这类样式表角色，Qt 每次重绘重新求值，天然跟随主题；**静态** token（`*ColorHex()`）在调用瞬间固化成 `#RRGGBB`。
 - `palette(...)` 是 QSS 专有扩展，**只有样式表能解析**。写进 QLabel/QTextEdit 富文本（走 QTextDocument 的 CSS 解析器）、`QColor` 字符串构造、`setForeground`/`QPen` 等绘制路径，或通过环境变量传给插件进程，都会被**静默丢弃**——声明整条失效、元素退回继承色，没有任何警告。这类误用已经犯过 5 次（HardwareDock 的 CPU 详情单元格、GlobalUiSearch 的结果副标题、NotificationCardManager、PluginHost）。上述场景一律改用 `*ColorHex()`。
@@ -23,6 +27,7 @@ KSword 主程序位于 `Ksword5.1/Ksword5.1`（Qt 6.9.3 Widgets + Qt Advanced Do
 - `SurfaceMuted` 和 `TextDisabled` 没有动态版本，且不该硬造：QSS 的 `palette()` 选不到 disabled group，剩余空闲角色（light/bright-text/shadow）都会被 QStyle 用于原生控件的立体边框绘制。用到它们的页面必须自己具备重建入口（`changeEvent` 处理 `ApplicationPaletteChange`，或每次显示时重新生成样式）。
 - 纯图标按钮的几何同样由 `theme.h` 收口：紧凑工具栏使用 `ApplyCompactIconButtonMetrics`（28px 按钮 / 16px 图标），独立或强调动作使用 `ApplyStandardIconButtonMetrics`（32px / 18px）；页面不得继续新增 30/34/36px 的临时组合。
 - `MainWindow::applyAppearanceSettings`：主题应用唯一入口，设置 QApplication palette + 调用 `applyGlobalApplicationStyleBlocks`（带 marker 的 QSS 块替换机制，marker 常量在 MainWindow.cpp 顶部匿名命名空间）。
+- 外观设置的`UI/ThemePreviewWidget`展示未应用的深浅模式/主体色/背景色，选色器`currentColorChanged`仅更新样例，取消还原待应用值。`theme.h::ScopedThemePreview`借用线程局部种子同步求值，所有颜色复用生产角色算法并绕过全局角色缓存；禁止在该范围内处理事件或应用设置，不得用临时修改全局种子或QApplication palette实现预览。
 - 全局 QSS 块顺序：BaseControl（`UI/GlobalUiBaseStyle.cpp`）→ Tooltip → ContextMenu → ControlContrast → ComboBox，依次追加到 app stylesheet，基线块在最前，局部样式可覆盖。
 - `QComboBox` 弹出列表是独立 `Qt::Popup` 顶层窗口。禁止在 Popup 的 `Show`/`Resize` 事件内同步调用 `setMask`、`setStyleSheet` 或其它可能 repolish 子树的操作：Qt 此时可能仍在 `QWidgetPrivate::showChildren` 中遍历内部子对象，重入修改会留下悬空 child。Popup palette/QSS 必须用零延时 queued 更新并做幂等去重；圆角只保留 QSS 绘制，不再修改原生窗口 mask。
 - `UI/GlobalDialogTheme.cpp`：QApplication 事件过滤器给所有 QDialog 补主题（palette + 追加 QSS）；QMessageBox 由 `UI/ThemedMessageBox` 专管。
@@ -115,6 +120,9 @@ KSword 主程序位于 `Ksword5.1/Ksword5.1`（Qt 6.9.3 Widgets + Qt Advanced Do
 
 ## 踩坑记录
 
+- 2026-10-04 主题恢复：`theme.h::AccentSeedOffset` 记录角色相对默认强调色的 RGB 偏移，角色不能重新固化成独立配色；`UI/ThemeControlGlyphs` 按实际底色生成控件图形，QSS 调用方所属目标必须链接其 `.cpp`。
+- QADS provider 注册只影响后续生成的图标，现存标题栏和标签按钮还须由 `UI/DockThemeIcons` 刷新。其按钮带 `ksword_theme_icon_managed` 属性，通用图标扫描必须跳过，避免覆盖 Disabled/Selected/DPR 状态。模型项中的自制单色图标使用 `UI/ThemeAccentIcon` 保留源图并在绘制时读取当前主题；Shell/进程多色图不要接入该包装。
+- 可复现主题回归入口为 `tools/Invoke-ThemeRecoveryUiTests.ps1`，使用真实 QADS、项目 `shared/ui/KsPainterChart` 与 Qt offscreen，不启动主程序或访问驱动。项目自有 `QChart/QLineSeries` 不能误当成 QtCharts 同名类型。历史三方集合与功能入口审查见 `docs/合并功能恢复审查.md`；范围语言审计通过不能替代整库语言门禁或生产 GUI 验收。
 - 构建带 **i18n 审计钩子**：源码中任何"可提取"字符串字面量（中文日志、英文句子、无路径分隔的头文件名、甚至 `GetProcAddress` 的函数名）都必须在两个语言包的 `source_translations` 有条目，否则构建直接失败。QSS 选择器行要与 `{` 写在同一字符串片段内才会被审计排除。
 - 语言包**只能定点编辑**：用脚本 json.load/dump 会重排键序与缩进，产生 5 万行无意义 diff。
 - 约 1374 处散落 `setStyleSheet` 分布在 136 个文件（多带 `!important`），未来渐进收敛到全局基线。

@@ -54,6 +54,9 @@ public:
     void setExternalExtraSelections(const QList<QTextEdit::ExtraSelection>& selections);
 
 protected:
+    // changeEvent：排队重算语法色和选择区，不修改正文与编辑会话。
+    void changeEvent(QEvent* event) override;
+
     // resizeEvent：
     // - 编辑区尺寸变化时同步行号区几何。
     void resizeEvent(QResizeEvent* event) override;
@@ -81,6 +84,8 @@ private:
 
     // m_bracketHighlighter：括号着色器对象。
     QSyntaxHighlighter* m_bracketHighlighter = nullptr;
+
+    bool m_themeRefreshPending = false; // 合并多个palette通知，避免重复重高亮。
 
     // m_extraSelectionTimer：高亮刷新节流计时器。
     QTimer* m_extraSelectionTimer = nullptr;

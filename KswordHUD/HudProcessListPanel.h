@@ -23,6 +23,8 @@ public:
     explicit HudProcessListPanel(QWidget* parent = nullptr);
     ~HudProcessListPanel() override;
     void setTableTextColor(const QColor& colorValue);
+    // 设置实际合成底色，仅用于选中行的对比校准，不改变普通文字或背景配置。
+    void setEffectiveBackgroundColor(const QColor& colorValue);
 
 protected:
     void showEvent(QShowEvent* event) override;
@@ -148,6 +150,7 @@ private:
     bool m_refreshInProgress = false;
     int m_logicalCpuCount = 1;
     QColor m_tableTextColor = QColor(255, 255, 255);
+    QColor m_effectiveBackgroundColor = QColor(10, 15, 22); // 资源轨道下方的实际合成底色。
     QHash<QString, CounterSample> m_previousSamples;
     QHash<QString, QString> m_imagePathByIdentity;
     QHash<QString, QIcon> m_iconCacheByIdentity;

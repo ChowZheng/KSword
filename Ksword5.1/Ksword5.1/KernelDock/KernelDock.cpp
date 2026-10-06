@@ -1,6 +1,8 @@
 
 #include "KernelDock.h"
 #include "../UI/VisibleTableWidget.h"
+#include "../UI/ThemeAccentIcon.h"
+#include "../UI/ThemeItemForeground.h"
 
 // ============================================================
 // KernelDock.cpp
@@ -244,7 +246,8 @@ namespace
     // - 变量 iconPath：图标资源路径，统一放在调用点便于审阅。
     QIcon tabIcon(const QString& iconPath)
     {
-        return tintedSvgIcon(iconPath, KswordTheme::PrimaryBlueColor);
+        // 普通标签保留默认蓝源图并动态取色，选中对比色仍由 selectedTabIcon 处理。
+        return ks::ui::MakeThemeAccentIcon(tintedSvgIcon(iconPath, KswordTheme::DefaultPrimaryAccentColor()));
     }
 
     // selectedTabIcon：
@@ -294,6 +297,22 @@ bool KernelDock::eventFilter(QObject* watched, QEvent* event)
         ensureSelfDriverCurrentTabRefreshed();
     }
     return QWidget::eventFilter(watched, event);
+}
+
+void KernelDock::changeEvent(QEvent* event)
+{
+    QWidget::changeEvent(event);
+    if (event == nullptr || (event->type() != QEvent::PaletteChange
+        && event->type() != QEvent::ApplicationPaletteChange) || m_itemThemeRefreshScheduled)
+    {
+        return;
+    }
+    // 退出 palette 传播栈后仅更新已标记项；保留当前节点、展开层级和筛选快照。
+    m_itemThemeRefreshScheduled = true;
+    QTimer::singleShot(0, this, [this]() {
+        ks::ui::RefreshThemeItemForegrounds(m_objectNamespaceTree);
+        m_itemThemeRefreshScheduled = false;
+    });
 }
 
 void KernelDock::showEvent(QShowEvent* event)
@@ -1009,6 +1028,7 @@ void KernelDock::initializeObjectNamespaceTab()
         });
     m_objectNamespaceTree->setSelectionMode(QAbstractItemView::SingleSelection);
     m_objectNamespaceTree->setAlternatingRowColors(true);
+    ks::ui::InstallThemeItemForegroundDelegate(m_objectNamespaceTree);
     m_objectNamespaceTree->setContextMenuPolicy(Qt::CustomContextMenu);
     m_objectNamespaceTree->setStyleSheet(itemSelectionStyle());
     m_objectNamespaceTree->setUniformRowHeights(true);

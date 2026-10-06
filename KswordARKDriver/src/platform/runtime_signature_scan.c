@@ -427,23 +427,44 @@ Return Value:
 static BOOLEAN
 KswordARKRuntimeDecodeDirectBranch(
     _In_ ULONG_PTR InstructionAddress,
-    _Out_ ULONG_PTR* TargetOut
+    _Out_ ULONG_PTR* TargetOut,
+    _Out_ ULONG* InstructionBytesOut
     )
 {
-    UCHAR bytes[5];
-    LONG displacement = 0L;
+    UCHAR bytes[5]; // 保存完整的 rel8 或 rel32 分支指令。
+    LONG displacement = 0L; // 有符号位移用于安全计算前向或后向目标。
+    ULONG instructionBytes = 0UL; // 输出真实长度，禁止分支跨越已确认的函数边界。
 
-    if (TargetOut == NULL ||
+    if (TargetOut == NULL || InstructionBytesOut == NULL ||
         !KswordARKRuntimeReadMemory(
             (const VOID*)InstructionAddress,
             bytes,
-            sizeof(bytes)) ||
-        (bytes[0] != 0xE8U && bytes[0] != 0xE9U)) {
+            1U)) { // 先读 opcode，短跳转无需假定后面还有五字节。
         return FALSE;
     }
-    RtlCopyMemory(&displacement, bytes + 1UL, sizeof(displacement));
+    if (bytes[0] == 0xEBU) { // EB rel8 是导出短跳板和尾跳转的明确编码。
+        instructionBytes = 2UL; // rel8 指令总长为两字节。
+    }
+    else if (bytes[0] == 0xE8U || bytes[0] == 0xE9U) { // 保留已有直接 call/jmp 支持。
+        instructionBytes = 5UL; // rel32 指令总长为五字节。
+    }
+    else {
+        return FALSE; // 间接调用和未知编码不能推测目的地址。
+    }
+    if (!KswordARKRuntimeReadMemory(
+            (const VOID*)InstructionAddress, bytes, instructionBytes) ||
+        InstructionAddress > MAXULONG_PTR - instructionBytes) {
+        return FALSE; // 不完整读取或下一指令地址溢出时拒绝候选。
+    }
+    if (instructionBytes == 2UL) {
+        displacement = (LONG)(CHAR)bytes[1]; // 显式符号扩展后向 rel8。
+    }
+    else {
+        RtlCopyMemory(&displacement, bytes + 1UL, sizeof(displacement)); // 仅复制本地快照。
+    }
+    *InstructionBytesOut = instructionBytes; // 调用方用此值验证完整指令范围。
     return KswordARKRuntimeResolveRelativeTarget(
-        InstructionAddress + sizeof(bytes),
+        InstructionAddress + instructionBytes,
         displacement,
         TargetOut);
 }
@@ -562,8 +583,23 @@ KswordARKRuntimeScanRoutine(
         return 0UL;
     }
 
-    if (FunctionBounds) { // 卸载缓存扫描必须受 PE 自带函数边界限制。
+    if (FunctionBounds) { // 私有全局扫描必须受 PE 自带函数边界限制。
         ScanBytes = KswordARKRuntimeFunctionScanBytes(View, RoutineAddress, ScanBytes); // 不扫描相邻函数。
+        if (ScanBytes == 0UL) { // 简单导出跳板可能没有 x64 unwind 条目。
+            UCHAR opcode = 0U; // 只认可入口处明确的无条件跳转，不扫描未知叶函数。
+            ULONG_PTR target = 0U; // 跳板的目标仍须位于当前模块可执行节。
+            ULONG instructionBytes = 0UL; // 校验整个跳板指令的映像边界。
+            if (BranchTargets != NULL && BranchCapacity != 0UL &&
+                KswordARKRuntimeReadMemory((const VOID*)RoutineAddress, &opcode, sizeof(opcode)) &&
+                (opcode == 0xE9U || opcode == 0xEBU) &&
+                KswordARKRuntimeDecodeDirectBranch(RoutineAddress, &target, &instructionBytes) &&
+                KswordARKRuntimeAddressIsExecutable(View, RoutineAddress, instructionBytes) &&
+                KswordARKRuntimeAddressIsExecutable(View, target, 1U)) {
+                BranchTargets[0] = target; // 后续轮次仍以目标函数的 PE 条目限定扫描。
+                return 1UL; // 当前跳板只提供一个跳转目标，不发布数据候选。
+            }
+            return 0UL; // 无法确认函数或跳板时保留不可用状态。
+        }
     }
     for (offset = 0UL; offset < ScanBytes; ++offset) {
         ULONG_PTR instructionAddress = RoutineAddress + offset;
@@ -588,8 +624,10 @@ KswordARKRuntimeScanRoutine(
             }
         }
         if (BranchTargets != NULL && branchCount < BranchCapacity &&
-            (!FunctionBounds || ScanBytes - offset >= 5UL) && // rel32 分支也不能跨函数边界。
-            KswordARKRuntimeDecodeDirectBranch(instructionAddress, &target) &&
+            KswordARKRuntimeDecodeDirectBranch(instructionAddress, &target, &instructionBytes) &&
+            (instructionBytes == 5UL || (FunctionBounds && // 保持旧固定窗口扫描器的 rel32 行为。
+             (target < RoutineAddress || target - RoutineAddress >= ScanBytes))) && // 只跟踪离开当前扫描范围的 rel8，避免重复加入内部短分支。
+            (!FunctionBounds || instructionBytes <= ScanBytes - offset) && // rel8/rel32 均不得跨函数边界。
             KswordARKRuntimeAddressIsExecutable(View, target, 1U)) {
             ULONG branchIndex = 0UL;
             BOOLEAN duplicate = FALSE;

@@ -86,6 +86,21 @@
         <file alias="titlebar_restore.svg">Resource/Icon/system/restore_line.svg</file>
         <file alias="titlebar_close.svg">Resource/Icon/system/close_line.svg</file>
 
+        <!-- 内存工作台新增图标（别名均以 memwb_ 开头；源文件都在 Resource/Icon 图标库内，未新增 svg）：
+             写入模式胶囊（立即写入 / 暂存后应用）、地址簿与加入书签、int3 补丁的还原与全部还原、
+             汇编编辑、四个子页签（十六进制 / 反汇编 / 文本 / 对比）。 -->
+        <file alias="memwb_mode_immediate.svg">Resource/Icon/device/flash_line.svg</file>
+        <file alias="memwb_mode_staged.svg">Resource/Icon/file/inbox_line.svg</file>
+        <file alias="memwb_bookmarks.svg">Resource/Icon/education/bookmarks_line.svg</file>
+        <file alias="memwb_bookmark_add.svg">Resource/Icon/education/bookmark_add_line.svg</file>
+        <file alias="memwb_restore.svg">Resource/Icon/system/restore_line.svg</file>
+        <file alias="memwb_restore_all.svg">Resource/Icon/system/history_anticlockwise_line.svg</file>
+        <file alias="memwb_assemble.svg">Resource/Icon/development/terminal_box_line.svg</file>
+        <file alias="memwb_tab_hex.svg">Resource/Icon/editor/hashtag_line.svg</file>
+        <file alias="memwb_tab_disasm.svg">Resource/Icon/development/code_line.svg</file>
+        <file alias="memwb_tab_text.svg">Resource/Icon/editor/text_line.svg</file>
+        <file alias="memwb_tab_compare.svg">Resource/Icon/development/git_compare_line.svg</file>
+
         <!-- 句柄面板图标资源 -->
         <file alias="handle_refresh.svg">Resource/Icon/system/refresh_3_line.svg</file>
         <file alias="handle_copy.svg">Resource/Icon/file/copy_line.svg</file>

@@ -61,6 +61,7 @@
 #define NOMINMAX
 #endif
 #include <Windows.h>
+#include "../../DebuggerBackend/KswordPluginTheme.h"
 
 namespace
 {
@@ -1601,6 +1602,17 @@ namespace
         }
 
     protected:
+        // 主题快照在当前palette/style更新栈结束后发送，避免Qt构造/重排期间重入。
+        void changeEvent(QEvent* event) override
+        {
+            QWidget::changeEvent(event);
+            if (event->type() == QEvent::ApplicationPaletteChange ||
+                event->type() == QEvent::PaletteChange)
+            {
+                schedulePluginThemeUpdate();
+            }
+        }
+
         void showEvent(QShowEvent* event) override
         {
             QWidget::showEvent(event);
@@ -1617,6 +1629,7 @@ namespace
                 (event->type() == QEvent::Resize || event->type() == QEvent::Show))
             {
                 resizePluginWindow();
+                if (event->type() == QEvent::Show) schedulePluginThemeUpdate();
             }
             if (watched == m_surface && event->type() == QEvent::MouseButtonPress && ::IsWindow(m_pluginWindow))
             {
@@ -1723,6 +1736,7 @@ namespace
         void consumeStdout();
         void processProtocolLine(const QByteArray& line);
         void resizePluginWindow();
+        void schedulePluginThemeUpdate();
         void fail(const QString& message, bool stopProcess);
 
         PluginDescriptor m_descriptor;
@@ -1738,6 +1752,7 @@ namespace
         bool m_failed = false;
         bool m_stopping = false;
         bool m_startScheduled = false;
+        bool m_themeUpdatePending = false; // 合并同一轮外观事件，生命周期由this约束。
     };
 
     void PluginTabPage::consumeStdout()
@@ -1858,6 +1873,56 @@ namespace
             .arg(owningProcessId));
         ::ShowWindow(m_pluginWindow, SW_SHOW);
         resizePluginWindow();
+        // 启动环境快照之后可能已换主题；握手完成时立即补当前色。
+        schedulePluginThemeUpdate();
+    }
+
+    // 将最新主题发送给已通过PID与WS_CHILD父窗口核验的日志页。
+    // 输出仅是有限超时的颜色消息，不重启插件、不触碰其后端/日志状态。
+    void PluginTabPage::schedulePluginThemeUpdate()
+    {
+        if (m_themeUpdatePending || m_stopping)
+        {
+            return;
+        }
+        m_themeUpdatePending = true;
+        QTimer::singleShot(0, this, [this]()
+        {
+            m_themeUpdatePending = false;
+            if (!m_ready || m_stopping || m_process == nullptr || m_surface == nullptr ||
+                !::IsWindow(m_pluginWindow))
+            {
+                return;
+            }
+            // 重验当前PID/直接父窗，避免退出后复用的HWND接收颜色消息。
+            DWORD ownerPid = 0;
+            ::GetWindowThreadProcessId(m_pluginWindow, &ownerPid);
+            const HWND hostWindow = reinterpret_cast<HWND>(m_surface->winId());
+            if (ownerPid != static_cast<DWORD>(m_process->processId()) ||
+                ::GetParent(m_pluginWindow) != hostWindow)
+            {
+                return;
+            }
+            // 转为Win32实色；勾选轮廓以真实根底校准，避免白色强调种子不可见。
+            const auto nativeColor = [](const QColor& value)
+            {
+                return RGB(value.red(), value.green(), value.blue());
+            };
+            ksword::plugin_theme::Packet packet;
+            packet.window = nativeColor(KswordTheme::WindowColor());
+            packet.surface = nativeColor(KswordTheme::SurfaceColor());
+            packet.text = nativeColor(KswordTheme::TextPrimaryColor());
+            packet.border = nativeColor(KswordTheme::BorderColor());
+            packet.accent = nativeColor(KswordTheme::ControlGlyphColor(KswordTheme::WindowColor()));
+            COPYDATASTRUCT copyData{}; // 消息仅在同步调用期间持有本地快照。
+            copyData.dwData = ksword::plugin_theme::kCopyDataTag;
+            copyData.cbData = sizeof(packet);
+            copyData.lpData = &packet;
+            DWORD_PTR reply = 0; // 老插件可忽略消息，挂起子进程也不能无限阻塞主窗口。
+            ::SendMessageTimeoutW(m_pluginWindow, WM_COPYDATA,
+                reinterpret_cast<WPARAM>(hostWindow), reinterpret_cast<LPARAM>(&copyData),
+                SMTO_ABORTIFHUNG | SMTO_BLOCK, 50, &reply);
+        });
     }
 
     void PluginTabPage::resizePluginWindow()

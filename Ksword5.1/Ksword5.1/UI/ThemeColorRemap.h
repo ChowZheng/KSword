@@ -14,6 +14,8 @@
 // ============================================================
 
 #include <QList>
+#include <QColor>
+#include <QPalette>
 #include <QString>
 
 namespace ks::ui
@@ -62,4 +64,11 @@ namespace ks::ui
     QString RemapStaleThemeColorsInText(
         const ThemeColorSnapshot& previousSnapshot,
         const QString& styleText);
+
+    // 纯值重映射接口：修复尚未返还控件的保存快照，不触发 setPalette/repolish。
+    // previousSnapshot 是该值捕获时的主题；颜色 alpha、画刷类型和 palette 继承标记不变。
+    QColor RemapStaleThemeColor(const ThemeColorSnapshot& previousSnapshot, const QColor& color);
+    QPalette RemapStaleThemeColorsInPalette(
+        const ThemeColorSnapshot& previousSnapshot,
+        const QPalette& palette);
 }

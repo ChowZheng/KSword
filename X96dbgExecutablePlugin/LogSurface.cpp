@@ -2,6 +2,7 @@
 // The debugger stays a top-level window. Only this control/log surface is embedded.
 #include "LogSurface.h"
 #include "../DebuggerBackend/KswordDebuggerFileProtocol.h"
+#include "../DebuggerBackend/KswordPluginTheme.h"
 #include "../TitanEnginePlugin/ControlProtocol.h"
 #include <algorithm>
 #include <cwchar>
@@ -171,6 +172,38 @@ namespace ksword::x96_log
     }
     bool message(HWND parent, UINT messageId, WPARAM wParam, LPARAM lParam, LRESULT& result)
     {
+        // 宿主热更新只影响自有日志页，不修改独立调试器或任何后端配置。
+        if (messageId == WM_COPYDATA)
+        {
+            ksword::plugin_theme::Packet packet;
+            result = FALSE;
+            if (!ksword::plugin_theme::DecodeCopyData(parent, wParam, lParam, packet))
+            {
+                return true;
+            }
+            // 成对创建后交换画刷，避免资源失败留下半套主题。
+            HBRUSH windowBrush = CreateSolidBrush(packet.window);
+            HBRUSH surfaceBrush = CreateSolidBrush(packet.surface);
+            if (windowBrush == nullptr || surfaceBrush == nullptr)
+            {
+                if (windowBrush != nullptr) DeleteObject(windowBrush);
+                if (surfaceBrush != nullptr) DeleteObject(surfaceBrush);
+                return true;
+            }
+            DeleteObject(gWindowBrush);
+            DeleteObject(gSurfaceBrush);
+            gWindowBrush = windowBrush;
+            gSurfaceBrush = surfaceBrush;
+            gWindow = packet.window;
+            gSurface = packet.surface;
+            gText = packet.text;
+            gBorder = packet.border;
+            gAccent = packet.accent;
+            // 子控件下次绘制读取新颜色，既有选择、日志和确认状态不变。
+            RedrawWindow(parent, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN);
+            result = TRUE;
+            return true;
+        }
         const int id = LOWORD(wParam);
         if (messageId == WM_COMMAND && id >= kToggleId && id <= kPagesId)
         {

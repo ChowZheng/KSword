@@ -1,10 +1,15 @@
-# KSword 标题栏全局搜索 / 双模式输入
+# KSword 标题栏全局搜索 / 双模式与四节点循环输入
 
 主程序标题栏中间输入框是“搜索 / CMD”双模式（默认搜索），实现分三层：
 
 - `Framework/CustomTitleBar`：输入组 `ksTitleInputGroup`（QToolButton 模式按钮 + QLineEdit 一体外观）。
   模式按钮 InstantPopup 菜单切换；搜索模式发 `searchTextEdited`，CMD 模式回车发 `commandSubmitted`
   （cmd /K 新控制台，MainWindow::executeCommandInNewConsole）。模式切换发 `inputModeChanged`。
+  顶部输入框的普通 Tab/Shift+Tab 按 Global ↔ CurrentPage ↔ CurrentTable ↔ CMD 四节点循环；
+  范围边界由 `requestCommandInputActivation -> activateCommandInput` 切 CMD，CMD 返回搜索仍走
+  `requestSearchInputActivation -> activateSearchInput`。复用 `inputModeChanged` 同步搜索/CMD 配置弹层。
+  CMD 的 Enter/Esc 透传给 `CommandExecutionPopup`；popup 内字段与 Ctrl/Alt/Meta+Tab 不被四节点逻辑接管。
+  返回搜索要同步当前文本，包括空串，否则会恢复 CMD 模式前的旧查询。
 - `UI/GlobalUiSearch`（ks::ui::GlobalUiSearchController，Q_OBJECT/QtMoc）：防抖 220ms 后**异步分片**扫描——
   控件树只能在 UI 线程碰，所以按“每个事件循环周期扫一个 Dock”切片（singleShot(0) 链），
   分片间让出事件循环保持 UI 响应；`m_searchGeneration` 代数自增实现取消（新输入/Esc/切模式/收起弹层
@@ -21,7 +26,7 @@
   （activateDockForSearchNavigation：isClosed 先 toggleView(true) 再 raise）。
 
 通用表格搜索入口只保留图标按钮；空间足够时显示，点击后切换到“当前表格”范围并激活标题栏搜索框。
-命中仍展示在搜索结果弹层中；搜索过程不修改表格原有行可见状态。
+命中仍展示在搜索结果弹层中；默认不改变行可见状态。开启“仅显示搜索结果”后会附加通用行过滤，切离搜索、清空查询或撤销过滤时恢复此前的隐藏行快照，不能把原本隐藏的行一并显示。
 
 可揭示性判定：向上遍历到 CDockWidget，途中显式隐藏且父不是 QStackedWidget 的控件视为不可揭示（不收录）。
 非当前 Tab 页被 QStackedWidget 显式 hide 属于导航性隐藏，必须放行，否则搜不到其他页签内容。
@@ -38,3 +43,9 @@
 - source template 的 `%1` 等捕获值会再做一次源文本翻译，使外层英文模板不会夹带“安全模式”等稳定中文枚举；动态多行报告仍应逐行翻译后再 join，不能对最终整块只调用一次 sourceText。
 - 语言包两文件键序逐行对齐（同键同行号），插入词条必须两包同锚点成对插入；
   用“整行内容锚点 + 行插入”脚本定点编辑，禁止 json.load/dump 重写。
+
+## 四节点循环的实际回归入口（2026-10-04）
+
+`tools/Invoke-SearchHistoryUiTests.ps1` 在既有构建日志目录编译真实 CustomTitleBar、GlobalUiSearch、TableSearchSupport、CommandExecutionPopup 和 LanguageManager，CMD执行请求只接记录槽。当前128条离屏断言覆盖双向四节点、菜单/修饰键/弹层字段Tab、Enter/Esc、真实防抖后过滤快照恢复、空查询和未提交分片的取消；不运行真实命令或驱动。
+
+修饰键Tab按Qt正常焦点顺序移动时，当前表格上下文和名称可合法变化；范围不变应断言popup QTabBar索引，不能冻结包含动态表名的searchScopeDisplayText。切回搜索须同步空字符串，否则旧pending query可能重新启动；取消必须同时停止debounce、增加扫描代数并恢复原隐藏行快照。

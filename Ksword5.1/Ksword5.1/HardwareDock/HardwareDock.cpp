@@ -4147,6 +4147,13 @@ void HardwareDock::resizeEvent(QResizeEvent* resizeEventPointer)
 bool HardwareDock::eventFilter(QObject* watchedObject, QEvent* eventObject)
 {
     QWidget* const eventWidget = qobject_cast<QWidget*>(watchedObject);
+    // 全局 palette 传播尚在遍历子树时只排队，主题完成后统一刷新性能图和浮窗快照。
+    if (eventObject != nullptr
+        && (eventObject->type() == QEvent::ApplicationPaletteChange
+            || (eventObject->type() == QEvent::PaletteChange && eventWidget == this)))
+    {
+        scheduleUtilizationThemeRefresh();
+    }
     QWidget* const floatingWindow = m_utilizationFloatingWindow.data();
     if (eventObject != nullptr && floatingWindow != nullptr && eventWidget != nullptr
         && (eventWidget == floatingWindow || floatingWindow->isAncestorOf(eventWidget))
@@ -5074,6 +5081,7 @@ void HardwareDock::openUtilizationFloatingWindow(const bool sidebarMode)
     m_utilizationFloatingWindow = floatingWindow;
     m_utilizationFloatingPage = sourceWidget;
     m_utilizationBorrowedPalette = sourceWidget->palette();
+    m_utilizationBorrowedThemeColors = ks::ui::CaptureThemeColorSnapshot();
     m_utilizationBorrowedHadPalette = sourceWidget->testAttribute(Qt::WA_SetPalette);
     m_utilizationBorrowedFont = sourceWidget->font();
     m_utilizationBorrowedHadFont = sourceWidget->testAttribute(Qt::WA_SetFont);
@@ -5574,7 +5582,8 @@ void HardwareDock::restoreUtilizationFloatingWindow()
     {
         if (m_utilizationBorrowedHadPalette)
         {
-            borrowedWidget->setPalette(m_utilizationBorrowedPalette);
+            borrowedWidget->setPalette(ks::ui::RemapStaleThemeColorsInPalette(
+                m_utilizationBorrowedThemeColors, m_utilizationBorrowedPalette));
         }
         else
         {
@@ -5607,6 +5616,8 @@ void HardwareDock::restoreUtilizationFloatingWindow()
     m_utilizationBorrowedHadPalette = false;
     m_utilizationSavedSplitterSizes.clear();
     delete floatingWindow;
+    // 图表的画笔不继承 QWidget palette；返回主界面时显式恢复当前主主题角色。
+    refreshUtilizationChartThemeColors();
 
     if (mainWindow != nullptr)
     {
@@ -5724,7 +5735,7 @@ void HardwareDock::applyUtilizationFloatingContentScale(const bool forceRestyle)
         {
             m_utilizationFloatingWidgetStyles.push_back({ widget, widget->styleSheet(),
                 widget->palette(), widget->testAttribute(Qt::WA_SetPalette),
-                widget->minimumHeight(), widget->maximumHeight() });
+                widget->minimumHeight(), widget->maximumHeight(), ks::ui::CaptureThemeColorSnapshot() });
             existing = std::prev(m_utilizationFloatingWidgetStyles.end());
         }
         QPalette childPalette = existing->palette;
@@ -5856,13 +5867,20 @@ void HardwareDock::restoreUtilizationFloatingContentScale()
     {
         if (QWidget* const widget = state.widget.data())
         {
-            if (widget->styleSheet() != state.styleSheet)
+            const QString restoredStyle = ks::ui::RemapStaleThemeColorsInText(
+                state.themeColors, state.styleSheet);
+            if (widget->styleSheet() != restoredStyle)
             {
-                widget->setStyleSheet(state.styleSheet);
+                widget->setStyleSheet(restoredStyle);
             }
-            widget->setPalette(state.palette);
-            if (!state.hadPalette)
+            if (state.hadPalette)
             {
+                widget->setPalette(ks::ui::RemapStaleThemeColorsInPalette(state.themeColors, state.palette));
+            }
+            else
+            {
+                // 空 palette 真正清除 resolve mask；仅改 WA_SetPalette 仍可能保留旧继承颜色。
+                widget->setPalette(QPalette());
                 widget->setAttribute(Qt::WA_SetPalette, false);
             }
             if ((qobject_cast<QLabel*>(widget) != nullptr
@@ -5969,17 +5987,8 @@ void HardwareDock::applyUtilizationFloatingTheme()
     {
         borrowedWidget->setPalette(floatingPalette);
         borrowedWidget->update();
-        for (QWidget* const child : borrowedWidget->findChildren<QWidget*>())
-        {
-            if (auto* const view = dynamic_cast<QChartView*>(child))
-            {
-                if (QChart* const chart = view->chart())
-                {
-                    chart->setTitleBrush(QBrush(textColor));
-                    chart->legend()->setLabelColor(secondaryTextColor);
-                }
-            }
-        }
+        // 轴、曲线、网格和 plot 填充也需要本地表面校准，不能只换标题与图例。
+        refreshUtilizationChartThemeColors(followMain ? nullptr : &floatingPalette);
     }
 }
 
@@ -6747,8 +6756,8 @@ void HardwareDock::initializeUtilizationDiskSubTab()
     m_diskReadLineSeries = new QLineSeries(m_utilizationDiskSubPage);
     m_diskReadLineSeries->setName(ks::i18n::contextText(
         QStringLiteral("hardware.utilization.disk.read"), QStringLiteral("读取")));
-    const QColor diskReadColor(80, 170, 255);
-    const QColor diskWriteColor(255, 190, 105);
+    const QColor diskReadColor = KswordTheme::PerformanceColor(KswordTheme::PerformanceRole::Read);
+    const QColor diskWriteColor = KswordTheme::PerformanceColor(KswordTheme::PerformanceRole::Write);
     m_diskReadLineSeries->setColor(diskReadColor);
     m_diskReadBaselineSeries = createBaselineSeries(m_utilizationDiskSubPage, m_historyLength);
     m_diskWriteLineSeries = new QLineSeries(m_utilizationDiskSubPage);
@@ -6848,8 +6857,8 @@ void HardwareDock::initializeUtilizationNetworkSubTab()
     m_networkRxLineSeries = new QLineSeries(m_utilizationNetworkSubPage);
     m_networkRxLineSeries->setName(ks::i18n::contextText(
         QStringLiteral("hardware.utilization.network.down"), QStringLiteral("下行")));
-    const QColor networkRxColor(92, 190, 255);
-    const QColor networkTxColor(153, 129, 255);
+    const QColor networkRxColor = KswordTheme::PerformanceColor(KswordTheme::PerformanceRole::Read);
+    const QColor networkTxColor = KswordTheme::PerformanceColor(KswordTheme::PerformanceRole::Write);
     m_networkRxLineSeries->setColor(networkRxColor);
     m_networkRxBaselineSeries = createBaselineSeries(m_utilizationNetworkSubPage, m_historyLength);
     m_networkTxLineSeries = new QLineSeries(m_utilizationNetworkSubPage);
@@ -7935,8 +7944,8 @@ void HardwareDock::createDiskUtilizationDevicePage(DiskUtilizationDevice* device
     devicePointer->readLineSeries = new QLineSeries(devicePointer->pageWidget);
     devicePointer->readLineSeries->setName(ks::i18n::contextText(
         QStringLiteral("hardware.utilization.disk.read"), QStringLiteral("读取")));
-    const QColor readColor(80, 170, 255);
-    const QColor writeColor(255, 190, 105);
+    const QColor readColor = KswordTheme::PerformanceColor(KswordTheme::PerformanceRole::Read);
+    const QColor writeColor = KswordTheme::PerformanceColor(KswordTheme::PerformanceRole::Write);
     devicePointer->readLineSeries->setColor(readColor);
     devicePointer->readBaselineSeries = createBaselineSeries(devicePointer->pageWidget, m_historyLength);
     devicePointer->writeLineSeries = new QLineSeries(devicePointer->pageWidget);
@@ -8056,8 +8065,8 @@ void HardwareDock::createNetworkUtilizationDevicePage(NetworkUtilizationDevice* 
     devicePointer->rxLineSeries = new QLineSeries(devicePointer->pageWidget);
     devicePointer->rxLineSeries->setName(ks::i18n::contextText(
         QStringLiteral("hardware.utilization.network.down"), QStringLiteral("下行")));
-    const QColor rxColor(92, 190, 255);
-    const QColor txColor(255, 190, 105);
+    const QColor rxColor = KswordTheme::PerformanceColor(KswordTheme::PerformanceRole::Read);
+    const QColor txColor = KswordTheme::PerformanceColor(KswordTheme::PerformanceRole::Write);
     devicePointer->rxLineSeries->setColor(rxColor);
     devicePointer->rxBaselineSeries = createBaselineSeries(devicePointer->pageWidget, m_historyLength);
     devicePointer->txLineSeries = new QLineSeries(devicePointer->pageWidget);

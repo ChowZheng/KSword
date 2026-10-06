@@ -9,6 +9,7 @@
 // ============================================================
 
 #include "../Framework.h"
+#include "../UI/ThemeColorRemap.h"
 
 #include <QStringList>
 #include <QPointer>
@@ -410,6 +411,10 @@ private:
     void initializeCoreCharts();
     void initializeConnections();
     void scheduleUtilizationLayoutRefresh();
+    // 主题更新只排队一次；按明确设备/引擎角色重算业务颜色，不从旧色猜角色。
+    void scheduleUtilizationThemeRefresh();
+    void refreshUtilizationThemeColors();
+    void refreshUtilizationChartThemeColors(const QPalette* floatingPalette = nullptr);
     void applyInitialUtilizationSplitterSize();
     void syncUtilizationSidebarCardWidths();
     void syncUtilizationSidebarSelection(int selectedRowIndex);
@@ -628,6 +633,7 @@ private:
     QList<int> m_utilizationSavedSplitterSizes;
     int m_utilizationSavedDetailIndex = -1;
     QPalette m_utilizationBorrowedPalette;
+    ks::ui::ThemeColorSnapshot m_utilizationBorrowedThemeColors;
     bool m_utilizationBorrowedHadPalette = false;
     QFont m_utilizationBorrowedFont;
     bool m_utilizationBorrowedHadFont = false;
@@ -639,6 +645,7 @@ private:
         bool hadPalette = false;
         int minimumHeight = 0;
         int maximumHeight = QWIDGETSIZE_MAX;
+        ks::ui::ThemeColorSnapshot themeColors; // 保存 QSS/palette 时的主主题，用于安全返还。
     };
     struct FloatingLayoutStyleState
     {
@@ -651,6 +658,7 @@ private:
     std::vector<FloatingWidgetStyleState> m_utilizationFloatingWidgetStyles;
     std::vector<FloatingLayoutStyleState> m_utilizationFloatingLayoutStyles;
     double m_utilizationFloatingAppliedContentScale = 1.0;
+    bool m_utilizationThemeRefreshScheduled = false; // 合并 palette 事件，禁止同步 repolish 重入。
     QSize m_utilizationFloatingBaseSize;
     int m_utilizationFloatingScalePercent = 100;
     int m_utilizationFloatingBackgroundOpacityPercent = 100;

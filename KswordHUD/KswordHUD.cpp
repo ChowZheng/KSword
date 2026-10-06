@@ -23,6 +23,7 @@
 #include "HudProcessListPanel.h"
 #include "HudPerformancePanel.h"
 #include "KswordHUD.h"
+#include "HudColors.h"
 // 命名空间（简化代码）
 
 namespace
@@ -66,12 +67,56 @@ OpenGLWidget::~OpenGLWidget() {
 
 void OpenGLWidget::setBackgroundPixmap(const QPixmap& pixmap) {
     m_backgroundPixmap = pixmap;
+    emit backdropChanged();
     update();
 }
 
 void OpenGLWidget::setOpacity(qreal opacity) {
     m_opacity = opacity;
+    emit backdropChanged();
     update();
+}
+
+QColor OpenGLWidget::effectivePanelBackground(
+    const QWidget* panel, const QColor& fillColor, const int opacityPercent) const
+{
+    // 与 paintGL 共用 KeepAspectRatioByExpanding、居中和图片 alpha；这里只做颜色采样。
+    const QImage image = m_backgroundPixmap.toImage();
+    const QRect area = panel != nullptr ? panel->geometry() : rect();
+    const double scale = image.isNull() ? 1.0 : qMax(
+        static_cast<double>(width()) / qMax(1, image.width()),
+        static_cast<double>(height()) / qMax(1, image.height()));
+    const double offsetX = (width() - image.width() * scale) * 0.5;
+    const double offsetY = (height() - image.height() * scale) * 0.5;
+    QColor fill = fillColor;
+    fill.setAlpha(qBound(0, opacityPercent, 100) * 255 / 100);
+    int red = 0;
+    int green = 0;
+    int blue = 0;
+    constexpr int samples = 7;
+    for (int row = 0; row < samples; ++row)
+    {
+        for (int column = 0; column < samples; ++column)
+        {
+            QColor pixel(0, 0, 0, 128);
+            if (!image.isNull())
+            {
+                const double x = area.x() + area.width() * (column + 0.5) / samples;
+                const double y = area.y() + area.height() * (row + 0.5) / samples;
+                const int imageX = qBound(0, qRound((x - offsetX) / qMax(0.001, scale)), image.width() - 1);
+                const int imageY = qBound(0, qRound((y - offsetY) / qMax(0.001, scale)), image.height() - 1);
+                pixel = image.pixelColor(imageX, imageY);
+            }
+            pixel.setAlpha(qRound(pixel.alpha() * qBound(0.0, static_cast<double>(m_opacity), 1.0)));
+            // 外部桌面不在 HUD 图片快照中，以合成层的透明黑为参考；不宣称任意桌面保证。
+            const QColor background = KswordHudColors::Composite(pixel, QColor(Qt::black));
+            const QColor visible = KswordHudColors::Composite(fill, background);
+            red += visible.red();
+            green += visible.green();
+            blue += visible.blue();
+        }
+    }
+    return QColor(red / (samples * samples), green / (samples * samples), blue / (samples * samples));
 }
 
 void OpenGLWidget::setChildWidgets(QWidget* left, QWidget* right) {
@@ -139,6 +184,7 @@ void OpenGLWidget::resizeGL(int w, int h) {
         const int topY = kHudOuterMargin;
         m_leftWidget->setGeometry(leftX, topY, paneWidth, paneHeight);
         m_rightWidget->setGeometry(rightX, topY, contentWidth - paneWidth, paneHeight);
+        emit backdropChanged();
     }
 }
 
@@ -219,6 +265,7 @@ KswordHUD::KswordHUD(QWidget* parent)
 
     // 创建OpenGL加速部件
     m_glWidget = new OpenGLWidget(this);
+    connect(m_glWidget, &OpenGLWidget::backdropChanged, this, [this]() { refreshPaneColors(); });
     setCentralWidget(m_glWidget);
 
     const HudConfig config = loadOrCreateConfig();
@@ -410,6 +457,7 @@ KswordHUD::HudConfig KswordHUD::loadOrCreateConfig() const
 
 void KswordHUD::applyHudConfig(const HudConfig& config)
 {
+    m_hudConfig = config;
     const QString styleDirPath = QCoreApplication::applicationDirPath() + "/Style";
     QString backgroundPath = config.backgroundImagePath.trimmed();
     if (backgroundPath.isEmpty()) {
@@ -470,6 +518,30 @@ void KswordHUD::applyHudConfig(const HudConfig& config)
     }
     if (m_processListPanel != nullptr) {
         m_processListPanel->setTableTextColor(leftProcessTableFontColor);
+    }
+    refreshPaneColors();
+}
+
+void KswordHUD::refreshPaneColors()
+{
+    if (m_glWidget == nullptr)
+    {
+        return;
+    }
+    // 保留现有 0 值回退语义与所有背景配置，仅给前景模块提供实际配置合成后的参考底。
+    const QColor left = parseConfigColor(m_hudConfig.leftWidgetBackgroundColor, QColor(Qt::black));
+    const QColor right = parseConfigColor(m_hudConfig.rightWidgetBackgroundColor, QColor(Qt::black));
+    const int leftOpacity = m_hudConfig.leftWidgetBackgroundOpacityPercent > 0
+        ? m_hudConfig.leftWidgetBackgroundOpacityPercent : kDefaultLeftWidgetBackgroundOpacityPercent;
+    const int rightOpacity = m_hudConfig.rightWidgetBackgroundOpacityPercent > 0
+        ? m_hudConfig.rightWidgetBackgroundOpacityPercent : kDefaultRightWidgetBackgroundOpacityPercent;
+    if (m_processListPanel != nullptr)
+    {
+        m_processListPanel->setEffectiveBackgroundColor(m_glWidget->effectivePanelBackground(m_leftWidget, left, leftOpacity));
+    }
+    if (m_performancePanel != nullptr)
+    {
+        m_performancePanel->setEffectiveBackgroundColor(m_glWidget->effectivePanelBackground(m_rightWidget, right, rightOpacity));
     }
 }
 

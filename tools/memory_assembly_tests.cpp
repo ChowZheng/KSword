@@ -136,6 +136,21 @@ int main()
     rejected("add rax,ffffffff", AssemblyError::InvalidInstruction);
     rejected("mov eax,10000000000000000", AssemblyError::InvalidNumber);
     rejected("mov eax,[rax++1]", AssemblyError::InvalidOperands);
+    // 空白不得把数字、前缀、寄存器或标签拼成新的操作数；失败不能返回部分机器码。
+    rejected("mov eax, 1 0", AssemblyError::InvalidOperands);
+    rejected("mov eax, 0x 10", AssemblyError::InvalidOperands);
+    rejected("mov eax, 10 h", AssemblyError::InvalidOperands);
+    rejected("mov eax, 1\t0", AssemblyError::InvalidOperands);
+    rejected("mov eax, [rax + 1 0]", AssemblyError::InvalidOperands);
+    rejected("mov eax, [ra x + 10]", AssemblyError::InvalidOperands);
+    rejected("mov eax, [rax + rcx * 1 0]", AssemblyError::InvalidOperands);
+    rejected("target: nop\njmp tar get", AssemblyError::InvalidOperands, 2);
+    rejected("nop\nmov eax, 1 0", AssemblyError::InvalidOperands, 2);
+    // 加减乘号周围和整个表达式首尾仍允许空白，且机器码必须与紧凑输入一致。
+    require(assemble("mov eax, 1 + 0") == assemble("mov eax,1+0"), "spaced immediate operators");
+    require(assemble("mov eax, [ rax + rcx * 4 - 10 ]")
+        == assemble("mov eax,[rax+rcx*4-10]"), "spaced memory operators");
+    require(assemble("mov eax, \t-\t1 ") == assemble("mov eax,-1"), "spaced unary sign");
     rejected("mov eax,[rax+rcx*3]", AssemblyError::InvalidMemory);
     rejected("mov eax,[rip+rax]", AssemblyError::InvalidMemory);
     rejected("mov eax,[rip+80000000]", AssemblyError::InvalidMemory);

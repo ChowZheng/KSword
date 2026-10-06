@@ -306,7 +306,10 @@ namespace ks::ui
         const QString textSecondaryHex = KswordTheme::TextSecondaryHex();
         const QString accentHex = KswordTheme::AccentHex(KswordTheme::AccentRole::Blue);
         const QString accentHoverHex = KswordTheme::PrimaryBlueSolidHoverHex();
-        const QString accentTextHex = KswordTheme::OnAccentHex();
+        const QString accentTextHex = KswordTheme::OnAccentHex(
+            KswordTheme::AccentColor(KswordTheme::AccentRole::Blue));
+        const QString accentHoverTextHex = KswordTheme::OnAccentHex(
+            KswordTheme::PrimaryBlueSolidHoverColor());
 
         // 弹层显式设置各类控件背景，避免透明主窗口下继承黑色默认底色。
         setStyleSheet(QStringLiteral(
@@ -354,6 +357,7 @@ namespace ks::ui
             "#ksCommandExecutionPopup QToolButton#ksCommandExecutionPopupExecuteButton:hover{"
             "background:%7;"
             "border:1px solid %7;"
+            "color:__EXECUTE_HOVER_TEXT__;"
             "}"
             "#ksCommandExecutionPopup QLabel#ksCommandExecutionPopupHint{"
             "color:%3;"
@@ -369,7 +373,8 @@ namespace ks::ui
                 alternateBackgroundHex,
                 accentHex,
                 accentHoverHex,
-                accentTextHex));
+                accentTextHex)
+            .replace(QStringLiteral("__EXECUTE_HOVER_TEXT__"), accentHoverTextHex));
     }
 
     void CommandExecutionPopup::showPopupPanel()
@@ -564,6 +569,18 @@ namespace ks::ui
         if (eventObject == nullptr)
         {
             return false;
+        }
+        if (watchedObject == this && (eventObject->type() == QEvent::PaletteChange
+            || eventObject->type() == QEvent::ApplicationPaletteChange)
+            && !property("ksword_command_theme_refresh_pending").toBool())
+        {
+            // 各状态前景是具体像素色；已有弹层也要重建，不能只靠QSS旧色映射。
+            setProperty("ksword_command_theme_refresh_pending", true);
+            QTimer::singleShot(0, this, [this]()
+            {
+                refreshTextAndStyle();
+                setProperty("ksword_command_theme_refresh_pending", false);
+            });
         }
 
         const QEvent::Type eventType = eventObject->type();

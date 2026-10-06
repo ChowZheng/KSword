@@ -20,6 +20,7 @@
 #include "fl_draw.H"
 
 #include <algorithm>
+#include <cmath>
 #include <string>
 #include <typeinfo>
 
@@ -161,6 +162,35 @@ void ApplyTextDisplayPalette(Fl_Text_Display* text_display, const KTheme& theme)
 KThemeManager& KThemeManager::instance() {
     static KThemeManager manager;
     return manager;
+}
+
+double KThemeContrast(const Fl_Color foreground, const Fl_Color background)
+{
+    // FLTK 的颜色可能是索引色，必须先解析真实 RGB，再计算线性化相对亮度。
+    const auto luminance = [](const Fl_Color color) {
+        unsigned char red = 0;
+        unsigned char green = 0;
+        unsigned char blue = 0;
+        Fl::get_color(color, red, green, blue);
+        const auto linear = [](const unsigned char channel) {
+            const double value = channel / 255.0;
+            return value <= 0.04045 ? value / 12.92 : std::pow((value + 0.055) / 1.055, 2.4);
+        };
+        return 0.2126 * linear(red) + 0.7152 * linear(green) + 0.0722 * linear(blue);
+    };
+    const double first = luminance(foreground);
+    const double second = luminance(background);
+    return (std::max(first, second) + 0.05) / (std::min(first, second) + 0.05);
+}
+
+Fl_Color KThemeReadableText(const Fl_Color preferred, const Fl_Color background, const double minimumRatio)
+{
+    if (KThemeContrast(preferred, background) >= minimumRatio)
+    {
+        return preferred;
+    }
+    // 按实际 normal/hover/pressed 底色选字；默认蓝底仍保持白字，亮悬停底改为可读深字。
+    return KThemeContrast(FL_WHITE, background) >= KThemeContrast(FL_BLACK, background) ? FL_WHITE : FL_BLACK;
 }
 
 KThemeManager::KThemeManager()

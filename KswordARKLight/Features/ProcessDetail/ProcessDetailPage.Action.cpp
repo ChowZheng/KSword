@@ -52,6 +52,8 @@ bool ProcessDetailPage::CreateActionTab() {
     AddComboItem(terminateMode,
         L"R0 驱动结束（四步：清保护 → ZwTerminate → 逐线程 → 清零内存）",
         static_cast<LPARAM>(terminateMethods.size()));
+    // 组合链追加到独立 ID，保留当前单方法及 R0 默认选择和编号。
+    AddComboItem(terminateMode, L"结束进程(组合方法链)", static_cast<LPARAM>(terminateMethods.size()) + 1);
     ::SendMessageW(terminateMode, CB_SETCURSEL, 0, 0);
 
     AddLabel(tab, 0, L"运行控制", 18, 70, 88, 28);
@@ -120,6 +122,13 @@ bool ProcessDetailPage::HandleActionCommand(int controlId) {
         if (mode == static_cast<LPARAM>(methods.size())) {
             if (ConfirmDanger(hwnd_, L"将通过 R0 驱动结束目标进程。未保存的数据会丢失，是否继续？")) {
                 ExecuteProcessAction(static_cast<int>(ProcessActionId::R0TerminateProcess));
+            }
+            return true;
+        }
+        if (mode == static_cast<LPARAM>(methods.size()) + 1) {
+            // 复用当前后台动作：它冻结创建时间、持有校验句柄并逐方法复核退出。
+            if (ConfirmDanger(hwnd_, L"将按多种结束方法依次处理目标进程。未保存的数据会丢失，是否继续？")) {
+                ExecuteProcessAction(static_cast<int>(ProcessActionId::TerminateProcessMultiMethod));
             }
             return true;
         }

@@ -6146,7 +6146,7 @@ void MonitorDock::initializeEtwTab()
     m_etwSessionTable->horizontalHeader()->setSectionResizeMode(3, QHeaderView::ResizeToContents);
     m_etwSessionTable->horizontalHeader()->setSectionResizeMode(4, QHeaderView::Stretch);
     m_etwSessionTable->setMinimumHeight(180);
-    // ETW 会话表提供控制动作；通用“复制整行”菜单不适用于该表。
+    // ETW 会话表将控制动作与复制整行整合到同一个菜单，保留调查导出入口。
     m_etwSessionTable->setContextMenuPolicy(Qt::CustomContextMenu);
     m_etwSessionPanelLayout->addWidget(m_etwSessionTable, 1);
 
@@ -11191,6 +11191,20 @@ void MonitorDock::showEtwSessionContextMenu(const QPoint& position)
         m_etwSessionTable->selectRow(clickedIndex.row());
     }
 
+    // copyRowIndex/copyValues 用途：冻结右键行（或当前行）显示内容，避免菜单期间刷新错行。
+    const int copyRowIndex = clickedIndex.isValid() ? clickedIndex.row() : m_etwSessionTable->currentRow();
+    const bool canCopyRow = copyRowIndex >= 0 && copyRowIndex < m_etwSessionTable->rowCount();
+    QStringList copyValues;
+    if (canCopyRow)
+    {
+        copyValues.reserve(m_etwSessionTable->columnCount());
+        for (int column = 0; column < m_etwSessionTable->columnCount(); ++column)
+        {
+            const QTableWidgetItem* item = m_etwSessionTable->item(copyRowIndex, column);
+            copyValues << (item != nullptr ? item->text() : QString());
+        }
+    }
+
     QMenu menu(m_etwSessionTable);
     // 显式使用不透明主题样式，确保浅色和深色主题的菜单均可读。
     menu.setStyleSheet(KswordTheme::ContextMenuStyle());
@@ -11200,6 +11214,13 @@ void MonitorDock::showEtwSessionContextMenu(const QPoint& position)
     QAction* flushAction = menu.addAction(
         QIcon(QStringLiteral(":/Icon/process_refresh.svg")),
         QStringLiteral("刷新选中会话的缓冲区"));
+    menu.addSeparator();
+    // copyRowAction 用途：仅复制冻结的 TSV 文本，不触发会话停止或缓冲区刷新。
+    QAction* copyRowAction = menu.addAction(
+        QIcon(QStringLiteral(":/Icon/log_clipboard.svg")),
+        ks::i18n::sourceText(QStringLiteral("复制整行")));
+    copyRowAction->setToolTip(ks::i18n::sourceText(QStringLiteral("复制当前行所有列（TSV）")));
+    copyRowAction->setEnabled(canCopyRow);
     menu.addSeparator();
     QAction* refreshAction = menu.addAction(
         QIcon(QStringLiteral(":/Icon/process_refresh.svg")),
@@ -11220,6 +11241,15 @@ void MonitorDock::showEtwSessionContextMenu(const QPoint& position)
     else if (chosenAction == refreshAction)
     {
         refreshEtwSessionsAsync();
+    }
+    else if (chosenAction == copyRowAction)
+    {
+        // clipboardObject 用途：把菜单弹出前捕获的会话行写入通用剪贴板。
+        QClipboard* clipboardObject = QApplication::clipboard();
+        if (clipboardObject != nullptr)
+        {
+            clipboardObject->setText(copyValues.join(QLatin1Char('\t')));
+        }
     }
 }
 

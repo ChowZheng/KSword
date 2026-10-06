@@ -559,6 +559,8 @@ public:
     QString displayStateSummary() const;
 
 protected:
+    // changeEvent 只排队重着色已有对象节点；event 为主题事件，不启动枚举或重建树。
+    void changeEvent(QEvent* event) override;
     // eventFilter：
     // - 处理迁移到 DriverDock 的自身驱动容器首次真正可见事件；
     // - 只安排当前二级页的一次幂等首刷，不接管页面业务所有权。
@@ -1223,6 +1225,7 @@ private:
     std::vector<KernelTimerDpcEntry> m_timerDpcRows;                 // m_timerDpcRows：KTIMER/DPC 快照行。
 
     // ==================== 刷新状态 ====================
+    bool m_itemThemeRefreshScheduled = false; // 同一轮 palette 传播只重着色一次存量节点。
     std::atomic_bool m_objectNamespaceRefreshRunning{ false }; // m_objectNamespaceRefreshRunning：对象命名空间刷新状态。
     std::atomic_bool m_atomRefreshRunning{ false };            // m_atomRefreshRunning：原子表刷新状态。
     std::atomic_bool m_ntQueryRefreshRunning{ false };         // m_ntQueryRefreshRunning：历史 NtQuery 刷新状态。

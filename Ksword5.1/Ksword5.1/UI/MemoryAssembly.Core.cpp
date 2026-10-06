@@ -158,9 +158,28 @@ namespace
     bool terms(const std::string& expression, std::vector<std::pair<bool, std::string>>& output,
         Failure& failure)
     {
+        // compact 保留运算符结构；空白只能出现在词法单元之间，不能拼接数字或标识符。
         std::string compact;
-        for (const auto c : expression)
-            if (!std::isspace(static_cast<unsigned char>(c))) compact.push_back(c);
+        bool separated = false;
+        const auto isOperator = [](char character) {
+            return character == '+' || character == '-' || character == '*';
+        };
+        for (const auto character : expression)
+        {
+            if (std::isspace(static_cast<unsigned char>(character)))
+            {
+                separated = true;
+                continue;
+            }
+            // separated 表示刚跨过空白：两个相邻原子必须由显式运算符分隔。
+            if (separated && !compact.empty()
+                && !isOperator(compact.back()) && !isOperator(character))
+            {
+                return failure.set(AssemblyError::InvalidOperands, expression);
+            }
+            compact.push_back(character);
+            separated = false;
+        }
         if (compact.empty()) return failure.set(AssemblyError::InvalidOperands);
         std::size_t pos = 0;
         while (pos < compact.size())

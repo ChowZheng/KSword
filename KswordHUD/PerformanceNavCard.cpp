@@ -1,23 +1,11 @@
 #include "PerformanceNavCard.h"
+#include "HudColors.h"
 
 #include <QEasingCurve>
 #include <QVariantAnimation>
 #include <QPaintEvent>
 #include <QPainter>
 #include <QPainterPath>
-
-namespace
-{
-    QColor textPrimaryColor()
-    {
-        return QColor(242, 246, 252);
-    }
-
-    QColor textSecondaryColor()
-    {
-        return QColor(190, 206, 226);
-    }
-}
 
 PerformanceNavCard::PerformanceNavCard(QWidget* parent)
     : QWidget(parent)
@@ -143,10 +131,12 @@ void PerformanceNavCard::paintEvent(QPaintEvent* paintEventPointer)
     };
 
     const QRect cardRect = rect().adjusted(2, 2, -2, -2);
+    // 数据色相保留，只按当前面板有效底色校准线条；文字跟随父性能页 palette。
+    const QColor accent = KswordHudColors::Readable(m_accentColor, palette().color(QPalette::Window), 3.0);
     const QColor cardBorderColor(
-        m_accentColor.red(),
-        m_accentColor.green(),
-        m_accentColor.blue(),
+        accent.red(),
+        accent.green(),
+        accent.blue(),
         m_selected ? 210 : 92);
     QPen cardBorderPen(cardBorderColor);
     cardBorderPen.setWidthF(m_selected ? 1.6 : 1.0);
@@ -156,9 +146,9 @@ void PerformanceNavCard::paintEvent(QPaintEvent* paintEventPointer)
 
     const QRect sparkRect(cardRect.left() + 10, cardRect.top() + 10, 62, cardRect.height() - 20);
     const QColor sparkBorderColor(
-        m_accentColor.red(),
-        m_accentColor.green(),
-        m_accentColor.blue(),
+        accent.red(),
+        accent.green(),
+        accent.blue(),
         m_selected ? 220 : 150);
     QPen sparkBorderPen(sparkBorderColor);
     sparkBorderPen.setWidthF(1.2);
@@ -166,9 +156,9 @@ void PerformanceNavCard::paintEvent(QPaintEvent* paintEventPointer)
     painter.drawRect(sparkRect);
 
     QPen gridPen(QColor(
-        m_accentColor.red(),
-        m_accentColor.green(),
-        m_accentColor.blue(),
+        accent.red(),
+        accent.green(),
+        accent.blue(),
         45));
     gridPen.setWidthF(0.8);
     painter.setPen(gridPen);
@@ -182,7 +172,7 @@ void PerformanceNavCard::paintEvent(QPaintEvent* paintEventPointer)
     {
         const double yRatio = animatedValueAt(0) / 100.0;
         const double yValue = sparkRect.bottom() - yRatio * static_cast<double>(sparkRect.height());
-        QPen trendPen(m_accentColor);
+        QPen trendPen(accent);
         trendPen.setWidthF(1.6);
         painter.setPen(trendPen);
         painter.drawLine(
@@ -209,7 +199,7 @@ void PerformanceNavCard::paintEvent(QPaintEvent* paintEventPointer)
             }
         }
 
-        QPen trendPen(m_accentColor);
+        QPen trendPen(accent);
         trendPen.setWidthF(1.6);
         painter.setPen(trendPen);
         painter.setBrush(Qt::NoBrush);
@@ -231,13 +221,13 @@ void PerformanceNavCard::paintEvent(QPaintEvent* paintEventPointer)
     titleFont.setPointSizeF(16.0);
     titleFont.setBold(true);
     painter.setFont(titleFont);
-    painter.setPen(textPrimaryColor());
+    painter.setPen(palette().color(QPalette::WindowText));
     painter.drawText(titleRect, Qt::AlignLeft | Qt::AlignVCenter, m_titleText);
 
     QFont subtitleFont = painter.font();
     subtitleFont.setPointSizeF(11.0);
     subtitleFont.setBold(false);
     painter.setFont(subtitleFont);
-    painter.setPen(textSecondaryColor());
+    painter.setPen(palette().color(QPalette::Mid));
     painter.drawText(subtitleRect, Qt::AlignLeft | Qt::AlignVCenter, m_subtitleText);
 }

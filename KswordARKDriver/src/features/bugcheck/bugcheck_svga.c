@@ -13,6 +13,7 @@ Abstract:
 #include "bugcheck_internal.h"
 #include "bugcheck_font.h"
 #include "bugcheck_layout.h"
+#include "../../../../third_party/qrcodegen/qrcodegen.h" // 共用固定二维码矩阵，不在崩溃期分配资源。
 
 #define KSW_SVGA_PCI_MAX_BUSES 256UL
 #define KSW_SVGA_PCI_MAX_DEVICES 32UL
@@ -770,6 +771,64 @@ KswordARKSvgaLayoutDrawText(
 }
 
 static NTSTATUS
+KswordARKSvgaLayoutDrawQr(
+    _In_opt_ PVOID Context,
+    _In_ LONG X,
+    _In_ LONG Y,
+    _In_ ULONG ModulePixels,
+    _In_ const UCHAR* QrCode
+    )
+{
+    PKSWORD_ARK_SVGA_LAYOUT_CONTEXT layout; // 预映射且已验证的帧缓冲上下文。
+    ULONG qrSize; // 不含静区的二维码边长。
+    ULONG extent; // 含四模块静区的像素边长。
+    ULONG blue; // Linux 模式的纯蓝数据模块。
+    ULONG row; // 固定矩阵行号。
+
+    layout = (PKSWORD_ARK_SVGA_LAYOUT_CONTEXT)Context; // 共用布局传入本次渲染的后端上下文。
+    if (layout == NULL || layout->Svga == NULL || QrCode == NULL || X < 0 || Y < 0 ||
+        ModulePixels == 0 || ModulePixels > 8UL || QrCode[0] < 21U ||
+        QrCode[0] > 177U || ((QrCode[0] - 17U) & 3U) != 0U) { // 先检查有效版本再调用库断言接口。
+        return STATUS_INVALID_PARAMETER; // 防止畸形矩阵或坐标进入帧缓冲写入路径。
+    }
+    qrSize = (ULONG)qrcodegen_getSize(QrCode); // QR 最大版本 40 对应 177 模块。
+    extent = (qrSize + 8UL) * ModulePixels; // 保留四周完整的四模块白色静区。
+    if ((ULONG64)(ULONG)X + extent > layout->Svga->Width ||
+        (ULONG64)(ULONG)Y + extent > layout->Svga->Height) { // 二维码不得依赖 FillRect 的裁剪功能。
+        return STATUS_BUFFER_TOO_SMALL; // 可扫描数据需要完整落在画布内。
+    }
+    blue = KswordARKSvgaPixelFromRgb(layout->Svga, 0U, 0U, 170U); // 按实际 framebuffer mask 编码纯蓝色。
+    KswordARKSvgaFillRect(layout->Svga,
+        (ULONG)X, (ULONG)Y, (ULONG)X + extent, (ULONG)Y + extent,
+        layout->Colors[KswordArkBugcheckLayoutColorLinuxText]); // 一次写白底和静区，无堆内存或字体依赖。
+    for (row = 0; row < qrSize; ++row) { // 只覆盖矩阵中的暗模块，白色静区保持完整。
+        ULONG column; // 从左到右合并本行相邻的暗模块。
+
+        column = 0UL; // 本行扫描起点。
+        while (column < qrSize) { // 177 模块上界保证扫描有界。
+            ULONG runStart; // 当前连续暗模块的起点。
+            ULONG left; // 转换后的帧缓冲像素左边界。
+            ULONG top; // 转换后的帧缓冲像素上边界。
+
+            if (!qrcodegen_getModule(QrCode, (int)column, (int)row)) { // 亮模块已经由整块白底提供。
+                ++column; // 继续查找需要绘制的暗模块。
+                continue; // 不重复覆盖白色像素。
+            }
+            runStart = column; // 保留连续纯蓝段起点。
+            do {
+                ++column; // 向右查找暗模块段终点。
+            } while (column < qrSize && qrcodegen_getModule(QrCode, (int)column, (int)row)); // 最多扫描一行。
+            left = (ULONG)X + (runStart + 4UL) * ModulePixels; // 加入左侧四模块静区。
+            top = (ULONG)Y + (row + 4UL) * ModulePixels; // 加入顶部四模块静区。
+            KswordARKSvgaFillRect(layout->Svga,
+                left, top, left + (column - runStart) * ModulePixels,
+                top + ModulePixels, blue); // 直接写提前映射的帧缓冲，不分配或访问文件。
+        }
+    }
+    return STATUS_SUCCESS; // 整个矩阵与静区完成后才向共用布局报告成功。
+}
+
+static NTSTATUS
 KswordARKSvgaLayoutDrawFrame(
     _In_opt_ PVOID Context,
     _In_ LONG X,
@@ -830,10 +889,12 @@ KswordARKBugcheckSvgaDrawPanelNoLog(
 {
     KSWORD_ARK_BUGCHECK_LAYOUT_CANVAS canvas;
     KSWORD_ARK_SVGA_LAYOUT_CONTEXT layout;
+    KSWORD_ARK_BGP_DUMP_STATE bgpState; // 正常运行期与崩溃期已经采集的诊断状态。
     PKSWORD_ARK_SVGA_CONTEXT svga;
     LONG originX;
     ULONG background;
     ULONG callbackMask;
+    ULONG renderMode; // 本次回调只读取一次模式，保持画布和内容一致。
 
     if (State == NULL ||
         InterlockedCompareExchange(&State->Active, 1, 1) == 0) {
@@ -848,11 +909,16 @@ KswordARKBugcheckSvgaDrawPanelNoLog(
 
     RtlZeroMemory(&layout, sizeof(layout));
     layout.Svga = svga;
-    background = KswordARKSvgaPixelFromRgb(
-        svga,
-        KSWORD_ARK_BUGCHECK_LAYOUT_BACKGROUND_RED,
-        KSWORD_ARK_BUGCHECK_LAYOUT_BACKGROUND_GREEN,
-        KSWORD_ARK_BUGCHECK_LAYOUT_BACKGROUND_BLUE);
+    renderMode = KswordARKBugcheckControlGetRenderMode(); // 共享协议的模式由配置 IOCTL 原子发布。
+    background = renderMode == KSWORD_ARK_BUGCHECK_RENDER_MODE_LINUX_QR
+        ? KswordARKSvgaPixelFromRgb(svga, 0U, 0U, 170U)
+        : KswordARKSvgaPixelFromRgb(
+            svga,
+            KSWORD_ARK_BUGCHECK_LAYOUT_BACKGROUND_RED,
+            KSWORD_ARK_BUGCHECK_LAYOUT_BACKGROUND_GREEN,
+            KSWORD_ARK_BUGCHECK_LAYOUT_BACKGROUND_BLUE); // Linux 模式采用示例中的纯蓝画布。
+    layout.Colors[KswordArkBugcheckLayoutColorLinuxText] =
+        KswordARKSvgaPixelFromRgb(svga, 255U, 255U, 255U); // 用户指定正文、企鹅和二维码亮模块均为纯白。
     layout.Colors[KswordArkBugcheckLayoutColorText] =
         KswordARKSvgaPixelFromRgb(
             svga,
@@ -893,7 +959,7 @@ KswordARKBugcheckSvgaDrawPanelNoLog(
     originX = KswordARKBugcheckLayoutOriginX(
         svga->Width,
         svga->Height);
-    if (!KswordARKSvgaDrawBitmap(
+    if (renderMode != KSWORD_ARK_BUGCHECK_RENDER_MODE_LINUX_QR && !KswordARKSvgaDrawBitmap(
             State,
             (ULONG)(originX + KSWORD_ARK_BUGCHECK_LAYOUT_LOGO_X),
             KSWORD_ARK_BUGCHECK_LAYOUT_LOGO_Y,
@@ -931,11 +997,15 @@ KswordARKBugcheckSvgaDrawPanelNoLog(
     }
 
     RtlZeroMemory(&canvas, sizeof(canvas));
+    KswordARKBugcheckBgpSnapshot(&bgpState); // QR 报告复用最新固定诊断快照，不解析外部对象。
     canvas.Context = &layout;
     canvas.Width = svga->Width;
     canvas.Height = svga->Height;
     canvas.DrawText = KswordARKSvgaLayoutDrawText;
     canvas.DrawFrame = KswordARKSvgaLayoutDrawFrame;
+    canvas.RenderMode = renderMode; // 与 BGP 使用相同的共用模式路由。
+    canvas.BgpSnapshot = &bgpState; // 将已采集 BGP 信息纳入诊断二维码。
+    canvas.DrawQr = KswordARKSvgaLayoutDrawQr; // 直接填预映射帧缓冲，无崩溃期资源分配。
     (VOID)KswordARKBugcheckLayoutDraw(
         &canvas,
         &State->Diagnostics,

@@ -840,7 +840,7 @@ Return Value:
     RtlZeroMemory(&Workspace->ListScratch, sizeof(Workspace->ListScratch));
     RtlZeroMemory(Workspace->Visited, sizeof(Workspace->Visited));
     *AmbiguousOut = FALSE;
-    referenceCount = KswordARKRuntimeCollectAnchoredDataReferences(
+    referenceCount = KswordARKRuntimeCollectFunctionDataReferences( // 特殊回调候选只来自导出锚点的实际函数范围。
         NtosView,
         AnchorNames,
         AnchorCount,

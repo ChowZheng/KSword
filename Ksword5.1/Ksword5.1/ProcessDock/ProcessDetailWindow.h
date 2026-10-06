@@ -629,6 +629,8 @@ private:
 
     // ======== 操作页动作 ========
     void executeSingleTerminateMethodAction(std::size_t methodIndex);
+    // executeTerminateProcessComboAction：校验当前实例后执行有界共享方法链并复核退出。
+    void executeTerminateProcessComboAction();
     void executeR0SuspendSelectedThreadAction();
     void executeR0ResumeSelectedThreadAction();
       void executeDriverThreadAction(unsigned long action, unsigned long terminateMethod = KSWORD_ARK_DRIVER_THREAD_TERMINATE_METHOD_NONE);

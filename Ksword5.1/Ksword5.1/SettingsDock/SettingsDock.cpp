@@ -4,6 +4,7 @@
 #include "../Internationalization/LanguageManager.h"
 #include "../Framework/PrivilegeElevationPrompt.h"
 #include "../theme.h"
+#include "../UI/ThemePreviewWidget.h"
 
 #include <QButtonGroup>
 #include <QCheckBox>
@@ -26,6 +27,7 @@
 #include <QSlider>
 #include <QSpinBox>
 #include <QStringList>
+#include <QStyleHints>
 #include <QTabWidget>
 #include <QToolButton>
 #include <QVBoxLayout>
@@ -66,7 +68,7 @@ namespace
     }
 
     // selectedThemeUsesDarkBackground 作用：为尚未应用的主题按钮状态计算默认主背景预览。
-    // 跟随系统时复用当前已生效的主题状态，强制主题时直接读取按钮 ID。
+    // 跟随系统与MainWindow使用同一平台来源，避免当前强制浅色掩盖系统深色。
     bool selectedThemeUsesDarkBackground(const QButtonGroup* themeButtonGroup)
     {
         if (themeButtonGroup != nullptr)
@@ -81,7 +83,8 @@ namespace
                 return false;
             }
         }
-        return KswordTheme::IsDarkModeEnabled();
+        const QStyleHints* styleHints = QGuiApplication::styleHints(); // 系统当前的真实配色方案。
+        return styleHints != nullptr && styleHints->colorScheme() == Qt::ColorScheme::Dark;
     }
 
     std::wstring queryCurrentExecutablePath()
@@ -238,6 +241,7 @@ void SettingsDock::changeEvent(QEvent* event)
     if (event->type() == QEvent::ApplicationPaletteChange && m_themeButtonGroup != nullptr)
     {
         updateThemeButtonStyle();
+        updateMainBackgroundColorPreview();
     }
 }
 
@@ -397,6 +401,20 @@ void SettingsDock::initializeAppearanceTab()
     themeColorActionLayout->addStretch();
     themeColorLayout->addLayout(themeColorActionLayout);
     themeLayout->addWidget(themeColorGroupBox);
+
+    // 配色预览紧邻主体色设置；样例颜色来自未应用种子，保留原应用/取消语义。
+    QGroupBox* previewGroupBox = new QGroupBox(themeGroupBox);
+    languageManager.bindText(previewGroupBox, QStringLiteral("settings.theme.preview.group"),
+        QStringLiteral("配色预览"));
+    QVBoxLayout* previewLayout = new QVBoxLayout(previewGroupBox); // 限定预览与说明的局部布局。
+    QLabel* previewHint = new QLabel(previewGroupBox); // 说明当前展示的是待应用配色。
+    previewHint->setWordWrap(true);
+    languageManager.bindText(previewHint, QStringLiteral("settings.theme.preview.hint"),
+        QStringLiteral("预览待应用的主题、主体色和背景色；点击“应用”后才会改变主界面。"));
+    previewLayout->addWidget(previewHint);
+    m_themeComponentPreview = new ks::ui::ThemePreviewWidget(previewGroupBox);
+    previewLayout->addWidget(m_themeComponentPreview);
+    themeLayout->addWidget(previewGroupBox);
 
     QHBoxLayout* fontLayout = new QHBoxLayout();
     fontLayout->setSpacing(6);
@@ -1242,6 +1260,13 @@ void SettingsDock::initializeFeaturesTab()
 
 void SettingsDock::bindAppearanceSignals()
 {
+    // 即使主窗口当前强制主题，未应用的“跟随系统”预览也要响应系统切换。
+    if (QStyleHints* styleHints = QGuiApplication::styleHints())
+    {
+        connect(styleHints, &QStyleHints::colorSchemeChanged, this, [this]() {
+            updateMainBackgroundColorPreview();
+        });
+    }
     if (m_languageCombo != nullptr)
     {
         connect(m_languageCombo, &QComboBox::currentIndexChanged, this, [this](const int /*index*/) {
@@ -1970,6 +1995,7 @@ void SettingsDock::updateApplyButtonState()
 
 void SettingsDock::updateThemeColorPreview()
 {
+    updateThemeComponentPreview();
     if (m_themeColorPreviewLabel == nullptr)
     {
         return;
@@ -1995,6 +2021,19 @@ void SettingsDock::updateThemeColorPreview()
     }
 }
 
+void SettingsDock::updateThemeComponentPreview(const QString& accentOverride,
+    const QString& backgroundOverride)
+{
+    if (m_themeComponentPreview == nullptr)
+    {
+        return;
+    }
+    // null覆盖值表示未提供临时颜色；空但非null仍可明确预览默认配色。
+    m_themeComponentPreview->setPreview(selectedThemeUsesDarkBackground(m_themeButtonGroup),
+        accentOverride.isNull() ? m_pendingCustomThemeColor : accentOverride,
+        backgroundOverride.isNull() ? m_pendingCustomMainBackgroundColor : backgroundOverride);
+}
+
 void SettingsDock::chooseCustomThemeColor()
 {
     const QMessageBox::StandardButton warningResult = QMessageBox::warning(
@@ -2015,18 +2054,30 @@ void SettingsDock::chooseCustomThemeColor()
     const QColor initialColor = m_pendingCustomThemeColor.isEmpty()
         ? KswordTheme::DefaultPrimaryAccentColor()
         : QColor(m_pendingCustomThemeColor);
-    const QColor selectedColor = QColorDialog::getColor(
-        initialColor,
-        this,
-        ks::i18n::text(
+    // 非原生选色器保证拖动时发出currentColorChanged，只临时更新预览框。
+    QColorDialog colorDialog(initialColor, this);
+    colorDialog.setWindowTitle(ks::i18n::text(
             QStringLiteral("settings.theme.color.dialog.title"),
-            QStringLiteral("选择主题色")),
-        QColorDialog::ShowAlphaChannel);
-    if (!selectedColor.isValid())
+            QStringLiteral("选择主题色")));
+    colorDialog.setOptions(QColorDialog::ShowAlphaChannel | QColorDialog::DontUseNativeDialog);
+    connect(&colorDialog, &QColorDialog::currentColorChanged, this, [this](const QColor& color) {
+        if (color.isValid())
+        {
+            updateThemeComponentPreview(color.name(QColor::HexRgb));
+        }
+    });
+    if (colorDialog.exec() != QDialog::Accepted)
     {
+        updateThemeComponentPreview();
         return;
     }
 
+    const QColor selectedColor = colorDialog.currentColor(); // 接受后才写入待应用配置。
+    if (!selectedColor.isValid())
+    {
+        updateThemeComponentPreview();
+        return;
+    }
     m_pendingCustomThemeColor = selectedColor.name(QColor::HexRgb).toUpper();
     updateThemeColorPreview();
     markPendingChanges(QStringLiteral("custom theme color selected"));
@@ -2046,6 +2097,7 @@ void SettingsDock::resetThemeColorToDefault()
 
 void SettingsDock::updateMainBackgroundColorPreview()
 {
+    updateThemeComponentPreview();
     if (m_mainBackgroundColorPreviewLabel == nullptr)
     {
         return;
@@ -2079,17 +2131,29 @@ void SettingsDock::chooseCustomMainBackgroundColor()
         ? KswordTheme::DefaultMainBackgroundColor(
             selectedThemeUsesDarkBackground(m_themeButtonGroup))
         : QColor(m_pendingCustomMainBackgroundColor);
-    const QColor selectedColor = QColorDialog::getColor(
-        initialColor,
-        this,
-        ks::i18n::text(
+    QColorDialog colorDialog(initialColor, this); // 与主体色共用实时预览、取消还原流程。
+    colorDialog.setWindowTitle(ks::i18n::text(
             QStringLiteral("settings.background.color.dialog.title"),
             QStringLiteral("选择主背景色")));
-    if (!selectedColor.isValid())
+    colorDialog.setOption(QColorDialog::DontUseNativeDialog);
+    connect(&colorDialog, &QColorDialog::currentColorChanged, this, [this](const QColor& color) {
+        if (color.isValid())
+        {
+            updateThemeComponentPreview(QString(), color.name(QColor::HexRgb));
+        }
+    });
+    if (colorDialog.exec() != QDialog::Accepted)
     {
+        updateThemeComponentPreview();
         return;
     }
 
+    const QColor selectedColor = colorDialog.currentColor(); // 接受后才写入待应用背景。
+    if (!selectedColor.isValid())
+    {
+        updateThemeComponentPreview();
+        return;
+    }
     m_pendingCustomMainBackgroundColor = selectedColor.name(QColor::HexRgb).toUpper();
     updateMainBackgroundColorPreview();
     markPendingChanges(QStringLiteral("custom main background color selected"));

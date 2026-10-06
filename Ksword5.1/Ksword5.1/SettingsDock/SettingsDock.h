@@ -17,6 +17,11 @@ class QTabWidget;
 class QToolButton;
 class QVBoxLayout;
 
+namespace ks::ui
+{
+    class ThemePreviewWidget;
+}
+
 class SettingsDock : public QWidget
 {
     Q_OBJECT
@@ -58,6 +63,9 @@ signals:
 
     // bugcheckDiagnosticsAutoInstallChanged 作用：通知主窗口更新本次已加载配置与页面入口显示状态。
     void bugcheckDiagnosticsAutoInstallChanged(bool enabled);
+
+    // bugcheckDiagnosticsRenderModeChanged：保存模式后同步主窗口的下一次自动安装参数。
+    void bugcheckDiagnosticsRenderModeChanged(int renderMode);
 
     // bugcheckDiagnosticsInstalledForSession 作用：本次安装完成后显示蓝屏诊断入口并上传运行期资源。
     void bugcheckDiagnosticsInstalledForSession();
@@ -105,6 +113,14 @@ private:
     // installBugcheckDiagnosticsForCurrentSession 作用：后台发送 R0 安装 IOCTL，仅影响当前驱动生命周期。
     // 调用方式：点击“本次安装”按钮时调用；返回：无，结果通过状态文本和信号反馈。
     void installBugcheckDiagnosticsForCurrentSession();
+
+    // setBugcheckDiagnosticsRenderMode：只保存用户选中的模式；已提权时异步切换当前驱动。
+    // 入参 renderMode：共享协议模式值；保存失败会恢复选项，未安装时等待下一次安装。
+    void setBugcheckDiagnosticsRenderMode(int renderMode);
+
+    // configureBugcheckDiagnosticsForCurrentSession：共用后台安装/切换模式的结果回投路径。
+    // 入参 action：INSTALL 或 SET_RENDER_MODE；返回：无，UI 状态和信号报告结果。
+    void configureBugcheckDiagnosticsForCurrentSession(unsigned long action);
 
     // setBugcheckDiagnosticsControlsBusy 作用：安装期间禁用三个操作，防止并发 BGP 扫描与回调注册。
     // 调用方式：后台任务发出前和回投完成后调用；入参 busy：是否正在安装；返回：无。
@@ -174,6 +190,11 @@ private:
     // updateThemeColorPreview 作用：刷新当前主题色预览与“恢复默认”按钮状态。
     // 调用方式：载入配置、选择颜色或恢复默认后调用。
     void updateThemeColorPreview();
+
+    // updateThemeComponentPreview 更新待应用配色；非空覆盖参数用于选色器实时预览。
+    // null字符串使用当前待应用值，取消选色时无参调用即可还原；不保存或应用设置。
+    void updateThemeComponentPreview(const QString& accentOverride = QString(),
+        const QString& backgroundOverride = QString());
 
     // chooseCustomThemeColor 作用：先展示极端颜色风险提示，再打开颜色选择器。
     // 调用方式：点击“自定义主题色”按钮时调用。
@@ -275,6 +296,9 @@ private:
     // m_themeColorPreviewLabel 作用：显示当前主主题色及其 #RRGGBB 值。
     QLabel* m_themeColorPreviewLabel = nullptr;
 
+    // m_themeComponentPreview 仅绘制颜色样例；不创建业务Dock或改全局外观。
+    ks::ui::ThemePreviewWidget* m_themeComponentPreview = nullptr;
+
     // m_chooseThemeColorButton / m_resetThemeColorButton：主题色选择与一键恢复按钮。
     QPushButton* m_chooseThemeColorButton = nullptr;
     QPushButton* m_resetThemeColorButton = nullptr;
@@ -359,6 +383,9 @@ private:
 
     // m_bugcheckDiagnosticsStatusLabel 作用：展示自动安装配置和当前会话安装结果。
     QLabel* m_bugcheckDiagnosticsStatusLabel = nullptr;
+
+    // m_bugcheckDiagnosticsRenderModeCombo：选择原诊断面板或 Linux 风格二维码页面。
+    QComboBox* m_bugcheckDiagnosticsRenderModeCombo = nullptr;
 
     // m_enableBugcheckDiagnosticsAutoInstallButton 作用：写入后续驱动启动时自动安装的配置项。
     QPushButton* m_enableBugcheckDiagnosticsAutoInstallButton = nullptr;

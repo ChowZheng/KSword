@@ -15,7 +15,7 @@ namespace
     // detailExtendedProcessStillPresent 作用：
     // - 使用 Toolhelp 快照检查目标 PID 是否仍存在；
     // - 输入 targetPid 为进程 ID，queryOkOut 接收快照是否成功；
-    // - 返回 true 表示进程仍存在，false 表示未找到或查询失败。
+    // - 返回 true 表示进程仍存在或查询失败；只有完整枚举确认缺失才返回 false。
     bool detailExtendedProcessStillPresent(const std::uint32_t targetPid, bool* const queryOkOut)
     {
         if (queryOkOut != nullptr)
@@ -43,12 +43,14 @@ namespace
             walkOk = ::Process32NextW(snapshotHandle, &processEntry);
         }
 
+        // enumerationComplete 用途：区分正常遍历结束与枚举错误，错误不能伪报退出。
+        const bool enumerationComplete = foundTarget || ::GetLastError() == ERROR_NO_MORE_FILES;
         ::CloseHandle(snapshotHandle);
         if (queryOkOut != nullptr)
         {
-            *queryOkOut = true;
+            *queryOkOut = enumerationComplete;
         }
-        return foundTarget;
+        return foundTarget || !enumerationComplete;
     }
 
     // appendExtendedIoResultDetail 作用：
@@ -178,6 +180,70 @@ namespace
             return ks::process::ProcessPriorityLevel::Normal;
         }
     }
+}
+
+// executeTerminateProcessComboAction：
+// - 输入：详情页缓存的 PID 与创建时间；不接收新目标或追加 R0 回退；
+// - 处理：持有校验过的进程句柄，最多两轮复用共享终止方法并逐次检查退出；
+// - 输出：通过统一详情动作反馈报告方法日志与最终退出结果。
+void ProcessDetailWindow::executeTerminateProcessComboAction()
+{
+    // targetPid/actionEvent 用途：冻结本次目标并让整个动作共享日志事件。
+    const std::uint32_t targetPid = m_baseRecord.pid;
+    kLogEvent actionEvent;
+    // identityHold/identityDetailText 用途：持续引用已核验的进程实例及校验错误。
+    DetailProcessIdentityHold identityHold;
+    std::string identityDetailText;
+    if (!identityHold.acquire(targetPid, m_baseRecord.creationTime100ns, &identityDetailText))
+    {
+        showActionResultMessage(QStringLiteral("结束进程(组合方法链)"), false, identityDetailText, actionEvent);
+        return;
+    }
+
+    // 方法表仍是列表页与两个详情页的唯一来源，避免恢复旧的重复方法清单。
+    const auto& methods = ks::process::TerminateMethodTable();
+    // kTerminateRoundLimit/processExited 用途：约束尝试次数并记录真实退出复核结果。
+    constexpr int kTerminateRoundLimit = 2;
+    bool processExited = false;
+    // actionDetailStream 用途：保留每个方法的原始结果，不能以调用成功代替退出。
+    std::ostringstream actionDetailStream;
+    actionDetailStream << "pid=" << targetPid;
+    for (int round = 1; round <= kTerminateRoundLimit && !processExited; ++round)
+    {
+        for (const auto& method : methods)
+        {
+            // methodDetail/methodOk 用途：记录共享终止方法本身的返回情况。
+            std::string methodDetail;
+            const bool methodOk = method.invokeMethod(targetPid, &methodDetail);
+            // queryOk/stillPresent 用途：独立确认目标是否退出，查询失败不算成功。
+            bool queryOk = false;
+            const bool stillPresent = detailExtendedProcessStillPresent(targetPid, &queryOk);
+            processExited = queryOk && !stillPresent;
+            (methodOk ? info : warn) << actionEvent
+                << "[ProcessDetailWindow] 组合结束方法, pid=" << targetPid
+                << ", round=" << round << ", method=" << method.methodName
+                << ", ok=" << (methodOk ? "true" : "false")
+                << ", exitConfirmed=" << (processExited ? "true" : "false")
+                << ", detail=" << methodDetail << eol;
+
+            // 汇总调用结果与查询状态；确认退出后立即停止，保留既有两轮上限。
+            actionDetailStream << " | round" << round << ":" << method.methodName
+                << "=" << (methodOk ? "ok" : "fail") << "(" << methodDetail << ")"
+                << ", exitQuery=" << (queryOk ? "ok" : "fail")
+                << ", exitConfirmed=" << (processExited ? "true" : "false");
+            if (processExited)
+            {
+                break;
+            }
+        }
+    }
+
+    // identityHold 在最终反馈前仍存活，PID-only 的共享方法不会误指向复用实例。
+    showActionResultMessage(
+        QStringLiteral("结束进程(组合方法链)"),
+        processExited,
+        actionDetailStream.str(),
+        actionEvent);
 }
 
 void ProcessDetailWindow::executeSetPriorityActionById(const int priorityActionId)

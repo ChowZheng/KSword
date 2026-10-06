@@ -3,6 +3,7 @@
 #include "../UI/TableInteractionSupport.h"
 #include "../UI/VisibleTableWidget.h"
 #include "../UI/DetailLayoutRegistry.h"
+#include "../UI/ThemeItemForeground.h"
 
 // ============================================================
 // NetworkFirewallPage.cpp
@@ -27,6 +28,7 @@
 #include <QDateTime>
 #include <QDialog>
 #include <QDialogButtonBox>
+#include <QEvent>
 #include <QFormLayout>
 #include <QGuiApplication>
 #include <QHash>
@@ -2499,6 +2501,22 @@ NetworkFirewallPage::NetworkFirewallPage(QWidget* parent)
     initializeConnections();
 }
 
+void NetworkFirewallPage::changeEvent(QEvent* event)
+{
+    QWidget::changeEvent(event);
+    if (event == nullptr || (event->type() != QEvent::PaletteChange
+        && event->type() != QEvent::ApplicationPaletteChange) || m_itemThemeRefreshScheduled)
+    {
+        return;
+    }
+    // 切色只更新存量规则的语义画刷，不触发 COM 枚举、CRUD 或规则筛选。
+    m_itemThemeRefreshScheduled = true;
+    QTimer::singleShot(0, this, [this]() {
+        ks::ui::RefreshThemeItemForegrounds(m_ruleTable);
+        m_itemThemeRefreshScheduled = false;
+    });
+}
+
 NetworkFirewallPage::~NetworkFirewallPage()
 {
     // 所有后台任务都只使用文件级函数和入参副本，不触碰页面成员：这里先置取消位
@@ -2744,6 +2762,7 @@ void NetworkFirewallPage::initializeRuleManagerUi()
     m_ruleTable->setSelectionMode(QAbstractItemView::ExtendedSelection);
     m_ruleTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
     m_ruleTable->setAlternatingRowColors(true);
+    ks::ui::InstallThemeItemForegroundDelegate(m_ruleTable);
     m_ruleTable->verticalHeader()->setVisible(false);
     m_ruleTable->horizontalHeader()->setStretchLastSection(false);
     m_ruleTable->horizontalHeader()->setSectionResizeMode(QHeaderView::Interactive);
@@ -3618,11 +3637,11 @@ void NetworkFirewallPage::appendRulesToTable(
             item->setData(Qt::UserRole + 1, ruleEntry.enabled);
             if (!ruleEntry.enabled)
             {
-                item->setForeground(KswordTheme::TextSecondaryColor());
+                ks::ui::ApplyThemeItemForeground(item, ks::ui::ItemForegroundRole::Secondary);
             }
             else if (column == RuleColumnAction && ruleEntry.actionValue == NET_FW_ACTION_BLOCK)
             {
-                item->setForeground(KswordTheme::ErrorColor());
+                ks::ui::ApplyThemeItemForeground(item, ks::ui::ItemForegroundRole::Error);
             }
             m_ruleTable->setItem(row, column, item);
         }

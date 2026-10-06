@@ -70,6 +70,9 @@ namespace ks::ui
         void applyHistory(bool forward);
         void updateState();
         void showAssemblyEditor();
+        // 配置行内汇编编辑；单击/工具按钮只暂存单条完整指令，不写入真实内存。
+        void initializeInlineAssemblyEditing();
+        void beginInlineAssemblyEdit(int row, int column = 2);
         void showInstructionMenu(const QPoint& position);
         void selectInstruction(std::uint64_t address);
         std::uint64_t selectedAddress() const;

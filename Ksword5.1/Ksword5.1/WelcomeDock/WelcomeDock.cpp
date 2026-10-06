@@ -13,7 +13,6 @@
 #include <QFrame>
 #include <QGuiApplication>
 #include <QGridLayout>
-#include <QHideEvent>
 #include <QLabel>
 #include <QPainter>
 #include <QPainterPath>
@@ -171,28 +170,24 @@ namespace
 
     QString welcomeOutlineButtonStyle()
     {
-        return QStringLiteral(
-            "QPushButton{background:transparent;color:%1;border:1px solid #409EFF;"
-            "border-radius:5px;padding:7px 12px;}"
-            "QPushButton:hover{background:transparent;border-color:#64B5F6;}"
-            "QPushButton:pressed{background:transparent;border-color:#1976D2;}")
-            .arg(KswordTheme::TextPrimaryHex());
+        // 描边三态使用当前控件强调色，透明按钮的文字继续继承当前 palette。
+        return QStringLiteral(R"(QPushButton{background:transparent;color:palette(text);border:1px solid %1;border-radius:5px;padding:7px 12px;} QPushButton:hover{background:transparent;border-color:%2;} QPushButton:pressed{background:transparent;border-color:%3;})")
+            .arg(KswordTheme::ControlAccentHex(), KswordTheme::ControlAccentHoverHex(),
+                KswordTheme::ControlAccentPressedHex());
     }
 
-    class WelcomeRgbBorderButton final : public QPushButton
+    // welcomeCollapseButtonStyle 保留透明折叠头几何，仅按当前角色派生 hover/展开边框。
+    QString welcomeCollapseButtonStyle()
+    {
+        return QStringLiteral(R"(QToolButton{background:transparent;color:palette(text);border:1px solid transparent;padding:7px 12px;font-size:16px;font-weight:600;text-align:center;} QToolButton:hover{background:transparent;border-color:%1;} QToolButton:checked{background:transparent;border-color:%2;})")
+            .arg(KswordTheme::ControlAccentHoverHex(), KswordTheme::ControlAccentHex());
+    }
+
+    // WelcomeThemeBorderButton 保留语言入口的粗描边，绘制时读取当前主题而非持有旧 RGB。
+    class WelcomeThemeBorderButton final : public QPushButton
     {
     public:
         using QPushButton::QPushButton;
-
-        void setBorderColor(const QColor& borderColor)
-        {
-            if (m_borderColor == borderColor)
-            {
-                return;
-            }
-            m_borderColor = borderColor;
-            update();
-        }
 
     protected:
         void paintEvent(QPaintEvent* event) override
@@ -201,13 +196,15 @@ namespace
             QPainter painter(this);
             painter.setRenderHint(QPainter::Antialiasing, true);
             painter.setBrush(Qt::NoBrush);
-            painter.setPen(QPen(m_borderColor, 3.0));
+            // 自绘直接读取当前三态角色，不缓存旧 RGB，也不靠定时器补偿切主题。
+            const QColor borderColor = isDown() ? KswordTheme::ControlAccentPressedColor()
+                : underMouse() ? KswordTheme::ControlAccentHoverColor()
+                : KswordTheme::ControlAccentColor();
+            painter.setPen(QPen(borderColor, 3.0));
             painter.drawRoundedRect(
                 QRectF(rect()).adjusted(1.5, 1.5, -1.5, -1.5), 9.0, 9.0);
         }
 
-    private:
-        QColor m_borderColor = QColor::fromHsv(0, 255, 255);
     };
 }
 
@@ -228,19 +225,12 @@ WelcomeDock::WelcomeDock(QWidget* parent)
     m_leftImage->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
     m_leftImage->setScaledContents(true);
 
-    m_languageSettingsBtn = new WelcomeRgbBorderButton(this);
+    m_languageSettingsBtn = new WelcomeThemeBorderButton(this);
     m_languageSettingsBtn->setObjectName(QStringLiteral("welcomeLanguageSettingsButton"));
     m_languageSettingsBtn->setMinimumSize(0, 48);
     m_languageSettingsBtn->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     m_languageSettingsBtn->setCursor(Qt::PointingHandCursor);
     initializeLanguageButtonStyle();
-
-    m_languageButtonColorTimer = new QTimer(this);
-    m_languageButtonColorTimer->setInterval(80);
-    connect(m_languageButtonColorTimer, &QTimer::timeout, this, [this]() {
-        m_languageButtonHue = (m_languageButtonHue + 4) % 360;
-        updateLanguageButtonRgbBorder();
-    });
 
     m_copyright = new QLabel(this);
     m_copyright->setWordWrap(true);
@@ -397,12 +387,7 @@ void WelcomeDock::initializePerformanceCards()
 void WelcomeDock::initializeContributorCollapse()
 {
     // 折叠标题常态不描边，只在 hover/展开时才亮出边框，避免首页一上来就是两个蓝框。
-    const QString headerStyle = QStringLiteral(
-        "QToolButton{background:transparent;color:%1;border:1px solid transparent;padding:7px 12px;"
-        "font-size:16px;font-weight:600;text-align:center;}"
-        "QToolButton:hover{background:transparent;border-color:#64B5F6;}"
-        "QToolButton:checked{background:transparent;border-color:#409EFF;}")
-        .arg(KswordTheme::TextPrimaryHex());
+    const QString headerStyle = welcomeCollapseButtonStyle();
 
     m_contributorsCollapse = new QToolButton(this);
     m_contributorsCollapse->setCheckable(true);
@@ -737,13 +722,55 @@ void WelcomeDock::initializeLanguageButtonStyle()
         .arg(KswordTheme::TextPrimaryHex()));
 }
 
-void WelcomeDock::updateLanguageButtonRgbBorder()
+void WelcomeDock::refreshThemeColors()
 {
+    // 原对象保留，避免主题刷新改变折叠状态、焦点、翻译文本或采样连接。
     if (m_languageSettingsBtn != nullptr)
     {
-        static_cast<WelcomeRgbBorderButton*>(m_languageSettingsBtn)->setBorderColor(
-            QColor(QStringLiteral("#409EFF")));
+        initializeLanguageButtonStyle();
+        m_languageSettingsBtn->update();
     }
+    const QString outlineStyle = welcomeOutlineButtonStyle();
+    for (QPushButton* button : {m_githubBtn, m_qqBtn, m_pplControlBtn, m_systemInformerBtn, m_skt64Btn})
+    {
+        if (button != nullptr && button->styleSheet() != outlineStyle)
+        {
+            button->setStyleSheet(outlineStyle);
+        }
+    }
+    const QString collapseStyle = welcomeCollapseButtonStyle();
+    for (QToolButton* button : {m_contributorsCollapse, m_donorsCollapse})
+    {
+        if (button != nullptr && button->styleSheet() != collapseStyle)
+        {
+            button->setStyleSheet(collapseStyle);
+        }
+    }
+    // 颜色角色顺序与 initializePerformanceCards 一致，不请求新硬件数据。
+    const std::array<KswordTheme::PerformanceRole, 5> roles = {{
+        KswordTheme::PerformanceRole::Cpu, KswordTheme::PerformanceRole::Memory,
+        KswordTheme::PerformanceRole::Gpu, KswordTheme::PerformanceRole::Disk,
+        KswordTheme::PerformanceRole::Network}};
+    const int cardCount = std::min(static_cast<int>(m_performanceCards.size()),
+        static_cast<int>(roles.size())); // 只处理当前已创建卡片与既有角色的交集。
+    for (int index = 0; index < cardCount; ++index)
+    {
+        m_performanceCards[index]->setAccentColor(
+            KswordTheme::PerformanceColor(roles[static_cast<std::size_t>(index)]));
+    }
+}
+
+void WelcomeDock::scheduleThemeRefresh()
+{
+    if (m_themeRefreshScheduled)
+    {
+        return;
+    }
+    m_themeRefreshScheduled = true;
+    QTimer::singleShot(0, this, [this]() {
+        refreshThemeColors();
+        m_themeRefreshScheduled = false;
+    });
 }
 
 void WelcomeDock::changeEvent(QEvent* event)
@@ -753,25 +780,17 @@ void WelcomeDock::changeEvent(QEvent* event)
     {
         retranslateUi();
     }
+    if (event != nullptr && (event->type() == QEvent::PaletteChange
+        || event->type() == QEvent::ApplicationPaletteChange))
+    {
+        scheduleThemeRefresh();
+    }
 }
 
 void WelcomeDock::showEvent(QShowEvent* event)
 {
     QWidget::showEvent(event);
-    updateLanguageButtonRgbBorder();
-    if (m_languageButtonColorTimer != nullptr && !m_languageButtonColorTimer->isActive())
-    {
-        m_languageButtonColorTimer->start();
-    }
-}
-
-void WelcomeDock::hideEvent(QHideEvent* event)
-{
-    if (m_languageButtonColorTimer != nullptr)
-    {
-        m_languageButtonColorTimer->stop();
-    }
-    QWidget::hideEvent(event);
+    scheduleThemeRefresh();
 }
 
 void WelcomeDock::retranslateUi()

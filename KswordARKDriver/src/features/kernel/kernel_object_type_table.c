@@ -356,7 +356,7 @@ Return Value:
     if (knownCount < 3UL) {
         return STATUS_NOT_SUPPORTED;
     }
-    referenceCount = KswordARKRuntimeCollectAnchoredDataReferences(
+    referenceCount = KswordARKRuntimeCollectFunctionDataReferences( // 只接受 Object Manager 锚点实际函数边界内的引用。
         NtosView,
         anchors,
         RTL_NUMBER_OF(anchors),

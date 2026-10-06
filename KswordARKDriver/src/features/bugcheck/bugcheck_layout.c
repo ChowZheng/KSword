@@ -14,6 +14,7 @@ Abstract:
 
 #include "bugcheck_layout.h"
 #include "bugcheck_decode.h"
+#include "bugcheck_linux.h"
 
 #include <ntstrsafe.h>
 #include <stdarg.h>
@@ -871,9 +872,23 @@ KswordARKBugcheckLayoutDraw(
     BOOLEAN compact;
 
     if (Canvas == NULL || Diagnostics == NULL ||
-        Canvas->DrawText == NULL || Canvas->DrawFrame == NULL ||
+        Canvas->DrawText == NULL ||
         Canvas->Width < KSWORD_ARK_BUGCHECK_LAYOUT_REQUIRED_WIDTH ||
         Canvas->Height < KSWORD_ARK_BUGCHECK_LAYOUT_REQUIRED_HEIGHT) {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    // Linux 页面仅复用快照和绘图回调；原四区布局的边框资源无需参与该模式。
+    if (Canvas->RenderMode == KSWORD_ARK_BUGCHECK_RENDER_MODE_LINUX_QR) {
+        return KswordARKBugcheckLinuxDraw(
+            Canvas,
+            Diagnostics,
+            CallbackMask,
+            ModuleCount);
+    }
+    // 拒绝未知模式或缺失原布局边框回调，防止协议漂移被误当作成功绘制。
+    if (Canvas->RenderMode != KSWORD_ARK_BUGCHECK_RENDER_MODE_DIAGNOSTIC ||
+        Canvas->DrawFrame == NULL) {
         return STATUS_INVALID_PARAMETER;
     }
 

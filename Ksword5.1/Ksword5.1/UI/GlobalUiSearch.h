@@ -42,7 +42,7 @@ namespace ads
 
 namespace ks::ui
 {
-    // UiSearchScope：标题栏搜索的三个作用域，Tab/Shift+Tab 循环切换。
+    // UiSearchScope：三个搜索作用域；输入框 Tab/Shift+Tab 还会跨越独立的 CMD 模式。
     enum class UiSearchScope
     {
         Global,
@@ -133,6 +133,9 @@ namespace ks::ui
         // requestSearchInputActivation：请求标题栏切回搜索模式，可选择是否抢占焦点。
         void requestSearchInputActivation(bool focusTopInput);
 
+        // requestCommandInputActivation：到达搜索范围边界时切到 CMD，不执行输入内容。
+        void requestCommandInputActivation(bool focusTopInput);
+
         // searchScopeDisplayTextChanged：范围变化后刷新标题栏模式标签和提示。
         void searchScopeDisplayTextChanged(const QString& displayText);
 
@@ -204,6 +207,11 @@ namespace ks::ui
         // - 作用：按命中列表重建弹层列表项（含富文本高亮与路径行）。
         void rebuildResultList();
 
+        // refreshResultHtmlColors 原地更新当前结果的富文本角色，保留列表对象、选择和查询快照。
+        void refreshResultHtmlColors();
+        // scheduleResultThemeRefresh 合并主题事件；不启动搜索、递增扫描代次或重设隐藏行。
+        void scheduleResultThemeRefresh();
+
         // showPopupPanel：
         // - 作用：应用当前主题样式、计算尺寸并显示/置前弹层。
         void showPopupPanel();
@@ -230,7 +238,7 @@ namespace ks::ui
         // isCurrentQueryLongEnough：当前表格允许任意单字符，其余范围沿用全局降噪规则。
         bool isCurrentQueryLongEnough(const QString& queryText) const;
 
-        // setSearchScope/cycleSearchScope：设置或循环搜索范围，并重启当前查询。
+        // setSearchScope/cycleSearchScope：设置搜索范围或四节点循环；跨边界通过信号进入 CMD。
         void setSearchScope(UiSearchScope searchScope);
         void cycleSearchScope(int direction);
 
@@ -268,6 +276,7 @@ namespace ks::ui
         QLabel* m_searchProgressLabel = nullptr;  // m_searchProgressLabel：进度文案“正在搜索：Dock 名（n/N）”。
         QProgressBar* m_searchProgressBar = nullptr; // m_searchProgressBar：按 Dock 数推进的进度条。
         QTimer* m_searchDebounceTimer = nullptr;  // m_searchDebounceTimer：输入防抖定时器。
+        bool m_resultThemeRefreshScheduled = false; // 合并存量 HTML 重着色，避免 palette 传播栈重入。
 
         QString m_pendingQueryText;               // m_pendingQueryText：最近一次输入的查询文本。
         QString m_activeQueryText;                // m_activeQueryText：当前异步扫描采用的查询快照。

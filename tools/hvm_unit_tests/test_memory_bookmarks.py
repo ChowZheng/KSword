@@ -239,7 +239,7 @@ const DdmaSession& currentDdmaSession() { return session; }
 std::uint64_t ddmaSessionGeneration() { return sessionGeneration; }
 QString backendDisplayName(MemoryAccessBackend backend) { return QString::fromStdString(std::to_string(static_cast<int>(backend))); }
 AccessOutcome readVirtual(MemoryAccessBackend backend, const DdmaSession& saved,
-    std::uint32_t pid, std::uint64_t address, std::uint64_t length) {
+    std::uint32_t pid, std::uint64_t address, std::uint64_t length, bool /*requireHvmDirectWindow*/) {
     reads.push_back({backend, saved, pid, address, length});
     if (!scriptedReads.empty()) {
         auto result = scriptedReads.front(); scriptedReads.pop_front(); return result;

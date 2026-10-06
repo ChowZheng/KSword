@@ -92,7 +92,7 @@ namespace ksword::ark
         return result;
     }
     HvmControlResult DriverClient::controlHvm(unsigned long command, unsigned long, bool, bool, bool,
-        bool, bool, bool, bool, bool, bool, bool, unsigned long, bool) const
+        bool, bool, bool, bool, bool, bool, bool, unsigned long, bool, bool) const
     {
         ++model.controlCalls;
         HvmControlResult result{}; result.io = success(sizeof(result.response));

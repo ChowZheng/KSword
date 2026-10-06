@@ -2,6 +2,7 @@
 #include "../shared/ui/KsPainterChart.h"
 
 #include "PerformanceNavCard.h"
+#include "HudColors.h"
 
 #include <QAbstractItemView>
 #include <QAbstractScrollArea>
@@ -113,11 +114,17 @@ namespace
                 return;
             }
 
-            painter.setPen(QPen(QColor(110, 168, 235, 48), 1.0));
-            painter.setBrush(QColor(255, 255, 255, 8));
+            const QColor accent = palette().color(QPalette::Highlight);
+            QColor border = accent;
+            border.setAlpha(48);
+            painter.setPen(QPen(border, 1.0));
+            QColor track = palette().color(QPalette::WindowText);
+            track.setAlpha(8);
+            painter.setBrush(track);
             painter.drawRoundedRect(contentRect, 6.0, 6.0);
 
-            painter.setPen(QPen(QColor(110, 168, 235, 28), 1.0));
+            border.setAlpha(28);
+            painter.setPen(QPen(border, 1.0));
             const double midY = contentRect.top() + contentRect.height() * 0.5;
             painter.drawLine(
                 QPointF(contentRect.left() + 4.0, midY),
@@ -173,7 +180,7 @@ namespace
                 }
             }
 
-            painter.setPen(QPen(QColor(72, 170, 255, 230), 1.5));
+            painter.setPen(QPen(accent, 1.5));
             painter.setBrush(Qt::NoBrush);
             painter.drawPath(linePath);
         }
@@ -573,6 +580,77 @@ void HudPerformancePanel::resizeEvent(QResizeEvent* resizeEventPointer)
     adjustChartHeights();
 }
 
+void HudPerformancePanel::setEffectiveBackgroundColor(const QColor& colorValue)
+{
+    // 文字和自绘 CPU 线都使用独立 HUD 底色；动态 palette QSS 随本次更新生效。
+    QPalette colors = palette();
+    const QColor primary = KswordHudColors::Readable(QColor(242, 246, 252), colorValue);
+    const QColor secondary = KswordHudColors::Readable(QColor(185, 205, 225), colorValue);
+    colors.setColor(QPalette::Window, colorValue);
+    colors.setColor(QPalette::Base, colorValue);
+    colors.setColor(QPalette::WindowText, primary);
+    colors.setColor(QPalette::Text, primary);
+    colors.setColor(QPalette::Mid, secondary);
+    colors.setColor(QPalette::Highlight, KswordHudColors::Readable(QColor(72, 170, 255), colorValue, 3.0));
+    setPalette(colors);
+
+    // 项目自有 QChart 持有实色，不能仅更新 QWidget palette；每条曲线保留原数据色种子。
+    const auto widgets = findChildren<QWidget*>();
+    for (QWidget* widget : widgets)
+    {
+        auto* view = dynamic_cast<QChartView*>(widget);
+        if (view == nullptr || view->chart() == nullptr)
+        {
+            continue;
+        }
+        applyChartColors(view->chart(), colorValue);
+        view->update();
+    }
+    update();
+}
+
+void HudPerformancePanel::applyChartColors(QChart* chart, const QColor& colorValue)
+{
+    if (chart != nullptr)
+    {
+        const QColor primary = KswordHudColors::Readable(QColor(242, 246, 252), colorValue);
+        const QColor secondary = KswordHudColors::Readable(QColor(185, 205, 225), colorValue);
+        chart->setTitleBrush(primary);
+        if (chart->legend() != nullptr)
+        {
+            chart->legend()->setLabelColor(primary);
+        }
+        for (QAbstractAxis* axis : chart->axes())
+        {
+            axis->setLabelsBrush(secondary);
+            axis->setTitleBrush(primary);
+            axis->setLinePenColor(secondary);
+            const QVariant savedGrid = axis->property("ksword_hud_grid_seed");
+            const QColor gridSeed = savedGrid.isValid() ? savedGrid.value<QColor>() : axis->gridLinePen().color();
+            if (!savedGrid.isValid())
+            {
+                axis->setProperty("ksword_hud_grid_seed", gridSeed);
+            }
+            QColor grid = KswordHudColors::Readable(gridSeed, colorValue, 3.0);
+            grid.setAlpha(gridSeed.alpha());
+            axis->setGridLineColor(grid);
+        }
+        for (QAbstractSeries* series : chart->series())
+        {
+            if (auto* line = dynamic_cast<QLineSeries*>(series))
+            {
+                const QVariant savedSeed = line->property("ksword_hud_series_seed");
+                const QColor seed = savedSeed.isValid() ? savedSeed.value<QColor>() : line->color();
+                if (!savedSeed.isValid())
+                {
+                    line->setProperty("ksword_hud_series_seed", seed);
+                }
+                line->setColor(KswordHudColors::Readable(seed, colorValue, 3.0));
+            }
+        }
+    }
+}
+
 void HudPerformancePanel::showEvent(QShowEvent* showEventPointer)
 {
     QWidget::showEvent(showEventPointer);
@@ -664,17 +742,17 @@ void HudPerformancePanel::initializeCpuPage()
 
     QHBoxLayout* headerLayout = new QHBoxLayout();
     QLabel* titleLabel = new QLabel(QStringLiteral("CPU"), m_cpuPage);
-    titleLabel->setStyleSheet(QStringLiteral("font-size:46px;font-weight:700;color:#F2F6FC;"));
+    titleLabel->setStyleSheet(QStringLiteral("font-size:46px;font-weight:700;color:palette(window-text);"));
     m_cpuModelLabel = new QLabel(QStringLiteral("Detecting..."), m_cpuPage);
     m_cpuModelLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-    m_cpuModelLabel->setStyleSheet(QStringLiteral("font-size:15px;font-weight:500;color:#F2F6FC;"));
+    m_cpuModelLabel->setStyleSheet(QStringLiteral("font-size:15px;font-weight:500;color:palette(window-text);"));
     headerLayout->addWidget(titleLabel, 0);
     headerLayout->addStretch(1);
     headerLayout->addWidget(m_cpuModelLabel, 0);
     pageLayout->addLayout(headerLayout, 0);
 
     m_cpuSummaryLabel = new QLabel(QStringLiteral("30-second utilization history"), m_cpuPage);
-    m_cpuSummaryLabel->setStyleSheet(QStringLiteral("color:#B9CDE1;font-size:14px;font-weight:600;"));
+    m_cpuSummaryLabel->setStyleSheet(QStringLiteral("color:palette(mid);font-size:14px;font-weight:600;"));
     pageLayout->addWidget(m_cpuSummaryLabel, 0);
 
     m_coreChartScrollArea = new QScrollArea(m_cpuPage);
@@ -700,8 +778,8 @@ void HudPerformancePanel::initializeCpuPage()
     m_cpuSecondaryDetailLabel = new QLabel(QStringLiteral("Loading hardware details..."), m_cpuPage);
     m_cpuPrimaryDetailLabel->setWordWrap(false);
     m_cpuSecondaryDetailLabel->setWordWrap(false);
-    m_cpuPrimaryDetailLabel->setStyleSheet(QStringLiteral("font-size:14px;color:#F2F6FC;"));
-    m_cpuSecondaryDetailLabel->setStyleSheet(QStringLiteral("font-size:14px;color:#F2F6FC;"));
+    m_cpuPrimaryDetailLabel->setStyleSheet(QStringLiteral("font-size:14px;color:palette(window-text);"));
+    m_cpuSecondaryDetailLabel->setStyleSheet(QStringLiteral("font-size:14px;color:palette(window-text);"));
     detailLayout->addWidget(m_cpuPrimaryDetailLabel, 1);
     detailLayout->addWidget(m_cpuSecondaryDetailLabel, 1);
     pageLayout->addLayout(detailLayout, 0);
@@ -720,16 +798,16 @@ void HudPerformancePanel::initializeMemoryPage()
 
     QHBoxLayout* headerLayout = new QHBoxLayout();
     QLabel* titleLabel = new QLabel(QStringLiteral("Memory"), m_memoryPage);
-    titleLabel->setStyleSheet(QStringLiteral("font-size:46px;font-weight:700;color:#F2F6FC;"));
+    titleLabel->setStyleSheet(QStringLiteral("font-size:46px;font-weight:700;color:palette(window-text);"));
     m_memoryCapacityLabel = new QLabel(QStringLiteral("Loading..."), m_memoryPage);
-    m_memoryCapacityLabel->setStyleSheet(QStringLiteral("font-size:31px;font-weight:500;color:#F2F6FC;"));
+    m_memoryCapacityLabel->setStyleSheet(QStringLiteral("font-size:31px;font-weight:500;color:palette(window-text);"));
     headerLayout->addWidget(titleLabel, 0);
     headerLayout->addStretch(1);
     headerLayout->addWidget(m_memoryCapacityLabel, 0);
     pageLayout->addLayout(headerLayout, 0);
 
     m_memorySummaryLabel = new QLabel(QStringLiteral("Memory utilization"), m_memoryPage);
-    m_memorySummaryLabel->setStyleSheet(QStringLiteral("color:#B9CDE1;font-size:14px;font-weight:600;"));
+    m_memorySummaryLabel->setStyleSheet(QStringLiteral("color:palette(mid);font-size:14px;font-weight:600;"));
     pageLayout->addWidget(m_memorySummaryLabel, 0);
 
     m_memoryLineSeries = new QLineSeries(m_memoryPage);
@@ -770,8 +848,8 @@ void HudPerformancePanel::initializeMemoryPage()
     m_memorySecondaryDetailLabel = new QLabel(QStringLiteral("Loading hardware details..."), m_memoryPage);
     m_memoryPrimaryDetailLabel->setWordWrap(false);
     m_memorySecondaryDetailLabel->setWordWrap(false);
-    m_memoryPrimaryDetailLabel->setStyleSheet(QStringLiteral("font-size:14px;color:#F2F6FC;"));
-    m_memorySecondaryDetailLabel->setStyleSheet(QStringLiteral("font-size:14px;color:#F2F6FC;"));
+    m_memoryPrimaryDetailLabel->setStyleSheet(QStringLiteral("font-size:14px;color:palette(window-text);"));
+    m_memorySecondaryDetailLabel->setStyleSheet(QStringLiteral("font-size:14px;color:palette(window-text);"));
     detailLayout->addWidget(m_memoryPrimaryDetailLabel, 1);
     detailLayout->addWidget(m_memorySecondaryDetailLabel, 1);
     pageLayout->addLayout(detailLayout, 0);
@@ -788,11 +866,11 @@ void HudPerformancePanel::initializeDiskPage()
     pageLayout->setSpacing(6);
 
     QLabel* titleLabel = new QLabel(QStringLiteral("Disk"), m_diskPage);
-    titleLabel->setStyleSheet(QStringLiteral("font-size:46px;font-weight:700;color:#F2F6FC;"));
+    titleLabel->setStyleSheet(QStringLiteral("font-size:46px;font-weight:700;color:palette(window-text);"));
     pageLayout->addWidget(titleLabel, 0);
 
     m_diskSummaryLabel = new QLabel(QStringLiteral("Initializing..."), m_diskPage);
-    m_diskSummaryLabel->setStyleSheet(QStringLiteral("color:#B9CDE1;font-size:14px;font-weight:600;"));
+    m_diskSummaryLabel->setStyleSheet(QStringLiteral("color:palette(mid);font-size:14px;font-weight:600;"));
     pageLayout->addWidget(m_diskSummaryLabel, 0);
 
     m_diskReadLineSeries = new QLineSeries(m_diskPage);
@@ -836,7 +914,7 @@ void HudPerformancePanel::initializeDiskPage()
 
     m_diskDetailLabel = new QLabel(QStringLiteral("Sampling..."), m_diskPage);
     m_diskDetailLabel->setWordWrap(false);
-    m_diskDetailLabel->setStyleSheet(QStringLiteral("font-size:14px;color:#F2F6FC;"));
+    m_diskDetailLabel->setStyleSheet(QStringLiteral("font-size:14px;color:palette(window-text);"));
     pageLayout->addWidget(m_diskDetailLabel, 0);
 
     m_detailStack->addWidget(m_diskPage);
@@ -851,11 +929,11 @@ void HudPerformancePanel::initializeNetworkPage()
     pageLayout->setSpacing(6);
 
     QLabel* titleLabel = new QLabel(QStringLiteral("Ethernet"), m_networkPage);
-    titleLabel->setStyleSheet(QStringLiteral("font-size:46px;font-weight:700;color:#F2F6FC;"));
+    titleLabel->setStyleSheet(QStringLiteral("font-size:46px;font-weight:700;color:palette(window-text);"));
     pageLayout->addWidget(titleLabel, 0);
 
     m_networkSummaryLabel = new QLabel(QStringLiteral("Initializing..."), m_networkPage);
-    m_networkSummaryLabel->setStyleSheet(QStringLiteral("color:#B9CDE1;font-size:14px;font-weight:600;"));
+    m_networkSummaryLabel->setStyleSheet(QStringLiteral("color:palette(mid);font-size:14px;font-weight:600;"));
     pageLayout->addWidget(m_networkSummaryLabel, 0);
 
     m_networkRxLineSeries = new QLineSeries(m_networkPage);
@@ -899,7 +977,7 @@ void HudPerformancePanel::initializeNetworkPage()
 
     m_networkDetailLabel = new QLabel(QStringLiteral("Sampling..."), m_networkPage);
     m_networkDetailLabel->setWordWrap(false);
-    m_networkDetailLabel->setStyleSheet(QStringLiteral("font-size:14px;color:#F2F6FC;"));
+    m_networkDetailLabel->setStyleSheet(QStringLiteral("font-size:14px;color:palette(window-text);"));
     pageLayout->addWidget(m_networkDetailLabel, 0);
 
     m_detailStack->addWidget(m_networkPage);
@@ -915,17 +993,17 @@ void HudPerformancePanel::initializeGpuPage()
 
     QHBoxLayout* headerLayout = new QHBoxLayout();
     QLabel* titleLabel = new QLabel(QStringLiteral("GPU"), m_gpuPage);
-    titleLabel->setStyleSheet(QStringLiteral("font-size:46px;font-weight:700;color:#F2F6FC;"));
+    titleLabel->setStyleSheet(QStringLiteral("font-size:46px;font-weight:700;color:palette(window-text);"));
     m_gpuAdapterTitleLabel = new QLabel(QStringLiteral("Loading adapter..."), m_gpuPage);
     m_gpuAdapterTitleLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-    m_gpuAdapterTitleLabel->setStyleSheet(QStringLiteral("font-size:18px;font-weight:500;color:#F2F6FC;"));
+    m_gpuAdapterTitleLabel->setStyleSheet(QStringLiteral("font-size:18px;font-weight:500;color:palette(window-text);"));
     headerLayout->addWidget(titleLabel, 0);
     headerLayout->addStretch(1);
     headerLayout->addWidget(m_gpuAdapterTitleLabel, 0);
     pageLayout->addLayout(headerLayout, 0);
 
     m_gpuSummaryLabel = new QLabel(QStringLiteral("Initializing..."), m_gpuPage);
-    m_gpuSummaryLabel->setStyleSheet(QStringLiteral("color:#B9CDE1;font-size:14px;font-weight:600;"));
+    m_gpuSummaryLabel->setStyleSheet(QStringLiteral("color:palette(mid);font-size:14px;font-weight:600;"));
     pageLayout->addWidget(m_gpuSummaryLabel, 0);
 
     m_gpuEngineHostWidget = new QWidget(m_gpuPage);
@@ -946,7 +1024,7 @@ void HudPerformancePanel::initializeGpuPage()
             cellLayout->setSpacing(2);
 
             QLabel* cellTitle = new QLabel(displayNameText, cellWidget);
-            cellTitle->setStyleSheet(QStringLiteral("font-size:14px;font-weight:600;color:#F2F6FC;"));
+            cellTitle->setStyleSheet(QStringLiteral("font-size:14px;font-weight:600;color:palette(window-text);"));
             cellLayout->addWidget(cellTitle, 0);
 
             QLineSeries* lineSeries = new QLineSeries(cellWidget);
@@ -1070,7 +1148,7 @@ void HudPerformancePanel::initializeGpuPage()
 
     m_gpuDetailLabel = new QLabel(QStringLiteral("Sampling..."), m_gpuPage);
     m_gpuDetailLabel->setWordWrap(false);
-    m_gpuDetailLabel->setStyleSheet(QStringLiteral("font-size:14px;color:#F2F6FC;"));
+    m_gpuDetailLabel->setStyleSheet(QStringLiteral("font-size:14px;color:palette(window-text);"));
     pageLayout->addWidget(m_gpuDetailLabel, 0);
 
     m_detailStack->addWidget(m_gpuPage);
@@ -1102,7 +1180,7 @@ void HudPerformancePanel::initializeCoreCharts()
         chartEntry.titleLabel = new QLabel(
             QStringLiteral("CPU %1").arg(coreIndex),
             chartEntry.containerWidget);
-        chartEntry.titleLabel->setStyleSheet(QStringLiteral("color:#B9CDE1;font-weight:600;"));
+        chartEntry.titleLabel->setStyleSheet(QStringLiteral("color:palette(mid);font-weight:600;"));
         chartEntry.titleLabel->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
         chartEntry.titleLabel->setMinimumWidth(128);
         containerLayout->addWidget(chartEntry.titleLabel, 0);

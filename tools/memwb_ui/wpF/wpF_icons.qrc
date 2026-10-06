@@ -1,0 +1,15 @@
+<RCC>
+    <!-- wpF 夹具专用的精简图标资源：别名与主程序 Ksword5.qrc 保持一致（同名指向同一个源 svg），
+         让 Int3PatchPanel 的工具钮与右键菜单图标在离屏截图里可见。只含本工作包用到的 6 个别名，
+         其中 memwb_restore / memwb_restore_all 是 Phase 3 WP-0 已经登记进主程序 qrc 的别名，
+         其余四个（disk_tools / log_clear / detail_node_collapsed / detail_node_expanded）是
+         仓库早已存在的别名，本文件只是为了让夹具离线运行而复制了一份映射，不新增任何别名。 -->
+    <qresource prefix="/Icon">
+        <file alias="disk_tools.svg">../../../Ksword5.1/Ksword5.1/Resource/Icon/system/tool_line.svg</file>
+        <file alias="log_clear.svg">../../../Ksword5.1/Ksword5.1/Resource/Icon/system/delete_2_line.svg</file>
+        <file alias="detail_node_collapsed.svg">../../../Ksword5.1/Ksword5.1/Resource/Icon/arrow/right_small_line.svg</file>
+        <file alias="detail_node_expanded.svg">../../../Ksword5.1/Ksword5.1/Resource/Icon/arrow/down_small_line.svg</file>
+        <file alias="memwb_restore.svg">../../../Ksword5.1/Ksword5.1/Resource/Icon/system/restore_line.svg</file>
+        <file alias="memwb_restore_all.svg">../../../Ksword5.1/Ksword5.1/Resource/Icon/system/history_anticlockwise_line.svg</file>
+    </qresource>
+</RCC>
