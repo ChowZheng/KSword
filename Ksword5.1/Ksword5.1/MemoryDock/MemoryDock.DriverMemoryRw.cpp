@@ -11,6 +11,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QMessageBox>
+#include <QPointer>
 #include <QPushButton>
 #include <QSignalBlocker>
 #include <QSpinBox>
@@ -1095,6 +1096,42 @@ void MemoryDock::driverApplyMemoryDiffFromUi()
     const auto snapshotPid = m_driverMemorySnapshotPid;
     const auto snapshotBackend = m_driverMemorySnapshotBackend;
     const QByteArray snapshotOriginal = m_driverMemoryOriginalBytes;
+    const QByteArray snapshotEdited = m_driverMemoryEditedBytes; // 本轮实际批准写入的完整编辑快照
+    const auto snapshotDdmaGeneration = m_driverMemorySnapshotDdmaGeneration;
+    const auto attachmentGeneration = m_processAttachmentGeneration.load(); // 同 PID 重附加也作废旧请求
+    const QPointer<MemoryDock> self(this); // 确认/提权对话框可在嵌套事件循环中销毁宿主
+    const auto identityUnchanged = [&]() {
+        return self && m_driverMemoryHasSnapshot && m_driverMemoryBaseAddress == snapshotBase
+            && m_driverMemorySnapshotPid == snapshotPid
+            && m_driverMemorySnapshotIsPhysical == physicalSnapshot
+            && m_driverMemorySnapshotBackend == snapshotBackend
+            && currentDriverMemoryBackend() == snapshotBackend
+            && m_driverMemorySnapshotDdmaGeneration == snapshotDdmaGeneration
+            && m_processAttachmentGeneration.load() == attachmentGeneration
+            && (snapshotBackend != ksword::memory_backend::MemoryAccessBackend::Ddma
+                || snapshotDdmaGeneration == ksword::memory_backend::ddmaSessionGeneration());
+    };
+    const auto requireFrozenSnapshot = [&]() {
+        if (!self) { return false; }
+        if (!identityUnchanged() || m_driverMemoryOriginalBytes != snapshotOriginal
+            || m_driverMemoryEditedBytes != snapshotEdited
+            || m_driverMemoryHexEditor == nullptr || m_driverMemoryHexEditor->data() != snapshotEdited)
+        {
+            QMessageBox::warning(this, QStringLiteral("驱动内存读写"),
+                QStringLiteral("访问后端或 DDMA 会话已改变，请重新读取后再应用改动。"));
+            return false;
+        }
+        return true;
+    };
+    // 完整回读已 setSnapshot 为实际目标字节；仅接受仍等于批准快照的缓存，不清掉新编辑。
+    const auto acceptWrittenSnapshot = [&]() {
+        if (identityUnchanged() && m_driverMemoryEditedBytes == snapshotEdited
+            && m_driverMemoryHexEditor != nullptr && m_driverMemoryHexEditor->data() == snapshotEdited)
+        {
+            m_driverMemoryOriginalBytes = snapshotEdited;
+            m_driverMemoryEditor->acceptChanges();
+        }
+    };
     // 危险确认策略只允许跳过重复模态框；R0 确认标志、快照比对和写后状态仍然执行。
     const bool suppressDangerousConfirmation =
         ks::settings::dangerousActionConfirmationsSuppressed();
@@ -1120,6 +1157,7 @@ void MemoryDock::driverApplyMemoryDiffFromUi()
             .arg(ksword::memory_backend::backendDisplayName(m_driverMemorySnapshotBackend)),
             QMessageBox::Yes | QMessageBox::No,
             QMessageBox::No);
+        if (!self) { return; }
         if (confirmResult != QMessageBox::Yes)
         {
             if (m_driverMemoryStatusLabel != nullptr)
@@ -1144,24 +1182,15 @@ void MemoryDock::driverApplyMemoryDiffFromUi()
     }
 
     // 确认弹窗运行嵌套事件循环，返回后再次核验快照和通道身份。
-    if (!m_driverMemoryHasSnapshot || m_driverMemoryBaseAddress != snapshotBase
-        || m_driverMemorySnapshotPid != snapshotPid
-        || m_driverMemorySnapshotIsPhysical != physicalSnapshot
-        || m_driverMemoryOriginalBytes != snapshotOriginal
-        || m_driverMemorySnapshotBackend != snapshotBackend
-        || currentDriverMemoryBackend() != snapshotBackend
-        || (snapshotBackend == ksword::memory_backend::MemoryAccessBackend::Ddma
-            && m_driverMemorySnapshotDdmaGeneration != ksword::memory_backend::ddmaSessionGeneration()))
+    if (!requireFrozenSnapshot())
     {
-        QMessageBox::warning(this, QStringLiteral("驱动内存读写"),
-            QStringLiteral("访问后端或 DDMA 会话已改变，请重新读取后再应用改动。"));
         return;
     }
     // 所有通道都在用户确认完成后复核差异区间，再开始提交。
     for (const auto& block : diffBlocks)
     {
-        const qsizetype offset = static_cast<qsizetype>(block.address - m_driverMemoryBaseAddress);
-        const QByteArray expected = m_driverMemoryOriginalBytes.mid(offset, block.bytes.size());
+        const qsizetype offset = static_cast<qsizetype>(block.address - snapshotBase);
+        const QByteArray expected = snapshotOriginal.mid(offset, block.bytes.size());
         const auto live = physicalSnapshot
             ? ksword::memory_backend::readPhysical(m_driverMemorySnapshotBackend,
                 currentDdmaSession(), block.address, static_cast<std::uint64_t>(block.bytes.size()))
@@ -1181,15 +1210,19 @@ void MemoryDock::driverApplyMemoryDiffFromUi()
     {
         QString physicalFailureText;
         const bool physicalWriteOk = applyDriverMemoryPhysicalDiff(diffBlocks, physicalFailureText);
+        if (!self || !requireFrozenSnapshot()) { return; }
         const bool physicalVerified = verifyDriverMemoryWrittenBlocks(diffBlocks, physicalFailureText);
+        if (!self) { return; }
         if (physicalWriteOk && physicalVerified)
         {
+            if (!identityUnchanged()) { return; }
             // 全部成功后把编辑缓存提升为新的基线，后续差异从这里重新计算。
-            m_driverMemoryOriginalBytes = m_driverMemoryEditedBytes;
-            m_driverMemoryEditor->acceptChanges();
+            acceptWrittenSnapshot();
+            if (!self) { return; }
             if (m_driverMemoryApplyButton != nullptr)
             {
-                m_driverMemoryApplyButton->setEnabled(false);
+                m_driverMemoryApplyButton->setEnabled(m_driverMemoryHexEditor != nullptr
+                    && m_driverMemoryHexEditor->data() != m_driverMemoryOriginalBytes);
             }
             if (m_driverMemoryStatusLabel != nullptr)
             {
@@ -1219,8 +1252,8 @@ void MemoryDock::driverApplyMemoryDiffFromUi()
     if (m_driverMemorySnapshotBackend == ksword::memory_backend::MemoryAccessBackend::UserMode
         || m_driverMemorySnapshotBackend == ksword::memory_backend::MemoryAccessBackend::Hvm)
     {
-        const std::uint32_t pid = kernelAddressSnapshot ? 0U : m_driverMemorySnapshotPid;
-        const auto backend = m_driverMemorySnapshotBackend;
+        const std::uint32_t pid = kernelAddressSnapshot ? 0U : snapshotPid;
+        const auto backend = snapshotBackend;
         std::uint64_t totalWritten = 0;
         QString failureText;
         for (const auto& block : diffBlocks)
@@ -1242,22 +1275,28 @@ void MemoryDock::driverApplyMemoryDiffFromUi()
                 break;
             }
         }
+        if (!requireFrozenSnapshot()) { return; }
         verifyDriverMemoryWrittenBlocks(diffBlocks, failureText);
+        if (!self) { return; }
         if (!failureText.isEmpty())
         {
             m_driverMemoryStatusLabel->setText(QStringLiteral("应用未完成：已写入 %1 字节。%2")
                 .arg(static_cast<qulonglong>(totalWritten)).arg(failureText));
-            if (!ks::ui::promptForPrivilegeFailure(this,
-                QStringLiteral("编辑进程内存"), failureText))
+            const bool privilegeHandled = ks::ui::promptForPrivilegeFailure(this,
+                QStringLiteral("编辑进程内存"), failureText);
+            if (!self) { return; }
+            if (!privilegeHandled)
             {
                 QMessageBox::warning(this, QStringLiteral("驱动内存读写"),
                     m_driverMemoryStatusLabel->text());
             }
             return;
         }
-        m_driverMemoryOriginalBytes = m_driverMemoryEditedBytes;
-        m_driverMemoryEditor->acceptChanges();
-        m_driverMemoryApplyButton->setEnabled(false);
+        if (!identityUnchanged()) { return; }
+        acceptWrittenSnapshot();
+        if (!self) { return; }
+        m_driverMemoryApplyButton->setEnabled(m_driverMemoryHexEditor != nullptr
+            && m_driverMemoryHexEditor->data() != m_driverMemoryOriginalBytes);
         m_driverMemoryStatusLabel->setText(QStringLiteral("应用完成并已回读：%1 字节。")
             .arg(static_cast<qulonglong>(totalWritten)));
         return;
@@ -1269,7 +1308,7 @@ void MemoryDock::driverApplyMemoryDiffFromUi()
     if (currentDriverMemoryBackend() == ksword::memory_backend::MemoryAccessBackend::Ddma)
     {
         const std::uint32_t ddmaTargetPid =
-            kernelAddressSnapshot ? 0U : m_driverMemorySnapshotPid;
+            kernelAddressSnapshot ? 0U : snapshotPid;
         std::uint64_t ddmaWrittenTotal = 0ULL;
         bool ddmaScratchDirty = false;
         bool ddmaLostUpdate = false;
@@ -1277,6 +1316,7 @@ void MemoryDock::driverApplyMemoryDiffFromUi()
 
         for (const DriverDiffBlock& block : diffBlocks)
         {
+            if (!requireFrozenSnapshot()) { return; }
             ksword::memory_backend::AccessOutcome blockOutcome =
                 ksword::memory_backend::writeVirtual(
                     ksword::memory_backend::MemoryAccessBackend::Ddma,
@@ -1289,19 +1329,33 @@ void MemoryDock::driverApplyMemoryDiffFromUi()
             // 首个块触发 force 确认后，本轮后续块复用同一次同意。
             if (blockOutcome.forceRequired && !ddmaForceApproved)
             {
-                if (!confirmForceDriverMemoryWrite(
+                const bool forceConfirmed = confirmForceDriverMemoryWrite(
                         block.address,
                         static_cast<std::uint32_t>(block.bytes.size()),
-                        blockOutcome.failureText, snapshotPid))
+                        blockOutcome.failureText, snapshotPid);
+                if (!self || !requireFrozenSnapshot()) { return; }
+                if (!forceConfirmed)
                 {
                     QString failureText = QStringLiteral("用户取消了 DDMA 强制写入。");
                     verifyDriverMemoryWrittenBlocks(diffBlocks, failureText);
+                    if (!self) { return; }
                     if (m_driverMemoryStatusLabel != nullptr)
                     {
                         m_driverMemoryStatusLabel->setText(
                             QStringLiteral("应用未完成：已写入 %1 字节。%2")
                                 .arg(static_cast<qulonglong>(ddmaWrittenTotal)).arg(failureText));
                     }
+                    return;
+                }
+                // 二次确认期间目标字节也可能变化；强制写前按批准时的原始块再次回读。
+                const auto beforeForce = ksword::memory_backend::readVirtual(snapshotBackend,
+                    currentDdmaSession(), ddmaTargetPid, block.address, static_cast<std::uint64_t>(block.bytes.size()));
+                const QByteArray expectedBefore = snapshotOriginal.mid(
+                    static_cast<qsizetype>(block.address - snapshotBase), block.bytes.size());
+                if (!beforeForce.ok || beforeForce.partial || beforeForce.data != expectedBefore)
+                {
+                    QMessageBox::warning(this, QStringLiteral("驱动内存读写"),
+                        QStringLiteral("目标字节已改变，请重新读取后再编辑。"));
                     return;
                 }
                 ddmaForceApproved = true;
@@ -1331,6 +1385,7 @@ void MemoryDock::driverApplyMemoryDiffFromUi()
                         "\n严重告警：暂存扇区未能还原，磁盘上留下了脏扇区。");
                 }
                 verifyDriverMemoryWrittenBlocks(diffBlocks, failureText);
+                if (!self) { return; }
                 if (m_driverMemoryStatusLabel != nullptr)
                 {
                     m_driverMemoryStatusLabel->setText(failureText);
@@ -1341,18 +1396,22 @@ void MemoryDock::driverApplyMemoryDiffFromUi()
         }
 
         QString verificationFailure;
+        if (!requireFrozenSnapshot()) { return; }
         if (!verifyDriverMemoryWrittenBlocks(diffBlocks, verificationFailure))
         {
+            if (!self) { return; }
             m_driverMemoryStatusLabel->setText(verificationFailure);
             QMessageBox::warning(this, QStringLiteral("驱动内存读写"), verificationFailure);
             return;
         }
 
-        m_driverMemoryOriginalBytes = m_driverMemoryEditedBytes;
-        m_driverMemoryEditor->acceptChanges();
+        if (!self || !identityUnchanged()) { return; }
+        acceptWrittenSnapshot();
+        if (!self) { return; }
         if (m_driverMemoryApplyButton != nullptr)
         {
-            m_driverMemoryApplyButton->setEnabled(false);
+            m_driverMemoryApplyButton->setEnabled(m_driverMemoryHexEditor != nullptr
+                && m_driverMemoryHexEditor->data() != m_driverMemoryOriginalBytes);
         }
         QString ddmaDoneText = QStringLiteral(
             "DDMA 写入完成，已提交 %1 个差异块，共 %2 字节。")
@@ -1400,6 +1459,7 @@ void MemoryDock::driverApplyMemoryDiffFromUi()
         int offset = 0;
         while (offset < block.bytes.size())
         {
+            if (!requireFrozenSnapshot()) { return; }
             const int chunkBytes = std::min<int>(
                 block.bytes.size() - offset,
                 static_cast<int>(
@@ -1476,6 +1536,7 @@ void MemoryDock::driverApplyMemoryDiffFromUi()
                             this,
                             QStringLiteral("R0内核字节事务 PREPARE"),
                             prepareResult.io.win32Error);
+                    if (!self) { return; }
                     ++failedBlockCount;
                     lastFailureText = QString(
                         "内核字节事务 PREPARE 失败：地址=%1 请求=%2 状态=%3 NT=%4 信息=%5")
@@ -1580,7 +1641,7 @@ void MemoryDock::driverApplyMemoryDiffFromUi()
             }
             ksword::ark::VirtualMemoryWriteResult writeResult =
                 driverClient.writeVirtualMemory(
-                    m_driverMemorySnapshotPid,
+                    snapshotPid,
                     chunkAddress,
                     chunk,
                     writeFlags);
@@ -1593,10 +1654,12 @@ void MemoryDock::driverApplyMemoryDiffFromUi()
                     .arg(formatAddress(chunkAddress))
                     .arg(chunkBytes)
                     .arg(driverMemoryIoMessageText(writeResult.io.message));
-                if (!confirmForceDriverMemoryWrite(
+                const bool forceConfirmed = confirmForceDriverMemoryWrite(
                     chunkAddress,
                     static_cast<std::uint32_t>(chunkBytes),
-                    forcePromptText, snapshotPid))
+                    forcePromptText, snapshotPid);
+                if (!self || !requireFrozenSnapshot()) { return; }
+                if (!forceConfirmed)
                 {
                     ++failedBlockCount;
                     lastFailureText = QString("用户未强制继续，地址=%1 请求=%2。")
@@ -1605,10 +1668,22 @@ void MemoryDock::driverApplyMemoryDiffFromUi()
                     break;
                 }
 
+                // 逐块强制确认之后重新核对 expected-before，禁止覆盖弹窗期间的新目标数据。
+                const auto beforeForce = ksword::memory_backend::readVirtual(snapshotBackend,
+                    currentDdmaSession(), snapshotPid, chunkAddress, static_cast<std::uint64_t>(chunkBytes));
+                const QByteArray expectedBefore = snapshotOriginal.mid(
+                    static_cast<qsizetype>(chunkAddress - snapshotBase), chunkBytes);
+                if (!beforeForce.ok || beforeForce.partial || beforeForce.data != expectedBefore)
+                {
+                    QMessageBox::warning(this, QStringLiteral("驱动内存读写"),
+                        QStringLiteral("目标字节已改变，请重新读取后再编辑。"));
+                    return;
+                }
+
                 forceWriteApproved = true;
                 writeFlags |= KSWORD_ARK_MEMORY_WRITE_FLAG_FORCE;
                 writeResult = driverClient.writeVirtualMemory(
-                    m_driverMemorySnapshotPid,
+                    snapshotPid,
                     chunkAddress,
                     chunk,
                     writeFlags);
@@ -1623,12 +1698,14 @@ void MemoryDock::driverApplyMemoryDiffFromUi()
                     this,
                     QStringLiteral("R0写入进程内存"),
                     writeResult.io.win32Error);
+                if (!self) { return; }
                 if (!privilegePromptHandled)
                 {
                     privilegePromptHandled = ks::ui::promptForPrivilegeNtStatus(
                         this,
                         QStringLiteral("R0写入进程内存"),
                         static_cast<long>(writeResult.copyStatus));
+                    if (!self) { return; }
                 }
                 ++failedBlockCount;
                 lastFailureText = QString("地址=%1 请求=%2 写入=%3 状态=%4 NT=0x%5 信息=%6")
@@ -1715,17 +1792,20 @@ void MemoryDock::driverApplyMemoryDiffFromUi()
     }
 
     // 失败/回滚完成后也必须回读实际状态；原写入错误仍决定本轮失败。
+    if (!requireFrozenSnapshot()) { return; }
     if (!verifyDriverMemoryWrittenBlocks(diffBlocks, lastFailureText) && failedBlockCount == 0)
     {
         failedBlockCount = 1;
     }
+    if (!self || (failedBlockCount == 0 && !identityUnchanged())) { return; }
 
     // 成功写入的情况下，把当前编辑缓存提升为新备份，避免重复应用同一差异。
     if (failedBlockCount == 0)
     {
-        m_driverMemoryOriginalBytes = m_driverMemoryEditedBytes;
-        m_driverMemoryEditor->acceptChanges();
-        m_driverMemoryApplyButton->setEnabled(false);
+        acceptWrittenSnapshot();
+        if (!self) { return; }
+        m_driverMemoryApplyButton->setEnabled(m_driverMemoryHexEditor != nullptr
+            && m_driverMemoryHexEditor->data() != m_driverMemoryOriginalBytes);
         if (m_driverMemoryStatusLabel != nullptr)
         {
             m_driverMemoryStatusLabel->setText(
@@ -1808,26 +1888,35 @@ bool MemoryDock::confirmForceDriverMemoryWrite(
     // 自动返回 true 等于替用户同意了一次驱动已经否决的写入。
 
     // 强制确认入口：普通写入被 R0 拒绝后才会走到这里。
-    QMessageBox warningBox(this);
-    warningBox.setIcon(QMessageBox::Warning);
-    warningBox.setWindowTitle(QStringLiteral("强制写入确认"));
-    warningBox.setText(QStringLiteral("R0 已拒绝普通内存写入请求。"));
-    warningBox.setInformativeText(
+    // 嵌套事件循环期间父 Dock 可能被销毁，Qt 只能删除堆分配的子对话框。
+    const QPointer<MemoryDock> self(this);
+    QPointer<QMessageBox> warningBox = new QMessageBox(this);
+    warningBox->setIcon(QMessageBox::Warning);
+    warningBox->setWindowTitle(QStringLiteral("强制写入确认"));
+    warningBox->setText(QStringLiteral("R0 已拒绝普通内存写入请求。"));
+    warningBox->setInformativeText(
         QStringLiteral("目标 PID=%1\n目标地址=%2\n请求长度=%3 字节\n\n%4\n\n强制继续会绕过本次普通请求保护，只应在确认目标进程和地址无误时使用。")
         .arg(targetPid)
         .arg(formatAddress(blockAddress))
         .arg(requestedBytes)
         .arg(failureText));
-    warningBox.setStandardButtons(QMessageBox::Cancel);
-    warningBox.setDefaultButton(QMessageBox::Cancel);
+    warningBox->setStandardButtons(QMessageBox::Cancel);
+    warningBox->setDefaultButton(QMessageBox::Cancel);
 
     // 自定义按钮用于明确表达 force 语义，避免把普通 Yes/Ok 误当成强制写入。
     QPushButton* const forceButton =
-        warningBox.addButton(QStringLiteral("强制继续"), QMessageBox::DestructiveRole);
-    warningBox.exec();
+        warningBox->addButton(QStringLiteral("强制继续"), QMessageBox::DestructiveRole);
+    warningBox->exec();
+
+    if (!self || !warningBox)
+    {
+        return false;
+    }
+    const bool forceConfirmed = warningBox->clickedButton() == forceButton;
+    delete warningBox.data();
 
     // 返回值只在用户点中强制按钮时为 true；关闭窗口或取消均停止写入。
-    return warningBox.clickedButton() == forceButton;
+    return forceConfirmed;
 }
 
 void MemoryDock::collectDriverMemoryDiffBlocks(std::vector<DriverDiffBlock>& diffBlocksOut) const

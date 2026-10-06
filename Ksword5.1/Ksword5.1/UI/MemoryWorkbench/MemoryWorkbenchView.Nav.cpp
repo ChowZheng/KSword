@@ -123,6 +123,7 @@ namespace ks::ui
     // 自己再做点什么（例如 NeedsAttach 时聚焦进程选择框）。
     NavStatus MemoryWorkbenchView::openAt(const NavRequest& request)
     {
+        const QPointer<MemoryWorkbenchView> self(this);
         if (target_ == nullptr)
         {
             applyNavOutcome(request, NavStatus::Unavailable);
@@ -143,6 +144,10 @@ namespace ks::ui
         // ---- 身份变化合并为一次 requestIdentity（N2）----
         IdentityRequest identity;
         const auto& before = target_->session();
+        if (!self)
+        {
+            return NavStatus::LeaveRefused;
+        }
         if (request.scope != before.scope)
         {
             identity.scope = request.scope;
@@ -172,7 +177,12 @@ namespace ks::ui
             identity.scope.has_value() || identity.pinPid.has_value() || identity.channel.has_value();
         if (identityRequested)
         {
-            if (!target_->requestIdentity(identity, LeaveReason::ScopeChange))
+            const bool accepted = target_->requestIdentity(identity, LeaveReason::ScopeChange);
+            if (!self)
+            {
+                return NavStatus::LeaveRefused;
+            }
+            if (!accepted)
             {
                 const auto failure = target_->lastIdentityFailure();
                 applyNavOutcome(request, failure);
@@ -182,6 +192,10 @@ namespace ks::ui
         const bool identityActuallyChanged = (identityChangeCount_ != identityChangeCountBefore);
 
         const auto& session = target_->session();
+        if (!self)
+        {
+            return NavStatus::LeaveRefused;
+        }
         const bool hasTarget = (session.scope != ksword::memwb::Scope::ProcessVirtual) || (session.pid != 0);
         if (!hasTarget)
         {
@@ -330,7 +344,15 @@ namespace ks::ui
         addressEdit_->setStyleSheet(QString());
 
         NavRequest request;
-        request.scope = target_->session().scope;
+        const auto& session = target_->session();
+        request.scope = session.scope;
+        // 内部导航沿用当前固定目标；pid=0 专用于外部请求跟随 Dock。
+        if (session.scope == ksword::memwb::Scope::ProcessVirtual
+            && target_->followMode() == ksword::memwb::MemoryTargetTracker::Follow::Pinned)
+        {
+            request.pid = session.pid;
+            request.createTime = session.processCreateTime100ns;
+        }
         request.address = eval.expr.value;
         request.origin = NavOrigin::AddressBar;
         openAt(request);

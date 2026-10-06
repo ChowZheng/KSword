@@ -8,6 +8,7 @@
 
 #include <QAbstractButton>
 #include <QMessageBox>
+#include <QPointer>
 #include <QPushButton>
 #include <QWidget>
 
@@ -95,7 +96,7 @@ namespace ks::ui
         outcome.rollbackAttempted = result.rollbackAttempted;
         outcome.rollbackWriteOk = result.rollbackWriteOk;
 
-        // 安装成功和未证实回滚的恢复条目都须记住通道；之后的还原必须使用它。
+        // 安装成功和验证失败的恢复条目都须记住通道；之后的还原必须使用它。
         if (result.id != 0)
         {
             m_installChannel[result.id] = m_currentChannel;
@@ -106,7 +107,8 @@ namespace ks::ui
     }
 
     // RestoreInternal：Restore 与 RestoreAll 共用，不发 changed（留给公开入口统一发）。
-    Int3RestoreOutcome Int3Controller::RestoreInternal(const std::uint64_t id)
+    Int3RestoreOutcome Int3Controller::RestoreInternal(
+        const std::uint64_t id, const ContextSnapshot& context)
     {
         Int3RestoreOutcome outcome;
 
@@ -114,16 +116,16 @@ namespace ks::ui
         // 查不到（旁路表与账本的"待还原集合"同步增删），账本会直接给 NotFound，不会真的发起
         // 端口调用，所以这里的兜底值选什么都不影响正确性。
         const auto channelIt = m_installChannel.find(id);
-        const Channel channel = (channelIt != m_installChannel.end()) ? channelIt->second : m_currentChannel;
+        const Channel channel = (channelIt != m_installChannel.end()) ? channelIt->second : context.channel;
 
-        const std::unique_ptr<IPatchByteStore> store = m_factory(m_currentTarget, channel);
+        const std::unique_ptr<IPatchByteStore> store = m_factory(context.target, channel);
         if (!store)
         {
             outcome.status = RestoreStatus::WriteFailed;
             return outcome;
         }
 
-        const RestoreResult result = m_ledger.Restore(id, m_currentTarget, *store);
+        const RestoreResult result = m_ledger.Restore(id, context.target, *store);
         outcome.status = result.status;
         outcome.hasObservedByte = result.hasObservedByte;
         outcome.observedByte = result.observedByte;
@@ -140,7 +142,7 @@ namespace ks::ui
     // Restore：公开入口，补一次 changed。
     Int3RestoreOutcome Int3Controller::Restore(const std::uint64_t id)
     {
-        const Int3RestoreOutcome outcome = RestoreInternal(id);
+        const Int3RestoreOutcome outcome = RestoreInternal(id, SnapshotContext());
         emit changed();
         return outcome;
     }
@@ -149,10 +151,16 @@ namespace ks::ui
     // 必须先快照：RestoreInternal 成功会从账本删条目，一边遍历一边改会错位。
     std::vector<PatchRestoreOutcome> Int3Controller::RestoreAll()
     {
+        return RestoreAllForContext(SnapshotContext());
+    }
+
+    // RestoreAllForContext：过滤与逐条还原都使用同一副本，不借用可变的共享上下文。
+    std::vector<PatchRestoreOutcome> Int3Controller::RestoreAllForContext(const ContextSnapshot& context)
+    {
         std::vector<std::pair<std::uint64_t, std::uint64_t>> snapshot;
         for (const PatchEntry& entry : m_ledger.Entries())
         {
-            if (IsCurrentTarget(entry))
+            if (IsTarget(entry, context.target))
             {
                 snapshot.emplace_back(entry.id, entry.address);
             }
@@ -162,7 +170,7 @@ namespace ks::ui
         outcomes.reserve(snapshot.size());
         for (const auto& idAndAddress : snapshot)
         {
-            const Int3RestoreOutcome single = RestoreInternal(idAndAddress.first);
+            const Int3RestoreOutcome single = RestoreInternal(idAndAddress.first, context);
             PatchRestoreOutcome outcome;
             outcome.id = idAndAddress.first;
             outcome.address = idAndAddress.second;
@@ -230,20 +238,35 @@ namespace ks::ui
         return it->second;
     }
 
-    // IsCurrentTarget：判据见头文件注释，RestoreAll / HasUnrestoredForCurrentTarget /
-    // CountForCurrentTarget 三处共用。
+    // SnapshotContext：操作期间持有目标、范围和通道的值副本。
+    Int3Controller::ContextSnapshot Int3Controller::SnapshotContext() const
+    {
+        return {m_currentTarget, m_currentScope, m_currentChannel};
+    }
+
+    // IsTarget：判据见头文件注释，当前目标查询和已快照操作共用。
+    bool Int3Controller::IsTarget(const PatchEntry& entry, const PatchTarget& target)
+    {
+        return entry.pid == target.pid &&
+               entry.processCreateTime100ns == target.processCreateTime100ns;
+    }
+
     bool Int3Controller::IsCurrentTarget(const PatchEntry& entry) const
     {
-        return entry.pid == m_currentTarget.pid &&
-               entry.processCreateTime100ns == m_currentTarget.processCreateTime100ns;
+        return IsTarget(entry, m_currentTarget);
     }
 
     // HasUnrestoredForCurrentTarget：线性扫描——账本条目数量是人手点出来的量级。
     bool Int3Controller::HasUnrestoredForCurrentTarget() const
     {
+        return HasUnrestoredForTarget(m_currentTarget);
+    }
+
+    bool Int3Controller::HasUnrestoredForTarget(const PatchTarget& target) const
+    {
         for (const PatchEntry& entry : m_ledger.Entries())
         {
-            if (IsCurrentTarget(entry))
+            if (IsTarget(entry, target))
             {
                 return true;
             }
@@ -276,11 +299,19 @@ namespace ks::ui
     // ApplyLeaveChoice：三个分支各自的后果见头文件注释。
     bool Int3Controller::ApplyLeaveChoice(const Int3LeaveChoice choice)
     {
+        return ApplyLeaveChoiceForContext(choice, SnapshotContext());
+    }
+
+    // ApplyLeaveChoiceForContext：信号回调可切换上下文或删除 owner，判据不能依赖当前值。
+    bool Int3Controller::ApplyLeaveChoiceForContext(
+        const Int3LeaveChoice choice, const ContextSnapshot& context)
+    {
+        const QPointer<Int3Controller> self(this);
         switch (choice)
         {
         case Int3LeaveChoice::RestoreAllThenContinue:
-            RestoreAll();
-            return !HasUnrestoredForCurrentTarget();
+            RestoreAllForContext(context);
+            return self && !self->HasUnrestoredForTarget(context.target);
         case Int3LeaveChoice::KeepAndContinue:
             return true;
         case Int3LeaveChoice::Cancel:
@@ -297,31 +328,41 @@ namespace ks::ui
     // "取消"（2026 年审核报告缺陷 2：曾经两者都是"取消"，与规格相反）。
     bool Int3Controller::RequestLeave(QWidget* parentWidget, const Int3LeaveScenario scenario)
     {
-        const bool hasUnrestoredForTarget = HasUnrestoredForCurrentTarget();
+        const ContextSnapshot context = SnapshotContext();
+        const bool hasUnrestoredForTarget = HasUnrestoredForTarget(context.target);
         if (!NeedsLeavePrompt(hasUnrestoredForTarget, scenario))
         {
             return true;
         }
 
         const int patchCount = CountForCurrentTarget();
-        QMessageBox box(parentWidget);
-        box.setIcon(QMessageBox::Warning);
-        box.setWindowTitle(QStringLiteral("退出确认"));
-        box.setText(QStringLiteral(
+        // 对话框由 parentWidget 管理；若模态期间父窗口被销毁，QPointer 会清空，
+        // 避免栈上的 QObject 子对象被父窗口删除后再次析构。owner 也必须独立守卫。
+        const QPointer<Int3Controller> self(this);
+        QPointer<QMessageBox> box = new QMessageBox(parentWidget);
+        box->setIcon(QMessageBox::Warning);
+        box->setWindowTitle(QStringLiteral("退出确认"));
+        box->setText(QStringLiteral(
             "目标进程中还有 %1 处 int3 补丁（0xCC）未还原；不还原就退出，补丁会一直留在目标里。")
             .arg(patchCount));
 
-        QPushButton* restoreAllButton = box.addButton(QStringLiteral("全部还原后继续"), QMessageBox::AcceptRole);
-        QPushButton* keepButton = box.addButton(QStringLiteral("保留补丁继续"), QMessageBox::DestructiveRole);
-        QPushButton* cancelButton = box.addButton(QStringLiteral("取消"), QMessageBox::RejectRole);
+        QPushButton* restoreAllButton = box->addButton(QStringLiteral("全部还原后继续"), QMessageBox::AcceptRole);
+        QPushButton* keepButton = box->addButton(QStringLiteral("保留补丁继续"), QMessageBox::DestructiveRole);
+        QPushButton* cancelButton = box->addButton(QStringLiteral("取消"), QMessageBox::RejectRole);
         // 默认按钮=全部还原后继续（规格：docs/内存工作台Phase3集成设计.md 第 0 节第 6 条）；
         // Esc 的结果单独设成取消——这是安全默认，设计文档没有要求连带改掉它。
-        box.setDefaultButton(restoreAllButton);
-        box.setEscapeButton(cancelButton);
+        box->setDefaultButton(restoreAllButton);
+        box->setEscapeButton(cancelButton);
 
-        box.exec();
+        box->exec();
 
-        const QAbstractButton* clicked = box.clickedButton();
+        if (!self || !box)
+        {
+            delete box.data();
+            return false;
+        }
+
+        const QAbstractButton* clicked = box->clickedButton();
         Int3LeaveChoice choice = Int3LeaveChoice::Cancel;
         if (clicked == static_cast<QAbstractButton*>(restoreAllButton))
         {
@@ -333,6 +374,7 @@ namespace ks::ui
         }
         // 其余情形（包括 Esc 关闭、点了取消）都落在默认值 Cancel。
 
-        return ApplyLeaveChoice(choice);
+        delete box.data();
+        return self && self->ApplyLeaveChoiceForContext(choice, context);
     }
 }

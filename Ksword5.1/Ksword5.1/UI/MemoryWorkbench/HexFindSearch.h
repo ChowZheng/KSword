@@ -67,8 +67,9 @@ namespace ks::ui::hexfind
     class ByteArraySource final : public ksword::memwb::IByteSource
     {
     public:
-        // 构造：data 数据（隐式共享，不拷贝）；base 数据对应的起始地址。
-        ByteArraySource(const QByteArray& data, std::uint64_t base);
+        // 构造：data 数据（隐式共享，不拷贝）；base 起始地址；validMask 非空时必须与 data 等长。
+        // 空掩码保留普通文件宿主的“全部有效”约定，内存宿主必须传入真实掩码。
+        ByteArraySource(const QByteArray& data, std::uint64_t base, const QByteArray& validMask = QByteArray());
 
         // Read：见 IByteSource；与数据块部分相交返回 Partial，完全不相交返回 Unreadable，长度 0 返回 Ok。
         ksword::memwb::ReadStatus Read(
@@ -80,6 +81,7 @@ namespace ks::ui::hexfind
     private:
         // m_data：数据本体（隐式共享）。
         QByteArray m_data;
+        QByteArray m_validMask; // 可读性快照；值为 0 的字节即使数据填成 00 也不参与模式匹配
         // m_base：数据起始地址。
         std::uint64_t m_base;
     };
@@ -105,7 +107,8 @@ namespace ks::ui::hexfind
         std::uint64_t start,
         ksword::memwb::SearchDirection direction,
         bool wrap,
-        const std::atomic<bool>* cancel);
+        const std::atomic<bool>* cancel,
+        const QByteArray& validMask = QByteArray());
 
     // HitsInRange：列出 [visibleFirst, visibleLast] 内全部命中（含起点在可见范围之前、但延伸进可见范围的命中）。
     // 传入：data/base 缓冲；pattern 模式；可见范围（闭区间，会夹取到缓冲内）；cap 最多返回几个。
@@ -117,5 +120,6 @@ namespace ks::ui::hexfind
         const ksword::memwb::SearchPattern& pattern,
         std::uint64_t visibleFirst,
         std::uint64_t visibleLast,
-        std::size_t cap);
+        std::size_t cap,
+        const QByteArray& validMask = QByteArray());
 }

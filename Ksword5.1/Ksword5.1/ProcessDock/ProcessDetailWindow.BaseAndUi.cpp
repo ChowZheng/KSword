@@ -13,6 +13,7 @@
 #include "../PluginHost.h"
 
 #include <QTimer>
+#include <QCloseEvent>
 #include <QEasingCurve>
 #include <QHash>
 #include <QMouseEvent>
@@ -1716,6 +1717,47 @@ void ProcessDetailWindow::rebuildActionAffinityCoreButtons()
     m_affinityMatrixLayout->setColumnStretch(
         kAffinityMatrixColumnCount,
         1);
+}
+
+// closeEvent：只处理已创建的工作台，不为关闭而懒加载；确认时拒绝重入与全局退出中的重复关闭。
+void ProcessDetailWindow::closeEvent(QCloseEvent* event)
+{
+    // 全局退出已经统一询问所有工作台，模态循环里迟到的详情窗关闭请求不得再弹一轮确认。
+    if ((qApp != nullptr && qApp->property("ksword_memory_quit_guard_active").toBool())
+        || property("ksword_memory_detail_close_guard_active").toBool())
+    {
+        if (event != nullptr)
+        {
+            event->ignore();
+        }
+        return;
+    }
+
+    if (m_embeddedMemoryDock != nullptr)
+    {
+        // self：确认框的嵌套事件循环可能销毁详情窗，返回后必须先探活再改属性或访问成员。
+        const QPointer<ProcessDetailWindow> self(this);
+        setProperty("ksword_memory_detail_close_guard_active", true);
+        const bool allowed = m_embeddedMemoryDock->confirmWorkbenchQuit();
+        if (!self)
+        {
+            if (event != nullptr)
+            {
+                event->ignore();
+            }
+            return;
+        }
+        setProperty("ksword_memory_detail_close_guard_active", false);
+        if (!allowed)
+        {
+            if (event != nullptr)
+            {
+                event->ignore();
+            }
+            return;
+        }
+    }
+    QWidget::closeEvent(event);
 }
 
 ProcessDetailWindow::ProcessDetailWindow(const ks::process::ProcessRecord& baseRecord, QWidget* parent)

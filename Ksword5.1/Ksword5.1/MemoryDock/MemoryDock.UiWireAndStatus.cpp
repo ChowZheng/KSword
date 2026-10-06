@@ -1696,4 +1696,6 @@ void MemoryDock::initializeBookmarkRefreshTimer()
         refreshBookmarkValues();
         });
     m_bookmarkRefreshTimer->start();
+    // 视图若早于计时器创建，在此补接退出探测；否则由懒创建视图端完成，始终只接一次。
+    connectWorkbenchLiveness();
 }

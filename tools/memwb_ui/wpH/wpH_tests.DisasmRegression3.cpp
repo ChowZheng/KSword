@@ -41,6 +41,7 @@
 
 #include <QApplication>
 #include <QClipboard>
+#include <QDialog>
 #include <QColor>
 #include <QCoreApplication>
 #include <QGuiApplication>
@@ -49,6 +50,8 @@
 #include <QLineEdit>
 #include <QMenu>
 #include <QPointer>
+#include <QPlainTextEdit>
+#include <QPushButton>
 #include <QSignalSpy>
 #include <QTableView>
 #include <QTimer>
@@ -558,6 +561,78 @@ namespace wpH_test
             WPH_CHECK_NOTE(rig.view.model()->rowAt(0).has_value(), QStringLiteral("reset 后重新跳转应正常刷新"));
         }
 
+        // 模态预览提交：正常路径可暂存；身份/架构/权限/原始覆盖字节变化后不得沿用旧请求。
+        // 直接驱动真实右键菜单与对话框，复用同一 provider 的 reset 路径是核心回归条件。
+        void runAssemblyDialogContextTests()
+        {
+            for (int scenario = 0; scenario < 7; ++scenario)
+            {
+                Rig3 rig(QByteArray::fromHex("4889E590C3"));
+                FakeBytesProvider replacement(64); // 同地址/同字节的新目标，不能仅靠内容判身份
+                loadBytes3(replacement, rig.base, QByteArray::fromHex("4889E590C3"));
+                QSignalSpy spy(&rig.view, &WorkbenchDisasmView::stageRequested);
+                bool droveDialog = false; // 证明夹具确实进入并编译了预览
+                QTimer watchdog; // 超时只退出本用例弹窗，函数结束即撤销定时器
+                watchdog.setSingleShot(true);
+                QObject::connect(&watchdog, &QTimer::timeout, &rig.view, []() {
+                    if (auto* popup = QApplication::activePopupWidget()) { popup->close(); }
+                    if (auto* modal = QApplication::activeModalWidget()) { modal->close(); }
+                });
+                watchdog.start(3000);
+                QTimer::singleShot(0, &rig.view, [&]() {
+                    auto* menu = qobject_cast<QMenu*>(QApplication::activePopupWidget());
+                    if (menu == nullptr) { return; }
+                    QAction* assemblyAction = nullptr; // 只选择菜单中真实的汇编编辑入口
+                    for (auto* action : menu->actions())
+                    {
+                        if (action->text().contains(QStringLiteral("汇编编辑"))) { assemblyAction = action; }
+                    }
+                    if (assemblyAction == nullptr) { menu->close(); return; }
+                    // 下一层事件循环属于汇编对话框；回调以视图为上下文，关闭用例后不会残留。
+                    QTimer::singleShot(0, &rig.view, [&]() {
+                        auto* dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget());
+                        if (dialog == nullptr) { return; }
+                        auto* source = dialog->findChild<QPlainTextEdit*>(QStringLiteral("ksMemwbAssemblySource"));
+                        QPushButton* compile = nullptr;
+                        QPushButton* stage = nullptr;
+                        for (auto* button : dialog->findChildren<QPushButton*>())
+                        {
+                            if (button->text().contains(QStringLiteral("编译"))) { compile = button; }
+                            if (button->text().contains(QStringLiteral("暂存"))) { stage = button; }
+                        }
+                        if (source == nullptr || compile == nullptr || stage == nullptr) { dialog->reject(); return; }
+                        source->setPlainText(QStringLiteral("nop"));
+                        compile->click();
+                        droveDialog = stage->isEnabled();
+                        if (!droveDialog) { dialog->reject(); return; }
+                        // 在预览成功后才改变目标条件，使旧代码的“仅检查 this 存活”错误可观测。
+                        switch (scenario)
+                        {
+                        case 1: rig.view.reset(); rig.view.jumpTo(rig.base); break;
+                        case 2: rig.view.setBytesProvider(&replacement); break;
+                        case 3: rig.view.setAddressBits(32); break;
+                        case 4: rig.view.setEditable(false); rig.view.setEditable(true); break;
+                        case 5: loadBytes3(rig.provider, rig.base, QByteArray::fromHex("90909090C3")); break;
+                        case 6:
+                            rig.provider.overlay().LoadBaseline("rig3", rig.base,
+                                toVec3(QByteArray::fromHex("4889E590C3")), { 0, 1, 1, 1, 1 });
+                            break;
+                        default: break;
+                        }
+                        stage->click();
+                    });
+                    menu->setActiveAction(assemblyAction);
+                    QTest::keyClick(menu, Qt::Key_Return);
+                });
+                auto* table = rig.view.table();
+                table->setCurrentIndex(rig.view.model()->index(0, 0));
+                emit table->customContextMenuRequested(table->visualRect(rig.view.model()->index(0, 0)).center());
+                watchdog.stop();
+                WPH_CHECK(droveDialog);
+                WPH_CHECK(spy.count() == (scenario == 0 ? 1 : 0));
+            }
+        }
+
         // ---------------- M8：右键菜单的 QPointer 自guard，this 存活时必须正常工作 ----------------
         void runContextMenuNormalPathStillWorksTests()
         {
@@ -626,6 +701,7 @@ namespace wpH_test
         runFlagConditionalFollowTests();
         runCancelInlineEditHidesErrorTests();
         runResetCancelsInlineEditTests();
+        runAssemblyDialogContextTests();
         runContextMenuNormalPathStillWorksTests();
         std::cerr << "[DisasmRegression3] checks=" << (g_checks - before) << " failures=" << (g_failures - beforeFail) << std::endl;
     }

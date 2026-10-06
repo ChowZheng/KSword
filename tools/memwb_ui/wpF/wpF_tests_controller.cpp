@@ -15,7 +15,9 @@
 #include "../../../Ksword5.1/Ksword5.1/UI/MemoryWorkbench/Int3Controller.h"
 
 #include <QObject>
+#include <QPointer>
 #include <QTimer>
+#include <QWidget>
 
 #include <iostream>
 #include <memory>
@@ -150,7 +152,7 @@ namespace wpf_test
             CHECK(controller.Entries().empty());
         }
 
-        // ---- VerifyFailed：写入后回读到别的值，尝试回滚 ----
+        // ---- VerifyFailed：写入后回读到别的值，不盲写，保留原字节和安装通道 ----
         {
             FakeMemoryIoPort port;
             MemoryTargetSession session;
@@ -158,15 +160,20 @@ namespace wpf_test
             const PatchTarget target = MakeTarget(77, 88);
             controller.SetCurrentContext(target, Scope::ProcessVirtual, Channel::UserMode);
             port.memory[0x5000] = 0x41;
-            // 第 1 次 1 字节读是"读原字节"（必须读到真实的 0x41，否则回滚基准就错了）；
+            // 第 1 次 1 字节读是"读原字节"（必须读到真实的 0x41，否则恢复基准就错了）；
             // 第 2 次才是写入后的验证读，这里才覆盖成错误值 0x42，制造 VerifyFailed。
             port.nextReadOverride = 0x42;
             port.overrideAtReadCall = 2;
 
             const Int3InstallOutcome outcome = controller.Install(target, 0x5000, 1);
             CHECK(outcome.status == InstallStatus::VerifyFailed);
-            CHECK(outcome.rollbackAttempted);
-            CHECK(outcome.rollbackWriteOk);
+            CHECK(!outcome.rollbackAttempted);
+            CHECK(!outcome.rollbackWriteOk);
+            CHECK(port.writeCalls == 1);
+            CHECK(port.memory[0x5000] == kInt3PatchByte);
+            CHECK(outcome.id != 0 && controller.Entries().size() == 1);
+            CHECK(controller.InstalledChannel(outcome.id) == Channel::UserMode);
+            CHECK(controller.Restore(outcome.id).status == RestoreStatus::Restored);
             CHECK(port.memory[0x5000] == 0x41);
         }
 
@@ -550,6 +557,51 @@ namespace wpf_test
             controller.Discard(second.id);
         }
 
+        // changed 回调切换当前目标，不得把旧目标的还原失败当成新目标无残留的成功。
+        {
+            FakeMemoryIoPort port;
+            MemoryTargetSession session;
+            Int3Controller controller(MakeFactory(port, session));
+            const PatchTarget targetA = MakeTarget(31, 32);
+            const PatchTarget targetB = MakeTarget(33, 34);
+            controller.SetCurrentContext(targetA, Scope::ProcessVirtual, Channel::UserMode);
+            port.memory[0xBA00] = 0x61;
+            const Int3InstallOutcome installed = controller.Install(targetA, 0xBA00, 1);
+            port.memory[0xBA00] = 0x62; // 第三方改变，Restore 必须失败且不写。
+            bool contextChanged = false;
+            const auto connection = QObject::connect(&controller, &Int3Controller::changed, [&]() {
+                if (contextChanged)
+                {
+                    return;
+                }
+                contextChanged = true;
+                controller.SetCurrentContext(targetB, Scope::ProcessVirtual, Channel::StandardDriver);
+            });
+            CHECK(!controller.ApplyLeaveChoice(Int3LeaveChoice::RestoreAllThenContinue));
+            QObject::disconnect(connection);
+            CHECK(controller.CurrentTarget().pid == targetB.pid);
+            CHECK(controller.CurrentScope() == Scope::ProcessVirtual);
+            CHECK(controller.HasUnrestored() && !controller.HasUnrestoredForCurrentTarget());
+            CHECK(port.memory[0xBA00] == 0x62);
+            CHECK(controller.Discard(installed.id));
+        }
+
+        // changed 回调删除控制器时，退出动作不能继续访问已释放的账本。
+        {
+            FakeMemoryIoPort port;
+            MemoryTargetSession session;
+            auto* controller = new Int3Controller(MakeFactory(port, session));
+            const QPointer<Int3Controller> guard(controller);
+            const PatchTarget target = MakeTarget(35, 36);
+            controller->SetCurrentContext(target, Scope::ProcessVirtual, Channel::UserMode);
+            port.memory[0xBB00] = 0x63;
+            controller->Install(target, 0xBB00, 1);
+            QObject::connect(controller, &Int3Controller::changed, [controller]() { delete controller; });
+            CHECK(!controller->ApplyLeaveChoice(Int3LeaveChoice::RestoreAllThenContinue));
+            CHECK(!guard);
+            CHECK(port.memory[0xBB00] == 0x63);
+        }
+
         // RequestLeave：无待还原时不弹框。挂一个安全网定时器（见 ArmUnexpectedModalWatchdog
         // 注释）：如果 NeedsLeavePrompt 被改错而误弹框（审核报告 F-M8 的判断点），200ms 后
         // 会被强制按 Escape 关掉，让下面的 CHECK(controller.RequestLeave(...)) 断言失败并
@@ -635,6 +687,77 @@ namespace wpf_test
             CHECK(allowed);
             CHECK(!controller.HasUnrestored()); // 默认按钮等价于"全部还原后继续"，账本应已清空
             CHECK(port.memory[0xB400] == 0x54); // 真的写回了原字节，不是碰巧 Cancel 也返回 true
+        }
+
+        // 模态期间另一工作台激活目标 B：选择只还原提示中的 A，保持 B 的共享上下文。
+        {
+            FakeMemoryIoPort port;
+            MemoryTargetSession session;
+            Int3Controller controller(MakeFactory(port, session));
+            const PatchTarget targetA = MakeTarget(41, 42);
+            const PatchTarget targetB = MakeTarget(43, 44);
+            controller.SetCurrentContext(targetA, Scope::ProcessVirtual, Channel::UserMode);
+            port.memory[0xBC00] = 0x64;
+            controller.Install(targetA, 0xBC00, 1);
+            controller.SetCurrentContext(targetB, Scope::ProcessVirtual, Channel::StandardDriver);
+            port.memory[0xBD00] = 0x65;
+            controller.Install(targetB, 0xBD00, 2);
+            controller.SetCurrentContext(targetA, Scope::ProcessVirtual, Channel::UserMode);
+            QObject timerContext;
+            QTimer::singleShot(0, &timerContext, [&]() {
+                CHECK(ActiveModalMessageBoxText().contains(QStringLiteral("1 处")));
+                controller.SetCurrentContext(targetB, Scope::ProcessVirtual, Channel::StandardDriver);
+                ClickModalButtonByText(QStringLiteral("全部还原后继续"));
+            });
+            CHECK(controller.RequestLeave(nullptr, Int3LeaveScenario::ProcessChange));
+            CHECK(port.memory[0xBC00] == 0x64 && port.memory[0xBD00] == kInt3PatchByte);
+            CHECK(session.pid == targetA.pid && session.channel == Channel::UserMode);
+            CHECK(controller.Entries().size() == 1 && controller.Entries().front().pid == targetB.pid);
+            CHECK(controller.CurrentTarget().pid == targetB.pid);
+            CHECK(controller.CurrentScope() == Scope::ProcessVirtual);
+            CHECK(controller.CurrentChannel() == Channel::StandardDriver);
+            controller.SetCurrentContext(targetB, Scope::ProcessVirtual, Channel::StandardDriver);
+            CHECK(controller.RestoreAll().size() == 1);
+        }
+
+        // 模态期间 owner 被销毁：对话框关闭后只返回取消，不再读取其成员。
+        {
+            FakeMemoryIoPort port;
+            MemoryTargetSession session;
+            auto* controller = new Int3Controller(MakeFactory(port, session));
+            const QPointer<Int3Controller> guard(controller);
+            const PatchTarget target = MakeTarget(45, 46);
+            controller->SetCurrentContext(target, Scope::ProcessVirtual, Channel::UserMode);
+            port.memory[0xBE00] = 0x66;
+            controller->Install(target, 0xBE00, 1);
+            QObject timerContext;
+            QTimer::singleShot(0, &timerContext, [controller]() {
+                delete controller;
+                ClickModalButtonByText(QStringLiteral("全部还原后继续"));
+            });
+            CHECK(!controller->RequestLeave(nullptr, Int3LeaveScenario::DockDetach));
+            CHECK(!guard);
+            CHECK(port.memory[0xBE00] == kInt3PatchByte && port.writeCalls == 1);
+            CHECK(CountOpenMessageBoxes() == 0);
+        }
+
+        // 模态期间父窗口销毁：其 QMessageBox 子对象也被删除，不能再析构栈子对象。
+        {
+            FakeMemoryIoPort port;
+            MemoryTargetSession session;
+            Int3Controller controller(MakeFactory(port, session));
+            const PatchTarget target = MakeTarget(47, 48);
+            controller.SetCurrentContext(target, Scope::ProcessVirtual, Channel::UserMode);
+            port.memory[0xBF00] = 0x67;
+            controller.Install(target, 0xBF00, 1);
+            auto* parent = new QWidget;
+            const QPointer<QWidget> parentGuard(parent);
+            QObject timerContext;
+            QTimer::singleShot(0, &timerContext, [parent]() { delete parent; });
+            CHECK(!controller.RequestLeave(parent, Int3LeaveScenario::MainWindowClose));
+            CHECK(!parentGuard);
+            CHECK(controller.HasUnrestored() && port.writeCalls == 1);
+            CHECK(CountOpenMessageBoxes() == 0);
         }
 
         std::cout << "wpF leave-prompt tests: " << (g_checks - checksBefore) << " checks, "

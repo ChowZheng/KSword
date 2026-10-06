@@ -22,6 +22,7 @@
 #include <QLineEdit>
 #include <QMenu>
 #include <QPlainTextEdit>
+#include <QPointer>
 #include <QPushButton>
 #include <QSignalBlocker>
 #include <QShortcut>
@@ -262,16 +263,29 @@ namespace ks::ui
             const auto before = beforeItem->text();
             const auto after = afterItem->text();
             const auto revision = m_snapshotRevision;
-            QMenu menu(this);
-            auto* copyAddress = menu.addAction(trText(QStringLiteral("复制地址")));
-            auto* copyBefore = menu.addAction(trText(QStringLiteral("复制基线字节")));
-            auto* copyAfter = menu.addAction(trText(QStringLiteral("复制当前字节")));
-            auto* locate = menu.addAction(trText(QStringLiteral("在十六进制视图中定位")));
-            auto* selected = menu.exec(m_comparison->viewport()->mapToGlobal(position));
-            if (selected == copyAddress) QApplication::clipboard()->setText(addressText(address));
-            if (selected == copyBefore) QApplication::clipboard()->setText(before);
-            if (selected == copyAfter) QApplication::clipboard()->setText(after);
-            if (selected == locate && revision == m_snapshotRevision && contains(address))
+            // 菜单进入嵌套事件循环，父编辑器可能先被销毁；堆对象与双守卫避免释放栈对象。
+            const QPointer<MemoryEditorWidget> self(this);
+            QPointer<QMenu> menu = new QMenu(this);
+            menu->setStyleSheet(KswordTheme::ContextMenuStyle());
+            auto* copyAddress = menu->addAction(trText(QStringLiteral("复制地址")));
+            auto* copyBefore = menu->addAction(trText(QStringLiteral("复制基线字节")));
+            auto* copyAfter = menu->addAction(trText(QStringLiteral("复制当前字节")));
+            auto* locate = menu->addAction(trText(QStringLiteral("在十六进制视图中定位")));
+            auto* selected = menu->exec(m_comparison->viewport()->mapToGlobal(position));
+            if (!self || !menu)
+            {
+                return;
+            }
+            // 动作指针随菜单销毁；先冻结选择，再立即释放菜单，后续不引用动作或菜单。
+            const bool copyAddressSelected = selected == copyAddress;
+            const bool copyBeforeSelected = selected == copyBefore;
+            const bool copyAfterSelected = selected == copyAfter;
+            const bool locateSelected = selected == locate;
+            delete menu.data();
+            if (copyAddressSelected) QApplication::clipboard()->setText(addressText(address));
+            if (copyBeforeSelected) QApplication::clipboard()->setText(before);
+            if (copyAfterSelected) QApplication::clipboard()->setText(after);
+            if (self && locateSelected && revision == m_snapshotRevision && contains(address))
             {
                 m_tabs->setCurrentIndex(0);
                 jumpToAddress(address);
@@ -317,6 +331,8 @@ namespace ks::ui
         });
         connect(m_textEncoding, &QComboBox::currentIndexChanged, this, [this]() { rebuildText(); });
         connect(m_architecture, &QComboBox::currentIndexChanged, this, [this]() {
+            // 即使之后切回原架构，也不复活切换前已经排队或打开预览的汇编请求。
+            ++m_snapshotRevision;
             if (m_tabs->currentIndex() == 1) rebuildDisassembly();
         });
         const auto navigate = [this]() {
@@ -396,17 +412,28 @@ namespace ks::ui
         m_base = base;
         ++m_snapshotRevision;
         m_original = bytes;
+        const QPointer<MemoryEditorWidget> self(this);
         m_hex->setByteArray(bytes, base);
+        if (!self) return;
         m_anchor = contains(anchor) ? anchor : base;
-        const QSignalBlocker blocker(m_architecture);
-        m_architecture->setCurrentIndex(arch == DisassemblyArchitecture::X86 ? 0 : 1);
+        {
+            // 后续 bytesChanged 可同步销毁编辑器；信号屏蔽器不能跨越该通知存活。
+            const QSignalBlocker blocker(m_architecture);
+            m_architecture->setCurrentIndex(arch == DisassemblyArchitecture::X86 ? 0 : 1);
+        }
         m_decodeAddress->setText(addressText(m_anchor));
         jumpToAddress(m_anchor);
+        if (!self) return;
         refreshFromHexEditor();
     }
 
     void MemoryEditorWidget::setEditable(bool editable)
     {
+        // 权限暂停/恢复使之前的编辑上下文失效；重复下发相同状态不干扰正常操作。
+        if (m_editable != editable)
+        {
+            ++m_snapshotRevision;
+        }
         m_editable = editable;
         updateState();
     }
@@ -793,25 +820,38 @@ namespace ks::ui
         if (!byteItem || !mnemonicItem || !operandItem) return;
         const auto bytes = byteItem->text();
         const auto instruction = mnemonicItem->text() + QLatin1Char(' ') + operandItem->text();
-        QMenu menu(this);
-        auto* edit = menu.addAction(trText(QStringLiteral("汇编编辑")));
-        menu.setStyleSheet(KswordTheme::ContextMenuStyle());
+        const QPointer<MemoryEditorWidget> self(this); // exec 返回后先确认宿主仍存活
+        QPointer<QMenu> menu = new QMenu(this);
+        auto* edit = menu->addAction(trText(QStringLiteral("汇编编辑")));
+        menu->setStyleSheet(KswordTheme::ContextMenuStyle());
         edit->setEnabled(m_editable);
-        auto* copyAddress = menu.addAction(trText(QStringLiteral("复制地址")));
-        auto* copyBytes = menu.addAction(trText(QStringLiteral("复制原始字节")));
-        auto* copyInstruction = menu.addAction(trText(QStringLiteral("复制整条指令")));
-        auto* hex = menu.addAction(trText(QStringLiteral("在十六进制视图中定位")));
-        auto* selected = menu.exec(m_instructions->viewport()->mapToGlobal(position));
-        if (selected == copyAddress) QApplication::clipboard()->setText(addressText(address));
-        if (selected == copyBytes) QApplication::clipboard()->setText(bytes);
-        if (selected == copyInstruction) QApplication::clipboard()->setText(instruction);
-        if (revision != m_snapshotRevision || !contains(address)) return;
-        if (selected == edit)
+        auto* copyAddress = menu->addAction(trText(QStringLiteral("复制地址")));
+        auto* copyBytes = menu->addAction(trText(QStringLiteral("复制原始字节")));
+        auto* copyInstruction = menu->addAction(trText(QStringLiteral("复制整条指令")));
+        auto* hex = menu->addAction(trText(QStringLiteral("在十六进制视图中定位")));
+        auto* selected = menu->exec(m_instructions->viewport()->mapToGlobal(position));
+        if (!self || !menu)
+        {
+            return;
+        }
+        // 先取选择再销毁菜单，复制使用菜单打开时的快照，导航/编辑必须通过当前代次复核。
+        const bool copyAddressSelected = selected == copyAddress;
+        const bool copyBytesSelected = selected == copyBytes;
+        const bool copyInstructionSelected = selected == copyInstruction;
+        const bool editSelected = selected == edit;
+        const bool hexSelected = selected == hex;
+        delete menu.data();
+        if (copyAddressSelected) QApplication::clipboard()->setText(addressText(address));
+        if (copyBytesSelected) QApplication::clipboard()->setText(bytes);
+        if (copyInstructionSelected) QApplication::clipboard()->setText(instruction);
+        if (!self || revision != m_snapshotRevision || !contains(address)) return;
+        if (editSelected)
         {
             jumpToAddress(address);
+            if (!self) return;
             showAssemblyEditor();
         }
-        if (selected == hex)
+        if (self && hexSelected)
         {
             m_tabs->setCurrentIndex(0);
             jumpToAddress(address);
@@ -830,49 +870,54 @@ namespace ks::ui
         const auto decoded = InstructionDecoder::decode(snapshot.mid(offset, 15), address, assemblyArchitecture, 1);
         if (decoded.rows.isEmpty()) return;
         const auto first = decoded.rows.first();
-        QDialog dialog(this);
-        dialog.setWindowTitle(trText(QStringLiteral("汇编编辑")));
-        auto* layout = new QVBoxLayout(&dialog);
+        // 父窗口在 exec 期间销毁时，Qt 会删除所有子对象，不能让它 delete 一个栈上对话框。
+        const QPointer<MemoryEditorWidget> self(this);
+        QPointer<QDialog> dialog = new QDialog(this);
+        dialog->setAttribute(Qt::WA_DeleteOnClose);
+        dialog->setObjectName(QStringLiteral("memory_assembly_dialog"));
+        dialog->setStyleSheet(KswordTheme::OpaqueDialogStyle(dialog->objectName()));
+        dialog->setWindowTitle(trText(QStringLiteral("汇编编辑")));
+        auto* layout = new QVBoxLayout(dialog);
         auto* form = new QFormLayout;
-        form->addRow(trText(QStringLiteral("起始地址")), new QLabel(addressText(address), &dialog));
+        form->addRow(trText(QStringLiteral("起始地址")), new QLabel(addressText(address), dialog));
         form->addRow(trText(QStringLiteral("指令架构")), new QLabel(
-            assemblyArchitecture == DisassemblyArchitecture::X64 ? QStringLiteral("x64") : QStringLiteral("x86"), &dialog));
-        auto* span = new QSpinBox(&dialog);
+            assemblyArchitecture == DisassemblyArchitecture::X64 ? QStringLiteral("x64") : QStringLiteral("x86"), dialog));
+        auto* span = new QSpinBox(dialog);
         span->setRange(1, static_cast<int>(std::min<qsizetype>(snapshot.size() - offset, 65536)));
         span->setValue(static_cast<int>(first.bytes.size()));
         form->addRow(trText(QStringLiteral("覆盖长度（字节）")), span);
-        auto* pad = new QCheckBox(trText(QStringLiteral("用 NOP 填充剩余覆盖空间")), &dialog);
+        auto* pad = new QCheckBox(trText(QStringLiteral("用 NOP 填充剩余覆盖空间")), dialog);
         pad->setChecked(true);
         form->addRow(pad);
         layout->addLayout(form);
-        auto* hint = new QLabel(trText(QStringLiteral("每行一条 Intel 指令。数字默认十六进制，十进制用 0d 前缀；支持局部标签。覆盖长度须包含完整指令；编译不会写入真实内存。")), &dialog);
+        auto* hint = new QLabel(trText(QStringLiteral("每行一条 Intel 指令。数字默认十六进制，十进制用 0d 前缀；支持局部标签。覆盖长度须包含完整指令；编译不会写入真实内存。")), dialog);
         hint->setWordWrap(true);
         layout->addWidget(hint);
-        auto* source = new QPlainTextEdit(&dialog);
+        auto* source = new QPlainTextEdit(dialog);
         source->setObjectName(QStringLiteral("memory_assembly_source"));
         source->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
         source->setPlainText(first.decoded ? first.mnemonic + QLatin1Char(' ') + first.operands
             : QStringLiteral("db ") + byteText(first.bytes));
         layout->addWidget(source, 1);
-        auto* preview = new QPlainTextEdit(&dialog);
+        auto* preview = new QPlainTextEdit(dialog);
         preview->setObjectName(QStringLiteral("memory_assembly_preview"));
         preview->setReadOnly(true);
         preview->setFont(source->font());
         layout->addWidget(preview, 1);
-        auto* status = new QLabel(&dialog);
+        auto* status = new QLabel(dialog);
         status->setWordWrap(true);
         layout->addWidget(status);
-        auto* buttons = new QDialogButtonBox(QDialogButtonBox::Cancel, &dialog);
+        auto* buttons = new QDialogButtonBox(QDialogButtonBox::Cancel, dialog);
         auto* compile = buttons->addButton(trText(QStringLiteral("编译并预览")), QDialogButtonBox::ActionRole);
         auto* stage = buttons->addButton(trText(QStringLiteral("填入缓存")), QDialogButtonBox::AcceptRole);
         stage->setEnabled(false);
         layout->addWidget(buttons);
         QByteArray payload;
         const auto invalidate = [&]() { payload.clear(); stage->setEnabled(false); preview->clear(); status->clear(); };
-        connect(source, &QPlainTextEdit::textChanged, &dialog, invalidate);
-        connect(span, &QSpinBox::valueChanged, &dialog, invalidate);
-        connect(pad, &QCheckBox::toggled, &dialog, invalidate);
-        connect(compile, &QPushButton::clicked, &dialog, [&]() {
+        connect(source, &QPlainTextEdit::textChanged, dialog.data(), invalidate);
+        connect(span, &QSpinBox::valueChanged, dialog.data(), invalidate);
+        connect(pad, &QCheckBox::toggled, dialog.data(), invalidate);
+        connect(compile, &QPushButton::clicked, dialog.data(), [&]() {
             invalidate();
             const auto result = InstructionAssembler::assemble(source->toPlainText(), address, assemblyArchitecture);
             if (!result.success)
@@ -922,17 +967,26 @@ namespace ks::ui
             status->setText(trText(QStringLiteral("预览完成：%1 字节；填入缓存后，使用页面的应用差异按钮写回。" )).arg(payload.size()));
             stage->setEnabled(true);
         });
-        connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
-        connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
-        applyResponsiveWindowGeometry(&dialog, this, QSize(760, 620), QSize(480, 360));
-        if (dialog.exec() != QDialog::Accepted || payload.isEmpty()) return;
-        // The owner can process asynchronous state while the modal dialog runs.
+        connect(buttons, &QDialogButtonBox::accepted, dialog.data(), &QDialog::accept);
+        connect(buttons, &QDialogButtonBox::rejected, dialog.data(), &QDialog::reject);
+        applyResponsiveWindowGeometry(dialog, this, QSize(760, 620), QSize(480, 360));
+        const int result = dialog->exec();
+        // 先销毁尚存的弹窗，断开捕获 payload 等局部变量的回调，再允许本函数返回。
+        // WA_DeleteOnClose 已销毁或父对象同步删除时，QPointer 为 null，无需再次释放。
+        if (dialog)
+        {
+            delete dialog.data();
+        }
+        if (!self || result != QDialog::Accepted || payload.isEmpty()) return;
+        // 嵌套事件循环可能更换目标/架构、暂停权限或刷新字节；旧快照的预览必须整体失效。
         if (!m_editable || m_base != snapshotBase || m_snapshotRevision != snapshotRevision
             || architecture() != assemblyArchitecture || data() != snapshot) return;
         QByteArray changed = snapshot;
         changed.replace(offset, payload.size(), payload);
         m_hex->setByteArray(changed, m_base);
+        if (!self) return;
         jumpToAddress(address);
+        if (!self) return;
         refreshFromHexEditor();
     }
 }

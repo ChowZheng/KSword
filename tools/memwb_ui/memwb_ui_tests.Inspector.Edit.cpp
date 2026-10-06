@@ -12,6 +12,7 @@
 #include <QContextMenuEvent>
 #include <QFocusEvent>
 #include <QGuiApplication>
+#include <QKeyEvent>
 #include <QLineEdit>
 #include <QMenu>
 #include <QSignalSpy>
@@ -331,7 +332,92 @@ namespace memwb_test
             CHECK(!scene->overlay.HasPendingPatches());
         }
 
-        // 编辑期间目标字节变成"尚未加载"（画布 refresh 换了来源代次）：提交时的预检必须拒绝，不能在看不到值的字节上暂存。
+        // 相同地址/字节仍可能已换目标：刷新取消旧编辑，排队通知到达前的 Enter 也不得暂存旧输入。
+        void TestEditSourceIdentity()
+        {
+            ApplyTheme(false);
+            for (int scenario = 0; scenario < 5; ++scenario)
+            {
+                ksword::memwb::MemoryDiffOverlay replacement;
+                auto scene = MakeInspectorScene(MakeInspectorData(), true, true, QSize(1100, 560), 400);
+                HexInspectorPanel& panel = *scene->panel;
+                HexCanvas& canvas = *scene->canvas;
+                canvas.setCaretAddress(kInspectorBase);
+                FlushDeferred();
+                CHECK(panel.beginEditRow(RowIndexOf(panel, QStringLiteral("u32"))));
+                QLineEdit* editor = panel.rowView()->editor();
+                CHECK(editor != nullptr);
+                if (editor == nullptr)
+                {
+                    continue;
+                }
+                editor->setText(QStringLiteral("0x11223344"));
+                QSignalSpy staged(&canvas, &HexCanvas::editStaged);
+                QSignalSpy rejected(&panel, &HexInspectorPanel::editRejected);
+                const auto revision = canvas.sourceRevision();
+                const Bytes baseline(reinterpret_cast<const std::uint8_t*>(scene->data.constData()),
+                    reinterpret_cast<const std::uint8_t*>(scene->data.constData()) + scene->data.size());
+                const Bytes mask(baseline.size(), 1);
+
+                if (scenario == 0)
+                {
+                    canvas.setStaticData(kInspectorBase, scene->data);
+                    CHECK(canvas.sourceRevision() != revision);
+                    FlushDeferred();
+                    CHECK(!panel.rowView()->isEditing());
+                }
+                else if (scenario == 1 || scenario == 2)
+                {
+                    if (scenario == 1)
+                    {
+                        scene->overlay.LoadBaseline(std::string("new-target"), kInspectorBase, baseline, mask);
+                        canvas.notifyOverlayChanged();
+                    }
+                    else
+                    {
+                        replacement.LoadBaseline(scene->overlay.IdentityKey(), kInspectorBase, baseline, mask);
+                        canvas.setOverlay(&replacement);
+                    }
+                    CHECK(canvas.sourceRevision() == revision);
+                    // 不处理排队的 contentChanged，直接让旧编辑器提交以覆盖最终暂存入口的检查。
+                    QKeyEvent enter(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+                    QApplication::sendEvent(editor, &enter);
+                    CHECK(!panel.rowView()->isEditing());
+                    CHECK(rejected.count() == 1);
+                    CHECK(StatusText(panel).contains(QStringLiteral("请重新读取")));
+                }
+                else if (scenario == 3)
+                {
+                    scene->overlay.LoadBaseline(std::string("new-target"), kInspectorBase, baseline, mask);
+                    canvas.notifyOverlayChanged();
+                    FlushDeferred();
+                    CHECK(!panel.rowView()->isEditing());
+                }
+                else
+                {
+                    // 同目标普通通知和手工重建没有换来源，不应丢掉正在键入的值。
+                    canvas.notifyOverlayChanged();
+                    FlushDeferred();
+                    panel.refreshFromCanvas();
+                    CHECK(canvas.sourceRevision() == revision);
+                    CHECK(panel.rowView()->isEditing());
+                    CHECK(panel.rowView()->editor() != nullptr
+                        && panel.rowView()->editor()->text() == QStringLiteral("0x11223344"));
+                    PressInEditor(panel, Qt::Key_Return);
+                    CHECK(staged.count() == 1);
+                    CHECK(Effective(scene->overlay, kInspectorBase, 4) == Bytes({ 0x44, 0x33, 0x22, 0x11 }));
+                }
+                if (scenario != 4)
+                {
+                    CHECK(staged.isEmpty());
+                    CHECK(!scene->overlay.HasPendingPatches());
+                    CHECK(!replacement.HasPendingPatches());
+                }
+                FlushDeferred();
+            }
+        }
+
+        // 编辑期间画布 refresh 换了来源代次：取消旧编辑，不得在新代次上暂存旧输入。
         void TestUnloadedAtCommit()
         {
             ApplyTheme(false);
@@ -355,11 +441,13 @@ namespace memwb_test
             DoubleClickRow(panel, QStringLiteral("u32"));
             TypeIntoEditor(panel, QStringLiteral("7"));
             CHECK(panel.rowView()->isEditing());
+            QLineEdit* editor = panel.rowView()->editor();
             canvas.refresh();
             CHECK(!canvas.cellStateAt(kInspectorBase + 0x10).hasValue);
-            PressInEditor(panel, Qt::Key_Return);
-            CHECK(panel.rowView()->isEditing());
-            CHECK_NOTE(StatusText(panel).contains(QStringLiteral("尚未加载")), StatusText(panel));
+            QKeyEvent enter(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+            QApplication::sendEvent(editor, &enter);
+            CHECK(!panel.rowView()->isEditing());
+            CHECK_NOTE(StatusText(panel).contains(QStringLiteral("请重新读取")), StatusText(panel));
             CHECK(panel.statusBar()->kind() == HexInspectorStatusBar::Kind::Error);
             CHECK(!scene->overlay.HasPendingPatches());
             panel.rowView()->endEdit();
@@ -587,6 +675,7 @@ namespace memwb_test
         TestIntegerEdit();
         TestFloatAndPointerEdit();
         TestRejectAndCancel();
+        TestEditSourceIdentity();
         TestUnloadedAtCommit();
         TestReadOnly();
         TestCopy();

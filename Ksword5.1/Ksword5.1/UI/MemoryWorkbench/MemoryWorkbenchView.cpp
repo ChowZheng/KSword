@@ -95,9 +95,8 @@ namespace ks::ui
     {
         // LeaveReasonDisplayText（修复缺陷 3）：把 installLeaveGuard 收到的
         // LeaveReason 翻译成一句人话，拼进 PromptLeaveWithPending 的正文
-        // （"...前必须先处理"）。MainWindowClose 不经过这条路径（见
-        // installLeaveGuard 原有注释：主窗口关闭直接调用 Int3Controller 的
-        // RequestLeave，不经过这个 target_->setLeaveGuard 回调），这里只需要
+        // （"...前必须先处理"）。MainWindowClose 直接调用 confirmQuit，
+        // 不经过这个 target_->setLeaveGuard 回调；两者最终共用 runLeaveSequence，这里只需要
         // 覆盖 WorkbenchTarget::LeaveReason 实际会出现的四个取值。
         QString LeaveReasonDisplayText(const LeaveReason reason)
         {
@@ -344,6 +343,24 @@ namespace ks::ui
     // 钉住入口在会话条的目标 chip 展开态，这里只隐藏侧栏容器）；范围锁定为进程。
     void MemoryWorkbenchView::setEmbeddedProcessMode(bool embedded)
     {
+        if (embedded && target_ != nullptr)
+        {
+            // 内嵌视图必须把真实会话切回跟随进程，不能只改策略与范围分段的显示。
+            IdentityRequest request;
+            request.scope = ksword::memwb::Scope::ProcessVirtual;
+            request.pinPid = 0U;
+            if (sessionBar_ != nullptr)
+            {
+                request.channel = sessionBar_->rememberedChannel(ksword::memwb::Scope::ProcessVirtual);
+            }
+            // self：已有暂存可能触发离开询问，取消时保持原状态，被销毁时停止所有后续访问。
+            const QPointer<MemoryWorkbenchView> self(this);
+            const bool accepted = target_->requestIdentity(request, LeaveReason::ScopeChange);
+            if (!self || !accepted)
+            {
+                return;
+            }
+        }
         embedded_ = embedded;
         target_->setPolicy(WorkbenchTarget::Policy{/*lockToDock=*/embedded, /*allowKernelPhysical=*/!embedded});
         // 侧栏可见性统一交给裁决入口：内嵌恒隐藏且不给展开钮（第二轮复核 B1：旧实现
@@ -474,7 +491,7 @@ namespace ks::ui
     }
 
     // loadSettings：所有视图（权威与否）都读；读失败的键各自退回默认（见
-    // WorkbenchSettings.h 的失败语义），本函数只负责把读到的值灌进各控件。
+    // WorkbenchSettings.h 的失败语义），范围、通道与写入模式先走真实状态裁决，再回写控件。
     void MemoryWorkbenchView::loadSettings()
     {
         using namespace ks::ui::workbench_settings;
@@ -492,18 +509,63 @@ namespace ks::ui
                 LoadChannelForScope(static_cast<std::uint32_t>(ksword::memwb::Scope::Physical)));
 
             const std::uint32_t scopeValue = LoadScope();
-            const ksword::memwb::Scope scope = (scopeValue <= 2U)
+            const ksword::memwb::Scope scope = (!embedded_ && scopeValue <= 2U)
                 ? static_cast<ksword::memwb::Scope>(scopeValue)
                 : ksword::memwb::Scope::ProcessVirtual;
-            // setScope 只是纯回写（不发 scopeRequested），真正生效仍要走一次身份
-            // 请求——但装配顺序上视图刚构造、还没有任何目标，这里只负责把界面
-            // 显示摆到用户上次离开时的样子，不在这里发起 requestIdentity。
-            sessionBar_->setScope(scope);
+            if (target_ != nullptr)
+            {
+                // savedIdentity：范围与对应通道一起交给真实会话裁决，避免显示内核却仍读取进程。
+                IdentityRequest savedIdentity;
+                savedIdentity.scope = scope;
+                savedIdentity.channel = sessionBar_->rememberedChannel(scope);
+                const QPointer<MemoryWorkbenchView> self(this);
+                (void)target_->requestIdentity(savedIdentity, LeaveReason::ScopeChange);
+                if (!self)
+                {
+                    return;
+                }
+                // 守卫拒绝或内嵌策略拒绝时按真实状态回写，不把设置值假装成已经生效。
+                const auto session = target_->session();
+                if (!self)
+                {
+                    return;
+                }
+                sessionBar_->setSession(session.scope, session.channel, /*rememberAsUserChoice=*/false);
+            }
+            else
+            {
+                sessionBar_->setScope(scope);
+            }
 
             const std::uint32_t modeValue = LoadWriteMode();
-            sessionBar_->setWriteMode(modeValue == 1U
+            // savedMode：持久化的真实写入策略，不能只修改工具条而让事务仍按立即写入执行。
+            const auto savedMode = modeValue == 1U
                 ? ksword::memwb::WriteMode::StagedThenApply
-                : ksword::memwb::WriteMode::Immediate);
+                : ksword::memwb::WriteMode::Immediate;
+            if (writeController_ != nullptr)
+            {
+                // self：注入的服务与事务通知可能同步销毁视图，回调返回后先探活。
+                const QPointer<MemoryWorkbenchView> self(this);
+                const auto status = writeController_->requestModeSwitch(savedMode);
+                if (!self)
+                {
+                    return;
+                }
+                if (status == ksword::memwb::ModeSwitchStatus::NeedsDecision)
+                {
+                    // 重载设置不能代替用户应用/丢弃已有暂存；取消待决切换并保留当前真实模式。
+                    (void)writeController_->resolveModeSwitch(ksword::memwb::ModeSwitchDecision::Cancel);
+                    if (!self)
+                    {
+                        return;
+                    }
+                }
+                sessionBar_->setWriteMode(writeController_->mode());
+            }
+            else
+            {
+                sessionBar_->setWriteMode(savedMode);
+            }
         }
 
         if (hexPane_ != nullptr)
@@ -631,6 +693,8 @@ namespace ks::ui
     void MemoryWorkbenchView::installLeaveGuard()
     {
         target_->setLeaveGuard([this](LeaveReason reason) -> bool {
+            // self：离开询问会进入模态事件循环，期间宿主可能同步销毁视图；返回后必须先探活。
+            const QPointer<MemoryWorkbenchView> self(this);
             // Int3LeaveScenario 只有三个取值：DockDetach/ProcessChange/MainWindowClose；
             // 后者不经过这条 LeaveReason 路径（主窗口关闭走 confirmQuit，见下）。这里只需要
             // 区分"是不是 Dock 的附加/分离事件"，其余三种 LeaveReason（ScopeChange/
@@ -642,11 +706,22 @@ namespace ks::ui
             // 每次询问都先清掉上一次的"用户已选择保留补丁"记号，只有这次明确选了才重新置位。
             int3KeptByLeaveGuard_ = false;
             const bool allowed = runLeaveSequence(LeaveReasonDisplayText(reason), scenario);
+            if (!self)
+            {
+                return false;
+            }
             // Dock 的附加/分离是"先问守卫、再真正分离"两步：用户在守卫里选了"保留补丁继续"
             // （放行之后账本里当前目标仍有未还原条目）时，紧接着发出的 aboutToDetach 安全网
             // 不得再把补丁强制还原，否则等于无视用户刚做的明确选择（见 onTargetAboutToDetach）。
-            int3KeptByLeaveGuard_ = allowed && reason == LeaveReason::DockAttachChange
-                && WorkbenchShared::Instance().Int3().HasUnrestoredForCurrentTarget();
+            if (allowed && reason == LeaveReason::DockAttachChange)
+            {
+                syncInt3Context();
+                if (!self)
+                {
+                    return false;
+                }
+                int3KeptByLeaveGuard_ = WorkbenchShared::Instance().Int3().HasUnrestoredForCurrentTarget();
+            }
             return allowed;
         });
     }
@@ -655,7 +730,29 @@ namespace ks::ui
     // 只是原因文案固定为"退出程序"、int3 场景固定为 MainWindowClose。
     bool MemoryWorkbenchView::confirmQuit()
     {
-        return runLeaveSequence(QStringLiteral("退出程序"), Int3LeaveScenario::MainWindowClose);
+        const QPointer<MemoryWorkbenchView> self(this);
+        int3KeptByLeaveGuard_ = false;
+        const bool allowed = runLeaveSequence(QStringLiteral("退出程序"), Int3LeaveScenario::MainWindowClose);
+        if (!self)
+        {
+            return false;
+        }
+        if (allowed)
+        {
+            // 关闭详情窗口随后会分离内嵌 Dock；尊重这次明确选择的保留补丁。
+            syncInt3Context();
+            if (!self)
+            {
+                return false;
+            }
+            int3KeptByLeaveGuard_ = WorkbenchShared::Instance().Int3().HasUnrestoredForCurrentTarget();
+        }
+        return allowed;
+    }
+
+    void MemoryWorkbenchView::cancelQuitPreparation()
+    {
+        int3KeptByLeaveGuard_ = false;
     }
 
     // runLeaveSequence：离开守卫与 confirmQuit 共用的三阶段原子逻辑。
@@ -664,6 +761,11 @@ namespace ks::ui
     //       false=用户取消或应用失败，此时暂存与 int3 都原封不动（应用失败时暂存保留）。
     bool MemoryWorkbenchView::runLeaveSequence(const QString& reasonText, const Int3LeaveScenario scenario)
     {
+        // 外层写确认仍在运行时不能嵌套丢弃、换目标或关闭其事务宿主。
+        if (writeController_ != nullptr && writeController_->isCommitting())
+        {
+            return false;
+        }
         // 第二轮复核 B3：守卫必须"原子"——整件事被取消时，用户的未提交编辑不能
         // 已经被丢弃/写入。所以分三个阶段：
         //   阶段一 只"问"暂存补丁三选一（不执行任何动作）；
@@ -676,6 +778,34 @@ namespace ks::ui
         // int3 阶段按"账本当前目标"判断有无未还原补丁：先把它声明回本视图的目标，
         // 否则内嵌进程详情窗口改过它之后，本视图的补丁会被漏问。
         syncInt3Context();
+
+        if (!self || target_ == nullptr)
+        {
+            return false;
+        }
+        const auto leaveCapture = target_->capture();
+        if (!self)
+        {
+            return false;
+        }
+        // 两次询问都只授权开始时的目标与暂存内容，嵌套事件循环里的变更不能继承授权。
+        const auto stillCurrent = [self, rev = leaveCapture.rev]() {
+            if (!self || self->target_ == nullptr)
+            {
+                return false;
+            }
+            const bool stale = self->target_->isStale(rev);
+            if (!self)
+            {
+                return false;
+            }
+            if (stale && self->statusBar_ != nullptr)
+            {
+                self->statusBar_->setDiagnosticsText(workbench_messages::Translate(
+                    ksword::memwb::CommitOutcome::Stale), /*autoExpand=*/true);
+            }
+            return !stale;
+        };
 
         auto pendingDecision = ksword::memwb::ModeSwitchDecision::Cancel;
         bool hasPendingDecision = false;
@@ -694,7 +824,7 @@ namespace ks::ui
                 hexPane_->overlay().PendingByteCount(),
                 static_cast<std::uint64_t>(hexPane_->overlay().DiffBlocks().size()),
                 reasonText);
-            if (self.isNull())
+            if (!stillCurrent())
             {
                 return false;
             }
@@ -706,9 +836,16 @@ namespace ks::ui
             hasPendingDecision = true;
         }
 
+        // 暂存询问的事件循环可能让另一个视图接管共享 int3 上下文；执行前重新绑定本视图。
+        syncInt3Context();
+        if (!self)
+        {
+            return false;
+        }
+
         // 阶段二：int3 账本里当前目标还有未还原补丁时弹三选一（没有则直接放行，不弹框）。
         const bool int3Allowed = WorkbenchShared::Instance().Int3().RequestLeave(this, scenario);
-        if (self.isNull() || !int3Allowed)
+        if (!self || !int3Allowed || !stillCurrent())
         {
             return false;
         }
@@ -731,7 +868,13 @@ namespace ks::ui
         }
         // 丢弃并离开：叠加层清空后画布要重绘，会话条的"N 字节待写入"也要同步清掉
         // （第二轮复核 B4：旧实现漏了后一步，芯片残留）。
+        const bool hadPendingPatches = hexPane_->overlay().HasPendingPatches();
         hexPane_->overlay().DiscardAll();
+        if (hadPendingPatches && target_ != nullptr)
+        {
+            // 真正丢弃会改变工作台显示内容；推进内容代次，让既有捕获能识别这次变化。
+            target_->noteContentChanged();
+        }
         if (hexPane_->canvas() != nullptr)
         {
             hexPane_->canvas()->notifyOverlayChanged();

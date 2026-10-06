@@ -2,6 +2,8 @@
 #include "../KernelDock/KernelThreadAuditTab.h"
 #include "../UI/TableInteractionSupport.h"
 
+#include <QPointer>
+
 // ============================================================
 // MemoryDock.DriverMemorySource.cpp
 // 作用：
@@ -492,6 +494,51 @@ bool MemoryDock::applyDriverMemoryPhysicalDiff(
 {
     failureTextOut.clear();
 
+    // 强制确认会进入事件循环；固定本轮物理快照与后端，禁止换会话后继续写旧地址。
+    const QPointer<MemoryDock> self(this);
+    const auto snapshotBase = m_driverMemoryBaseAddress;
+    const auto snapshotPid = m_driverMemorySnapshotPid;
+    const auto snapshotBackend = m_driverMemorySnapshotBackend;
+    const auto snapshotDdmaGeneration = m_driverMemorySnapshotDdmaGeneration;
+    const auto attachmentGeneration = m_processAttachmentGeneration.load();
+    const QByteArray snapshotOriginal = m_driverMemoryOriginalBytes;
+    const QByteArray snapshotEdited = m_driverMemoryEditedBytes;
+    const auto requireSnapshot = [&]() {
+        const bool unchanged = self && m_driverMemoryHasSnapshot && m_driverMemorySnapshotIsPhysical
+            && m_driverMemoryBaseAddress == snapshotBase && m_driverMemorySnapshotPid == snapshotPid
+            && m_driverMemorySnapshotBackend == snapshotBackend && currentDriverMemoryBackend() == snapshotBackend
+            && m_driverMemorySnapshotDdmaGeneration == snapshotDdmaGeneration
+            && m_processAttachmentGeneration.load() == attachmentGeneration
+            && m_driverMemoryOriginalBytes == snapshotOriginal && m_driverMemoryEditedBytes == snapshotEdited
+            && m_driverMemoryHexEditor != nullptr && m_driverMemoryHexEditor->data() == snapshotEdited
+            && (snapshotBackend != ksword::memory_backend::MemoryAccessBackend::Ddma
+                || snapshotDdmaGeneration == ksword::memory_backend::ddmaSessionGeneration());
+        if (!unchanged)
+        {
+            failureTextOut = QStringLiteral("访问后端或 DDMA 会话已改变，请重新读取后再应用改动。");
+        }
+        return unchanged;
+    };
+    const auto verifyBeforeForce = [&](std::uint64_t address, qsizetype length) {
+        if (!requireSnapshot())
+        {
+            return false;
+        }
+        const auto live = ksword::memory_backend::readPhysical(snapshotBackend,
+            currentDdmaSession(), address, static_cast<std::uint64_t>(length));
+        const QByteArray expected = snapshotOriginal.mid(static_cast<qsizetype>(address - snapshotBase), length);
+        if (!live.ok || live.partial || live.data != expected)
+        {
+            failureTextOut = QStringLiteral("目标字节已改变，请重新读取后再编辑。");
+            return false;
+        }
+        return true;
+    };
+    if (!requireSnapshot())
+    {
+        return false;
+    }
+
     // 记录物理写日志：这是本页破坏性最强的一条路径。
     kLogEvent physicalWriteEvent;
     warn << physicalWriteEvent
@@ -503,7 +550,7 @@ bool MemoryDock::applyDriverMemoryPhysicalDiff(
     std::uint64_t writtenBytesTotal = 0ULL;
     const ksword::ark::DriverClient driverClient;
 
-    if (m_driverMemorySnapshotBackend == ksword::memory_backend::MemoryAccessBackend::Hvm)
+    if (snapshotBackend == ksword::memory_backend::MemoryAccessBackend::Hvm)
     {
         for (const auto& block : diffBlocks)
         {
@@ -525,7 +572,7 @@ bool MemoryDock::applyDriverMemoryPhysicalDiff(
 
     // DDMA 后端按页切片走磁盘 DMA，切片规则、状态码与告警位都在后端门面里，
     // 这里只负责 force 确认与文案。
-    if (currentDriverMemoryBackend() == ksword::memory_backend::MemoryAccessBackend::Ddma)
+    if (snapshotBackend == ksword::memory_backend::MemoryAccessBackend::Ddma)
     {
         bool scratchDirty = false;
         bool lostUpdate = false;
@@ -542,12 +589,21 @@ bool MemoryDock::applyDriverMemoryPhysicalDiff(
 
             if (blockOutcome.forceRequired && !forceApproved)
             {
-                if (!confirmForceDriverMemoryWrite(
+                const bool forceConfirmed = confirmForceDriverMemoryWrite(
                         diffBlock.address,
                         static_cast<std::uint32_t>(diffBlock.bytes.size()),
-                        blockOutcome.failureText, m_driverMemorySnapshotPid))
+                        blockOutcome.failureText, snapshotPid);
+                if (!requireSnapshot())
+                {
+                    return false;
+                }
+                if (!forceConfirmed)
                 {
                     failureTextOut = QStringLiteral("用户取消了 DDMA 强制写入。");
+                    return false;
+                }
+                if (!verifyBeforeForce(diffBlock.address, diffBlock.bytes.size()))
+                {
                     return false;
                 }
                 forceApproved = true;
@@ -628,12 +684,21 @@ bool MemoryDock::applyDriverMemoryPhysicalDiff(
                 && !forceApproved)
             {
                 // 驱动明确要求强制标志，弹一次不可抑制的确认框。
-                if (!confirmForceDriverMemoryWrite(
+                const bool forceConfirmed = confirmForceDriverMemoryWrite(
                         chunkAddress,
                         static_cast<std::uint32_t>(chunkBytes.size()),
-                        QStringLiteral("驱动要求对物理内存写入附加强制标志。"), m_driverMemorySnapshotPid))
+                        QStringLiteral("驱动要求对物理内存写入附加强制标志。"), snapshotPid);
+                if (!requireSnapshot())
+                {
+                    return false;
+                }
+                if (!forceConfirmed)
                 {
                     failureTextOut = QStringLiteral("用户取消了物理内存强制写入。");
+                    return false;
+                }
+                if (!verifyBeforeForce(chunkAddress, chunkBytes.size()))
+                {
                     return false;
                 }
                 forceApproved = true;
@@ -641,6 +706,8 @@ bool MemoryDock::applyDriverMemoryPhysicalDiff(
                 writeResult = driverClient.writePhysicalMemory(chunkAddress, payload, writeFlags);
             }
 
+            // 失败块也可能已有部分字节落地，计量必须包含驱动报告的实际写入量。
+            writtenBytesTotal += static_cast<std::uint64_t>(writeResult.bytesWritten);
             const bool chunkOk = writeResult.io.ok
                 && writeResult.writeStatus == KSWORD_ARK_MEMORY_PHYSICAL_WRITE_STATUS_OK
                 && writeResult.bytesWritten == static_cast<std::uint32_t>(chunkBytes.size());
@@ -661,7 +728,6 @@ bool MemoryDock::applyDriverMemoryPhysicalDiff(
                     .arg(writtenBytesTotal);
                 return false;
             }
-            writtenBytesTotal += static_cast<std::uint64_t>(chunkBytes.size());
         }
     }
 

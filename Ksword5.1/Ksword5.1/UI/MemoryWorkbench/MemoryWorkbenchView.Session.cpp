@@ -129,6 +129,11 @@ namespace ks::ui
             compareView_->setWindow(0, 0);
         }
 
+        if (sessionBar_ != nullptr)
+        {
+            sessionBar_->setSession(session.scope, session.channel, /*rememberAsUserChoice=*/false);
+        }
+
         // 旧目标的导航历史与"切换并跳转"挂起请求对新目标没有意义。
         backStack_.clear();
         forwardStack_.clear();
@@ -324,7 +329,9 @@ namespace ks::ui
         request.scope = scope;
         const auto rememberedChannel = sessionBar_->rememberedChannel(scope);
         request.channel = rememberedChannel;
-        if (!target_->requestIdentity(request, LeaveReason::ScopeChange))
+        const QPointer<MemoryWorkbenchView> self(this);
+        const bool accepted = target_->requestIdentity(request, LeaveReason::ScopeChange);
+        if (!self || !accepted)
         {
             // 被拒绝：会话逐字段不变，什么都不回写（N2 不变式）。
             return;
@@ -340,7 +347,9 @@ namespace ks::ui
         }
         IdentityRequest request;
         request.channel = channel;
-        if (!target_->requestIdentity(request, LeaveReason::ChannelChange))
+        const QPointer<MemoryWorkbenchView> self(this);
+        const bool accepted = target_->requestIdentity(request, LeaveReason::ChannelChange);
+        if (!self || !accepted)
         {
             return;
         }
@@ -353,7 +362,12 @@ namespace ks::ui
         {
             return;
         }
+        const QPointer<MemoryWorkbenchView> self(this);
         const auto status = writeController_->requestModeSwitch(mode);
+        if (!self)
+        {
+            return;
+        }
         if (status == ksword::memwb::ModeSwitchStatus::Switched)
         {
             sessionBar_->setWriteMode(mode);
@@ -369,7 +383,15 @@ namespace ks::ui
             mode,
             hexPane_->overlay().PendingByteCount(),
             static_cast<std::uint64_t>(hexPane_->overlay().DiffBlocks().size()));
+        if (!self)
+        {
+            return;
+        }
         const auto result = writeController_->resolveModeSwitch(decision);
+        if (!self)
+        {
+            return;
+        }
         if (result.status == ksword::memwb::ModeSwitchStatus::Switched)
         {
             sessionBar_->setWriteMode(mode);
@@ -400,7 +422,12 @@ namespace ks::ui
         {
             return;
         }
+        const bool hadPendingPatches = hexPane_->overlay().HasPendingPatches();
         hexPane_->overlay().DiscardAll();
+        if (hadPendingPatches && target_ != nullptr)
+        {
+            target_->noteContentChanged();
+        }
         if (hexPane_->canvas() != nullptr)
         {
             hexPane_->canvas()->notifyOverlayChanged();
@@ -514,7 +541,14 @@ namespace ks::ui
             return;
         }
         NavRequest request;
-        request.scope = target_ ? target_->session().scope : ksword::memwb::Scope::ProcessVirtual;
+        const auto& session = target_->session();
+        request.scope = session.scope;
+        if (session.scope == ksword::memwb::Scope::ProcessVirtual
+            && target_->followMode() == ksword::memwb::MemoryTargetTracker::Follow::Pinned)
+        {
+            request.pid = session.pid;
+            request.createTime = session.processCreateTime100ns;
+        }
         request.address = resolved.address;
         request.origin = NavOrigin::AddressBook;
         openAt(request);
@@ -522,8 +556,9 @@ namespace ks::ui
 
     void MemoryWorkbenchView::onAddressBookOpenDisassemblyRequested(quint64 id)
     {
+        const QPointer<MemoryWorkbenchView> self(this);
         onAddressBookJumpRequested(id);
-        if (subTabStack_ != nullptr)
+        if (self && subTabStack_ != nullptr)
         {
             subTabStack_->setCurrentIndex(1);
         }

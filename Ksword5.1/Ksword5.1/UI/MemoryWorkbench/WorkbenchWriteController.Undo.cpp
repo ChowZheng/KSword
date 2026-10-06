@@ -180,7 +180,8 @@ namespace ks::ui
 
         // 不论结果如何，先把这次回放的地址/字节/完整报告记进结果——即使最终
         // outcome 不是 Replayed，外层也可能需要 report.failureText 之外的字段
-        // （目前只在 Replayed 时使用，但结构体本身不应该因为失败就缺数据）。
+        // （失败也要交给控制器做报告收尾，但不移动日志游标、不记录新历史）。
+        result.commitAttempted = true;
         result.address = replay->address;
         result.before = replay->expectedCurrent;
         result.after = replay->restore;

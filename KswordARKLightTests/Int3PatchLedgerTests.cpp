@@ -323,9 +323,9 @@ void TestInstallWriteFailure(KswordTests::Suite& suite) {
         L"int3 ledger: a failed install does not consume an id");
 }
 
-// 七、回读验证失败：尝试恢复原字节；只有回读证实恢复才不记账。
-void TestInstallVerifyFailureRollsBack(KswordTests::Suite& suite) {
-    // (a) 写入落了别的值 0x90：回读 0x90 != 0xCC -> VerifyFailed，回滚把 0x55 写回。
+// 七、回读验证失败：不盲写原字节，保留恢复证据；原字节已在则无需再写。
+void TestInstallVerifyFailurePreservesByte(KswordTests::Suite& suite) {
+    // (a) 回读是其它值 0x90：可能被第三方改变，不能自动覆盖，保留恢复条目。
     {
         Int3PatchLedger ledger;
         FakeByteStore store = MakeStore(kAddr, kOrig);
@@ -334,18 +334,20 @@ void TestInstallVerifyFailureRollsBack(KswordTests::Suite& suite) {
         const InstallResult result = ledger.Install(kProcA, kAddr, store, 1ULL);
         suite.expect(result.status == InstallStatus::VerifyFailed,
             L"int3 ledger: a read-back that differs from 0xCC is a VerifyFailed");
-        suite.expect(result.id == 0ULL, L"int3 ledger: VerifyFailed returns id 0");
-        suite.expect(result.rollbackAttempted && result.rollbackWriteOk,
-            L"int3 ledger: VerifyFailed attempts the rollback and reports it succeeded");
-        suite.expect(store.writes.size() == 2U && store.writes[0].value == 0xCC
-                && store.writes[1].value == kOrig && store.writes[1].address == kAddr,
-            L"int3 ledger: the rollback writes the original byte back at the same address");
-        suite.expect(store.memory[kAddr] == kOrig, L"int3 ledger: the byte is back to its original after rollback");
-        suite.expect(ledger.Entries().empty() && !ledger.HasUnrestored(),
-            L"int3 ledger: VerifyFailed records nothing");
+        suite.expect(result.id == 1ULL && ledger.HasUnrestored(),
+            L"int3 ledger: VerifyFailed retains a valid recovery id for a changed byte");
+        suite.expect(!result.rollbackAttempted && !result.rollbackWriteOk,
+            L"int3 ledger: VerifyFailed does not claim an automatic rollback");
+        suite.expect(store.writes.size() == 1U && store.writes[0].value == 0xCC
+            && store.memory[kAddr] == 0x90,
+            L"int3 ledger: verification failure never overwrites the observed foreign byte");
+        const RestoreResult restore = ledger.Restore(result.id, kProcA, store);
+        suite.expect(restore.status == RestoreStatus::Diverged && restore.hasObservedByte
+            && restore.observedByte == 0x90 && store.writeCalls == 1,
+            L"int3 ledger: an explicit restore reports divergence without overwriting it");
     }
 
-    // (b) 写入返回成功但没落地：回读仍是 0x55，同样判 VerifyFailed 并尝试回滚。
+    // (b) 写入返回成功但没落地：回读仍是原字节，不重复写回，也不占恢复 id。
     {
         Int3PatchLedger ledger;
         FakeByteStore store = MakeStore(kAddr, kOrig);
@@ -353,12 +355,16 @@ void TestInstallVerifyFailureRollsBack(KswordTests::Suite& suite) {
         const InstallResult result = ledger.Install(kProcA, kAddr, store, 1ULL);
         suite.expect(result.status == InstallStatus::VerifyFailed,
             L"int3 ledger: a write that reports success but did not land is a VerifyFailed");
-        suite.expect(result.rollbackAttempted && store.writeCalls == 2,
-            L"int3 ledger: a dropped write is still followed by a rollback attempt");
+        suite.expect(!result.rollbackAttempted && !result.rollbackWriteOk && store.writeCalls == 1
+            && result.id == 0 && ledger.Entries().empty() && store.memory[kAddr] == kOrig,
+            L"int3 ledger: an observed original byte needs neither a second write nor a recovery entry");
+        const InstallResult retry = ledger.Install(kProcA, kAddr, store, 2);
+        suite.expect(retry.status == InstallStatus::Installed && retry.id == 1,
+            L"int3 ledger: an unchanged byte does not consume a recovery id");
     }
 
     // (c) 回读本身失败（第 2 次读）：字节其实已经被写成 0xCC，目标状态未知。
-    //     必须仍然尝试回滚，否则会留下一个账本里没有记录的 0xCC。
+    //     不盲写未知状态，账本必须记录原字节供之后显式还原。
     {
         Int3PatchLedger ledger;
         FakeByteStore store = MakeStore(kAddr, kOrig);
@@ -366,28 +372,29 @@ void TestInstallVerifyFailureRollsBack(KswordTests::Suite& suite) {
         const InstallResult result = ledger.Install(kProcA, kAddr, store, 1ULL);
         suite.expect(result.status == InstallStatus::VerifyFailed,
             L"int3 ledger: a failing read-back is a VerifyFailed, not a success");
-        suite.expect(result.rollbackAttempted && result.rollbackWriteOk,
-            L"int3 ledger: a failing read-back still triggers the rollback");
-        suite.expect(store.memory[kAddr] == kOrig,
-            L"int3 ledger: the rollback removes the 0xCC that the failed read-back could not see");
-        suite.expect(ledger.Entries().empty(), L"int3 ledger: a failing read-back records nothing");
+        suite.expect(!result.rollbackAttempted && !result.rollbackWriteOk && store.writeCalls == 1
+            && result.id == 1 && store.memory[kAddr] == kInt3PatchByte && ledger.HasUnrestored(),
+            L"int3 ledger: a failing read-back keeps recovery evidence without writing an unknown byte");
+        suite.expect(ledger.Restore(result.id, kProcA, store).status == RestoreStatus::Restored
+            && store.memory[kAddr] == kOrig && !ledger.HasUnrestored(),
+            L"int3 ledger: explicit restore can safely recover an uncertain install after reading 0xCC");
     }
 
-    // (d) 回滚写本身也失败：保留原字节和有效 id；后续 Restore 不覆盖外来字节。
+    // (d) 保留原字节和有效 id；后续 Restore 不覆盖外来字节，重复安装不丢证据。
     {
         Int3PatchLedger ledger;
         FakeByteStore store = MakeStore(kAddr, kOrig);
         store.corruptWriteOnCall = 1;
         store.failWriteOnCall = 2;
         const InstallResult result = ledger.Install(kProcA, kAddr, store, 1ULL);
-        suite.expect(result.status == InstallStatus::VerifyFailed && result.rollbackAttempted,
-            L"int3 ledger: a failing rollback is still reported as VerifyFailed");
-        suite.expect(!result.rollbackWriteOk, L"int3 ledger: a failing rollback is reported as failed");
-        suite.expect(store.memory[kAddr] == 0x90, L"int3 ledger: a failed rollback leaves the byte where it was");
+        suite.expect(result.status == InstallStatus::VerifyFailed && !result.rollbackAttempted
+            && !result.rollbackWriteOk && store.writeCalls == 1,
+            L"int3 ledger: a foreign byte is not passed to an automatic rollback write");
+        suite.expect(store.memory[kAddr] == 0x90, L"int3 ledger: verification preserves a foreign byte");
         const auto recovery = ledger.FindById(result.id);
         suite.expect(result.id == 1 && ledger.HasUnrestored()
             && recovery.has_value() && recovery->originalByte == kOrig,
-            L"int3 ledger: a failed rollback retains the original byte under a valid recovery id");
+            L"int3 ledger: a failed verification retains the original byte under a valid recovery id");
         const int writesBeforeRestore = store.writeCalls;
         const auto diverged = ledger.Restore(result.id, kProcA, store);
         suite.expect(diverged.status == RestoreStatus::Diverged
@@ -404,11 +411,12 @@ void TestInstallVerifyFailureRollsBack(KswordTests::Suite& suite) {
         store.memory[kAddr] = kOrig;
         const InstallResult retry = ledger.Install(kProcA, kAddr, store, 2ULL);
         suite.expect(retry.status == InstallStatus::Installed && retry.id == 2ULL,
-            L"int3 ledger: the id of an unproven rollback is never reused");
+            L"int3 ledger: the id of a retained recovery entry is never reused");
     }
 }
 
-void TestUnprovenRollbackRetainsRecoveryEntry(KswordTests::Suite& suite) {
+// 未证实的安装保留证据，显式还原失败后也能再次重试。
+void TestUncertainInstallRetainsRecoveryEntry(KswordTests::Suite& suite) {
     for (int fault = 0; fault < 3; ++fault) {
         Int3PatchLedger ledger;
         FakeByteStore store = MakeStore(kAddr, kOrig);
@@ -423,31 +431,30 @@ void TestUnprovenRollbackRetainsRecoveryEntry(KswordTests::Suite& suite) {
         const InstallResult result = ledger.Install(kProcA, kAddr, store, 123);
         const auto entry = ledger.FindById(result.id);
         suite.expect(result.status == InstallStatus::VerifyFailed && result.id == 1
-            && result.rollbackAttempted && result.rollbackWriteOk == (fault != 0)
+            && !result.rollbackAttempted && !result.rollbackWriteOk && store.writeCalls == 1
             && ledger.HasUnrestored() && entry.has_value(),
-            L"int3 ledger: failed, dropped or unreadable rollback keeps a recovery entry without claiming Installed");
+            L"int3 ledger: unreadable verification keeps recovery evidence without claiming rollback or Installed");
         suite.expect(entry.has_value() && entry->originalByte == kOrig
             && entry->pid == kProcA.pid && entry->processCreateTime100ns == kProcA.processCreateTime100ns
             && entry->address == kAddr && entry->installedAtTick == 123,
-            L"int3 ledger: an unproven rollback preserves exact original, target, address and tick");
+            L"int3 ledger: an uncertain install preserves exact original, target, address and tick");
         const int readsBeforeMismatch = store.readCalls;
         const int writesBeforeMismatch = store.writeCalls;
         suite.expect(ledger.Restore(result.id, kProcAReused, store).status == RestoreStatus::TargetMismatch
             && store.readCalls == readsBeforeMismatch && store.writeCalls == writesBeforeMismatch,
             L"int3 ledger: a recovery entry never touches a pid-reusing target");
+        const RestoreStatus expected = fault == 0 ? RestoreStatus::WriteFailed
+            : fault == 1 ? RestoreStatus::VerifyFailed : RestoreStatus::ReadFailed;
+        suite.expect(ledger.Restore(result.id, kProcA, store).status == expected
+            && store.memory[kAddr] == kInt3PatchByte && ledger.HasUnrestored(),
+            L"int3 ledger: an explicit failed, dropped or unreadable restore retains recovery evidence");
         store.failReadOnCall = 0;
         store.failReadFromCall = 0;
-        if (fault != 2) {
-            suite.expect(store.memory[kAddr] == 0xCC
-                && ledger.Restore(result.id, kProcA, store).status == RestoreStatus::Restored
-                && store.memory[kAddr] == kOrig && !ledger.HasUnrestored(),
-                L"int3 ledger: retained 0xCC from a failed or dropped rollback can be restored later");
-        } else {
-            suite.expect(store.memory[kAddr] == kOrig
-                && ledger.Restore(result.id, kProcA, store).status == RestoreStatus::Diverged
-                && store.writeCalls == writesBeforeMismatch && ledger.HasUnrestored(),
-                L"int3 ledger: unproven but actually restored original is not overwritten during retry");
-        }
+        store.failWriteOnCall = 0;
+        store.dropWriteOnCall = 0;
+        suite.expect(ledger.Restore(result.id, kProcA, store).status == RestoreStatus::Restored
+            && store.memory[kAddr] == kOrig && !ledger.HasUnrestored(),
+            L"int3 ledger: recovery can be retried after the explicit restore fault is cleared");
     }
 }
 
@@ -838,8 +845,8 @@ int RunMemwbInt3LedgerTests() {
     TestDuplicateInstall(suite);
     TestInstallReadFailure(suite);
     TestInstallWriteFailure(suite);
-    TestInstallVerifyFailureRollsBack(suite);
-    TestUnprovenRollbackRetainsRecoveryEntry(suite);
+    TestInstallVerifyFailurePreservesByte(suite);
+    TestUncertainInstallRetainsRecoveryEntry(suite);
     TestRestoreHappyPath(suite);
     TestRestoreTargetMismatchWritesNothing(suite);
     TestRestoreDivergedAndReadFailure(suite);

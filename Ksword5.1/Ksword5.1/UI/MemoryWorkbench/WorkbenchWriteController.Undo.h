@@ -85,18 +85,19 @@ namespace ks::ui
     {
         // outcome：见 UndoReplayOutcome。
         UndoReplayOutcome outcome = UndoReplayOutcome::NothingToReplay;
-        // address：本次回放写入的起始绝对地址；outcome 非 Replayed 时无意义
-        // （恒为 0，调用方不应读取）。
+        // commitAttempted：确实执行过临时 Commit；失败也必须转发报告与重读告警。
+        // 没有历史或临时基线/暂存失败时为 false，不虚构一次写事务的结果。
+        bool commitAttempted = false;
+        // address：本次回放的起始地址；commitAttempted 为 true 时有意义。
         std::uint64_t address = 0;
         // before / after：本次回放写入前后的字节（分别对应 JournalReplay::
-        // expectedCurrent / restore，长度相等即块长度）；outcome 非 Replayed 时为
-        // 空。连同 address 一起就是"地址/长度"（长度=before.size()）。
+        // expectedCurrent / restore，长度相等即块长度）；实际调用过 Commit 时
+        // 均保留，失败后仍可确定本次尝试的范围，不能据此宣称写入成功。
         ksword::memwb::JournalBytes before;
         ksword::memwb::JournalBytes after;
         // report：临时 scratchTransaction.Commit() 的完整报告（含 failureText）；
-        // outcome 非 Replayed 时是默认构造的占位值（outcome=NoChange），调用方
-        // 应该用 lastFailureText() 或本结构体自己的 outcome 字段判断失败原因，
-        // 不要去读这个占位 report。
+        // commitAttempted 为 false 时才是默认占位值；为 true 时失败报告同样
+        // 有效，包含部分写入、重读需求及暂存区脏标记，不得静默丢弃。
         ksword::memwb::CommitReport report;
     };
 

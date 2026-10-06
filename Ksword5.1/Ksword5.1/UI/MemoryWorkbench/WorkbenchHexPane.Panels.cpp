@@ -145,6 +145,10 @@ namespace ks::ui
                             reinterpret_cast<const char*>(materialized.bytes.data()),
                             static_cast<int>(materialized.bytes.size()));
                         view.base = overlay_.BaseAddress();
+                        // 不可读字节的占位 00 不是数据；搜索与高亮都需要同一份真实有效性快照。
+                        view.validMask = QByteArray(
+                            reinterpret_cast<const char*>(materialized.validMask.data()),
+                            static_cast<qsizetype>(materialized.validMask.size()));
                     }
                 }
             }

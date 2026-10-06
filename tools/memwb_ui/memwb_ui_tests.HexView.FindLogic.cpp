@@ -352,6 +352,41 @@ namespace memwb_test
             CHECK_NOTE(straddleAfter > 30, QString::number(straddleAfter));
         }
 
+        // 内存孔洞不能被零字节或通配符命中；上下方向、跨孔模式和高亮共用真实掩码。
+        void TestUnreadableMemoryMask()
+        {
+            // data/mask：第 1、5 字节是未读占位 00，其余是已确认读到的数据。
+            const QByteArray data = QByteArray::fromHex("0000004142004142");
+            const QByteArray mask = QByteArray::fromHex("0100010101000101");
+            const std::uint64_t base = 0x100;
+            const SearchPattern zero = MakeSearchPattern({ 0x00 }, { 0xFF });
+            const SearchPattern zeroPair = MakeSearchPattern({ 0x00, 0x00 }, { 0xFF, 0xFF });
+            const SearchPattern anyPair = MakeSearchPattern({ 0x00, 0x00 }, { 0x00, 0x00 });
+            const SearchPattern letters = MakeSearchPattern({ 0x41, 0x42 }, { 0xFF, 0xFF });
+
+            hf::Outcome outcome = hf::RunSearch(data, base, zero, base + 1, SearchDirection::Forward, false, nullptr, mask);
+            CHECK(outcome.found && outcome.address == base + 2);
+            outcome = hf::RunSearch(data, base, zero, base + 5, SearchDirection::Backward, false, nullptr, mask);
+            CHECK(outcome.found && outcome.address == base + 2);
+            CHECK(!hf::RunSearch(data, base, zeroPair, base, SearchDirection::Forward, true, nullptr, mask).found);
+            CHECK(hf::RunSearch(data, base, letters, base + 4, SearchDirection::Forward, false, nullptr, mask).address == base + 6);
+            CHECK(hf::HitsInRange(data, base, anyPair, base, base + 7, 100, mask).size() == 3);
+            CHECK(hf::HitsInRange(data, base, zeroPair, base, base + 7, 100, mask).empty());
+            // 空掩码保留完整文件缓冲行为；错误长度的非空掩码必须拒绝而非退回“全有效”。
+            CHECK(hf::RunSearch(data, base, zeroPair, base, SearchDirection::Forward, false, nullptr).found);
+            CHECK(hf::RunSearch(data, base, zero, base, SearchDirection::Forward, false, nullptr, mask.left(2)).invalid);
+            CHECK(hf::HitsInRange(data, base, zero, base, base + 7, 100, mask.left(2)).empty());
+
+            hf::ByteArraySource source(data, base, mask);
+            std::vector<std::uint8_t> bytes; // 输出实际数据，未读字节仍由 valid 明确标识
+            std::vector<std::uint8_t> valid; // 输出可读性，搜索不得忽略
+            CHECK(source.Read(base, 3, bytes, valid) == ksword::memwb::ReadStatus::Partial);
+            CHECK(valid == std::vector<std::uint8_t>({ 1, 0, 1 }));
+            CHECK(source.Read(base + 1, 1, bytes, valid) == ksword::memwb::ReadStatus::Unreadable);
+            CHECK(source.Read(base + 3, 2, bytes, valid) == ksword::memwb::ReadStatus::Ok);
+            CHECK(hf::RunSearch(data, 0xFFFFFFFFFFFFFFFCULL, zero, base, SearchDirection::Forward, true, nullptr, mask).invalid);
+        }
+
         // 起点越界、取消标志、非法参数、上限。
         void TestEdgesAndLimits()
         {
@@ -406,6 +441,7 @@ namespace memwb_test
         TestByteArraySource();
         TestRunSearchDifferential();
         TestHitsInRangeDifferential();
+        TestUnreadableMemoryMask();
         TestEdgesAndLimits();
     }
 }

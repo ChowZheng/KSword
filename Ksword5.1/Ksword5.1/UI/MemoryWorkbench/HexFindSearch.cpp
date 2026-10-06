@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <limits>
 
 namespace ks::ui::hexfind
 {
@@ -51,8 +52,9 @@ namespace ks::ui::hexfind
     }
 
     // 构造：保存数据与基址。
-    ByteArraySource::ByteArraySource(const QByteArray& data, std::uint64_t base)
+    ByteArraySource::ByteArraySource(const QByteArray& data, std::uint64_t base, const QByteArray& validMask)
         : m_data(data)
+        , m_validMask(validMask)
         , m_base(base)
     {
     }
@@ -71,7 +73,8 @@ namespace ks::ui::hexfind
         {
             return ksword::memwb::ReadStatus::Ok;
         }
-        if (m_data.isEmpty())
+        if (m_data.isEmpty() || (!m_validMask.isEmpty() && m_validMask.size() != m_data.size())
+            || static_cast<std::uint64_t>(m_data.size() - 1) > std::numeric_limits<std::uint64_t>::max() - m_base)
         {
             return ksword::memwb::ReadStatus::Unreadable;
         }
@@ -94,8 +97,26 @@ namespace ks::ui::hexfind
         const std::size_t outOffset = static_cast<std::size_t>(overlapLow - address);
         const std::size_t dataOffset = static_cast<std::size_t>(overlapLow - m_base);
         std::memcpy(bytesOut.data() + outOffset, m_data.constData() + dataOffset, count);
-        std::memset(validOut.data() + outOffset, 1, count);
-        return (count == length) ? ksword::memwb::ReadStatus::Ok : ksword::memwb::ReadStatus::Partial;
+        if (m_validMask.isEmpty())
+        {
+            // 完整文件缓冲保留批量填充，避免把大文件查找退化成逐字节循环。
+            std::memset(validOut.data() + outOffset, 1, count);
+            return (count == length) ? ksword::memwb::ReadStatus::Ok : ksword::memwb::ReadStatus::Partial;
+        }
+        // 保留读掩码的孔洞：模式通配符也不能把未读填充值当作真实字节命中。
+        // readableCount：请求中实际可读的字节数，决定 Ok/Partial/Unreadable 状态。
+        std::size_t readableCount = 0;
+        for (std::size_t i = 0; i < count; ++i)
+        {
+            const bool readable = m_validMask.at(static_cast<qsizetype>(dataOffset + i)) != 0;
+            validOut[outOffset + i] = readable ? 1 : 0;
+            readableCount += readable ? 1U : 0U;
+        }
+        if (readableCount == 0)
+        {
+            return ksword::memwb::ReadStatus::Unreadable;
+        }
+        return (readableCount == length) ? ksword::memwb::ReadStatus::Ok : ksword::memwb::ReadStatus::Partial;
     }
 
     // 一次查找。
@@ -106,10 +127,13 @@ namespace ks::ui::hexfind
         std::uint64_t start,
         ksword::memwb::SearchDirection direction,
         bool wrap,
-        const std::atomic<bool>* cancel)
+        const std::atomic<bool>* cancel,
+        const QByteArray& validMask)
     {
         Outcome outcome;
-        if (data.isEmpty() || pattern.bytes.empty() || pattern.bytes.size() != pattern.mask.size())
+        if (data.isEmpty() || pattern.bytes.empty() || pattern.bytes.size() != pattern.mask.size()
+            || (!validMask.isEmpty() && validMask.size() != data.size())
+            || static_cast<std::uint64_t>(data.size() - 1) > std::numeric_limits<std::uint64_t>::max() - base)
         {
             outcome.invalid = true;
             return outcome;
@@ -120,7 +144,7 @@ namespace ks::ui::hexfind
         range.first = base;
         range.last = base + (static_cast<std::uint64_t>(data.size()) - 1ULL);
 
-        ByteArraySource source(data, base);
+        ByteArraySource source(data, base, validMask);
         const ksword::memwb::SearchResult result = ksword::memwb::Find(
             source, pattern, range, start, direction, wrap, cancel, kSearchChunkBytes);
         outcome.found = result.found;
@@ -138,11 +162,14 @@ namespace ks::ui::hexfind
         const ksword::memwb::SearchPattern& pattern,
         std::uint64_t visibleFirst,
         std::uint64_t visibleLast,
-        std::size_t cap)
+        std::size_t cap,
+        const QByteArray& validMask)
     {
         std::vector<AddressRange> hits;
         if (data.isEmpty() || pattern.bytes.empty() || pattern.bytes.size() != pattern.mask.size()
-            || visibleFirst > visibleLast || cap == 0)
+            || visibleFirst > visibleLast || cap == 0
+            || (!validMask.isEmpty() && validMask.size() != data.size())
+            || static_cast<std::uint64_t>(data.size() - 1) > std::numeric_limits<std::uint64_t>::max() - base)
         {
             return hits;
         }
@@ -173,7 +200,7 @@ namespace ks::ui::hexfind
         }
 
         // 逐个向前找：每次从上一个命中起点 + 1 开始（重叠命中都列出）。
-        ByteArraySource source(data, base);
+        ByteArraySource source(data, base, validMask);
         ksword::memwb::SearchRange range;
         range.first = scanFirst;
         range.last = scanLast;
