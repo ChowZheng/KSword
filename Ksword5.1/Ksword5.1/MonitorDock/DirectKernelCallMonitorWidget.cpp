@@ -711,7 +711,10 @@ void DirectKernelCallMonitorWidget::startCapture()
     ++m_captureIntervalGeneration;
     m_consumerIntervalGeneration = m_captureIntervalGeneration.load();
     m_frameInspectionCache.clear();
-    m_stackEnableStatus.store(ERROR_NOT_READY);
+    m_stackEnableStatus.store(ERROR_SUCCESS);
+    m_startTraceStatus.store(ERROR_SUCCESS);
+    m_openTraceStatus.store(ERROR_SUCCESS);
+    m_processTraceStatus.store(ERROR_SUCCESS);
     m_etwEventsLost.store(0);
     m_etwBuffersLost.store(0);
     m_stackMatched.store(0);
@@ -822,6 +825,7 @@ void DirectKernelCallMonitorWidget::startCapture()
 
         TRACEHANDLE sessionHandle = 0;
         ULONG startStatus = ::StartTraceW(&sessionHandle, loggerNamePointer, properties);
+        guardThis->m_startTraceStatus.store(startStatus);
 
         if (startStatus != ERROR_SUCCESS)
         {
@@ -835,6 +839,7 @@ void DirectKernelCallMonitorWidget::startCapture()
                 guardThis->m_statusLabel->setText(QStringLiteral("● StartTrace失败:%1").arg(startStatus));
                 ks::ui::ApplyStatusRole(guardThis->m_statusLabel, ks::ui::StatusRole::Error);
                 guardThis->updateActionState();
+                guardThis->updateStatusLabel();
                 kPro.set(guardThis->m_captureProgressPid, "System Syscall 会话启动失败", 0, 100.0f);
             }, Qt::QueuedConnection);
             return;
@@ -866,6 +871,7 @@ void DirectKernelCallMonitorWidget::startCapture()
         if (traceHandle == INVALID_PROCESSTRACE_HANDLE)
         {
             const ULONG lastError = ::GetLastError();
+            guardThis->m_openTraceStatus.store(lastError);
             guardThis->stopOwnedSession();
             QMetaObject::invokeMethod(qApp, [guardThis, lastError]() {
                 if (guardThis == nullptr)
@@ -877,6 +883,7 @@ void DirectKernelCallMonitorWidget::startCapture()
                 guardThis->m_statusLabel->setText(QStringLiteral("● OpenTrace失败:%1").arg(lastError));
                 ks::ui::ApplyStatusRole(guardThis->m_statusLabel, ks::ui::StatusRole::Error);
                 guardThis->updateActionState();
+                guardThis->updateStatusLabel();
                 kPro.set(guardThis->m_captureProgressPid, "OpenTrace 失败", 0, 100.0f);
             }, Qt::QueuedConnection);
             return;
@@ -897,6 +904,7 @@ void DirectKernelCallMonitorWidget::startCapture()
         kPro.set(guardThis->m_captureProgressPid, "接收 syscall 事件", 0, 55.0f);
 
         const ULONG processStatus = ::ProcessTrace(&traceHandle, 1, nullptr, nullptr);
+        guardThis->m_processTraceStatus.store(processStatus == ERROR_CANCELLED ? ERROR_SUCCESS : processStatus);
         guardThis->publishCorrelatedRows(guardThis->m_stackCorrelator.Expire(correlationNowMs(), true));
         guardThis->m_frameInspectionCache.clear();
         const std::uint64_t ownedTraceHandle = guardThis->m_traceHandle.exchange(0);
@@ -1128,6 +1136,21 @@ void DirectKernelCallMonitorWidget::updateStatusLabel()
             ks::ui::ApplyStatusRole(m_statusLabel, ks::ui::StatusRole::Info);
         }
     }
+    else if (m_startTraceStatus.load() != ERROR_SUCCESS)
+    {
+        m_statusLabel->setText(QStringLiteral("● StartTrace失败:%1").arg(m_startTraceStatus.load()));
+        ks::ui::ApplyStatusRole(m_statusLabel, ks::ui::StatusRole::Error);
+    }
+    else if (m_openTraceStatus.load() != ERROR_SUCCESS)
+    {
+        m_statusLabel->setText(QStringLiteral("● OpenTrace失败:%1").arg(m_openTraceStatus.load()));
+        ks::ui::ApplyStatusRole(m_statusLabel, ks::ui::StatusRole::Error);
+    }
+    else if (m_processTraceStatus.load() != ERROR_SUCCESS)
+    {
+        m_statusLabel->setText(QStringLiteral("● ProcessTrace结束:%1").arg(m_processTraceStatus.load()));
+        ks::ui::ApplyStatusRole(m_statusLabel, ks::ui::StatusRole::Warning);
+    }
     else
     {
         m_statusLabel->setText(QStringLiteral("● 空闲  事件=%1").arg(eventCount));
@@ -1143,6 +1166,11 @@ void DirectKernelCallMonitorWidget::updateStatusLabel()
         .arg(m_stackMatched.load()).arg(m_stackMissing.load()).arg(m_stackConflicts.load())
         .arg(m_stackCapacityEvicted.load()).arg(m_etwEventsLost.load()).arg(m_etwBuffersLost.load())
         .arg(static_cast<qulonglong>(queueDropped)));
+    if (m_stackEnableStatus.load() != ERROR_SUCCESS)
+    {
+        m_statusLabel->setText(m_statusLabel->text() + QStringLiteral(" | 调用栈启用失败：%1").arg(m_stackEnableStatus.load()));
+        ks::ui::ApplyStatusRole(m_statusLabel, ks::ui::StatusRole::Error);
+    }
     if (m_sessionStopStatus.load() != ERROR_SUCCESS)
     {
         m_statusLabel->setText(m_statusLabel->text() + QStringLiteral(" | ETW 会话停止失败：%1").arg(m_sessionStopStatus.load()));
@@ -1354,14 +1382,24 @@ void DirectKernelCallMonitorWidget::publishCorrelatedRows(
         auto& row = output.row;
         row.pid = output.pid;
         row.tid = output.tid;
-        // Unknown header identities can be filled only by an exact stack match.
-        if (row.pid == UINT32_MAX || !shouldCapturePid(row.pid) || m_capturePaused.load())
+        // Rejected arrivals count as drops; do not flood the UI queue with them.
+        // Global capture can show raw rows with unknown identity. PID-scoped
+        // capture still requires a known header or exact stack payload identity.
+        if (output.state == ks::evidence::syscall::CorrelationState::CapacityEvicted
+            || !shouldCapturePid(row.pid) || m_capturePaused.load())
         {
             continue;
         }
-        row.pidTidText = QStringLiteral("%1 / %2").arg(row.pid).arg(row.tid);
-        row.processText = processNameForPid(row.pid, &row.processCreationTime100ns);
-        if (row.processCreationTime100ns > row.eventTime100ns)
+        row.pidTidText = QStringLiteral("%1 / %2").arg(
+            row.pid == UINT32_MAX ? QStringLiteral("<未知>") : QString::number(row.pid),
+            row.tid == UINT32_MAX ? QStringLiteral("<未知>") : QString::number(row.tid));
+        row.processText = row.pid == UINT32_MAX ? QStringLiteral("<未知>")
+            : processNameForPid(row.pid, &row.processCreationTime100ns);
+        if (row.pid == UINT32_MAX)
+        {
+            row.verdictText = QStringLiteral("证据不足：进程身份不可验证");
+        }
+        else if (row.processCreationTime100ns > row.eventTime100ns)
         {
             row.processText = QStringLiteral("PID %1").arg(row.pid);
             row.processCreationTime100ns = 0;
@@ -1374,10 +1412,6 @@ void DirectKernelCallMonitorWidget::publishCorrelatedRows(
         else if (output.state == ks::evidence::syscall::CorrelationState::Ambiguous)
         {
             row.verdictText = QStringLiteral("证据不足：调用栈关联冲突");
-        }
-        else if (output.state == ks::evidence::syscall::CorrelationState::CapacityEvicted)
-        {
-            row.verdictText = QStringLiteral("证据不足：调用栈关联容量已满");
         }
         row.detailText = QStringLiteral("%1 | %2 | %3").arg(row.verdictText, row.callAddressText, row.serviceName);
         row.detailAllText += QStringLiteral("%1\n%2\n调用栈启用状态：%3\n")
@@ -1846,7 +1880,7 @@ bool DirectKernelCallMonitorWidget::shouldCapturePid(std::uint32_t pid) const
         return true;
     }
     std::lock_guard<std::mutex> lock(m_captureConfigMutex);
-    return m_capturePidSet.find(pid) != m_capturePidSet.end();
+    return pid != UINT32_MAX && m_capturePidSet.find(pid) != m_capturePidSet.end();
 }
 
 void DirectKernelCallMonitorWidget::flushPendingRows()
@@ -1887,6 +1921,8 @@ void DirectKernelCallMonitorWidget::flushPendingRows()
     }
     if (rowList.empty())
     {
+        // Counters and setup failures must remain visible even with zero rows.
+        updateStatusLabel();
         if (!m_captureRunning.load() && m_uiUpdateTimer != nullptr)
         {
             m_uiUpdateTimer->stop();
@@ -2174,7 +2210,7 @@ void DirectKernelCallMonitorWidget::showEventContextMenu(const QPoint& position)
     const QTableWidgetItem* processIdItem = m_eventTable->item(row, EventColumnPidTid);
     std::uint32_t processId = 0;
     const bool hasProcessId = processIdItem != nullptr &&
-        ks::online_scan::tryParsePidFromText(processIdItem->text(), &processId) &&
+        ks::online_scan::tryParsePidFromText(processIdItem->text().section(QChar(u'/'), 0, 0), &processId) &&
         processId != 0U;
 
     // processCreationTime100ns：从事件行角色读取捕获时的进程 identity。
@@ -2205,7 +2241,8 @@ void DirectKernelCallMonitorWidget::showEventContextMenu(const QPoint& position)
                 ? m_eventTable->item(row, EventColumnPidTid)
                 : nullptr;
             std::uint32_t pidValue = 0;
-            if (pidItem == nullptr || !ks::online_scan::tryParsePidFromText(pidItem->text(), &pidValue))
+            if (pidItem == nullptr || !ks::online_scan::tryParsePidFromText(
+                    pidItem->text().section(QChar(u'/'), 0, 0), &pidValue))
             {
                 return {
                     QString(),

@@ -67,9 +67,29 @@ namespace ks::evidence::syscall
             std::uint64_t nowMs)
         {
             auto output = Expire(nowMs);
-            while (events_.size() >= kEventCapacity)
+            if (events_.size() >= kEventCapacity)
             {
-                PublishFront(nowMs, true, output);
+                // Preserve admitted events for their full collision/stack window.
+                // Evicting the oldest on every arrival starves all correlation
+                // under sustained load, even when its stack is already present.
+                auto found = buckets_.find(key);
+                if (found != buckets_.end())
+                {
+                    if (found->second.eventCount != 0)
+                    {
+                        // A rejected duplicate still invalidates the pending key.
+                        found->second.ambiguous = true;
+                    }
+                    else
+                    {
+                        earlyStacks_.erase(found->second.earlyPosition);
+                        buckets_.erase(found);
+                    }
+                }
+                Retire(key, nowMs);
+                output.push_back(Output{ std::move(row), pid, tid, {},
+                    CorrelationState::CapacityEvicted });
+                return output;
             }
             auto& bucket = buckets_[key];
             if (bucket.eventCount != 0 || retired_.find(key) != retired_.end())
@@ -166,7 +186,7 @@ namespace ks::evidence::syscall
             while (!events_.empty()
                 && (force || Elapsed(nowMs, events_.front().receivedMs, kWindowMs)))
             {
-                PublishFront(nowMs, false, output);
+                PublishFront(nowMs, output);
             }
             while (!earlyStacks_.empty()
                 && (force || Elapsed(nowMs, earlyStacks_.front().receivedMs, kWindowMs)))
@@ -266,8 +286,7 @@ namespace ks::evidence::syscall
             return header == kUnknownIdentity || header == payload;
         }
 
-        void PublishFront(std::uint64_t nowMs, bool capacity,
-            std::vector<Output>& output)
+        void PublishFront(std::uint64_t nowMs, std::vector<Output>& output)
         {
             Event event = std::move(events_.front());
             events_.pop_front();
@@ -275,13 +294,7 @@ namespace ks::evidence::syscall
             Bucket& bucket = found->second;
             Output result{ std::move(event.row), event.pid, event.tid, {},
                 CorrelationState::MissingStack };
-            if (capacity)
-            {
-                result.state = CorrelationState::CapacityEvicted;
-                // Any sibling must also remain unknown after forced publication.
-                bucket.ambiguous = true;
-            }
-            else if (bucket.ambiguous || (bucket.hasStack
+            if (bucket.ambiguous || (bucket.hasStack
                 && (!IdentityMatches(event.pid, bucket.stackPid)
                     || !IdentityMatches(event.tid, bucket.stackTid))))
             {

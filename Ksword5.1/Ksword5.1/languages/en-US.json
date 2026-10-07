@@ -6786,6 +6786,7 @@
     "内存访问范围超出地址空间或缓冲区容量。": "The memory access range exceeds the address space or buffer capacity.",
     "虚拟地址 %1 无法翻译，DDMA 读取已停止；已读取 %2 字节。": "Virtual address %1 could not be translated; DDMA reading stopped after %2 bytes.",
     " | ETW 会话停止失败：%1": " | ETW session stop failed: %1",
+    " | 调用栈启用失败：%1": " | Stack tracing enable failed: %1",
     "覆盖范围包含无法解码的字节；请调整范围或使用十六进制编辑。": "The overwrite range contains undecodable bytes. Adjust the range or edit hexadecimal bytes.",
     "关联用户调用栈并只读检查 syscall 桩，识别直接调用、疑似间接调用和 SysWhispers 兼容形态": "Correlate user stacks and inspect syscall stubs read-only to identify direct calls, suspected indirect calls, and SysWhispers-compatible patterns",
     "桩内调用号（静态）": "Stub service number (static)",

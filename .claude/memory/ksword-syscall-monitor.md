@@ -7,6 +7,7 @@
 - 不再用字段名模糊匹配或 payload DWORD0 猜服务号。进入事件只有 `SysCallAddress` 内核服务入口；退出只有 NTSTATUS，成功状态 0 不是服务号 0。
 - QPC 会话必须使用 `PROCESS_TRACE_MODE_RAW_TIMESTAMP`；否则头部被转换成 FILETIME、栈载荷仍为 QPC，关联全失败。FILETIME 仅用于显示及进程创建时间边界。
 - 关联 250 ms 窗口、2048 事件、512 提前栈；乱序/重复/冲突/迟到与退役键均有离线测试。缺栈和容量淘汰不能读成常规调用。严格关联不覆盖全部延迟共享用户栈、CPU 迁移、压缩 stack-key。
+- 2026-10-07 修复全局采集空列表：满载时必须拒绝新进入事件并保留已接纳事件的 250 ms 窗口。旧策略持续淘汰最老事件，导致已有正确栈的记录也永远无法匹配；每秒 10 万条的离线复现匹配/可显示均为 0。容量拒绝只计数，不压入 UI 队列；被拒绝的重复键仍须将已有 bucket 标为冲突。全局模式允许已接纳的未知 PID 原始进入事件显示证据不足，PID 筛选不借此放宽。PID/TID 列的跳转与上传只解析斜杠左侧，不能把未知 PID 后的 TID 当 PID。空队列刷新仍须更新统计和错误；TraceSetInformation 返回值直接显示，StartTrace/OpenTrace/ProcessTrace 错误保存到状态成员，避免被定时刷新覆盖。
 
 ## 易误判之处
 
@@ -22,6 +23,7 @@
 - `tools/syscall_monitor/run-tests.ps1` 编译执行两个生产 header 的独立 C++ 回归，包含截断/未知布局/错误归因、乱序/碰撞/容量/会话重置；这些是离线测试，不代替 Qt/MSVC 构建或实机 ETW 验收。
 - `tools/syscall_monitor/run-etw-probe.ps1` 是只触发自身标准 Windows 调用的独立实机探针；`CAPTURE_NOT_VERIFIED`（例如 StartTrace 访问拒绝）不是通过。停止失败保留自己的 session handle，消费者结束、析构或下次开始再试，不能丢掉所有权或停止别人的会话。
 - 主程序仍使用 `tools/Invoke-KSwordBuildCheck.ps1` 的 HostX64 MSVC 门禁。机器缺 Qt/MSBuild 时报告构建未验证，不安装或替换工具链绕过。
+- 2026-10-07 本机 x64 MSVC 离线判据 379 项通过，关联回归通过；10 万条/秒、总计 10 万条的连续输入发布 6144 条精确匹配、拒绝 91808 条，剩余 2048 条仍在窗口内。抽取生产发布/状态方法的 Qt offscreen 回归通过（全局未知 PID 可显示、目标 PID 不放宽、容量拒绝不进 UI、暂停不发布、栈启用与三阶段错误保留）。i18n audit 27751 条通过。主程序 HostX64 Release 已编译修改后的源码，但链接因运行中的 EXE 被占用报 LNK1104，未生成新版 EXE；用户明确接受仅剩占用的结果。实机 ETW 探针 StartTraceW=5，采集未验证。
 - UI 新文本定点同步双语语言包并运行 i18n audit。
 
 资料：[SysCallEnter](https://learn.microsoft.com/en-us/windows/win32/etw/syscallenter)、[SysCallExit](https://learn.microsoft.com/en-us/windows/win32/etw/syscallexit)、[StackWalk_Event](https://learn.microsoft.com/en-us/windows/win32/etw/stackwalk-event)、[SysWhispers2](https://github.com/jthuraisamy/SysWhispers2)、[SysWhispers3](https://github.com/klezVirus/SysWhispers3)。
