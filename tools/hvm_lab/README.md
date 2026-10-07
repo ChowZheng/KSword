@@ -199,4 +199,4 @@ Intel 保留原执行路径，新增调度边界目前由 AMD 接入；共享 ph
 `Test-GeneralAcceptance.ps1` 只验证离线快照门禁；`Test-AcceptanceCapture.ps1` 只验证进程输出采集。
 
 
-2026-10-07 架构候选：`prepare-svm-accel/resident-svm-accel` 独立测试物理 VLS/vGIF/clean；`prepare-svm-opt/resident-svm-opt` 追加受控 CPU 写跟踪和共享虚拟 VMCB 根缓存。metrics v11，需配套 CLI/GUI；候选目录 `artifacts/amd-perf-20261007-architecture`。本轮仅编译，测试执行 NOT_RUN，不启用宿主或来宾硬件。每 CPU targeted DPC 通过两次私有 QUERY 取得全 flush 确认证据，不在 root 调 IPI 或等待锁；退出后先撤销证明，再在 all-native 释放时排空 DPC。共享根注册表满时用原每 CPU 根，64 MiB 表预算不足则准备拒绝。详见性能计划末尾和 CLI 文档。
+2026-10-07 架构候选：`prepare-svm-accel/resident-svm-accel` 测试物理 VLS/clean；vGIF 路径因物理中断屏蔽错误已撤回，CLGI/STGI 始终截获。`prepare-svm-opt/resident-svm-opt` 追加受控 CPU 写跟踪和共享虚拟 VMCB 根缓存。metrics v11，需配套 CLI/GUI；最新修复候选目录 `artifacts/amd-perf-20261007-vgif-fix`，原 `architecture` 候选发生宿主硬锁，不得重用。修复版本 25 C 目标及 6 项 Python 离线测试已执行通过，硬件结果另记。每 CPU targeted DPC 通过两次私有 QUERY 取得全 flush 确认证据，不在 root 调 IPI 或等待锁；退出后先撤销证明，再在 all-native 释放时排空 DPC。共享根注册表满时用原每 CPU 根，64 MiB 表预算不足则准备拒绝。详见性能计划末尾和 CLI 文档。

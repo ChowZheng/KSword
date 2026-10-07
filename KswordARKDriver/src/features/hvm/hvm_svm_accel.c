@@ -5,6 +5,8 @@ void KswSvmAccelApply(KSW_SVM_ACCEL* Accel, KSW_SVM_VMCB* Current,
 {
     /* Never remove a source intercept when no matching prepared hardware contract exists. */
     unsigned misc;
+    /* Hardware vGIF does not mask physical interrupts for this transparent Windows host. */
+    (void)HardwareGif;
     /* This overlay is consumed exactly once after real hardware return. */
     Accel->Misc2 = (unsigned)KswSvmRead64(Current, KSW_VMCB_MISC2);
     /* Keep extension ownership separate from the baseline intercept dword. */
@@ -24,15 +26,9 @@ void KswSvmAccelApply(KSW_SVM_ACCEL* Accel, KSW_SVM_VMCB* Current,
             /* Saturating diagnostics cannot wrap into apparent inactivity. */
             if (Accel->VlsEntries != ~0ULL) { ++Accel->VlsEntries; }
         }
-        /* The interrupt coordinator has already installed V_GIF and validated event ownership. */
-        if (HardwareGif && (Accel->Features & (1U << 16))) {
-            /* Deferred events force the coordinator to decline this mode and retain STGI interception. */
-            misc &= ~0x30U;
-            /* Count selected entry contracts separately from actual removed exits. */
-            if (Accel->VgifEntries != ~0ULL) { ++Accel->VgifEntries; }
-        }
+        /* CLGI/STGI stay intercepted so every physical GIF transition reaches the coordinator. */
     }
-    /* Unknown and L1-owned intercepts remain exactly as requested by their original owners. */
+    /* Unknown and L1-owned intercepts, including CLGI/STGI, retain their original owners. */
     KswSvmWrite32(Current, KSW_VMCB_MISC2, misc);
 }
 int KswSvmAccelRestore(KSW_SVM_ACCEL* Accel, KSW_SVM_VMCB* Current)

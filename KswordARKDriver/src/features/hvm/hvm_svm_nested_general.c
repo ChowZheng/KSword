@@ -272,7 +272,8 @@ NTSTATUS KswordSvmNestedInitializeGeneral(KSW_SVM_CPU* Cpu)
     /* Missing VLS/vGIF/clean support keeps the same software execution contract. */
     nested->Accel.Enabled = ((((KSW_SVM_STATE*)Cpu->Runtime->BackendContext)->PreparedFlags & KSWORD_ARK_HVM_CONTROL_FLAG_SVM_ACCEL) != 0);
     /* The coordinator declines vGIF whenever software-owned pending events need an STGI notification. */
-    nested->GeneralMachine.HardwareGifAllowed = nested->Accel.Enabled && ((Cpu->Caps.Features & (1U << 16)) != 0);
+    /* vGIF is not physical GIF; transparent Windows keeps its software interrupt shielding. */
+    nested->GeneralMachine.HardwareGifAllowed = 0;
     /* Capture actual initial TPR, but do not create an executable overlay before assembly sets final RIP/RFLAGS. */
     if (KswSvmNestedMachineInitialize(&nested->GeneralMachine) != KSW_NSVM_MACHINE_READY) { return STATUS_NOT_SUPPORTED; }
     /* This is bound-resource readiness; public activation and hardware success are separate evidence. */

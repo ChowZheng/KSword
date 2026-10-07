@@ -8,7 +8,8 @@ static unsigned checks;
 static KSW_SVM_VMCB image;
 static KSW_SVM_ACCEL accel;
 static KSW_NSHADOW shadow;
-static KSW_SVM_U64 tableWords[8][512], values[2];
+__declspec(align(4096)) static KSW_SVM_U64 tableWords[8][512];
+static KSW_SVM_U64 values[2];
 static KSW_NSHADOW_PAGE pages[8];
 static unsigned reads, dirty;
 static int read_source(void* context, KSW_SVM_U64 address, KSW_SVM_U64* value)
@@ -33,7 +34,9 @@ static int test_accel(void)
             ((unsigned char*)&image)[KSW_VMCB_CS + 3] = 2;
             KswSvmWrite64(&image, KSW_VMCB_INTCTL, KSW_SVM_VGIF_ENABLE | KSW_SVM_VGIF);
             KswSvmAccelApply(&accel, &image, inner, svme ? KSW_SVM_EFER_SVME : 0, 1);
-            CHECK((unsigned)KswSvmRead64(&image, KSW_VMCB_MISC2) == (!inner && svme ? 0x7c3U : 0x7ffU));
+            CHECK((unsigned)KswSvmRead64(&image, KSW_VMCB_MISC2) == (!inner && svme ? 0x7f3U : 0x7ffU));
+            CHECK((KswSvmRead64(&image, KSW_VMCB_MISC2) & 0x30U) == 0x30U);
+            CHECK(accel.VgifEntries == 0);
             CHECK(accel.VlsActive == (unsigned)(!inner && svme));
             CHECK(KswSvmAccelRestore(&accel, &image));
             CHECK((unsigned)KswSvmRead64(&image, KSW_VMCB_MISC2) == 0x7ffU && !KswSvmRead64(&image, 0xb8));

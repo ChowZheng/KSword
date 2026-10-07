@@ -414,12 +414,8 @@ SelectCurrent:
     /* Never truncate a failed callback or issue host APIs to update interrupt priority. */
     if (!Machine->Io.WriteTpr(Machine->Io.Context, tpr)) { return KswNsvmMachineResult(Machine, KSW_NSVM_MACHINE_FAULT); }
     /* Apply masks only after all previous failure paths have retained their original state. */
-    /* A queued event or NMI/IRET observation restores the software STGI notification path. */
-    Machine->Overlay.HardwareGif = Machine->HardwareGifAllowed && !inner &&
-        (execution->Registers.Svm->Efer & KSW_SVM_EFER_SVME) && !execution->Pending.Count &&
-        !Machine->NmiHardwareMask && !Machine->NmiBlocked && !Machine->PhysicalNmiToken &&
-        !Machine->HeldNmiToken && !Machine->Iret.Requested && !Machine->Iret.Applied &&
-        !Machine->ArmedToken && !(event & (1ULL << 31));
+    /* Physical Windows interrupt shielding requires intercepted CLGI/STGI, even without pending events. */
+    Machine->Overlay.HardwareGif = 0;
     /* Every other path retains the original reversible physical masking overlay. */
     if (!KswSvmNestedInterruptPrepare(execution->Current, execution->Session, execution->Gif, &Machine->Overlay)) {
         /* No executable control overlay means no hardware entry is authorized. */

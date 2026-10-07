@@ -20,7 +20,7 @@ typedef struct _KSW_SVM_ACCEL {
 /* Select only L1 VLS; deeper SVM remains intercepted by the ordinary owner policy. */
 void KswSvmAccelApply(KSW_SVM_ACCEL* Accel, KSW_SVM_VMCB* Current,
     unsigned Inner, KSW_SVM_U64 VirtualEfer, unsigned HardwareGif);
-/* Remove only this monitor's VLS/STGI overlays before normal exit ownership dispatch. */
+/* Remove only this monitor's VLS overlay before normal exit ownership dispatch. */
 int KswSvmAccelRestore(KSW_SVM_ACCEL* Accel, KSW_SVM_VMCB* Current);
 /* Whitelisted clean groups use exact comparisons of private prior-entry controls. */
 unsigned KswSvmAccelCleanPrepare(KSW_SVM_ACCEL* Accel, const KSW_SVM_VMCB* Current, KSW_SVM_U64 Pa);

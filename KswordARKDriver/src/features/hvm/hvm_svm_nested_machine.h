@@ -65,7 +65,7 @@ typedef struct _KSW_NSVM_MACHINE {
     unsigned LastAction, LastPhysicalAction, NmiCount;
     /* One initial TPR observation is needed before any guest CR8 execution. */
     unsigned Initialized;
-    /* Physical capability/option gate; pending-event state still decides each entry independently. */
+    /* Reserved policy field: transparent Windows physical-GIF shielding currently forces this off. */
     unsigned HardwareGifAllowed;
 } KSW_NSVM_MACHINE;
 /* Call on the pinned CPU after binding trusted callbacks and before the first hardware entry. */

@@ -535,7 +535,7 @@ AMD metrics v10 增加可选 `perf`。命令 `prepare-svm-profile → self-test 
 
 ### AMD 架构优化实验入口（metrics v11，尚未实机验收）
 
-`hvm prepare-svm-accel → hvm self-test → hvm resident-svm-accel` 单独选择物理 VLS/vGIF 和私有 clean 控制；硬件缺少对应能力时继续软件执行。
+`hvm prepare-svm-accel → hvm self-test → hvm resident-svm-accel` 单独选择物理 VLS 和私有 clean 控制；硬件缺少对应能力时继续软件执行。vGIF 不能屏蔽物理中断，本模式保留 CLGI/STGI 截获与物理 INTR/NMI 软件协调；`vgifSelected/vgifEntries` 保持零。
 `hvm prepare-svm-opt → hvm self-test → hvm resident-svm-opt` 另外启用 CPU 写入跟踪、VMCB 身份共享 NPT02 缓存和整数 MSR 快路。`hvm_ctl` 直接使用同名命令，不加 `hvm` 前缀。两种准备/启动模式必须匹配；结束仍使用 `stop → teardown`，不能从 CLI 退出推断驱动已经停止。
 
 metrics 升为 v11，主协议仍 v6；旧 metrics 请求明确版本不匹配。`svmProcessors[].optimization` 报告请求标志、VLS/vGIF 选择、clean mask、共享根/迁移计数、写跟踪代次/逐核确认与源依赖撤销。`stableVmcb01Pa/stableVmcb02Pa` 是固定资源身份，`vmcbPa` 仍为当前选择的物理执行页，跨窗口统计不能把正常切层当成资源更换。选择次数不是被消除的退出次数，也不是完整 L2 OS 通过。

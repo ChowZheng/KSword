@@ -314,9 +314,33 @@ static int software_int_npf(void)
     return 0;
 }
 
+static int physical_gif_cycle(void)
+{
+    KSW_NSVM_MACHINE* m = &model.machine;
+    initialize();
+    model.msrs.Efer = KSW_SVM_EFER_SVME;
+    m->HardwareGifAllowed = 1;
+    KswSvmWrite32(&model.current, KSW_VMCB_MISC2, 0x30U);
+    CHECK(KswSvmNestedMachineInitialize(m) == KSW_NSVM_MACHINE_READY);
+    CHECK(KswSvmNestedMachineEntry(m) == KSW_NSVM_MACHINE_READY);
+    CHECK(!m->Overlay.HardwareGif);
+    CHECK((KswSvmRead64(&model.current, KSW_VMCB_MISC2) & 0x30U) == 0x30U);
+    hardware_exit(0x85, 0);
+    CHECK(KswSvmNestedMachineExit(m) == KSW_NSVM_MACHINE_READY);
+    CHECK(!model.execution.Gif);
+    CHECK(KswSvmNestedMachineEntry(m) == KSW_NSVM_MACHINE_READY);
+    CHECK(m->Overlay.ForcedMask && !m->Overlay.HostIf && !m->Overlay.HardwareGif);
+    CHECK(KswSvmNestedInterceptRequested(&model.current, 0x61) == 1);
+    hardware_exit(0x84, 0);
+    CHECK(KswSvmNestedMachineExit(m) == KSW_NSVM_MACHINE_READY);
+    CHECK(model.execution.Gif);
+    CHECK(KswSvmNestedMachineEntry(m) == KSW_NSVM_MACHINE_READY);
+    CHECK(!m->Overlay.ForcedMask && !m->Overlay.HardwareGif);
+    return 0;
+}
 int main(void)
 {
-    if (ordinary_cycle() || irq_window() || nmi_ownership() || held_nmi_iret() || retained_failures() || nmi_collision() || software_int_npf()) { return 1; }
+    if (physical_gif_cycle() || ordinary_cycle() || irq_window() || nmi_ownership() || held_nmi_iret() || retained_failures() || nmi_collision() || software_int_npf()) { return 1; }
     puts("nested coordinator integration fixtures passed (simulated hardware only)");
     return 0;
 }
