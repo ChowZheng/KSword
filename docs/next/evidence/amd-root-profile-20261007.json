@@ -1,0 +1,218 @@
+{
+  "kind": "physical-amd-profile-observation",
+  "sourceCommit": "1c528dd3f5915b3ac002a7d113489dec8f5a7033",
+  "sysPdb": {
+    "guid": "6af862d1-e5f0-4522-9c0e-4d9ae9bd7a7a",
+    "age": 5
+  },
+  "hvmVersion": 6,
+  "metricsVersion": 10,
+  "candidate": "artifacts/amd-perf-20261007-fast",
+  "signedSysSha256": "31c3fd432444c5ae9167c94ed24058be8e519e53e3a3fafa32d0dc2780adcfe0",
+  "host": {
+    "bootId": "2026-10-07T07:00:30.5000000Z",
+    "LabHostReady": true,
+    "hypervisorPresent": false,
+    "vbs": 0,
+    "selfTestProcessors": 32,
+    "activeProcessors": 32,
+    "stopTestedInThisRun": false
+  },
+  "vm": {
+    "config": "KSword-AMD-Lab.vmx",
+    "vcpus": 1,
+    "memoryMiB": 8192,
+    "monitorMode": "CPL0",
+    "display": "Windows logo/spinner, progressing (user)",
+    "desktopVerified": false,
+    "innerFullOsPassed": false
+  },
+  "sampling": {
+    "mask": 63,
+    "windows": [
+      {
+        "seconds": 10.6596797,
+        "completeCpuCoverage": true,
+        "completeTimingCoverage": true
+      },
+      {
+        "seconds": 10.7996037,
+        "completeCpuCoverage": true,
+        "completeTimingCoverage": true
+      }
+    ],
+    "excluded": [],
+    "totalExits": 3867015,
+    "sampledRootCycles": 910090475,
+    "buckets": {
+      "L1/MSR": {
+        "ticks": 32435300,
+        "fraction": 0.03563964341017853
+      },
+      "L1/XSETBV": {
+        "ticks": 2351975,
+        "fraction": 0.002584330969951092
+      },
+      "L1/VMLOAD": {
+        "ticks": 64124925,
+        "fraction": 0.07045994520489844
+      },
+      "L1/VMSAVE": {
+        "ticks": 63770950,
+        "fraction": 0.07007100035850831
+      },
+      "L1/STGI": {
+        "ticks": 3256000,
+        "fraction": 0.0035776662754326708
+      },
+      "L1/CLGI": {
+        "ticks": 2917025,
+        "fraction": 0.003205203306847047
+      },
+      "L1/VMRUN": {
+        "ticks": 661892500,
+        "fraction": 0.7272820869815169
+      },
+      "L1/CPUID": {
+        "ticks": 286700,
+        "fraction": 0.0003150236244369001
+      },
+      "L1/NPF": {
+        "ticks": 0,
+        "fraction": 0.0
+      },
+      "L1/IO": {
+        "ticks": 0,
+        "fraction": 0.0
+      },
+      "L1/IRQ": {
+        "ticks": 0,
+        "fraction": 0.0
+      },
+      "L1/other": {
+        "ticks": 0,
+        "fraction": 0.0
+      },
+      "L2/MSR": {
+        "ticks": 4700,
+        "fraction": 5.164321712080329e-06
+      },
+      "L2/XSETBV": {
+        "ticks": 0,
+        "fraction": 0.0
+      },
+      "L2/VMLOAD": {
+        "ticks": 0,
+        "fraction": 0.0
+      },
+      "L2/VMSAVE": {
+        "ticks": 0,
+        "fraction": 0.0
+      },
+      "L2/STGI": {
+        "ticks": 0,
+        "fraction": 0.0
+      },
+      "L2/CLGI": {
+        "ticks": 0,
+        "fraction": 0.0
+      },
+      "L2/VMRUN": {
+        "ticks": 0,
+        "fraction": 0.0
+      },
+      "L2/CPUID": {
+        "ticks": 28775,
+        "fraction": 3.161773558832159e-05
+      },
+      "L2/NPF": {
+        "ticks": 74492100,
+        "fraction": 0.08185131264009768
+      },
+      "L2/IO": {
+        "ticks": 3114075,
+        "fraction": 0.003421720241605649
+      },
+      "L2/IRQ": {
+        "ticks": 1379675,
+        "fraction": 0.0015159756506626443
+      },
+      "L2/other": {
+        "ticks": 35775,
+        "fraction": 3.9309278563760376e-05
+      }
+    },
+    "stages": {
+      "xstate_save": {
+        "ticks": 12354375,
+        "fraction": 0.01357488660674094
+      },
+      "host_restore": {
+        "ticks": 8249150,
+        "fraction": 0.00906409881940584
+      },
+      "entry_coordination": {
+        "ticks": 12637125,
+        "fraction": 0.013885570003355985
+      },
+      "guest_restore": {
+        "ticks": 23140450,
+        "fraction": 0.0254265379494275
+      },
+      "dispatch": {
+        "ticks": 853709375,
+        "fraction": 0.9380489066210698
+      }
+    },
+    "dispatchDetails": {
+      "fetch": {
+        "ticks": 132153425,
+        "fraction": 0.14520910681984667
+      },
+      "operand": {
+        "ticks": 23696775,
+        "fraction": 0.026037823327400497
+      },
+      "permissions": {
+        "ticks": 294074475,
+        "fraction": 0.3231266374917285
+      },
+      "npt12_sync": {
+        "ticks": 273369250,
+        "fraction": 0.30037590493406713
+      },
+      "writeback": {
+        "ticks": 11207625,
+        "fraction": 0.012314847048586021
+      },
+      "npt_walk": {
+        "ticks": 61010500,
+        "fraction": 0.06703784038614402
+      },
+      "shadow_install": {
+        "ticks": 2448775,
+        "fraction": 0.002690694021382874
+      },
+      "remainder": {
+        "ticks": 55748550,
+        "fraction": 0.06125605259191401
+      }
+    },
+    "hardwareTlbIssued": {
+      "0": 3348503,
+      "1": 164631,
+      "3": 353881,
+      "7": 0
+    },
+    "limitations": "Periodic 1/64 samples; possible phase aliasing. Weights exclude hardware VMEXIT/VMRUN, guest execution and VMware L1 work; not wall-time fractions."
+  },
+  "rawEvidence": {
+    "10s-metrics.json": "d825190a2cc27e7e9de906e3e32350bf3c355874972abdcb8f6f93825f7d9c13",
+    "20s-metrics.json": "8d5f38197967f4964d2f6f8c5ec784155d3c079d560eda5cf068424c019a8d23",
+    "40s-metrics.json": "24fca0c80e992abf1cf591b3d01983779dbd65131c597db6600538232bea63ab",
+    "status-selftest.json": "a51a810db979fbb6406cd56abdebab961f9d6eff6c4a450a7a6eeff10c4369e1",
+    "status-resident.json": "ff2a915b1e26458e5a730301674ab2755c9b4c4182d0c8bcfe18bdc753f1aaf3",
+    "control.log": "3808eb083c268d678179fbd75afea5164b42c9a7a62b359c492a72b5bef149f3",
+    "vmware-start-evidence.txt": "63f9fa4c438edd4e49297741680e6c087bf5f4b8270a3db611331f32d5a9704d"
+  }
+}

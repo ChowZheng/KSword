@@ -6,6 +6,14 @@ P1 已本地提交 `8646bd5c`，未推送：双页批量取指、VMRUN 首遍 id
 
 驱动标准64位MSVC/WDK Release /WX + x64 API Universal/INF/CAT通过；CLI/JSON/PS5CP936/命令门通过，宿主23测试目标及profile5项通过。候选 `artifacts/amd-perf-20261006-profile` 未签名未加载；GUI需要后续同步构建ABI v10。P2整数MSR快路已实装，见后述；VLS、vGIF、稳定01/02+clean未实装。用户暂时不能UAC，未触碰驱动/VM/启动配置。细节见性能计划末尾实施记录。
 
+## 2026-10-07 实体机周期采样首轮（参考模式，未启用 fast）
+
+用户签名后，Luna 用 `artifacts/amd-perf-20261007-fast` 的 1c528dd3/RSDS 6af862d1-e5f0-4522-9c0e-4d9ae9bd7a7a age5 候选真实加载；普通Authenticode证书时间失败仍记录，不能代替实际内核加载结果。LabHostReady / HypervisorFalse / VBS0 / bootId2026-10-07T07:00:30.5000000Z。32/32 sequential selftest与profile模式32/32 ACTIVE成功。VMX从8CPU冷态只改numvcpus/coresPerSocket=1，内存8192保持；vmrun真实启动，CPL0/NumVCPUs1；用户看到Windowslogo/转圈且有进展，**未确认桌面/完整L2 OS通过**。
+
+原始证据 `artifacts/amd-perf-20261007-profile-live`；独立摘要 `docs/next/evidence/amd-root-profile-20261007.json`。三份perf/hotspot各32CPU有效，两窗actualQPC10.6596797/10.7996037秒，不用10/20/40文件标签作间隔。3,867,015次退出，采样root910,090,475ticks；样本root成本L1 VMRUN72.73%、VMLOAD7.05%、VMSAVE7.01%、L2 NPF8.19%、MSR3.56%；内部permissions32.31%、NPT12sync30.04%、fetch14.52%。这些是周期性1/64样本的软件root分布，非walltime或纯VMEXIT硬件成本。第二窗cache仅30CPU可比，两CPU general序列busy不可当0活动；包括SourceSync触发reset471、pool0，不能把未检验累计计数做差。
+
+补采 `steady-1cpu` QPC12.9236/11.4020秒，32 ACTIVE、perf有效；NPF+943912/+1086009（约73k/95k每秒），无7f/INVALID/DF或首故障锁存，Tools曾短暂恢复再超时，仍无桌面证据。首轮软件瓶颈优先级已实测收敛到VMRUN权限图/源同步/取指，不能按MSR退出次数推断其占用最多。当前已授权Luna保存A-final并仅结束实验克隆，再按stop全核原生→teardown成功的顺序切换同一SYS `prepare-svm-fast/self-test/resident-svm-fast`，测试B单核；busy/不完整必须保留资源。尚无fast动态结果、profile本轮stop结果或8核新候选验收。
+
 ## 2026-10-07 P2 整数叶续接（尚无动态结果）
 
 `prepare-svm-fast/resident-svm-fast`：独立 FAST_MSR=0x40000，强制 general+profile，prepare/start模式相等。Fast pointer CPU158h、Perf150h有C_ASSERT；eligible须L1idle无租约/队列/注入/NMI IRQ IRET窗口/TLB，保留固定GIF=0/1遮罩并核对完整INT_CTL/真实CR8。scalar叶仅EFER/HSAVE/XSS读及同值写，XSS仍查XSAVES；不取消MSRPM也不物理HSAVE passthrough，变值/不符/任何非MSR慢路。EFER读实时硬件LMA+虚拟SVME，同值写同步软件镜像。跳过XSTATE/mask和host/guest VMLOAD配对仅因叶不修改guest非自动状态；FastSubset计数包含在普通Hotspots内，ring只记录慢路。

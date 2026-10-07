@@ -188,3 +188,10 @@ P0 证据：`tools/hvm_lab/build-tests.cmd` 23 目标通过（session 3366 项�
 P2 的可切换候选已实现（2026-10-07）：`prepare-svm-fast/resident-svm-fast` 单独加入 FAST_MSR；其 L1 entry 必须无租约、队列、注入、NMI/IRQ/IRET 窗口、待 flush，且下一次退出保持 INT_CTL/物理 CR8。固定 GIF=0/1 的遮罩都保留，不省略需要重新协调的事件。EFER/HSAVE/XSS 读和同值写通过专用 scalar C 叶，变值写全部回完整桥；XSS 无 XSAVES 则回完整架构拒绝。叶不使用宿主 GS/TLS/回调、真实 SVM MSR、不访问 guest RAM；EFER 的硬件 LMA 实时取 VMCB，并在同值写时同步虚拟镜像。汇编只在合格 MSR 退出时调用它，跳过 XSTATE/mask/VMLOAD 配对；其间 guest VMLOAD 状态和所有向量组件保持 live。Hotspots/逐 CPU退出/机器计数精确累计，快路 ring 不逐次记录，FastSubset 不额外加到 exit total。
 
 链接门直接反汇编完整 `hvm_svm_fast.obj`，闭集整数指令、仅本函数内直跳、无 call/向量/x87/FS/GS；Release 二进制 229 条指令通过。源码的 volatile scalar + compiler barriers 防止聚合复制和序列外重排，禁用该叶 LTCG；不依赖不受支持的编译器“禁 SIMD”选项。portable leaf/准入测试 208 项、全部24 C目标、分析器/机器码门6项通过；生产 JSON/PS5CP936、87 命令目录通过，WDK零警告/API/INF/CAT通过。尚无真实 XSTATE/事件/加速收益结果，不能据无SIMD代码证明完整硬件正确性。相同 SYS 可用 profile 与 fast 两种模式作阶段 A/B，不混 VLS/vGIF。
+
+
+## 2026-10-07 首轮硬件数据与优先级更新
+
+实体机32CPU profile准入、自检、ACTIVE与周期计数有效性已真实通过；单核VM启动到Windows标志，有用户进展观察，完整桌面尚未通过。摘要与原始文件哈希见 `evidence/amd-root-profile-20261007.json`。软件root样本中的VMRUN约72.73%，权限图/源同步/取指分别32.31/30.04/14.52%；MSR3.56%。应先在实际profile数据下进一步削减页表重复翻译、权限图捕获/合并与源表同步的内存窗口开销；P2快路保留为独立比较，不宣称凭退出次数就能恢复原生性能。
+
+NPF逐步增多，补采达到73k/95k每秒，没有terminal锁存；raw RIP/CR3/GPA仍变化，无法仅据计数断言固定NPF循环或正常启动成功。Root采样不包含硬件VMEXIT/VMRUN和VMware自身工作；周期性1/64可能相位偏采样。测试B按同签后SYS、同单核VM独立切fast；收尾必须确认32核全部原生且teardown成功。8核、XSTATE专项、VLS/vGIF与clean仍未完成动态验收。
