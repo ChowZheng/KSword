@@ -92,8 +92,25 @@ static int KswNsvmSessionReadSourceBatch(void* Context, KSW_SVM_U64 Address, KSW
     }
     /* Changing pages discards the previous image; consecutive words reuse only this fresh call's copy. */
     if (!capture->Valid || capture->Page != (Address & ~4095ULL)) {
+        /* Singleton ancestor pages are cheaper as exact words than complete 4-KiB snapshots. */
+        unsigned low = 0, high = io->Shadow->SourceCount, middle;
         /* A failed copy cannot authorize reuse of old contents. */
         capture->Page = Address & ~4095ULL; capture->Valid = 2;
+        /* The publication ledger is sorted by GPA, allowing one bounded page-density lookup. */
+        while (low < high) {
+            /* Find the first tracked word in this page, including addresses before the submitted word. */
+            middle = low + (high - low) / 2U;
+            /* Comparing page bases does not alter any tracked source identity. */
+            if ((io->Shadow->SourceAddress[middle] & ~4095ULL) < capture->Page) { low = middle + 1U; }
+            /* Keep matching words in the candidate range. */
+            else { high = middle; }
+        }
+        /* Fewer than four tracked words retain the original fresh exact-word path for this page. */
+        if (io->Shadow->SourceCount - low < 4U ||
+            (io->Shadow->SourceAddress[low + 3U] & ~4095ULL) != capture->Page) {
+            /* This call's page marker prevents repeating the density search for its remaining words. */
+            return KswNsvmSessionReadSource((void*)io, Address, Value);
+        }
         /* Full-page transport is optional; failure preserves the original exact-word fallback. */
         if (KswSvmNestedReadOperandPage(&io->Operand, Address & ~4095ULL,
                 io->SourceSyncPage, &result) != KSW_NNPT_OK) {

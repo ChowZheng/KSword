@@ -5,32 +5,46 @@
 static void KswNshadowTrackSources(KSW_NSHADOW* Shadow, const KSW_NMMU_RESULT* Result)
 {
     /* Each resolved source path has at most four architectural words. */
-    unsigned path, source;
+    unsigned path, source, low, high, middle, move;
     /* Synthetic/untracked paths require a conservative reset on the next invalidation. */
     if (!Result->Inner.Count || Result->Inner.Count > 4U) { Shadow->SourceUntracked = 1; return; }
     /* Duplicate source words are stored once for the complete sparse root. */
     for (path = 0; path < Result->Inner.Count; ++path) {
-        /* A previously recorded frame must retain the same committed interpretation. */
-        for (source = 0; source < Shadow->SourceCount; ++source) {
-            /* Ignore Accessed, but include Dirty: clearing D requires write-fault accounting again. */
-            if (Shadow->SourceAddress[source] == Result->Inner.EntryAddress[path]) {
-                /* Conflicting provenance cannot be overwritten while old leaves remain published. */
-                if ((Shadow->SourceValue[source] ^ Result->Inner.EntryValue[path]) & ~0x20ULL) { Shadow->SourceUntracked = 1; }
-                /* This exact source GPA already belongs to the ledger. */
-                break;
-            }
+        /* Maintain address order during publication so later VMRUN validation reads each page once. */
+        low = 0; high = Shadow->SourceCount;
+        /* A bounded binary search replaces repeated linear deduplication at NPF time. */
+        while (low < high) {
+            /* All indices refer to initialized ledger entries. */
+            middle = low + (high - low) / 2U;
+            /* Select the first source address not less than this newly resolved path word. */
+            if (Shadow->SourceAddress[middle] < Result->Inner.EntryAddress[path]) { low = middle + 1U; }
+            /* Retain a matching address as the lower bound, including index zero. */
+            else { high = middle; }
         }
-        /* The fixed ledger is bounded independently from the page-table allocation pool. */
-        if (source == Shadow->SourceCount) {
-            /* Overflow loses optimization eligibility, never mapping correctness. */
-            if (source == KSW_NSHADOW_SOURCE_WORDS) { Shadow->SourceUntracked = 1; return; }
-            /* Preserve committed source identity and all architectural permission/cache bits. */
-            Shadow->SourceAddress[source] = Result->Inner.EntryAddress[path];
-            /* Source values describe the mapping currently held by this root's leaves. */
-            Shadow->SourceValue[source] = Result->Inner.EntryValue[path];
-            /* Readers never inspect uninitialized array entries. */
-            ++Shadow->SourceCount;
+        /* A duplicate keeps its original committed value and never consumes capacity. */
+        source = low;
+        /* Ignore Accessed, but include Dirty: clearing D requires write-fault accounting again. */
+        if (source < Shadow->SourceCount && Shadow->SourceAddress[source] == Result->Inner.EntryAddress[path]) {
+            /* Conflicting provenance cannot replace a value used by already published mappings. */
+            if ((Shadow->SourceValue[source] ^ Result->Inner.EntryValue[path]) & ~0x20ULL) { Shadow->SourceUntracked = 1; }
+            /* Continue validating every word in the newly committed path. */
+            continue;
         }
+        /* Overflow loses optimization eligibility, never mapping correctness. */
+        if (Shadow->SourceCount == KSW_NSHADOW_SOURCE_WORDS) { Shadow->SourceUntracked = 1; return; }
+        /* Shift pairs together, with no allocation and no sorting work in the VMRUN path. */
+        for (move = Shadow->SourceCount; move > source; --move) {
+            /* Copy backwards so adjacent source identities cannot be overwritten. */
+            Shadow->SourceAddress[move] = Shadow->SourceAddress[move - 1U];
+            /* Keep each permission/frame value attached to its original address. */
+            Shadow->SourceValue[move] = Shadow->SourceValue[move - 1U];
+        }
+        /* Preserve committed source identity and every architectural permission/cache bit. */
+        Shadow->SourceAddress[source] = Result->Inner.EntryAddress[path];
+        /* Source values describe the mapping currently held by this root's leaves. */
+        Shadow->SourceValue[source] = Result->Inner.EntryValue[path];
+        /* Readers never inspect uninitialized array entries. */
+        ++Shadow->SourceCount;
     }
 }
 

@@ -1,5 +1,11 @@
 # AMD 实验后端与重启续接
 
+## 2026-10-07 bulk 实测与下一静态候选
+
+df1a584d签后装载/selftest32/profile ACTIVE32成功；clone1CPU/CPL0冷启动后5秒起采。用户反馈仍很慢、无明显改善，未确认桌面。原始artifacts/amd-perf-20261007-bulk/profile-live；摘要docs/next/evidence/amd-bulk-profile-20261007.json。32CPU perf/hotspot有效，两窗10.4242669/10.6282817秒，root样本632146950ticks，NPT12sync58.47%、permissions6.99%、fetch12.83%、NPTwalk6.26%；NPF+106536/+145326。cache各仅31CPU有效（完整性不能声明32），hits16432/16610与52505/52607，source-sync标志重置178/102，无pool回收。不是整体性能通过；不同boot阶段不能直接算加速倍数。
+
+代码发现源账本按发现次序穿插页，单页scratch会反复批读同页。下一静态候选按GPA排序插入源身份/value对，用binary去重，分组在NPF发布时完成，不把排序放进每次VMRUN。同步时低于4个源项的稀疏页保留exact-word，密集页一次批读；依旧全部校验、每VMRUN新捕获、Accessed-only容忍、overflow/conflict失效。真实publication夹具交错200词四页验证只4个page transport，加一稀疏页只1词读，后续末页权限改变仍reset。24 C目标/6 Python通过，session3897检查，WDK/API/INF/CAT零警告、integer gate229通过；未签候选artifacts/amd-perf-20261007-grouped，尚未加载。用户已去睡觉，最新要求只做理论/静态；VM与旧驱动保留，不再UAC/换版/重启，不沿用旧关机指令。
+
 ## 2026-10-07 fast 硬件采样与收尾
 
 测量后的批量候选：权限图合并对齐时每次OR一个64位word，未对齐保留byte路径，disabled/null语义和IOPM尾页不变；物理整页读取保留volatile qword源读取，对齐私有输出用qword存储。NPT12源同步借每CPU预分配4KiB scratch，只在当前VMRUN内复用连续同页，仍通过NPT01/PAT/RAM和源路径回读；缺少回调/整页读取失败则原exact-word路径，不跨VMRUN保留证明。200词夹具只1次源页读、下一调用源变化仍reset；未对齐、失败fallback、Accessed容忍/权限frame/cache/NX/Dirty变化均测试。24 C目标与Python6项通过，permission999733/session3423 checks；标准64位WDK /WX/API Universal/INF/CAT无警告，fast integer gate229指令通过。候选artifacts/amd-perf-20261007-bulk尚未签/加载，metrics仍v10，CLI复用已编译版本；这些是离线结果，未证明性能改善。

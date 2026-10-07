@@ -456,6 +456,55 @@ static int test_source_bulk_capture(void)
     }
     return 0;
 }
+static int test_source_page_grouping(void)
+{
+    MODEL* m = &model[0];
+    KSW_NMMU_RESULT mapping = {0};
+    KSW_SVM_U64 epoch;
+    static const unsigned sourcePages[] = {7,8,10,11};
+    unsigned i, path, page;
+    CHECK(initialize(m, 0)); m->io.ReuseNpt = m->mmu.OuterImmutable = 1;
+    m->io.Operand.ReadPage = read_source_page; m->io.SourceSyncPage = m->sourceScratch;
+    for (i = 0; i < 4; ++i) { page = sourcePages[i]; m->ram[4][page] = ((KSW_SVM_U64)page << 12) | 7; }
+    m->ram[4][12] = 0xc007;
+    CHECK(cache_roundtrip(m) == 0); epoch = m->shadow.Epoch;
+    mapping.Status = KSW_NNPT_OK; mapping.Gpa = 0x1000; mapping.Epoch = epoch; mapping.Leaf = 0x3067;
+    mapping.Inner.Complete = mapping.Outer.Complete = 1;
+    mapping.Inner.InputAddress = mapping.Gpa;
+    mapping.Inner.Address = mapping.Outer.InputAddress = mapping.Outer.Address = 0x3000;
+    mapping.Inner.Permissions = mapping.Outer.Permissions = 7;
+    mapping.Inner.Count = 4;
+    /* Mimic successive paths interleaving words from four different NPT12 pages. */
+    for (i = 0; i < 50; ++i) {
+        for (path = 0; path < 4; ++path) {
+            page = sourcePages[(i + path) % 4];
+            m->ram[page][i] = 0x3007 + 4096ULL * i;
+            mapping.Inner.EntryAddress[path] = ((KSW_SVM_U64)page << 12) + 8ULL * i;
+            mapping.Inner.EntryValue[path] = m->ram[page][i];
+        }
+        CHECK(KswSvmNestedShadowInstall(&m->shadow, &mapping) == KSW_NSHADOW_OK);
+    }
+    CHECK(m->shadow.SourceCount == 200 && !m->shadow.SourceUntracked);
+    for (i = 0; i < 200; ++i) {
+        if (i) { CHECK(m->shadow.SourceAddress[i - 1] < m->shadow.SourceAddress[i]); }
+        CHECK(m->shadow.SourceValue[i] == m->ram[m->shadow.SourceAddress[i] >> 12][(m->shadow.SourceAddress[i] & 4095) / 8]);
+    }
+    /* Deduplication preserves matching pairs without charging Accessed changes as conflicts. */
+    CHECK(KswSvmNestedShadowInstall(&m->shadow, &mapping) == KSW_NSHADOW_OK && m->shadow.SourceCount == 200);
+    mapping.Inner.EntryValue[0] ^= 0x20;
+    CHECK(KswSvmNestedShadowInstall(&m->shadow, &mapping) == KSW_NSHADOW_OK && !m->shadow.SourceUntracked);
+    /* A sparse fifth page should use one fresh word and avoid a full-page transport. */
+    mapping.Inner.Count = 1; mapping.Inner.EntryAddress[0] = 0xc000; mapping.Inner.EntryValue[0] = m->ram[12][0] = 0x3067;
+    CHECK(KswSvmNestedShadowInstall(&m->shadow, &mapping) == KSW_NSHADOW_OK);
+    ((unsigned char*)m->ram[6])[KSW_VMCB_TLB] = 3;
+    memset(m->pageReads, 0, sizeof(m->pageReads)); memset(m->wordReads, 0, sizeof(m->wordReads));
+    CHECK(cache_roundtrip(m) == 0 && m->shadow.Epoch == epoch);
+    for (i = 0; i < 4; ++i) { page = sourcePages[i]; CHECK(m->pageReads[page] == 1 && !m->wordReads[page]); }
+    CHECK(!m->pageReads[12] && m->wordReads[12] == 1);
+    m->ram[11][49] ^= 2;
+    CHECK(cache_roundtrip(m) == 0 && m->shadow.Epoch == epoch + 1 && !m->shadow.SourceCount);
+    return 0;
+}
 static int test_tlb_consumption(void)
 {
     MODEL* m = &model[0];
@@ -527,7 +576,7 @@ static int test_perf_boundaries(void)
 int main(void)
 {
     HANDLE threads[8]; unsigned i; DWORD resultCode;
-    if (test_transitions() || test_event_consumption() || test_cache_lifetime() || test_cache_transfer_chain() || test_cache_counter_edges() || test_npt_source_sync() || test_source_bulk_capture() || test_tlb_consumption() || test_perf_boundaries()) { return 1; }
+    if (test_transitions() || test_event_consumption() || test_cache_lifetime() || test_cache_transfer_chain() || test_cache_counter_edges() || test_npt_source_sync() || test_source_bulk_capture() || test_source_page_grouping() || test_tlb_consumption() || test_perf_boundaries()) { return 1; }
     for (i = 0; i < 8; ++i) { CHECK(initialize(&model[i], i)); threads[i] = CreateThread(NULL, 0, run_parallel, &model[i], 0, NULL); CHECK(threads[i]); }
     CHECK(WaitForMultipleObjects(8, threads, TRUE, 30000) == WAIT_OBJECT_0);
     for (i = 0; i < 8; ++i) {
