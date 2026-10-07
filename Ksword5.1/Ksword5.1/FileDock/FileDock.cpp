@@ -9,6 +9,7 @@
 #include "FileHandleUsageScanner.h"
 #include "../Internationalization/LanguageManager.h"
 #include "../MainWindow.h"
+#include "../MiscDock/DiskEditor/StorageControllerResearchDialog.h"
 
 // ============================================================
 // FileDock.cpp
@@ -13165,6 +13166,8 @@ void FileDock::initializeUi()
     m_mainSplitter->setStretchFactor(1, 1);
 
     m_rootTabWidget->addTab(m_fileManagerPage, QStringLiteral("文件管理"));
+    m_storageControllerPage = new ks::misc::StorageControllerResearchDialog(m_rootTabWidget);
+    m_rootTabWidget->addTab(m_storageControllerPage, QStringLiteral("存储控制器"));
     initializeRecoveryPage();
     if (m_fileRecoveryPage != nullptr)
     {
@@ -13177,6 +13180,9 @@ void FileDock::initializeUi()
     }
     ks::i18n::LanguageManager::instance().bindTab(
         m_rootTabWidget, m_fileManagerPage, QStringLiteral("file.tab.manager"), QStringLiteral("文件管理"));
+    ks::i18n::LanguageManager::instance().bindTab(
+        m_rootTabWidget, m_storageControllerPage,
+        QStringLiteral("file.tab.storage_controller"), QStringLiteral("存储控制器"));
     if (m_fileRecoveryPage != nullptr)
     {
         ks::i18n::LanguageManager::instance().bindTab(

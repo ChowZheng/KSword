@@ -602,4 +602,7 @@
   </Target>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets" />
+  <ItemGroup>
+    <ClInclude Include="..\shared\usermode\KswordArkServiceMode.h" />
+  </ItemGroup>
 </Project>

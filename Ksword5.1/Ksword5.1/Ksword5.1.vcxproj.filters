@@ -3129,4 +3129,26 @@
     <ClInclude Include="..\..\shared\ApiMonitorInjectionBroker.h" />
     <ClCompile Include="..\..\shared\ApiMonitorInjectionBroker.cpp" />
   </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="ArkDriverClient\ArkStorageControllerClient.cpp">
+      <Filter>Source Files\ArkDriverClient</Filter>
+    </ClCompile>
+    <ClInclude Include="ArkDriverClient\ArkStorageControllerClient.h">
+      <Filter>Header Files\ArkDriverClient</Filter>
+    </ClInclude>
+    <ClCompile Include="MiscDock\DiskEditor\StorageControllerResearchDialog.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClInclude Include="MiscDock\DiskEditor\StorageControllerResearchDialog.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="MiscDock\DiskEditor\StorageControllerInput.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="..\..\shared\usermode\KswordArkServiceMode.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+  </ItemGroup>
 </Project>

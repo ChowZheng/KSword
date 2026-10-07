@@ -39,6 +39,8 @@
 #include "ark_storage.h"
 #include "ark_system_time.h"
 #include "ark_startup.h"
+#include "ark_driver_lifecycle.h"
+#include "ark_storage_controller.h"
 #include "Trace.h"
 
 EXTERN_C_START

@@ -156,7 +156,7 @@ Lab use only.
 
 **Driver / Kernel** — service management, DriverObject / DeviceObject / MajorFunction inspection, transactional dispatch-table editor, loader-list removal (reversible), integrity & cross-view checks, unloaded-driver / PiDDB evidence. Object namespace, SSDT/SSSDT, IAT/EAT/inline hooks, callbacks (notify, registry, object, filter, bugcheck, shutdown, FS, logon, NMI, …), IDT baselines, descriptor-table & IOCTL decoding, disassembly.
 
-**File / Storage** — dual-pane manager, hashes, signatures, PE/strings/hex, unlocker, NTFS recovery, minifilter & Section evidence, raw filesystem browser with deleted-entry analysis (read-only by default, write requires unlock), device tree and R0 device-stack audit.
+**File / Storage** — dual-pane manager, hashes, signatures, PE/strings/hex, unlocker, NTFS recovery, minifilter & Section evidence, raw filesystem browser with deleted-entry analysis (read-only by default, write requires unlock), device tree and R0 device-stack audit. The File sidebar also exposes [KSword Controller](docs/StorageController.md), integrated into the main `KswordARK.sys`, with session control, conditional writes, reread verification and rollback. The optional manual PnP controller profile uses the same `KswordARK` service; the ordinary load profile keeps its existing SCM workflow.
 
 **Monitor** — per-process ETW, syscall capture, WinAPI agent, WMI subscriptions, ETW session management, risk center. Task-Manager-style live charts.
 

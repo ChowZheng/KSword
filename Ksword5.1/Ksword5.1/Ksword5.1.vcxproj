@@ -1396,6 +1396,13 @@
       <Private>false</Private>
     </ProjectReference>
   </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="ArkDriverClient\ArkStorageControllerClient.cpp" />
+    <ClInclude Include="ArkDriverClient\ArkStorageControllerClient.h" />
+    <ClCompile Include="MiscDock\DiskEditor\StorageControllerResearchDialog.cpp" />
+    <ClInclude Include="MiscDock\DiskEditor\StorageControllerResearchDialog.h" />
+    <ClInclude Include="MiscDock\DiskEditor\StorageControllerInput.h" />
+  </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ItemGroup>
     <MASM Include="OtherDock\DwmRemoteLoader.asm" />
@@ -1438,5 +1445,8 @@
     <ClInclude Include="..\..\shared\ApiMonitorInjectionProtocol.h" />
     <ClInclude Include="..\..\shared\ApiMonitorInjectionBroker.h" />
     <ClCompile Include="..\..\shared\ApiMonitorInjectionBroker.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="..\..\shared\usermode\KswordArkServiceMode.h" />
   </ItemGroup>
 </Project>

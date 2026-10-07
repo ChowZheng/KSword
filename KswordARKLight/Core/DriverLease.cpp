@@ -1,4 +1,5 @@
 #include "DriverLease.h"
+#include "../../shared/usermode/KswordArkServiceMode.h"
 
 #include <algorithm>
 #include <array>
@@ -172,6 +173,10 @@ bool DriverLease::acquire() {
 }
 
 void DriverLease::observeStartTransition(const bool runningBefore, const bool runningAfter) {
+    if (!ksword::ark::queryServiceProfile().scmManagementAllowed()) {
+        observeExplicitStop();
+        return;
+    }
     if (!registered_ || !DriverLeasePolicy::OwnsStartTransition(runningBefore, runningAfter)) {
         return;
     }
@@ -224,7 +229,7 @@ bool DriverLease::releaseRequestsStop() {
         }
     }
     registered_ = false;
-    return shouldStop;
+    return shouldStop && ksword::ark::queryServiceProfile().scmManagementAllowed();
 }
 
 void DriverLease::closeHandles() noexcept {

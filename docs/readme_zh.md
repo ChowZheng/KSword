@@ -105,7 +105,7 @@ DDMA 使用磁盘控制器的 `ATA_PASS_THROUGH_DIRECT` / `SCSI_PASS_THROUGH_DIR
 
 **驱动 / 内核** — 服务管理，DriverObject / DeviceObject / MajorFunction 检查，事务式派发表编辑器，加载链摘除（可恢复），完整性和 cross-view 检查，已卸载驱动 / PiDDB 证据。对象命名空间、SSDT/SSSDT、IAT/EAT/inline Hook、回调（notify、注册表、对象、filter、bugcheck、shutdown、FS、logon、NMI……）、IDT 基线、描述符表和 IOCTL 解码、反汇编。
 
-**文件 / 存储** — 双面板管理器、哈希、签名、PE/字符串/Hex、解锁、NTFS 恢复、minifilter 和 Section 证据、原始文件系统浏览和已删除条目分析（默认只读，写入需解锁）、设备树和 R0 设备栈审计。
+**文件 / 存储** — 双面板管理器、哈希、签名、PE/字符串/Hex、解锁、NTFS 恢复、minifilter 和 Section 证据、原始文件系统浏览和已删除条目分析（默认只读，写入需解锁）、设备树和 R0 设备栈审计。文件侧边栏直接提供 [KSword Controller](StorageController.md) 入口，控制器代码已并入主 `KswordARK.sys`，支持会话控制、条件写入、复读验证与回滚；可选手动 PnP 绑定使用同一个 `KswordARK` 服务，普通加载保留原有 SCM 流程。
 
 **监控** — 按进程 ETW、syscall 采集、WinAPI agent、WMI 订阅、ETW session 管理、风险中心。类任务管理器的实时图表。
 

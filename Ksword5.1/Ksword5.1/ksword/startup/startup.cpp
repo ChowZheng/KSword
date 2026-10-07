@@ -3,6 +3,7 @@
 #include "startup_internal.h"
 
 #include "../string/string.h"
+#include "../../../../shared/usermode/KswordArkServiceMode.h"
 
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -6439,6 +6440,14 @@ try {
         const ks::startup::StartupEntry& entry)
     {
         const std::wstring serviceName = ToWide(entry.actionLocator.serviceNameText);
+        if (ksword::ark::isKswordArkService(serviceName))
+        {
+            const auto profile = ksword::ark::queryServiceProfile();
+            if (!profile.scmManagementAllowed())
+                return MakeActionResult(ks::startup::StartupActionStatus::WriteFailed,
+                    false, false, ksword::ark::serviceProfileManagementError(profile),
+                    FromWide(ksword::ark::serviceProfileManagementMessage(profile)));
+        }
         if (serviceName.empty()
             || serviceName.find(L'\0') != std::wstring::npos
             || serviceName.find_first_of(L"\\/") != std::wstring::npos
@@ -6525,6 +6534,18 @@ try {
                 FromWide(L"服务或驱动配置已在枚举后变化；未删除陈旧目标。"));
         }
 
+        if (ksword::ark::isKswordArkService(serviceName))
+        {
+            const auto profile = ksword::ark::queryServiceProfile();
+            if (!profile.scmManagementAllowed())
+            {
+                ::CloseServiceHandle(serviceHandle);
+                ::CloseServiceHandle(scmHandle);
+                return MakeActionResult(ks::startup::StartupActionStatus::WriteFailed,
+                    false, false, ksword::ark::serviceProfileManagementError(profile),
+                    FromWide(ksword::ark::serviceProfileManagementMessage(profile)));
+            }
+        }
         const BOOL deleteOk = ::DeleteService(serviceHandle);
         const DWORD deleteError = deleteOk == FALSE ? ::GetLastError() : ERROR_SUCCESS;
         ::CloseServiceHandle(serviceHandle);

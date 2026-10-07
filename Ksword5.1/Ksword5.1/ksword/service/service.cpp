@@ -1,6 +1,7 @@
 #include "service.h"
 
 #include "../string/string.h"
+#include "../../../../shared/usermode/KswordArkServiceMode.h"
 
 #include <algorithm>
 #include <chrono>
@@ -75,6 +76,16 @@ namespace
         if (codeOut != nullptr) { *codeOut = 0; }
         if (textOut != nullptr) { *textOut = (text == nullptr) ? std::string() : std::string(text); }
         return false;
+    }
+
+    bool allowScmMutation(const std::wstring& name, std::string* textOut, std::uint32_t* codeOut)
+    {
+        if (!ksword::ark::isKswordArkService(name)) return true;
+        const auto profile = ksword::ark::queryServiceProfile();
+        if (profile.scmManagementAllowed()) return true;
+        return failWin32(
+            "KswordARK PnP binding must be managed in Device Manager; service configuration is preserved",
+            ksword::ark::serviceProfileManagementError(profile), textOut, codeOut);
     }
 
     // trimWide removes FormatMessage CR/LF and surrounding whitespace; it mutates the input string in place.
@@ -548,10 +559,33 @@ namespace ks::service
     {
         clearOutputs(textOut, codeOut);
         if (name.empty()) { return failText("StartServiceByName received an empty service name", textOut, codeOut); }
+        if (ksword::ark::isKswordArkService(name))
+        {
+            const auto profile = ksword::ark::queryServiceProfile();
+            if (profile.profile == ksword::ark::ServiceProfile::Unknown)
+                return failWin32(
+                    "Cannot read the KswordARK service profile; service configuration is preserved",
+                    ksword::ark::serviceProfileManagementError(profile), textOut, codeOut);
+            if (profile.profile == ksword::ark::ServiceProfile::StorageControllerPnp)
+            {
+                Guard scm = openScm(SC_MANAGER_CONNECT, textOut, codeOut);
+                if (!scm.ok()) return false;
+                Guard svc = openSvc(scm.get(), name, SERVICE_QUERY_STATUS, textOut, codeOut);
+                if (!svc.ok()) return false;
+                ServiceStatus current;
+                if (!queryStatusByHandle(svc.get(), &current, textOut, codeOut)) return false;
+                if (finalStatus) *finalStatus = current;
+                if (current.currentState == SERVICE_RUNNING) return true;
+                return failWin32(
+                    "Start the bound KswordARK storage controller in Device Manager",
+                    ERROR_SERVICE_NOT_ACTIVE, textOut, codeOut);
+            }
+        }
         Guard scm = openScm(SC_MANAGER_CONNECT, textOut, codeOut);
         if (!scm.ok()) { return false; }
         Guard svc = openSvc(scm.get(), name, SERVICE_START | SERVICE_QUERY_STATUS, textOut, codeOut);
         if (!svc.ok()) { return false; }
+        if (!allowScmMutation(name, textOut, codeOut)) return false;
         if (::StartServiceW(svc.get(), 0, nullptr) == FALSE)
         {
             const DWORD err = ::GetLastError();
@@ -565,11 +599,13 @@ namespace ks::service
     {
         clearOutputs(textOut, codeOut);
         if (name.empty()) { return failText("ControlServiceByName received an empty service name", textOut, codeOut); }
+        if (controlCode != SERVICE_CONTROL_INTERROGATE && !allowScmMutation(name, textOut, codeOut)) return false;
         Guard scm = openScm(SC_MANAGER_CONNECT, textOut, codeOut);
         if (!scm.ok()) { return false; }
         Guard svc = openSvc(scm.get(), name, static_cast<DWORD>(access) | SERVICE_QUERY_STATUS, textOut, codeOut);
         if (!svc.ok()) { return false; }
         SERVICE_STATUS ignored{};
+        if (controlCode != SERVICE_CONTROL_INTERROGATE && !allowScmMutation(name, textOut, codeOut)) return false;
         if (::ControlService(svc.get(), static_cast<DWORD>(controlCode), &ignored) == FALSE)
         {
             const DWORD err = ::GetLastError();
@@ -588,6 +624,7 @@ namespace ks::service
     {
         clearOutputs(textOut, codeOut);
         if (name.empty()) { return failText("DeleteServiceByName received an empty service name", textOut, codeOut); }
+        if (!allowScmMutation(name, textOut, codeOut)) return false;
         Guard scm = openScm(SC_MANAGER_CONNECT, textOut, codeOut);
         if (!scm.ok()) { return false; }
         Guard svc = openSvc(scm.get(), name, DELETE | SERVICE_STOP | SERVICE_QUERY_STATUS, textOut, codeOut);
@@ -598,6 +635,7 @@ namespace ks::service
             if (queryStatusByHandle(svc.get(), &current, nullptr, nullptr) && current.currentState != SERVICE_STOPPED)
             {
                 SERVICE_STATUS ignored{};
+                if (!allowScmMutation(name, textOut, codeOut)) return false;
                 (void)::ControlService(svc.get(), SERVICE_CONTROL_STOP, &ignored);
                 ServiceStatus finalStatus;
                 (void)waitByHandle(svc.get(), SERVICE_STOPPED, static_cast<DWORD>(stopTimeoutMs), &finalStatus);
@@ -616,6 +654,7 @@ namespace ks::service
                     codeOut);
             }
         }
+        if (!allowScmMutation(name, textOut, codeOut)) return false;
         if (::DeleteService(svc.get()) == FALSE)
         {
             const DWORD err = ::GetLastError();
@@ -632,6 +671,7 @@ namespace ks::service
         {
             return failText("CreateOrUpdateKernelDriverService requires serviceName and binaryPath", textOut, codeOut);
         }
+        if (!allowScmMutation(cfg.serviceName, textOut, codeOut)) return false;
 
         Guard scm = openScm(SC_MANAGER_CONNECT | SC_MANAGER_CREATE_SERVICE, textOut, codeOut);
         if (!scm.ok()) { return false; }
@@ -644,6 +684,7 @@ namespace ks::service
         {
             const DWORD openErr = ::GetLastError();
             if (openErr != ERROR_SERVICE_DOES_NOT_EXIST) { return failWin32("OpenServiceW failed", openErr, textOut, codeOut); }
+            if (!allowScmMutation(cfg.serviceName, textOut, codeOut)) return false;
             SC_HANDLE raw = ::CreateServiceW(
                 scm.get(),
                 cfg.serviceName.c_str(),
@@ -663,6 +704,7 @@ namespace ks::service
             created = true;
         }
 
+        if (!allowScmMutation(cfg.serviceName, textOut, codeOut)) return false;
         if (::ChangeServiceConfigW(
             svc.get(),
             SERVICE_KERNEL_DRIVER,
@@ -682,6 +724,7 @@ namespace ks::service
         SERVICE_DESCRIPTIONW desc{};
         std::wstring mutableDesc = cfg.description;
         desc.lpDescription = writableOrNull(mutableDesc);
+        if (!allowScmMutation(cfg.serviceName, textOut, codeOut)) return false;
         (void)::ChangeServiceConfig2W(svc.get(), SERVICE_CONFIG_DESCRIPTION, reinterpret_cast<LPBYTE>(&desc));
         if (createdOut != nullptr) { *createdOut = created; }
         return true;
@@ -691,6 +734,7 @@ namespace ks::service
     {
         clearOutputs(textOut, codeOut);
         if (name.empty()) { return failText("ChangeServiceConfiguration received an empty service name", textOut, codeOut); }
+        if (!allowScmMutation(name, textOut, codeOut)) return false;
         Guard scm = openScm(SC_MANAGER_CONNECT, textOut, codeOut);
         if (!scm.ok()) { return false; }
         Guard svc = openSvc(scm.get(), name, SERVICE_CHANGE_CONFIG, textOut, codeOut);
@@ -706,6 +750,7 @@ namespace ks::service
         const wchar_t* password = update.changePassword ? update.password.c_str() : nullptr;
         const wchar_t* display = update.changeDisplayName ? update.displayName.c_str() : nullptr;
 
+        if (!allowScmMutation(name, textOut, codeOut)) return false;
         if (::ChangeServiceConfigW(svc.get(), serviceType, startType, errorControl, binaryPath, group, nullptr, deps, account, password, display) == FALSE)
         {
             return failWin32("ChangeServiceConfigW failed", ::GetLastError(), textOut, codeOut);
@@ -717,6 +762,7 @@ namespace ks::service
     {
         clearOutputs(textOut, codeOut);
         if (name.empty()) { return failText("SetServiceDescription received an empty service name", textOut, codeOut); }
+        if (!allowScmMutation(name, textOut, codeOut)) return false;
         Guard scm = openScm(SC_MANAGER_CONNECT, textOut, codeOut);
         if (!scm.ok()) { return false; }
         Guard svc = openSvc(scm.get(), name, SERVICE_CHANGE_CONFIG, textOut, codeOut);
@@ -724,6 +770,7 @@ namespace ks::service
         SERVICE_DESCRIPTIONW desc{};
         std::wstring mutableDesc = description;
         desc.lpDescription = writableOrNull(mutableDesc);
+        if (!allowScmMutation(name, textOut, codeOut)) return false;
         if (::ChangeServiceConfig2W(svc.get(), SERVICE_CONFIG_DESCRIPTION, reinterpret_cast<LPBYTE>(&desc)) == FALSE)
         {
             return failWin32("ChangeServiceConfig2W(description) failed", ::GetLastError(), textOut, codeOut);
@@ -735,12 +782,14 @@ namespace ks::service
     {
         clearOutputs(textOut, codeOut);
         if (name.empty()) { return failText("SetDelayedAutoStart received an empty service name", textOut, codeOut); }
+        if (!allowScmMutation(name, textOut, codeOut)) return false;
         Guard scm = openScm(SC_MANAGER_CONNECT, textOut, codeOut);
         if (!scm.ok()) { return false; }
         Guard svc = openSvc(scm.get(), name, SERVICE_CHANGE_CONFIG, textOut, codeOut);
         if (!svc.ok()) { return false; }
         SERVICE_DELAYED_AUTO_START_INFO info{};
         info.fDelayedAutostart = delayedAutoStart ? TRUE : FALSE;
+        if (!allowScmMutation(name, textOut, codeOut)) return false;
         if (::ChangeServiceConfig2W(svc.get(), SERVICE_CONFIG_DELAYED_AUTO_START_INFO, reinterpret_cast<LPBYTE>(&info)) == FALSE)
         {
             return failWin32("ChangeServiceConfig2W(delayed auto-start) failed", ::GetLastError(), textOut, codeOut);
@@ -804,6 +853,7 @@ namespace ks::service
     {
         clearOutputs(textOut, codeOut);
         if (name.empty()) { return failText("ApplyServiceFailureSettings received an empty service name", textOut, codeOut); }
+        if (!allowScmMutation(name, textOut, codeOut)) return false;
         Guard scm = openScm(SC_MANAGER_CONNECT, textOut, codeOut);
         if (!scm.ok()) { return false; }
         Guard svc = openSvc(scm.get(), name, SERVICE_CHANGE_CONFIG, textOut, codeOut);
@@ -827,6 +877,7 @@ namespace ks::service
         info.lpCommand = writableOrNull(command);
         info.cActions = static_cast<DWORD>(actions.size());
         info.lpsaActions = actions.empty() ? nullptr : actions.data();
+        if (!allowScmMutation(name, textOut, codeOut)) return false;
         if (::ChangeServiceConfig2W(svc.get(), SERVICE_CONFIG_FAILURE_ACTIONS, reinterpret_cast<LPBYTE>(&info)) == FALSE)
         {
             return failWin32("ChangeServiceConfig2W(failure actions) failed", ::GetLastError(), textOut, codeOut);
@@ -834,6 +885,7 @@ namespace ks::service
 
         SERVICE_FAILURE_ACTIONS_FLAG flag{};
         flag.fFailureActionsOnNonCrashFailures = settings.failureActionsOnNonCrash ? TRUE : FALSE;
+        if (!allowScmMutation(name, textOut, codeOut)) return false;
         if (::ChangeServiceConfig2W(svc.get(), SERVICE_CONFIG_FAILURE_ACTIONS_FLAG, reinterpret_cast<LPBYTE>(&flag)) == FALSE)
         {
             return failWin32("ChangeServiceConfig2W(failure actions flag) failed", ::GetLastError(), textOut, codeOut);

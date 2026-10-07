@@ -1,4 +1,5 @@
 #include "MainWindow.h"
+#include "../../shared/usermode/KswordArkServiceMode.h"
 #include "Framework/PrivilegeElevationPrompt.h"
 #include "MinidumpDock/DumpAutoCheck.h"
 #include <QMenu>
@@ -3715,6 +3716,16 @@ namespace
     R0ServiceOperationOutcome executeR0ServiceStopOnWorker()
     {
         R0ServiceOperationOutcome operationOutcome;
+        const auto mayManageService = [&operationOutcome]()
+        {
+            const auto profile = ksword::ark::queryServiceProfile();
+            if (profile.scmManagementAllowed()) return true;
+            operationOutcome.errorCode = ksword::ark::serviceProfileManagementError(profile);
+            operationOutcome.stageText = QStringLiteral("R0 服务模式不允许通过 SCM 卸载或删除。");
+            operationOutcome.detailText = QStringLiteral("请在设备管理器中恢复控制器的 Windows 驱动绑定或移除设备。全部控制器解绑且驱动映像退出后，手动将 StorageControllerPnP 设为 0 再启用普通 R0；配置读取失败时不修改服务。");
+            return false;
+        };
+        if (!mayManageService()) return operationOutcome;
 
         ScopedServiceHandle scmHandle(::OpenSCManagerW(nullptr, SERVICES_ACTIVE_DATABASE, SC_MANAGER_CONNECT));
         if (!scmHandle.isValid())
@@ -3756,6 +3767,7 @@ namespace
             if (currentStatus.dwCurrentState != SERVICE_STOP_PENDING)
             {
                 SERVICE_STATUS ignoredStatus{};
+                if (!mayManageService()) return operationOutcome;
                 if (::ControlService(serviceHandle.get(), SERVICE_CONTROL_STOP, &ignoredStatus) == FALSE)
                 {
                     const DWORD stopError = ::GetLastError();
@@ -3769,6 +3781,7 @@ namespace
                                 enableCurrentProcessPrivilege(SE_LOAD_DRIVER_NAME, &privilegeError);
 
                             long ntUnloadStatus = 0;
+                            if (!mayManageService()) return operationOutcome;
                             const bool unloadOk = tryNtUnloadDriverByServiceName(
                                 kR0DriverServiceName,
                                 &ntUnloadStatus);
@@ -3826,6 +3839,7 @@ namespace
             }
         }
 
+        if (!mayManageService()) return operationOutcome;
         if (::DeleteService(serviceHandle.get()) == FALSE)
         {
             const DWORD deleteError = ::GetLastError();
@@ -3850,11 +3864,28 @@ namespace
     R0ServiceOperationOutcome executeR0ServiceStartOnWorker(const QString& nativeDriverPath)
     {
         R0ServiceOperationOutcome operationOutcome;
+        const auto profile = ksword::ark::queryServiceProfile();
+        if (profile.profile == ksword::ark::ServiceProfile::Unknown)
+        {
+            operationOutcome.errorCode = ksword::ark::serviceProfileManagementError(profile);
+            operationOutcome.stageText = QStringLiteral("无法确认 KswordARK 服务模式；未修改或启动服务。");
+            return operationOutcome;
+        }
+        const bool pnp = profile.profile == ksword::ark::ServiceProfile::StorageControllerPnp;
+        const auto mayManageService = [&operationOutcome]()
+        {
+            const auto latest = ksword::ark::queryServiceProfile();
+            if (latest.scmManagementAllowed()) return true;
+            operationOutcome.errorCode = ksword::ark::serviceProfileManagementError(latest);
+            operationOutcome.stageText = QStringLiteral("无法确认 KswordARK 服务模式；未修改或启动服务。");
+            operationOutcome.detailText = QStringLiteral("请在设备管理器中恢复控制器的 Windows 驱动绑定或移除设备。全部控制器解绑且驱动映像退出后，手动将 StorageControllerPnP 设为 0 再启用普通 R0；配置读取失败时不修改服务。");
+            return false;
+        };
 
         ScopedServiceHandle scmHandle(::OpenSCManagerW(
             nullptr,
             SERVICES_ACTIVE_DATABASE,
-            SC_MANAGER_CONNECT | SC_MANAGER_CREATE_SERVICE));
+            SC_MANAGER_CONNECT | (pnp ? 0U : SC_MANAGER_CREATE_SERVICE)));
         if (!scmHandle.isValid())
         {
             operationOutcome.errorCode = ::GetLastError();
@@ -3865,7 +3896,25 @@ namespace
         ScopedServiceHandle serviceHandle(::OpenServiceW(
             scmHandle.get(),
             kR0DriverServiceName,
-            SERVICE_QUERY_STATUS | SERVICE_START | SERVICE_STOP | SERVICE_CHANGE_CONFIG | DELETE));
+            pnp ? SERVICE_QUERY_STATUS :
+                SERVICE_QUERY_STATUS | SERVICE_START | SERVICE_STOP | SERVICE_CHANGE_CONFIG | DELETE));
+        if (pnp)
+        {
+            SERVICE_STATUS_PROCESS currentStatus{};
+            DWORD queryError = serviceHandle.isValid() ? ERROR_SUCCESS : ::GetLastError();
+            if (serviceHandle.isValid() &&
+                queryServiceStatus(serviceHandle.get(), currentStatus, queryError) &&
+                currentStatus.dwCurrentState == SERVICE_RUNNING)
+            {
+                operationOutcome.succeeded = true;
+                operationOutcome.alreadyInTargetState = true;
+                return operationOutcome;
+            }
+            operationOutcome.errorCode = queryError == ERROR_SUCCESS
+                ? ERROR_SERVICE_NOT_ACTIVE : queryError;
+            operationOutcome.stageText = QStringLiteral("KswordARK 使用 PnP 存储控制器模式；请在设备管理器中启动已绑定的控制器。");
+            return operationOutcome;
+        }
         if (!serviceHandle.isValid())
         {
             const DWORD openError = ::GetLastError();
@@ -3877,6 +3926,7 @@ namespace
             }
 
             const std::wstring driverPathWide = nativeDriverPath.toStdWString();
+            if (!mayManageService()) return operationOutcome;
             serviceHandle.reset(::CreateServiceW(
                 scmHandle.get(),
                 kR0DriverServiceName,
@@ -3902,6 +3952,7 @@ namespace
         else
         {
             const std::wstring driverPathWide = nativeDriverPath.toStdWString();
+            if (!mayManageService()) return operationOutcome;
             if (::ChangeServiceConfigW(
                 serviceHandle.get(),
                 SERVICE_KERNEL_DRIVER,
@@ -3937,6 +3988,7 @@ namespace
             return operationOutcome;
         }
 
+        if (!mayManageService()) return operationOutcome;
         if (::StartServiceW(serviceHandle.get(), 0, nullptr) == FALSE)
         {
             const DWORD startError = ::GetLastError();
@@ -9369,6 +9421,20 @@ bool MainWindow::queryR0DriverServiceRunning(bool& runningOut, const bool fatalO
 
 bool MainWindow::stopR0DriverService(const bool suppressErrorDialog)
 {
+    const auto profile = ksword::ark::queryServiceProfile();
+    if (!profile.scmManagementAllowed())
+    {
+        const QString message = QStringLiteral("请在设备管理器中恢复控制器的 Windows 驱动绑定或移除设备。全部控制器解绑且驱动映像退出后，手动将 StorageControllerPnP 设为 0 再启用普通 R0；配置读取失败时不修改服务。");
+        if (!suppressErrorDialog)
+            showR0FatalError(QStringLiteral("R0 服务模式不允许通过 SCM 卸载或删除。"),
+                ksword::ark::serviceProfileManagementError(profile), message);
+        else
+        {
+            kLogEvent event;
+            err << event << message.toStdString() << eol;
+        }
+        return false;
+    }
     // 作用：
     // - 入参 suppressErrorDialog：true 表示静默停驱，失败只写日志不弹错误框；
     // - 处理：UI 线程只做“收敛本进程持有的驱动句柄 + 派发”，SCM 停止/等待/删除整段交给线程池；
@@ -9669,7 +9735,8 @@ bool MainWindow::startR0DriverService(const bool suppressPrivilegeElevationPromp
     const QString driverPath = QDir(QCoreApplication::applicationDirPath()).absoluteFilePath(QStringLiteral("KswordARK.sys"));
     const QString nativeDriverPath = QDir::toNativeSeparators(driverPath);
     const QFileInfo driverFileInfo(driverPath);
-    if (!driverFileInfo.exists() || !driverFileInfo.isFile())
+    if (ksword::ark::queryServiceProfile().scmManagementAllowed() &&
+        (!driverFileInfo.exists() || !driverFileInfo.isFile()))
     {
         // 驱动文件缺失是立即可判的失败，不必为它派发后台任务。
         g_r0ServiceOperationInFlight.store(false);

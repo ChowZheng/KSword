@@ -17,6 +17,7 @@ Environment:
 
 #include "ark/ark_driver.h"
 #include "ioctl_registry.h"
+#include "ark/ark_storage_controller.h"
 #include "../features/bugcheck/bugcheck_evidence.h" // 统一记录最近真实 IOCTL 事件，不访问普通日志 ring。
 #include "ioctl_dispatch.tmh"
 
@@ -109,6 +110,32 @@ Return Value:
     NTSTATUS status = STATUS_INVALID_DEVICE_REQUEST;
     size_t completeBytes = 0;
 
+    /* Resolve the endpoint role before anything can read the primary context.
+     * Controller FDOs own independent queues, resources, and audit records. */
+    ioctlEntry = KswordARKLookupIoctlEntry(IoControlCode);
+    if (KswordARKStorageControllerIsDevice(Device)) {
+        if (ioctlEntry == NULL || ioctlEntry->Handler == NULL ||
+            (ioctlEntry->Flags & KSWORD_ARK_IOCTL_FLAG_CONTROLLER_ONLY) == 0UL) {
+            WdfRequestCompleteWithInformation(Request, STATUS_INVALID_DEVICE_REQUEST, 0U);
+            return;
+        }
+        status = ioctlEntry->Handler(Device, Request, InputBufferLength,
+            OutputBufferLength, &completeBytes);
+        if (status != STATUS_PENDING) {
+            WdfRequestCompleteWithInformation(Request, status, completeBytes);
+        }
+        return;
+    }
+    if (ioctlEntry != NULL &&
+        (ioctlEntry->Flags & KSWORD_ARK_IOCTL_FLAG_CONTROLLER_ONLY) != 0UL) {
+        WdfRequestCompleteWithInformation(Request, STATUS_INVALID_DEVICE_REQUEST, 0U);
+        return;
+    }
+    if (!KswordARKDriverCoreEnterRequest()) {
+        WdfRequestCompleteWithInformation(Request, STATUS_DELETE_PENDING, 0U);
+        return;
+    }
+
     TraceEvents(
         TRACE_LEVEL_INFORMATION,
         TRACE_QUEUE,
@@ -146,10 +173,10 @@ Return Value:
     //     return;
     // }
 
-    ioctlEntry = KswordARKLookupIoctlEntry(IoControlCode);
     if (ioctlEntry == NULL || ioctlEntry->Handler == NULL) {
         KswordARKDispatchLog(Device, "Warn", "Unsupported ioctl=0x%08X.", (unsigned int)IoControlCode);
         WdfRequestCompleteWithInformation(Request, status, completeBytes);
+        KswordARKDriverCoreLeaveRequest();
         return;
     }
 
@@ -164,6 +191,7 @@ Return Value:
             (unsigned int)status);
         KswordARKCapabilityRecordLastError(status, "ioctl_dispatch", "IOCTL denied by DynData capability gate.");
         WdfRequestCompleteWithInformation(Request, status, completeBytes);
+        KswordARKDriverCoreLeaveRequest();
         return;
     }
 
@@ -204,6 +232,7 @@ Return Value:
     if (status != STATUS_PENDING) {
         WdfRequestCompleteWithInformation(Request, status, completeBytes);
     }
+    KswordARKDriverCoreLeaveRequest();
 }
 
 VOID
