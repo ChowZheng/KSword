@@ -192,6 +192,8 @@ P2 的可切换候选已实现（2026-10-07）：`prepare-svm-fast/resident-svm-
 
 ## 2026-10-07 首轮硬件数据与优先级更新
 
+fast模式补测：两个真实QPC窗口10.9415527/10.9344453秒内，EFER/HSAVE快路读取分别190814/95359，32核持续ACTIVE；软件root样本VMRUN48.72%、NPF39.25%。用户仍看到Windows标志转圈，无完整桌面。漏采早期约109秒与A/B来宾阶段差异使这些数据不具备整体速度比较条件。结束后全32核原生、资源归零，退出主程序后SCM最终STOPPED，证据artifacts/amd-perf-20261007-fast-live。
+
 实体机32CPU profile准入、自检、ACTIVE与周期计数有效性已真实通过；单核VM启动到Windows标志，有用户进展观察，完整桌面尚未通过。摘要与原始文件哈希见 `evidence/amd-root-profile-20261007.json`。软件root样本中的VMRUN约72.73%，权限图/源同步/取指分别32.31/30.04/14.52%；MSR3.56%。应先在实际profile数据下进一步削减页表重复翻译、权限图捕获/合并与源表同步的内存窗口开销；P2快路保留为独立比较，不宣称凭退出次数就能恢复原生性能。
 
 NPF逐步增多，补采达到73k/95k每秒，没有terminal锁存；raw RIP/CR3/GPA仍变化，无法仅据计数断言固定NPF循环或正常启动成功。Root采样不包含硬件VMEXIT/VMRUN和VMware自身工作；周期性1/64可能相位偏采样。测试B按同签后SYS、同单核VM独立切fast；收尾必须确认32核全部原生且teardown成功。8核、XSTATE专项、VLS/vGIF与clean仍未完成动态验收。

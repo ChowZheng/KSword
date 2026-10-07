@@ -1,5 +1,11 @@
 # AMD 实验后端与重启续接
 
+## 2026-10-07 fast 硬件采样与收尾
+
+同一签后1c528dd3候选，profile全核stop/teardown后进入fast，32/32 self-test和ACTIVE通过。单核VM只到Windows标志转圈，用户描述静止，未进入桌面。原始证据artifacts/amd-perf-20261007-fast-live；两个QPC窗口10.9415527/10.9344453秒，快路EFER读190814、HSAVE读95359，证明整数快路执行，不证明XSTATE专项或完整L2通过。采样root786788100ticks，VMRUN48.72%、NPF39.25%；NPF新增963087/609072。启动早期漏采约109秒，A/B阶段不同且硬关机可能改变来宾恢复路径，不作整体加速结论。
+
+收尾实验VM已关，32核全部DEVIRTUALIZED，teardown资源/SLAT归零；SCM一度STOP_PENDING，用户正常退出KSword后16:07:35独立SCM确认STOPPED/exit0。final/gui-closed-recheck.txt是卸载完成证据，不能用此前STOP_PENDING替代。
+
 ## 2026-10-06 P0/P1 实施续接（无实机操作）
 
 P1 已本地提交 `8646bd5c`，未推送：双页批量取指、VMRUN 首遍 identity-only、权限图清零减负及有限 writeback ranges。P0 增加一次性 TLB pending/成功硬件返回消费、NPT12 源账本重新验证（512 PTE 上限、溢出/变化保守 reset）、可选每64退出周期采样，metrics 升 v10，CLI `prepare-svm-profile/resident-svm-profile`。五段 root 软件周期、七个叶 detail、硬件 TLB0/1/3/7 完成计数；不测纯硬件 VMEXIT/VMRUN 和 guest 时间。分析器已改完整 JSONL/UTF16读取和相邻同代次差值，剔除无效/饱和/拓扑改变；去除 flight 时间伪权重，退出图含 NPF，不混生命周期。
