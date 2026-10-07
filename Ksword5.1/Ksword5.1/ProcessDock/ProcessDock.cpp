@@ -4794,17 +4794,17 @@ void ProcessDock::initializeTopControls()
     // 进程友好视图：
     // - 唯一复选框同时承担两种互斥视图的切换；
     // - 勾选为友好视图，取消勾选为参照 KswordARKLight 父子关系构建的树状视图。
-    m_friendlyViewCheck = new QCheckBox(QStringLiteral("进程友好视图"), this);
+    m_friendlyViewCheck = new QCheckBox(QStringLiteral("进程树视图"), this);
     m_friendlyViewCheck->setChecked(true);
-    m_friendlyViewCheck->setToolTip(QStringLiteral("勾选：友好视图（默认）；取消勾选：树状视图。搜索或查看历史活动快照时自动使用扁平结果。"));
+    m_friendlyViewCheck->setToolTip(QStringLiteral("勾选：按应用、后台进程和系统分组（默认）；取消勾选：按父子进程关系显示进程树。搜索或查看历史活动快照时自动使用扁平结果。"));
     languageManager.bindText(
         m_friendlyViewCheck,
         QStringLiteral("process.toolbar.friendly"),
-        QStringLiteral("进程友好视图"));
+        QStringLiteral("进程树视图"));
     languageManager.bindToolTip(
         m_friendlyViewCheck,
         QStringLiteral("process.tooltip.friendly"),
-        QStringLiteral("勾选：友好视图（默认）；取消勾选：树状视图。搜索或查看历史活动快照时自动使用扁平结果。"));
+        QStringLiteral("勾选：按应用、后台进程和系统分组（默认）；取消勾选：按父子进程关系显示进程树。搜索或查看历史活动快照时自动使用扁平结果。"));
 
     // 视图模式下拉框：默认监视视图。
     // 项由 rebuildViewModeComboItems 统一生成：内置预设在前，用户自定义视图追加在后。
