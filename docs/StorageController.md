@@ -18,6 +18,8 @@ PnP 配置通过设备管理器恢复系统驱动或移除绑定完成退出。�
 3. PnP 建立控制器后，在文件侧边栏打开“存储控制器”并刷新状态。客户端只接受服务属性为 `KswordARK` 的设备接口，跳过旧独立服务。
 4. 退出控制器配置时，先释放会话并关闭驱动客户端，再在设备管理器恢复系统绑定。确认所有控制器绑定已移除且驱动已退出后，显式将 `StorageControllerPnP` 设为 DWORD `0`，再使用普通加载流程。程序不会自动清除该配置。
 
+可选 INF 的所有类兼容 ID 都通过 `InteractiveInstall` 要求交互安装，避免仅暂存驱动包后静默接管随后枚举的控制器。安装时仍必须核实目标是专用控制器；确认按钮不验证启动盘或挂载卷状态。[Microsoft 的 INF ControlFlags 说明](https://learn.microsoft.com/en-us/windows-hardware/drivers/install/inf-controlflags-section)说明此设置会对兼容 ID 匹配要求用户确认。CI 解析实际 Models、ControlFlags 和服务关联，阻止遗漏交互要求或重新引入独立服务/二进制。
+
 原始写入保留独占会话、代次、确认令牌、原数据哈希比较、flush、复读验证和条件回滚。介质写入与电源故障不构成硬件原子事务。只有 NVMe 提供可验证的受控复位，AHCI/IDE 不报告未经验证的恢复成功。
 
 ## 实现与验证

@@ -29,6 +29,11 @@ KswordARK.sys=1,,
 %NvmeDeviceDesc%=Controller_Install,PCI\CC_010802
 %IdeDeviceDesc%=Controller_Install,PCI\CC_0101
 
+[ControlFlags]
+; Class-compatible matches must require an administrator's confirmation.
+; Staging this package must not silently replace an inbox storage driver.
+InteractiveInstall=PCI\CC_010601,PCI\CC_010802,PCI\CC_0101
+
 [Controller_Install.NT]
 CopyFiles=Driver_Copy
 

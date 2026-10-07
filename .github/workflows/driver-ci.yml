@@ -27,6 +27,9 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Verify manual storage controller installation policy
+        run: python3 tools/storage_controller_inf_policy.py --self-test
+
       - name: Detect changed driver inputs
         id: detect
         shell: bash
