@@ -15,6 +15,10 @@ static ULONG gReplayCaptureSkip;
 static ULONG gReplayCaptureLimit;
 static USHORT gReplayFrames = 16;
 static BOOLEAN gReplayRaise;
+static BOOLEAN gReplayTrackingAccepting = TRUE; // Existing stack replay runs with diagnostics admitted.
+static ULONG gReplayTrackingReferences; // Every admitted operation owns one mock reference.
+static ULONG gReplayTrackingAcquires;
+static ULONG gReplayTrackingReleases;
 static ULONG gChecks;
 static ULONG gFailures;
 
@@ -23,6 +27,22 @@ static KIRQL ReplayIrql(VOID) { return gReplayIrql; }
 static ULONG64 ReplayTime(VOID) { return gReplayTime; }
 static HANDLE ReplayThread(VOID) { return (HANDLE)gReplayThread; }
 static HANDLE ReplayProcess(VOID) { return (HANDLE)gReplayProcess; }
+static BOOLEAN ReplayTrackingAcquire(VOID)
+{
+    if (!gReplayTrackingAccepting) return FALSE; // A closed diagnostics generation must not touch stack state.
+    gReplayTrackingReferences += 1;
+    gReplayTrackingAcquires += 1;
+    return TRUE;
+}
+static VOID ReplayTrackingRelease(VOID)
+{
+    if (gReplayTrackingReferences == 0) { // Report an unbalanced production release without unsigned underflow.
+        gFailures += 1;
+        return;
+    }
+    gReplayTrackingReferences -= 1;
+    gReplayTrackingReleases += 1;
+}
 static USHORT NTAPI ReplayCapture(ULONG Skip, ULONG Limit, PVOID* Frames, PULONG Hash)
 {
     ULONG index;
@@ -42,6 +62,8 @@ static USHORT NTAPI ReplayCapture(ULONG Skip, ULONG Limit, PVOID* Frames, PULONG
 #define PsGetCurrentThreadId ReplayThread
 #define PsGetCurrentProcessId ReplayProcess
 #define RtlCaptureStackBackTrace ReplayCapture
+#define KswordARKBugcheckTrackingAcquire ReplayTrackingAcquire // Context replay supplies lifecycle admission without linking the WDF controller.
+#define KswordARKBugcheckTrackingRelease ReplayTrackingRelease // Check successful, busy-writer and capture-exception release paths.
 // The production declaration describes an import; this unit supplies the OS mock.
 #undef NTSYSAPI
 #define NTSYSAPI
@@ -263,6 +285,16 @@ static VOID TestOperationStack(VOID)
     KswordARKBugcheckContextReset();
     gReplayIrql = PASSIVE_LEVEL; gReplayFrames = 16; gReplayRaise = FALSE;
     gReplayTime = 456789ULL;
+    calls = gReplayCaptureCalls;
+    gReplayTrackingAccepting = FALSE; // An uninstalled or closing generation rejects a normal PASSIVE operation.
+    KswordARKBugcheckContextOperation();
+    EXPECT(gReplayCaptureCalls == calls);
+    EXPECT(gStackWriter == 0);
+    EXPECT(gReplayTrackingReferences == 0);
+    evidence = ContextSnapshot(gReplayThread);
+    EXPECT(evidence.Context.StackCount == 0);
+    EXPECT(evidence.Context.StackStatus == STATUS_NOT_FOUND);
+    gReplayTrackingAccepting = TRUE; // Preserve the existing successful and exception replay cases below.
     KswordARKBugcheckContextOperation();
     evidence = ContextSnapshot(gReplayThread);
     EXPECT(gReplayCaptureSkip == 1);
@@ -418,6 +450,8 @@ int main(VOID)
     TestDumpContext();
     TestOperationStack();
     TestTrace();
+    EXPECT(gReplayTrackingReferences == 0); // No path may keep the diagnostics generation alive after replay.
+    EXPECT(gReplayTrackingAcquires == gReplayTrackingReleases); // Exceptions and CAS rejection still return their reference.
     printf("BUGCHECK_CONTEXT_REPLAY checks=%lu failures=%lu\n", gChecks, gFailures);
     return gFailures == 0 ? 0 : 1;
 }

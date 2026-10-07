@@ -70,8 +70,8 @@ namespace ks::ui
         Int3RouteReject routeReject = Int3RouteReject::None;             // 路由预检结果
         ksword::memwb::InstallStatus status = ksword::memwb::InstallStatus::None; // 账本结果
         std::uint64_t id = 0;              // 已安装或失败后仍需恢复的条目 id；无条目时为 0
-        bool rollbackAttempted = false;    // 仅 VerifyFailed：是否尝试写回原字节
-        bool rollbackWriteOk = false;      // 仅 VerifyFailed：写回是否报告成功
+        bool rollbackAttempted = false;    // 兼容字段；当前账本不自动回滚，恒为 false
+        bool rollbackWriteOk = false;      // 兼容字段；没有回滚写入，恒为 false
     };
 
     // Int3RestoreOutcome：一次 Restore 的结果。还原不做范围/通道预检（通道已经由安装时
@@ -174,8 +174,9 @@ namespace ks::ui
         static bool NeedsLeavePrompt(bool hasUnrestored, Int3LeaveScenario scenario);
 
         // ApplyLeaveChoice：按用户选择执行动作。
-        // RestoreAllThenContinue：调用 RestoreAll()，只有当前目标的全部条目都真正被还原
-        //   （还原后 HasUnrestoredForCurrentTarget 为假）才返回 true；否则返回 false，
+        // RestoreAllThenContinue：快照调用时的上下文，只有该目标的全部条目都真正被还原
+        //   才返回 true；changed 回调切换当前上下文也不会改变此次还原对象与成功判据。
+        //   否则返回 false，
         //   补丁仍留在账本里，调用方应据此继续阻止退出并转告原因。
         // KeepAndContinue：不碰账本，恒返回 true。
         // Cancel：不碰账本，恒返回 false。
@@ -187,7 +188,9 @@ namespace ks::ui
         // 按各自的目标标签把它们显示出来，不是被隐藏）。否则弹出"全部还原后继续｜保留补丁
         // 继续｜取消"三选一（QMessageBox，默认按钮是"全部还原后继续"，Esc 的结果是
         // "取消"——两者是分开设置的两件事，不是同一个按钮）。并把用户选择交给
-        // ApplyLeaveChoice。parentWidget 仅用于定位弹框，可传空。
+        // 弹框前快照的上下文。模态期间其它工作台修改共享上下文也不会改变提示的目标，
+        // 执行后也不会覆盖其它工作台的新上下文。owner 或弹框被删除时返回 false。
+        // parentWidget 仅用于定位弹框，可传空。
         bool RequestLeave(QWidget* parentWidget, Int3LeaveScenario scenario);
 
     signals:
@@ -195,13 +198,35 @@ namespace ks::ui
         void changed();
 
     private:
-        // RestoreInternal：Restore 与 RestoreAll 共用的单条还原逻辑，不发 changed
-        // （由调用方在一次公开操作结束时统一发一次）。
-        Int3RestoreOutcome RestoreInternal(std::uint64_t id);
+        // ContextSnapshot：一次操作的目标、范围与通道；嵌套事件循环不能改变该副本。
+        // 还原仍按条目安装通道执行，scope 只记录提示时的完整上下文，不作为还原限制。
+        struct ContextSnapshot
+        {
+            ksword::memwb::PatchTarget target;
+            ksword::memwb::Scope scope;
+            ksword::memwb::Channel channel;
+        };
 
-        // IsCurrentTarget：判断一条账本条目是否属于"当前目标"（pid 与进程创建时间同时
-        // 一致）。RestoreAll / HasUnrestoredForCurrentTarget / CountForCurrentTarget 三处
-        // 都要做同一件事，共用这一个判据，避免三份各自维护一条 && 判断、改一处忘两处。
+        // SnapshotContext：复制共享的当前上下文，不修改它。
+        ContextSnapshot SnapshotContext() const;
+
+        // RestoreInternal：Restore 与 RestoreAll 共用的单条还原逻辑，不发 changed
+        // （由调用方在一次公开操作结束时统一发一次），目标取此次操作的快照。
+        Int3RestoreOutcome RestoreInternal(std::uint64_t id, const ContextSnapshot& context);
+
+        // RestoreAllForContext / ApplyLeaveChoiceForContext：执行已提示目标的动作，不覆盖
+        // m_currentTarget 等共享上下文；发信号后用 QPointer 检查 owner 是否仍存在。
+        std::vector<ksword::memwb::PatchRestoreOutcome> RestoreAllForContext(const ContextSnapshot& context);
+        bool ApplyLeaveChoiceForContext(Int3LeaveChoice choice, const ContextSnapshot& context);
+
+        // HasUnrestoredForTarget：退出动作完成后仍按提示的目标判定是否有残留。
+        bool HasUnrestoredForTarget(const ksword::memwb::PatchTarget& target) const;
+
+        // IsTarget：按 pid + 创建时间比较指定目标，附加代次不影响已落地补丁的归属。
+        static bool IsTarget(const ksword::memwb::PatchEntry& entry, const ksword::memwb::PatchTarget& target);
+
+        // IsCurrentTarget：当前目标查询使用 IsTarget 的同一判据，避免与快照操作的
+        // pid / 创建时间匹配规则漂移。
         bool IsCurrentTarget(const ksword::memwb::PatchEntry& entry) const;
 
         ByteStoreFactory m_factory;                       // 构造 IPatchByteStore 的工厂

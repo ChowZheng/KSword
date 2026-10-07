@@ -158,6 +158,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <string>
 #include <vector>
 
 class QButtonGroup;
@@ -283,6 +284,9 @@ namespace ks::ui
         // WindowSnapshot：一次取字节的结果，同时是"没有变化就不重建"的比较依据。
         struct WindowSnapshot
         {
+            std::uint64_t sourceRevision = 0;       // 地址空间/来源换代，普通页回填不改变
+            const ksword::memwb::MemoryDiffOverlay* overlay = nullptr;
+            std::string identityKey;               // 同一叠加层对象也可能已换目标
             bool hasData = false;                   // 画布是否有地址空间
             std::uint64_t address = 0;              // 起点（插入点）地址
             std::vector<std::uint8_t> bytes;        // 从起点起连续可用的字节（最多 kWindowBytes 个）
@@ -338,5 +342,8 @@ namespace ks::ui
         bool m_hasBuilt = false;                            // 是否已经建过一次行（首次必须建）
         int m_editRow = -1;                                 // 正在编辑的行，-1 表示没有
         std::uint64_t m_editAddress = 0;                    // 编辑开始时的插入点地址（提交时写到这里）
+        std::uint64_t m_editSourceRevision = 0;             // 编辑归属的来源代次
+        const ksword::memwb::MemoryDiffOverlay* m_editOverlay = nullptr;
+        std::string m_editIdentityKey;                      // 编辑归属的目标身份
     };
 }

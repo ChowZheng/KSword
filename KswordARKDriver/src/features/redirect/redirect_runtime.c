@@ -561,7 +561,6 @@ Return Value:
 {
     KSWORD_ARK_REDIRECT_RUNTIME* runtime = KswordARKRedirectGetRuntime();
     KSWORD_ARK_REDIRECT_SET_RULES_RESPONSE* response = NULL;
-    KSWORD_ARK_REDIRECT_RULE newRules[KSWORD_ARK_REDIRECT_MAX_RULES] = { 0 };
     ULONG ruleIndex = 0UL;
     ULONG appliedCount = 0UL;
     NTSTATUS status = STATUS_SUCCESS;
@@ -605,8 +604,7 @@ Return Value:
                 response->lastStatus = status;
                 return STATUS_SUCCESS;
             }
-            RtlCopyMemory(&newRules[ruleIndex], &Request->rules[ruleIndex], sizeof(newRules[ruleIndex]));
-            if ((newRules[ruleIndex].flags & KSWORD_ARK_REDIRECT_RULE_FLAG_ENABLED) != 0UL) {
+            if ((Request->rules[ruleIndex].flags & KSWORD_ARK_REDIRECT_RULE_FLAG_ENABLED) != 0UL) { // caller 已建立稳定池快照，无需再次在栈上复制 16 条路径规则。
                 appliedCount += 1UL;
             }
         }
@@ -621,7 +619,8 @@ Return Value:
     KswordARKAcquirePushLockExclusive(&runtime->Lock);
     RtlZeroMemory(runtime->Rules, sizeof(runtime->Rules));
     if (Request->action == KSWORD_ARK_REDIRECT_ACTION_REPLACE && appliedCount != 0UL) {
-        RtlCopyMemory(runtime->Rules, newRules, sizeof(newRules));
+        RtlCopyMemory(runtime->Rules, Request->rules,
+            (SIZE_T)Request->ruleCount * sizeof(runtime->Rules[0])); // 全部规则验证后再一次性提交；未使用槽保持前面的清零状态。
     }
     runtime->Generation += 1UL;
     KswordARKRedirectRefreshFlagsLocked(runtime);

@@ -89,6 +89,8 @@ KSword 主程序位于 `Ksword5.1/Ksword5.1`（Qt 6.9.3 Widgets + Qt Advanced Do
 
 ## 通用表格交互
 
+- 2026-10-07：窗口列表由 `WindowDock` 内嵌的 `OtherDock` 实现，默认筛选“所有窗口”，仍叠加外部 PID 与关键字过滤，包含退出保留一轮的无效窗口。自动刷新默认开启、间隔 1000 ms；在信号连接完成后勾选以实际启动定时器。定时采样调用 `refreshWindowListAsync(false)`，不注册或更新全局 `kPro` 任务，手动刷新保留进度通知。
+- 窗口列表列宽由 `WindowListInteraction.h::configureWindowListColumnSizing` 收口：关闭该树的全局 `TableColumnAutoFit`，标题列 Stretch，其他列使用 Qt 原生 ResizeToContents，按实际子节点、字体与进程图标定宽，窄视口允许横向滚动。全局适配会接管成 Interactive，并按 48 行抽样/压缩，单纯 setColumnWidth 会被再次覆盖；不要叠加全局和原生两套列宽控制。
 - 2026-10-05：窗口列表（`OtherDock`，含进程详情内嵌列表）支持 Ctrl/Shift 多选；批量置顶/取消置顶、显示/隐藏、启用/禁用采用统一目标状态，避免混合选区逐项反转。防截图操作按顶层 HWND 去重，进程操作按 PID 去重；菜单打开前复制窗口快照，不能持有异步枚举缓存的指针跨越 `QMenu::exec` 或反馈弹窗。树刷新使用通用菜单/Ctrl 提交屏障，并按 HWND/PID/TID/进程创建时间恢复选区；屏障期间新快照替换后也必须核验旧树项身份，不能仅凭 HWND 找到新快照就操作。
 - 2026-10-05 后续按用户要求将“闪烁窗口”改为“标记位置”：`OtherDock/WindowListInteraction.h` 的 `WindowPositionOverlay` 用一个原生透明窗口覆盖整个虚拟桌面，把所有选中窗口的物理矩形统一换算到该窗口的逻辑绘图坐标；全部淡主题色填充/边框先画，不透明信息卡片和文字最后画，卡片尽量避让。保持显示直到一次左/右键按下即销毁；没有计时闪烁、没有 `FlashWindowEx`、不改变目标显示或前台状态。空白像素必须有 1/255 alpha 以捕获整屏点击，不能设置 `WindowTransparentForInput`；顶层 Tool 必须显式复制 owner 的 palette/font，强调色取 Active Highlight，避免非活动窗口默认灰色调替代主题色。最小化顶层窗口取 `WINDOWPLACEMENT` 还原矩形并转换 workspace/screen 坐标；不实际恢复窗口。`tools/Invoke-WindowListTests.cmd` 在不切换输入桌面的测试桌面验证真实 Qt 多选、身份恢复、混合状态批量操作、单层覆盖多选、重叠填充不盖信息、主题色/透明点击区/前台保持、左/右键按下销毁，并输出绘制预览。Qt `grab()` 图像带 DPR，合成到 DPR=1 的 QA 图时需先清除图像 DPR，避免预览被再次缩小。多 DPI 查询显式使用可恢复的线程 `PER_MONITOR_AWARE_V2` 上下文，所有目标共用标记层 backing-store DPR；Qt DPR/屏幕变化后排队重设原生虚拟桌面范围。`--dpi-matrix` 已在两个物理显示器上通过原生缩放及 Qt 100%/125%/150%/200% 混合组合，还测试负坐标/跨屏的绘图不变式与 DPI-unaware 调用方的坐标虚拟化隔离。此回归不代表主程序 GUI 或更改真实 Windows 显示布局的验收。
 

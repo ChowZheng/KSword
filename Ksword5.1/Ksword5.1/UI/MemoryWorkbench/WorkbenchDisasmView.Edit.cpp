@@ -8,6 +8,7 @@
 
 #include "HexCanvasFormat.h"
 
+#include "../../Internationalization/LanguageManager.h"
 #include "../../theme.h"
 
 #include <QCheckBox>
@@ -111,14 +112,26 @@ namespace ks::ui
                     const auto* keyEvent = static_cast<QKeyEvent*>(event);
                     if (keyEvent->key() == Qt::Key_Return || keyEvent->key() == Qt::Key_Enter)
                     {
-                        const QString error = m_commit(lineEdit);
+                        // stageRequested 可同步进入写确认的嵌套事件循环并销毁宿主。
+                        // 两个守卫保证返回后不再向已销毁的委托或编辑器发送收尾信号。
+                        const QPointer<DisasmEditDelegate> delegateGuard(this);
+                        const QPointer<QLineEdit> editorGuard(lineEdit);
+                        const auto commit = m_commit;
+                        const QString error = commit(lineEdit);
+                        if (!delegateGuard || !editorGuard)
+                        {
+                            return true;
+                        }
                         if (!error.isEmpty())
                         {
                             // 编译失败：吞掉事件，编辑框保持打开，原因已经由回调显示在下方。
                             return true;
                         }
                         emit commitData(lineEdit);
-                        emit closeEditor(lineEdit);
+                        if (delegateGuard && editorGuard)
+                        {
+                            emit closeEditor(lineEdit);
+                        }
                         return true;
                     }
                     if (keyEvent->key() == Qt::Key_Escape)
@@ -169,6 +182,7 @@ namespace ks::ui
             editor->setProperty("ksAddress", QVariant::fromValue<qulonglong>(row->address));
             editor->setProperty("ksOldBytes", row->bytes);
             editor->setProperty("ksX64", isX64());
+            editor->setProperty("ks_edit_context_revision", QVariant::fromValue<qulonglong>(m_editContextRevision));
             // ksOriginalSource：D1——记住进入编辑时的原文，提交时如果一字未改，直接关闭
             // 编辑框而不发任何信号（旧版 MemoryEditorWidget.InlineAssembly.cpp 有这一步，
             // 新实现丢了它：Enter 进编辑、手滑再按一次 Enter，也会把原指令重新编译一遍，
@@ -197,11 +211,54 @@ namespace ks::ui
             const std::uint64_t address = editor->property("ksAddress").toULongLong();
             const QByteArray oldBytes = editor->property("ksOldBytes").toByteArray();
             const bool x64 = editor->property("ksX64").toBool();
+            // 会话复用同一 provider、架构或权限变化时，旧编辑器冻结的地址不能被新目标继承。
+            const std::uint64_t editRevision = editor->property("ks_edit_context_revision").toULongLong();
+            if (!m_editable || m_provider == nullptr || editRevision != m_editContextRevision || x64 != isX64())
+            {
+                const QString error = QStringLiteral("数据已刷新，原指令不再位于当前视图，已取消本次汇编编辑。");
+                showInlineEditError(editor->geometry(), error);
+                return error;
+            }
+            // 编辑期间实时重读可能已更新基线。逐字节复核原指令，防止按旧指令长度覆盖新代码。
+            const WorkbenchByteWindow currentWindow = m_provider->FetchWindow(address, static_cast<std::uint64_t>(oldBytes.size()));
+            bool originalBytesMatch = currentWindow.ok && currentWindow.address == address
+                && currentWindow.bytes.size() >= static_cast<std::size_t>(oldBytes.size())
+                && currentWindow.validMask.size() >= static_cast<std::size_t>(oldBytes.size());
+            for (qsizetype i = 0; originalBytesMatch && i < oldBytes.size(); ++i)
+            {
+                const std::size_t index = static_cast<std::size_t>(i);
+                originalBytesMatch = currentWindow.validMask[index] != 0
+                    && currentWindow.bytes[index] == static_cast<std::uint8_t>(oldBytes[i]);
+            }
+            if (!originalBytesMatch)
+            {
+                const QString error = QStringLiteral("数据已刷新，原指令不再位于当前视图，已取消本次汇编编辑。");
+                showInlineEditError(editor->geometry(), error);
+                return error;
+            }
             const WorkbenchAssembleResult result = m_assembleOne(source, address, x64);
             if (!result.success)
             {
                 showInlineEditError(editor->geometry(), result.error);
                 return result.error;
+            }
+            // 行内只接受一条完整指令：先复核未填充的机器码，不能把多条指令或尾部残片
+            // 当成一条短指令补 NOP；右键汇编编辑仍使用自己的多行预览与边界校验。
+            // decodedInstruction：按编辑开始时冻结的真实地址和架构解出的首条指令。
+            std::optional<DecodedRow> decodedInstruction;
+            if (m_decodeOne && !result.bytes.isEmpty())
+            {
+                decodedInstruction = m_decodeOne(
+                    reinterpret_cast<const std::uint8_t*>(result.bytes.constData()),
+                    static_cast<std::size_t>(result.bytes.size()), address, x64);
+            }
+            if (!decodedInstruction.has_value() || !decodedInstruction->decoded
+                || decodedInstruction->bytes != result.bytes)
+            {
+                const QString error = ks::i18n::sourceText(QStringLiteral(
+                    "行内编辑只接受一条完整指令；多行汇编请使用右键汇编编辑。"));
+                showInlineEditError(editor->geometry(), error);
+                return error;
             }
             if (result.bytes.size() > oldBytes.size())
             {
@@ -293,7 +350,7 @@ namespace ks::ui
     // 行号/行内容都可能变了，不能再用旧行号盲取。
     void WorkbenchDisasmView::showAssemblyPreviewDialog(const DecodedRow& expectedRow)
     {
-        if (m_provider == nullptr || !m_decodeOne || !m_assembleOne)
+        if (!m_editable || m_provider == nullptr || !m_decodeOne || !m_assembleOne)
         {
             return;
         }
@@ -316,6 +373,7 @@ namespace ks::ui
         }
         const std::uint64_t address = current->address;
         const bool x64 = isX64();
+        const std::uint64_t editRevision = m_editContextRevision; // 冻结宿主身份，即使 provider 地址不变也可检测切换
 
         // 拉一段足够长的窗口用于边界扫描（右键编辑很少需要覆盖超过这个范围）。
         const WorkbenchByteWindow window = m_provider->FetchWindow(address, 4096);
@@ -478,6 +536,30 @@ namespace ks::ui
         }
         if (result != QDialog::Accepted || payload.isEmpty())
         {
+            return;
+        }
+        // exec 允许自动附加/分离、改通道与实时重读；QPointer 只能证明对象仍活着，
+        // 不能证明旧预览仍属于当前目标。先检查身份/架构/权限，再复核整个覆盖范围。
+        bool snapshotMatches = m_editable && m_provider != nullptr
+            && editRevision == m_editContextRevision && x64 == isX64();
+        if (snapshotMatches)
+        {
+            const WorkbenchByteWindow currentWindow = m_provider->FetchWindow(address, static_cast<std::uint64_t>(payload.size()));
+            snapshotMatches = currentWindow.ok && currentWindow.address == address
+                && currentWindow.bytes.size() >= static_cast<std::size_t>(payload.size())
+                && currentWindow.validMask.size() >= static_cast<std::size_t>(payload.size())
+                && snapshot.size() >= payload.size();
+            for (qsizetype i = 0; snapshotMatches && i < payload.size(); ++i)
+            {
+                const std::size_t index = static_cast<std::size_t>(i);
+                snapshotMatches = currentWindow.validMask[index] != 0
+                    && currentWindow.bytes[index] == static_cast<std::uint8_t>(snapshot[i]);
+            }
+        }
+        if (!snapshotMatches)
+        {
+            m_status->setText(QStringLiteral("数据已刷新，原指令不再位于当前视图，已取消本次汇编编辑。"));
+            emit statusMessage(m_status->text());
             return;
         }
         emit stageRequested(address, payload);

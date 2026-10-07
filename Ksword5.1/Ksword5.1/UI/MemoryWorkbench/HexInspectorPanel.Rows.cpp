@@ -128,6 +128,13 @@ namespace ks::ui
         {
             return snapshot;
         }
+        // 身份也属于快照：换目标后即便地址和字节相同，旧输入仍必须失效。
+        snapshot.sourceRevision = canvasPointer->sourceRevision();
+        snapshot.overlay = canvasPointer->overlay();
+        if (snapshot.overlay != nullptr)
+        {
+            snapshot.identityKey = snapshot.overlay->IdentityKey();
+        }
         const std::optional<HexCanvas::AddressRange> selection = canvasPointer->selectedRange();
         if (!selection.has_value())
         {

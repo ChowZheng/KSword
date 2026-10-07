@@ -631,7 +631,8 @@ void ProcessTraceMonitorWidget::refreshAvailableProcessListAsync()
     updateActionState();
 
     QPointer<ProcessTraceMonitorWidget> guardThis(this);
-    std::thread([guardThis]() {
+    const auto dispatcher = m_uiDispatcher;
+    std::thread([guardThis, dispatcher]() {
         std::vector<ks::process::ProcessRecord> processList = ks::process::EnumerateProcesses(
             ks::process::ProcessEnumStrategy::Auto);
 
@@ -647,7 +648,7 @@ void ProcessTraceMonitorWidget::refreshAvailableProcessListAsync()
                 return left.pid < right.pid;
             });
 
-        QMetaObject::invokeMethod(qApp, [guardThis, processList = std::move(processList)]() {
+        dispatcher->post([guardThis, processList = std::move(processList)]() {
             if (guardThis == nullptr)
             {
                 return;
@@ -656,7 +657,7 @@ void ProcessTraceMonitorWidget::refreshAvailableProcessListAsync()
             guardThis->m_availableRefreshPending.store(false);
             guardThis->populateAvailableProcessTable(processList);
             guardThis->updateActionState();
-        }, Qt::QueuedConnection);
+        });
     }).detach();
 }
 

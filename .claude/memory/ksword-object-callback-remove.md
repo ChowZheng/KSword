@@ -66,6 +66,24 @@ metadata:
   和 Inf2Cat 通过。最终驱动为未签名产物；主程序测试签名信任验证返回 0x80096019。
   没有进行实机加载或外部回调注销验收，不能把构建/模拟 API 回归等同于实机支持矩阵。
 
+## 启发式 Object 注销蓝屏证据（2026-10-05）
+
+- `100526-7656-01` 转储明确为 `0x3B / C0000005`：匹配旧映像恢复的链路为
+  `KswordARK+0x55E0 → ObUnRegisterCallbacks+0x39 → ObpLockObjectTypeExclusive+0x2F`，
+  非法锁地址为 `0x12F`，由传入 `ObjectType=0x77` 产生。请求 IOCTL 为 `0x22A21C`
+  （`REMOVE_EXTERNAL_CALLBACK_EX`），栈副本 `source=7`、`trustFlags=0x14`，证实走启发式
+  Object 候选分支；目标回调为 `sysdiag.sys+0x38260`，不能据目标模块转移故障归因。
+- 旧包 `Ksword5.1/x64/!非正式版-KswordARK-2026091601.7z` 中驱动与转储的
+  `TimeDateStamp=0x6AAA6870`、`SizeOfImage=0x1053000`、`CheckSum=0x2ADC2D` 均匹配；
+  所需 PDB GUID 为 `7D8CA4F8-CCC3-40CC-A54A-AE90B65B996C`、Age 6，目前未找到。
+  当前 Release PDB 被调试器标为 `unmatched`，曾误显示 `callback_waiter.c` 的函数名和行号；
+  此类显示必须排除。没有 PDB 时仍可用匹配 `.sys` 的展开信息恢复驱动调用栈。
+- 本次分析时当前源码仍按邻近扫描得到首个非模块内核指针作为 `RegistrationBlock`，并允许
+  重新枚举相同启发式候选后调用 `ObUnRegisterCallbacks`。重枚举证明候选重复出现，不能证明
+  真实句柄语义；本转储不能被当作已修复案例。候选池内存未收入小转储，错误候选与并发失效/
+  更早破坏的最终区分仍需补充证据。本次仅诊断，未修改生产代码或做实机验收。
+- 本地完整证据保存在 `artifacts/dump-analysis/100526-7656-01/`（生成产物，不提交）。
+
 ## 进程 Ex2 与 Minifilter 回调行卸载（2026-10-01）
 
 - 进程 Ex2 原来只有枚举分类，注销后端漏接。`callback_remove_extended.c` 现在按重枚举的

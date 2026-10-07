@@ -13010,6 +13010,7 @@ std::size_t FileDock::recordFileOplockAccessPrograms(
 
 FileDock::FileDock(QWidget* parent)
     : QWidget(parent)
+    , m_uiDispatcher(std::make_shared<ks::ui::AsyncUiDispatcher>(this))
 {
     // 构造日志：记录文件模块启动。
     kLogEvent event;
@@ -13020,6 +13021,7 @@ FileDock::FileDock(QWidget* parent)
 
 FileDock::~FileDock()
 {
+    m_uiDispatcher->close();
     // 析构阶段先释放持有型 Oplock，再停止解锁器后台线程。
     releaseAllActiveOplocks(false);
     m_unlockerWorkerStopRequested.store(true);
@@ -14800,7 +14802,8 @@ void FileDock::requestAsyncManualReload(FilePanelWidgets& panel, const bool show
     }
 
     QPointer<FileDock> safeThis(this);
-    std::thread([safeThis, leftPanelRequest, requestPath, requestedFsType, requestedReadMode, parseBackend, driverMode, backendText, panelNameText, showWarningMessage, requestSerial, progressPid]() {
+    const auto dispatcher = m_uiDispatcher;
+    std::thread([safeThis, dispatcher, leftPanelRequest, requestPath, requestedFsType, requestedReadMode, parseBackend, driverMode, backendText, panelNameText, showWarningMessage, requestSerial, progressPid]() {
         kPro.set(
             progressPid,
             (backendText + QStringLiteral("目录中")).toStdString(),
@@ -14830,14 +14833,7 @@ void FileDock::requestAsyncManualReload(FilePanelWidgets& panel, const bool show
         kPro.set(progressPid, parseOk ? "生成目录列表中" : "解析失败，整理错误信息", 0, 78.0f);
         const QSet<QString> suspiciousNameSet = buildSuspiciousNameSet(suspiciousNames);
 
-        if (safeThis.isNull())
-        {
-            kPro.set(progressPid, "界面已关闭", 0, 100.0f);
-            return;
-        }
-
-        const bool invokeOk = QMetaObject::invokeMethod(
-            qApp,
+        dispatcher->post(
             [safeThis,
              leftPanelRequest,
              requestPath,
@@ -15115,12 +15111,11 @@ void FileDock::requestAsyncManualReload(FilePanelWidgets& panel, const bool show
                 }
                 commitSnapshot();
             },
-            Qt::QueuedConnection);
+            [progressPid]()
+            {
+                kPro.set(progressPid, "界面已关闭", 0, 100.0f);
+            });
 
-        if (!invokeOk)
-        {
-            kPro.set(progressPid, "回调失败", 0, 100.0f);
-        }
     }).detach();
 }
 
@@ -15916,7 +15911,8 @@ void FileDock::scanDeletedFilesForRecoveryAsync()
     kPro.set(progressPid, "准备扫描卷", 0, 5.0f);
 
     QPointer<FileDock> safeThis(this);
-    std::thread([safeThis, rootPath, progressPid]() {
+    const auto dispatcher = m_uiDispatcher;
+    std::thread([safeThis, dispatcher, rootPath, progressPid]() {
         QString errorText;
         std::vector<ks::file::NtfsDeletedFileEntry> deletedItems;
 
@@ -15934,14 +15930,7 @@ void FileDock::scanDeletedFilesForRecoveryAsync()
             kPro.set(progressPid, "扫描失败，整理错误信息", 0, 82.0f);
         }
 
-        if (safeThis.isNull())
-        {
-            kPro.set(progressPid, "界面已关闭", 0, 100.0f);
-            return;
-        }
-
-        QMetaObject::invokeMethod(
-            safeThis.data(),
+        dispatcher->post(
             [safeThis,
              rootPath,
              progressPid,
@@ -16122,7 +16111,10 @@ void FileDock::scanDeletedFilesForRecoveryAsync()
                 }
                 commitSnapshot();
             },
-            Qt::QueuedConnection);
+            [progressPid]()
+            {
+                kPro.set(progressPid, "界面已关闭", 0, 100.0f);
+            });
     }).detach();
 }
 
@@ -16239,7 +16231,8 @@ void FileDock::recoverSelectedDeletedFilesAsync()
     kPro.set(progressPid, "准备恢复", 0, 5.0f);
 
     QPointer<FileDock> safeThis(this);
-    std::thread([safeThis, progressPid, volumeRoot, exportDir, selectedItems]() {
+    const auto dispatcher = m_uiDispatcher;
+    std::thread([safeThis, dispatcher, progressPid, volumeRoot, exportDir, selectedItems]() {
         int successCount = 0;
         QStringList failTextList;
         QSet<QString> reservedTargetPathSet;
@@ -16294,14 +16287,7 @@ void FileDock::recoverSelectedDeletedFilesAsync()
             kPro.set(progressPid, "恢复处理中", 0, progress);
         }
 
-        if (safeThis.isNull())
-        {
-            kPro.set(progressPid, "界面已关闭", 0, 100.0f);
-            return;
-        }
-
-        QMetaObject::invokeMethod(
-            safeThis.data(),
+        dispatcher->post(
             [safeThis, progressPid, successCount, failTextList]() {
                 if (safeThis.isNull())
                 {
@@ -16352,7 +16338,10 @@ void FileDock::recoverSelectedDeletedFilesAsync()
 
                 kPro.set(progressPid, "恢复完成", 0, 100.0f);
             },
-            Qt::QueuedConnection);
+            [progressPid]()
+            {
+                kPro.set(progressPid, "界面已关闭", 0, 100.0f);
+            });
     }).detach();
 }
 
@@ -16682,14 +16671,15 @@ void FileDock::showPanelContextMenu(FilePanelWidgets& panel, const QPoint& local
         const QString identityText = selectedAction->text();
         const std::wstring executablePath = QDir::toNativeSeparators(firstPath).toStdWString();
         const QPointer<FileDock> guardedSelf(this);
-        QThreadPool::globalInstance()->start([guardedSelf, executablePath, identity, identityText]()
+        const auto dispatcher = m_uiDispatcher;
+        QThreadPool::globalInstance()->start([guardedSelf, dispatcher, executablePath, identity, identityText]()
             {
                 const auto result = ks::process::RunExecutableAs(executablePath, identity);
                 kLogEvent event;
                 (result.success ? info : warn) << event
                     << "[FileDock] Run executable as, identity=" << identityText.toStdString()
                     << ", pid=" << result.processId << ", error=" << result.error << eol;
-                QMetaObject::invokeMethod(qApp, [guardedSelf, result, identityText]()
+                dispatcher->post([guardedSelf, result, identityText]()
                     {
                         if (guardedSelf.isNull() || result.success || result.error == ERROR_CANCELLED) return;
                         QMessageBox::warning(guardedSelf.data(),
@@ -16697,7 +16687,7 @@ void FileDock::showPanelContextMenu(FilePanelWidgets& panel, const QPoint& local
                             ks::i18n::displayText(QStringLiteral("无法以 %1 权限运行该程序。\n错误码：%2\n%3"))
                                 .arg(identityText).arg(result.error)
                                 .arg(ks::i18n::packedSourceText(QString::fromStdWString(result.detail))));
-                    }, Qt::QueuedConnection);
+                    });
             });
         return;
     }
@@ -17458,11 +17448,11 @@ void FileDock::transferSelectedItemsToOppositePanel(FilePanelWidgets& sourcePane
     const QString sourcePanelNameText = sourcePanel.panelNameText;
     const QString targetPanelNameText = targetPanel->panelNameText;
     const QPointer<FileDock> safeThis(this);
-    const QPointer<QApplication> applicationGuard(qApp);
+    const auto dispatcher = m_uiDispatcher;
 
     QThreadPool::globalInstance()->start(
         [safeThis,
-            applicationGuard,
+            dispatcher,
             selectedItemPaths,
             targetDirectoryPath,
             sourcePanelNameText,
@@ -17556,27 +17546,17 @@ void FileDock::transferSelectedItemsToOppositePanel(FilePanelWidgets& sourcePane
                     errorLines << copyErrorText;
                 }
 
-                if (!applicationGuard.isNull())
                 {
                     const float progress = 5.0f +
                         (static_cast<float>(i + 1) / static_cast<float>(totalCount)) * 90.0f;
-                    QMetaObject::invokeMethod(
-                        applicationGuard.data(),
+                    dispatcher->post(
                         [progressPid, moveItems, progress]()
                         {
                             kPro.set(progressPid, moveItems ? "移动处理中" : "复制处理中", 0, progress);
-                        },
-                        Qt::QueuedConnection);
+                        });
                 }
             }
-
-            if (applicationGuard.isNull())
-            {
-                return;
-            }
-
-            QMetaObject::invokeMethod(
-                applicationGuard.data(),
+            dispatcher->post(
                 [safeThis,
                     errorLines = std::move(errorLines),
                     sourcePanelNameText,
@@ -17631,7 +17611,10 @@ void FileDock::transferSelectedItemsToOppositePanel(FilePanelWidgets& sourcePane
                         << (moveItems ? "move" : "copy")
                         << eol;
                 },
-                Qt::QueuedConnection);
+                [progressPid]()
+                {
+                    kPro.set(progressPid, "界面已关闭", 0, 100.0f);
+                });
         });
 }
 
@@ -17934,15 +17917,15 @@ void FileDock::deleteSelectedItemsWithMode(FilePanelWidgets& panel, const FileDe
     const bool sourceWasLeftPanel = &panel == &m_leftPanel;
     const QString panelNameText = panel.panelNameText;
     const QPointer<FileDock> guardedSelf(this);
-    const QPointer<QApplication> applicationGuard(qApp);
+    const auto dispatcher = m_uiDispatcher;
 
     QThreadPool::globalInstance()->start(
-        [guardedSelf, applicationGuard, paths, panelNameText, modeNameText, mode, sourceWasLeftPanel, progressPid]()
+        [guardedSelf, dispatcher, paths, panelNameText, modeNameText, mode, sourceWasLeftPanel, progressPid]()
         {
             // 进度按整数百分比节流：大目录会产生上万次回调，逐次 post 会把主线程事件队列打爆。
             int lastProgressBucket = 5;
             const auto progressReporter =
-                [&lastProgressBucket, applicationGuard, progressPid](const float progress)
+                [&lastProgressBucket, dispatcher, progressPid](const float progress)
                 {
                     const int bucket = static_cast<int>(progress);
                     if (bucket <= lastProgressBucket)
@@ -17950,28 +17933,15 @@ void FileDock::deleteSelectedItemsWithMode(FilePanelWidgets& panel, const FileDe
                         return;
                     }
                     lastProgressBucket = bucket;
-                    if (applicationGuard.isNull())
-                    {
-                        return;
-                    }
-                    QMetaObject::invokeMethod(
-                        applicationGuard.data(),
+                    dispatcher->post(
                         [progressPid, progress]()
                         {
                             kPro.set(progressPid, "删除处理中", 0, progress);
-                        },
-                        Qt::QueuedConnection);
+                        });
                 };
 
             FileDeleteBatchStats stats = runFileDeleteBatch(paths, mode, progressReporter);
-
-            if (applicationGuard.isNull())
-            {
-                return;
-            }
-
-            QMetaObject::invokeMethod(
-                applicationGuard.data(),
+            dispatcher->post(
                 [guardedSelf,
                     stats = std::move(stats),
                     panelNameText,
@@ -18107,7 +18077,10 @@ void FileDock::deleteSelectedItemsWithMode(FilePanelWidgets& panel, const FileDe
                                 .arg(summaryLines.join(QStringLiteral("\n"))));
                     }
                 },
-                Qt::QueuedConnection);
+                [progressPid]()
+                {
+                    kPro.set(progressPid, "界面已关闭", 0, 100.0f);
+                });
         });
 }
 
@@ -19429,7 +19402,8 @@ void FileDock::takeOwnershipSelectedItems(FilePanelWidgets& panel)
     const bool leftPanelRequest = (&panel == &m_leftPanel);
     const QString panelNameText = panel.panelNameText;
     QPointer<FileDock> safeThis(this);
-    std::thread([safeThis, paths, progressPid, leftPanelRequest, panelNameText]()
+    const auto dispatcher = m_uiDispatcher;
+    std::thread([safeThis, dispatcher, paths, progressPid, leftPanelRequest, panelNameText]()
     {
         QStringList errorDetails;
         for (std::size_t index = 0; index < paths.size(); ++index)
@@ -19447,14 +19421,7 @@ void FileDock::takeOwnershipSelectedItems(FilePanelWidgets& panel)
         }
         kPro.set(progressPid, "完成", 0, 100.0f);
 
-        if (safeThis.isNull())
-        {
-            kPro.set(progressPid, "界面已关闭", 0, 100.0f);
-            return;
-        }
-
-        const bool invokeOk = QMetaObject::invokeMethod(
-            safeThis.data(),
+        dispatcher->post(
             [safeThis, progressPid, leftPanelRequest, panelNameText, paths, errorDetails]()
             {
                 if (safeThis.isNull())
@@ -19506,11 +19473,10 @@ void FileDock::takeOwnershipSelectedItems(FilePanelWidgets& panel)
                     << paths.size()
                     << eol;
             },
-            Qt::QueuedConnection);
-        if (!invokeOk)
-        {
-            kPro.set(progressPid, "回调失败", 0, 100.0f);
-        }
+            [progressPid]()
+            {
+                kPro.set(progressPid, "界面已关闭", 0, 100.0f);
+            });
     }).detach();
 }
 

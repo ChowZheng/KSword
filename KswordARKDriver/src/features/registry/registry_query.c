@@ -352,6 +352,7 @@ Return Value:
     ULONG queryLength = 0UL;
     ULONG maxDataBytes = KSWORD_ARK_REGISTRY_DATA_MAX_BYTES;
     ULONG boundedQueryLength = 0UL;
+    ULONG availableDataBytes = 0UL; // 第二次查询实际缓冲中可读取的数据窗口。
     PKEY_VALUE_PARTIAL_INFORMATION valueInformation = NULL;
     NTSTATUS status = STATUS_SUCCESS;
     USHORT valueNameChars = 0U;
@@ -514,18 +515,34 @@ Return Value:
         return STATUS_SUCCESS;
     }
 
-    response->valueType = valueInformation->Type;
-    response->requiredBytes = valueInformation->DataLength;
+    if (resultLength < (ULONG)FIELD_OFFSET(KEY_VALUE_PARTIAL_INFORMATION, Data)) { // 不完整固定头不能提供有效的 Type/DataLength。
+        response->status = KSWORD_ARK_REGISTRY_READ_STATUS_FAILED; // 拒绝损坏或不完整的查询结果。
+        response->lastStatus = STATUS_INFO_LENGTH_MISMATCH; // 保留结构长度错误供 R3 诊断。
+        ExFreePoolWithTag(valueInformation, KSWORD_ARK_REGISTRY_QUERY_TAG); // 释放此次查询的所有临时内存。
+        return STATUS_SUCCESS; // 已写入完整的结构化失败响应。
+    }
 
-    response->dataBytes = valueInformation->DataLength;
-    if (response->dataBytes > maxDataBytes) {
-        response->dataBytes = maxDataBytes;
-        response->status = KSWORD_ARK_REGISTRY_READ_STATUS_BUFFER_TOO_SMALL;
-        response->lastStatus = STATUS_BUFFER_TOO_SMALL;
+    availableDataBytes = queryLength - (ULONG)FIELD_OFFSET(KEY_VALUE_PARTIAL_INFORMATION, Data); // 分配长度已至少容纳固定头，减法不会下溢。
+    if (availableDataBytes > resultLength - (ULONG)FIELD_OFFSET(KEY_VALUE_PARTIAL_INFORMATION, Data)) { // 成功查询可能只写入分配窗口的一部分。
+        availableDataBytes = resultLength - (ULONG)FIELD_OFFSET(KEY_VALUE_PARTIAL_INFORMATION, Data); // 不读取返回结果长度以后的未使用字节。
+    }
+    response->valueType = valueInformation->Type; // 只有固定头完整时才读取类型。
+    response->requiredBytes = valueInformation->DataLength; // 保留并发增长后完整值的长度，不以分配窗口替代。
+
+    response->dataBytes = valueInformation->DataLength; // 从当前完整值长度开始分别应用协议与物理缓冲上限。
+    if (response->dataBytes > maxDataBytes) { // 尊重调用者指定的数据容量。
+        response->dataBytes = maxDataBytes; // 先限制为协议可返回的字节数。
+    }
+    if (response->dataBytes > availableDataBytes) { // BUFFER_OVERFLOW 的 DataLength 可以大于第一次查询所确定的分配窗口。
+        response->dataBytes = availableDataBytes; // 只复制本次查询缓冲内真实存在的前缀。
+    }
+    if (response->dataBytes < response->requiredBytes) { // 任一上限造成前缀截断时都通知调用者重读。
+        response->status = KSWORD_ARK_REGISTRY_READ_STATUS_BUFFER_TOO_SMALL; // 保持原有截断响应的协议语义。
+        response->lastStatus = STATUS_BUFFER_TOO_SMALL; // 请求容量足够但值并发增长时也必须报告截断。
     }
     else {
-        response->status = KSWORD_ARK_REGISTRY_READ_STATUS_SUCCESS;
-        response->lastStatus = STATUS_SUCCESS;
+        response->status = KSWORD_ARK_REGISTRY_READ_STATUS_SUCCESS; // 仅当完整值全部复制时报告成功。
+        response->lastStatus = STATUS_SUCCESS; // 完整数据回执不包含查询阶段的临时状态。
     }
 
     if (response->dataBytes != 0UL) {

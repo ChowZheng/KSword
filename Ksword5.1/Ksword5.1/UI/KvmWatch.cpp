@@ -24,7 +24,10 @@
 #include <Windows.h>
 
 #include <algorithm>
+#include <cstddef>
+#include <cstring>
 #include <iterator>
+#include <limits>
 #include <vector>
 
 namespace ksword::kvm
@@ -298,93 +301,119 @@ namespace ksword::kvm
             const auto* const base =
                 reinterpret_cast<const unsigned char*>(image.constData());
             const qsizetype size = image.size();
+            const auto containsRange = [size](const quint64 offset, const quint64 bytes) {
+                const quint64 fileSize = static_cast<quint64>(size);
+                return offset <= fileSize && bytes <= fileSize - offset;
+            };
             if (size < static_cast<qsizetype>(sizeof(IMAGE_DOS_HEADER)))
             {
                 return table;
             }
-            const auto* const dos =
-                reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
-            if (dos->e_magic != IMAGE_DOS_SIGNATURE ||
-                dos->e_lfanew <= 0 ||
-                dos->e_lfanew + static_cast<LONG>(sizeof(IMAGE_NT_HEADERS64)) >
-                    static_cast<LONG>(size))
+            IMAGE_DOS_HEADER dos{};
+            std::memcpy(&dos, base, sizeof(dos));
+            if (dos.e_magic != IMAGE_DOS_SIGNATURE || dos.e_lfanew <= 0 ||
+                !containsRange(static_cast<quint64>(dos.e_lfanew), sizeof(IMAGE_NT_HEADERS64)))
             {
                 return table;
             }
-            const auto* const nt =
-                reinterpret_cast<const IMAGE_NT_HEADERS64*>(base + dos->e_lfanew);
-            if (nt->Signature != IMAGE_NT_SIGNATURE ||
-                nt->OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR64_MAGIC)
+            const quint64 ntOffset = static_cast<quint64>(dos.e_lfanew);
+            IMAGE_NT_HEADERS64 nt{};
+            std::memcpy(&nt, base + ntOffset, sizeof(nt));
+            if (nt.Signature != IMAGE_NT_SIGNATURE ||
+                nt.OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR64_MAGIC ||
+                static_cast<quint64>(nt.FileHeader.SizeOfOptionalHeader) < sizeof(IMAGE_OPTIONAL_HEADER64) ||
+                nt.OptionalHeader.NumberOfRvaAndSizes <= IMAGE_DIRECTORY_ENTRY_EXPORT)
             {
                 return table;
             }
             const IMAGE_DATA_DIRECTORY& directory =
-                nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT];
+                nt.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT];
             if (directory.VirtualAddress == 0 || directory.Size == 0)
             {
                 return table;
             }
             // 磁盘映像按 FileAlignment 排布，RVA 必须逐节翻成文件偏移。
-            const auto* const sections = IMAGE_FIRST_SECTION(nt);
-            const auto rvaToOffset = [&](const quint32 rva) -> qsizetype {
-                for (unsigned index = 0; index < nt->FileHeader.NumberOfSections; ++index)
+            const quint64 sectionOffset = ntOffset + offsetof(IMAGE_NT_HEADERS64, OptionalHeader)
+                + nt.FileHeader.SizeOfOptionalHeader;
+            if (!containsRange(sectionOffset,
+                static_cast<quint64>(nt.FileHeader.NumberOfSections) * sizeof(IMAGE_SECTION_HEADER)))
+            {
+                return table;
+            }
+            const auto rvaToOffset = [&](const quint32 rva, const quint64 bytes = 1) -> qsizetype {
+                for (unsigned index = 0; index < nt.FileHeader.NumberOfSections; ++index)
                 {
-                    const IMAGE_SECTION_HEADER& section = sections[index];
-                    if (rva >= section.VirtualAddress &&
-                        rva < section.VirtualAddress + section.SizeOfRawData)
+                    IMAGE_SECTION_HEADER section{};
+                    std::memcpy(&section, base + sectionOffset +
+                        static_cast<quint64>(index) * sizeof(section), sizeof(section));
+                    if (rva < section.VirtualAddress)
                     {
-                        return static_cast<qsizetype>(
-                            section.PointerToRawData + (rva - section.VirtualAddress));
+                        continue;
+                    }
+                    const quint64 delta = static_cast<quint64>(rva) - section.VirtualAddress;
+                    const quint64 offset = static_cast<quint64>(section.PointerToRawData) + delta;
+                    if (delta < section.SizeOfRawData && bytes <= section.SizeOfRawData - delta &&
+                        containsRange(offset, bytes))
+                    {
+                        return static_cast<qsizetype>(offset);
                     }
                 }
                 return -1;
             };
-            const qsizetype directoryOffset = rvaToOffset(directory.VirtualAddress);
-            if (directoryOffset < 0 ||
-                directoryOffset + static_cast<qsizetype>(sizeof(IMAGE_EXPORT_DIRECTORY)) > size)
+            const qsizetype directoryOffset = rvaToOffset(directory.VirtualAddress, sizeof(IMAGE_EXPORT_DIRECTORY));
+            if (directoryOffset < 0)
             {
                 return table;
             }
-            const auto* const exports =
-                reinterpret_cast<const IMAGE_EXPORT_DIRECTORY*>(base + directoryOffset);
-            const qsizetype namesOffset = rvaToOffset(exports->AddressOfNames);
-            const qsizetype ordinalsOffset = rvaToOffset(exports->AddressOfNameOrdinals);
-            const qsizetype functionsOffset = rvaToOffset(exports->AddressOfFunctions);
+            IMAGE_EXPORT_DIRECTORY exports{};
+            std::memcpy(&exports, base + directoryOffset, sizeof(exports));
+            if (exports.NumberOfNames > static_cast<quint32>(std::numeric_limits<int>::max()))
+            {
+                return table;
+            }
+            const qsizetype namesOffset = rvaToOffset(exports.AddressOfNames,
+                static_cast<quint64>(exports.NumberOfNames) * sizeof(quint32));
+            const qsizetype ordinalsOffset = rvaToOffset(exports.AddressOfNameOrdinals,
+                static_cast<quint64>(exports.NumberOfNames) * sizeof(quint16));
+            const qsizetype functionsOffset = rvaToOffset(exports.AddressOfFunctions,
+                static_cast<quint64>(exports.NumberOfFunctions) * sizeof(quint32));
             if (namesOffset < 0 || ordinalsOffset < 0 || functionsOffset < 0)
             {
                 return table;
             }
-            const auto* const nameRvas =
-                reinterpret_cast<const quint32*>(base + namesOffset);
-            const auto* const ordinals =
-                reinterpret_cast<const quint16*>(base + ordinalsOffset);
-            const auto* const functionRvas =
-                reinterpret_cast<const quint32*>(base + functionsOffset);
-            table.entries.reserve(static_cast<int>(exports->NumberOfNames));
-            for (quint32 index = 0; index < exports->NumberOfNames; ++index)
+            table.entries.reserve(static_cast<int>(exports.NumberOfNames));
+            for (quint32 index = 0; index < exports.NumberOfNames; ++index)
             {
-                const qsizetype nameOffset = rvaToOffset(nameRvas[index]);
+                quint32 nameRva = 0;
+                quint16 ordinal = 0;
+                std::memcpy(&nameRva, base + namesOffset + static_cast<quint64>(index) * sizeof(nameRva), sizeof(nameRva));
+                std::memcpy(&ordinal, base + ordinalsOffset + static_cast<quint64>(index) * sizeof(ordinal), sizeof(ordinal));
+                const qsizetype nameOffset = rvaToOffset(nameRva);
                 if (nameOffset < 0 || nameOffset >= size)
                 {
                     continue;
                 }
-                const quint16 ordinal = ordinals[index];
-                if (ordinal >= exports->NumberOfFunctions)
+                if (ordinal >= exports.NumberOfFunctions)
                 {
                     continue;
                 }
-                const quint32 functionRva = functionRvas[ordinal];
+                quint32 functionRva = 0;
+                std::memcpy(&functionRva, base + functionsOffset + static_cast<quint64>(ordinal) * sizeof(functionRva), sizeof(functionRva));
                 if (functionRva == 0)
                 {
                     continue;
                 }
                 const char* const name =
                     reinterpret_cast<const char*>(base + nameOffset);
-                const qsizetype maximum = size - nameOffset;
+                const qsizetype maximum = std::min<qsizetype>(size - nameOffset, 4096);
                 qsizetype length = 0;
                 while (length < maximum && name[length] != '\0')
                 {
                     ++length;
+                }
+                if (length == maximum) // 截断或无 NUL 的异常导出名不生成符号，也不扩成整文件字符串。
+                {
+                    continue;
                 }
                 table.entries.append(
                     { functionRva, QString::fromLatin1(name, static_cast<int>(length)) });

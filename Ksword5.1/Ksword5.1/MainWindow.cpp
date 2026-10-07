@@ -5163,6 +5163,82 @@ void MainWindow::closeEvent(QCloseEvent* event)
     kLogEvent closeEventLog;
     info << closeEventLog << "[MainWindow] 收到关闭事件，准备退出进程。" << eol;
 
+    // 全局退出守卫覆盖主 Dock 与无父窗口的进程详情内嵌 Dock，并且在任何停驱/救援退出动作之前执行。
+    // 模态确认期间拒绝重复关闭；否则同一批暂存/int3 会被再次询问，甚至重入执行。
+    if (qApp != nullptr && qApp->property("ksword_memory_quit_guard_active").toBool())
+    {
+        if (event != nullptr)
+        {
+            event->ignore();
+        }
+        return;
+    }
+    // closeGuardSelf：每个确认框都可能同步销毁主窗口，返回后不得继续保存布局或停止驱动。
+    const QPointer<MainWindow> closeGuardSelf(this);
+    if (qApp != nullptr)
+    {
+        qApp->setProperty("ksword_memory_quit_guard_active", true);
+    }
+    // workbenchDocks：UI 线程上一次性取得弱指针快照，避免后续模态事件循环销毁其它详情窗导致悬空。
+    std::vector<QPointer<MemoryDock>> workbenchDocks;
+    // appendNewWorkbenchDocks：模态期间已排队的详情页构建仍会执行，把晚到 Dock 也纳入同一次退出。
+    const auto appendNewWorkbenchDocks = [&workbenchDocks]() {
+        for (QWidget* widget : QApplication::allWidgets())
+        {
+            if (auto* memoryDock = qobject_cast<MemoryDock*>(widget))
+            {
+                const bool alreadyKnown = std::any_of(
+                    workbenchDocks.cbegin(), workbenchDocks.cend(),
+                    [memoryDock](const auto& knownDock) { return knownDock.data() == memoryDock; });
+                if (!alreadyKnown)
+                {
+                    workbenchDocks.emplace_back(memoryDock);
+                }
+            }
+        }
+    };
+    appendNewWorkbenchDocks();
+    bool memoryQuitAllowed = true;
+    for (std::size_t dockIndex = 0; dockIndex < workbenchDocks.size(); ++dockIndex)
+    {
+        // memoryDock：当前迭代独立的弱指针副本，追加晚到 Dock 时不依赖 vector 中可能失效的引用。
+        const QPointer<MemoryDock> memoryDock = workbenchDocks[dockIndex];
+        if (memoryDock && !memoryDock->confirmWorkbenchQuit())
+        {
+            memoryQuitAllowed = false;
+            break;
+        }
+        if (!closeGuardSelf)
+        {
+            break;
+        }
+        appendNewWorkbenchDocks();
+    }
+    if (!closeGuardSelf || !memoryQuitAllowed)
+    {
+        // 本次全局退出取消：清掉之前视图批准的 Keep 许可，禁止它误跳过下一次未经提示的分离安全网。
+        // 已明确批准并执行的应用/丢弃保留其结果；这不是对已执行编辑的回滚。
+        for (const auto& memoryDock : workbenchDocks)
+        {
+            if (memoryDock)
+            {
+                memoryDock->cancelWorkbenchQuit();
+            }
+        }
+    }
+    if (qApp != nullptr)
+    {
+        qApp->setProperty("ksword_memory_quit_guard_active", false);
+    }
+    if (!closeGuardSelf || !memoryQuitAllowed)
+    {
+        if (event != nullptr)
+        {
+            event->ignore();
+        }
+        return;
+    }
+
     // 救援实例临时借用驱动和布局；退出时不覆盖主实例的配置，也不停止全局 R0 服务。
     if (qApp != nullptr && qApp->property("ksword_rescue_desktop").toBool())
     {
@@ -5177,17 +5253,6 @@ void MainWindow::closeEvent(QCloseEvent* event)
         }
         QMainWindow::closeEvent(event);
         QCoreApplication::quit();
-        return;
-    }
-
-    // 内存工作台的退出守卫必须放在最前：本函数后半段会停 R0 驱动，守卫晚了 int3 补丁的还原必失败；
-    // 同时有暂存的未提交补丁时也要先问用户。用户取消则放弃本次关闭（内存页尚未加载时跳过）。
-    if (m_memoryWidget != nullptr && !m_memoryWidget->confirmWorkbenchQuit())
-    {
-        if (event != nullptr)
-        {
-            event->ignore();
-        }
         return;
     }
 

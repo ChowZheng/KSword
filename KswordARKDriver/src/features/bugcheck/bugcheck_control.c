@@ -46,6 +46,60 @@ static PDRIVER_OBJECT g_KswordArkBugcheckControlDriverObject = NULL;
 static WDFDEVICE g_KswordArkBugcheckControlDevice = WDF_NO_HANDLE;
 static WDFWORKITEM g_KswordArkBugcheckControlWorkItem = WDF_NO_HANDLE;
 
+// 跨安装代次的同步对象保持常驻，绝不能随 g_KswordArkBugcheckState 一起清零。
+static EX_RUNDOWN_REF g_KswordArkBugcheckTrackingRundown;
+static volatile LONG g_KswordArkBugcheckTrackingInitialized = 0L; // 初次通知早于控制器初始化时必须短路。
+static volatile LONG g_KswordArkBugcheckTrackingAccepting = 0L; // 门禁不放入重装过程中正在清零的结构。
+
+VOID
+KswordARKBugcheckTrackingInitialize(VOID)
+{
+    ExInitializeRundownProtection(&g_KswordArkBugcheckTrackingRundown); // DriverEntry 仅建立一次独立同步对象。
+    ExWaitForRundownProtectionRelease(&g_KswordArkBugcheckTrackingRundown); // 初始空代次保持关闭，首轮安装才重开。
+    InterlockedExchange(&g_KswordArkBugcheckTrackingInitialized, 1L); // 初始关闭完成后才允许读取 rundown。
+}
+
+VOID
+KswordARKBugcheckTrackingStart(VOID)
+{
+    ExReInitializeRundownProtection(&g_KswordArkBugcheckTrackingRundown); // 控制器已等待旧代次排空，之后才复用同步对象。
+    InterlockedExchange(&g_KswordArkBugcheckState.TrackingReady, 1L); // 缓存与 evidence 锁已完整建立。
+    InterlockedExchange(&g_KswordArkBugcheckTrackingAccepting, 1L); // 最后发布独立准入，写者不会观察初始化中的状态。
+}
+
+VOID
+KswordARKBugcheckTrackingStop(VOID)
+{
+    InterlockedExchange(&g_KswordArkBugcheckTrackingAccepting, 0L); // 先拒绝新运行期写者与延迟的旧代次观察者。
+    InterlockedExchange(&g_KswordArkBugcheckState.TrackingReady, 0L); // 既有发布函数同步停止新缓存提交。
+    if (InterlockedCompareExchange(&g_KswordArkBugcheckTrackingInitialized, 0L, 0L) != 0L) { // 初始化前不得使用 opaque rundown。
+        ExWaitForRundownProtectionRelease(&g_KswordArkBugcheckTrackingRundown); // 已进入者全部退场后才可清零缓存或重置锁。
+    }
+}
+
+BOOLEAN
+KswordARKBugcheckTrackingAcquire(VOID)
+{
+    if (KeGetCurrentIrql() > APC_LEVEL || // 此引用只用于正常通知与运行期栈采样，不在 BugCheck 现场获取。
+        InterlockedCompareExchange(&g_KswordArkBugcheckTrackingAccepting, 0L, 0L) == 0L) { // 初次初始化前接受位始终为零。
+        return FALSE; // 不接触尚未初始化或已经排空的同步对象。
+    }
+    if (!ExAcquireRundownProtection(&g_KswordArkBugcheckTrackingRundown)) { // Stop 已封闭旧代次时不再建立引用。
+        return FALSE; // 不能访问后续可重置的状态和锁。
+    }
+    if (InterlockedCompareExchange(&g_KswordArkBugcheckTrackingAccepting, 0L, 0L) == 0L) { // 取得引用后重新检查关闭竞态。
+        ExReleaseRundownProtection(&g_KswordArkBugcheckTrackingRundown); // 交还未用于缓存访问的临时引用。
+        return FALSE; // 停止时仅接受已有实际访问者的排空。
+    }
+    return TRUE; // 引用覆盖缓存、evidence 与操作栈的全部访问窗口。
+}
+
+VOID
+KswordARKBugcheckTrackingRelease(VOID)
+{
+    ExReleaseRundownProtection(&g_KswordArkBugcheckTrackingRundown); // 释放后调用者不能继续访问可重置状态。
+}
+
 static VOID
 KswordARKBugcheckControlInstallWorker(
     _In_ WDFWORKITEM WorkItem
@@ -284,6 +338,7 @@ KswordARKBugcheckControlInitialize(
         return status;
     }
 
+    KswordARKBugcheckTrackingInitialize(); // 控制器 ready 发布前建立初始关闭的通知排空同步对象。
     g_KswordArkBugcheckControlDriverObject = DriverObject;
     // 每次驱动生命周期默认原诊断页；R3 的安装或切换请求显式恢复保存的模式。
     InterlockedExchange(

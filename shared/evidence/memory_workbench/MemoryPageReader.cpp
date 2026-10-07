@@ -183,9 +183,10 @@ namespace ksword::memwb
         while (!stopEverything && blockStart < pageCount)
         {
             const std::uint64_t blockEnd = (std::min)(blockStart + pagesPerBlock, pageCount);
+            bool singlePageReads = false;
 
-            // 规则 2：块内循环——一次 Read 覆盖"块里尚未处理的剩余部分"，续读绝不
-            // 借用下一块的配额，所以上界始终是本块自己的 blockEnd。
+            // 规则 2：优先批量读取块里尚未处理的范围；跨页零字节失败后，
+            // 本块改为每次一整页。所有请求都不越过当前 blockEnd。
             std::uint64_t cursor = blockStart;
             while (cursor < blockEnd)
             {
@@ -198,7 +199,7 @@ namespace ksword::memwb
                 }
 
                 const std::uint64_t reqAddress = firstPageStart + cursor * kPageBytes;
-                const std::uint64_t reqPages = blockEnd - cursor;
+                const std::uint64_t reqPages = singlePageReads ? 1 : blockEnd - cursor;
                 const std::uint64_t reqLength = reqPages * kPageBytes;
 
                 const IoReadResult outcome = port.Read(session, reqAddress, reqLength);
@@ -223,10 +224,26 @@ namespace ksword::memwb
                     break;
                 }
 
+                if (outcome.status == IoReadStatus::Unreadable && outcome.data.empty() && reqPages > 1)
+                {
+                    // A failed multi-page read does not identify its failing page.
+                    // ReadProcessMemory can return no prefix when a later page is
+                    // inaccessible. Verify the remaining block one page at a time;
+                    // never skip its first page or repeatedly rescan the same hole.
+                    if (outcome.scratchAreaDirty)
+                    {
+                        result.scratchAreaDirty = true;
+                        stopEverything = true;
+                        break;
+                    }
+                    singlePageReads = true;
+                    continue; // Re-enter the cancellation check before any fallback I/O.
+                }
+
                 std::uint64_t consumedPages = 0;
                 if (outcome.status == IoReadStatus::Ok)
                 {
-                    // 整块（剩余部分）真实读到；data 应当正好 reqLength 字节，
+                    // 当前请求真实读到；data 应当正好 reqLength 字节，
                     // 这里仍夹一下长度，防止端口违反契约时越界访问。
                     const std::uint64_t usable = (std::min<std::uint64_t>)(outcome.data.size(), reqLength);
                     const std::uint64_t fullPages = usable / kPageBytes;
@@ -277,9 +294,8 @@ namespace ksword::memwb
                 }
                 else // IoReadStatus::Unreadable
                 {
-                    // 只有这次 Read 请求的第一页被判定不可读，不代表块里剩下的页
-                    // 也读不到——"不探测"指的是不去猜这一页里还有没有能读的部分，
-                    // 不是把整块都放弃。
+                    // Single-page failure establishes this page's unreadability.
+                    // Do not probe individual bytes or retry that confirmed page.
                     MarkPageUnreadable(result.pages[static_cast<std::size_t>(cursor)]);
                     consumedPages = 1;
                     // P-1：只记第一次遇到的 Unreadable 原因，供状态条解释"为什么

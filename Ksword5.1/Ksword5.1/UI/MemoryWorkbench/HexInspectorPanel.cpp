@@ -356,17 +356,19 @@ namespace ks::ui
         settings->sync();
     }
 
-    // 刷新：重读窗口，变化了才重建行；插入点移动时放弃正在进行的编辑并清掉旧消息。
+    // 刷新：重读窗口，变化了才重建行；移动、换来源/目标或撤销编辑权限时放弃旧输入。
     void HexInspectorPanel::refresh(bool force)
     {
         const WindowSnapshot snapshot = collectWindow();
         const bool changed = force || !m_hasBuilt || !(snapshot == m_window);
-        const bool moved = m_hasBuilt && (snapshot.address != m_window.address || snapshot.hasData != m_window.hasData);
+        const bool moved = m_hasBuilt && (snapshot.address != m_window.address || snapshot.hasData != m_window.hasData
+            || snapshot.sourceRevision != m_window.sourceRevision || snapshot.overlay != m_window.overlay
+            || snapshot.identityKey != m_window.identityKey || (!snapshot.canEdit && m_window.canEdit));
         m_window = snapshot;
 
         if (moved)
         {
-            // 编辑属于旧插入点；消息（上一次编辑的结果、复制结果）也只对旧位置有意义。
+            // 编辑属于旧插入点和旧目标；普通同目标页回填不会改变来源代次或身份。
             if (m_rows->isEditing())
             {
                 m_rows->endEdit();

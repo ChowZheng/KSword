@@ -89,6 +89,8 @@
     <ClCompile Include="..\shared\evidence\memory_workbench\HexViewport.Selection.cpp"><Filter>Production\Evidence\MemoryWorkbench</Filter></ClCompile>
     <ClCompile Include="..\shared\evidence\memory_workbench\Int3PatchLedger.cpp"><Filter>Production\Evidence\MemoryWorkbench</Filter></ClCompile>
     <ClCompile Include="..\shared\evidence\memory_workbench\MemoryAddressBook.cpp"><Filter>Production\Evidence\MemoryWorkbench</Filter></ClCompile>
+    <ClCompile Include="..\shared\evidence\PointerChain.cpp"><Filter>Production\Evidence\MemoryWorkbench</Filter></ClCompile>
+    <ClCompile Include="..\shared\evidence\memory_workbench\PointerChainBindings.cpp"><Filter>Production\Evidence\MemoryWorkbench</Filter></ClCompile>
     <ClCompile Include="..\shared\evidence\memory_workbench\MemoryAddressBook.Serialize.cpp"><Filter>Production\Evidence\MemoryWorkbench</Filter></ClCompile>
     <ClCompile Include="..\shared\evidence\memory_workbench\MemoryWriteTransaction.cpp"><Filter>Production\Evidence\MemoryWorkbench</Filter></ClCompile>
     <ClCompile Include="..\shared\evidence\memory_workbench\MemoryWriteTransaction.Commit.cpp"><Filter>Production\Evidence\MemoryWorkbench</Filter></ClCompile>
@@ -150,6 +152,8 @@
     <ClInclude Include="..\shared\evidence\memory_workbench\HexViewport.h"><Filter>Production\Evidence\MemoryWorkbench</Filter></ClInclude>
     <ClInclude Include="..\shared\evidence\memory_workbench\Int3PatchLedger.h"><Filter>Production\Evidence\MemoryWorkbench</Filter></ClInclude>
     <ClInclude Include="..\shared\evidence\memory_workbench\MemoryAddressBook.h"><Filter>Production\Evidence\MemoryWorkbench</Filter></ClInclude>
+    <ClInclude Include="..\shared\evidence\PointerChain.h"><Filter>Production\Evidence\MemoryWorkbench</Filter></ClInclude>
+    <ClInclude Include="..\shared\evidence\memory_workbench\PointerChainBindings.h"><Filter>Production\Evidence\MemoryWorkbench</Filter></ClInclude>
     <ClInclude Include="..\shared\evidence\memory_workbench\MemoryWriteTransaction.h"><Filter>Production\Evidence\MemoryWorkbench</Filter></ClInclude>
     <ClInclude Include="..\shared\evidence\memory_workbench\MemoryValueDecode.h"><Filter>Production\Evidence\MemoryWorkbench</Filter></ClInclude>
     <ClInclude Include="..\shared\evidence\memory_workbench\MemoryByteSearch.h"><Filter>Production\Evidence\MemoryWorkbench</Filter></ClInclude>

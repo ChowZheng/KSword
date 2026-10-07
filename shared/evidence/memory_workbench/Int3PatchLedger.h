@@ -44,7 +44,7 @@
 //   Int3PatchLedger ledger;
 //   PatchTarget target{pid, createTime100ns, attachGeneration};
 //   const InstallResult installed = ledger.Install(target, address, store, nowTick);
-//   if (installed.id != 0) { /* 安装或未证实回滚的恢复条目，保存 id */ }
+//   if (installed.id != 0) { /* 安装或验证失败的恢复条目，保存 id */ }
 //   const RestoreResult restored = ledger.Restore(installed.id, target, store);
 //
 // 条目一律用 id 标识，绝不用表格行号：行号会随删除、排序而变，id 单调递增且永不
@@ -67,7 +67,7 @@ inline constexpr std::uint8_t kInt3PatchByte = 0xCC;
 
 // IPatchByteStore：账本唯一的 I/O 出口，由调用方绑定到"当前已附加的目标"。
 //
-// 约定（两个函数都必须遵守，账本的回滚判断建立在它们之上）：
+// 约定（两个函数都必须遵守，账本的写入与回读判断建立在它们之上）：
 //   * ReadByte  返回 false 表示没有读到，此时 valueOut 的内容无意义，账本不会使用；
 //   * WriteByte 返回 false 表示该字节**没有被改动**。返回 true 表示需要回读
 //     核对的写入已发生或调用已成功；后置失败不能抹掉已落地事实，账本仍会验证。
@@ -113,15 +113,16 @@ enum class InstallStatus {
     ReadFailed,                 // 读不到原字节；未写任何东西
     AlreadyContainsPatchByte,   // 该地址上原本就是 0xCC；未写任何东西
     WriteFailed,                // WriteByte 返回失败；按约定目标字节未被改动，无需回滚
-    VerifyFailed,               // 回读未确认 0xCC；已尝试恢复原字节，未证实恢复时保留条目
+    VerifyFailed,               // 回读未确认 0xCC；不盲写回原字节，未证实原字节仍在时保留条目
 };
 
-// InstallResult：Installed 的 id 有效；VerifyFailed 未证实回滚时也带恢复条目 id。
+// InstallResult：Installed 的 id 有效；VerifyFailed 未证实原字节仍在时也带恢复条目 id。
+// rollback 字段保留接口兼容；Install 不再对已改变或未知的字节自动回滚，两者恒为 false。
 struct InstallResult {
     InstallStatus status = InstallStatus::None;     // 结果状态
-    std::uint64_t id = 0;                           // 安装或未证实回滚的恢复条目 id；0 表示未留条目
-    bool rollbackAttempted = false;                 // 仅 VerifyFailed：是否尝试了写回原字节
-    bool rollbackWriteOk = false;                   // 仅 VerifyFailed：写回的 WriteByte 是否返回成功
+    std::uint64_t id = 0;                           // 安装或验证失败的恢复条目 id；0 表示未留条目
+    bool rollbackAttempted = false;                 // 兼容字段；当前 Install 不自动回滚，恒为 false
+    bool rollbackWriteOk = false;                   // 兼容字段；没有回滚写入，恒为 false
 };
 
 // RestoreStatus：一次 Restore 的结果。
@@ -164,9 +165,10 @@ public:
     // 检查顺序固定为：同目标同地址已有条目 -> Duplicate（先于任何读写，因为已补丁
     // 的地址读出来必然是 0xCC，若先读会被误判成 AlreadyContainsPatchByte）；
     // 读原字节 -> ReadFailed；原字节已是 0xCC -> AlreadyContainsPatchByte；
-    // 写入 -> WriteFailed；回读验证 -> VerifyFailed（并尝试写回原字节）。
-    // 写入前拒绝不产生条目；VerifyFailed 只有回滚写成功且回读为原字节才不记账，
-    // 否则保留带有效 id 的恢复条目，仍返回 VerifyFailed，不冒充 Installed。
+    // 写入 -> WriteFailed；回读验证 -> VerifyFailed。回读为原字节时不重复写回、不记账；
+    // 回读为其它值或读取失败时不盲写，保留带有效 id 的恢复条目，仍返回 VerifyFailed，
+    // 不冒充 Installed。之后显式 Restore 会再次读取当前字节：其它值返回 Diverged 且
+    // 不覆盖第三方改动；只有读到 0xCC 才写回已记录的原字节。
     InstallResult Install(
         const PatchTarget& target,
         std::uint64_t address,

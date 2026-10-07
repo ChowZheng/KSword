@@ -174,6 +174,17 @@ KswordARKBugcheckControlCheckAbort(
     VOID
     );
 
+// 控制器只初始化一次；独立 rundown 不属于重装时清零的诊断状态。
+VOID KswordARKBugcheckTrackingInitialize(VOID);
+// 安装者先排空旧引用并完成所有缓存/锁初始化，再开启新一代运行期写入。
+VOID KswordARKBugcheckTrackingStart(VOID);
+// 关闭运行期准入并等待持有引用的通知/操作栈写者退场，只供串行化控制层调用。
+VOID KswordARKBugcheckTrackingStop(VOID);
+// 运行期写者先取得引用再访问可重置状态；失败时不能访问缓存或其锁。
+BOOLEAN KswordARKBugcheckTrackingAcquire(VOID);
+// 与每个成功 Acquire 配对；释放引用后不得再访问诊断缓存。
+VOID KswordARKBugcheckTrackingRelease(VOID);
+
 NTSTATUS
 KswordARKBugcheckSvgaInitialize(
     _Inout_ PKSWORD_ARK_SVGA_CONTEXT Context

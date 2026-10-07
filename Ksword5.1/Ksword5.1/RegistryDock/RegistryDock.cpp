@@ -124,6 +124,7 @@ namespace
 
 RegistryDock::RegistryDock(QWidget* parent)
     : QWidget(parent)
+    , m_uiDispatcher(std::make_shared<ks::ui::AsyncUiDispatcher>(this))
 {
     {
         kLogEvent event;
@@ -143,6 +144,7 @@ RegistryDock::RegistryDock(QWidget* parent)
 
 RegistryDock::~RegistryDock()
 {
+    m_uiDispatcher->close();
     kLogEvent event;
     info << event << "[RegistryDock] 析构开始，准备停止搜索线程。" << eol;
 
@@ -1427,8 +1429,10 @@ void RegistryDock::exportCurrentKeyAsync()
     kPro.set(m_progressPid, "导出中", 0, 20.0f);
 
     QPointer<RegistryDock> guardThis(this);
+    const auto dispatcher = m_uiDispatcher;
+    const int progressPid = m_progressPid;
     const QString keyPath = m_currentPath;
-    std::thread([guardThis, keyPath, outputPath]() {
+    std::thread([guardThis, dispatcher, progressPid, keyPath, outputPath]() {
         QProcess process;
         process.start(QStringLiteral("reg.exe"), QStringList{ QStringLiteral("export"), keyPath, outputPath, QStringLiteral("/y") });
         process.waitForFinished(-1);
@@ -1436,9 +1440,9 @@ void RegistryDock::exportCurrentKeyAsync()
         const bool ok = process.exitStatus() == QProcess::NormalExit && process.exitCode() == 0;
         const QString errText = QString::fromLocal8Bit(process.readAllStandardError());
 
-        QMetaObject::invokeMethod(qApp, [guardThis, ok, errText, outputPath]() {
+        dispatcher->post([guardThis, progressPid, ok, errText, outputPath]() {
             if (guardThis == nullptr) return;
-            kPro.set(guardThis->m_progressPid, "导出完成", 0, 100.0f);
+            kPro.set(progressPid, "导出完成", 0, 100.0f);
             if (ok)
             {
                 kLogEvent event;
@@ -1451,7 +1455,7 @@ void RegistryDock::exportCurrentKeyAsync()
                 warn << event << "[RegistryDock] 导出失败, error=" << errText.toStdString() << eol;
                 QMessageBox::warning(guardThis, QStringLiteral("导出 .reg"), QStringLiteral("导出失败：\n%1").arg(errText));
             }
-        }, Qt::QueuedConnection);
+        }, [progressPid]() { kPro.set(progressPid, "界面已关闭", 0, 100.0f); });
     }).detach();
 }
 
@@ -1467,7 +1471,9 @@ void RegistryDock::importRegFileAsync()
     kPro.set(m_progressPid, "导入中", 0, 20.0f);
 
     QPointer<RegistryDock> guardThis(this);
-    std::thread([guardThis, inputPath]() {
+    const auto dispatcher = m_uiDispatcher;
+    const int progressPid = m_progressPid;
+    std::thread([guardThis, dispatcher, progressPid, inputPath]() {
         QProcess process;
         process.start(QStringLiteral("reg.exe"), QStringList{ QStringLiteral("import"), inputPath });
         process.waitForFinished(-1);
@@ -1475,15 +1481,15 @@ void RegistryDock::importRegFileAsync()
         const bool ok = process.exitStatus() == QProcess::NormalExit && process.exitCode() == 0;
         const QString errText = QString::fromLocal8Bit(process.readAllStandardError());
 
-        QMetaObject::invokeMethod(qApp, [guardThis, ok, errText]() {
+        dispatcher->post([guardThis, progressPid, ok, errText]() {
             if (guardThis == nullptr) return;
-            kPro.set(guardThis->m_progressPid, "导入完成", 0, 100.0f);
+            kPro.set(progressPid, "导入完成", 0, 100.0f);
             if (ok)
             {
                 kLogEvent event;
                 info << event << "[RegistryDock] 导入成功。" << eol;
                 QMessageBox::information(guardThis, QStringLiteral("导入 .reg"), QStringLiteral("导入成功。"));
-                guardThis->refreshCurrentKey(true);
+                if (guardThis != nullptr) guardThis->refreshCurrentKey(true); // 模态消息框返回后重新确认页面仍在。
             }
             else
             {
@@ -1491,7 +1497,7 @@ void RegistryDock::importRegFileAsync()
                 warn << event << "[RegistryDock] 导入失败, error=" << errText.toStdString() << eol;
                 QMessageBox::warning(guardThis, QStringLiteral("导入 .reg"), QStringLiteral("导入失败：\n%1").arg(errText));
             }
-        }, Qt::QueuedConnection);
+        }, [progressPid]() { kPro.set(progressPid, "界面已关闭", 0, 100.0f); });
     }).detach();
 }
 void RegistryDock::startSearchAsync()
@@ -1502,6 +1508,14 @@ void RegistryDock::startSearchAsync()
         dbg << event << "[RegistryDock] 搜索请求被忽略：已有搜索在运行。" << eol;
         return;
     }
+
+    // 已完成的 std::thread 仍然 joinable，覆盖它会在析构时 terminate。
+    // 交互停止也保留同一句柄，析构和下一次启动都能等待实际写者退出。
+    if (m_searchThread != nullptr && m_searchThread->joinable())
+    {
+        m_searchThread->join();
+    }
+    m_searchThread.reset();
 
     const QString keyword = m_searchEdit->text().trimmed();
     if (keyword.isEmpty())
@@ -1543,24 +1557,32 @@ void RegistryDock::startSearchAsync()
     m_searchFlushTimer->start();
 
     QPointer<RegistryDock> guardThis(this);
+    const auto dispatcher = m_uiDispatcher;
+    const int progressPid = m_progressPid;
     SearchOptions options;
-    m_searchThread = std::make_unique<std::thread>([guardThis, root, subPath, keyword, options]() {
-        if (guardThis == nullptr) return;
-
+    m_searchThread = std::make_unique<std::thread>([this, guardThis, dispatcher, progressPid, root, subPath, keyword, options]() {
         std::size_t scanned = 0;
         std::size_t hits = 0;
-        guardThis->searchRegistryRecursive(root, subPath, keyword, options, &scanned, &hits);
+        searchRegistryRecursive(root, subPath, keyword, options, &scanned, &hits);
 
-        QMetaObject::invokeMethod(qApp, [guardThis, scanned, hits]() {
+        dispatcher->post([guardThis, progressPid, scanned, hits]() {
             if (guardThis == nullptr) return;
             guardThis->flushPendingSearchRows();
+            const bool stopped = guardThis->m_searchStopFlag.exchange(false);
             guardThis->m_searchRunning.store(false);
-            guardThis->m_searchStopFlag.store(false);
             guardThis->m_searchButton->setEnabled(true);
             guardThis->m_stopSearchButton->setEnabled(false);
             guardThis->m_searchFlushTimer->stop();
+            if (stopped)
+            {
+                guardThis->updateStatusBar(QStringLiteral("状态: 搜索已停止"));
+                kPro.set(progressPid, "搜索停止", 0, 100.0f);
+                kLogEvent event;
+                info << event << "[RegistryDock] 搜索已停止（异步回收完成）。" << eol;
+                return;
+            }
             guardThis->updateStatusBar(QStringLiteral("状态: 搜索完成，扫描 %1 键，命中 %2 项").arg(scanned).arg(hits));
-            kPro.set(guardThis->m_progressPid, "搜索完成", 0, 100.0f);
+            kPro.set(progressPid, "搜索完成", 0, 100.0f);
 
             kLogEvent event;
             info << event
@@ -1569,7 +1591,7 @@ void RegistryDock::startSearchAsync()
                 << ", hits="
                 << hits
                 << eol;
-        }, Qt::QueuedConnection);
+        }, [progressPid]() { kPro.set(progressPid, "搜索停止", 0, 100.0f); });
     });
 }
 
@@ -1604,25 +1626,8 @@ void RegistryDock::stopSearch(bool waitForThread)
         return;
     }
 
-    std::unique_ptr<std::thread> joinThread = std::move(m_searchThread);
-    QPointer<RegistryDock> guardThis(this);
-    std::thread([joinThread = std::move(joinThread), guardThis]() mutable {
-        if (joinThread != nullptr && joinThread->joinable()) joinThread->join();
-        QMetaObject::invokeMethod(qApp, [guardThis]() {
-            if (guardThis == nullptr) return;
-            guardThis->flushPendingSearchRows();
-            guardThis->m_searchRunning.store(false);
-            guardThis->m_searchStopFlag.store(false);
-            guardThis->m_searchButton->setEnabled(true);
-            guardThis->m_stopSearchButton->setEnabled(false);
-            if (guardThis->m_searchFlushTimer != nullptr) guardThis->m_searchFlushTimer->stop();
-            guardThis->updateStatusBar(QStringLiteral("状态: 搜索已停止"));
-            kPro.set(guardThis->m_progressPid, "搜索停止", 0, 100.0f);
-
-            kLogEvent event;
-            info << event << "[RegistryDock] 搜索已停止（异步回收完成）。" << eol;
-        }, Qt::QueuedConnection);
-    }).detach();
+    // 唯一 join 句柄必须留在页面里；完成消息会恢复按钮并报告停止状态。
+    // 析构调用 stopSearch(true) 时仍能等到递归搜索和全部成员访问结束。
 }
 
 void RegistryDock::flushPendingSearchRows()
@@ -1755,12 +1760,12 @@ void RegistryDock::searchRegistryRecursive(HKEY root, const QString& subPath, co
         const std::size_t scannedSnapshot = *scanned;
         const std::size_t hitSnapshot = (hit == nullptr) ? 0 : *hit;
         QPointer<RegistryDock> guardThis(this);
-        QMetaObject::invokeMethod(qApp, [guardThis, scannedSnapshot, hitSnapshot]() {
+        m_uiDispatcher->post([guardThis, scannedSnapshot, hitSnapshot]() {
             if (guardThis == nullptr) return;
             guardThis->updateStatusBar(QStringLiteral("状态: 搜索中，扫描 %1 键，命中 %2 项").arg(scannedSnapshot).arg(hitSnapshot));
             const float progress = 5.0f + static_cast<float>(std::min<std::size_t>(scannedSnapshot, 4000)) / 50.0f;
             kPro.set(guardThis->m_progressPid, "搜索中", 0, std::min(progress, 95.0f));
-        }, Qt::QueuedConnection);
+        });
     }
 
     std::vector<wchar_t> subNameBuffer(static_cast<std::size_t>(maxSubKeyLen + 4), L'\0');

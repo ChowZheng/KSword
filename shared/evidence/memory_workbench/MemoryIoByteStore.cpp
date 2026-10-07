@@ -5,6 +5,7 @@
 #include "MemoryKernelMutation.h"
 
 #include <algorithm>
+#include <exception>
 #include <utility>
 
 namespace ksword::memwb
@@ -17,6 +18,33 @@ namespace ksword::memwb
         , session_(session)
         , kernelMutationPort_(kernelMutationPort)
     {
+    }
+
+    void MemoryIoByteStore::SetWriteValidationCallback(WriteValidationFn callback)
+    {
+        writeValidationCallback_ = std::move(callback);
+    }
+
+    bool MemoryIoByteStore::ValidateWrite(
+        const std::uint64_t address, const std::uint64_t length, std::string& reason) const
+    {
+        try
+        {
+            reason.clear();
+            // Keep the active callable alive if it updates its own binding.
+            const auto validation = writeValidationCallback_;
+            if (!validation || validation(session_, address, length, reason)) return true;
+            if (reason.empty()) reason = "write validation rejected the target";
+        }
+        catch (const std::exception& error)
+        {
+            reason = std::string("write validation failed: ") + error.what();
+        }
+        catch (...)
+        {
+            reason = "write validation failed with an unknown exception";
+        }
+        return false;
     }
 
     bool MemoryIoByteStore::IsKernelMutationRoute(const std::uint64_t address) const
@@ -106,6 +134,9 @@ namespace ksword::memwb
 
         if (IsKernelMutationRoute(address))
         {
+            AccessResult rejected;
+            if (!ValidateWrite(address, static_cast<std::uint64_t>(bytes.size()), rejected.failureText))
+                return rejected;
             return WriteViaKernelMutation(address, bytes);
         }
         return WriteViaPort(address, bytes, explicitApproval);
@@ -197,6 +228,12 @@ namespace ksword::memwb
                 bytes.begin() + static_cast<std::ptrdiff_t>(offset),
                 bytes.begin() + static_cast<std::ptrdiff_t>(offset) + static_cast<std::ptrdiff_t>(chunkLength));
 
+            if (!ValidateWrite(chunkAddress, chunkLength, result.failureText))
+            {
+                result.bytesDone = totalDone;
+                result.partial = totalDone != 0;
+                return result;
+            }
             const IoWriteResult outcome = port_.Write(session_, chunkAddress, chunk, explicitApproval);
             // 只置位不清除：哪怕这一片之后整体停止，脏标记与窗口标记都已经是事实。
             result.scratchAreaDirty = result.scratchAreaDirty || outcome.scratchAreaDirty;

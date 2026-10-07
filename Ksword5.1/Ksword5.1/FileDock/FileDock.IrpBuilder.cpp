@@ -1332,19 +1332,13 @@ void FileDock::submitConstructedIrp()
     kPro.set(progressPid, "提交内核请求", 0, 20.0f);
 
     QPointer<FileDock> safeThis(this);
-    std::thread([safeThis, params, progressPid, majorFunction, ntPath]() {
+    const auto dispatcher = m_uiDispatcher;
+    std::thread([safeThis, dispatcher, params, progressPid, majorFunction, ntPath]() {
         const ksword::ark::FileIrpSubmitResult result =
             ksword::ark::DriverClient().submitFileIrp(params);
 
         kPro.set(progressPid, "整理结果", 0, 80.0f);
-        if (safeThis.isNull())
-        {
-            kPro.set(progressPid, "界面已关闭", 0, 100.0f);
-            return;
-        }
-
-        QMetaObject::invokeMethod(
-            safeThis.data(),
+        dispatcher->post(
             [safeThis, result, progressPid, majorFunction, ntPath]() {
                 if (safeThis.isNull())
                 {
@@ -1491,6 +1485,9 @@ void FileDock::submitConstructedIrp()
 
                 kPro.set(progressPid, semanticOk ? "提交完成" : "提交返回失败状态", 0, 100.0f);
             },
-            Qt::QueuedConnection);
+            [progressPid]()
+            {
+                kPro.set(progressPid, "界面已关闭", 0, 100.0f);
+            });
     }).detach();
 }

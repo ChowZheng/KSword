@@ -47,6 +47,7 @@
 #include "../../../../shared/evidence/memory_workbench/MemoryAddressBook.h"
 #include "../../../../shared/evidence/memory_workbench/MemoryChannelGate.h"
 #include "../../../../shared/evidence/memory_workbench/MemoryWriteTransaction.h"
+#include "../../../../shared/evidence/memory_workbench/PointerChainBindings.h"
 
 #include <QByteArray>
 #include <QList>
@@ -56,8 +57,10 @@
 #include <QWidget>
 
 #include <cstdint>
+#include <atomic>
 #include <functional>
 #include <memory>
+#include <map>
 #include <optional>
 #include <string>
 #include <vector>
@@ -199,6 +202,9 @@ namespace ks::ui
         // 传出：true=可以继续退出；false=用户取消（或应用失败），此时暂存与 int3 都原封不动。
         // 无暂存、无未还原 int3 时不弹任何框，直接返回 true。只在 UI 线程调用。
         bool confirmQuit();
+
+        // 多窗口退出被其他窗口取消时，撤回仅供这次关闭使用的保留补丁许可。
+        void cancelQuitPreparation();
 
         // focusAddress：十六进制子页当前的插入点地址，供旧页面取"用户正在看哪里"当默认值
         // （例如 PTE 页的默认地址）。没有可用目标（进程范围且未附加）或画布无数据时返回空，
@@ -391,6 +397,15 @@ namespace ks::ui
         void onAddressBookOpenDisassemblyRequested(quint64 id);
         void onAddressBookPromoteRequested(quint64 id, ksword::memwb::EntryKind newKind);
         void onAddressBookRemoveRequested(const QList<quint64>& ids);
+        void onPointerChainCreateRequested();
+        void onPointerChainEditRequested(quint64 id);
+        void onPointerChainResolveRequested(quint64 id);
+        void showPointerChainEditor(std::uint64_t id);
+        void resolvePointerChain(std::uint64_t id, bool navigate, bool disassembly = false);
+        void cancelPointerChainResolution();
+        void leavePointerChainNavigation();
+        bool validatePointerChainWrite(const ksword::memwb::MemoryTargetSession& session,
+            std::uint64_t address, std::uint64_t length, std::string& reason);
         void onInt3ResultMessage(const QString& text, bool isError);
 
         // ---- 十六进制子页与只读子页转发 ----
@@ -514,6 +529,15 @@ namespace ks::ui
         std::unique_ptr<WorkbenchPageProvider> pageProvider_;
         std::unique_ptr<WorkbenchBaselineFeeder> baselineFeeder_;
         std::unique_ptr<WorkbenchWriteController> writeController_;
+        std::shared_ptr<ksword::memwb::PointerChainBindings> pointerBindings_ =
+            std::make_shared<ksword::memwb::PointerChainBindings>();
+        std::shared_ptr<std::atomic<bool>> pointerCancel_;
+        std::uint64_t pointerTicket_ = 0;
+        bool pointerResolutionBusy_ = false;
+        bool pointerNavigation_ = false;
+        bool pointerClearAfterPending_ = false;
+        bool pointerClosing_ = false;
+        std::map<std::uint64_t, std::string> pointerTraces_;
         // hexPane_：十六进制子页，持有 overlay 唯一一份；用 QWidget 的 parent 机制
         // 管理（本类作为父对象，构造时用 new 创建，不需要 unique_ptr）。它比上面
         // 三个 unique_ptr 成员活得更久的原因见文件头"创建/销毁顺序"——这是 Qt

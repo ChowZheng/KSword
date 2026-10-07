@@ -35,6 +35,7 @@
 
 ProcessTraceMonitorWidget::ProcessTraceMonitorWidget(QWidget* parent)
     : QWidget(parent)
+    , m_uiDispatcher(std::make_shared<ks::ui::AsyncUiDispatcher>(this))
 {
     // initEvent：构造阶段统一复用同一个日志事件，便于串起整个初始化链路。
     kLogEvent initEvent;
@@ -51,6 +52,7 @@ ProcessTraceMonitorWidget::ProcessTraceMonitorWidget(QWidget* parent)
 
 ProcessTraceMonitorWidget::~ProcessTraceMonitorWidget()
 {
+    m_uiDispatcher->close();
     // 析构阶段同步停止后台线程，避免对象释放后回调仍访问成员。
     stopMonitoringInternal(true);
 

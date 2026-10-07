@@ -16,7 +16,9 @@ Environment:
 
 #include "ark/ark_keyboard.h"
 #include "../kernel/hook_scan_support.h"
+#include "../kernel/object_header_fallback.h" // 通过公开 ID 查询取得与候选地址精确匹配的线程引用。
 #include "keyboard_internal.h"
+#include "../../platform/pool_compat.h" // 声明非分页池分配器，确保状态快照分配使用正确的指针返回类型。
 
 #include <ntstrsafe.h>
 
@@ -487,15 +489,51 @@ Cleanup:
     return status;
 }
 
+static ULONG
+KswordARKKeyboardSnapshotThreadCidOffset(
+    VOID
+    )
+/*++
+
+Routine Description:
+
+    只保留本次热键查询需要的 ETHREAD.Cid 偏移。完整 DynData 状态放在临时池中，
+    避免逐条身份查询反复快照，或在已有枚举栈帧上叠加大型状态结构。
+
+Return Value:
+
+    可用的偏移；快照分配失败或 IRQL 不允许时返回缺失哨兵。
+
+--*/
+{
+    KSW_DYN_STATE* snapshot = NULL; // 大型状态不放到内核调用栈中。
+    ULONG threadCidOffset = MAXULONG; // 默认不支持身份读取，仍允许其余热键字段查询。
+
+    if (KeGetCurrentIrql() > APC_LEVEL) { // DynData push lock 和候选读取不允许更高 IRQL。
+        return threadCidOffset; // 无需分配或访问全局状态。
+    }
+    snapshot = (KSW_DYN_STATE*)KswordARKAllocateNonPagedPool(sizeof(*snapshot), KSW_HOOK_SCAN_TAG); // 每次完整查询只分配一次小型状态快照。
+    if (snapshot == NULL) { // 内存不足仅使 PID/TID 变为未确认，不改变热键枚举结果。
+        return threadCidOffset; // 没有临时分配需要清理。
+    }
+    KswordARKDynDataSnapshot(snapshot); // 在既有状态锁保护下复制完整状态。
+    threadCidOffset = snapshot->Kernel.EtCid; // 仅把稳定的偏移值传给所有行。
+    ExFreePoolWithTag(snapshot, KSW_HOOK_SCAN_TAG); // 在访问任何热键或模块之前释放临时池。
+    return threadCidOffset; // 身份读取 helper 将继续检查缺失哨兵和安全引用。
+}
+
 static VOID
 KswordARKKeyboardFillHotkeyThreadIdentity(
     _In_ ULONG_PTR ThreadInfo,
+    _In_ ULONG ThreadCidOffset, // 同一热键查询使用一份 DynData.Cid 偏移快照。
     _Out_ ULONG_PTR* ThreadObjectOut,
     _Out_ ULONG* ProcessIdOut,
     _Out_ ULONG* ThreadIdOut
     )
 {
     ULONG_PTR threadObject = 0U;
+    ULONG_PTR candidateThreadId = 0U; // 安全读取的 ID 仅用于取得公开对象引用。
+    NTSTATUS referenceStatus = STATUS_SUCCESS; // 候选引用失败时不调用线程访问器。
 
     if (ThreadObjectOut != NULL) {
         *ThreadObjectOut = 0U;
@@ -507,7 +545,8 @@ KswordARKKeyboardFillHotkeyThreadIdentity(
         *ThreadIdOut = 0UL;
     }
 
-    if (ThreadInfo == 0U ||
+    if (KeGetCurrentIrql() > APC_LEVEL || // 候选快照和公开 PID/TID lookup 仅允许 APC_LEVEL 及以下。
+        ThreadInfo == 0U ||
         !KswordARKKeyboardReadPointer(ThreadInfo, &threadObject) ||
         !KswordARKKeyboardLooksLikeKernelPointer(threadObject)) {
         return;
@@ -517,22 +556,32 @@ KswordARKKeyboardFillHotkeyThreadIdentity(
         *ThreadObjectOut = threadObject;
     }
 
-    __try {
-        if (ProcessIdOut != NULL) {
-            *ProcessIdOut = HandleToULong(PsGetThreadProcessId((PETHREAD)threadObject));
-        }
-        if (ThreadIdOut != NULL) {
-            *ThreadIdOut = HandleToULong(PsGetThreadId((PETHREAD)threadObject));
-        }
+    if (ThreadCidOffset == 0UL || ThreadCidOffset == MAXULONG || ThreadCidOffset == 0xFFFFUL || // 缺失偏移不能被当成 ETHREAD.Cid 地址。
+        PsThreadType == NULL || *PsThreadType == NULL) { // 对象管理器未提供线程类型时保持身份未确认。
+        return; // 已保留裸地址诊断，PID/TID 继续为零。
     }
-    __except (EXCEPTION_EXECUTE_HANDLER) {
-        if (ProcessIdOut != NULL) {
-            *ProcessIdOut = 0UL;
-        }
-        if (ThreadIdOut != NULL) {
-            *ThreadIdOut = 0UL;
-        }
+    if (threadObject > MAXULONG_PTR - (2U * sizeof(PVOID)) || // 为 Cid.UniqueProcess/UniqueThread 两个字段完整宽度保留空间。
+        (ULONG_PTR)ThreadCidOffset > MAXULONG_PTR - threadObject - (2U * sizeof(PVOID))) { // 防止候选字段地址和读取范围回绕。
+        return; // 无法构造安全候选字段地址时不继续 lookup。
     }
+    if (!KswordARKKeyboardReadPointer(threadObject + ThreadCidOffset + sizeof(PVOID), &candidateThreadId) || // ETHREAD.Cid.UniqueThread 仍只通过安全读取取得。
+        candidateThreadId == 0U) { // 空 ID 无法确认存活线程身份。
+        return; // 不以裸 ETHREAD 调用 PsGetThreadId 来弥补读取失败。
+    }
+    referenceStatus = KswordARKObjectHeaderReferenceObjectSafe( // 先按 ID 引用，再要求地址与类型都精确匹配。
+        (PVOID)threadObject, // 该地址在 lookup 完成前仅是诊断候选。
+        (HANDLE)candidateThreadId, // ID 回收导致不同地址时公共 helper 会拒绝并释放 lookup 对象。
+        *PsThreadType); // 只允许公开线程类型的受保护对象。
+    if (!NT_SUCCESS(referenceStatus)) { // 退出、回收、类型不符或 lookup 失败都保留未确认状态。
+        return; // 此分支没有取得引用，不释放候选地址。
+    }
+    if (ProcessIdOut != NULL) { // 公开访问器只作用于本函数已经持有引用的线程。
+        *ProcessIdOut = HandleToULong(PsGetThreadProcessId((PETHREAD)threadObject)); // 使用稳定线程对象返回实际所属进程 ID。
+    }
+    if (ThreadIdOut != NULL) { // 可选输出不影响引用的成对释放。
+        *ThreadIdOut = HandleToULong(PsGetThreadId((PETHREAD)threadObject)); // 使用稳定对象返回实际线程 ID。
+    }
+    ObDereferenceObject((PVOID)threadObject); // 释放公共安全 helper 成功取得的唯一引用。
 }
 
 static VOID
@@ -548,6 +597,7 @@ KswordARKKeyboardAppendHotkeyEntry(
     _In_ ULONG ModifiersOffset,
     _In_ ULONG VkOffset,
     _In_ ULONG IdOffset,
+    _In_ ULONG ThreadCidOffset, // 每次查询的 ETHREAD.Cid 偏移，不在逐行函数中分配状态。
     _In_ ULONG RequestFlags,
     _In_ ULONG FilterProcessId
     )
@@ -655,6 +705,7 @@ KswordARKKeyboardAppendHotkeyEntry(
     }
     KswordARKKeyboardFillHotkeyThreadIdentity(
         threadInfo,
+        ThreadCidOffset, // 候选线程只通过这份偏移安全读取 ID。
         &threadObject,
         &tempEntry.processId,
         &tempEntry.threadId);
@@ -1007,6 +1058,7 @@ KswordARKDriverEnumerateKeyboardHotkeys(
     ULONG modifiersOffset = 0UL;
     ULONG vkOffset = 0UL;
     ULONG idOffset = 0UL;
+    ULONG threadCidOffset = MAXULONG; // 缺失时保持 PID/TID 为零并保留其他热键诊断。
     PEPROCESS attachProcess = NULL;
     DECLSPEC_ALIGN(16) UCHAR attachState[128];
     BOOLEAN attached = FALSE;
@@ -1040,6 +1092,7 @@ KswordARKDriverEnumerateKeyboardHotkeys(
         entryCapacity = maxEntries;
     }
 
+    threadCidOffset = KswordARKKeyboardSnapshotThreadCidOffset(); // 只在枚举开始时获取一次偏移，且不增加大型栈帧。
     status = KswordARKHookBuildModuleSnapshot(&moduleInfo, &moduleInfoBytes);
     response->lastStatus = status;
     if (!NT_SUCCESS(status) || moduleInfo == NULL) {
@@ -1140,6 +1193,7 @@ KswordARKDriverEnumerateKeyboardHotkeys(
                 modifiersOffset,
                 vkOffset,
                 idOffset,
+                threadCidOffset, // 每个热键使用同一查询快照的 Cid 偏移。
                 requestFlags,
                 (Request != NULL) ? Request->processId : 0UL);
 

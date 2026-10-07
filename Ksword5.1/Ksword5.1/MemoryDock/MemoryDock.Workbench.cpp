@@ -5,6 +5,7 @@
 #include "../UI/MemoryWorkbench/MemoryWorkbenchView.h"
 #include "../UI/MemoryWorkbench/WorkbenchNavigation.h"
 #include "../UI/MemoryWorkbench/WorkbenchSettings.h"
+#include "../UI/MemoryWorkbench/WorkbenchShared.h"
 #include "../UI/MemoryWorkbench/WorkbenchTarget.h"
 
 // ============================================================
@@ -147,11 +148,51 @@ void MemoryDock::ensureWorkbenchView()
     {
         workbenchOnAttached();
     }
+    // 视图懒创建通常晚于计时器；若构造期间已创建视图，则计时器创建端稍后补接同一条连接。
+    connectWorkbenchLiveness();
 
     kLogEvent createdEvent;
     info << createdEvent
         << "[MemoryDock] 内存工作台视图已创建。"
         << eol;
+}
+
+// connectWorkbenchLiveness：复用既有一秒 tick；弱身份/非进程范围不探测，不把不可核验目标误判为退出。
+void MemoryDock::connectWorkbenchLiveness()
+{
+    if (m_workbenchView == nullptr || m_bookmarkRefreshTimer == nullptr
+        || m_workbenchView->property("ksword_memwb_liveness_hooked").toBool())
+    {
+        return;
+    }
+    // view：视图弱指针，只在 UI 线程取用；所有连接以视图为 context，销毁后 Qt 自动断开。
+    const QPointer<ks::ui::MemoryWorkbenchView> view(m_workbenchView);
+    connect(m_bookmarkRefreshTimer, &QTimer::timeout, view.data(), [view]() {
+        if (view && view->target().identityAnchored())
+        {
+            // identityAnchored 已限定 Process/PID/创建时间；只查持有的进程锚点，不枚举系统进程。
+            view->target().checkLiveness();
+            // checkLiveness 可同步通知并销毁宿主，故返回后不再访问视图。
+        }
+    });
+    connect(&view->target(), &ks::ui::WorkbenchTarget::livenessChanged, view.data(), [view](const int state) {
+        if (!view || state != static_cast<int>(ks::ui::LivenessState::Exited)
+            || !view->target().identityAnchored())
+        {
+            return;
+        }
+        // captured：按真实目标会话复制 PID/创建时间；DDMA 代次拉取可能同步销毁视图，复制后再探活。
+        const auto captured = view->target().capture();
+        if (!view || captured.session.scope != ksword::memwb::Scope::ProcessVirtual
+            || captured.session.pid == 0U || captured.session.processCreateTime100ns == 0U)
+        {
+            return;
+        }
+        ks::ui::WorkbenchShared::Instance().Int3().OnTargetGone(
+            captured.session.pid, captured.session.processCreateTime100ns);
+        // 账本 changed 通知可同步销毁视图，此后也不再读取成员。
+    });
+    view->setProperty("ksword_memwb_liveness_hooked", true);
 }
 
 // workbenchOnAttached：附加成功之后调用（句柄、PID、名称、读写标志都已就位）。
@@ -215,6 +256,14 @@ bool MemoryDock::confirmWorkbenchQuit()
         return true;
     }
     return m_workbenchView->confirmQuit();
+}
+
+void MemoryDock::cancelWorkbenchQuit()
+{
+    if (m_workbenchView != nullptr)
+    {
+        m_workbenchView->cancelQuitPreparation();
+    }
 }
 
 // shutdownWorkbench：析构路径上先于子对象销毁调用——权威视图把设置落盘。

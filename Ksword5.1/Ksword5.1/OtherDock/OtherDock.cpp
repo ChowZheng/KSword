@@ -623,14 +623,16 @@ namespace
         switch (mode)
         {
         case 0:
-            return QStringLiteral("可见窗口");
+            return QStringLiteral("所有窗口");
         case 1:
-            return QStringLiteral("隐藏窗口");
+            return QStringLiteral("可见窗口");
         case 2:
-            return QStringLiteral("顶层窗口");
+            return QStringLiteral("隐藏窗口");
         case 3:
-            return QStringLiteral("子窗口");
+            return QStringLiteral("顶层窗口");
         case 4:
+            return QStringLiteral("子窗口");
+        case 5:
             return QStringLiteral("无效窗口");
         default:
             return QStringLiteral("未知模式");
@@ -2955,6 +2957,7 @@ OtherDock::OtherDock(QWidget* parent)
 
     initializeUi();
     initializeConnections();
+    m_autoRefreshCheck->setChecked(true);
     applyViewMode();
     refreshWindowListAsync();
 }
@@ -3075,6 +3078,7 @@ void OtherDock::initializeUi()
 
     m_filterModeCombo = new QComboBox(m_toolBarWidget);
     m_filterModeCombo->addItems({
+        QStringLiteral("所有窗口"),
         QStringLiteral("可见窗口"),
         QStringLiteral("隐藏窗口"),
         QStringLiteral("顶层窗口"),
@@ -3216,21 +3220,7 @@ void OtherDock::initializeUi()
         QStringLiteral("状态"),
         QStringLiteral("透明度")
         });
-    m_windowTree->header()->setStretchLastSection(false);
-    m_windowTree->header()->setSectionResizeMode(kWindowColumnTitle, QHeaderView::Interactive);
-    m_windowTree->header()->setSectionResizeMode(kWindowColumnHandle, QHeaderView::ResizeToContents);
-    m_windowTree->header()->setSectionResizeMode(kWindowColumnEnumApi, QHeaderView::ResizeToContents);
-    m_windowTree->header()->setSectionResizeMode(kWindowColumnClassName, QHeaderView::ResizeToContents);
-    m_windowTree->header()->setSectionResizeMode(kWindowColumnPid, QHeaderView::ResizeToContents);
-    m_windowTree->header()->setSectionResizeMode(kWindowColumnProcessName, QHeaderView::ResizeToContents);
-    m_windowTree->header()->setSectionResizeMode(kWindowColumnTid, QHeaderView::ResizeToContents);
-    m_windowTree->header()->setSectionResizeMode(kWindowColumnSize, QHeaderView::ResizeToContents);
-    m_windowTree->header()->setSectionResizeMode(kWindowColumnVisible, QHeaderView::ResizeToContents);
-    m_windowTree->header()->setSectionResizeMode(kWindowColumnEnabled, QHeaderView::ResizeToContents);
-    m_windowTree->header()->setSectionResizeMode(kWindowColumnTopMost, QHeaderView::ResizeToContents);
-    m_windowTree->header()->setSectionResizeMode(kWindowColumnState, QHeaderView::ResizeToContents);
-    m_windowTree->header()->setSectionResizeMode(kWindowColumnAlpha, QHeaderView::ResizeToContents);
-    m_windowTree->setColumnWidth(kWindowColumnTitle, 420);
+    ks::window::configureWindowListColumnSizing(m_windowTree);
 
     m_previewWidget = new QWidget(m_mainSplitter);
     m_previewLayout = new QVBoxLayout(m_previewWidget);
@@ -3472,7 +3462,7 @@ void OtherDock::initializeConnections()
         dbg << event
             << "[OtherDock] 自动刷新定时器触发。"
             << eol;
-        refreshWindowListAsync();
+        refreshWindowListAsync(false);
     });
 
     // 右键菜单：窗口操作入口。
@@ -3653,7 +3643,7 @@ void OtherDock::applyViewMode()
         << eol;
 }
 
-void OtherDock::refreshWindowListAsync()
+void OtherDock::refreshWindowListAsync(const bool reportProgress)
 {
     // 防并发刷新：上一轮未完成时直接忽略当前请求。
     if (m_refreshRunning.exchange(true))
@@ -3679,14 +3669,17 @@ void OtherDock::refreshWindowListAsync()
         << m_filterEdit->text().toStdString()
         << eol;
 
-    if (m_refreshProgressPid == 0)
+    if (reportProgress)
     {
-        m_refreshProgressPid = kPro.addReusable(this, "窗口", "窗口枚举");
+        if (m_refreshProgressPid == 0)
+        {
+            m_refreshProgressPid = kPro.addReusable(this, "窗口", "窗口枚举");
+        }
+        kPro.set(m_refreshProgressPid, "开始枚举窗口", 0, 5.0f);
     }
-    kPro.set(m_refreshProgressPid, "开始枚举窗口", 0, 5.0f);
 
     QPointer<OtherDock> guardThis(this);
-    std::thread([guardThis, refreshEvent, enumMode]() {
+    std::thread([guardThis, refreshEvent, enumMode, reportProgress]() {
         std::vector<WindowInfo> snapshot;
         // collectWindowSnapshotByMode 用途：根据用户选择策略采集窗口并去重。
         collectWindowSnapshotByMode(enumMode, snapshot);
@@ -3695,13 +3688,16 @@ void OtherDock::refreshWindowListAsync()
         {
             return;
         }
-        QMetaObject::invokeMethod(qApp, [guardThis, snapshot = std::move(snapshot), refreshEvent, enumMode]() mutable {
+        QMetaObject::invokeMethod(qApp, [guardThis, snapshot = std::move(snapshot), refreshEvent, enumMode, reportProgress]() mutable {
             if (guardThis == nullptr)
             {
                 return;
             }
 
-            kPro.set(guardThis->m_refreshProgressPid, "合并窗口快照", 0, 70.0f);
+            if (reportProgress)
+            {
+                kPro.set(guardThis->m_refreshProgressPid, "合并窗口快照", 0, 70.0f);
+            }
 
             // 记录上一轮有效窗口，作为“新增/退出”对比基线。
             std::vector<WindowInfo> previousValidList;
@@ -3769,7 +3765,10 @@ void OtherDock::refreshWindowListAsync()
             guardThis->rebuildWindowTreeFromSnapshot();
             guardThis->updateStatusBar();
             guardThis->m_refreshRunning.store(false);
-            kPro.set(guardThis->m_refreshProgressPid, "窗口枚举完成", 0, 100.0f);
+            if (reportProgress)
+            {
+                kPro.set(guardThis->m_refreshProgressPid, "窗口枚举完成", 0, 100.0f);
+            }
 
             info << refreshEvent
                 << "[OtherDock] 枚举完成，当前窗口="
@@ -3800,30 +3799,32 @@ bool OtherDock::passFilter(const WindowInfo& info) const
     switch (mode)
     {
     case 0:
+        break;
+    case 1:
         if (!info.visible || !info.valid)
         {
             return false;
         }
         break;
-    case 1:
+    case 2:
         if (info.visible || !info.valid)
         {
             return false;
         }
         break;
-    case 2:
+    case 3:
         if (info.isChildWindow || !info.valid)
         {
             return false;
         }
         break;
-    case 3:
+    case 4:
         if (!info.isChildWindow || !info.valid)
         {
             return false;
         }
         break;
-    case 4:
+    case 5:
         if (info.valid)
         {
             return false;

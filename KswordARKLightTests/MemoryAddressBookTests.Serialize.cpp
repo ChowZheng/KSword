@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <initializer_list>
+#include <limits>
 #include <optional>
 #include <string>
 #include <vector>
@@ -356,7 +357,7 @@ void TestRejectedHeaders(KswordTests::Suite& suite) {
         DeserializeError::BadHeader);
 
     // 魔数对、版本不是 1：一律是"未知版本"。
-    const char* const versions[] = { "2", "0", "10", "01", "1 ", "1.0", "v1" };
+    const char* const versions[] = { "3", "0", "10", "01", "1 ", "1.0", "v1" };
     std::size_t index = 0;
     for (const char* version : versions) {
         const std::string text = std::string("KSWORD-ADDRESS-BOOK ") + version + "\n";
@@ -600,6 +601,124 @@ void TestAcceptedBoundaries(KswordTests::Suite& suite) {
         L"boundary: double backslash then t decodes to a backslash and the letter t");
 }
 
+void TestPointerV2Serialization(KswordTests::Suite& suite) {
+    using MemwbAddressBookTestSupport::PointerDraft;
+    const std::string header = "KSWORD-ADDRESS-BOOK 2\n";
+    MemoryAddressBook book;
+    auto pointer = PointerDraft();
+    pointer.pointerChain->offsets = {0, (std::numeric_limits<std::int64_t>::min)(),
+        (std::numeric_limits<std::int64_t>::max)()};
+    const auto pointerId = book.Add(pointer);
+    book.Add(Draft(EntryKind::Watch, "ordinary", "", 0, 0x5000, "normal"));
+    const auto text = book.Serialize();
+    suite.expect(text.starts_with(header), L"pointer v2: mixed book upgrades to version 2");
+    suite.expect(text.find("0x0,-0x8000000000000000,0x7fffffffffffffff") != std::string::npos,
+        L"pointer v2: signed hexadecimal extremes are written without overflow");
+    suite.expect(text.find("C:\\\\Game\\\\game.exe\tC:\\\\Game\\\\game.dll") != std::string::npos,
+        L"pointer v2: full paths use existing lossless escaping");
+    suite.expect(text.find("normal\t\t\t\t\t\t\t\t\n") != std::string::npos,
+        L"pointer v2: ordinary rows append eight empty fixed fields");
+    MemoryAddressBook loaded;
+    suite.expect(MemoryAddressBook::Deserialize(text, loaded).ok && SameList(book.List(), loaded.List())
+        && loaded.NextId() == book.NextId(), L"pointer v2: mixed entries and full definitions roundtrip");
+    suite.expect(loaded.Serialize() == text, L"pointer v2: canonical serialization is stable");
+    AddressFilter onlyWatch;
+    onlyWatch.kinds = {EntryKind::Watch};
+    suite.expect(book.Serialize(onlyWatch).starts_with(kHeader), L"pointer v2: a plain filtered export retains v1");
+    suite.expect(book.Remove(pointerId) && book.Serialize().starts_with(kHeader),
+        L"pointer v2: removing the last pointer restores legacy output");
+
+    auto escaped = PointerDraft();
+    escaped.note = "a\tb\nc\r\\note";
+    escaped.pointerChain->processPath += "\t\n\r";
+    escaped.pointerChain->modulePath += "\\t";
+    escaped.pointerChain->moduleFileSize = (std::numeric_limits<std::int64_t>::max)();
+    escaped.pointerChain->moduleFileTime = (std::numeric_limits<std::int64_t>::max)();
+    escaped.pointerChain->moduleSize = kU64Max;
+    escaped.pointerChain->pointerSize = 4;
+    escaped.pointerChain->offsets.resize(16, -1);
+    MemoryAddressBook escaping;
+    escaping.Add(escaped);
+    suite.expect(MemoryAddressBook::Deserialize(escaping.Serialize(), loaded).ok
+        && SameList(escaping.List(), loaded.List()),
+        L"pointer v2: escaped strings, positive metadata limits, width 4 and maximum depth roundtrip");
+
+    MemoryAddressBook migrated;
+    suite.expect(MemoryAddressBook::Deserialize(kHeader + GoodRow("5"), migrated).ok,
+        L"pointer v2: preexisting v1 address book loads");
+    suite.expect(migrated.SetPointerChain(5, *pointer.pointerChain, "game.dll", 0x100)
+        && migrated.Serialize().starts_with(header) && migrated.Find(5)->valueType == ValueType::U32
+        && migrated.Find(5)->note == "n", L"pointer v2: editing a v1 bookmark migrates without losing metadata");
+
+    using Columns = std::vector<std::string>;
+    const Columns validFields = {"5", "bookmark", "u32", "game.exe", "game.dll", "0x100", "0x0", "n",
+        "pointer", "C:\\\\Game\\\\game.exe", "C:\\\\Game\\\\game.dll", "16384", "32768", "123456789", "8", "0x0,-0x10"};
+    const auto row = [](const Columns& fields) {
+        std::string result;
+        for (std::size_t i = 0; i < fields.size(); ++i) { if (i) result += '\t'; result += fields[i]; }
+        return result + '\n';
+    };
+    std::string normal = GoodRow("1");
+    normal.pop_back();
+    normal += "\t\t\t\t\t\t\t\t\n";
+    std::size_t rejectionCase = 0;
+    const auto reject = [&](const std::string& badText, const DeserializeError expected, std::size_t line = 3) {
+        MemoryAddressBook existing;
+        existing.Add(PointerDraft());
+        existing.Add(Draft(EntryKind::Watch, "keep", "", 0, 0xABCD, "precious"));
+        const auto before = existing.List();
+        const auto next = existing.NextId();
+        const auto result = MemoryAddressBook::Deserialize(badText, existing);
+        const auto label = L"pointer v2: corrupt input case " + std::to_wstring(++rejectionCase);
+        suite.expect(!result.ok && result.errorCode == expected && result.errorLine == line && !result.errorText.empty(),
+            (label + L" reports exact error and line").c_str());
+        suite.expect(SameList(before, existing.List()) && existing.NextId() == next,
+            (label + L" preserves existing pointer entries and id counter").c_str());
+    };
+    const auto corruptField = [&](std::size_t index, const std::string& replacement,
+                                  DeserializeError error = DeserializeError::BadPointerChain) {
+        auto fields = validFields;
+        fields[index] = replacement;
+        reject(header + normal + row(fields), error);
+    };
+    for (const auto* kind : {"search", "watch"}) corruptField(1, kind);
+    corruptField(4, "", DeserializeError::InconsistentAddress);
+    corruptField(5, "0x4000");
+    corruptField(5, "0x3ff9");
+    corruptField(6, "0x1", DeserializeError::InconsistentAddress);
+    corruptField(8, "chain");
+    corruptField(8, "");
+    for (const auto index : {9U, 10U}) {
+        for (const auto* path : {"", "game.exe", "C:game.exe", "\\\\q"})
+            corruptField(index, path);
+        corruptField(index, "C:\\q", DeserializeError::BadEscape);
+        corruptField(index, "C:/" + std::string(32766, 'x'));
+    }
+    for (const auto index : {11U, 12U, 13U})
+        for (const auto* value : {"0", "-1", "+1", " 1", "1.0", "18446744073709551616"}) corruptField(index, value);
+    corruptField(12, "9223372036854775808");
+    corruptField(13, "9223372036854775808");
+    for (const auto* width : {"0", "3", "16", "08", "8.0"}) corruptField(14, width);
+    for (const auto* offsets : {"", "0", "-0x8000000000000001", "0x8000000000000000", "0xg", "0x1,",
+        ",0x1", "0x1,,0x2", "0x1, 0x2", "0x00000000000000000", "0x1_0"}) corruptField(15, offsets);
+    std::string deep = "0x0";
+    for (int i = 1; i < 17; ++i) deep += ",0x0";
+    corruptField(15, deep);
+    corruptField(15, std::string(321, '0'));
+    auto shortRow = validFields;
+    shortRow.pop_back();
+    reject(header + normal + row(shortRow), DeserializeError::WrongFieldCount);
+    auto tooMany = validFields;
+    tooMany.push_back("extra");
+    reject(header + normal + row(tooMany), DeserializeError::WrongFieldCount);
+    auto truncated = header + normal + row(validFields);
+    truncated.pop_back();
+    reject(truncated, DeserializeError::UnterminatedLine);
+    reject(header + std::string(ksword::memwb::kAddressBookV2TextLimit, 'x'), DeserializeError::InputTooLarge, 1);
+    suite.expect(MemoryAddressBook::Deserialize(header, loaded).ok && loaded.Size() == 0,
+        L"pointer v2: an empty v2 book is valid");
+}
+
 } // namespace
 
 // RunMemwbAddressBookSerializeTests：序列化相关用例的总入口，由 RunMemwbAddressBookTests 调用。
@@ -616,4 +735,5 @@ void RunMemwbAddressBookSerializeTests(KswordTests::Suite& suite) {
     TestRejectedInconsistencyAndDuplicates(suite);
     TestAcceptedInputs(suite);
     TestAcceptedBoundaries(suite);
+    TestPointerV2Serialization(suite);
 }

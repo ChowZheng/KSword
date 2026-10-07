@@ -69,12 +69,15 @@ private:
         return true;
     }
 
-    bool parseValue(JsonValue* output) {
+    bool parseValue(JsonValue* output, size_t depth = 0) {
         skipWhitespace();
         if (position_ >= text_.size()) return fail("unexpected end of input");
         const char ch = text_[position_];
-        if (ch == '{') return parseObject(output);
-        if (ch == '[') return parseArray(output);
+        // Bound both parser recursion and the depth of the resulting DOM destruction.
+        if (ch == '{' || ch == '[') {
+            if (depth >= 64) return fail("JSON nesting limit exceeded");
+            return ch == '{' ? parseObject(output, depth + 1) : parseArray(output, depth + 1);
+        }
         if (ch == '"') {
             std::string value;
             if (!parseString(&value)) return false;
@@ -164,14 +167,14 @@ private:
         return true;
     }
 
-    bool parseArray(JsonValue* output) {
+    bool parseArray(JsonValue* output, size_t depth) {
         if (!consume('[')) return false;
         JsonValue::Array values;
         skipWhitespace();
         if (position_ < text_.size() && text_[position_] == ']') { ++position_; *output = JsonValue(std::move(values)); return true; }
         while (true) {
             JsonValue value;
-            if (!parseValue(&value)) return false;
+            if (!parseValue(&value, depth)) return false;
             values.push_back(std::move(value));
             skipWhitespace();
             if (position_ < text_.size() && text_[position_] == ']') { ++position_; break; }
@@ -181,7 +184,7 @@ private:
         return true;
     }
 
-    bool parseObject(JsonValue* output) {
+    bool parseObject(JsonValue* output, size_t depth) {
         if (!consume('{')) return false;
         JsonValue::Object values;
         skipWhitespace();
@@ -192,7 +195,7 @@ private:
             if (!parseString(&key)) return false;
             if (!consume(':')) return false;
             JsonValue value;
-            if (!parseValue(&value)) return false;
+            if (!parseValue(&value, depth)) return false;
             values.emplace(std::move(key), std::move(value));
             skipWhitespace();
             if (position_ < text_.size() && text_[position_] == '}') { ++position_; break; }

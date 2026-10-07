@@ -309,6 +309,19 @@ namespace ks::ui
         return true;
     }
 
+    bool AddressBookStore::setPointerChain(const std::uint64_t id,
+        const ksword::memwb::PointerBookmarkDefinition& definition,
+        QString moduleName, const std::uint64_t rootRva)
+    {
+        if (!m_book.SetPointerChain(id, definition, moduleName.toStdString(), rootRva))
+        {
+            return false;
+        }
+        scheduleSave();
+        emit entryChanged(static_cast<quint64>(id));
+        return true;
+    }
+
     bool AddressBookStore::promote(const std::uint64_t id, const ksword::memwb::EntryKind newKind)
     {
         if (!m_book.Promote(id, newKind))
@@ -427,6 +440,11 @@ namespace ks::ui
 
     bool AddressBookStore::writeAtomic(const QByteArray& bytes)
     {
+        if (bytes.startsWith("KSWORD-ADDRESS-BOOK 2\n")
+            && static_cast<std::size_t>(bytes.size()) > ksword::memwb::kAddressBookV2TextLimit)
+        {
+            return false;
+        }
         // 载入失败且备份失败时，原文件可能仍含能手工恢复的数据。即使导致改名失败的
         // 临时占用已经解除，也不能让防抖保存或析构保存把这份唯一副本覆盖掉。
         if (m_lastLoadFailed && m_lastLoadBackupPath.isEmpty() && QFile::exists(m_filePath))

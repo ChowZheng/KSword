@@ -10,6 +10,7 @@
 
 #include <cstdint>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace MemwbAddressBookTestSupport {
@@ -46,7 +47,20 @@ inline bool SameEntry(const AddressEntry& a, const AddressEntry& b) {
     return a.id == b.id && a.kind == b.kind && a.targetKey == b.targetKey
         && a.moduleName == b.moduleName && a.rva == b.rva
         && a.absoluteAddress == b.absoluteAddress && a.note == b.note
-        && a.valueType == b.valueType;
+        && a.valueType == b.valueType && a.pointerChain == b.pointerChain;
+}
+
+inline AddressEntry PointerDraft() {
+    auto entry = Draft(EntryKind::Bookmark, "game.exe", "game.dll", 0x100, 0, "pointer note", ValueType::U32);
+    ksword::memwb::PointerBookmarkDefinition definition;
+    definition.processPath = "C:\\Game\\game.exe";
+    definition.modulePath = "C:\\Game\\game.dll";
+    definition.moduleSize = 0x4000;
+    definition.moduleFileSize = 0x8000;
+    definition.moduleFileTime = 123456789;
+    definition.offsets = {0, -0x10, 0x20};
+    entry.pointerChain = std::move(definition);
+    return entry;
 }
 
 // SameList：逐项、按顺序比较两组条目。

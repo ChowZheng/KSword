@@ -36,6 +36,7 @@ namespace ksword::ark
 }
 
 class QCheckBox;
+class QCloseEvent;
 class QButtonGroup;
 class QComboBox;
 class QEvent;
@@ -345,6 +346,10 @@ private:
 
 private:
     // ======== UI 初始化 ========
+    // closeEvent：关闭独立详情窗前询问内嵌工作台的暂存/int3；取消则保留窗口与附加目标。
+    // 调用方式：Qt 关闭窗口时自动调用；event 为本次关闭请求，放行交给 QWidget，拒绝则 ignore。
+    void closeEvent(QCloseEvent* event) override;
+
     // changeEvent 作用：
     // - 监听调色板/样式变化；
     // - 在深浅色切换后重建内部样式，避免进程详情页残留白底。

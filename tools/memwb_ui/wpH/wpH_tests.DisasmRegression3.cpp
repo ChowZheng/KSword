@@ -31,6 +31,8 @@
 // - M8：右键菜单的 QPointer 自guard（可疑点 3 的修复）本身的"正常路径"没有用例——必须
 //   证明 this 存活时菜单操作（复制地址等）仍然正常工作，不是加了 guard 之后反而总是提前
 //   返回什么都不做。
+// - 行内汇编复核：未补 NOP 的机器码必须恰好解出一条完整指令；拒绝时保留编辑框，
+//   显示错误且不暂存。真实解码器同时覆盖多指令、残片及 x86/x64 入参，防止旧长度检查回归。
 
 #include "wpH_common.h"
 
@@ -39,6 +41,7 @@
 
 #include <QApplication>
 #include <QClipboard>
+#include <QDialog>
 #include <QColor>
 #include <QCoreApplication>
 #include <QGuiApplication>
@@ -47,6 +50,8 @@
 #include <QLineEdit>
 #include <QMenu>
 #include <QPointer>
+#include <QPlainTextEdit>
+#include <QPushButton>
 #include <QSignalSpy>
 #include <QTableView>
 #include <QTimer>
@@ -103,6 +108,156 @@ namespace wpH_test
             rig.view.table()->setCurrentIndex(rig.view.model()->index(row, 2));
             QTest::keyClick(rig.view.table(), Qt::Key_F2);
             return qobject_cast<QLineEdit*>(QApplication::focusWidget());
+        }
+
+        // runInlineCompleteInstructionRejectTests：注入成功汇编结果，逐项检查解码复核的拒绝契约。
+        // 无入参/返回值；通过 F2/Enter 操作真实委托，旧的“只比长度后补 NOP”会错误暂存这些结果。
+        void runInlineCompleteInstructionRejectTests()
+        {
+            // RejectedCase：每项冻结后端异常形状；多指令、尾部残片和非法字节仍走真实 Zydis。
+            struct RejectedCase
+            {
+                const char* hex; // 成功汇编后返回的未补齐机器码
+                int decodeShape; // 0=真实解码，1=失败，2=占位，3=空指令，4=缺后端，5=越界长度，6=字节不符
+                const char* name; // 失败断言中的场景说明
+            };
+            const RejectedCase cases[] = {
+                {"", 0, "empty assembly"},
+                {"90", 1, "decode failure"},
+                {"90", 2, "placeholder"},
+                {"90", 3, "empty decoded instruction"},
+                {"9090", 0, "two complete instructions"},
+                {"900F", 0, "instruction and incomplete tail"},
+                {"06", 0, "invalid x64 instruction"},
+                {"90", 4, "missing decoder"},
+                {"90", 5, "decoder exceeds available bytes"},
+                {"90", 6, "decoder returns different bytes of equal length"}
+            };
+            for (const RejectedCase& testCase : cases)
+            {
+                Rig3 rig(QByteArray::fromHex("554889E590C3")); // 第 1 行旧 mov 占 3 字节，所有结果均未超长。
+                const QByteArray bytes = QByteArray::fromHex(testCase.hex); // 模拟汇编成功返回的原始机器码。
+                rig.view.setAssembleBackend([bytes](const QString&, std::uint64_t, bool) {
+                    ks::ui::WorkbenchAssembleResult result; // 后端显式成功，不能依赖汇编失败分支挡住用例。
+                    result.success = true;
+                    result.bytes = bytes;
+                    return result;
+                });
+                QSignalSpy spy(&rig.view, &WorkbenchDisasmView::stageRequested); // 记录是否错误地提交了补丁。
+                const QPointer<QLineEdit> editor(openEditor3(rig, 1)); // 旧实现关闭编辑框时安全检查其生命期。
+                WPH_CHECK(editor != nullptr);
+                if (editor == nullptr)
+                {
+                    continue;
+                }
+
+                // 先打开真实 mov 的编辑框，再替换解码后端；刷新被延后，仍保留冻结的旧指令上下文。
+                if (testCase.decodeShape == 4)
+                {
+                    rig.view.setDecodeBackend(ks::ui::DecodeOneFn{});
+                }
+                else
+                {
+                    const auto realDecode = MakeRealZydisDecodeBackend(); // 真实识别多条指令/残片，不模拟边界规则。
+                    rig.view.setDecodeBackend([realDecode, testCase](const std::uint8_t* data,
+                        const std::size_t available, const std::uint64_t address, const bool x64)
+                        -> std::optional<ks::ui::DecodedRow> {
+                        if (testCase.decodeShape == 1)
+                        {
+                            return std::nullopt;
+                        }
+                        auto row = realDecode(data, available, address, x64); // 只改变所测试的后端异常字段。
+                        if (row.has_value() && testCase.decodeShape == 2)
+                        {
+                            row->decoded = false;
+                        }
+                        if (row.has_value() && testCase.decodeShape == 3)
+                        {
+                            row->bytes.clear();
+                        }
+                        if (row.has_value() && testCase.decodeShape == 5)
+                        {
+                            row->bytes.append(static_cast<char>(0x90));
+                        }
+                        if (row.has_value() && testCase.decodeShape == 6)
+                        {
+                            row->bytes = QByteArray::fromHex("91"); // 只比长度会放过错误的解码结果。
+                        }
+                        return row;
+                    });
+                }
+
+                // 不依赖错误文案的具体翻译，只要求拒绝后可见说明、编辑继续且没有 stageRequested。
+                editor->selectAll();
+                QTest::keyClicks(editor.data(), QStringLiteral("nop"));
+                QTest::keyClick(editor.data(), Qt::Key_Return);
+                const QString context = QString::fromLatin1(testCase.name); // 各形状失败时的定位信息。
+                WPH_CHECK_NOTE(spy.count() == 0, context);
+                WPH_CHECK_NOTE(rig.view.isEditing() && editor != nullptr && editor->isVisible(), context);
+                auto* error = rig.view.table()->viewport()->findChild<QLabel*>(QStringLiteral("ksMemwbDisasmInlineError"));
+                WPH_CHECK_NOTE(error != nullptr && error->isVisible() && !error->text().isEmpty(), context);
+                if (editor != nullptr && editor->isVisible())
+                {
+                    QTest::keyClick(editor.data(), Qt::Key_Escape); // 每项收尾，不能把编辑状态带入下一项。
+                }
+            }
+        }
+
+        // runInlineCompleteInstructionAcceptTests：真实短单指令可暂存，解码必须先于 NOP 补齐。
+        // 无入参/返回值；分别检查 x86/x64 的真实地址、架构和解码窗口，再核对补齐后的提交字节。
+        void runInlineCompleteInstructionAcceptTests()
+        {
+            const int architectures[] = {32, 64}; // 两种默认架构都必须传给 DecodeOneFn。
+            for (const int bits : architectures)
+            {
+                const std::uint64_t base = bits == 64 ? 0x140012340ULL : 0x00401230ULL; // 避免总传零地址也能过。
+                const QByteArray baseline = QByteArray::fromHex(bits == 64 ? "554889E590C3" : "5589E590C3");
+                bool checkingInline = false; // 区分刷新模型的解码与 Enter 提交时的复核。
+                int decodeCalls = 0; // 提交必须只解码第一条，并确认它吃掉完整结果。
+                QByteArray decodedInput; // 保存解码入参，验证没有提前混入填充 NOP。
+                std::uint64_t decodedAddress = 0; // 保存真实指令地址。
+                bool decodedX64 = bits != 64; // 初值刻意取反，漏传/漏调用会失败。
+                const auto realDecode = MakeRealZydisDecodeBackend(); // 正常路径保持真实 Zydis。
+                // 视图先于记录状态析构，回调不会在宿主收尾时持有已经消失的引用。
+                Rig3 rig(baseline, bits, base); // 旧 mov 长度分别为 3/2，nop 长度为 1。
+                rig.view.setDecodeBackend([&, realDecode](const std::uint8_t* data, const std::size_t available,
+                    const std::uint64_t address, const bool x64) -> std::optional<ks::ui::DecodedRow> {
+                    if (checkingInline)
+                    {
+                        ++decodeCalls;
+                        decodedInput = QByteArray(reinterpret_cast<const char*>(data), static_cast<qsizetype>(available));
+                        decodedAddress = address;
+                        decodedX64 = x64;
+                    }
+                    return realDecode(data, available, address, x64);
+                });
+
+                QSignalSpy spy(&rig.view, &WorkbenchDisasmView::stageRequested); // 最终提交只应出现一次。
+                auto* editor = openEditor3(rig, 1); // 在非零行编辑，地址须带上 push 的 1 字节偏移。
+                WPH_CHECK(editor != nullptr);
+                if (editor == nullptr)
+                {
+                    continue;
+                }
+                editor->selectAll();
+                QTest::keyClicks(editor, QStringLiteral("nop"));
+                checkingInline = true;
+                QTest::keyClick(editor, Qt::Key_Return);
+                checkingInline = false;
+
+                // 复核前机器码恰好是一个 nop；提交后才按旧指令长度补齐，不能用补齐窗口判单指令。
+                WPH_CHECK(decodeCalls == 1);
+                WPH_CHECK(decodedInput == QByteArray::fromHex("90"));
+                WPH_CHECK(decodedAddress == base + 1);
+                WPH_CHECK(decodedX64 == (bits == 64));
+                WPH_CHECK(!rig.view.isEditing());
+                WPH_CHECK(spy.count() == 1);
+                if (spy.count() == 1)
+                {
+                    WPH_CHECK(spy.first().at(0).toULongLong() == base + 1);
+                    WPH_CHECK(spy.first().at(1).toByteArray() == QByteArray(bits == 64 ? 3 : 2, static_cast<char>(0x90)));
+                }
+            }
         }
 
         // ---------------- T14（杀 rC19）：setEditable(false) 必须关掉打开着的编辑框 ----------------
@@ -406,6 +561,78 @@ namespace wpH_test
             WPH_CHECK_NOTE(rig.view.model()->rowAt(0).has_value(), QStringLiteral("reset 后重新跳转应正常刷新"));
         }
 
+        // 模态预览提交：正常路径可暂存；身份/架构/权限/原始覆盖字节变化后不得沿用旧请求。
+        // 直接驱动真实右键菜单与对话框，复用同一 provider 的 reset 路径是核心回归条件。
+        void runAssemblyDialogContextTests()
+        {
+            for (int scenario = 0; scenario < 7; ++scenario)
+            {
+                Rig3 rig(QByteArray::fromHex("4889E590C3"));
+                FakeBytesProvider replacement(64); // 同地址/同字节的新目标，不能仅靠内容判身份
+                loadBytes3(replacement, rig.base, QByteArray::fromHex("4889E590C3"));
+                QSignalSpy spy(&rig.view, &WorkbenchDisasmView::stageRequested);
+                bool droveDialog = false; // 证明夹具确实进入并编译了预览
+                QTimer watchdog; // 超时只退出本用例弹窗，函数结束即撤销定时器
+                watchdog.setSingleShot(true);
+                QObject::connect(&watchdog, &QTimer::timeout, &rig.view, []() {
+                    if (auto* popup = QApplication::activePopupWidget()) { popup->close(); }
+                    if (auto* modal = QApplication::activeModalWidget()) { modal->close(); }
+                });
+                watchdog.start(3000);
+                QTimer::singleShot(0, &rig.view, [&]() {
+                    auto* menu = qobject_cast<QMenu*>(QApplication::activePopupWidget());
+                    if (menu == nullptr) { return; }
+                    QAction* assemblyAction = nullptr; // 只选择菜单中真实的汇编编辑入口
+                    for (auto* action : menu->actions())
+                    {
+                        if (action->text().contains(QStringLiteral("汇编编辑"))) { assemblyAction = action; }
+                    }
+                    if (assemblyAction == nullptr) { menu->close(); return; }
+                    // 下一层事件循环属于汇编对话框；回调以视图为上下文，关闭用例后不会残留。
+                    QTimer::singleShot(0, &rig.view, [&]() {
+                        auto* dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget());
+                        if (dialog == nullptr) { return; }
+                        auto* source = dialog->findChild<QPlainTextEdit*>(QStringLiteral("ksMemwbAssemblySource"));
+                        QPushButton* compile = nullptr;
+                        QPushButton* stage = nullptr;
+                        for (auto* button : dialog->findChildren<QPushButton*>())
+                        {
+                            if (button->text().contains(QStringLiteral("编译"))) { compile = button; }
+                            if (button->text().contains(QStringLiteral("暂存"))) { stage = button; }
+                        }
+                        if (source == nullptr || compile == nullptr || stage == nullptr) { dialog->reject(); return; }
+                        source->setPlainText(QStringLiteral("nop"));
+                        compile->click();
+                        droveDialog = stage->isEnabled();
+                        if (!droveDialog) { dialog->reject(); return; }
+                        // 在预览成功后才改变目标条件，使旧代码的“仅检查 this 存活”错误可观测。
+                        switch (scenario)
+                        {
+                        case 1: rig.view.reset(); rig.view.jumpTo(rig.base); break;
+                        case 2: rig.view.setBytesProvider(&replacement); break;
+                        case 3: rig.view.setAddressBits(32); break;
+                        case 4: rig.view.setEditable(false); rig.view.setEditable(true); break;
+                        case 5: loadBytes3(rig.provider, rig.base, QByteArray::fromHex("90909090C3")); break;
+                        case 6:
+                            rig.provider.overlay().LoadBaseline("rig3", rig.base,
+                                toVec3(QByteArray::fromHex("4889E590C3")), { 0, 1, 1, 1, 1 });
+                            break;
+                        default: break;
+                        }
+                        stage->click();
+                    });
+                    menu->setActiveAction(assemblyAction);
+                    QTest::keyClick(menu, Qt::Key_Return);
+                });
+                auto* table = rig.view.table();
+                table->setCurrentIndex(rig.view.model()->index(0, 0));
+                emit table->customContextMenuRequested(table->visualRect(rig.view.model()->index(0, 0)).center());
+                watchdog.stop();
+                WPH_CHECK(droveDialog);
+                WPH_CHECK(spy.count() == (scenario == 0 ? 1 : 0));
+            }
+        }
+
         // ---------------- M8：右键菜单的 QPointer 自guard，this 存活时必须正常工作 ----------------
         void runContextMenuNormalPathStillWorksTests()
         {
@@ -458,6 +685,8 @@ namespace wpH_test
     {
         const int before = g_checks;
         const int beforeFail = g_failures;
+        runInlineCompleteInstructionRejectTests();
+        runInlineCompleteInstructionAcceptTests();
         runSetEditableClosesEditorTests();
         runSetEditableDoesNotFreezeTests();
         runDbOperandFormatTests();
@@ -472,6 +701,7 @@ namespace wpH_test
         runFlagConditionalFollowTests();
         runCancelInlineEditHidesErrorTests();
         runResetCancelsInlineEditTests();
+        runAssemblyDialogContextTests();
         runContextMenuNormalPathStillWorksTests();
         std::cerr << "[DisasmRegression3] checks=" << (g_checks - before) << " failures=" << (g_failures - beforeFail) << std::endl;
     }

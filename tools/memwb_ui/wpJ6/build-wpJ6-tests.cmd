@@ -89,6 +89,7 @@ cl %CLFLAGS% ^
   "%FIX%\wpJ6_tests.Review2A.cpp" "%FIX%\wpJ6_tests.Review2B.cpp" "%FIX%\wpJ6_tests.Review2C.cpp" "%FIX%\wpJ6_tests.Review2Fixes.cpp" "%FIX%\wpJ6_tests.Quit.cpp" "%FIX%\wpJ6_tests.Entry3b.cpp" "%FIX%\wpJ6_tests.Narrow.cpp" "%FIX%\wpJ6_tests.DarkLabels.cpp" ^
   "%WPI%\memwb_wpI_common.cpp" ^
   "%UI%\MemoryWorkbenchView.cpp" "%UI%\MemoryWorkbenchView.Ui.cpp" "%UI%\MemoryWorkbenchView.Session.cpp" "%UI%\MemoryWorkbenchView.Nav.cpp" "%UI%\WorkbenchDiagnosticsHost.cpp" ^
+  "%UI%\MemoryWorkbenchView.PointerChains.cpp" "%APP%\MemoryDock\WorkbenchPointerChainAccess.cpp" ^
   "%UI%\WorkbenchShared.cpp" ^
   "%UI%\WorkbenchHexPane.cpp" "%UI%\WorkbenchHexPane.Panels.cpp" ^
   "%UI%\WorkbenchPageProvider.cpp" "%UI%\WorkbenchPageProvider.Pool.cpp" ^
@@ -130,6 +131,7 @@ cl %CLFLAGS% ^
   "%CORE%\MemoryWriteTransaction.cpp" "%CORE%\MemoryWriteTransaction.Commit.cpp" "%CORE%\MemoryIoByteStore.cpp" "%CORE%\MemoryKernelMutation.cpp" "%CORE%\MemoryEditJournal.cpp" ^
   "%CORE%\MemoryBaselineWindow.cpp" "%CORE%\MemoryWritePolicy.cpp" ^
   "%CORE%\MemoryAddressBook.cpp" "%CORE%\MemoryAddressBook.Serialize.cpp" "%CORE%\Int3PatchLedger.cpp" ^
+  "shared\evidence\PointerChain.cpp" "%CORE%\PointerChainBindings.cpp" ^
   /Fo"%OBJ%\\"
 if errorlevel 1 exit /b %errorlevel%
 

@@ -9,6 +9,8 @@
 
 #include "wpJ4_common.h"
 
+#include <QPointer>
+
 namespace wpj4_test
 {
     namespace
@@ -148,11 +150,23 @@ namespace wpj4_test
                     == ksword::memwb::ModeSwitchStatus::NeedsDecision);
 
                 // 选 Cancel：模式与补丁都不变。
+                const std::uint64_t contentBefore = h.target.capture().rev.content;
+                int pendingNotifications = 0;
+                quint64 pendingBytes = 1;
+                quint64 pendingBlocks = 1;
+                QObject::connect(&h.controller, &ks::ui::WorkbenchWriteController::pendingPatchesChanged,
+                    [&](quint64 bytes, quint64 blocks) {
+                        ++pendingNotifications;
+                        pendingBytes = bytes;
+                        pendingBlocks = blocks;
+                    });
                 ksword::memwb::ModeSwitchResult cancelResult =
                     h.controller.resolveModeSwitch(ksword::memwb::ModeSwitchDecision::Cancel);
                 WPJ4_CHECK(cancelResult.status == ksword::memwb::ModeSwitchStatus::Cancelled);
                 WPJ4_CHECK(h.controller.mode() == ksword::memwb::WriteMode::StagedThenApply);
                 WPJ4_CHECK(h.overlay.HasPendingPatches() == true);
+                WPJ4_CHECK(h.target.capture().rev.content == contentBefore);
+                WPJ4_CHECK(pendingNotifications == 0);
 
                 // 选 DiscardThenSwitch：补丁被丢弃，模式切换成功。
                 WPJ4_CHECK(
@@ -163,6 +177,25 @@ namespace wpj4_test
                 WPJ4_CHECK(discardResult.status == ksword::memwb::ModeSwitchStatus::Switched);
                 WPJ4_CHECK(h.controller.mode() == ksword::memwb::WriteMode::Immediate);
                 WPJ4_CHECK(h.overlay.HasPendingPatches() == false);
+                WPJ4_CHECK(h.target.capture().rev.content == contentBefore + 1);
+                WPJ4_CHECK(pendingNotifications == 1 && pendingBytes == 0 && pendingBlocks == 0);
+                WPJ4_CHECK(h.rawPort->writeCalls.empty());
+
+                // 迟到的相同决定没有待决请求，不能再次推进内容代次或通知。
+                WPJ4_CHECK(h.controller.resolveModeSwitch(ksword::memwb::ModeSwitchDecision::DiscardThenSwitch)
+                    .status == ksword::memwb::ModeSwitchStatus::NoPendingSwitch);
+                WPJ4_CHECK(h.target.capture().rev.content == contentBefore + 1 && pendingNotifications == 1);
+
+                // 确认前补丁已被其它入口清空：仍可切换模式，但没有新内容变化可通知。
+                WPJ4_CHECK(h.controller.requestModeSwitch(ksword::memwb::WriteMode::StagedThenApply)
+                    == ksword::memwb::ModeSwitchStatus::Switched);
+                WPJ4_CHECK(h.Stage(0xD300, {0x07}) == ksword::memwb::StageStatus::Ok);
+                WPJ4_CHECK(h.controller.requestModeSwitch(ksword::memwb::WriteMode::Immediate)
+                    == ksword::memwb::ModeSwitchStatus::NeedsDecision);
+                h.overlay.DiscardAll();
+                WPJ4_CHECK(h.controller.resolveModeSwitch(ksword::memwb::ModeSwitchDecision::DiscardThenSwitch)
+                    .status == ksword::memwb::ModeSwitchStatus::Switched);
+                WPJ4_CHECK(h.target.capture().rev.content == contentBefore + 1 && pendingNotifications == 1);
             }
 
             // 分支 3：ApplyThenSwitch——先提交补丁成功后再切换，提交期间同样要
@@ -202,6 +235,41 @@ namespace wpj4_test
                 }
             }
         }
+        // 丢弃通知同步删除控制器后，仅返回栈上结果，不再访问宿主成员。
+        void TestModeDiscardSignalCanDestroyController()
+        {
+            Harness h;
+            h.AttachProcess(506);
+            auto owned = std::make_unique<ks::ui::WorkbenchWriteController>();
+            auto* controller = owned.get();
+            const QPointer<ks::ui::WorkbenchWriteController> guard(controller);
+            controller->setTarget(&h.target);
+            controller->setOverlay(&h.overlay);
+            controller->setConfirmationSink(h.confirmations.get());
+            controller->setAuditSink(&h.audit);
+            controller->setIoPortFactory([]() -> std::unique_ptr<ksword::memwb::IMemoryIoPort> {
+                return std::make_unique<MemwbIoTests::FakeMemoryIoPort>();
+            });
+            WPJ4_CHECK(controller->requestModeSwitch(ksword::memwb::WriteMode::StagedThenApply)
+                == ksword::memwb::ModeSwitchStatus::Switched);
+            h.LoadBaseline(0xD500, {0x00});
+            WPJ4_CHECK(h.Stage(0xD500, {0x08}) == ksword::memwb::StageStatus::Ok);
+            WPJ4_CHECK(controller->requestModeSwitch(ksword::memwb::WriteMode::Immediate)
+                == ksword::memwb::ModeSwitchStatus::NeedsDecision);
+            const std::uint64_t contentBefore = h.target.capture().rev.content;
+            int notifications = 0;
+            QObject::connect(controller, &ks::ui::WorkbenchWriteController::pendingPatchesChanged,
+                [&](quint64 bytes, quint64 blocks) {
+                    ++notifications;
+                    WPJ4_CHECK(bytes == 0 && blocks == 0);
+                    owned.reset();
+                });
+            WPJ4_CHECK(controller->resolveModeSwitch(ksword::memwb::ModeSwitchDecision::DiscardThenSwitch)
+                .status == ksword::memwb::ModeSwitchStatus::Switched);
+            WPJ4_CHECK(!guard && !owned && notifications == 1);
+            WPJ4_CHECK(!h.overlay.HasPendingPatches() && h.target.capture().rev.content == contentBefore + 1);
+        }
+
         // M-F5（D3 修复新增）：resolveModeSwitch 的 ApplyThenSwitch 分支在
         // commitDepth_ > 0 时必须直接返回 Busy，不嵌套执行自己的那次 Commit。
         // 复用 onEditCompleted 自己的确认框作为"正在进行中的 Commit"窗口——忙
@@ -306,6 +374,7 @@ namespace wpj4_test
         TestKernelImmediateAsksOnce();
         TestApprovalAlwaysAsksRegardlessOfSuppression();
         TestModeSwitchThreeWayBranches();
+        TestModeDiscardSignalCanDestroyController();
         TestResolveModeSwitchApplyRejectedWhileBusy();
         TestApplyThenSwitchRefreshesDdmaGeneration();
         TestCommitPendingNowRefreshesDdmaGeneration();

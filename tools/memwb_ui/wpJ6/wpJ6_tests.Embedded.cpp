@@ -10,6 +10,81 @@
 
 namespace wpj6_test
 {
+    // TestLoadedModeControlsRealWrites：加载暂存模式后首次编辑不得写目标；重载立即模式不得丢暂存。
+    void TestLoadedModeControlsRealWrites()
+    {
+        using namespace ks::ui::workbench_settings;
+        SaveScope(0U);
+        SaveChannelForScope(0U, 0U);
+        SaveWriteMode(1U);
+        Harness harness;
+        harness.view->loadSettings();
+        harness.AttachProcess();
+        auto* controller = harness.view->writeControllerForTest();
+        auto* pane = harness.view->hexPaneForTest();
+        WPJ6_CHECK(controller->mode() == ksword::memwb::WriteMode::StagedThenApply);
+        WPJ6_CHECK(harness.view->sessionBarForTest()->currentWriteMode() == controller->mode());
+
+        // address / before / wanted：构造确实有变化的单字节编辑，并用假后端核对没有实际写入。
+        const std::uint64_t address = 0xC4ULL;
+        auto& backend = ConfigureSharedOnce();
+        std::uint8_t before = 0;
+        {
+            std::lock_guard<std::mutex> lock(backend.backing->mutex);
+            before = backend.backing->bytes[address - backend.backing->base];
+        }
+        const std::uint8_t wanted = static_cast<std::uint8_t>(before ^ 0x53U);
+        WPJ6_CHECK(WaitForStageable(pane, address));
+        QString reason;
+        WPJ6_CHECK(pane->canvas()->stageBytes(address, QByteArray(1, static_cast<char>(wanted)), &reason));
+        WPJ6_CHECK(pane->overlay().HasPendingPatches());
+        {
+            std::lock_guard<std::mutex> lock(backend.backing->mutex);
+            WPJ6_CHECK(backend.backing->bytes[address - backend.backing->base] == before);
+        }
+
+        // 已有编辑时重新读设置：不代表用户同意应用/丢弃，真实模式与工具条都须维持暂存。
+        SaveWriteMode(0U);
+        harness.view->loadSettings();
+        WPJ6_CHECK(controller->mode() == ksword::memwb::WriteMode::StagedThenApply);
+        WPJ6_CHECK(harness.view->sessionBarForTest()->currentWriteMode() == controller->mode());
+        WPJ6_CHECK(pane->overlay().HasPendingPatches());
+        WPJ6_CHECK(controller->resolveModeSwitch(ksword::memwb::ModeSwitchDecision::DiscardThenSwitch).status
+            == ksword::memwb::ModeSwitchStatus::NoPendingSwitch);
+        WPJ6_CHECK(pane->overlay().HasPendingPatches());
+    }
+
+    // TestLoadedScopeChannelAndEmbeddedTarget：保存的范围/通道须进入真实会话，内嵌模式须真正回到进程。
+    void TestLoadedScopeChannelAndEmbeddedTarget()
+    {
+        using namespace ks::ui::workbench_settings;
+        SaveWriteMode(0U);
+        SaveChannelForScope(0U, 0U);
+        for (const std::uint32_t scopeValue : {1U, 2U})
+        {
+            SaveScope(scopeValue);
+            SaveChannelForScope(scopeValue, 2U);
+            Harness harness;
+            harness.view->loadSettings();
+            auto& target = harness.view->target();
+            WPJ6_CHECK(static_cast<std::uint32_t>(target.session().scope) == scopeValue);
+            WPJ6_CHECK(target.session().channel == ksword::memwb::Channel::Hvm);
+            WPJ6_CHECK(harness.view->sessionBarForTest()->currentScope() == target.session().scope);
+            WPJ6_CHECK(harness.view->sessionBarForTest()->currentChannel() == target.session().channel);
+
+            // 与生产顺序一致：先加载非进程偏好，再切内嵌；后续再加载也不能退出进程范围。
+            harness.view->setEmbeddedProcessMode(true);
+            WPJ6_CHECK(target.session().scope == ksword::memwb::Scope::ProcessVirtual);
+            WPJ6_CHECK(target.session().channel == ksword::memwb::Channel::UserMode);
+            WPJ6_CHECK(target.followMode() == ksword::memwb::MemoryTargetTracker::Follow::Dock);
+            harness.view->loadSettings();
+            WPJ6_CHECK(target.session().scope == ksword::memwb::Scope::ProcessVirtual);
+            WPJ6_CHECK(harness.view->sessionBarForTest()->currentScope() == target.session().scope);
+            SaveChannelForScope(scopeValue, 1U);
+        }
+        SaveScope(0U);
+    }
+
     // TestSettingsAuthorityOnlyAuthoritativeSaves：决策 1——只有权威视图的
     // saveSettings() 真正写盘，非权威视图是空操作。用子页签下标
     // （subTab，QStackedWidget::setCurrentIndex 不依赖任何布局/显示状态，
@@ -76,6 +151,8 @@ namespace wpj6_test
 
     void RunEmbeddedTests()
     {
+        TestLoadedModeControlsRealWrites();
+        TestLoadedScopeChannelAndEmbeddedTarget();
         TestSettingsAuthorityOnlyAuthoritativeSaves();
         TestEmbeddedModeBlocksKernelAndPhysical();
     }

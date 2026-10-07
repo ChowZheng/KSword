@@ -365,6 +365,15 @@ namespace wpH_test
                 WPH_CHECK_NOTE(spy.count() == 1 && spy.first().at(1).toByteArray() == QByteArray::fromHex("909090"),
                     QStringLiteral("完整边界应接受并发出 90 90 90，实得 count=%1").arg(spy.count()));
             }
+            {
+                // 单指令限制只约束行内 Enter；右键明确设置覆盖范围的多行预览仍应允许两条 nop。
+                Rig rig(QByteArray::fromHex("4889E590C3")); // 覆盖原 3 字节 mov，剩余 1 字节补 NOP。
+                QSignalSpy spy(&rig.view, &WorkbenchDisasmView::stageRequested);
+                const DialogDrive drive = runDialog(rig, 0, QStringLiteral("nop\nnop"), 3, true, true);
+                WPH_CHECK_NOTE(drive.found && drive.stageEnabled, QStringLiteral("右键多行汇编预览不得被行内单指令检查阻断"));
+                WPH_CHECK_NOTE(spy.count() == 1 && spy.first().at(1).toByteArray() == QByteArray::fromHex("909090"),
+                    QStringLiteral("右键两条 nop 应允许并补齐第三字节，实得 count=%1").arg(spy.count()));
+            }
         }
 
         // ---------------- D7：错误提示 Esc 后隐藏 ----------------

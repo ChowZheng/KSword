@@ -101,23 +101,20 @@ InstallResult Int3PatchLedger::Install(
 
     // 第五步：回读验证。WriteByte 返回 true 只说明调用成功，不说明字节真的变了
     // （只读映射、写时复制、被其它线程立刻改回都会造成这种情况）。回读失败和回读
-    // 值不对一律视为验证失败：此时目标字节处于未知状态，尽力把原字节写回去，
-    // 回滚写的结果如实带回；只有回读确认原字节已恢复，才可不保留恢复记录。
+    // 值不对一律视为验证失败。读到其它值时可能已有第三方改动，读不到时则无法
+    // 判断当前值；两者都不能盲写原字节。只有回读已经是原字节时才无需保留恢复记录，
+    // 其它情形保留记录，交给显式 Restore 再读到 0xCC 后按原通道还原。
     std::uint8_t readBackByte = 0;
     const bool readBackOk = store.ReadByte(address, readBackByte);
     const bool verified = readBackOk && (readBackByte == kInt3PatchByte);
     if (!verified) {
         result.status = InstallStatus::VerifyFailed;
-        result.rollbackAttempted = true;
-        result.rollbackWriteOk = store.WriteByte(address, originalByte);
-        std::uint8_t restoredByte = 0;
-        if (result.rollbackWriteOk && store.ReadByte(address, restoredByte)
-            && restoredByte == originalByte) {
+        if (readBackOk && readBackByte == originalByte) {
             return result;
         }
     }
 
-    // 第六步：验证通过或未能证实回滚时发放 id 并记账。后者仍是 VerifyFailed，
+    // 第六步：验证通过或未能证实原字节仍在时发放 id 并记账。后者仍是 VerifyFailed，
     // 但必须保留原字节和目标身份供恢复；nextId_ 只增不减，已用 id 永不复用。
     PatchEntry entry;
     entry.id = nextId_;

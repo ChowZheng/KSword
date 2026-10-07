@@ -361,6 +361,7 @@ namespace ks::ui
         QLabel* m_status = nullptr;                        // 状态行（解码来源、行数、提示）
         QLabel* m_inlineError = nullptr;                   // 行内编辑错误提示（覆盖在编辑框下方）
         std::uint64_t m_anchor = 0;                        // 当前窗口起始地址
+        std::uint64_t m_editContextRevision = 0;           // 会话/架构/权限/后端变化时前进，使旧编辑请求失效
         bool m_hasAnchor = false;                          // 是否已经跳转过（没有则显示空状态）
         bool m_editingActive = false;                      // 是否有行内编辑器打开（见 isEditing）
         bool m_refreshPending = false;                     // D2：编辑期间被推迟的刷新请求

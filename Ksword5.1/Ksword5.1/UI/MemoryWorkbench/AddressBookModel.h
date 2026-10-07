@@ -126,6 +126,7 @@ namespace ks::ui
         // valueState / valueText：供调用方查询某条目此刻展示的值与状态（例如轮询器判断要不要重读）。
         ValueState valueState(std::uint64_t id) const;
         QString valueText(std::uint64_t id) const;
+        bool isPointerChain(std::uint64_t id) const;
 
         // ---- 行 <-> id ----
 

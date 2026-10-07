@@ -430,7 +430,7 @@ namespace ks::ui
         HexFindBar* const self = this;
         QRunnable* task = QRunnable::create([self, source, pattern, start, direction, forcedWrap, ticket, cancelFlag]() {
             const hexfind::Outcome outcome = hexfind::RunSearch(
-                source.data, source.base, pattern, start, direction, true, cancelFlag.get());
+                source.data, source.base, pattern, start, direction, true, cancelFlag.get(), source.validMask);
             QMetaObject::invokeMethod(
                 self,
                 [self, ticket, outcome, forcedWrap, direction]() {
@@ -513,7 +513,7 @@ namespace ks::ui
         }
         const SourceView source = m_sourceGetter();
         const std::vector<AddressRange> hits = hexfind::HitsInRange(
-            source.data, source.base, m_activePattern, m_visibleFirst, m_visibleLast, hexfind::kMaxVisibleHits);
+            source.data, source.base, m_activePattern, m_visibleFirst, m_visibleLast, hexfind::kMaxVisibleHits, source.validMask);
         if (hits == m_highlights)
         {
             return;

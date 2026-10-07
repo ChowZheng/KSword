@@ -79,6 +79,7 @@ namespace ks::ui
         {
             QByteArray data;            // 缓冲（隐式共享）
             std::uint64_t base = 0;     // 缓冲对应的起始地址
+            QByteArray validMask;       // 非空时逐字节标明可读性；普通完整文件缓冲留空表示全部有效
         };
 
         // SourceGetter：宿主提供的数据读取回调。

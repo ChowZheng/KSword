@@ -183,11 +183,18 @@ namespace wpj6_test
                 PumpUntil([]() { return true; }, 10);
                 WPJ6_CHECK(StageOne(*h.view, 0x28ULL, 0xAC));
                 h.prompter->leaveWithPendingDecision = ksword::memwb::ModeSwitchDecision::DiscardThenSwitch;
+                // beforeDiscard：既有内容快照，真正丢弃后必须被判为陈旧；空退出不得重复推进。
+                const auto beforeDiscard = h.view->target().capture().rev;
                 const bool allowed = h.view->confirmQuit();
                 PumpFor(60);
                 WPJ6_CHECK(allowed);
                 WPJ6_CHECK(!h.view->hexPaneForTest()->overlay().HasPendingPatches());
                 WPJ6_CHECK_NOTE(!PendingChipVisible(*h.view), QStringLiteral("丢弃并退出：待写入芯片必须清掉"));
+                const auto afterDiscard = h.view->target().capture().rev;
+                WPJ6_CHECK(afterDiscard.content > beforeDiscard.content);
+                WPJ6_CHECK(h.view->target().isStale(beforeDiscard));
+                WPJ6_CHECK(h.view->confirmQuit());
+                WPJ6_CHECK(h.view->target().capture().rev.content == afterDiscard.content);
             }
             // 应用：放行，字节真的写进假内存。
             {
@@ -484,6 +491,24 @@ namespace wpj6_test
                 WPJ6_CHECK_NOTE(
                     Int3Count() == 0U,
                     QStringLiteral("范围切换守卫里的保留不适用于之后的 Dock 分离，安全网应还原"));
+                ClearInt3AndByte(address);
+            }
+            // 全局退出中本视图已选保留、另一视图取消：撤销退出许可后，下一次分离必须仍有安全网。
+            {
+                Harness h;
+                h.AttachProcess(6445);
+                WaitForStageable(h.view->hexPaneForTest(), address);
+                ToggleInt3(*h.view, address);
+                {
+                    ArmClicker clicker(QStringLiteral("保留补丁继续"));
+                    WPJ6_CHECK(h.view->confirmQuit());
+                    WPJ6_CHECK(clicker.clicked);
+                }
+                WPJ6_CHECK(Int3Count() == 1U);
+                h.view->cancelQuitPreparation();
+                h.view->target().onDockAboutToDetach();
+                WPJ6_CHECK_NOTE(Int3Count() == 0U,
+                    QStringLiteral("全局退出取消后，先前保留许可不得跳过下一次分离安全网"));
                 ClearInt3AndByte(address);
             }
         }

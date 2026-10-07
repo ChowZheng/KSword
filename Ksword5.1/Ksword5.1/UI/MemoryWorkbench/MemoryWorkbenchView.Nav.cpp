@@ -123,6 +123,7 @@ namespace ks::ui
     // 自己再做点什么（例如 NeedsAttach 时聚焦进程选择框）。
     NavStatus MemoryWorkbenchView::openAt(const NavRequest& request)
     {
+        const QPointer<MemoryWorkbenchView> self(this);
         if (target_ == nullptr)
         {
             applyNavOutcome(request, NavStatus::Unavailable);
@@ -143,6 +144,10 @@ namespace ks::ui
         // ---- 身份变化合并为一次 requestIdentity（N2）----
         IdentityRequest identity;
         const auto& before = target_->session();
+        if (!self)
+        {
+            return NavStatus::LeaveRefused;
+        }
         if (request.scope != before.scope)
         {
             identity.scope = request.scope;
@@ -172,7 +177,12 @@ namespace ks::ui
             identity.scope.has_value() || identity.pinPid.has_value() || identity.channel.has_value();
         if (identityRequested)
         {
-            if (!target_->requestIdentity(identity, LeaveReason::ScopeChange))
+            const bool accepted = target_->requestIdentity(identity, LeaveReason::ScopeChange);
+            if (!self)
+            {
+                return NavStatus::LeaveRefused;
+            }
+            if (!accepted)
             {
                 const auto failure = target_->lastIdentityFailure();
                 applyNavOutcome(request, failure);
@@ -182,6 +192,10 @@ namespace ks::ui
         const bool identityActuallyChanged = (identityChangeCount_ != identityChangeCountBefore);
 
         const auto& session = target_->session();
+        if (!self)
+        {
+            return NavStatus::LeaveRefused;
+        }
         const bool hasTarget = (session.scope != ksword::memwb::Scope::ProcessVirtual) || (session.pid != 0);
         if (!hasTarget)
         {
@@ -237,6 +251,7 @@ namespace ks::ui
         }
 
         clearScopeSwitchPrompt();
+        leavePointerChainNavigation();
         applyNavOutcome(request, NavStatus::Ok);
         return NavStatus::Ok;
     }
@@ -330,7 +345,15 @@ namespace ks::ui
         addressEdit_->setStyleSheet(QString());
 
         NavRequest request;
-        request.scope = target_->session().scope;
+        const auto& session = target_->session();
+        request.scope = session.scope;
+        // 内部导航沿用当前固定目标；pid=0 专用于外部请求跟随 Dock。
+        if (session.scope == ksword::memwb::Scope::ProcessVirtual
+            && target_->followMode() == ksword::memwb::MemoryTargetTracker::Follow::Pinned)
+        {
+            request.pid = session.pid;
+            request.createTime = session.processCreateTime100ns;
+        }
         request.address = eval.expr.value;
         request.origin = NavOrigin::AddressBar;
         openAt(request);
@@ -357,6 +380,7 @@ namespace ks::ui
         // 旧实现点后退后该按钮仍然可见，点了会跳到一个用户已经离开的地址）。
         clearScopeSwitchPrompt();
         hexPane_->jumpTo(destination);
+        leavePointerChainNavigation();
     }
 
     void MemoryWorkbenchView::onGoForwardRequested()
@@ -374,6 +398,7 @@ namespace ks::ui
         }
         clearScopeSwitchPrompt();
         hexPane_->jumpTo(destination);
+        leavePointerChainNavigation();
     }
 
     // onRerouteButtonClicked："切换并跳转"按钮——用户主动确认才真正切换范围。
@@ -484,13 +509,16 @@ namespace ks::ui
     // 处理函数），失败/成功都会在状态条留下一句话，不再无声无息。
     void MemoryWorkbenchView::onToggleInt3AtAddress(quint64 address)
     {
+        const QPointer<MemoryWorkbenchView> self(this);
         if (target_ == nullptr)
         {
             return;
         }
-        const auto& session = target_->session();
+        const auto session = target_->session();
+        if (!self) return;
         // Install/Restore 的路由预检与目标匹配都读账本的"当前目标"，先声明回本视图的会话。
         applyInt3Context(session);
+        if (!self) return;
         auto& int3 = WorkbenchShared::Instance().Int3();
         std::optional<std::uint64_t> existingId;
         for (const auto& entry : int3.Entries())
@@ -506,9 +534,26 @@ namespace ks::ui
         if (existingId.has_value())
         {
             const auto outcome = int3.Restore(*existingId);
+            if (!self) return;
             onInt3ResultMessage(
                 TranslateInt3RestoreOutcome(outcome),
                 outcome.status != ksword::memwb::RestoreStatus::Restored);
+            return;
+        }
+        std::string validationFailure;
+        const bool allowed = validatePointerChainWrite(session, address, 1, validationFailure);
+        if (!self) return;
+        if (!allowed)
+        {
+            onInt3ResultMessage(QString::fromUtf8(validationFailure.c_str()), true);
+            return;
+        }
+        const auto context = int3.CurrentTarget();
+        if (context.pid != session.pid || context.processCreateTime100ns != session.processCreateTime100ns
+            || context.attachGeneration != session.attachGeneration || int3.CurrentScope() != session.scope
+            || int3.CurrentChannel() != session.channel)
+        {
+            onInt3ResultMessage(ks::i18n::sourceText(QStringLiteral("目标身份与请求不一致")), true);
             return;
         }
         const ksword::memwb::PatchTarget patchTarget{
@@ -517,6 +562,7 @@ namespace ks::ui
         // 即可（与 Int3PatchPanel::onInstallClicked 同一取法）。
         const std::uint64_t nowTick = static_cast<std::uint64_t>(QDateTime::currentMSecsSinceEpoch());
         const auto outcome = int3.Install(patchTarget, address, nowTick);
+        if (!self) return;
         const bool isError = (outcome.routeReject != Int3RouteReject::None) ||
             (outcome.status != ksword::memwb::InstallStatus::Installed);
         onInt3ResultMessage(TranslateInt3InstallOutcome(outcome, address), isError);

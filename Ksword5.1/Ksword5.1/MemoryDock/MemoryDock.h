@@ -114,6 +114,8 @@ public:
     // - 调用方式：MainWindow::closeEvent 最前调用（其后半段会停 R0 驱动，晚了 int3 还原必失败）；
     // - 返回：true=可以继续退出（工作台未创建时恒为 true）；false=用户取消，应放弃本次关闭。
     bool confirmWorkbenchQuit();
+    // 全局退出被取消时，撤销这次退出专用的保留补丁许可。
+    void cancelWorkbenchQuit();
 
     // canOpenInWorkbench：
     // - 作用：内存工作台当前是否可用（整体开关开启、页签已创建）；
@@ -1412,6 +1414,9 @@ private:
     void initializeWorkbenchTab();
     // ensureWorkbenchView：幂等地创建视图并完成全部接线；内嵌窗口里恒为空操作。
     void ensureWorkbenchView();
+    // connectWorkbenchLiveness：视图与既有书签计时器都就绪后幂等接线，锚定目标退出时孤立 int3 记录。
+    // 调用方式：任一对象创建后调用；无传入/传出，不新增计时器或枚举任务。
+    void connectWorkbenchLiveness();
     // 三个附加/分离钩子：转给视图的 WorkbenchTarget；视图尚未创建时是空操作。
     void workbenchOnAttached();
     void workbenchOnAboutToDetach();

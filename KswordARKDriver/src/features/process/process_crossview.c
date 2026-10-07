@@ -16,6 +16,7 @@ Environment:
 
 #include "process_crossview.h"
 #include "..\kernel\hook_scan_support.h"
+#include "..\kernel\object_header_fallback.h" // 候选地址只通过 CID 查询结果取得精确对象引用。
 #include "..\..\dispatch\ioctl_validation.h"
 
 #include <ntstrsafe.h>
@@ -1322,10 +1323,9 @@ Routine Description:
 Arguments:
 
     CandidateObject - Decoded object body pointer from a kernel-owned source.
-    CandidateId - ID observed from the source. It is retained for callers that
-                  perform identity validation after the independent reference.
+    CandidateId - ID observed from the source, used for a protected lookup.
     ExpectedObjectType - Required object type, such as PsProcessType.
-    TypeMatchedOut - Receives whether ObGetObjectType matched ExpectedObjectType.
+    TypeMatchedOut - TRUE only after a protected reference confirms the type.
     ReferencedOut - Receives whether the reference was taken.
 
 Return Value:
@@ -1334,16 +1334,13 @@ Return Value:
     otherwise. Caller must dereference CandidateObject only when ReferencedOut is
     TRUE.
 
-    The reference is established directly through the object manager pointer
-    path. No PsLookupProcessByProcessId/PsLookupThreadByThreadId lookup is used,
-    so a hooked lookup routine cannot substitute a different object.
+    The ID-based lookup must return the exact observed address. A failed lookup
+    leaves object lifetime and type unconfirmed; no object-manager routine may
+    read or write the candidate header before that reference is established.
 
 --*/
 {
-    POBJECT_TYPE objectType = NULL;
-    NTSTATUS status = STATUS_SUCCESS;
-
-    UNREFERENCED_PARAMETER(CandidateId);
+    NTSTATUS status = STATUS_SUCCESS; // 保留公开查询或精确地址比较失败的原始状态。
 
     if (TypeMatchedOut == NULL || ReferencedOut == NULL) {
         return STATUS_INVALID_PARAMETER;
@@ -1356,51 +1353,15 @@ Return Value:
         return STATUS_INVALID_PARAMETER;
     }
 
-    __try {
-        objectType = ObGetObjectType(CandidateObject);
-    }
-    __except (EXCEPTION_EXECUTE_HANDLER) {
-        return GetExceptionCode();
-    }
-
-    if (objectType != ExpectedObjectType) {
-        return STATUS_OBJECT_TYPE_MISMATCH;
-    }
-    *TypeMatchedOut = TRUE;
-
-    /* Establish lifetime through the independent object-manager pointer path.
-       Zero desired access keeps this operation read-only. */
-    if (KeGetCurrentIrql() > APC_LEVEL) {
-        return STATUS_INVALID_DEVICE_STATE;
-    }
-    status = ObReferenceObjectByPointer(
-        CandidateObject,
-        0UL,
-        ExpectedObjectType,
-        KernelMode);
+    // 未引用候选可能已经释放；只有公开 ID 查询返回同一地址才允许读对象头。
+    status = KswordARKObjectHeaderReferenceObjectSafe(
+        CandidateObject, CandidateId, ExpectedObjectType); // helper 在引用后核验对象类型。
     if (!NT_SUCCESS(status)) {
-        return status;
+        return status; // 失败时不能解引用候选，也不能声称其对象类型已确认。
     }
-
-    //
-    // The type was read before the reference existed.  Read it again now that
-    // the object cannot be deleted, so a body recycled between the two steps
-    // cannot be reported as a process.
-    //
-    __try {
-        objectType = ObGetObjectType(CandidateObject);
-    }
-    __except (EXCEPTION_EXECUTE_HANDLER) {
-        objectType = NULL;
-    }
-    if (objectType != ExpectedObjectType) {
-        ObDereferenceObject(CandidateObject);
-        *TypeMatchedOut = FALSE;
-        return STATUS_OBJECT_TYPE_MISMATCH;
-    }
-
-    *ReferencedOut = TRUE;
-    return status;
+    *TypeMatchedOut = TRUE; // 对象类型由 helper 在持有引用后确认。
+    *ReferencedOut = TRUE; // 仅成功路径把一个平衡引用交给调用者。
+    return status; // 调用者处理完成后必须归还引用。
 }
 
 static NTSTATUS
@@ -2491,14 +2452,14 @@ Return Value:
                 "Observed through ActiveProcessLinks head process.");
             ObDereferenceObject(PsInitialSystemProcess);
         }
-        else if (typeMatched) {
+        else { // ActiveProcessLinks 来源仍保留只读候选，不冒充已验证的 Process 对象。
             KswordARKProcessCrossViewMergeDanglingCandidate(
                 Context,
                 (ULONG64)(ULONG_PTR)PsInitialSystemProcess,
                 HandleToULong(PsGetProcessId(PsInitialSystemProcess)),
                 KSWORD_ARK_CROSSVIEW_SOURCE_ACTIVE_LIST,
                 referenceStatus,
-                "ActiveProcessLinks head process type matched but could not be referenced.");
+                "ActiveProcessLinks head candidate could not be safely referenced; object type is unconfirmed.");
         }
         walked += 1UL;
     }
@@ -2612,7 +2573,7 @@ Return Value:
             }
             ObDereferenceObject(processObject);
         }
-        else if (typeMatched) {
+        else { // 读取链表来源证据不要求先访问候选对象头。
             (VOID)KswordARKCrossViewReadPointerField(
                 candidateObject,
                 Context->DynState.Kernel.EpUniqueProcessId,
@@ -2624,7 +2585,7 @@ Return Value:
                 processId,
                 KSWORD_ARK_CROSSVIEW_SOURCE_ACTIVE_LIST,
                 referenceStatus,
-                "ActiveProcessLinks candidate type matched but could not be referenced.");
+                "ActiveProcessLinks candidate could not be safely referenced; object type is unconfirmed.");
         }
 
         current = next;

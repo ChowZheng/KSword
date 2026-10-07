@@ -37,8 +37,10 @@ rem MEMWB_OUT 可由调用方预先设置，让多个验证互不覆盖产物目
 if not defined MEMWB_OUT set "MEMWB_OUT=.codex-tmp\memwb-wpF"
 set "OUT=%MEMWB_OUT%"
 set "OBJ=%OUT%\obj"
+set "OBJ2=%OUT%\obj2"
 set "MOC=%OUT%\moc"
 if not exist "%OBJ%" mkdir "%OBJ%"
+if not exist "%OBJ2%" mkdir "%OBJ2%"
 if not exist "%MOC%" mkdir "%MOC%"
 if not exist "%OUT%\shots" mkdir "%OUT%\shots"
 
@@ -50,6 +52,13 @@ if errorlevel 1 exit /b %errorlevel%
 "%QT%\bin\rcc.exe" "%FIX%\wpF_icons.qrc" -name wpF_icons -o "%MOC%\qrc_wpF_icons.cpp"
 if errorlevel 1 exit /b %errorlevel%
 
+rem ---- LanguageManager: compile existing dependency separately without /WX ----
+cl /nologo /std:c++latest /Zc:__cplusplus /permissive- /utf-8 /EHsc /MD /W3 /WX- /O2 /DWIN32_LEAN_AND_MEAN /external:W0 /DNOMINMAX /DUNICODE /D_UNICODE /DQT_CORE_LIB /DQT_GUI_LIB /DQT_WIDGETS_LIB ^
+  /external:I"%QT%\include" /external:I"%QT%\include\QtCore" /external:I"%QT%\include\QtGui" /external:I"%QT%\include\QtWidgets" ^
+  /c "%APP%\Internationalization\LanguageManager.cpp" ^
+  /Fo"%OBJ2%\\"
+if errorlevel 1 exit /b %errorlevel%
+
 rem ---- 编译并链接 ----
 if not defined CL set "CL=/MP"
 cl /nologo /std:c++latest /Zc:__cplusplus /permissive- /utf-8 /EHsc /MD /W4 /WX /O2 /Gy /DWIN32_LEAN_AND_MEAN /external:W0 /DNOMINMAX /DUNICODE /D_UNICODE /DQT_CORE_LIB /DQT_GUI_LIB /DQT_WIDGETS_LIB /DQT_TESTLIB_LIB /external:I"%QT%\include" /external:I"%QT%\include\QtCore" /external:I"%QT%\include\QtGui" /external:I"%QT%\include\QtWidgets" /external:I"%QT%\include\QtTest" ^
@@ -58,7 +67,8 @@ cl /nologo /std:c++latest /Zc:__cplusplus /permissive- /utf-8 /EHsc /MD /W4 /WX 
   "%CORE%\Int3PatchLedger.cpp" "%CORE%\MemoryPatchByteStore.cpp" "%CORE%\MemoryTargetSession.cpp" ^
   "%MOC%\moc_Int3Controller.cpp" "%MOC%\moc_Int3PatchPanel.cpp" "%MOC%\qrc_wpF_icons.cpp" ^
   /Fo"%OBJ%\\" /Fe"%OUT%\memwb_wpF_tests.exe" ^
-  /link /OPT:REF /LIBPATH:"%QT%\lib" Qt6Core.lib Qt6Gui.lib Qt6Widgets.lib Qt6Test.lib user32.lib advapi32.lib
+  /link /OPT:REF /LIBPATH:"%QT%\lib" Qt6Core.lib Qt6Gui.lib Qt6Widgets.lib Qt6Test.lib user32.lib advapi32.lib ^
+  "%OBJ2%\LanguageManager.obj"
 if errorlevel 1 exit /b %errorlevel%
 
 rem ---- 部署 DLL 与插件（离屏平台、SVG 图标引擎与图片格式） ----

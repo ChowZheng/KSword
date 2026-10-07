@@ -485,9 +485,6 @@
     <ClCompile Include="UI\MemoryEditHistory.Core.cpp" />
     <ClCompile Include="UI\MemoryEditorWidget.cpp" />
     <ClCompile Include="UI\MemoryEditorWidget.InlineAssembly.cpp" />
-    <ClCompile Include="..\..\third_party\zydis\Zydis.c">
-      <CompileAs>CompileAsC</CompileAs>
-    </ClCompile>
     <ClCompile Include="UI\GlobalDialogTheme.cpp" />
     <ClCompile Include="UI\GlobalUiBaseStyle.cpp" />
     <ClCompile Include="UI\GlobalRefreshShortcut.cpp" />
@@ -600,6 +597,10 @@
     <ClCompile Include="..\..\shared\evidence\memory_workbench\MemoryPatchByteStore.cpp" />
     <ClCompile Include="..\..\shared\evidence\memory_workbench\Int3PatchLedger.cpp" />
     <ClCompile Include="..\..\shared\evidence\memory_workbench\MemoryAddressBook.cpp" />
+    <ClCompile Include="..\..\shared\evidence\PointerChain.cpp" />
+    <ClCompile Include="..\..\shared\evidence\memory_workbench\PointerChainBindings.cpp" />
+    <ClCompile Include="MemoryDock\WorkbenchPointerChainAccess.cpp" />
+    <ClCompile Include="UI\MemoryWorkbench\MemoryWorkbenchView.PointerChains.cpp" />
     <ClCompile Include="..\..\shared\evidence\memory_workbench\MemoryAddressBook.Serialize.cpp" />
     <ClCompile Include="..\..\shared\evidence\memory_workbench\MemoryChannelGate.cpp" />
     <ClCompile Include="..\..\shared\evidence\memory_workbench\MemoryModuleDirectory.cpp" />
@@ -732,11 +733,6 @@
     <ClCompile Include="ArkDriverClient\ArkDriverBugcheck.cpp" />
     <ClCompile Include="ArkDriverClient\ArkDriverSystemTime.cpp" />
     <ClCompile Include="ArkDriverClient\ArkDriverResearch.cpp" />
-    <ClCompile Include="..\..\third_party\zstd\zstd.c">
-      <CompileAs>CompileAsC</CompileAs>
-      <WarningLevel>TurnOffAllWarnings</WarningLevel>
-      <SDLCheck>false</SDLCheck>
-    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <QtMoc Include="MainWindow.h" />
@@ -834,6 +830,7 @@
     <ClInclude Include="ksword\startup\startup_internal.h" />
     <ClInclude Include="ksword\string\string.h" />
     <ClInclude Include="theme.h" />
+    <ClInclude Include="UI\AsyncUiDispatcher.h" />
     <ClInclude Include="UI\FlatTableModel.h" />
     <ClInclude Include="UI\DockTabInteraction.h" />
     <ClInclude Include="UI\FlowLayout.h" />
@@ -1085,6 +1082,9 @@
     <ClInclude Include="..\..\shared\evidence\memory_workbench\MemoryPatchByteStore.h" />
     <ClInclude Include="..\..\shared\evidence\memory_workbench\Int3PatchLedger.h" />
     <ClInclude Include="..\..\shared\evidence\memory_workbench\MemoryAddressBook.h" />
+    <ClInclude Include="..\..\shared\evidence\PointerChain.h" />
+    <ClInclude Include="..\..\shared\evidence\memory_workbench\PointerChainBindings.h" />
+    <ClInclude Include="MemoryDock\WorkbenchPointerChainAccess.h" />
     <ClInclude Include="..\..\shared\evidence\memory_workbench\MemoryChannelGate.h" />
     <ClInclude Include="..\..\shared\evidence\memory_workbench\MemoryModuleDirectory.h" />
     <ClInclude Include="..\..\shared\evidence\memory_workbench\MemoryProcessMatch.h" />
@@ -1358,6 +1358,18 @@
     <Warning Condition="!Exists('$(KswordArkSignScript)')" Text="Ksword5.1 auto test-sign skipped because script was not found: $(KswordArkSignScript)" />
   </Target>
   <ItemGroup>
+    <ProjectReference Include="..\..\third_party\zydis\ZydisStatic.vcxproj">
+      <Project>{4ABB357E-1521-4741-A151-EEF3F9CBE9C9}</Project>
+      <LinkLibraryDependencies>true</LinkLibraryDependencies>
+      <UseLibraryDependencyInputs>false</UseLibraryDependencyInputs>
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+    </ProjectReference>
+    <ProjectReference Include="..\..\third_party\zstd\ZstdStatic.vcxproj">
+      <Project>{48B3992C-9A72-4A62-9FA1-55EF23BA1CBD}</Project>
+      <LinkLibraryDependencies>true</LinkLibraryDependencies>
+      <UseLibraryDependencyInputs>false</UseLibraryDependencyInputs>
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+    </ProjectReference>
     <ProjectReference Include="..\..\APIMonitor_x64\APIMonitor_x64.vcxproj">
       <Project>{CEF9AD14-A819-4792-AA6B-009DB21334EE}</Project>
       <LinkLibraryDependencies>false</LinkLibraryDependencies>

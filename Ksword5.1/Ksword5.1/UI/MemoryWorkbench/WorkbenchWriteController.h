@@ -195,6 +195,11 @@ namespace ks::ui
         void setIoPortFactory(IoPortFactory factory);
         void setKernelMutationPortFactory(KernelPortFactory factory);
 
+        using WriteValidationFn = ksword::memwb::MemoryIoByteStore::WriteValidationFn;
+        // Binding updates remain valid after the shared byte store is created;
+        // immediate, staged and undo/redo writes all use that same store.
+        void setWriteValidationCallback(WriteValidationFn callback);
+
         // setRereadRangeCallback / setTickProvider：见上方类型说明；未设置
         // TickProvider 时内部退回系统单调时钟。
         void setRereadRangeCallback(RereadRangeFn callback);
@@ -262,6 +267,8 @@ namespace ks::ui
         // 提交与撤销/重做的临时提交两种情形）或 transaction_->IsBusy() 为真即为
         // true。装配层据此决定画布只读与实时刷新挂起是否应该生效。
         bool isCommitting() const;
+        // True only while a real undo/redo write replay is executing.
+        bool isHistoryReplay() const noexcept { return historyReplay_; }
 
         // beginPendingStage：地址簿"值"列编辑落在当前基线窗口外时的入口（设计文档
         // §1 第 13 条）。传入目标地址与待写入字节；本类请求 PageProvider/
@@ -397,6 +404,8 @@ namespace ks::ui
         std::unique_ptr<ksword::memwb::IMemoryIoPort> port_;
         std::unique_ptr<ksword::memwb::IKernelMutationPort> kernelPort_;
         std::unique_ptr<ksword::memwb::MemoryIoByteStore> byteStore_;
+        WriteValidationFn writeValidationCallback_;
+        bool historyReplay_ = false;
         // transaction_：唯一的写事务，惰性构造（见 ensureTransaction），持有对
         // overlay_/target_->session()/target_->revisions()/byteStore_/
         // confirmation_/audit_ 的引用，这些引用必须比 transaction_ 活得更久。

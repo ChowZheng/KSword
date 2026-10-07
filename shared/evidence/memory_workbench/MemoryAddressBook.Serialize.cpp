@@ -1,11 +1,13 @@
 // MemoryAddressBook.Serialize.cpp
-// 地址簿 v1 文本格式的写出与解析。格式定义见 MemoryAddressBook.h 文件头。
+// 地址簿 v1/v2 文本格式的写出与解析。格式定义见 MemoryAddressBook.h 文件头。
 
 #include "MemoryAddressBook.h"
 
 #include "../NumericTextParse.h"
+#include "../PointerChain.h"
 
 #include <algorithm>
+#include <limits>
 #include <utility>
 
 namespace ksword::memwb {
@@ -15,8 +17,10 @@ namespace {
 // 标题魔数（不含版本）与完整的 v1 标题行。
 constexpr std::string_view kHeaderMagic = "KSWORD-ADDRESS-BOOK";
 constexpr std::string_view kHeaderLineV1 = "KSWORD-ADDRESS-BOOK 1";
+constexpr std::string_view kHeaderLineV2 = "KSWORD-ADDRESS-BOOK 2";
 // 每条条目行的字段数，以及地址字段允许的最大十六进制位数（16 位 = 64 位）。
 constexpr std::size_t kEntryFieldCount = 8;
+constexpr std::size_t kEntryFieldCountV2 = 16;
 constexpr std::size_t kMaxHexDigits = 16;
 
 // AppendEscaped：把一个字符串字段转义后追加到 out。
@@ -103,6 +107,12 @@ std::string FormatHexAddress(const std::uint64_t value) {
     return text;
 }
 
+std::string FormatOffset(const std::int64_t value) {
+    const auto magnitude = value < 0 ? static_cast<std::uint64_t>(-(value + 1)) + 1
+                                     : static_cast<std::uint64_t>(value);
+    return (value < 0 ? "-" : "") + FormatHexAddress(magnitude);
+}
+
 // ParseHexAddress：严格解析 "0x" + 1~16 位十六进制。
 // 传入：字段文本；输出值。传出：成功返回 true；失败返回 false 且 valueOut 不变。
 // 不接受空白、正负号、大写 0X、17 位及以上（哪怕前导零）。
@@ -122,6 +132,18 @@ bool ParseHexAddress(const std::string_view text, std::uint64_t& valueOut) {
     }
     valueOut = parsed;
     return true;
+}
+
+bool ParseOffset(const std::string_view text, std::int64_t& valueOut) {
+    auto unsignedText = text;
+    if (!unsignedText.empty() && (unsignedText.front() == '-' || unsignedText.front() == '+'))
+        unsignedText.remove_prefix(1);
+    std::uint64_t magnitude = 0;
+    return ParseHexAddress(unsignedText, magnitude) && ksword::pointer_chain::ParseOffset(text, valueOut);
+}
+
+bool ParsePositive(const std::string_view text, std::uint64_t& valueOut) {
+    return ksword::evidence::NumericTextParseDigits(text, 10, valueOut) && valueOut > 0;
 }
 
 // ParseEntryId：严格解析十进制 id，且必须落在 1 <= id < kAddressBookIdLimit。
@@ -153,15 +175,16 @@ std::vector<std::string_view> SplitTabs(const std::string_view line) {
             break;
         }
         fields.push_back(line.substr(start, tabPosition - start));
+        if (fields.size() > kEntryFieldCountV2) break;
         start = tabPosition + 1;
     }
     return fields;
 }
 
 // CheckHeaderLine：校验标题行（不含行尾 LF）。
-// 魔数对、版本不是 "1" -> UnsupportedVersion；其它任何不符 -> BadHeader。
+// 魔数对、版本不是 "1"/"2" -> UnsupportedVersion；其它任何不符 -> BadHeader。
 DeserializeError CheckHeaderLine(const std::string_view line) {
-    if (line == kHeaderLineV1) {
+    if (line == kHeaderLineV1 || line == kHeaderLineV2) {
         return DeserializeError::None;
     }
 
@@ -180,11 +203,11 @@ DeserializeError CheckHeaderLine(const std::string_view line) {
 // 传入：行文本；输出条目。传出：None 表示成功（entryOut 完整填好）；
 // 否则返回具体的失败原因，entryOut 内容无意义。
 // 校验顺序：字段数 -> id -> kind -> valueType -> rva -> absolute -> 三个字符串转义 -> 地址一致性。
-DeserializeError ParseEntryLine(const std::string_view line, AddressEntry& entryOut) {
-    // 字段数必须恰为 8；多一个制表符、少一个制表符、空行都落在这里。
+DeserializeError ParseEntryLine(const std::string_view line, const bool version2, AddressEntry& entryOut) {
+    // 字段数必须与版本相符；多/少一个制表符或空行都落在这里。
     // fields：这一行切出的字段视图。
     const std::vector<std::string_view> fields = SplitTabs(line);
-    if (fields.size() != kEntryFieldCount) {
+    if (fields.size() != (version2 ? kEntryFieldCountV2 : kEntryFieldCount)) {
         return DeserializeError::WrongFieldCount;
     }
 
@@ -228,6 +251,44 @@ DeserializeError ParseEntryLine(const std::string_view line, AddressEntry& entry
     if (entry.moduleName.empty() && entry.rva != 0) {
         return DeserializeError::InconsistentAddress;
     }
+    if (version2) {
+        if (fields[8].empty()) {
+            for (std::size_t i = 9; i < fields.size(); ++i)
+                if (!fields[i].empty()) return DeserializeError::BadPointerChain;
+        } else {
+            if (fields[8] != "pointer") return DeserializeError::BadPointerChain;
+            PointerBookmarkDefinition definition;
+            // Bound escaped inputs before allocating decoded path buffers.
+            if (fields[9].size() > 65536 || fields[10].size() > 65536)
+                return DeserializeError::BadPointerChain;
+            if (!Unescape(fields[9], definition.processPath) || !Unescape(fields[10], definition.modulePath))
+                return DeserializeError::BadEscape;
+            std::uint64_t fileSize = 0, fileTime = 0;
+            const auto signedMax = static_cast<std::uint64_t>((std::numeric_limits<std::int64_t>::max)());
+            if (!ParsePositive(fields[11], definition.moduleSize) || !ParsePositive(fields[12], fileSize)
+                || fileSize > signedMax || !ParsePositive(fields[13], fileTime) || fileTime > signedMax)
+                return DeserializeError::BadPointerChain;
+            definition.moduleFileSize = static_cast<std::int64_t>(fileSize);
+            definition.moduleFileTime = static_cast<std::int64_t>(fileTime);
+            if (fields[14] != "4" && fields[14] != "8") return DeserializeError::BadPointerChain;
+            definition.pointerSize = fields[14] == "4" ? 4U : 8U;
+            if (fields[15].empty() || fields[15].size() > ksword::pointer_chain::MaxDepth * 20)
+                return DeserializeError::BadPointerChain;
+            std::size_t start = 0;
+            while (true) {
+                if (definition.offsets.size() >= ksword::pointer_chain::MaxDepth)
+                    return DeserializeError::BadPointerChain;
+                const auto end = fields[15].find(',', start);
+                const auto part = fields[15].substr(start, end == std::string_view::npos ? end : end - start);
+                std::int64_t offset = 0;
+                if (!ParseOffset(part, offset)) return DeserializeError::BadPointerChain;
+                definition.offsets.push_back(offset);
+                if (end == std::string_view::npos) break;
+                start = end + 1;
+            }
+            entry.pointerChain = std::move(definition);
+        }
+    }
     entryOut = std::move(entry);
     return DeserializeError::None;
 }
@@ -252,9 +313,12 @@ std::string MemoryAddressBook::Serialize(const AddressFilter& filter) const {
     // 标题行先行；之后每个满足过滤条件的条目写一行，顺序即插入顺序。
     // text：累积的输出文本。
     std::string text;
-    text += kHeaderLineV1;
+    const auto entries = List(filter);
+    const bool version2 = std::any_of(entries.begin(), entries.end(),
+        [](const AddressEntry& entry) { return entry.pointerChain.has_value(); });
+    text += version2 ? kHeaderLineV2 : kHeaderLineV1;
     text.push_back('\n');
-    for (const AddressEntry& entry : List(filter)) {
+    for (const AddressEntry& entry : entries) {
         // 字段顺序固定：id kind valueType targetKey moduleName rva absolute note。
         text += std::to_string(entry.id);
         text.push_back('\t');
@@ -271,6 +335,30 @@ std::string MemoryAddressBook::Serialize(const AddressFilter& filter) const {
         text += FormatHexAddress(entry.absoluteAddress);
         text.push_back('\t');
         AppendEscaped(text, entry.note);
+        if (version2) {
+            if (!entry.pointerChain) {
+                text += "\t\t\t\t\t\t\t\t";
+            } else {
+                const auto& definition = *entry.pointerChain;
+                text += "\tpointer\t";
+                AppendEscaped(text, definition.processPath);
+                text.push_back('\t');
+                AppendEscaped(text, definition.modulePath);
+                text.push_back('\t');
+                text += std::to_string(definition.moduleSize);
+                text.push_back('\t');
+                text += std::to_string(definition.moduleFileSize);
+                text.push_back('\t');
+                text += std::to_string(definition.moduleFileTime);
+                text.push_back('\t');
+                text += std::to_string(definition.pointerSize);
+                text.push_back('\t');
+                for (std::size_t i = 0; i < definition.offsets.size(); ++i) {
+                    if (i != 0) text.push_back(',');
+                    text += FormatOffset(definition.offsets[i]);
+                }
+            }
+        }
         text.push_back('\n');
     }
     return text;
@@ -297,6 +385,7 @@ DeserializeResult MemoryAddressBook::Deserialize(
     std::size_t lineNumber = 0;
     // lineStart：当前行在 text 里的起始下标。
     std::size_t lineStart = 0;
+    bool version2 = false;
 
     // 逐行处理。每行必须以 LF 结尾；找不到 LF 说明这是被截断的最后一行。
     while (lineStart < text.size()) {
@@ -322,6 +411,9 @@ DeserializeResult MemoryAddressBook::Deserialize(
             if (headerError != DeserializeError::None) {
                 return MakeFailure(lineNumber, headerError);
             }
+            version2 = line == kHeaderLineV2;
+            if (version2 && text.size() > kAddressBookV2TextLimit)
+                return MakeFailure(lineNumber, DeserializeError::InputTooLarge);
             continue;
         }
 
@@ -329,10 +421,11 @@ DeserializeResult MemoryAddressBook::Deserialize(
         // entry：这一行解析出的条目。
         AddressEntry entry;
         // lineError：这一行的解析结论，None 表示合法。
-        const DeserializeError lineError = ParseEntryLine(line, entry);
+        const DeserializeError lineError = ParseEntryLine(line, version2, entry);
         if (lineError != DeserializeError::None) {
             return MakeFailure(lineNumber, lineError);
         }
+        if (!ValidPointerChain(entry)) return MakeFailure(lineNumber, DeserializeError::BadPointerChain);
         if (loaded.entries_.count(entry.id) != 0) {
             return MakeFailure(lineNumber, DeserializeError::DuplicateId);
         }

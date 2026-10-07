@@ -345,6 +345,8 @@ namespace ks::ui
         m_archSegmented->setSegmentToolTip(0, QStringLiteral("按 32 位寻址与指令集解码"));
         m_archSegmented->setSegmentToolTip(1, QStringLiteral("按 64 位寻址与指令集解码"));
         connect(m_archSegmented, &HexViewSegmented::currentIndexChanged, this, [this](int) {
+            // 架构选择真正变化后，旧行内或模态汇编结果不能继续沿用原架构提交。
+            ++m_editContextRevision;
             // D3：currentIndexChanged 在"用户点击"与"程序化 setCurrentIndex"两种场景下都会
             // 触发；m_programmaticArchChange 由 setAddressBits/setBytesProvider 在自己调用
             // setCurrentIndex 前后置位，只有不在这个窗口内触发的变化才算用户真的点了分段钮。
@@ -424,6 +426,7 @@ namespace ks::ui
         // 否则在 64 位目标上手动切过架构后，再换到一个 32 位目标会被锁死显示成 64 位。
         if (provider != m_provider)
         {
+            ++m_editContextRevision;
             m_x64Override = false;
             // N4（第二轮审核）：正在编辑的内容是针对"旧目标"冻结的地址/原字节（见
             // installEditDelegate 的 createEditor），换了目标后这段编辑必须作废——否则
@@ -447,12 +450,15 @@ namespace ks::ui
 
     void WorkbenchDisasmView::setDecodeBackend(DecodeOneFn backend)
     {
+        // 后端替换也使已打开编辑器的解码边界和预览失效。
+        ++m_editContextRevision;
         m_decodeOne = std::move(backend);
         rebuildRows();
     }
 
     void WorkbenchDisasmView::setAssembleBackend(AssembleOneFn backend)
     {
+        ++m_editContextRevision;
         m_assembleOne = std::move(backend);
     }
 
@@ -490,6 +496,8 @@ namespace ks::ui
             return;
         }
         m_editable = editable;
+        // 即使随后重新允许编辑，也不能复活暂停权限之前的模态写请求。
+        ++m_editContextRevision;
         if (!m_editable && m_editingActive)
         {
             cancelInlineEdit();
@@ -532,6 +540,8 @@ namespace ks::ui
     // 这里连锚点、后退栈都一起清，避免宿主换了目标又换回同一个 provider 时意外复原旧位置。
     void WorkbenchDisasmView::reset()
     {
+        // 宿主换目标仍可能复用同一个 provider；reset 才是这条路径的身份失效边界。
+        ++m_editContextRevision;
         // N4（第二轮审核）：与 setBytesProvider 同源的另一半——reset() 同样代表"放弃当前
         // 目标的一切状态"，正在进行的行内编辑也不例外，必须先取消，不能让它残留到下一次
         // jumpTo 之后还能被提交。下面的 rebuildRows() 会无条件刷新，这里不用再补一次。

@@ -7,6 +7,7 @@
 #include "Int3PatchPanel.h"
 
 #include "../../theme.h"
+#include "../../Internationalization/LanguageManager.h"
 
 #include <QAbstractItemView>
 #include <QAction>
@@ -16,6 +17,7 @@
 #include <QIcon>
 #include <QMenu>
 #include <QPoint>
+#include <QPointer>
 #include <QSizePolicy>
 #include <QTableWidget>
 #include <QTableWidgetItem>
@@ -24,9 +26,14 @@
 #include <QVariant>
 
 #include <iterator>
+#include <utility>
 
 namespace ks::ui
 {
+    void Int3PatchPanel::SetInstallValidationCallback(InstallValidationCallback callback)
+    {
+        m_installValidationCallback = std::move(callback);
+    }
     using ksword::memwb::Channel;
     using ksword::memwb::InstallStatus;
     using ksword::memwb::PatchEntry;
@@ -409,13 +416,51 @@ namespace ks::ui
         const std::uint64_t address = *m_insertionPoint;
         // nowTick：int3 账本要求调用方给定时钟读数以保持可测；界面侧用系统时钟即可。
         const std::uint64_t nowTick = static_cast<std::uint64_t>(QDateTime::currentMSecsSinceEpoch());
+        const QPointer<Int3PatchPanel> self(this);
         // 先让宿主声明"当前目标"，再读 CurrentTarget()——两者的先后顺序就是本信号存在的理由。
         emit aboutToAct();
-        const Int3InstallOutcome outcome = m_controller->Install(m_controller->CurrentTarget(), address, nowTick);
+        if (!self)
+        {
+            return;
+        }
+        const auto target = m_controller->CurrentTarget();
+        const auto scope = m_controller->CurrentScope();
+        const auto channel = m_controller->CurrentChannel();
+        QString reason;
+        bool allowed = true;
+        try
+        {
+            const auto validation = m_installValidationCallback;
+            if (validation) allowed = validation(address, reason);
+        }
+        catch (...)
+        {
+            allowed = false;
+        }
+        if (!self) return;
+        const auto current = m_controller->CurrentTarget();
+        if (current.pid != target.pid || current.processCreateTime100ns != target.processCreateTime100ns
+            || current.attachGeneration != target.attachGeneration || m_controller->CurrentScope() != scope
+            || m_controller->CurrentChannel() != channel) allowed = false;
+        if (!allowed)
+        {
+            emit resultMessage(reason.isEmpty()
+                ? ks::i18n::sourceText(QStringLiteral("写入未执行")) : reason, true);
+            return;
+        }
+        const Int3InstallOutcome outcome = m_controller->Install(target, address, nowTick);
+        if (!self)
+        {
+            return;
+        }
         if (outcome.status == InstallStatus::Installed && IsCollapsed())
         {
             // 首次写入自动展开（ux.md 第 4.4 节）。
             SetCollapsed(false);
+            if (!self)
+            {
+                return;
+            }
         }
         EmitInstallMessage(outcome, address);
     }
@@ -428,8 +473,17 @@ namespace ks::ui
         {
             return;
         }
+        const QPointer<Int3PatchPanel> self(this);
         emit aboutToAct();
+        if (!self)
+        {
+            return;
+        }
         const Int3RestoreOutcome outcome = m_controller->Restore(*id);
+        if (!self)
+        {
+            return;
+        }
         EmitRestoreMessage(outcome, *id);
     }
 
@@ -440,8 +494,17 @@ namespace ks::ui
         {
             return;
         }
+        const QPointer<Int3PatchPanel> self(this);
         emit aboutToAct();
+        if (!self)
+        {
+            return;
+        }
         const std::vector<ksword::memwb::PatchRestoreOutcome> outcomes = m_controller->RestoreAll();
+        if (!self)
+        {
+            return;
+        }
         int restoredCount = 0;
         int divergedCount = 0;
         int otherFailureCount = 0;
@@ -478,6 +541,10 @@ namespace ks::ui
                     .arg(divergedCount)
                     .arg(otherFailureCount),
                 true);
+        }
+        if (!self)
+        {
+            return;
         }
         rebuildTable();
     }
@@ -643,10 +710,17 @@ namespace ks::ui
             emit resultMessage(QStringLiteral("读取当前字节失败") + ChannelGuidance(channel), true);
             return;
         case RestoreStatus::Diverged:
+        {
+            const QPointer<Int3PatchPanel> self(this);
             m_divergedIds.insert(id);
             rebuildTable();
+            if (!self)
+            {
+                return;
+            }
             emit resultMessage(QStringLiteral("当前字节已不是 CC（被别处改过），仅可丢弃记录"), true);
             return;
+        }
         case RestoreStatus::WriteFailed:
             emit resultMessage(QStringLiteral("写回失败") + ChannelGuidance(channel), true);
             return;

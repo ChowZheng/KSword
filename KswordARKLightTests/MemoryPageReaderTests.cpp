@@ -4,8 +4,8 @@
 // 遇到四种读取状态分别怎么处理、什么时候停止"，这些规则错一条都不会抛异常，
 // 只会在界面上表现成"某一页该显示问号却显示了数据"或者"明明还有别的页可以读
 // 却提前放弃了"。只断言最终的 PageRecord 还不够，必须同时断言假端口记录到的
-// (address,length) 调用序列，才能钉死"遇到部分读/不可读就从下一页继续，绝不
-// 探测当前页剩余部分、绝不重读已经判定不可读的页"这条规则本身。
+// (address,length) 调用序列，才能钉死"已定位的页不重复探测，批量零字节失败
+// 须核验同址单页并逐页完成当前块"这条规则本身。
 //
 // 断言原则与 MemoryBaselineWindowTests.cpp 一致：
 //   * 每个场景的 script 与期望调用序列全部手算写死；
@@ -21,6 +21,7 @@
 #include "../shared/evidence/memory_workbench/MemoryPageReader.h"
 
 #include <atomic>
+#include <algorithm>
 #include <cstdint>
 #include <limits>
 #include <utility>
@@ -111,7 +112,7 @@ void ExpectPartiallyValid(
 }
 
 // CallsMatch：fake 记录到的调用序列是否与手算的 (address,length) 列表逐一相等
-// （包括个数）。这是钉死"不探测、不重读"的关键断言，所以单独抽出来，调用处
+// （包括个数）。这是钉死读取预算与核验范围的关键断言，所以单独抽出来，调用处
 // 直接把期望写成字面量列表，一眼就能对着算法手算。
 bool CallsMatch(
     const std::vector<ReadCall>& calls,
@@ -184,7 +185,7 @@ void TestPartialContinuesFromNextPage(KswordTests::Suite& suite) {
 }
 
 // ------------------------------------------------------------
-// 三、Unreadable：只有本次请求的第一页整页标无效，下一页起继续读。
+// 三、Unreadable：批量失败不能定位空洞，核验每一页后再标无效。
 // ------------------------------------------------------------
 void TestUnreadableThenContinue(KswordTests::Suite& suite) {
     constexpr std::uint64_t kBase = 0x9000ULL;
@@ -192,13 +193,16 @@ void TestUnreadableThenContinue(KswordTests::Suite& suite) {
 
     FakeMemoryIoPort fake;
     fake.limits.maxReadBytes = 0;
-    fake.script = { MakeUnreadable("page 0 is paged out"), MakeOk(tailData) };
+    fake.script = { MakeUnreadable("bulk unreadable"), MakeUnreadable("page 0 is paged out"),
+        MakeOk(Slice(tailData, 0, static_cast<std::size_t>(kPage))),
+        MakeOk(Slice(tailData, static_cast<std::size_t>(kPage), static_cast<std::size_t>(kPage))) };
 
     const PageReadResult result = ReadPages(fake, MakeSession(), kBase, 3, nullptr);
 
-    suite.expect(CallsMatch(fake.calls, { { kBase, 3 * kPage }, { kBase + kPage, 2 * kPage } }),
-        L"page reader: an Unreadable first page is followed by one Read for the remaining two pages");
-    suite.expect(result.portCalls == 2 && !result.channelFailed, L"page reader: Unreadable does not stop the block");
+    suite.expect(CallsMatch(fake.calls, { { kBase, 3 * kPage }, { kBase, kPage },
+        { kBase + kPage, kPage }, { kBase + 2 * kPage, kPage } }),
+        L"page reader: an ambiguous bulk failure is followed by one attempt per page in the same block");
+    suite.expect(result.portCalls == 4 && !result.channelFailed, L"page reader: Unreadable does not stop the block");
 
     ExpectBlankPage(suite, L"page reader: unreadable scenario page 0", result.pages[0], kBase, PageState::Unreadable);
     ExpectFullyValid(suite, L"page reader: unreadable scenario page 1", result.pages[1], kBase + kPage,
@@ -218,19 +222,21 @@ void TestMultipleHoles(KswordTests::Suite& suite) {
     FakeMemoryIoPort fake;
     fake.limits.maxReadBytes = 0;
     fake.script = {
+        MakeUnreadable("bulk hole location unknown"),
         MakeUnreadable("page 0 hole"),
         MakePartial(tinyPartial),
         MakeUnreadable("page 2 hole"),
-        MakeOk(okTail),
+        MakeOk(Slice(okTail, 0, static_cast<std::size_t>(kPage))),
+        MakeOk(Slice(okTail, static_cast<std::size_t>(kPage), static_cast<std::size_t>(kPage))),
     };
 
     const PageReadResult result = ReadPages(fake, MakeSession(), kBase, 5, nullptr);
 
     suite.expect(CallsMatch(fake.calls,
-        { { kBase, 5 * kPage }, { kBase + kPage, 4 * kPage },
-            { kBase + 2 * kPage, 3 * kPage }, { kBase + 3 * kPage, 2 * kPage } }),
-        L"page reader: four holes in one block produce exactly the hand-calculated call sequence");
-    suite.expect(result.portCalls == 4 && !result.channelFailed, L"page reader: multiple holes never stop the block");
+        { { kBase, 5 * kPage }, { kBase, kPage }, { kBase + kPage, kPage },
+            { kBase + 2 * kPage, kPage }, { kBase + 3 * kPage, kPage }, { kBase + 4 * kPage, kPage } }),
+        L"page reader: one ambiguous failure plus five single pages produces a bounded call sequence");
+    suite.expect(result.portCalls == 6 && !result.channelFailed, L"page reader: multiple holes never stop the block");
 
     ExpectBlankPage(suite, L"page reader: holes scenario page 0", result.pages[0], kBase, PageState::Unreadable);
     ExpectPartiallyValid(suite, L"page reader: holes scenario page 1", result.pages[1], kBase + kPage, 10, tinyPartial);
@@ -510,7 +516,7 @@ void TestAddressSpaceEnd(KswordTests::Suite& suite) {
 }
 
 // ------------------------------------------------------------
-// 十、精确调用序列：Unreadable -> Partial(跨 1 页又多 50 字节) -> Ok 的组合，
+// 十、精确调用序列：Partial(跨 1 页又多 50 字节) -> 批量失败 -> 单页核验，
 // 与前面几个场景用不同的切片长度，独立钉死一遍"调用序列=手算结果"。
 // ------------------------------------------------------------
 void TestExactCallSequenceIsHandCalculated(KswordTests::Suite& suite) {
@@ -520,20 +526,22 @@ void TestExactCallSequenceIsHandCalculated(KswordTests::Suite& suite) {
 
     FakeMemoryIoPort fake;
     fake.limits.maxReadBytes = 0;
-    fake.script = { MakeUnreadable("page 0"), MakePartial(partialData), MakeOk(okData) };
+    fake.script = { MakePartial(partialData), MakeUnreadable("bulk unknown hole"),
+        MakeUnreadable("page 2 hole"), MakeOk(okData) };
 
     const PageReadResult result = ReadPages(fake, MakeSession(), kBase, 4, nullptr);
 
     suite.expect(CallsMatch(fake.calls,
-        { { kBase, 4 * kPage }, { kBase + kPage, 3 * kPage }, { kBase + 3 * kPage, kPage } }),
-        L"page reader: Unreadable then a cross-page Partial then Ok produce exactly three hand-calculated calls");
-    suite.expect(result.portCalls == 3, L"page reader: portCalls equals the number of calls just asserted");
+        { { kBase, 4 * kPage }, { kBase + 2 * kPage, 2 * kPage },
+            { kBase + 2 * kPage, kPage }, { kBase + 3 * kPage, kPage } }),
+        L"page reader: a partial prefix remains valid when a later bulk failure requires two single-page checks");
+    suite.expect(result.portCalls == 4, L"page reader: portCalls equals the number of calls just asserted");
 
-    ExpectBlankPage(suite, L"page reader: exact-sequence page 0", result.pages[0], kBase, PageState::Unreadable);
-    ExpectFullyValid(suite, L"page reader: exact-sequence page 1", result.pages[1], kBase + kPage,
+    ExpectFullyValid(suite, L"page reader: exact-sequence page 0", result.pages[0], kBase,
         Slice(partialData, 0, static_cast<std::size_t>(kPage)));
-    ExpectPartiallyValid(suite, L"page reader: exact-sequence page 2", result.pages[2], kBase + 2 * kPage, 50,
+    ExpectPartiallyValid(suite, L"page reader: exact-sequence page 1", result.pages[1], kBase + kPage, 50,
         Slice(partialData, static_cast<std::size_t>(kPage), 50));
+    ExpectBlankPage(suite, L"page reader: exact-sequence page 2", result.pages[2], kBase + 2 * kPage, PageState::Unreadable);
     ExpectFullyValid(suite, L"page reader: exact-sequence page 3", result.pages[3], kBase + 3 * kPage, okData);
 }
 
@@ -621,6 +629,125 @@ void TestFailedDoesNotPolluteNote(KswordTests::Suite& suite) {
         L"page reader: Failed's failure text never folds into note; the earlier Ok note is left untouched");
 }
 
+// This oracle models the measured Windows API contract, not the reader's flow:
+// any hole anywhere in a request returns no data; readable individual pages do.
+class AllOrNothingPages final : public IMemoryIoPort {
+public:
+    static constexpr std::uint64_t Base = 0x160000;
+    std::vector<bool> readable;
+    std::vector<ReadCall> calls;
+    bool wrote = false;
+    IoLimits Limits(const MemoryTargetSession&) const override { return {}; }
+    IoReadResult Read(const MemoryTargetSession&, std::uint64_t address, std::uint64_t length) override {
+        calls.push_back({address, length});
+        if (address < Base || (address - Base) % kPage || length % kPage || !length)
+            return MakeFailed("invalid request in all-or-nothing fixture");
+        const auto start = (address - Base) / kPage;
+        const auto count = length / kPage;
+        if (start >= readable.size() || count > readable.size() - start) return MakeFailed("range outside fixture");
+        for (std::uint64_t i = 0; i < count; ++i)
+            if (!readable[static_cast<std::size_t>(start + i)]) return MakeUnreadable("RPM whole-range failure");
+        Bytes bytes(static_cast<std::size_t>(length));
+        for (std::size_t i = 0; i < bytes.size(); ++i) bytes[i] = static_cast<std::uint8_t>(7 + start + i / kPage);
+        return MakeOk(std::move(bytes));
+    }
+    IoWriteResult Write(const MemoryTargetSession&, std::uint64_t, const Bytes&, bool) override {
+        wrote = true; return {};
+    }
+};
+
+void TestActualRpmAllOrNothingModel(KswordTests::Suite& suite) {
+    const std::vector<std::vector<bool>> layouts = {{true, false, true}, {true, true, false},
+        {false, true, true}, {false, false, false}, {false}, {true, true, true}};
+    std::size_t scenario = 0;
+    for (const auto& layout : layouts) {
+        AllOrNothingPages port;
+        port.readable = layout;
+        const auto result = ReadPages(port, MakeSession(), port.Base, layout.size(), nullptr);
+        const bool holes = std::find(layout.begin(), layout.end(), false) != layout.end();
+        const auto expectedCalls = holes && layout.size() > 1 ? layout.size() + 1 : 1;
+        const auto label = L"RPM oracle scenario " + std::to_wstring(++scenario);
+        suite.expect(!result.channelFailed && !result.cancelled && !port.wrote && result.pages.size() == layout.size(),
+            (label + L": complete read-only result without channel failure").c_str());
+        suite.expect(port.calls.size() == expectedCalls && result.portCalls == expectedCalls,
+            (label + L": healthy bulk stays one call, a hole costs at most one bulk plus one call per page").c_str());
+        suite.expect(port.calls.front().address == port.Base && port.calls.front().length == layout.size() * kPage,
+            (label + L": first request retains full healthy-range throughput").c_str());
+        if (expectedCalls > 1 && port.calls.size() == expectedCalls)
+            for (std::size_t i = 0; i < layout.size(); ++i)
+                suite.expect(port.calls[i + 1].address == port.Base + i * kPage && port.calls[i + 1].length == kPage,
+                    (label + L": fallback verifies each page exactly once, including readable leading pages").c_str());
+        for (std::size_t i = 0; i < layout.size(); ++i) {
+            if (layout[i]) ExpectFullyValid(suite, label, result.pages[i], port.Base + i * kPage,
+                Bytes(static_cast<std::size_t>(kPage), static_cast<std::uint8_t>(7 + i)));
+            else ExpectBlankPage(suite, label, result.pages[i], port.Base + i * kPage, PageState::Unreadable);
+        }
+    }
+}
+
+void TestFallbackBlockResetAndAnnotations(KswordTests::Suite& suite) {
+    constexpr std::uint64_t base = 0x180000;
+    const auto page = MakePattern(0x22, static_cast<std::size_t>(kPage));
+    FakeMemoryIoPort port;
+    port.limits.maxReadBytes = 2 * kPage;
+    port.script = {MakeUnreadable("ambiguous bulk"), MakeOk(page), MakeUnreadable("known hole"),
+        MakeOk(MakePattern(0x33, static_cast<std::size_t>(2 * kPage)))};
+    auto result = ReadPages(port, MakeSession(), base, 4, nullptr);
+    suite.expect(CallsMatch(port.calls, {{base, 2 * kPage}, {base, kPage}, {base + kPage, kPage},
+        {base + 2 * kPage, 2 * kPage}}), L"fallback: the next block returns to bulk mode without re-scanning the failed block");
+    suite.expect(result.pages[0].state == PageState::Valid && result.pages[1].state == PageState::Unreadable
+        && result.pages[2].state == PageState::Valid && result.pages[3].state == PageState::Valid
+        && result.unreadableReason == "known hole", L"fallback: only verified pages carry unreadable state/reason");
+    FakeMemoryIoPort annotated;
+    auto bulk = MakeUnreadable("transient bulk failure"); bulk.readModifyWriteWindow = true;
+    auto partial = MakePartial(MakePattern(0x44, 17)); partial.failure = "note-A";
+    auto full = MakeOk(page); full.failure = "note-A";
+    auto last = MakeOk(page); last.failure = "note-B";
+    annotated.script = {bulk, partial, full, last};
+    result = ReadPages(annotated, MakeSession(), base, 3, nullptr);
+    ExpectPartiallyValid(suite, L"fallback: partial single page", result.pages[0], base, 17, partial.data);
+    ExpectFullyValid(suite, L"fallback: first recovered neighbor", result.pages[1], base + kPage, page);
+    ExpectFullyValid(suite, L"fallback: second recovered neighbor", result.pages[2], base + 2 * kPage, page);
+    suite.expect(result.portCalls == 4 && result.readModifyWriteWindow && !result.channelFailed
+        && result.note == "note-A；note-B" && result.unreadableReason.empty(),
+        L"fallback: single-page partials preserve notes/dedup/window flags without claiming an ambiguous bulk hole");
+}
+
+void TestFallbackStopsBeforeUnsafeProbes(KswordTests::Suite& suite) {
+    constexpr std::uint64_t base = 0x190000;
+    for (int scenario = 0; scenario < 7; ++scenario) {
+        std::atomic<bool> cancel{false};
+        FakeMemoryIoPort port;
+        auto bulk = MakeUnreadable("bulk unavailable"); bulk.readModifyWriteWindow = true;
+        auto probe = MakeOk(MakePattern(0x51, static_cast<std::size_t>(kPage)));
+        if (scenario == 0) probe = MakeFailed("probe channel failure");
+        if (scenario == 1) bulk.scratchAreaDirty = true;
+        if (scenario == 2) { probe = MakeUnreadable("dirty single page"); probe.scratchAreaDirty = true; }
+        if (scenario == 3 || scenario == 4) {
+            port.cancelToArmAfterCall = &cancel; port.cancelArmIndex = scenario == 3 ? 1 : 2;
+        }
+        if (scenario == 5) probe.scratchAreaDirty = true;
+        if (scenario == 6) { probe = MakePartial(MakePattern(0x52, 5)); probe.scratchAreaDirty = true; }
+        port.script = {bulk, probe};
+        const auto result = ReadPages(port, MakeSession(), base, 3, &cancel);
+        const auto label = L"fallback stop scenario " + std::to_wstring(scenario);
+        const auto expectedCalls = scenario == 1 || scenario == 3 ? 1U : 2U;
+        suite.expect(result.portCalls == expectedCalls && port.calls.size() == expectedCalls,
+            (label + L": no callback after cancellation, channel failure or scratch fault").c_str());
+        suite.expect(result.channelFailed == (scenario == 0) && result.cancelled == (scenario == 3 || scenario == 4)
+            && result.scratchAreaDirty == (scenario == 1 || scenario == 2 || scenario == 5 || scenario == 6)
+            && result.readModifyWriteWindow, (label + L": failure/dirty/cancel/window flags retain their separate meanings").c_str());
+        if (scenario == 2) ExpectBlankPage(suite, label, result.pages[0], base, PageState::Unreadable);
+        else if (scenario == 4 || scenario == 5) ExpectFullyValid(suite, label, result.pages[0], base, probe.data);
+        else if (scenario == 6) ExpectPartiallyValid(suite, label, result.pages[0], base, 5, probe.data);
+        else ExpectBlankPage(suite, label, result.pages[0], base, PageState::NotAttempted);
+        for (std::size_t i = 1; i < result.pages.size(); ++i)
+            ExpectBlankPage(suite, label, result.pages[i], base + i * kPage, PageState::NotAttempted);
+        if (scenario == 0) suite.expect(result.failure == "probe channel failure" && result.note.empty(),
+            L"fallback: Failed stops immediately and remains separate from successful-read notes");
+    }
+}
+
 } // namespace
 
 int RunMemwbPageReaderTests() {
@@ -639,6 +766,9 @@ int RunMemwbPageReaderTests() {
     TestEmptyRequestAndWindowAggregation(suite);
     TestNoteAggregationDedupAndCap(suite);
     TestFailedDoesNotPolluteNote(suite);
+    TestActualRpmAllOrNothingModel(suite);
+    TestFallbackBlockResetAndAnnotations(suite);
+    TestFallbackStopsBeforeUnsafeProbes(suite);
     suite.report();
     return suite.failures();
 }

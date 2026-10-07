@@ -72,10 +72,15 @@ namespace wpj4_test
             WPJ4_CHECK(h.controller.canRedo() == true);
 
             const std::size_t writeCallsBeforeNoopUndo = h.rawPort->writeCalls.size();
+            int noOpReports = 0;
+            QObject::connect(&h.controller, &ks::ui::WorkbenchWriteController::commitFinished,
+                [&](ksword::memwb::CommitReport) { ++noOpReports; });
             h.controller.undo(); // 没有更多可撤销步骤：应是空操作。
             WPJ4_CHECK_NOTE(
                 h.rawPort->writeCalls.size() == writeCallsBeforeNoopUndo,
                 QStringLiteral("NothingToReplay 不应该触碰端口"));
+            WPJ4_CHECK_NOTE(noOpReports == 0,
+                QStringLiteral("没有回放历史时不能虚构 CommitReport"));
         }
 
         // M-U2：撤销本身不向 journal 记新的一步——连续撤销/重做若干轮之后，
@@ -114,11 +119,8 @@ namespace wpj4_test
 
         // M-U3（**第二轮审核 C2 测试缺口补测后扩展**）：目标已变（写前复核读到的
         // "当前字节"与 journal 记录的 expectedCurrent 不符）——整步拒绝，游标
-        // 不动，端口没有发生任何写入；新增断言：也不应该误触发 W4 收尾（既不是
-        // "已回放"也不该报失败，commitFinished/commitFailed 一次都不该发），
-        // 内容代次不应该被当成"已回放"提前推进。原测试只断言 canUndo()/
-        // writeCalls，review2-wpJ4.md 的 C2 变异（把 W4 收尾条件从 Replayed
-        // 放宽成 Replayed||TargetChanged）能在这条断言下幸存，是真实测试缺口。
+        // 不动，端口没有发生任何写入；失败报告必须通知宿主并触发重读，不能让
+        // 用户按 Ctrl+Z 后静默无反馈。未写入时内容代次保持不变。
         void TestUndoRejectedOnTargetChanged()
         {
             Harness h;
@@ -150,8 +152,8 @@ namespace wpj4_test
                 h.rawPort->writeCalls.size() == writeCallsBefore,
                 QStringLiteral("写前复核失败，不应该发生任何写入"));
             WPJ4_CHECK_NOTE(
-                finishedCount == 0 && failedCount == 0,
-                QStringLiteral("TargetChanged 不应该误触发 W4 收尾信号（既不是已回放，也不该报失败）"));
+                finishedCount == 1 && failedCount == 1,
+                QStringLiteral("TargetChanged 必须报告失败，不能静默丢弃临时事务的结果"));
             WPJ4_CHECK_NOTE(
                 h.target.capture().rev.content == contentBefore,
                 QStringLiteral("TargetChanged 不应该推进内容代次"));
@@ -392,7 +394,7 @@ namespace wpj4_test
 
         // M-U11（review2-wpJ4.md C3 测试缺口补测，比 C2 更严重——此前 redo()
         // 遇到 TargetChanged 完全没有任何测试覆盖，不只是"条件放宽测不出"）：
-        // 目标已变时 redo() 必须整步拒绝，游标不动，且不应该误触发 W4 收尾。
+        // 目标已变时 redo() 必须整步拒绝，游标不动，并向宿主报告失败与重读需求。
         void TestRedoRejectedOnTargetChanged()
         {
             Harness h;
@@ -430,8 +432,8 @@ namespace wpj4_test
                 h.rawPort->writeCalls.size() == writeCallsBefore,
                 QStringLiteral("写前复核失败，不应该发生任何写入"));
             WPJ4_CHECK_NOTE(
-                finishedCount == 0 && failedCount == 0,
-                QStringLiteral("TargetChanged 不应该误触发 W4 收尾信号"));
+                finishedCount == 1 && failedCount == 1,
+                QStringLiteral("TargetChanged 必须报告失败，不能静默丢弃临时事务的结果"));
             WPJ4_CHECK_NOTE(
                 h.target.capture().rev.content == contentBefore,
                 QStringLiteral("TargetChanged 不应该推进内容代次"));
@@ -545,6 +547,92 @@ namespace wpj4_test
             }
         }
 
+        // 回放失败仍须报告真实落地字节、暂存区告警及重读需求，但不移动日志游标。
+        // 两种方向各覆盖部分写入和回读不符，随后恢复目标再重试，确认未污染历史。
+        void TestFailedUndoRedoRunW4Wrapup()
+        {
+            for (const bool isRedo : {false, true})
+            {
+                for (const bool partialWrite : {false, true})
+                {
+                    Harness h;
+                    h.AttachProcess(646, 1);
+                    h.controller.setUiConfirmSuppressed(true);
+                    h.EnsureWired();
+                    h.LoadBaseline(0xEA00, {0x00, 0x00});
+                    WPJ4_CHECK(h.Stage(0xEA00, {0x51, 0x52}) == ksword::memwb::StageStatus::Ok);
+                    h.rawPort->script.push_back(MemwbIoTests::MakeOk({0x00, 0x00}));
+                    h.rawPort->script.push_back(MemwbIoTests::MakeOk({0x51, 0x52}));
+                    h.rawPort->writeScript.push_back(MemwbIoTests::MakeWriteOk(2));
+                    h.controller.onEditCompleted();
+
+                    // 重做用例先成功撤销，建立唯一一条可重做历史。
+                    if (isRedo)
+                    {
+                        h.rawPort->script.push_back(MemwbIoTests::MakeOk({0x51, 0x52}));
+                        h.rawPort->script.push_back(MemwbIoTests::MakeOk({0x00, 0x00}));
+                        h.rawPort->writeScript.push_back(MemwbIoTests::MakeWriteOk(2));
+                        h.controller.undo();
+                    }
+                    const std::vector<std::uint8_t> expected = isRedo
+                        ? std::vector<std::uint8_t>{0x00, 0x00}
+                        : std::vector<std::uint8_t>{0x51, 0x52};
+                    const std::vector<std::uint8_t> restored = isRedo
+                        ? std::vector<std::uint8_t>{0x51, 0x52}
+                        : std::vector<std::uint8_t>{0x00, 0x00};
+                    h.rawPort->script.push_back(MemwbIoTests::MakeOk(expected));
+                    ksword::memwb::IoWriteResult write = MemwbIoTests::MakeWriteOk(2);
+                    if (partialWrite)
+                    {
+                        write.ok = false;
+                        write.partial = true;
+                        write.bytesDone = 1;
+                        write.scratchAreaDirty = true;
+                        write.failure = "scripted partial replay write";
+                    }
+                    else
+                    {
+                        // 全段已写入，但回读与期望不符；脏标记来自这次真实回读。
+                        auto verify = MemwbIoTests::MakeOk({0xFF, 0xFF});
+                        verify.scratchAreaDirty = true;
+                        h.rawPort->script.push_back(verify);
+                    }
+                    h.rawPort->writeScript.push_back(write);
+                    int finished = 0;
+                    int failed = 0;
+                    int dirty = 0;
+                    ksword::memwb::CommitReport lastReport;
+                    QObject::connect(&h.controller, &ks::ui::WorkbenchWriteController::commitFinished,
+                        [&](ksword::memwb::CommitReport report) { ++finished; lastReport = report; });
+                    QObject::connect(&h.controller, &ks::ui::WorkbenchWriteController::commitFailed,
+                        [&](ksword::memwb::CommitReport) { ++failed; });
+                    QObject::connect(&h.controller, &ks::ui::WorkbenchWriteController::scratchAreaDirtyReported,
+                        [&]() { ++dirty; });
+                    const auto before = h.target.capture().rev;
+                    isRedo ? h.controller.redo() : h.controller.undo();
+                    WPJ4_CHECK(finished == 1 && failed == 1 && dirty == 1);
+                    WPJ4_CHECK(lastReport.outcome == (partialWrite
+                        ? ksword::memwb::CommitOutcome::WriteFailed
+                        : ksword::memwb::CommitOutcome::VerifyMismatch));
+                    WPJ4_CHECK(lastReport.bytesWritten == (partialWrite ? 1U : 2U));
+                    WPJ4_CHECK(lastReport.blocksWritten == 0);
+                    WPJ4_CHECK(lastReport.needsReread && lastReport.scratchAreaDirty);
+                    WPJ4_CHECK(h.target.capture().rev.source != before.source);
+                    WPJ4_CHECK(h.target.capture().rev.content == before.content + 1);
+                    WPJ4_CHECK(h.controller.canUndo() == !isRedo);
+                    WPJ4_CHECK(h.controller.canRedo() == isRedo);
+
+                    // 假设目标已恢复到回放前的值，再次成功回放；只能消耗原有一步。
+                    h.rawPort->script.push_back(MemwbIoTests::MakeOk(expected));
+                    h.rawPort->script.push_back(MemwbIoTests::MakeOk(restored));
+                    h.rawPort->writeScript.push_back(MemwbIoTests::MakeWriteOk(2));
+                    isRedo ? h.controller.redo() : h.controller.undo();
+                    WPJ4_CHECK(h.controller.canUndo() == isRedo);
+                    WPJ4_CHECK(h.controller.canRedo() == !isRedo);
+                }
+            }
+        }
+
         // S2：一次提交落地多个块时，每个落地块各记一步（可逐步撤销到底）。杀 x15。
         void TestSuppMultiBlockCommitRecordsEveryLandedBlock()
         {
@@ -644,6 +732,7 @@ namespace wpj4_test
     void RunUndoTests()
     {
         TestSuppUndoRedoRunW4Wrapup();
+        TestFailedUndoRedoRunW4Wrapup();
         TestSuppMultiBlockCommitRecordsEveryLandedBlock();
         TestSuppIsCommittingTrueDuringUndoReplay();
         TestSuppUndoRedoRefreshDdmaGeneration();

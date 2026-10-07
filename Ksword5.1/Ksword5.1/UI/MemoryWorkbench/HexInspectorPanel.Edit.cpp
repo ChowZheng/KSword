@@ -89,6 +89,8 @@ namespace ks::ui
     // 打开行内编辑器。
     bool HexInspectorPanel::beginEditRow(int row)
     {
+        // contentChanged 是排队信号；开始输入前先同步来源，不能对尚未刷新显示的旧目标编辑。
+        refresh(false);
         // 被拒绝时把原因显示在状态条并发信号：只读视图下"双击没反应"是最糟的体验。
         const QString reason = editBlockedReason(row);
         if (!reason.isEmpty())
@@ -103,12 +105,19 @@ namespace ks::ui
         m_status->clearMessage();
         m_editRow = row;
         m_editAddress = m_window.address;
+        m_editSourceRevision = m_window.sourceRevision;
+        m_editOverlay = m_window.overlay;
+        m_editIdentityKey = m_window.identityKey;
         return m_rows->beginEdit(row, rowData.valueCopy);
     }
 
     // Enter 提交：先编码，再暂存；任何一步失败都保持编辑器打开并显示原因。
     void HexInspectorPanel::onEditCommitted(int row, const QString& text)
     {
+        if (row != m_editRow || !m_rows->isEditing())
+        {
+            return;
+        }
         // 复制一份行数据：后面刷新会重建行列表，引用会失效。
         const HexInspectorRowData rowData = m_rows->rowAt(row);
 
@@ -158,6 +167,17 @@ namespace ks::ui
             showEditError(QStringLiteral("没有关联的十六进制视图，不能编辑"), true);
             return false;
         }
+        // 再次核对冻结的来源：新目标可能尚未发出排队的 contentChanged，不能仅比较地址/字节。
+        const auto* currentOverlay = canvasPointer->overlay();
+        if (canvasPointer->sourceRevision() != m_editSourceRevision || currentOverlay != m_editOverlay
+            || currentOverlay == nullptr || currentOverlay->IdentityKey() != m_editIdentityKey)
+        {
+            m_rows->endEdit();
+            m_editRow = -1;
+            refresh(true);
+            showEditError(QStringLiteral("目标进程或访问后端已改变，请重新读取后再应用改动。"), true);
+            return false;
+        }
 
         // 当前值：目标范围内每个字节的"所见值"。只有在画布允许编辑、且每个字节都有值并且与新值逐字节相同时，
         // 才判定为"值没有变化"（只读或有字节看不到时，交给 stageBytes 去给出对应的拒绝原因）。
@@ -175,7 +195,23 @@ namespace ks::ui
             // 被拒绝时画布已发 editRejected，这里只显示原因（不再发第二遍），编辑器保持打开方便修改。
             QByteArray payload(reinterpret_cast<const char*>(bytes.data()), static_cast<qsizetype>(bytes.size()));
             QString reason;
-            if (!canvasPointer->stageBytes(editAddress, payload, &reason))
+            QPointer<HexInspectorPanel> self(this);
+            QPointer<HexCanvas> source(canvasPointer);
+            const auto stagedRevision = m_editSourceRevision;
+            const auto* stagedOverlay = m_editOverlay;
+            const std::string stagedIdentity = m_editIdentityKey;
+            const bool staged = canvasPointer->stageBytes(editAddress, payload, &reason);
+            if (!self)
+            {
+                return false;
+            }
+            // editStaged 的同步槽可进入写入确认并换目标；返回后不能关闭新目标的编辑器或覆盖其状态。
+            if (!source || m_canvas != source || source->sourceRevision() != stagedRevision
+                || source->overlay() != stagedOverlay || stagedOverlay->IdentityKey() != stagedIdentity)
+            {
+                return false;
+            }
+            if (!staged)
             {
                 showEditError(reason, false);
                 return false;

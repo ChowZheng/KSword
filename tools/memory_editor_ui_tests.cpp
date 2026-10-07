@@ -6,10 +6,15 @@
 #include <QComboBox>
 #include <QDialog>
 #include <QLineEdit>
+#include <QMenu>
+#include <QPlainTextEdit>
+#include <QPointer>
+#include <QPushButton>
 #include <QTableWidget>
 #include <QTabBar>
 #include <QTabWidget>
 #include <QTest>
+#include <QTimer>
 #include <cstdlib>
 #include <iostream>
 #include <string>
@@ -90,6 +95,95 @@ namespace
         editor->setText(QString::fromLatin1(instruction));
         QTest::keyClick(editor, Qt::Key_Return);
         flushEvents();
+    }
+
+    // 真实菜单/汇编预览的父销毁与陈旧请求回归。只操作假快照，不访问任何目标内存。
+    // 场景 0/1 在菜单/对话框期间销毁宿主；2/3 在成功预览后暂停权限或替换目标；4 正常提交。
+    void checkModalLifetimeAndStaleRequests()
+    {
+        constexpr std::uint64_t modalBase = 0x1000; // 所有目标共用地址，避免只靠地址误通过
+        const QByteArray bytes = QByteArray::fromHex("b801000000c3");
+        for (int scenario = 0; scenario < 5; ++scenario)
+        {
+            QPointer<ks::ui::MemoryEditorWidget> owner = new ks::ui::MemoryEditorWidget;
+            owner->resize(1100, 650);
+            owner->setSnapshot(bytes, modalBase);
+            owner->setEditable(true);
+            owner->show();
+            owner->showDisassemblyAt(modalBase);
+            flushEvents();
+            bool drovePopup = false; // 必须确实进入目标弹窗，不能把未触发测试当成安全
+            QTimer watchdog; // 超时仅关闭本用例弹窗，作用域退出便撤销定时任务
+            watchdog.setSingleShot(true);
+            QObject::connect(&watchdog, &QTimer::timeout, &watchdog, []() {
+                if (auto* popup = QApplication::activePopupWidget()) { popup->close(); }
+                if (auto* modal = QApplication::activeModalWidget()) { modal->close(); }
+            });
+            watchdog.start(3000);
+            QTimer::singleShot(0, owner.data(), [&]() {
+                auto* menu = qobject_cast<QMenu*>(QApplication::activePopupWidget());
+                if (menu == nullptr) { return; }
+                if (scenario == 0)
+                {
+                    drovePopup = true;
+                    delete owner.data();
+                    return;
+                }
+                QAction* assemblyAction = nullptr; // 冻结菜单中真实汇编动作
+                for (auto* action : menu->actions())
+                {
+                    if (action->text().contains(QStringLiteral("汇编编辑"))) { assemblyAction = action; }
+                }
+                if (assemblyAction == nullptr) { menu->close(); return; }
+                QTimer::singleShot(0, owner.data(), [&]() {
+                    auto* dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget());
+                    if (dialog == nullptr) { return; }
+                    if (scenario == 1)
+                    {
+                        drovePopup = true;
+                        delete owner.data();
+                        return;
+                    }
+                    auto* source = dialog->findChild<QPlainTextEdit*>(QStringLiteral("memory_assembly_source"));
+                    QPushButton* compile = nullptr;
+                    QPushButton* stage = nullptr;
+                    for (auto* button : dialog->findChildren<QPushButton*>())
+                    {
+                        if (button->text().contains(QStringLiteral("编译"))) { compile = button; }
+                        if (button->text().contains(QStringLiteral("填入缓存"))) { stage = button; }
+                    }
+                    if (source == nullptr || compile == nullptr || stage == nullptr) { dialog->reject(); return; }
+                    source->setPlainText(QStringLiteral("nop"));
+                    compile->click();
+                    drovePopup = stage->isEnabled();
+                    if (!drovePopup) { dialog->reject(); return; }
+                    if (scenario == 2) { owner->setEditable(false); owner->setEditable(true); }
+                    if (scenario == 3)
+                    {
+                        owner->setSnapshot(bytes, modalBase, ks::ui::DisassemblyArchitecture::X64,
+                            modalBase, QStringLiteral("new-target"));
+                    }
+                    stage->click();
+                });
+                menu->setActiveAction(assemblyAction);
+                QTest::keyClick(menu, Qt::Key_Return);
+            });
+            auto* table = owner->instructionTable();
+            emit table->customContextMenuRequested(table->visualRect(table->model()->index(0, 0)).center());
+            watchdog.stop();
+            require(drovePopup, "modal regression enters the requested popup");
+            if (scenario < 2)
+            {
+                require(owner.isNull(), "parent destruction exits modal interaction safely");
+            }
+            else
+            {
+                require(owner != nullptr, "normal modal return keeps its owner");
+                require(owner->hasChanges() == (scenario == 4), "stale assembly payload cannot change new context");
+                delete owner.data();
+            }
+            flushEvents();
+        }
     }
 }
 
@@ -194,5 +288,6 @@ int main(int argc, char** argv)
     flushEvents();
     editor = widget.instructionTable()->findChild<QLineEdit*>(QStringLiteral("memory_inline_assembly"));
     require(editor == nullptr || !editor->isVisible(), "read-only click cannot edit");
+    checkModalLifetimeAndStaleRequests();
     std::cout << "PASS: " << checks << " memory editor Qt checks\n";
 }

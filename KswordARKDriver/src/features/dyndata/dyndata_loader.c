@@ -1303,13 +1303,15 @@ Return Value:
     //
     // EpObjectTable / EpSectionObject 原本只有 System Informer 偏移表一个来源，
     // 该表按 ntoskrnl 的 TimeDateStamp + SizeOfImage 精确匹配，新内核往往不在表内。
-    // 这两条运行时解析只在偏移仍然缺失时才会写入（StoreRuntimeOffset 自带该判断），
-    // 解析失败时保持原样不可用，不会覆盖打包 profile 的结果，也不会造成回退。
+    // SectionObject 只消费精确 profile；运行期无安全的 Section 对象引用锚点时保持不可用。
+    // 在求值 resolver 前检查偏移，已有 profile 不执行多余候选探测。
     //
-    (VOID)KswordARKDynDataStoreRuntimeOffset(
-        KswordARKDriverResolveProcessSectionObjectOffset(),
-        &State->Kernel.EpSectionObject,
-        &State->KernelSources.EpSectionObject);
+    if (!KswordARKDynDataOffsetPresent(State->Kernel.EpSectionObject)) { // 有效 profile 值保留原偏移和来源，不求值 resolver。
+        (VOID)KswordARKDynDataStoreRuntimeOffset(
+            KswordARKDriverResolveProcessSectionObjectOffset(), // 缺乏独立引用锚点的 Section fallback 返回不可用。
+            &State->Kernel.EpSectionObject,
+            &State->KernelSources.EpSectionObject); // 解析失败保留原有不可用值及其来源。
+    }
     (VOID)KswordARKDynDataStoreRuntimeOffset(
         KswordARKDriverResolveProcessObjectTableOffset(),
         &State->Kernel.EpObjectTable,

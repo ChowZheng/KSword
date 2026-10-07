@@ -10,6 +10,7 @@
 
 #include "../Framework.h"
 #include "ManualFileSystemParser.h"
+#include "../UI/AsyncUiDispatcher.h"
 
 #include <QStringList>
 #include <QWidget>
@@ -79,7 +80,7 @@ public:
     explicit FileDock(QWidget* parent = nullptr);
 
     // 析构函数：
-    // - 作用：默认析构即可，所有子控件由 Qt 父子关系自动释放。
+    // - 作用：关闭后台 UI 投递，排空受管理线程，再由 Qt 释放子控件。
     ~FileDock() override;
 
     // openFileDetailByPath：
@@ -661,4 +662,5 @@ private:
     // Oplock 持有状态。
     std::vector<std::shared_ptr<FileOplockEntry>> m_activeOplocks;
     mutable std::mutex m_activeOplockMutex;
+    std::shared_ptr<ks::ui::AsyncUiDispatcher> m_uiDispatcher; // 后台完成消息与控件析构共享门禁。
 };

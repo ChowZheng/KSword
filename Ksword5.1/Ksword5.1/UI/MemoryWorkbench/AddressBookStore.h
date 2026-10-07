@@ -126,6 +126,9 @@ namespace ks::ui
         // setNote / setValueType：修改单个条目；id 不存在或类型越界返回 false。
         bool setNote(std::uint64_t id, QString note);
         bool setValueType(std::uint64_t id, ksword::memwb::ValueType valueType);
+        bool setPointerChain(std::uint64_t id,
+            const ksword::memwb::PointerBookmarkDefinition& definition,
+            QString moduleName, std::uint64_t rootRva);
 
         // promote：把条目的 kind 改成 newKind；禁止把 Bookmark/Watch 降回 Search（与
         // MemoryAddressBook::Promote 的规则一致），该情况返回 false 且不触发任何事。

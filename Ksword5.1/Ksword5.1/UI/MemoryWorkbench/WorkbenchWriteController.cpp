@@ -169,6 +169,12 @@ namespace ks::ui
         kernelPortFactory_ = std::move(factory);
     }
 
+    void WorkbenchWriteController::setWriteValidationCallback(WriteValidationFn callback)
+    {
+        writeValidationCallback_ = std::move(callback);
+        if (byteStore_) byteStore_->SetWriteValidationCallback(writeValidationCallback_);
+    }
+
     void WorkbenchWriteController::setRereadRangeCallback(RereadRangeFn callback)
     {
         rereadRangeCallback_ = std::move(callback);
@@ -219,6 +225,7 @@ namespace ks::ui
         }
         byteStore_ = std::make_unique<MemoryIoByteStore>(
             *port_, target_->session(), kernelPort_.get());
+        byteStore_->SetWriteValidationCallback(writeValidationCallback_);
         return byteStore_.get();
     }
 
@@ -311,8 +318,18 @@ namespace ks::ui
         if (decision != ModeSwitchDecision::ApplyThenSwitch)
         {
             // DiscardThenSwitch / Cancel 不会触发 Commit，不需要只读守卫，也没有
-            // CommitReport 要处理，也不受下面的重入保护限制。
-            return transaction_->ResolveModeSwitch(decision);
+            // CommitReport 要处理。真实丢弃仍须推进内容代次并清掉待写提示；没有
+            // 待决切换、取消或空 overlay 都不能虚构内容变化。
+            const bool hadPatches = overlay_ != nullptr && overlay_->HasPendingPatches();
+            const ModeSwitchResult result = transaction_->ResolveModeSwitch(decision);
+            if (decision == ModeSwitchDecision::DiscardThenSwitch && hadPatches
+                && result.status == ModeSwitchStatus::Switched)
+            {
+                target_->noteContentChanged();
+                detail::EmitPendingPatchesChanged(this, overlay_);
+            }
+            // pendingPatchesChanged 可同步删除宿主；此后只返回栈上结果。
+            return result;
         }
         // **D3/D4 修复**：ApplyThenSwitch 分支内部会真的尝试一次 Commit，受统一
         // 的重入深度保护——已经有 Commit 在进行（commitDepth_ > 0，可能是外层
@@ -531,15 +548,21 @@ namespace ks::ui
         UndoReplayResult replay;
         {
             detail::CommitReadOnlyGuard guard(commitDepth_, canvasReadOnlyHook_, commitSuspendHook_);
+            const auto resetHistory = [self, previous = historyReplay_](WorkbenchWriteController*) {
+                if (self) self->historyReplay_ = previous;
+            };
+            const std::unique_ptr<WorkbenchWriteController, decltype(resetHistory)> historyGuard(this, resetHistory);
+            historyReplay_ = true;
             replay = undo_->undo();
         }
-        if (replay.outcome == UndoReplayOutcome::Replayed)
+        if (replay.commitAttempted)
         {
-            // 撤销本身是"明确的一次新写入"：推进内容代次（target_->revisions()
-            // 内部的计数器原地跟着变）。撤销/重做不会调用 undo_->record()
-            // （协调器内部已经保证），所以这里只影响 Stale 复核，不会把这次补写
-            // 又记成可撤销的一步。
-            target_->noteContentChanged();
+            // 已落地的部分也是真实写入；失败不能沿用写前内容代次。仅拒绝确认或
+            // 写前复核失败且未写入时不推进，日志游标仍由协调器只在成功时移动。
+            if (replay.report.bytesWritten != 0)
+            {
+                target_->noteContentChanged();
+            }
             // **COMMON 裁决第 3 项**：W4 收尾——复用 HandleCommitReport 处理
             // commitFinished/commitFailed/scratchAreaDirtyReported/needsReread/
             // 局部重读，这些行为与正常 Commit 完全一致。undo 参数传 nullptr：
@@ -582,13 +605,21 @@ namespace ks::ui
         UndoReplayResult replay;
         {
             detail::CommitReadOnlyGuard guard(commitDepth_, canvasReadOnlyHook_, commitSuspendHook_);
+            const auto resetHistory = [self, previous = historyReplay_](WorkbenchWriteController*) {
+                if (self) self->historyReplay_ = previous;
+            };
+            const std::unique_ptr<WorkbenchWriteController, decltype(resetHistory)> historyGuard(this, resetHistory);
+            historyReplay_ = true;
             replay = undo_->redo();
         }
-        if (replay.outcome == UndoReplayOutcome::Replayed)
+        if (replay.commitAttempted)
         {
-            // 重做同样是"明确的一次新写入"，推进内容代次的理由与 undo() 对称，
-            // 见上方 undo() 的注释。
-            target_->noteContentChanged();
+            // 重做失败后的部分落地同样推进内容代次；未写入的拒绝保持原代次。
+            // 统一转发失败/重读/暂存区告警，不把失败回放当成成功消耗历史。
+            if (replay.report.bytesWritten != 0)
+            {
+                target_->noteContentChanged();
+            }
             std::vector<DiffBlock> landedBlocks(1);
             landedBlocks[0].address = replay.address;
             landedBlocks[0].before = replay.before;
