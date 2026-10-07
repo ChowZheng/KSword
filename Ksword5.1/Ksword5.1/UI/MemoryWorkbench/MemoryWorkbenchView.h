@@ -56,6 +56,7 @@
 #include <QString>
 #include <QWidget>
 
+#include <array>
 #include <cstdint>
 #include <atomic>
 #include <functional>
@@ -88,6 +89,7 @@ namespace ks::ui
     enum class Int3LeaveScenario;
 
     class AddressBookPanel;
+    class HexViewGlyphButton;
     class HexViewSegmented;
     class Int3PatchPanel;
     class WorkbenchBaselineFeeder;
@@ -514,9 +516,68 @@ namespace ks::ui
         // ToggleInspector 快捷键（Ctrl+I）本身仍然可用。
         void maybeAutoCollapseInspector();
 
+        // updateAddressRowLabels：地址栏右侧的重读/实时刷新/展开侧栏三个控件平时带文字标签
+        // （真机反馈"只有图标看不懂"）；视图窄于 kAddressRowLabelsMinWidth 时退成纯图标
+        // （复选框去掉文字、悬停提示仍在），避免带文字后地址栏最小宽度把窄窗口挤出界。
+        // 由 resizeEvent 调用；只在"是否紧凑"变化时才改控件，重复调用无副作用。
+        void updateAddressRowLabels();
+
+        // ---- 子页自动跳转（反汇编/文本/对比跟随十六进制；实现在 MemoryWorkbenchView.SubPages.cpp）----
+        // 规则见该文件头：每页一个"同步令牌"（上次跟随时的十六进制选区起点），只有从未定位过 /
+        // 十六进制动过 / 被强制才重新定位，否则只刷新数据，保留用户在子页里手动导航到的位置。
+
+        // SubPageFollowState：一个子页的跟随状态。
+        struct SubPageFollowState
+        {
+            // positioned：是否已经定位过（从未定位过一定要定位）。
+            bool positioned = false;
+            // syncedSelectionStart：令牌——上次跟随时十六进制的原始选区起点。
+            std::uint64_t syncedSelectionStart = 0;
+            // anchor：页面实际定位的地址（显式动作时可能不等于选区起点）；数据晚到刷新时用它重算窗口。
+            std::uint64_t anchor = 0;
+            // dirty：画布内容变过（页回填/暂存/换代次），切到本页时需要刷新。
+            bool dirty = false;
+        };
+
+        // onSubTabChanged：子页签切换（分段按钮/快捷键/loadSettings 恢复都经 currentChanged），切到 1~3 时跟随。
+        void onSubTabChanged(int tabIndex);
+        // onSubPageDataChanged：画布 contentChanged——三页标脏，当前可见的那页立即刷新。
+        void onSubPageDataChanged();
+        // onTargetModulesChanged：模块目录就绪/失败；有挂起的跟随请求且当前在子页时重试。
+        void onTargetModulesChanged(bool kernel);
+        // followSubPage：隐式跟随的核心；force 为真无视令牌（身份变化后、模块列表就绪后）。
+        void followSubPage(int tabIndex, bool force);
+        // showSubPageAt：显式地址（Ctrl+D、右键"从此处反汇编"）：总是覆盖，令牌记成当前选区起点，再切到该页。
+        void showSubPageAt(int tabIndex, std::uint64_t address);
+        // positionSubPage：把某个子页定位到 address（不判断要不要跟随，调用方已决定）。
+        // scrollToTarget：对比页重算窗口后是否滚到目标分组；数据到达引起的刷新传假，保持用户当前的滚动位置。
+        void positionSubPage(int tabIndex, std::uint64_t address, bool scrollToTarget = true);
+        // refreshSubPage：数据到达后刷新某个子页（文本/对比按上次定位的地址重算窗口）。
+        void refreshSubPage(int tabIndex);
+        // ensureWindowCovers：目标地址不在叠加层基线窗口里时，把十六进制画布滚到该地址，让基线重选窗口。
+        void ensureWindowCovers(std::uint64_t address);
+        // resetSubPageFollow：会话身份变化时清三页的跟随状态，文本/对比回到"尚未定位"。
+        void resetSubPageFollow();
+        // attachedProcessNameHint：宿主按 pid 查到的进程名（没有注入回调/查不到为空串），模块兜底按名字命中用。
+        QString attachedProcessNameHint(std::uint32_t pid) const;
+
         // toggleSidebarByUser：Ctrl+Shift+B 快捷键与 sidebarExpandButton_ 共用的
         // 手动切换入口；调用即视为"用户决定过"，置位 sidebarUserOverride_。
         void toggleSidebarByUser();
+
+        // ---- 十六进制画布自适应：视图菜单钮与偏好（实现在 MemoryWorkbenchView.HexPrefs.cpp）----
+        // loadHexPreferences：loadSettings 里调用一次。把已存的分组、字号、行宽偏好灌给十六进制页；
+        // 行宽"自动"默认真（WorkbenchSettings::LoadRowWidthAuto 默认 true）——**自适应只在这条路径里打开**，
+        // 不调 loadSettings 的宿主/夹具仍是固定 16 字节行宽。
+        void loadHexPreferences();
+        // saveHexPreferences：saveSettings 里（权威视图检查之后）调用一次。总是存"自动"状态；
+        // 只在非自动时才存 bytesPerRow，自动状态不得覆盖用户上次手选的值。
+        void saveHexPreferences() const;
+        // connectHexViewMenu：把 hexViewMenuButton_ 接上十六进制页的"视图"菜单（aboutToShow 重建）、
+        // 行宽模式变化时刷新徽标与悬停说明、仅在十六进制子页（子页签第 0 页）显示。buildUi 之后调用一次。
+        void connectHexViewMenu();
+        // hexViewMenuButton_：子页签那一行右侧的"视图"菜单钮（自绘图标钮，徽标显示"自动"或当前行宽）。
+        HexViewGlyphButton* hexViewMenuButton_ = nullptr;
 
         // ---- 本视图私有的五个对象（创建/销毁顺序见文件头）----
         // target_：本视图私有的目标持有者，由 WorkbenchShared::Instance().
@@ -551,6 +612,17 @@ namespace ks::ui
         WorkbenchDisasmView* disasmView_ = nullptr;
         WorkbenchTextView* textView_ = nullptr;
         WorkbenchCompareView* compareView_ = nullptr;
+
+        // subPageFollow_：三个子页（下标 0=反汇编、1=文本、2=对比）的跟随状态，见 SubPageFollowState。
+        std::array<SubPageFollowState, 3> subPageFollow_{};
+        // subPageFollowBusy_：跟随过程中的防重入标志（跟随时会让十六进制跳转/滚动，它们的信号不能再触发跟随）。
+        bool subPageFollowBusy_ = false;
+        // subPageFollowPending_：模块目录还在加载时挂起的跟随请求，等 modulesChanged/modulesFailed 再重试。
+        bool subPageFollowPending_ = false;
+        // kTextFollowBytes / kCompareFollowBytes：文本页/对比页跟随时单次窗口的字节上限（对比页的适配器逐字节
+        // 组装，窗口太大每次刷新会明显变慢，所以比文本页的上限更保守的是"整窗扫描"而不是字符串化）。
+        static constexpr std::uint64_t kTextFollowBytes = 64ULL * 1024ULL;
+        static constexpr std::uint64_t kCompareFollowBytes = 256ULL * 1024ULL;
 
         // ---- 会话条/地址条/侧栏/状态条/动作 ----
         WorkbenchSessionBar* sessionBar_ = nullptr;
@@ -621,6 +693,9 @@ namespace ks::ui
         bool inspectorUserOverride_ = false;
         // kSidebarAutoCollapseWidth：触发自动折叠的窗口宽度阈值（ux.md §1）。
         static constexpr int kSidebarAutoCollapseWidth = 760;
+        // kAddressRowLabelsMinWidth：地址栏右侧三个控件显示文字标签所需的最小视图宽度；
+        // 低于它退成纯图标（见 updateAddressRowLabels）。
+        static constexpr int kAddressRowLabelsMinWidth = 560;
         // kMinMainBodyWidth：落偏好侧栏宽度时，分割条至少要给主体（十六进制/反汇编等
         // 子页）留的宽度；放不下就不落（见 applySidebarWidthIfPossible）。
         static constexpr int kMinMainBodyWidth = 300;

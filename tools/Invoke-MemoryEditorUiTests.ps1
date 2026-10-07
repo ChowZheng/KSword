@@ -48,7 +48,9 @@ if (!($testInputs | Where-Object { $_ -match 'MEMORYEDITORWIDGET\.INLINEASSEMBLY
 }
 $testMainObjects = @($testInputs | Where-Object { [IO.Path]::GetFileName($_) -ieq 'main.obj' })
 if ($testMainObjects.Count -ne 1) { throw 'Production entry point is ambiguous.' }
-$testInputs = @($testInputs | Where-Object { $_ -notin $testMainObjects -and $_ -match '\.OBJ$' })
+# 主程序现在把 Zydis/zstd 作为静态库工程（KswordZydis.lib / KswordZstd.lib）链接，它们在链接记录里是 .LIB 输入；
+# 只留 .OBJ 会丢掉它们，链接报 Zydis*/ZSTD_* 未解析。所以 .LIB 输入一并保留（与 Qt 库重复无害）。
+$testInputs = @($testInputs | Where-Object { $_ -notin $testMainObjects -and $_ -match '\.(OBJ|LIB)$' })
 
 # testResponse 移除原产物路径和 Windows 入口；保留生产库、LTCG 与依赖。
 $testResponse = [regex]::Replace($testLinkFlags, '/(?:OUT|PDB|IMPLIB|LTCGOUT):(?:"[^"]*"|\S+)', '', 'IgnoreCase')

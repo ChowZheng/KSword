@@ -571,7 +571,8 @@ namespace wpg_test
                 QToolButton* chip = nullptr;
                 for (QToolButton* button : bar.findChildren<QToolButton*>())
                 {
-                    if (!button->text().isEmpty()) { chip = button; }
+                    // 目标 chip = 带文字的 QToolButton，但写入模式胶囊的两个半边现在也带文字（即时/暂存），要排除。
+                    if (!button->text().isEmpty() && qobject_cast<ks::ui::WriteModeSwitch*>(button->parentWidget()) == nullptr) { chip = button; }
                 }
                 WPG_CHECK(chip != nullptr);
                 if (chip != nullptr)
@@ -631,7 +632,8 @@ namespace wpg_test
             QToolButton* chip = nullptr;
             for (QToolButton* button : bar.findChildren<QToolButton*>())
             {
-                if (!button->text().isEmpty()) { chip = button; }
+                // 目标 chip = 带文字的 QToolButton，但写入模式胶囊的两个半边现在也带文字（即时/暂存），要排除。
+                if (!button->text().isEmpty() && qobject_cast<ks::ui::WriteModeSwitch*>(button->parentWidget()) == nullptr) { chip = button; }
             }
             WPG_CHECK(chip != nullptr);
             if (chip != nullptr)
@@ -647,7 +649,8 @@ namespace wpg_test
             Pump(60);
             for (QToolButton* button : bar.findChildren<QToolButton*>())
             {
-                if (!button->text().isEmpty())
+                // 排除写入模式胶囊的两个半边（它们现在也带文字）：这里只核对目标 chip。
+                if (!button->text().isEmpty() && qobject_cast<ks::ui::WriteModeSwitch*>(button->parentWidget()) == nullptr)
                 {
                     WPG_CHECK_NOTE(button->text() == QStringLiteral("No process needed (kernel)"), button->text());
                     WPG_CHECK_NOTE(

@@ -73,6 +73,10 @@ namespace ks::ui
         // setWindow：设置要展示的字节区间（通常跟随十六进制页当前可见范围）。
         void setWindow(std::uint64_t address, std::uint64_t length);
 
+        // reset：回到"尚未定位"的初始状态（清窗口、清文本、状态行回到占位文案）。
+        // 换目标（会话身份变化）时由宿主调用，不能让旧目标的窗口残留。
+        void reset();
+
         // setBytesPerRow：改变换行宽度（跟随十六进制页，见文件头）；只接受 >=1。
         void setBytesPerRow(int bytesPerRow);
 
@@ -108,6 +112,12 @@ namespace ks::ui
         // rebuildText：按当前窗口、编码、行宽重新渲染；无数据源/未设窗口时显示占位状态。
         void rebuildText();
 
+        // applyEditorText：把文本写进只读编辑器；与上一次写入的文本相同就不再写——
+        // setRawText 会把滚动位置重置回顶部，数据到达/实时刷新反复触发重建时，内容没变就不该打断阅读位置。
+        void applyEditorText(const QString& text);
+
+        QString m_lastEditorText;                          // 最近一次写入编辑器的文本（等值守卫用）
+        bool m_editorTextWritten = false;                   // 是否写入过（区分"从没写过"与"上次写的是空串"）
         IWorkbenchBytesProvider* m_provider = nullptr;   // 数据源（非拥有）
         QComboBox* m_encodingCombo = nullptr;             // 编码选择
         QLabel* m_status = nullptr;                       // 状态行（窗口范围、截断提示）

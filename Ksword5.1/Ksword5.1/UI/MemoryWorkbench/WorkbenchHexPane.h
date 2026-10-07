@@ -114,6 +114,11 @@ namespace ks::ui
         // insertionAddress：当前插入点地址，转发 canvas_->caretAddress()。
         std::uint64_t insertionAddress() const;
 
+        // selectionStart：选区的起点（闭区间的 first）；没有选区时退回插入点。
+        // 与 insertionAddress 的区别：向前拖选时插入点在选区末端，而用户要看的是选中区域的开头——
+        // 三个只读子页（反汇编/文本/对比）的自动跳转用它，而不是插入点。
+        std::uint64_t selectionStart() const;
+
         // jumpTo：跳转入口（地址条回车、模块表双击等最终都落到这里）。
         // 传出：false 表示地址不在当前地址空间内（调用方应先走 setAddressSpace 或
         //       NavStatus::NeedsScopeSwitch 的处理，不会在这里静默失败后一无所知）。
@@ -135,6 +140,39 @@ namespace ks::ui
         // 范围（既没有基线窗口、也从未收到过画布的可见范围通知）时是空操作，
         // 不崩溃。
         void rereadWindow();
+
+        // ------------------------------------------------------------
+        // 行宽偏好与"视图"菜单（十六进制画布自适应）
+        // ------------------------------------------------------------
+        // 画布默认**不是**自适应（HexCanvas::isAutoBytesPerRow() 初值为假），本类构造时也不打开它：
+        // 只有装配层在 loadSettings 路径里经 setRowWidthPreference 打开，所以不走 loadSettings 的
+        // 宿主/夹具仍是固定 16 字节行宽。
+
+        // setRowWidthPreference：应用一份行宽偏好。
+        // 传入：automatic 为真 -> 打开画布的自适应行宽，manualBytes 只作为"用户上次手选的值"记下来
+        //       （manualBytesPerRow() 读回，不立即应用）；为假 -> 把画布固定为 manualBytes（8/16/32/48/64，
+        //       非法值忽略并沿用已记下的手选值）。
+        void setRowWidthPreference(bool automatic, int manualBytes);
+
+        // rowWidthAutomatic：画布当前是否处于自适应行宽。
+        bool rowWidthAutomatic() const;
+
+        // manualBytesPerRow：用户上次手动选的行宽（默认 16）。自适应期间画布的实际行宽会随窗口变化，
+        // 但这个值不变——保存设置时用它判断"自动状态不得覆盖用户上次手选值"。
+        int manualBytesPerRow() const;
+
+        // rebuildViewMenu：把"视图"菜单（行宽 自动/8/16/32/48/64、分组 1/2/4/8、字号 放大/缩小/恢复）
+        // 的内容重建进 menu（先清空），并显式设置不透明的主题静态色样式、开启悬停提示。
+        // 用法：装配层把一个 QMenu 设给工具按钮，并在它的 aboutToShow 里调用本函数（每次弹出都按当前
+        //       状态与主题重建）。选中某项直接作用于画布，不经任何确认。定义在 WorkbenchHexPane.ViewMenu.cpp。
+        void rebuildViewMenu(QMenu* menu);
+
+        // viewButtonBadgeText / viewButtonToolTip：视图菜单按钮上的徽标文字与悬停说明。
+        // 徽标：自适应时是"自动"，否则是当前每行字节数（如 "32"）；悬停说明写明含义与当前值。
+        // 文字都已经过 ks::i18n::sourceText 翻译（按钮是自绘控件，运行期整树扫描够不到，必须在源头翻译）。
+        // 画布行宽模式变化（rowWidthModeChanged）后装配层应重新取一次。
+        QString viewButtonBadgeText() const;
+        QString viewButtonToolTip() const;
 
         // minimumSizeHint（Wave 3 分割比例修复新增，任务书增量④的配套修复）：
         // 不把分割条内部各面板的最小尺寸要求（尤其是解释器面板约 260px 的
@@ -172,6 +210,9 @@ namespace ks::ui
         // contextMenuAboutToShow：转发画布的右键菜单扩展点（添加到地址簿、写入字符串
         // 等菜单项由装配层在这里追加，见 ux.md §4.1）。
         void contextMenuAboutToShow(QMenu* menu, quint64 address, bool hasByte);
+        // rowWidthModeChanged：转发画布同名信号（行宽或自适应/手动模式任一变化就发）。
+        // 装配层据此刷新"视图"菜单按钮的徽标与悬停说明；可能多发（首次显示前后），订阅者须幂等。
+        void rowWidthModeChanged(int bytesPerRow, bool automatic);
 
     private slots:
         // onCanvasVisibleRangeChanged / onCanvasCaretMoved：驱动 baselineFeeder_->noteDirty。
@@ -247,5 +288,9 @@ namespace ks::ui
         // 永久跳过——"用户摆好的比例"优先于"程序认为合理的默认比例"，不能在
         // 用户拖完之后下一次 resize 又被程序悄悄改回去。
         bool splitterSizesUserAdjusted_ = false;
+
+        // manualBytesPerRow_：用户上次手动选的行宽（默认 16）。由画布的 rowWidthModeChanged（automatic 为假）
+        // 与 setRowWidthPreference 更新；自适应期间画布实际行宽随窗口变化，本值不变。
+        int manualBytesPerRow_ = 16;
     };
 }

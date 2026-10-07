@@ -44,6 +44,96 @@ namespace ks::ui
             || processDirectory_.Owner() != owner) return {};
         return processDirectory_.Records();
     }
+
+    namespace
+    {
+        // LowerAscii：模块名比较用的 ASCII 小写副本（模块名只有 ASCII 需要不区分大小写）。
+        std::string LowerAscii(std::string text)
+        {
+            for (char& ch : text)
+            {
+                if (ch >= 'A' && ch <= 'Z')
+                {
+                    ch = static_cast<char>(ch - 'A' + 'a');
+                }
+            }
+            return text;
+        }
+
+        // EndsWithLower：小写文本是否以小写后缀结尾。
+        bool EndsWithLower(const std::string& lowerText, const std::string& lowerSuffix)
+        {
+            return lowerText.size() >= lowerSuffix.size()
+                && lowerText.compare(lowerText.size() - lowerSuffix.size(), lowerSuffix.size(), lowerSuffix) == 0;
+        }
+    }
+
+    // primaryModule：见头文件。记录按基址升序（目录的约定），所以"最低基址"就是第一条/第一个符合条件的。
+    WorkbenchTarget::PrimaryModuleResult WorkbenchTarget::primaryModule(const QString& processNameHint) const
+    {
+        PrimaryModuleResult result;
+        const ksword::memwb::MemoryTargetSession& session = tracker_.Session();
+        // 物理范围没有模块；进程范围还没附加进程时也没有。
+        if (session.scope == ksword::memwb::Scope::Physical
+            || (session.scope == ksword::memwb::Scope::ProcessVirtual && session.pid == 0))
+        {
+            return result;
+        }
+        const bool kernel = session.scope == ksword::memwb::Scope::KernelVirtual;
+        const ksword::memwb::MemoryModuleDirectory& directory = kernel ? kernelDirectory_ : processDirectory_;
+        // 所有者核对用宽松比较：创建时间未锚定（0）的进程也能用，但 pid 必须一致，绝不拿别人的基址作答。
+        const ksword::memwb::ModuleOwner owner = ksword::memwb::ModuleOwnerForSession(session);
+        if (!ksword::memwb::IsSameModuleOwner(directory.Owner(), owner))
+        {
+            return result;
+        }
+        if (directory.GetState() == ksword::memwb::MemoryModuleDirectory::State::Loading)
+        {
+            result.state = PrimaryModuleState::Loading;
+            return result;
+        }
+        const std::vector<ksword::memwb::ModuleRecord>& records = directory.Records();
+        if (directory.GetState() != ksword::memwb::MemoryModuleDirectory::State::Ready || records.empty())
+        {
+            return result;
+        }
+
+        // wanted：优先按名字命中的模块名（小写）。内核固定 ntoskrnl.exe；进程用宿主给的进程名。
+        const std::string wanted = kernel ? std::string("ntoskrnl.exe") : LowerAscii(processNameHint.toUtf8().toStdString());
+        const ksword::memwb::ModuleRecord* chosen = nullptr;
+        if (!wanted.empty())
+        {
+            for (const ksword::memwb::ModuleRecord& record : records)
+            {
+                if (LowerAscii(record.name) == wanted)
+                {
+                    chosen = &record;
+                    break;
+                }
+            }
+        }
+        // 进程范围没按名字命中：取名字以 .exe 结尾的最低基址模块。
+        if (chosen == nullptr && !kernel)
+        {
+            for (const ksword::memwb::ModuleRecord& record : records)
+            {
+                if (EndsWithLower(LowerAscii(record.name), ".exe"))
+                {
+                    chosen = &record;
+                    break;
+                }
+            }
+        }
+        // 最后兜底：最低基址的模块。
+        if (chosen == nullptr)
+        {
+            chosen = &records.front();
+        }
+        result.state = PrimaryModuleState::Ready;
+        result.record = *chosen;
+        return result;
+    }
+
     // ModuleEnumTask：一次模块枚举任务。setAutoDelete(true)（默认值），交给
     // QThreadPool 后由线程池在 run() 返回时自动释放，调用方不持有也不需要释放它。
     class WorkbenchTarget::ModuleEnumTask final : public QRunnable

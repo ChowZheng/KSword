@@ -25,6 +25,7 @@
 #include <QPoint>
 #include <QPointer>
 #include <QRegularExpression>
+#include <QScrollBar>
 #include <QSet>
 #include <QTableView>
 #include <QVBoxLayout>
@@ -551,6 +552,7 @@ namespace ks::ui
         }
         m_hasAnchor = false;
         m_anchor = 0;
+        m_hasLastRebuiltAnchor = false;   // 新会话不继承旧会话的滚动位置
         m_backStack.clear();
         m_refreshPending = false;
         rebuildRows();
@@ -747,6 +749,11 @@ namespace ks::ui
             }
         }
 
+        // 同锚点刷新（数据晚到、实时刷新、暂存变化）要保持用户的纵向滚动位置：model reset 会让表格回到顶部，
+        // 而数据到达引起的自动刷新现在可能很频繁（宿主订阅了画布的 contentChanged）；锚点变了（跳转）才回到新位置。
+        const bool keepScrollPosition = m_hasLastRebuiltAnchor && m_hasAnchor && m_lastRebuiltAnchor == m_anchor;
+        const int previousScrollValue = m_table->verticalScrollBar()->value();
+
         const auto restoreSelection = [this, &previousSelectedAddress, previousSelectedColumn]() {
             if (!previousSelectedAddress.has_value())
             {
@@ -830,6 +837,12 @@ namespace ks::ui
             .arg(formatHexDigitsUpper(m_anchor, 16)).arg(rows.size()).arg(isX64() ? QStringLiteral("x64") : QStringLiteral("x86")));
         emit statusMessage(m_status->text());
         restoreSelection();
+        // 滚动位置要在选中行恢复之后再定：setCurrentIndex 会为了让选中行可见而滚动。
+        // 同锚点刷新 -> 覆盖回用户原来的位置；换了锚点（真正的跳转/自动跟随）-> 回到顶部，让新锚点那一行出现在第一行
+        // （model reset 不会复位滚动值，不处理的话跳转之后看到的是新窗口里第 N 行，目标行在屏幕外）。
+        m_table->verticalScrollBar()->setValue(keepScrollPosition ? previousScrollValue : 0);
+        m_lastRebuiltAnchor = m_anchor;
+        m_hasLastRebuiltAnchor = true;
     }
 
     // eventFilter：装在表格与其视口上，统一处理 F2/Enter/Backspace 与右键菜单。

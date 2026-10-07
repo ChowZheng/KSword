@@ -328,6 +328,15 @@ namespace wpj6_test
         };
     }
 
+    // g_lastFakeServices：最近一次由 servicesFactory 构造的假服务（裸指针，生命周期归所属 WorkbenchTarget）。
+    // 只在 UI 线程读写；对应的视图/目标销毁后它会悬空，所以测试必须在构造 Harness 之后立刻取用。
+    static memwb_wpI_test::FakeWorkbenchServices* g_lastFakeServices = nullptr;
+
+    memwb_wpI_test::FakeWorkbenchServices* LastFakeServices()
+    {
+        return g_lastFakeServices;
+    }
+
     SharedBackend& ConfigureSharedOnce()
     {
         static SharedBackend backend;
@@ -352,7 +361,10 @@ namespace wpj6_test
                 return std::make_unique<FakeInt3ByteStore>(backing);
             };
             backends.servicesFactory = []() -> std::unique_ptr<ks::ui::IWorkbenchServices> {
-                return std::make_unique<memwb_wpI_test::FakeWorkbenchServices>();
+                auto services = std::make_unique<memwb_wpI_test::FakeWorkbenchServices>();
+                // 记下最近一次构造的假服务，供测试在 AttachProcess 之前配置模块枚举结果（见 LastFakeServices）。
+                g_lastFakeServices = services.get();
+                return services;
             };
             backends.ioPortFactory = [backing = backend.backing]() -> std::unique_ptr<ksword::memwb::IMemoryIoPort> {
                 return std::make_unique<FakeMemoryIoPort>(backing);

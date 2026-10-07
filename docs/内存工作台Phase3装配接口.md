@@ -380,6 +380,22 @@ WorkbenchBaselineFeeder → WorkbenchWriteController → WorkbenchHexPane
   变异验证：往状态条与探针覆盖的生产代码里注入“文字与底同色/不省略/省略方向反/Elastic 退回普通 QLabel”等 11 种变异，全部被
   Narrow/DarkLabels/wpG T13 抓到，唯一幸存的是把 `OpaqueDialogStyle` 中 QDialog 自身 `color` 改成 `palette(window)`——等价变异
   （Qt 样式表默认不把 color 继承给子控件；同规则里改 background 会被抓）。变异必须串行跑（并行同一夹具会假性 COMPILE_ERROR）。
+- **真窗口反馈修复（2026-10-06）**：
+  - **控件含义**：会话条写入模式胶囊（`WriteModeSwitch`）两半改为自绘半边按钮（`CapsuleHalfButton`，图标 + 文字“即时/暂存” + 逐半边悬停说明，
+    点击不自己翻转高亮，由 `setMode` 回写）——主程序全局 `QToolButton` 样式（带边框、悬停整块填强调色、`!important`）原来会把 ⚡ 那一半画成溢出胶囊的
+    蓝色方块；地址栏右侧三控件（重读 / 实时刷新 / 展开侧栏）带文字标签，视图窄于 `kAddressRowLabelsMinWidth`(560) 退成纯图标
+    （`updateAddressRowLabels`）。
+  - **整页滚动 / 页面过长**：内存 Dock 加入 `MainWindow.cpp::DockSuppressesOuterScrollArea`（ForceNoScrollArea）；MemoryDock 每个页签用
+    `UI/AdaptivePageScroll.h::EnablePageInnerScroll` 包内部滚动壳（Ignored 策略、关自填背景），`m_tabWidget` 做 `IsolateMinimumSize`。根因：
+    `QTabWidget` 最小高度取所有页最大值（DDMA≈1070、系统审计≈850）+ ADS 自动滚动区把整页滚走。
+  - **滚轮**：画布 `setProperty("ksword_disable_smooth_scroll", true)` 退出全局平滑滚动过滤器（该过滤器把滚动条单位当像素，画布单位是行，一档≈一页）。
+  - **编辑区自适应**：`HexCanvas::setAutoBytesPerRow`（8/16/32/48/64 里取视口放得下的最大档，插入点可见时以它为锚点，不重读）、
+    `minimumSizeHint`（最小 4 行，不再把 Dock 顶高）、Ctrl+滚轮/Ctrl+=/-/0 字号缩放（-4..12）、子页签行右侧“视图”菜单
+    （行宽/分组/字号）、偏好 `rowWidthAuto/bytesPerRow/groupSize/hexZoom` 持久化；**自适应只在 `loadSettings` 路径默认打开**，构造函数不开。
+  - **子页自动跳转**（`MemoryWorkbenchView.SubPages.cpp`）：切到反汇编/文本/对比页、十六进制插入点变化（子页可见时）、会话身份变化、数据晚到
+    （`contentChanged`）都会跟随；每页一个“同步令牌”（上次跟随时十六进制选区起点）——用户在子页里手动导航后切回不覆盖，十六进制动过才重新定位；
+    没有选区（选区起点 == 地址空间起点）时落到起始模块（进程名命中 → 最低基址 `.exe` → 最低基址；内核取 `ntoskrnl.exe`；模块目录加载中挂起，
+    就绪/失败后重试；物理范围与 DDMA 通道不兜底）；Ctrl+D 与右键“从此处反汇编”改走 `showSubPageAt`（右键原来只在十六进制里重定位，是 bug）。
 - **验证**：wpJ6 `wpJ6_tests.Entry3b.cpp`（两视图共用账本的右键/面板/显示/激活/分离安全网/退出询问、`focusAddress`、
   内嵌拒绝钉住、加入地址簿规则与 10000 上限）、wpK1 `TestModuleJumpPin`、wpG 默认值断言翻转。**真窗口未验证**：
   页签重排的实际外观、内嵌窗口里工作台的真实交互、搜索结果排序后双击与右键的真机行为、证据页菜单项。

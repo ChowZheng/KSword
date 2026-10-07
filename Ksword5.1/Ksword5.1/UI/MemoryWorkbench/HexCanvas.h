@@ -170,6 +170,32 @@
 //   Resource/Icon/editor/paint_line.svg 在主 qrc 里尚无别名，加了别名后只需改 HexCanvas.Menu.cpp 的 fillIcon 常量。
 //
 // ------------------------------------------------------------
+// 七之二、自适应行宽与字号缩放（"内存编辑器太小"反馈的修复）
+// ------------------------------------------------------------
+// - 根因：内容宽度只取决于（每行字节数、分组、字符宽度、地址位数），与视口宽度无关；
+//   固定 16 字节时内容宽度约 600 px，窗口再宽右边也是大片空白，窗口窄了又出横向滚动条。
+// - setAutoBytesPerRow(true) 打开"自适应行宽"：每当视口宽度、分组、字体（含缩放）、地址位数变化，
+//   用纯函数 hexcanvas_format::ChooseAutoBytesPerRow 在 {64,48,32,16,8} 里选"放得下的最大一档"，
+//   一档都放不下退 8（横向滚动条兜底）。判据只用视口宽度（竖向滚动条常驻，不影响它），
+//   选择是宽度的确定性纯函数，因此没有"选 n -> 滚动条变化 -> 视口变化 -> 再选 n"的反馈环；
+//   m_inAutoFit 只是防重入的保险。不用定时器：跨过阈值才重排，一次拖动最多重排 4 次，
+//   定时器只会让布局滞后一帧、闪出横向滚动条。
+// - **默认关闭**：HexView 的各个宿主（文件/网络/磁盘/内存编辑器）每次载入数据都显式 setBytesPerRow(16)，
+//   默认打开会让它们的行为全变；只有内存工作台在自己的 loadSettings 路径里打开它。
+// - 手动 setBytesPerRow(n) 会关闭自适应（手动选择优先）；非法值返回 false 且不改变自适应标志。
+// - 改行宽（手动与自动共用 applyBytesPerRow）的锚点：插入点在当前屏幕上完整可见时，以插入点为锚点，
+//   让它停在同一屏幕行；否则沿用旧行为——以首行起始地址为锚点。改行宽只改行列映射与布局：
+//   选区、半字节预览、高亮层、暂存补丁都按地址存放，页缓存也按绝对地址存放，所以不 refresh()、
+//   不换来源代次、不发 contentChanged（HexFindBar 据 contentChanged 取消在途搜索，误发会丢搜索结果）。
+// - rowWidthModeChanged(n, automatic)：行宽或模式任一变化就发（首次显示前后可能多发一次，订阅者须幂等）。
+// - 字号缩放：setZoomLevel/zoomBy/zoomReset，级别 [-4, +12]，每档 1pt，基准字体取构造时的等宽字体。
+//   Ctrl+滚轮（按 120 累计成整档，触摸板的小增量也不会丢）与 Ctrl+= / Ctrl++ / Ctrl+- / Ctrl+0 触发，
+//   不滚动内容。解释器面板等别的控件用自己的字体，不跟随缩放。缩放走 setFont -> changeEvent(FontChange)，
+//   那里会重量度、夹取首行并重新自适应行宽。
+// - minimumSizeHint：高度至少表头 + 4 行 + 横向滚动条（宽度沿用基类，绝不抬高，否则宿主窗口会被钉在
+//   一个拖不动的宽度上）；sizeHint 不变（HexView 宿主的对话框尺寸依赖它）。
+//
+// ------------------------------------------------------------
 // 八、文件分工、自包含与验证
 // ------------------------------------------------------------
 // - 组件自包含：不包含 Framework.h，只依赖 Qt Core/Gui/Widgets、theme.h 与 shared/evidence/memory_workbench。
@@ -203,6 +229,7 @@
 #include <QAbstractScrollArea>
 #include <QByteArray>
 #include <QColor>
+#include <QFont>
 #include <QPoint>
 #include <QRect>
 #include <QStaticText>
@@ -402,17 +429,49 @@ namespace ks::ui
         bool stageBytes(std::uint64_t address, const QByteArray& bytes, QString* reasonOut = nullptr);
 
         // setBytesPerRow：改每行字节数，只接受 8/16/32/48/64；返回 false 表示被拒绝。
-        // 作用：保持当前首行首地址所在行可见，选区与缓存不受影响。
+        // 作用：插入点在屏幕上完整可见时以插入点为锚点（它停在同一屏幕行），否则以首行首地址所在行为锚点；
+        //       选区与缓存不受影响，不重读、不发 contentChanged。
+        // 手动选择优先：合法值会同时关闭自适应行宽（isAutoBytesPerRow() 变假）；非法值返回 false，
+        // 不改行宽也不改自适应标志。行宽或自适应标志变了会发 rowWidthModeChanged(n, false)。
         bool setBytesPerRow(int bytesPerRow);
 
-        // bytesPerRow：当前每行字节数。
+        // bytesPerRow：当前每行字节数（自适应模式下是自适应选出的那一档）。
         int bytesPerRow() const;
 
+        // setAutoBytesPerRow：开关"自适应行宽"（默认关，详见文件头"七之二"）。
+        // 传入：on 为真时按当前视口宽度立即重选一档并此后随宽度/分组/字体/地址位数自动重选；
+        //       为假时停在当前这一档不再自动变（等价于"把自适应结果固定为手动"）。
+        // 还没有地址空间时只记下标志，installSpace 时生效。值真的变了会发 rowWidthModeChanged。
+        void setAutoBytesPerRow(bool on);
+
+        // isAutoBytesPerRow：是否处于自适应行宽模式。
+        bool isAutoBytesPerRow() const;
+
         // setGroupSize：十六进制列分组，只接受 1/2/4/8；返回 false 表示被拒绝。
+        // 自适应模式下分组变化会让每行内容宽度变化，行宽随之重选。
         bool setGroupSize(int groupSize);
 
         // groupSize：当前分组字节数。
         int groupSize() const;
+
+        // ---------------- 字号缩放 ----------------
+
+        // kMinZoomLevel / kMaxZoomLevel：字号缩放级别的下限与上限（含），0 是默认字号，每档 1pt。
+        static constexpr int kMinZoomLevel = -4;
+        static constexpr int kMaxZoomLevel = 12;
+
+        // setZoomLevel：设置字号缩放级别，超出 [kMinZoomLevel, kMaxZoomLevel] 的值夹取到边界。
+        // 级别真的变了才重建字体（重量度、重建缓存文字、重选自适应行宽）并发 zoomLevelChanged。
+        void setZoomLevel(int level);
+
+        // zoomLevel：当前缩放级别。
+        int zoomLevel() const;
+
+        // zoomBy：在当前级别上加 delta 档（正数放大、负数缩小），夹取到边界。
+        void zoomBy(int delta);
+
+        // zoomReset：恢复默认字号（级别 0）。
+        void zoomReset();
 
         // ---------------- 选区与插入点 ----------------
 
@@ -505,8 +564,12 @@ namespace ks::ui
         // copySelection：按格式把选区复制到剪贴板。传出：false 表示被拒绝（已发 copyRejected）。
         bool copySelection(CopyFormat format);
 
-        // sizeHint：按当前每行宽度给出建议尺寸。
+        // sizeHint：按当前每行宽度给出建议尺寸（首选尺寸，不是最小尺寸）。
         QSize sizeHint() const override;
+
+        // minimumSizeHint：宽度沿用基类（两个滚动条的宽度，绝不抬高——否则宿主窗口会被钉在一个拖不动的宽度上），
+        // 高度至少"表头 + 4 行 + 横向滚动条"，让画布在被压扁时仍能看到几行数据。
+        QSize minimumSizeHint() const override;
 
         // inputMethodQuery：对 ImHints 返回禁用预测的拉丁输入提示。
         QVariant inputMethodQuery(Qt::InputMethodQuery query) const override;
@@ -565,6 +628,14 @@ namespace ks::ui
 
         // visibleRangeChanged：可见地址范围变化，first/last 为首尾可见字节地址。
         void visibleRangeChanged(quint64 first, quint64 last);
+
+        // rowWidthModeChanged：每行字节数或"自适应/手动"模式任一变化就发。
+        // bytesPerRow 是变化后的每行字节数，automatic 为真表示处于自适应模式。
+        // 首次显示前后窗口尺寸还没定下来时可能多发一次，订阅者必须幂等。
+        void rowWidthModeChanged(int bytesPerRow, bool automatic);
+
+        // zoomLevelChanged：字号缩放级别变化，参数是新级别。
+        void zoomLevelChanged(int level);
 
         // contextMenuAboutToShow：菜单弹出前发出，宿主可追加书签/补丁等项。
         void contextMenuAboutToShow(QMenu* menu, quint64 address, bool hasByte);
@@ -654,6 +725,23 @@ namespace ks::ui
         void requestVisiblePages();
         void notifyVisibleRange();
         void installSpace(std::uint64_t firstAddress, std::uint64_t lastAddress);
+
+        // applyBytesPerRow：改行宽并按锚点策略（插入点可见取插入点，否则取首行）重排，不动自适应标志、不发信号。
+        // 传入：已校验合法的行宽；传出：true 表示行宽真的变了并已重排，false 表示与当前相同（什么都没做）。
+        bool applyBytesPerRow(int bytesPerRow);
+
+        // applyAutoBytesPerRow：自适应模式下按视口宽度/字符宽度/分组/地址位数重选行宽（定义在 HexCanvas.Layout.cpp）。
+        // 传出：true 表示行宽真的变了（已发 rowWidthModeChanged）；非自适应、无地址空间、视口宽度尚未布局、
+        //       正在自适应中（防重入）或选出的档与当前相同都返回 false。
+        bool applyAutoBytesPerRow();
+
+        // applyZoomFont：按基准字体与缩放级别算出字体并 setFont（定义在 HexCanvas.Layout.cpp）。
+        void applyZoomFont();
+
+        // handleZoomKey：Ctrl+= / Ctrl++ / Ctrl+- / Ctrl+0 缩放键（定义在 HexCanvas.Input.cpp）。
+        // 传出：true 表示按键已处理（已 accept）。与有没有地址空间无关，Alt 同时按下（AltGr 文字输入）不处理。
+        bool handleZoomKey(QKeyEvent* event);
+
         void setFirstRowInternal(std::uint64_t row, bool syncBar);
         void applySelectionChange(const ksword::memwb::HexViewport::Selection& before);
         void scheduleContentChanged();
@@ -713,6 +801,8 @@ namespace ks::ui
         std::uint64_t m_revisionCounter = 1;                        // 来源代次发生器，只增不减
         bool m_editable = false;                                    // 是否允许编辑
         int m_groupSize = 1;                                        // 十六进制分组字节数
+        bool m_autoBytesPerRow = false;                             // 是否处于自适应行宽模式（默认关，见文件头"七之二"）
+        bool m_inAutoFit = false;                                   // 正在自适应重排中（防重入的保险）
 
         // ---- 滚动 ----
         std::uint64_t m_firstRow = 0;                               // 首个可见行的行号（权威值）
@@ -742,6 +832,11 @@ namespace ks::ui
         QPoint m_lastMousePos;                                      // 最近一次鼠标位置（视口坐标）
         QTimer m_autoScrollTimer;                                   // 拖出视口时的自动滚动定时器
         int m_wheelRemainder = 0;                                   // 滚轮角度累积余量
+
+        // ---- 字号缩放 ----
+        QFont m_baseFont;                                           // 基准字体（构造时的等宽字体，缩放级别 0 对应它）
+        int m_zoomLevel = 0;                                        // 当前缩放级别，范围 [kMinZoomLevel, kMaxZoomLevel]
+        int m_zoomWheelRemainder = 0;                               // Ctrl+滚轮的角度累积余量（按 120 凑成整档）
 
         // ---- 高亮与诊断 ----
         std::map<int, HighlightLayer> m_layers;                     // 通用高亮层，键为层号

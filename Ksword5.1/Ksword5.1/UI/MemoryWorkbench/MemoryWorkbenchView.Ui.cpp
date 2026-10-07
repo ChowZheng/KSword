@@ -125,9 +125,15 @@ namespace ks::ui
         rereadButton_->setObjectName(QStringLiteral("ksMemwbRereadButton"));
         rereadButton_->setIcon(QIcon(QStringLiteral(":/Icon/process_refresh.svg")));
         rereadButton_->setToolTip(QStringLiteral("用「当前通道」重读窗口（F5）；与上次读取不同的字节标青色"));
-        KswordTheme::ApplyCompactIconButtonMetrics(rereadButton_);
+        // 真机反馈"右边几个图标钮意义不明"：重读/实时刷新/侧栏都带上文字标签（图标 + 文字），
+        // 只有窗口很窄时才退成纯图标（见 updateAddressRowLabels）。固定高度、宽度随文字。
+        rereadButton_->setText(QStringLiteral("重读"));
+        rereadButton_->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+        rereadButton_->setIconSize(KswordTheme::CompactIconSize());
+        rereadButton_->setFixedHeight(KswordTheme::CompactIconButtonSize().height());
         liveRefreshCheckBox_ = new QCheckBox(this);
         liveRefreshCheckBox_->setIcon(QIcon(QStringLiteral(":/Icon/process_resume.svg")));
+        liveRefreshCheckBox_->setText(ks::i18n::sourceText(QStringLiteral("实时刷新")));
         liveRefreshCheckBox_->setToolTip(QStringLiteral("每秒重读一次；磁盘传输（DDMA）通道不可用"));
         liveRefreshTimer_ = new QTimer(this);
         liveRefreshTimer_->setInterval(1000);
@@ -139,7 +145,10 @@ namespace ks::ui
         sidebarExpandButton_->setIcon(QIcon(QStringLiteral(":/Icon/memwb_bookmarks.svg")));
         sidebarExpandButton_->setToolTip(QStringLiteral("展开侧栏：地址簿、书签、监视、搜索结果（Ctrl+Shift+B）"));
         sidebarExpandButton_->setVisible(false);
-        KswordTheme::ApplyCompactIconButtonMetrics(sidebarExpandButton_);
+        sidebarExpandButton_->setText(QStringLiteral("侧栏"));
+        sidebarExpandButton_->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+        sidebarExpandButton_->setIconSize(KswordTheme::CompactIconSize());
+        sidebarExpandButton_->setFixedHeight(KswordTheme::CompactIconButtonSize().height());
 
         addressRow->addWidget(backButton_);
         addressRow->addWidget(forwardButton_);
@@ -161,7 +170,19 @@ namespace ks::ui
                 ks::i18n::sourceText(QStringLiteral("文本")),
                 ks::i18n::sourceText(QStringLiteral("对比"))},
             this);
-        root->addWidget(subTabSegmented_);
+
+        // 子页签那一行：左边分段钮，右边"视图"菜单钮（行宽/分组/字号，只在十六进制子页显示，
+        // 不增加这一行的高度）。菜单钮是自绘图标钮，徽标显示"自动"或当前行宽；它的菜单内容、
+        // 徽标刷新与显隐在 connectHexViewMenu 里接上（那时 hexPane_/subTabStack_ 才存在）。
+        auto* subTabRow = new QHBoxLayout();
+        subTabRow->setContentsMargins(0, 0, 0, 0);
+        subTabRow->setSpacing(4);
+        subTabRow->addWidget(subTabSegmented_);
+        subTabRow->addStretch(1);
+        hexViewMenuButton_ = new HexViewGlyphButton(HexViewGlyphButton::Glyph::RowWidth, this);
+        hexViewMenuButton_->setPopupMode(QToolButton::InstantPopup);
+        subTabRow->addWidget(hexViewMenuButton_);
+        root->addLayout(subTabRow);
 
         // ---- 主体：hexPane_（随后注入三条管线）+ 三个只读子页 ----
         hexPane_ = new WorkbenchHexPane(this);
@@ -354,11 +375,17 @@ namespace ks::ui
         connect(hexPane_, &WorkbenchHexPane::editRejected, this, &MemoryWorkbenchView::onHexPaneEditRejected);
         connect(hexPane_, &WorkbenchHexPane::contextMenuAboutToShow, this, &MemoryWorkbenchView::onHexPaneContextMenuAboutToShow);
 
+        // 子页自动跳转：切到反汇编/文本/对比页时跟随十六进制的选区起点（或起始模块）；画布内容变化
+        // （页回填/暂存/换代次/基线喂入）时刷新当前可见的那一页。规则见 MemoryWorkbenchView.SubPages.cpp。
+        connect(subTabStack_, &QStackedWidget::currentChanged, this, &MemoryWorkbenchView::onSubTabChanged);
+        connect(hexPane_->canvas(), &HexCanvas::contentChanged, this, &MemoryWorkbenchView::onSubPageDataChanged);
+
         connect(disasmView_, &WorkbenchDisasmView::stageRequested, this, &MemoryWorkbenchView::onDisasmStageRequested);
         connect(disasmView_, &WorkbenchDisasmView::requestHexLocate, this, &MemoryWorkbenchView::onDisasmRequestHexLocate);
 
         connect(subTabSegmented_, &HexViewSegmented::currentIndexChanged, subTabStack_, &QStackedWidget::setCurrentIndex);
         connect(subTabStack_, &QStackedWidget::currentChanged, subTabSegmented_, &HexViewSegmented::setCurrentIndex);
+        connectHexViewMenu();
 
         connect(addressEdit_, &QLineEdit::returnPressed, this, &MemoryWorkbenchView::onAddressBarReturnPressed);
         connect(backButton_, &QToolButton::clicked, this, &MemoryWorkbenchView::onGoBackRequested);
@@ -408,6 +435,45 @@ namespace ks::ui
         maybeAutoCollapseSidebar();
         applySidebarWidthIfPossible();
         maybeAutoCollapseInspector();
+        updateAddressRowLabels();
+    }
+
+    // updateAddressRowLabels：见头文件声明处的注释。
+    void MemoryWorkbenchView::updateAddressRowLabels()
+    {
+        const bool compact = width() < kAddressRowLabelsMinWidth;
+        const Qt::ToolButtonStyle wantedStyle =
+            compact ? Qt::ToolButtonIconOnly : Qt::ToolButtonTextBesideIcon;
+        for (QToolButton* const button : {rereadButton_, sidebarExpandButton_})
+        {
+            if (button == nullptr)
+            {
+                continue;
+            }
+            if (button->toolButtonStyle() != wantedStyle)
+            {
+                button->setToolButtonStyle(wantedStyle);
+            }
+            // 纯图标时回到紧凑方块的宽度；带文字时宽度交给文字（取消固定宽度）。
+            if (compact)
+            {
+                button->setFixedWidth(KswordTheme::CompactIconButtonSize().width());
+            }
+            else
+            {
+                button->setMinimumWidth(0);
+                button->setMaximumWidth(QWIDGETSIZE_MAX);
+            }
+        }
+        if (liveRefreshCheckBox_ != nullptr)
+        {
+            // 文字走 sourceText：运行期切语言后这里重设的文字也是当前语言的。
+            const QString wantedText = compact ? QString() : ks::i18n::sourceText(QStringLiteral("实时刷新"));
+            if (liveRefreshCheckBox_->text() != wantedText)
+            {
+                liveRefreshCheckBox_->setText(wantedText);
+            }
+        }
     }
 
     // showEvent：视图被显示（页签切到前台、窗口首次弹出）时，把本视图的会话重新声明为

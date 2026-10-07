@@ -125,6 +125,16 @@ namespace ks::ui
         connect(canvas_, &HexCanvas::editRejected, this, &WorkbenchHexPane::editRejected);
         connect(canvas_, &HexCanvas::contextMenuAboutToShow, this, &WorkbenchHexPane::contextMenuAboutToShow);
 
+        // rowWidthModeChanged：行宽或自适应/手动模式变化。手动选择（automatic 为假）时记下这个值作为
+        // "用户上次手选的行宽"（保存设置时自适应状态不得覆盖它），再原样转发给装配层刷新菜单按钮。
+        connect(canvas_, &HexCanvas::rowWidthModeChanged, this, [this](int bytesPerRow, bool automatic) {
+            if (!automatic)
+            {
+                manualBytesPerRow_ = bytesPerRow;
+            }
+            emit rowWidthModeChanged(bytesPerRow, automatic);
+        });
+
         // ---- 查找条：数据/选区回调 ----
         // 查找范围 = 基线窗口（ux.md §4.1："查找范围=已读窗口"），取 overlay_
         // 当前基线的 Materialize 结果（含暂存补丁的"所见值"，与画布显示一致；

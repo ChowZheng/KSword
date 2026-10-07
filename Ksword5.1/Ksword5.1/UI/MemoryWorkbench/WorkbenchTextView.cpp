@@ -294,6 +294,15 @@ namespace ks::ui
         rebuildText();
     }
 
+    // reset：回到"尚未定位"状态——窗口清零、hasWindow 置假，rebuildText 会显示占位文案并清空编辑器。
+    void WorkbenchTextView::reset()
+    {
+        m_address = 0;
+        m_length = 0;
+        m_hasWindow = false;
+        rebuildText();
+    }
+
     void WorkbenchTextView::setBytesPerRow(const int bytesPerRow)
     {
         if (bytesPerRow < 1 || bytesPerRow == m_bytesPerRow)
@@ -347,12 +356,24 @@ namespace ks::ui
         return QSize(1, 1);
     }
 
+    // applyEditorText：见头文件。等值守卫只比较"上一次由本函数写入的文本"。
+    void WorkbenchTextView::applyEditorText(const QString& text)
+    {
+        if (m_editorTextWritten && text == m_lastEditorText)
+        {
+            return;
+        }
+        m_editor->setRawText(text);
+        m_lastEditorText = text;
+        m_editorTextWritten = true;
+    }
+
     // rebuildText：拉一次窗口，按 bytesPerRow 切块独立解码，拼成多行文本写回编辑器。
     void WorkbenchTextView::rebuildText()
     {
         if (m_provider == nullptr || !m_hasWindow)
         {
-            m_editor->setRawText(QString());
+            applyEditorText(QString());
             m_status->setText(m_provider == nullptr
                 ? QStringLiteral("尚未接入数据源。")
                 : QStringLiteral("尚未定位；跟随十六进制页的当前窗口。"));
@@ -361,7 +382,7 @@ namespace ks::ui
         const WorkbenchByteWindow window = m_provider->FetchWindow(m_address, m_length);
         if (!window.ok || window.bytes.empty())
         {
-            m_editor->setRawText(QString());
+            applyEditorText(QString());
             // D4：数字部分单独大写再 .arg() 进模板，不对整段模板调用 toUpper()。
             m_status->setText(QStringLiteral("0x%1 超出已读取窗口。").arg(formatHexDigitsUpper(m_address, 16)));
             return;
@@ -403,8 +424,8 @@ namespace ks::ui
             offset += chunkLength;
             firstRow = false;
         }
-        // setRawText：目标内容原样显示，绝不经过语言包翻译（文件头说明）。
-        m_editor->setRawText(text);
+        // setRawText：目标内容原样显示，绝不经过语言包翻译（文件头说明）；内容没变就不重写（保留滚动位置）。
+        applyEditorText(text);
         m_status->setText(QStringLiteral("0x%1 起 %2 字节，按 %3 行宽解码（%4）。")
             .arg(formatHexDigitsUpper(m_address, 16)).arg(window.bytes.size()).arg(m_bytesPerRow)
             .arg(m_encodingCombo->currentText()));

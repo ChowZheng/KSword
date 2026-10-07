@@ -4,6 +4,8 @@
 // HexCanvasFormat.h
 // 作用：
 // - HexCanvas 的"字节 <-> 文本"纯函数集合：复制出去的五种格式、粘贴进来的十六进制解析。
+// - 另有"自适应行宽"的两个纯函数 RowWidthChars / ChooseAutoBytesPerRow（一行内容占多少字符、
+//   视口放得下哪一档行宽），HexCanvas 的自适应模式与离屏测试共用同一份公式。
 // - 全部是无状态纯函数，不依赖任何控件，可以脱离界面单独测试。
 // - 之所以单独成文件：HexCanvas 本体已经承担滚动、绘制、输入三块职责，
 //   文本格式化再放进去会让任何一个文件超过 800 行。
@@ -16,10 +18,34 @@
 #include <QByteArray>
 #include <QString>
 
+#include <array>
 #include <cstdint>
 
 namespace ks::ui::hexcanvas_format
 {
+    // kAutoBytesPerRowCandidates：自适应行宽的候选集合，按"从大到小"排列。
+    // 只能取 HexViewport 支持的 8/16/32/48/64；48 是 16 的倍数，行起点仍 16 对齐，因此可以参与自适应。
+    // 想把某一档排除出自适应，从这里删掉一项即可（调用方遍历的就是这个数组）。
+    inline constexpr std::array<int, 5> kAutoBytesPerRowCandidates = { 64, 48, 32, 16, 8 };
+
+    // RowWidthChars：一行内容占用的字符数（地址列 + 十六进制区 + ASCII 区 + 各处间隙与左右边距）。
+    // 用法：内容像素宽度 = RowWidthChars(...) * 单个等宽字符宽度，与 HexCanvas::recomputeLayout 算出的
+    //       contentWidth 恒等（由离屏测试固定，防止两份公式漂移）。
+    // 传入：bytesPerRow 每行字节数；groupSize 十六进制分组字节数（1/2/4/8）；
+    //       addressDigits 地址列位数（8 或 16）。
+    // 传出：字符数；bytesPerRow 小于 1 时返回 0。
+    // 公式：1(左边距) + 地址位数 + 2(间隔) + 十六进制区 + 2(间隔) + ASCII 区 + 1(右边距)；
+    //       十六进制区 = (n-1)*3 + 额外间隔 + 2，额外间隔：第 c 列 c%8==0 加 2（中缝），
+    //       否则 groupSize>1 且 c%groupSize==0 加 1（组间隙）。
+    int RowWidthChars(int bytesPerRow, int groupSize, int addressDigits);
+
+    // ChooseAutoBytesPerRow：在视口宽度内选"放得下的最大行宽"；一个都放不下就退到最小的 8（由横向滚动条兜底）。
+    // 用法：HexCanvas 的自适应模式在视口尺寸、分组、字体、地址位数变化后调用它。
+    // 传入：viewportWidthPx 视口像素宽度（不含竖向滚动条）；charWidthPx 单个等宽字符的像素宽度
+    //       （小于 1 按 1 处理）；groupSize 分组字节数；addressDigits 地址列位数。
+    // 传出：kAutoBytesPerRowCandidates 里的一个值；结果只取决于入参（纯函数，没有滞回，因此不会来回抖动）。
+    int ChooseAutoBytesPerRow(int viewportWidthPx, int charWidthPx, int groupSize, int addressDigits);
+
     // kLoadingGlyph：未加载 / 在途字节的占位字符（中点 U+00B7）。
     // 十六进制面板画两个、ASCII 面板画一个；它不属于 0x20..0x7E，所以不会与任何真实字符混淆。
     // Consolas 与微软雅黑都有该字形（已在本机用 GlyphTypeface 核对）。

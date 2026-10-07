@@ -161,6 +161,28 @@ namespace
     constexpr const char* kLazyDockPlaceholderProgressBarObjectName = "ksLazyDockProgressBar";
     constexpr const char* kLazyDockPlaceholderStageLabelObjectName = "ksLazyDockStageLabel";
 
+    // DockSuppressesOuterScrollArea 作用：
+    // - 判断某个主 Dock 挂进 ADS 时是否要去掉 ADS 自动包的外层 QScrollArea（ForceNoScrollArea）；
+    // - 调用方：惰性占位页首次挂载与真实内容挂载两处，两处必须共用这一个判据，
+    //   以前同一个布尔表达式复制了两份，漏改其中一份就会让占位页与真实页的滚动结构不一致；
+    // - 入参 dockKey：Dock 的稳定键（network / hardware / kernel / kvm / memory ...）；
+    // - 返回：true=不要外层滚动区；false=沿用 ADS 的 AutoScrollArea。
+    // - 约束：
+    //   network / hardware / kernel / kvm 内部是分隔条加表格，外面再套一层 QScrollArea 会把分隔条压到最小高度；
+    //   memory 的每个页签都自带页内滚动壳（ks::ui::EnablePageInnerScroll，由
+    //   tools/test_memory_dock_layout_gate.py 把关），整个 MemoryDock 的最小高度因此降到几十像素，
+    //   外层再滚动只会把头部、工具栏、页签栏和状态栏一起滚走。
+    //   给新 Dock 加入本名单前必须先确认它内部的页面不会把最小高度撑到屏幕以上，
+    //   否则 ForceNoScrollArea 下超高页的底部会被静默裁掉。
+    bool DockSuppressesOuterScrollArea(const QString& dockKey)
+    {
+        return dockKey == QStringLiteral("network")
+            || dockKey == QStringLiteral("hardware")
+            || dockKey == QStringLiteral("kernel")
+            || dockKey == QStringLiteral("kvm")
+            || dockKey == QStringLiteral("memory");
+    }
+
     // kKswordDockTabPropertyName 作用：
     // - 给 ADS 主 Dock 标签打动态属性，供最终兜底 QSS 精准选择；
     // - 避免泛化 QWidget:hover 影响 Dock 内容区其它控件。
@@ -10218,10 +10240,9 @@ void MainWindow::ensureDockContentInitialized(ads::CDockWidget* dockWidget)
     }
 
     // KVM 页与内核页同理：内部是分隔条 + 表格 + 详情，外面再套一层 QScrollArea
-    // 会把分隔条压到最小高度。
-    const bool shouldSuppressOuterScrollArea =
-        isNetworkDock || (dockKey == QStringLiteral("hardware")) || isKernelDock ||
-        (dockKey == QStringLiteral("kvm"));
+    // 会把分隔条压到最小高度。内存页的各页签自带页内滚动壳，也不再需要外层滚动。
+    // 判据只此一处定义（DockSuppressesOuterScrollArea），与惰性占位页的挂载共用。
+    const bool shouldSuppressOuterScrollArea = DockSuppressesOuterScrollArea(dockKey);
     if (isNetworkDock)
     {
         // 网络页额外要求：
@@ -10806,10 +10827,8 @@ void MainWindow::initDockWidgets()
         const QString& dockKey)
         {
             const bool isNetworkDock = (dockKey == QStringLiteral("network"));
-            const bool isKernelDock = (dockKey == QStringLiteral("kernel"));
-            const bool shouldSuppressOuterScrollArea =
-                isNetworkDock || (dockKey == QStringLiteral("hardware")) || isKernelDock ||
-                (dockKey == QStringLiteral("kvm"));
+            // 与真实内容挂载共用同一个判据，占位页与真实页的滚动结构才会一致。
+            const bool shouldSuppressOuterScrollArea = DockSuppressesOuterScrollArea(dockKey);
             QWidget* dockContentWidget = eagerWidget;
             if (dockContentWidget == nullptr)
             {

@@ -1,6 +1,7 @@
 #include "MemoryDock.Internal.h"
 #include "SystemMemoryAuditPage.h"
 #include "DdmaPage.h"
+#include "../UI/AdaptivePageScroll.h" // ks::ui::EnablePageInnerScroll / IsolateMinimumSize：页内滚动壳与最小尺寸隔离。
 #include "../UI/VisibleTableWidget.h"
 #include "../Internationalization/LanguageManager.h"
 
@@ -307,7 +308,10 @@ void MemoryDock::initializeToolbar()
                 flushProcessComboDeferredCommit();
             }
             });
-    m_processCombo->setMinimumWidth(280);
+    // 最小宽度是整条工具栏乃至整个 Dock 的横向下限：Dock 不再套外层滚动区之后，
+    // 窄于这个下限的部分会被右侧直接裁掉。进程名靠可输入的过滤框和 stretch 拿到富余空间，
+    // 所以这里只保留够读一个短进程名的宽度；显式最小宽度也会盖过下拉项文本撑出的 sizeHint。
+    m_processCombo->setMinimumWidth(160);
     m_processCombo->setToolTip("选择目标进程。可直接输入过滤：进程名和 PID 都能匹配。");
 
     // 可输入 + 包含式补全。几百个进程用纯滚动的下拉是选不出来的，而同名进程多的
@@ -386,6 +390,11 @@ void MemoryDock::initializeTabs()
     // 全部子页面统一由 QTabWidget 承载。
     m_tabWidget = new QTabWidget(this);
     m_tabWidget->setDocumentMode(true);
+    // 加固：QTabWidget 的页面栈会对所有页（含未显示、被隐藏的旧页）的最小高度取最大值。
+    // 每个页面本身都已经带内部滚动壳（见 ks::ui::EnablePageInnerScroll），这里再把页签控件
+    // 的最小尺寸隔离掉，这样以后有人新增页签却忘了包壳，表现为页内被裁剪，
+    // 而不是把 Dock 的头部、工具栏和状态栏挤坏。
+    ks::ui::IsolateMinimumSize(m_tabWidget);
     m_rootLayout->addWidget(m_tabWidget, 1);
 
     initializeProcessModuleTab();
@@ -693,7 +702,9 @@ void MemoryDock::initializeProcessModuleTab()
 
     // Tab1：进程与模块。
     m_tabProcessModule = new QWidget(m_tabWidget);
-    QVBoxLayout* tabLayout = new QVBoxLayout(m_tabProcessModule);
+    // 页面自带内部滚动壳：内容放不下时在页内滚动，不把 Dock 撑高。页面指针身份不变。
+    QWidget* const tabContent = ks::ui::EnablePageInnerScroll(m_tabProcessModule);
+    QVBoxLayout* tabLayout = new QVBoxLayout(tabContent);
     tabLayout->setContentsMargins(6, 6, 6, 6);
     tabLayout->setSpacing(6);
 
@@ -823,7 +834,9 @@ void MemoryDock::initializeMemoryRegionTab()
 
     // Tab2：内存区域。
     m_tabRegions = new QWidget(m_tabWidget);
-    QVBoxLayout* tabLayout = new QVBoxLayout(m_tabRegions);
+    // 页面自带内部滚动壳：内容放不下时在页内滚动，不把 Dock 撑高。页面指针身份不变。
+    QWidget* const tabContent = ks::ui::EnablePageInnerScroll(m_tabRegions);
+    QVBoxLayout* tabLayout = new QVBoxLayout(tabContent);
     tabLayout->setContentsMargins(6, 6, 6, 6);
     tabLayout->setSpacing(6);
 
@@ -896,7 +909,9 @@ void MemoryDock::initializeMemorySearchTab()
 
     // Tab3：内存搜索。
     m_tabSearch = new QWidget(m_tabWidget);
-    QVBoxLayout* tabLayout = new QVBoxLayout(m_tabSearch);
+    // 页面自带内部滚动壳：内容放不下时在页内滚动，不把 Dock 撑高。页面指针身份不变。
+    QWidget* const tabContent = ks::ui::EnablePageInnerScroll(m_tabSearch);
+    QVBoxLayout* tabLayout = new QVBoxLayout(tabContent);
     tabLayout->setContentsMargins(6, 6, 6, 6);
     tabLayout->setSpacing(6);
 
@@ -1057,7 +1072,9 @@ void MemoryDock::initializeMemoryViewerTab()
 
     // Tab4：内存查看器。
     m_tabViewer = new QWidget(m_tabWidget);
-    QVBoxLayout* tabLayout = new QVBoxLayout(m_tabViewer);
+    // 页面自带内部滚动壳：内容放不下时在页内滚动，不把 Dock 撑高。页面指针身份不变。
+    QWidget* const tabContent = ks::ui::EnablePageInnerScroll(m_tabViewer);
+    QVBoxLayout* tabLayout = new QVBoxLayout(tabContent);
     tabLayout->setContentsMargins(6, 6, 6, 6);
     tabLayout->setSpacing(6);
 
@@ -1117,7 +1134,9 @@ void MemoryDock::initializeBreakpointBookmarkTab()
 
     // Tab5：断点与书签。
     m_tabBpBookmark = new QWidget(m_tabWidget);
-    QVBoxLayout* tabLayout = new QVBoxLayout(m_tabBpBookmark);
+    // 页面自带内部滚动壳：内容放不下时在页内滚动，不把 Dock 撑高。页面指针身份不变。
+    QWidget* const tabContent = ks::ui::EnablePageInnerScroll(m_tabBpBookmark);
+    QVBoxLayout* tabLayout = new QVBoxLayout(tabContent);
     tabLayout->setContentsMargins(6, 6, 6, 6);
     tabLayout->setSpacing(6);
 
@@ -1222,7 +1241,9 @@ void MemoryDock::initializeDriverMemoryRwTab()
 
     // Tab6：驱动内存读写，和原 Win32 查看器分离，避免编辑即写入真实内存。
     m_tabDriverMemoryRw = new QWidget(m_tabWidget);
-    QVBoxLayout* tabLayout = new QVBoxLayout(m_tabDriverMemoryRw);
+    // 页面自带内部滚动壳：内容放不下时在页内滚动，不把 Dock 撑高。页面指针身份不变。
+    QWidget* const tabContent = ks::ui::EnablePageInnerScroll(m_tabDriverMemoryRw);
+    QVBoxLayout* tabLayout = new QVBoxLayout(tabContent);
     tabLayout->setContentsMargins(6, 6, 6, 6);
     tabLayout->setSpacing(6);
 

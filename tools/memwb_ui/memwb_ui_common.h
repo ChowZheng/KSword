@@ -131,4 +131,7 @@ namespace memwb_test
     void RunSegmentedTests();
     void RunCachedRangeTests();
     void RunIconAliasTests();
+
+    // 十六进制自适应行宽/最小高度/Ctrl+滚轮缩放（画布层），定义在 memwb_ui_tests.RowFit.cpp。
+    void RunRowFitTests();
 }

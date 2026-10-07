@@ -1,4 +1,5 @@
 #include "MemoryDock.Internal.h"
+#include "../UI/AdaptivePageScroll.h" // ks::ui::EnablePageInnerScroll：页内滚动壳。
 #include "../UI/TableInteractionSupport.h"
 #include "../UI/VisibleTableWidget.h"
 #include "../UI/DetailLayoutRegistry.h"
@@ -364,7 +365,9 @@ void MemoryDock::initializeProcessMemoryEvidenceTab()
         << eol;
 
     m_tabProcessMemoryEvidence = new QWidget(m_tabWidget);
-    QVBoxLayout* tabLayout = new QVBoxLayout(m_tabProcessMemoryEvidence);
+    // 页面自带内部滚动壳：内容放不下时在页内滚动，不把 Dock 撑高。页面指针身份不变。
+    QWidget* const tabContent = ks::ui::EnablePageInnerScroll(m_tabProcessMemoryEvidence);
+    QVBoxLayout* tabLayout = new QVBoxLayout(tabContent);
     tabLayout->setContentsMargins(6, 6, 6, 6);
     tabLayout->setSpacing(6);
 

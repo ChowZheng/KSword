@@ -334,6 +334,34 @@ namespace ks::ui
         // A copied snapshot for pointer-bookmark forms, with strict owner identity.
         std::vector<ksword::memwb::ModuleRecord> pointerChainModules();
 
+        // PrimaryModuleState：primaryModule 的三态结果。
+        //   Unavailable：没有"起始模块"可言——物理范围、未附加进程、目录所有者不符、
+        //                目录为空/加载失败、或目录里没有记录；调用方退回当前插入点，不空等；
+        //   Loading：目录正在为当前所有者加载，调用方应挂起，等 modulesChanged/modulesFailed 再问；
+        //   Ready：record 里是起始模块。
+        enum class PrimaryModuleState
+        {
+            Unavailable = 0,
+            Loading,
+            Ready,
+        };
+
+        // PrimaryModuleResult：primaryModule 的返回值。
+        struct PrimaryModuleResult
+        {
+            // state：见 PrimaryModuleState。
+            PrimaryModuleState state = PrimaryModuleState::Unavailable;
+            // record：state==Ready 时的起始模块记录（拷贝，不指向目录内部）。
+            ksword::memwb::ModuleRecord record;
+        };
+
+        // primaryModule：当前范围的"起始模块"——反汇编/文本/对比三个子页在十六进制没有选区时
+        // 自动落到的位置。进程范围：先按 processNameHint（宿主查到的进程名，可空）不区分大小写命中，
+        // 没命中取名字以 .exe 结尾的最低基址模块，再不行取最低基址模块；内核范围：先取 ntoskrnl.exe，
+        // 没有就取最低基址模块；物理范围没有模块。只读当前会话快照（不触发 DDMA 代次拉取），
+        // 不发起枚举（枚举由身份变更/进入内核范围时的既有逻辑负责）。
+        PrimaryModuleResult primaryModule(const QString& processNameHint) const;
+
         // evaluate：求值一条地址表达式（回车提交时调用，绝不逐键调用）。
         // 内部用当前会话 + 两个模块目录 + 一个包装 services.readPointer 的读取器
         // 调用 SessionAddressResolver::EvaluateForSession。

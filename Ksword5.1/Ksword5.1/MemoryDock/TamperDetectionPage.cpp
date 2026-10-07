@@ -1,6 +1,7 @@
 #include "TamperDetectionPage.h"
 
 #include "../ArkDriverClient/ArkDriverClient.h"
+#include "../UI/AdaptivePageScroll.h"
 #include "../UI/VisibleTableWidget.h"
 #include "../theme.h"
 #include "../../../shared/evidence/NumericTextParse.h"
@@ -371,7 +372,10 @@ namespace ksword::memory_dock
 
     void TamperDetectionPage::buildUi()
     {
-        QVBoxLayout* rootLayout = new QVBoxLayout(this);
+        // 页面自带内部滚动壳：七个读取路径复选框排成一行时最小宽度接近一千像素，
+        // 窄 Dock 下在页内横向/纵向滚动，不再把整个内存 Dock 撑宽或撑高。
+        // 根布局建在壳的内容容器上。
+        QVBoxLayout* rootLayout = new QVBoxLayout(ks::ui::EnablePageInnerScroll(this));
         rootLayout->setContentsMargins(8, 8, 8, 8);
         rootLayout->setSpacing(8);
 

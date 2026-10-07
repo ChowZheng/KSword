@@ -42,6 +42,15 @@ namespace wpj6_test
     void RunEntry3bTests();
     void RunNarrowTests();
     void RunDarkLabelTests();
+    void RunChromeTests();
+    // 十六进制自适应（行宽/缩放/视图菜单/持久化）与 Dock 页面自适应。
+    // RunRowFitTests 按中文文字找菜单项，必须排在 RunI18nSmokeTest 之前；
+    // RunRowFitI18nTests 要在 en-US 下检查无汉字，必须排在 RunI18nSmokeTest 之后。
+    void RunRowFitTests();
+    void RunRowFitI18nTests();
+    void RunDockFillTests();
+    // 反汇编/文本/对比三个子页的自动跳转（跟随十六进制选区/起始模块）。
+    void RunSubPageTests();
 
     namespace
     {
@@ -293,9 +302,15 @@ int main(int argc, char** argv)
     wpj6_test::RunEntry3bTests();
     wpj6_test::RunNarrowTests();
     wpj6_test::RunDarkLabelTests();
+    wpj6_test::RunChromeTests();
+    wpj6_test::RunRowFitTests();
+    wpj6_test::RunDockFillTests();
+    wpj6_test::RunSubPageTests();
     wpj6_test::RunVisualTests();
     // 必须排在最后：initialize("en-US") 之后进程里再也不会切回中文。
     wpj6_test::RunI18nSmokeTest();
+    // 依赖 en-US 已经初始化：检查英文界面下视图菜单/徽标/悬停说明里没有汉字。
+    wpj6_test::RunRowFitI18nTests();
 
     std::printf("wpJ6_tests: %d checks, %d failures\n", wpj6_test::g_checks, wpj6_test::g_failures);
     return (wpj6_test::g_failures == 0) ? 0 : 1;

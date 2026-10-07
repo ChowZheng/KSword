@@ -315,6 +315,11 @@ namespace ks::ui
                     true);
             }
         });
+
+        // 子页自动跳转：模块目录就绪（modulesChanged）或失败（modulesFailed）时，重试因目录还在加载
+        // 而挂起的跟随请求（实现与规则见 MemoryWorkbenchView.SubPages.cpp）。
+        connect(target_.get(), &WorkbenchTarget::modulesChanged, this, &MemoryWorkbenchView::onTargetModulesChanged);
+        connect(target_.get(), &WorkbenchTarget::modulesFailed, this, &MemoryWorkbenchView::onTargetModulesChanged);
     }
 
     // 析构：显式先断开管线之间互相持有的"非拥有指针"，再进入成员的隐式销毁。
@@ -583,6 +588,9 @@ namespace ks::ui
         {
             hexPane_->inspector()->setVisible(true);
         }
+        // 十六进制画布的行宽（自动/手选）、分组、字号偏好；自适应行宽只在这条路径里默认打开
+        // （见 MemoryWorkbenchView.HexPrefs.cpp），不调 loadSettings 的宿主/夹具仍是固定 16 字节行宽。
+        loadHexPreferences();
         // 侧栏：已存的可见性/宽度只是"偏好"（第二轮复核 B1）。可见性经统一裁决入口
         // 落地（窄窗口仍可折叠一个想要可见的侧栏，但绝不会把已存为隐藏的侧栏放出来；
         // 内嵌模式恒隐藏）；宽度只记下来，等分割条有了真实宽度再落——loadSettings
@@ -690,6 +698,8 @@ namespace ks::ui
         {
             SaveLiveRefresh(liveRefreshCheckBox_->isChecked());
         }
+        // 十六进制画布偏好：自动状态总是存，bytesPerRow 只在非自动时才存（见 HexPrefs.cpp 文件头）。
+        saveHexPreferences();
     }
 
     // installLeaveGuard：组合两条守卫，注册给 target_。①写控制器是否有未提交
@@ -1016,14 +1026,12 @@ namespace ks::ui
         if (auto* s = CreateWorkbenchShortcut(WorkbenchActionId::OpenInDisasm, this))
         {
             connect(s, &QShortcut::activated, this, [this]() {
+                // Ctrl+D：在反汇编页打开十六进制选区的起点。旧实现先调 onDisasmRequestHexLocate（把十六进制
+                // 的选区折叠成 1 字节并切回十六进制页），再切到反汇编页，再 jumpTo 一次（重复压后退栈）；
+                // 现在统一走 showSubPageAt：不折叠选区、只定位一次。
                 if (hexPane_ != nullptr && subTabStack_ != nullptr)
                 {
-                    onDisasmRequestHexLocate(hexPane_->insertionAddress());
-                    subTabStack_->setCurrentIndex(1);
-                    if (disasmView_ != nullptr)
-                    {
-                        disasmView_->jumpTo(hexPane_->insertionAddress());
-                    }
+                    showSubPageAt(1, hexPane_->selectionStart());
                 }
             });
         }

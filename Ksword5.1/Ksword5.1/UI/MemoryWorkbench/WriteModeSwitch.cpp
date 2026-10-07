@@ -11,11 +11,14 @@
 #include "../../theme.h"
 
 #include <QEvent>
+#include <QFontMetrics>
 #include <QIcon>
 #include <QKeyEvent>
 #include <QPainter>
 #include <QPainterPath>
 #include <QToolButton>
+
+#include <algorithm>
 
 namespace ks::ui
 {
@@ -27,6 +30,72 @@ namespace ks::ui
         constexpr int kCapsuleHeight = 28;
         // kButtonInset：按钮离胶囊边框的内边距。
         constexpr int kButtonInset = 3;
+        // kHalfPadding：每一半里图标/文字离左右边缘的内边距。
+        constexpr int kHalfPadding = 8;
+        // kIconTextGap：图标与文字之间的间距。
+        constexpr int kIconTextGap = 4;
+
+        // CapsuleHalfButton：胶囊里的一半按钮，自己画"图标 + 文字"，完全不经过 QSS 样式。
+        // 为什么自绘：主程序全局样式表给所有 QToolButton 铺了带边框、悬停整块填强调色的
+        // `!important` 规则；胶囊底色/高亮由外层 WriteModeSwitch 画，这里如果再让样式引擎画
+        // 一层按钮底板，左半边就会在真窗口里变成一块溢出胶囊的蓝色方块（真机反馈的 BUG）。
+        // 自绘后不管全局规则怎么写都碰不到它；图标仍是 QToolButton 的图标槽位，
+        // 所以 SvgThemeIconManager 的全局主题着色照常认得出来。
+        //
+        // "当前模式"用按钮的 checked 状态表示（由 WriteModeSwitch::setMode 设置）。点击不会自己
+        // 翻转 checked：切换请不请得动是调用方（可能弹三选一、可能拒绝）说了算，高亮只能由
+        // setMode 回写，所以 nextCheckState 什么都不做，clicked 信号照常发出。
+        class CapsuleHalfButton final : public QToolButton
+        {
+        public:
+            explicit CapsuleHalfButton(QWidget* parent) : QToolButton(parent)
+            {
+                setCheckable(true);
+            }
+
+        protected:
+            // nextCheckState：点击时本来会翻转 checked，这里故意不翻转，见类注释。
+            void nextCheckState() override {}
+
+            // paintEvent：图标 + 文字水平居中；当前模式用主文字色，另一半用次文字色，悬停时提亮。
+            void paintEvent(QPaintEvent* /*event*/) override
+            {
+                QPainter painter(this);
+                painter.setRenderHint(QPainter::Antialiasing);
+                painter.setFont(font());
+
+                const QFontMetrics metrics(font());
+                const QSize iconPixelSize = iconSize();
+                // availableTextWidth：扣掉左右内边距与图标之后文字最多能占的宽度，放不下就右省略。
+                const int availableTextWidth =
+                    (std::max)(0, width() - kHalfPadding * 2 - iconPixelSize.width() - kIconTextGap);
+                const QString shownText = metrics.elidedText(text(), Qt::ElideRight, availableTextWidth);
+                const int textWidth = metrics.horizontalAdvance(shownText);
+                const int contentWidth = iconPixelSize.width() + kIconTextGap + textWidth;
+                const int left = (std::max)(kHalfPadding / 2, (width() - contentWidth) / 2);
+
+                const QIcon::Mode iconMode = isEnabled() ? QIcon::Normal : QIcon::Disabled;
+                icon().paint(
+                    &painter,
+                    QRect(left, (height() - iconPixelSize.height()) / 2, iconPixelSize.width(), iconPixelSize.height()),
+                    Qt::AlignCenter,
+                    iconMode);
+
+                const bool active = isChecked();
+                QColor textColor = (active || underMouse())
+                    ? KswordTheme::TextPrimaryColor()
+                    : KswordTheme::TextSecondaryColor();
+                if (!isEnabled())
+                {
+                    textColor = KswordTheme::TextDisabledColor();
+                }
+                painter.setPen(textColor);
+                painter.drawText(
+                    QRect(left + iconPixelSize.width() + kIconTextGap, 0, textWidth + 2, height()),
+                    Qt::AlignVCenter | Qt::AlignLeft | Qt::TextSingleLine,
+                    shownText);
+            }
+        };
     }
 
     WriteModeSwitch::WriteModeSwitch(QWidget* parent)
@@ -36,27 +105,37 @@ namespace ks::ui
         setFocusPolicy(Qt::TabFocus);
         setToolTip(workbench_messages::WriteModeTooltip());
 
-        // 两个图标按钮只负责显示图标与接收点击，胶囊底色由本控件的 paintEvent 画，
-        // 因此按钮本身必须是扁平、无边框，否则会在高亮底色上方再画一层按钮底板。
-        m_immediateButton = new QToolButton(this);
+        // 两个半边按钮只负责"图标 + 文字"的显示与接收点击，胶囊底色由本控件的 paintEvent 画，
+        // 按钮自己也是自绘的（见 CapsuleHalfButton），不会被全局 QToolButton 样式画出底板/边框。
+        // 文字（即时/暂存）与逐半边的悬停说明让用户不必猜图标含义；图标尺寸沿用紧凑图标尺寸，
+        // 但不再用 ApplyCompactIconButtonMetrics 把按钮钉成 28x28（那会把文字挤没）。
+        m_immediateButton = new CapsuleHalfButton(this);
         m_immediateButton->setIcon(QIcon(QStringLiteral(":/Icon/memwb_mode_immediate.svg")));
+        m_immediateButton->setIconSize(KswordTheme::CompactIconSize());
+        m_immediateButton->setText(workbench_messages::WriteModeImmediateLabel());
+        m_immediateButton->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
         m_immediateButton->setAutoRaise(true);
         m_immediateButton->setFocusPolicy(Qt::NoFocus);
-        m_immediateButton->setToolTip(workbench_messages::WriteModeTooltip());
-        KswordTheme::ApplyCompactIconButtonMetrics(m_immediateButton);
+        m_immediateButton->setToolTip(workbench_messages::WriteModeImmediateTooltip());
         connect(m_immediateButton, &QToolButton::clicked, this, [this]() {
             requestToggleToOtherSide(WriteMode::Immediate);
         });
 
-        m_stagedButton = new QToolButton(this);
+        m_stagedButton = new CapsuleHalfButton(this);
         m_stagedButton->setIcon(QIcon(QStringLiteral(":/Icon/memwb_mode_staged.svg")));
+        m_stagedButton->setIconSize(KswordTheme::CompactIconSize());
+        m_stagedButton->setText(workbench_messages::WriteModeStagedLabel());
+        m_stagedButton->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
         m_stagedButton->setAutoRaise(true);
         m_stagedButton->setFocusPolicy(Qt::NoFocus);
-        m_stagedButton->setToolTip(workbench_messages::WriteModeTooltip());
-        KswordTheme::ApplyCompactIconButtonMetrics(m_stagedButton);
+        m_stagedButton->setToolTip(workbench_messages::WriteModeStagedTooltip());
         connect(m_stagedButton, &QToolButton::clicked, this, [this]() {
             requestToggleToOtherSide(WriteMode::StagedThenApply);
         });
+
+        // 初始高亮：默认模式（立即写入）那一半。
+        m_immediateButton->setChecked(true);
+        m_stagedButton->setChecked(false);
 
         layoutButtons();
     }
@@ -73,15 +152,46 @@ namespace ks::ui
             return;
         }
         m_mode = mode;
+        // 半边按钮按"是否当前模式"决定文字颜色，属性变了要让它们重画。
+        m_immediateButton->setChecked(mode == WriteMode::Immediate);
+        m_stagedButton->setChecked(mode == WriteMode::StagedThenApply);
         update();
+    }
+
+    int WriteModeSwitch::halfButtonWidth() const
+    {
+        // 每一半的宽度：左右内边距 + 图标 + 间距 + 两个文字里较宽的那个（两半等宽，
+        // 高亮底色按"外框宽度的一半"画，两半必须等宽才对得上）。
+        const QFontMetrics metrics(font());
+        const int textWidth = (std::max)(
+            metrics.horizontalAdvance(m_immediateButton->text()),
+            metrics.horizontalAdvance(m_stagedButton->text()));
+        return kHalfPadding * 2 + KswordTheme::CompactIconSize().width() + kIconTextGap + textWidth;
     }
 
     QSize WriteModeSwitch::sizeHint() const
     {
-        // 两个紧凑按钮并排加上左右内边距与中间分隔的估算宽度。
-        const QSize buttonSize = KswordTheme::CompactIconButtonSize();
-        const int width = buttonSize.width() * 2 + kButtonInset * 3;
-        return QSize(width, kCapsuleHeight);
+        // 两个半边并排加上左右内边距与中间分隔。
+        return QSize(halfButtonWidth() * 2 + kButtonInset * 3, kCapsuleHeight);
+    }
+
+    QSize WriteModeSwitch::minimumSizeHint() const
+    {
+        // 最小也要放得下两个图标；文字放不下时半边按钮自己做右省略，所以最小宽度只算图标部分。
+        const int iconHalf = kHalfPadding + KswordTheme::CompactIconSize().width() + kHalfPadding;
+        return QSize(iconHalf * 2 + kButtonInset * 3, kCapsuleHeight);
+    }
+
+    bool WriteModeSwitch::event(QEvent* event)
+    {
+        // 运行期整句翻译会直接 setText 改半边按钮的文字（中英文宽度不同）：按钮的 updateGeometry
+        // 会给本控件投递 LayoutRequest，这里据此重算自己的建议尺寸并重新摆放两半。
+        if (event != nullptr && event->type() == QEvent::LayoutRequest)
+        {
+            updateGeometry();
+            layoutButtons();
+        }
+        return QWidget::event(event);
     }
 
     void WriteModeSwitch::requestToggleToOtherSide(const WriteMode clickedSide)
