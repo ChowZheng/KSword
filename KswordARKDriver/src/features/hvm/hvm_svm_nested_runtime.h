@@ -113,7 +113,7 @@ typedef struct _KSW_SVM_NESTED {
     /* Preallocated translation cache and ownership descriptors. */
     KSW_NSHADOW Shadow;
     /* All pool pages are tracked even when preparation fails partway. */
-    KSW_NSHADOW_PAGE Pages[KSW_NSVM_PROBE_PAGES];
+    KSW_NSHADOW_PAGE Pages[KSW_NSHADOW_GENERAL_PAGES];
     /* Prepared physical window, never shared across CPUs. */
     KSW_HVM_PHYS_WINDOW* Window;
     /* Runtime identity map/RAM inventory lifetime is held by the SVM backend. */

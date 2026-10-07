@@ -7,7 +7,7 @@ typedef struct _KSW_SVM_CACHE_ROOT {
     volatile LONG64 Identity;
     KSW_NSVM_CACHE Cache;
     KSW_NSHADOW Shadow;
-    KSW_NSHADOW_PAGE Pages[64];
+    KSW_NSHADOW_PAGE Pages[KSW_NSHADOW_GENERAL_PAGES];
     /* Physical tables and provenance follow a virtual VMCB across host CPU scheduling. */
     ULONG Allocated, LastCpu;
     ULONGLONG InvalidGeneration;

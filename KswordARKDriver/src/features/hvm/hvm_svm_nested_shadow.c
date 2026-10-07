@@ -1,11 +1,34 @@
 /* Preallocated AMD NPT02 construction; all paths are bounded and nonblocking. */
 #include "hvm_svm_nested_shadow.h"
 
+/* Allocate a dependency bit only from IDs absent from every retained source record. */
+static unsigned KswNshadowSourceId(KSW_NSHADOW* Shadow)
+{
+    /* Exhaustion is bounded even if private metadata is inconsistent. */
+    unsigned attempt;
+    /* The cursor rotates within the fixed bitset, not an ever-growing integer namespace. */
+    for (attempt = 0; attempt < KSW_NSHADOW_SOURCE_WORDS; ++attempt) {
+        /* IDs are independent of sorted ledger positions. */
+        unsigned id = Shadow->NextSourceId;
+        /* Wrap only within this live root's privately tracked free IDs. */
+        Shadow->NextSourceId = (id + 1U) % KSW_NSHADOW_SOURCE_WORDS;
+        /* Reusing an ID cannot affect any retained dependency. */
+        if (!(Shadow->SourceIdsUsed[id / 64U] & (1ULL << (id & 63U)))) {
+            /* Publish reservation before adding it to a table's dependencies. */
+            Shadow->SourceIdsUsed[id / 64U] |= 1ULL << (id & 63U);
+            /* No external generation or guard identity is recycled here. */
+            return id;
+        }
+    }
+    /* A full namespace requires the existing conservative synchronization fallback. */
+    return KSW_NSHADOW_SOURCE_WORDS;
+}
+
 /* Track committed source paths without allocating or assuming that NPT12 is immutable. */
 static void KswNshadowTrackSources(KSW_NSHADOW* Shadow, const KSW_NMMU_RESULT* Result)
 {
     /* Each resolved source path has at most four architectural words. */
-    unsigned path, source, low, high, middle, move;
+    unsigned path, source, low, high, middle, move, id;
     /* Synthetic/untracked paths require a conservative reset on the next invalidation. */
     if (!Result->Inner.Count || Result->Inner.Count > 4U) { Shadow->SourceUntracked = 1; return; }
     /* Duplicate source words are stored once for the complete sparse root. */
@@ -34,6 +57,10 @@ static void KswNshadowTrackSources(KSW_NSHADOW* Shadow, const KSW_NMMU_RESULT* R
         }
         /* Overflow loses optimization eligibility, never mapping correctness. */
         if (Shadow->SourceCount == KSW_NSHADOW_SOURCE_WORDS) { Shadow->SourceUntracked = 1; return; }
+        /* Reserve before shifting the ledger so failure leaves existing records intact. */
+        id = KswNshadowSourceId(Shadow);
+        /* Untracked mappings may not survive a later virtual invalidation. */
+        if (id == KSW_NSHADOW_SOURCE_WORDS) { Shadow->SourceUntracked = 1; return; }
         /* Shift pairs together, with no allocation and no sorting work in the VMRUN path. */
         for (move = Shadow->SourceCount; move > source; --move) {
             /* Copy backwards so adjacent source identities cannot be overwritten. */
@@ -52,7 +79,7 @@ static void KswNshadowTrackSources(KSW_NSHADOW* Shadow, const KSW_NMMU_RESULT* R
         /* A snapshot captured before protection/all-CPU flush is not a proof of later immutability. */
         Shadow->SourceProven[source] = 0;
         /* Distinct IDs never exceed the same fixed source budget. */
-        Shadow->SourceId[source] = Shadow->NextSourceId++;
+        Shadow->SourceId[source] = id;
         /* New source words affect the leaf group just committed by the installer. */
         Shadow->Dependencies[Shadow->LastLeafPage][Shadow->SourceId[source] / 64U] |= 1ULL << (Shadow->SourceId[source] & 63U);
         /* Readers never inspect uninitialized array entries. */
@@ -169,6 +196,8 @@ static int KswNshadowTryLarge(KSW_NSHADOW* Shadow,
         KswNshadowClear(Shadow->Pages[child].Words);
         /* Private level metadata distinguishes leaf PAT bit7 from nonleaf/large-page PS. */
         Shadow->Levels[child] = (unsigned char)(3U - level);
+        /* Keep the exact owned parent edge for bounded leaf-group reclamation. */
+        Shadow->ParentPage[child] = (unsigned short)page; Shadow->ParentSlot[child] = (unsigned short)Indices[level];
         Shadow->Pages[page].Words[Indices[level]] = Shadow->Pages[child].Physical | 7ULL;
         page = child;
     }
@@ -226,9 +255,15 @@ unsigned int KswSvmNestedShadowInitialize(KSW_NSHADOW* Shadow,
         unsigned metaPage, word;
         for (metaPage = 0; metaPage < KSW_NSHADOW_MAX_PAGES; ++metaPage) {
             Shadow->Levels[metaPage] = 0;
+            /* Unlinked pages cannot be selected as a reclamation victim. */
+            Shadow->ParentPage[metaPage] = Shadow->ParentSlot[metaPage] = 0xffffU;
             for (word = 0; word < KSW_NSHADOW_SOURCE_WORDS / 64U; ++word) { Shadow->Dependencies[metaPage][word] = 0; }
         }
         Shadow->Levels[0] = 4; Shadow->LastLeafPage = 0;
+        /* Empty lifetimes have no reserved dependency IDs or old clock hand. */
+        for (word = 0; word < KSW_NSHADOW_SOURCE_WORDS / 64U; ++word) { Shadow->SourceIdsUsed[word] = 0; }
+        /* Page zero is never an eviction candidate. */
+        Shadow->ReclaimCursor = 1;
     }
     /* No guest entry may observe allocator residue. */
     KswNshadowClear(Pages[0].Words);
@@ -256,9 +291,15 @@ unsigned int KswSvmNestedShadowReset(KSW_NSHADOW* Shadow)
         unsigned metaPage, word;
         for (metaPage = 0; metaPage < KSW_NSHADOW_MAX_PAGES; ++metaPage) {
             Shadow->Levels[metaPage] = 0;
+            /* Reset disconnects all old reverse-edge metadata. */
+            Shadow->ParentPage[metaPage] = Shadow->ParentSlot[metaPage] = 0xffffU;
             for (word = 0; word < KSW_NSHADOW_SOURCE_WORDS / 64U; ++word) { Shadow->Dependencies[metaPage][word] = 0; }
         }
         Shadow->Levels[0] = 4; Shadow->LastLeafPage = 0;
+        /* No disconnected source ID remains reserved in the next epoch. */
+        for (word = 0; word < KSW_NSHADOW_SOURCE_WORDS / 64U; ++word) { Shadow->SourceIdsUsed[word] = 0; }
+        /* A new root starts a fresh bounded second-chance traversal. */
+        Shadow->ReclaimCursor = 1;
     }
     /* Resource ownership remains unchanged. */
     return KSW_NSHADOW_OK;
@@ -357,6 +398,8 @@ unsigned int KswSvmNestedShadowInstall(KSW_NSHADOW* Shadow, const KSW_NMMU_RESUL
         KswNshadowClear(Shadow->Pages[child].Words);
         /* Private level metadata distinguishes leaf PAT bit7 from nonleaf/large-page PS. */
         Shadow->Levels[child] = (unsigned char)(3U - level);
+        /* Record only the forward edge that is about to be published. */
+        Shadow->ParentPage[child] = (unsigned short)page; Shadow->ParentSlot[child] = (unsigned short)indices[level];
         /* The owner is outside VMRUN; publication completes before the next entry. */
         Shadow->Pages[page].Words[indices[level]] = Shadow->Pages[child].Physical | 7ULL;
         /* Continue down the newly constructed suffix. */
@@ -396,6 +439,138 @@ unsigned int KswSvmNestedShadowInstall(KSW_NSHADOW* Shadow, const KSW_NMMU_RESUL
     Shadow->LastLeafPage = page;
     KswNshadowTrackSources(Shadow, Result);
     return KSW_NSHADOW_OK;
+}
+
+/* Drop provenance only after no remaining table group depends on its stable ID. */
+static void KswNshadowPruneSources(KSW_NSHADOW* Shadow)
+{
+    /* This fixed-size scratch is bounded to 512 bytes, including the expanded ledger. */
+    KSW_SVM_U64 live[KSW_NSHADOW_SOURCE_WORDS / 64U] = {0};
+    /* Compaction preserves sorted addresses and stable IDs of surviving sources. */
+    unsigned page, word, source, kept = 0;
+    /* Accumulate exact group dependencies without examining guest memory. */
+    for (page = 0; page < Shadow->Used; ++page) {
+        /* Upper-level large leaves own provenance just like ordinary PT groups. */
+        for (word = 0; word < KSW_NSHADOW_SOURCE_WORDS / 64U; ++word) { live[word] |= Shadow->Dependencies[page][word]; }
+    }
+    /* Remove dead records without renumbering any still-live dependency. */
+    for (source = 0; source < Shadow->SourceCount; ++source) {
+        /* Reclaim validates all IDs before changing the hardware tree. */
+        unsigned id = Shadow->SourceId[source];
+        /* Free only IDs no remaining group can observe. */
+        if (!(live[id / 64U] & (1ULL << (id & 63U)))) {
+            /* A later insertion initializes new provenance before reusing this private bit. */
+            Shadow->SourceIdsUsed[id / 64U] &= ~(1ULL << (id & 63U)); continue;
+        }
+        /* Move every member of the source record together. */
+        Shadow->SourceAddress[kept] = Shadow->SourceAddress[source]; Shadow->SourceValue[kept] = Shadow->SourceValue[source];
+        /* The actual guest-address guard identity is unchanged for surviving records. */
+        Shadow->SourceProven[kept] = Shadow->SourceProven[source]; Shadow->SourceId[kept] = id; ++kept;
+    }
+    /* Old trailing records are outside the published ledger. */
+    Shadow->SourceCount = kept;
+}
+
+/* Reuse one PT under an existing PD; uncommon missing upper levels retain full-reset fallback. */
+unsigned int KswSvmNestedShadowReclaim(KSW_NSHADOW* Shadow, KSW_SVM_U64 Gpa)
+{
+    /* No untrusted pointer, allocation or waiting participates in this operation. */
+    unsigned indices[3], parent = 0, level, pass, attempt, source;
+    /* Incomplete provenance cannot establish which surviving mappings remain reusable. */
+    if (!Shadow || !Shadow->Pages || Shadow->SourceUntracked) { return KSW_NSHADOW_FULL; }
+    /* Refuse corrupt geometry and epoch exhaustion before disconnecting a page. */
+    if (Shadow->Used < 2U || Shadow->Used > Shadow->Capacity || Shadow->Capacity > KSW_NSHADOW_MAX_PAGES ||
+        Shadow->SourceCount > KSW_NSHADOW_SOURCE_WORDS || Shadow->Epoch == ~0ULL ||
+        (Gpa & ~(Shadow->AddressMask | 4095ULL))) { return KSW_NSHADOW_INVALID; }
+    /* Every dependency ID must be bounded before later pruning indexes a bitset. */
+    for (source = 0; source < Shadow->SourceCount; ++source) {
+        /* Invalid provenance is a retained fault, not an opportunity to evict mappings. */
+        if (Shadow->SourceId[source] >= KSW_NSHADOW_SOURCE_WORDS) { return KSW_NSHADOW_INVALID; }
+    }
+    /* The first three indices identify the existing target PD and its empty slot. */
+    for (level = 0; level < 3U; ++level) { indices[level] = (unsigned)((Gpa >> (39U - 9U * level)) & 511ULL); }
+    /* Upper tables cannot be evicted by this PT-only policy. */
+    for (level = 0; level < 2U; ++level) {
+        /* Read only a private root-owned entry. */
+        KSW_SVM_U64 entry = Shadow->Pages[parent].Words[indices[level]];
+        /* A new PML4/PDPT branch needs the old bounded whole-root fallback. */
+        unsigned child;
+        /* Missing ancestors are ordinary capacity pressure, not corrupt ownership. */
+        if (!entry) { return KSW_NSHADOW_FULL; }
+        /* Large leaves are not table pointers. */
+        if ((entry & ~Shadow->AddressMask & ~0x20ULL) != 7ULL) { return KSW_NSHADOW_INVALID; }
+        /* Preserve the installer's strictly forward ownership edges. */
+        child = KswNshadowFind(Shadow, entry & Shadow->AddressMask);
+        /* Corrupt or wrong-level edges must never be traversed. */
+        if (child <= parent || child == Shadow->Capacity || Shadow->Levels[child] != 3U - level) { return KSW_NSHADOW_INVALID; }
+        /* The next iteration still refers only to the verified allocation ledger. */
+        parent = child;
+    }
+    /* Reclamation installs an empty PT; never overwrite an existing table or large leaf. */
+    if (Shadow->Pages[parent].Words[indices[2]]) { return KSW_NSHADOW_FULL; }
+    /* At most two complete bounded scans implement accessed-bit second chance. */
+    for (pass = 0; pass < 2U; ++pass) {
+        /* No polling or waiting occurs even if every table was recently accessed. */
+        for (attempt = 1; attempt < Shadow->Used; ++attempt) {
+            /* The clock cursor never points at the root or beyond the high-water mark. */
+            unsigned victim, oldParent, oldSlot, word;
+            /* The captured parent entry remains a private physical-table identity. */
+            KSW_SVM_U64 edge;
+            /* Wrap within this root's owned pages. */
+            if (!Shadow->ReclaimCursor || Shadow->ReclaimCursor >= Shadow->Used) { Shadow->ReclaimCursor = 1; }
+            /* Advance even when a page is ineligible. */
+            victim = Shadow->ReclaimCursor++;
+            /* Only a PT whose index keeps the new edge forward can be reused. */
+            if (Shadow->Levels[victim] != 1U || victim <= parent) { continue; }
+            /* Record the original edge before any page is disconnected. */
+            oldParent = Shadow->ParentPage[victim]; oldSlot = Shadow->ParentSlot[victim];
+            /* A forged reverse edge cannot authorize clearing another table. */
+            if (oldParent >= victim || oldSlot >= 512U || Shadow->Levels[oldParent] != 2U) { return KSW_NSHADOW_INVALID; }
+            /* Verify that the hardware tree still contains the precise reverse edge. */
+            edge = Shadow->Pages[oldParent].Words[oldSlot];
+            /* Hardware A is the only mutable parent bit admitted by the installer. */
+            if ((edge & ~0x20ULL) != (Shadow->Pages[victim].Physical | 7ULL)) { return KSW_NSHADOW_INVALID; }
+            /* Recently accessed groups get one chance before the mandatory flush renews observation. */
+            if (!pass && (edge & 0x20ULL)) {
+                /* This affects only private NPT02 observation, not guest NPT12 A/D accounting. */
+                Shadow->Pages[oldParent].Words[oldSlot] = edge & ~0x20ULL; Shadow->FlushPending = 1; continue;
+            }
+            /* Disconnect before clearing so no future entry can reach recycled contents. */
+            Shadow->Pages[oldParent].Words[oldSlot] = 0;
+            /* No retained source proof may describe leaves removed from this PT. */
+            KswNshadowClear(Shadow->Pages[victim].Words);
+            /* Remove exactly this group's dependency edges. */
+            for (word = 0; word < KSW_NSHADOW_SOURCE_WORDS / 64U; ++word) { Shadow->Dependencies[victim][word] = 0; }
+            /* Provenance of every other table is retained, including shared ancestors. */
+            KswNshadowPruneSources(Shadow);
+            /* Bind this already allocated physical page to the new empty region. */
+            Shadow->ParentPage[victim] = (unsigned short)parent; Shadow->ParentSlot[victim] = (unsigned short)indices[2];
+            /* Only an empty permissive nonleaf is published; no data permission is widened. */
+            Shadow->Pages[parent].Words[indices[2]] = Shadow->Pages[victim].Physical | 7ULL;
+            /* The previous resolved candidate must be discarded and freshly walked. */
+            ++Shadow->Epoch; Shadow->FlushPending = 1;
+            /* All physical pages remain owned until complete native release. */
+            return KSW_NSHADOW_OK;
+        }
+    }
+    /* Rare geometry with no eligible forward PT still uses the original safe reset. */
+    return KSW_NSHADOW_FULL;
+}
+
+/* Division-before-multiplication keeps processor-count budget checks free of overflow. */
+unsigned KswSvmNestedShadowBudget(unsigned MaxPages, unsigned IdentityPages,
+    unsigned Cpus, unsigned LocalPages, unsigned RequestedRoots, unsigned SharedPages)
+{
+    /* Invalid capacities cannot turn into an apparent free allocation budget. */
+    unsigned available;
+    /* Check immutable/clone/split tables before calculating CPU-local pools. */
+    if (!LocalPages || !SharedPages || IdentityPages > MaxPages) { return 0; }
+    /* Bound the multiplication before performing it. */
+    if (Cpus > (MaxPages - IdentityPages) / LocalPages) { return 0; }
+    /* Shared roots consume only the budget remaining after every fallback CPU pool. */
+    available = (MaxPages - IdentityPages - Cpus * LocalPages) / SharedPages;
+    /* Registry saturation retains the preexisting per-CPU fallback behavior. */
+    return available < RequestedRoots ? available : RequestedRoots;
 }
 
 /* Hardware permission tightening affects only aliases of the newly armed/revoked host pages. */

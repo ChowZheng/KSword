@@ -100,7 +100,7 @@ VOID KswordSvmNestedRelease(KSW_SVM_CPU* Cpu)
     /* Retain everything if the owner could still issue a nested VMRUN. */
     if (KswordSvmNestedBusy(Cpu)) { return; }
     /* Reverse the complete allocation set, including unused shadow pages. */
-    for (index = KSW_NSVM_PROBE_PAGES; index != 0;) {
+    for (index = KSW_NSHADOW_GENERAL_PAGES; index != 0;) {
         /* Descend through the allocation ledger, not hardware pointers. */
         --index;
         /* Free every successfully allocated page exactly once. */
@@ -133,9 +133,12 @@ NTSTATUS KswordSvmNestedPrepare(KSW_SVM_CPU* Cpu, ULONG Index)
     /* Validate both subranges without trusting allocator alignment implicitly. */
     ULONGLONG mapBase;
     /* Populate the fixed-capacity pool without runtime allocation. */
-    ULONG page;
+    ULONG page, pageCount;
     /* Current backend lifetime holds the shared NPT throughout this preparation. */
     KSW_SVM_STATE* state = Cpu->Runtime->BackendContext;
+    /* Bounded probes retain 64 pages; ordinary nested OS execution uses the full 256-page pool. */
+    pageCount = (state->PreparedFlags & KSWORD_ARK_HVM_CONTROL_FLAG_ENABLE_NESTED_SVM) ?
+        KSW_NSHADOW_GENERAL_PAGES : KSW_NSVM_PROBE_PAGES;
     /* Do not replace an existing owner. */
     if (Cpu->Nested) { return STATUS_ALREADY_REGISTERED; }
     /* Allocate snapshots/ledger from nonpaged memory. */
@@ -186,7 +189,7 @@ NTSTATUS KswordSvmNestedPrepare(KSW_SVM_CPU* Cpu, ULONG Index)
     /* Release and native return always retain the original allocation's identity. */
     nested->Vmcb01 = Cpu->Guest; nested->Vmcb01Pa = Cpu->GuestPa;
     /* Every shadow table must be independently aligned/physically contiguous. */
-    for (page = 0; page < KSW_NSVM_PROBE_PAGES; ++page) {
+    for (page = 0; page < pageCount; ++page) {
         /* Keep each allocation in the ledger before deriving its address. */
         nested->Pages[page].Words = MmAllocateContiguousMemory(4096, highest);
         /* A partial pool cannot admit nested execution. */
@@ -195,7 +198,7 @@ NTSTATUS KswordSvmNestedPrepare(KSW_SVM_CPU* Cpu, ULONG Index)
         nested->Pages[page].Physical = (ULONGLONG)MmGetPhysicalAddress(nested->Pages[page].Words).QuadPart;
     }
     /* The portable builder validates alignment, duplicate ownership and address width. */
-    if (KswSvmNestedShadowInitialize(&nested->Shadow, nested->Pages, KSW_NSVM_PROBE_PAGES,
+    if (KswSvmNestedShadowInitialize(&nested->Shadow, nested->Pages, pageCount,
         Cpu->Caps.PhysicalBits) != KSW_NSHADOW_OK) { return STATUS_DATA_ERROR; }
     /* No SVM instruction has executed yet. */
     return STATUS_SUCCESS;
