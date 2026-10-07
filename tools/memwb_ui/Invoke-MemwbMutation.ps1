@@ -63,6 +63,10 @@ robocopy (Join-Path $repo 'Ksword5.1\Ksword5.1\MemoryDock') (Join-Path $root 'Ks
 # 项目工具库头文件 + 日志实现（Win32 + std only）：MemoryDock 侧生产审计接收器的夹具要链接真实日志仓库。
 robocopy (Join-Path $repo 'Ksword5.1\Ksword5.1') (Join-Path $root 'Ksword5.1\Ksword5.1') '*.h' '*.hpp' /E /XD x64 Resource languages .vs Generated /NFL /NDL /NJH /NJS /NP /R:1 /W:1 | Out-Null
 robocopy (Join-Path $repo 'Ksword5.1\Ksword5.1\ksword\log') (Join-Path $root 'Ksword5.1\Ksword5.1\ksword\log') '*.cpp' /E /NFL /NDL /NJH /NJS /NP /R:1 /W:1 | Out-Null
+if ($Pkg -eq 'wpUI') {
+    # 画布层包的图标别名测试要读主工程的 Ksword5.qrc（相对仓库根），副本里要有这一份。
+    robocopy (Join-Path $repo 'Ksword5.1\Ksword5.1') (Join-Path $root 'Ksword5.1\Ksword5.1') 'Ksword5.qrc' /NFL /NDL /NJH /NJS /NP /R:1 /W:1 | Out-Null
+}
 if ($Pkg -eq 'wpH' -or $Pkg -eq 'wpJ6') {
     # 这两个夹具链接 CodeEditorWidget 依赖链，需要 Zydis.c。
     robocopy (Join-Path $repo 'third_party\zydis') (Join-Path $root 'third_party\zydis') /E /NFL /NDL /NJH /NJS /NP /R:1 /W:1 | Out-Null
@@ -88,7 +92,9 @@ if (-not $Control) {
 # 构建并运行：MEMWB_OUT 只放进本次 cmd 命令行；超时只杀自己启动的进程树。
 $out = Join-Path $root 'out'
 $log = Join-Path $root 'run.log'
-$cmdLine = "cd /d `"$root`" && set `"MEMWB_OUT=$out`"&& call tools\memwb_ui\$Pkg\build-$Pkg-tests.cmd"
+# wpUI 是"画布层"包（tools\memwb_ui\memwb_ui_tests*.cpp，构建脚本在 memwb_ui 根目录而不是子目录）。
+$buildScript = if ($Pkg -eq 'wpUI') { 'tools\memwb_ui\build-memwb-ui-tests.cmd' } else { "tools\memwb_ui\$Pkg\build-$Pkg-tests.cmd" }
+$cmdLine = "cd /d `"$root`" && set `"MEMWB_OUT=$out`"&& call $buildScript"
 $proc = Start-Process -FilePath 'cmd.exe' -ArgumentList '/c', $cmdLine -PassThru -NoNewWindow -RedirectStandardOutput $log -RedirectStandardError (Join-Path $root 'run.err')
 # 必须先取一次 Handle 缓存进程句柄，否则进程退出后 ExitCode 可能读到空值（PowerShell 已知坑）。
 $null = $proc.Handle
@@ -125,6 +131,7 @@ $finalPass = @{
     wpG = 'wpG_tests: all \d+ checks passed'
     wpH = '\[wpH\] total checks=\d+ failures=0'
     wpI = 'memwb_ui_tests: \d+ checks, 0 failures'
+    wpUI = 'memwb_ui_tests: \d+ checks, 0 failures'
 }
 # 装配层夹具（wpJ*）与之后的包统一用「<pkg>_tests: N checks, 0 failures」作最终汇总行。
 $finalPattern = if ($finalPass.ContainsKey($Pkg)) { $finalPass[$Pkg] } else { "$Pkg" + '_tests: \d+ checks, 0 failures' }

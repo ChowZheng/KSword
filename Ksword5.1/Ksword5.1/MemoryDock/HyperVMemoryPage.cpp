@@ -2,6 +2,7 @@
 #include "PhysicalPageScan.h"
 #include "MemoryAttributionChart.h"
 #include "../Internationalization/LanguageManager.h"
+#include "../UI/AdaptivePageScroll.h"
 #include "../UI/VisibleTableWidget.h"
 #include "../UI/TableInteractionSupport.h"
 #include <QEvent>
@@ -150,7 +151,9 @@ QString sourceName(const QString& source)
 
 HyperVMemoryPage::HyperVMemoryPage(QWidget* parent) : QWidget(parent)
 {
-    auto* root = new QVBoxLayout(this);
+    // 页面自带内部滚动壳：固定高度的归因图加五页签约四百五十像素，嵌在系统内存审计页里
+    // 放不下时在本页内滚动。根布局建在壳的内容容器上。
+    auto* root = new QVBoxLayout(ks::ui::EnablePageInnerScroll(this));
     root->setContentsMargins(0, 0, 0, 0);
     auto* actions = new QHBoxLayout;
     m_collect = new QPushButton(this); m_cancel = new QPushButton(this); m_export = new QPushButton(this);

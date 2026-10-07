@@ -5,6 +5,7 @@
 
 #include "../Internationalization/LanguageManager.h"
 #include "../theme.h"
+#include "../UI/AdaptivePageScroll.h" // ks::ui::EnablePageInnerScroll：页面内部滚动壳。
 // 表格交互与可视化表格基类：提供数值排序单元格、全局操作条与冻结行列能力。
 #include "../UI/TableInteractionSupport.h"
 #include "../UI/VisibleTableWidget.h"
@@ -614,7 +615,10 @@ void SystemMemoryAuditPage::changeEvent(QEvent* event)
 
 void SystemMemoryAuditPage::initializeUi()
 {
-    QVBoxLayout* const rootLayout = new QVBoxLayout(this);
+    // 页面自带内部滚动壳：摘要卡片、分页表格、说明区叠起来比 Dock 高得多，
+    // 放不下时在页内滚动，而不是把整个内存 Dock 撑高。根布局建在壳的内容容器上，
+    // 下面以 this 为父的控件会在加入布局时被重新挂到内容容器下。
+    QVBoxLayout* const rootLayout = new QVBoxLayout(ks::ui::EnablePageInnerScroll(this));
     rootLayout->setContentsMargins(6, 6, 6, 6);
     rootLayout->setSpacing(6);
 

@@ -363,6 +363,8 @@ namespace ks::ui
         std::uint64_t m_anchor = 0;                        // 当前窗口起始地址
         std::uint64_t m_editContextRevision = 0;           // 会话/架构/权限/后端变化时前进，使旧编辑请求失效
         bool m_hasAnchor = false;                          // 是否已经跳转过（没有则显示空状态）
+        std::uint64_t m_lastRebuiltAnchor = 0;             // 最近一次真正解码出行时的锚点（同锚点刷新时保持滚动位置）
+        bool m_hasLastRebuiltAnchor = false;               // 是否已经解码出过行
         bool m_editingActive = false;                      // 是否有行内编辑器打开（见 isEditing）
         bool m_refreshPending = false;                     // D2：编辑期间被推迟的刷新请求
         bool m_editable = true;                             // 可疑点 1：是否允许编辑

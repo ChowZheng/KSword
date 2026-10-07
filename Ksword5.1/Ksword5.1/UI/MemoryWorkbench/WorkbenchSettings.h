@@ -69,6 +69,21 @@ namespace ks::ui::workbench_settings
     int LoadGroupSize();
     void SaveGroupSize(int groupSize);
 
+    // LoadRowWidthAuto / SaveRowWidthAuto："rowWidthAuto" 键，十六进制页是否按窗口宽度自适应行宽，默认 true。
+    // 自适应为真时"bytesPerRow"键保存的是用户上次手动选的值（自适应状态下不会被改写，见 HexPrefs.cpp）。
+    bool LoadRowWidthAuto();
+    void SaveRowWidthAuto(bool automatic);
+
+    // kHexZoomMin / kHexZoomMax：十六进制画布字号缩放级别的合法范围（含），与 HexCanvas::kMinZoomLevel /
+    // kMaxZoomLevel 取同一组数值（本文件不依赖 HexCanvas，所以各存一份，由离屏测试核对两边一致）。
+    inline constexpr int kHexZoomMin = -4;
+    inline constexpr int kHexZoomMax = 12;
+
+    // LoadHexZoom / SaveHexZoom："hexZoom" 键，字号缩放级别 [kHexZoomMin, kHexZoomMax]，默认 0；
+    // 读到范围之外的值（损坏或手改）退回默认 0。
+    int LoadHexZoom();
+    void SaveHexZoom(int level);
+
     // LoadLiveRefresh / SaveLiveRefresh："liveRefresh" 键，默认 false。
     bool LoadLiveRefresh();
     void SaveLiveRefresh(bool enabled);

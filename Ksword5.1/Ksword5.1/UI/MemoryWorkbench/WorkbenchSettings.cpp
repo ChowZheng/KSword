@@ -352,6 +352,28 @@ namespace ks::ui::workbench_settings
         WriteInt(QStringLiteral("memwb/workbench/groupSize"), groupSize);
     }
 
+    bool LoadRowWidthAuto()
+    {
+        // 默认 true：内存工作台的十六进制页默认按窗口宽度自适应行宽（只在 loadSettings 路径里生效）。
+        return ReadBool(QStringLiteral("memwb/workbench/rowWidthAuto"), true);
+    }
+
+    void SaveRowWidthAuto(const bool automatic)
+    {
+        WriteBool(QStringLiteral("memwb/workbench/rowWidthAuto"), automatic);
+    }
+
+    int LoadHexZoom()
+    {
+        // ReadInt 对越界值退回 fallback（0），与头文件承诺一致；区间取头文件里的两个常量，不另写字面量。
+        return ReadInt(QStringLiteral("memwb/workbench/hexZoom"), 0, kHexZoomMin, kHexZoomMax);
+    }
+
+    void SaveHexZoom(const int level)
+    {
+        WriteInt(QStringLiteral("memwb/workbench/hexZoom"), level);
+    }
+
     bool LoadLiveRefresh()
     {
         return ReadBool(QStringLiteral("memwb/workbench/liveRefresh"), false);

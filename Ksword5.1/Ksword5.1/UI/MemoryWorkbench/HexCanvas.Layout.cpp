@@ -152,12 +152,116 @@ namespace ks::ui
             m_layout.rowHeight);
     }
 
-    // 建议尺寸。
+    // 建议尺寸（首选尺寸，不是最小尺寸）。
     QSize HexCanvas::sizeHint() const
     {
         return QSize(
             m_layout.contentWidth + verticalScrollBar()->sizeHint().width() + 2,
             m_layout.headerHeight + 16 * m_layout.rowHeight + 2);
+    }
+
+    // 最小尺寸：宽度沿用基类（两个滚动条的宽度），高度至少"表头 + 4 行 + 横向滚动条 + 边框"。
+    // 宽度绝不抬高：画布自己支持横向滚动，宿主窗口理应能被拖得比"半行"还窄，
+    // 抬宽会把宿主钉在一个拖不动的宽度上（见 MemoryWorkbenchView.Ui.cpp 的窄宽度硬下限说明）。
+    // 4 行是"压扁时仍能看到几行数据"的下限；基类的默认最小高度只有两个滚动条那么高（约 70 px），与字体无关。
+    QSize HexCanvas::minimumSizeHint() const
+    {
+        const QSize base = QAbstractScrollArea::minimumSizeHint();
+        const int minimumHeight = m_layout.headerHeight
+            + 4 * m_layout.rowHeight
+            + horizontalScrollBar()->sizeHint().height()
+            + 2;
+        return QSize(base.width(), std::max(base.height(), minimumHeight));
+    }
+
+    // 自适应行宽：按视口宽度在候选档里选"放得下的最大一档"，变了就重排。
+    // 调用时机：视口 Resize（viewportEvent）、字体变化、分组变化、地址空间安装（地址位数可能变）、
+    //          setAutoBytesPerRow(true)。
+    // 判据只用 viewport()->width()：竖向滚动条常驻，它的出现与否不会影响视口宽度，所以没有反馈环；
+    // m_inAutoFit 防的是 applyBytesPerRow -> 横向滚动条显隐 -> 视口 Resize -> 再进本函数 这条理论上的重入路径。
+    // 传出：true 表示行宽真的变了（已发 rowWidthModeChanged(n, true)）。
+    bool HexCanvas::applyAutoBytesPerRow()
+    {
+        if (!m_autoBytesPerRow || m_inAutoFit || !m_hasSpace)
+        {
+            return false;
+        }
+
+        // 视口宽度还是 0 或负数：窗口尚未布局，什么都不做，等 show 之后的 Resize 再选。
+        const int viewportWidth = viewport()->width();
+        if (viewportWidth <= 0)
+        {
+            return false;
+        }
+
+        // wanted：此刻放得下的最大一档；与当前相同就不重排（也就不会发多余的信号）。
+        const int wanted = hexcanvas_format::ChooseAutoBytesPerRow(
+            viewportWidth,
+            m_layout.charWidth,
+            m_groupSize,
+            addressDigits());
+        if (wanted == bytesPerRow())
+        {
+            return false;
+        }
+
+        m_inAutoFit = true;
+        const bool changed = applyBytesPerRow(wanted);
+        m_inAutoFit = false;
+        if (changed)
+        {
+            emit rowWidthModeChanged(bytesPerRow(), true);
+        }
+        return changed;
+    }
+
+    // 当前缩放级别。
+    int HexCanvas::zoomLevel() const
+    {
+        return m_zoomLevel;
+    }
+
+    // 设置缩放级别：夹取到 [kMinZoomLevel, kMaxZoomLevel]，真的变了才重建字体并发信号。
+    void HexCanvas::setZoomLevel(int level)
+    {
+        const int clamped = std::clamp(level, kMinZoomLevel, kMaxZoomLevel);
+        if (clamped == m_zoomLevel)
+        {
+            return;
+        }
+        m_zoomLevel = clamped;
+
+        // setFont 会触发 FontChange -> changeEvent：那里重量度、夹取首行、重选自适应行宽。
+        applyZoomFont();
+        emit zoomLevelChanged(m_zoomLevel);
+    }
+
+    // 在当前级别上加 delta 档。
+    void HexCanvas::zoomBy(int delta)
+    {
+        setZoomLevel(m_zoomLevel + delta);
+    }
+
+    // 恢复默认字号。
+    void HexCanvas::zoomReset()
+    {
+        setZoomLevel(0);
+    }
+
+    // 按基准字体与缩放级别算出字体并设置给控件。
+    // 每档 1pt（基准字体以像素为单位给尺寸时每档 1 px）；点数下限 4pt，防止极小字号退化成度量为 0。
+    void HexCanvas::applyZoomFont()
+    {
+        QFont zoomed = m_baseFont;
+        if (m_baseFont.pointSizeF() > 0.0)
+        {
+            zoomed.setPointSizeF(std::max(4.0, m_baseFont.pointSizeF() + static_cast<qreal>(m_zoomLevel)));
+        }
+        else if (m_baseFont.pixelSize() > 0)
+        {
+            zoomed.setPixelSize(std::max(5, m_baseFont.pixelSize() + m_zoomLevel));
+        }
+        setFont(zoomed);
     }
 
     // 输入法提示：禁用预测、偏好拉丁字符。
@@ -195,8 +299,15 @@ namespace ks::ui
         switch (event->type())
         {
         case QEvent::FontChange:
+            // 行高变了可见行数也变了，最大首行随之变化：必须夹取首行，否则 syncScrollBars 里的 setValue
+            // 被 m_updatingBars 屏蔽，m_firstRow 可能大于新的最大首行，末尾出现空白带（缩放功能前的潜伏缺陷）。
+            // 字符宽度变了每行内容宽度也变了，自适应模式要重选行宽（内部会同步滚动条）。
             rebuildMetrics();
+            m_firstRow = std::min(m_firstRow, maxFirstRow());
+            applyAutoBytesPerRow();
             syncScrollBars();
+            requestVisiblePages();
+            notifyVisibleRange();
             viewport()->update();
             break;
         case QEvent::PaletteChange:

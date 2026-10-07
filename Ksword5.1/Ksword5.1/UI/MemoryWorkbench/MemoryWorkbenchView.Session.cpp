@@ -124,14 +124,9 @@ namespace ks::ui
             disasmView_->reset();
             disasmView_->setAddressBits(static_cast<int>(session.addressBits));
         }
-        if (textView_ != nullptr)
-        {
-            textView_->setWindow(0, 0);
-        }
-        if (compareView_ != nullptr)
-        {
-            compareView_->setWindow(0, 0);
-        }
+        // 文本页与对比页回到"尚未定位"，同时清三页的跟随状态（旧代码只把它们设成空窗口 (0,0)，
+        // 状态行就会显示"0x0 超出已读取窗口"，而且从此没人再给它们喂过真地址）。
+        resetSubPageFollow();
 
         if (sessionBar_ != nullptr)
         {
@@ -163,6 +158,17 @@ namespace ks::ui
             if (ddma && liveRefreshTimer_ != nullptr)
             {
                 liveRefreshTimer_->stop();
+            }
+        }
+
+        // 重启后恢复在子页（loadSettings 恢复了上次的子页下标）再附加进程：没有 currentChanged 事件，
+        // 必须在身份变化收尾时补一次跟随；模块目录此刻必然还在加载，followSubPage 会挂起等它。
+        if (subTabStack_ != nullptr && hasUsableTarget)
+        {
+            const int currentTab = subTabStack_->currentIndex();
+            if (currentTab >= 1 && currentTab <= 3)
+            {
+                followSubPage(currentTab, true);
             }
         }
     }

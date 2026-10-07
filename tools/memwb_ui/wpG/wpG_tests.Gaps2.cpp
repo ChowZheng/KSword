@@ -286,7 +286,8 @@ namespace wpg_test
             const auto findChip = [&bar]() {
                 for (QToolButton* button : bar.findChildren<QToolButton*>())
                 {
-                    if (!button->text().isEmpty()) { return button; }
+                    // 目标 chip = 带文字的 QToolButton，但写入模式胶囊的两个半边现在也带文字（即时/暂存），要排除。
+                    if (!button->text().isEmpty() && qobject_cast<ks::ui::WriteModeSwitch*>(button->parentWidget()) == nullptr) { return button; }
                 }
                 return static_cast<QToolButton*>(nullptr);
             };

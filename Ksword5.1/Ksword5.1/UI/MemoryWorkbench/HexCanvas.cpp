@@ -126,6 +126,13 @@ namespace ks::ui
         // 视口整个由 paintEvent 不透明填充，告诉 Qt 不必再擦除背景。
         viewport()->setAttribute(Qt::WA_OpaquePaintEvent, true);
 
+        // 退出主程序的全局平滑滚动过滤器（UI/SmoothScrollSupport.cpp）：它把竖向滚动条的单位当"像素"，
+        // 一档滚轮请求 clamp(singleStep*3, 48, 120) 个单位、再被限幅到 pageStep-重叠；而本画布的竖向滚动条单位
+        // 是"行"（singleStep=1、pageStep=可见行数），结果一档滚轮就滚约一整页（真机反馈"一滚动就是一整页"）。
+        // 本画布自己的 wheelEvent 已经是"每档 3 行 + Ctrl+滚轮缩放 + Shift/横向滚轮横滚"，必须让它收到事件。
+        // 过滤器沿父链读这个属性，设在画布上即覆盖视口与两个滚动条。
+        setProperty("ksword_disable_smooth_scroll", true);
+
         // 输入法：保持启用，以便通过 inputMethodQuery 声明"仅拉丁、不预测"。
         setAttribute(Qt::WA_InputMethodEnabled, true);
         viewport()->setAttribute(Qt::WA_InputMethodEnabled, true);
@@ -135,7 +142,9 @@ namespace ks::ui
         setAccessibleDescription(QStringLiteral("以十六进制和 ASCII 两种形式显示并编辑内存字节"));
 
         // 字体：先设置等宽字体，随后量出字符宽度与行高。
-        setFont(BuildFixedFont());
+        // m_baseFont 记下这份基准字体：字号缩放（setZoomLevel）永远从它出发算，级别 0 就是它本身。
+        m_baseFont = BuildFixedFont();
+        setFont(m_baseFont);
         rebuildMetrics();
 
         // 滚动条与定时器的信号连接。
@@ -184,8 +193,11 @@ namespace ks::ui
         m_hOffset = 0;
         cancelNibble();
 
-        // 地址位数可能变化（8 位 <-> 16 位），重算几何后同步滚动条。
+        // 地址位数可能变化（8 位 <-> 16 位，例如 32 位目标与 64 位目标互换），重算几何后同步滚动条。
+        // 自适应模式下地址位数变了每行内容宽度也变了，要在请求页之前重选行宽
+        // （此刻首行恒为 0、插入点恒在行 0，行宽改变不需要什么锚点）。
         recomputeLayout();
+        applyAutoBytesPerRow();
         syncScrollBars();
         viewport()->update();
         requestVisiblePages();
@@ -570,23 +582,59 @@ namespace ks::ui
         return m_editable;
     }
 
-    // 改每行字节数。
-    // 传入：8/16/32/48/64；传出：是否接受。保持当前首行首地址所在行可见。
+    // 改每行字节数（公开入口，手动选择）。
+    // 传入：8/16/32/48/64；传出：是否接受。合法值会关闭自适应行宽（手动选择优先）。
+    // 锚点策略见 applyBytesPerRow；行宽或自适应标志变了才发 rowWidthModeChanged。
     bool HexCanvas::setBytesPerRow(int bytesPerRow)
     {
+        // 非法值：直接拒绝，不改行宽也不碰自适应标志。
         if (bytesPerRow < 0 || !ksword::memwb::HexViewport::IsSupportedBytesPerRow(static_cast<std::uint32_t>(bytesPerRow)))
         {
             return false;
         }
+
+        // 先清自适应标志再改行宽：改行宽的路径里不允许再被自适应抢回去。
+        // "与当前相同"的早返回必须放在清标志之后——用户在自适应模式下手选了恰好等于当前档的值，
+        // 也是一次明确的"改成手动"，之后窗口再变宽不应该再自动换档。
+        const bool modeChanged = m_autoBytesPerRow;
+        m_autoBytesPerRow = false;
+        const bool rowChanged = applyBytesPerRow(bytesPerRow);
+        if (rowChanged || modeChanged)
+        {
+            emit rowWidthModeChanged(this->bytesPerRow(), false);
+        }
+        return true;
+    }
+
+    // 改行宽并重排（手动与自动共用，不动自适应标志、不发信号）。
+    // 传入：已校验合法的行宽。传出：true 表示行宽真的变了；false 表示与当前相同，什么都没做。
+    // 锚点：插入点在屏幕上完整可见时以插入点为锚点——换行宽后它仍停在同一屏幕行
+    // （64 -> 16 之类的大变化里，旧的"首行锚点"会让插入点与选区直接滚出屏幕）；否则以首行起始地址为锚点。
+    // 不 refresh()、不换来源代次、不发 contentChanged：缓存按绝对地址存放，换行宽只是换了行列映射。
+    bool HexCanvas::applyBytesPerRow(int bytesPerRow)
+    {
         if (static_cast<std::uint32_t>(bytesPerRow) == m_viewport.BytesPerRow())
         {
-            return true;
+            return false;
         }
 
-        // anchor：改行宽前首个可见行的起始地址，改完后让它仍在首行。
-        const std::optional<std::uint64_t> anchor = m_hasSpace
-            ? m_viewport.RowStartAddress(m_firstRow)
-            : std::optional<std::uint64_t>();
+        // anchor：改行宽前选定的锚点地址；relativeRow：锚点在屏幕上相对首行的行数（首行锚点时为 0）。
+        std::optional<std::uint64_t> anchor;
+        std::uint64_t relativeRow = 0;
+        if (m_hasSpace)
+        {
+            // caretRow：插入点所在行（用旧行宽换算）；它落在 [首行, 首行 + 完整可见行数) 内才算"可见"。
+            const std::optional<std::uint64_t> caretRow = m_viewport.RowOfAddress(m_viewport.GetSelection().caret);
+            if (caretRow.has_value() && *caretRow >= m_firstRow && *caretRow - m_firstRow < fullVisibleRows())
+            {
+                anchor = m_viewport.GetSelection().caret;
+                relativeRow = *caretRow - m_firstRow;
+            }
+            else
+            {
+                anchor = m_viewport.RowStartAddress(m_firstRow);
+            }
+        }
         m_viewport.SetBytesPerRow(static_cast<std::uint32_t>(bytesPerRow));
 
         if (anchor.has_value())
@@ -594,7 +642,10 @@ namespace ks::ui
             // 首行的补空位地址早于空间起点，要先夹取到起点再换算行号。
             const std::uint64_t clamped = std::max(*anchor, m_viewport.FirstAddress());
             const std::optional<std::uint64_t> row = m_viewport.RowOfAddress(clamped);
-            m_firstRow = row.has_value() ? *row : 0ULL;
+            const std::uint64_t anchorRow = row.has_value() ? *row : 0ULL;
+
+            // 让锚点停在同一屏幕行：首行 = 锚点新行号 - 相对行数（不足时贴顶）。
+            m_firstRow = anchorRow - std::min(anchorRow, relativeRow);
         }
         m_firstRow = std::min(m_firstRow, maxFirstRow());
 
@@ -612,7 +663,43 @@ namespace ks::ui
         return static_cast<int>(m_viewport.BytesPerRow());
     }
 
+    // 开关自适应行宽。
+    // 传入：on 为真时立即按当前视口宽度重选一档，此后随宽度/分组/字体/地址位数自动重选；
+    //       为假时停在当前档不再自动变。值真的变了发 rowWidthModeChanged。
+    void HexCanvas::setAutoBytesPerRow(bool on)
+    {
+        if (m_autoBytesPerRow == on)
+        {
+            // 重复开启：再按当前宽度对一次，幂等且无信号（行宽没变就不发）。
+            if (on)
+            {
+                applyAutoBytesPerRow();
+            }
+            return;
+        }
+        m_autoBytesPerRow = on;
+        if (!on)
+        {
+            emit rowWidthModeChanged(bytesPerRow(), false);
+            return;
+        }
+
+        // 打开：立即重选。重选换了档时 applyAutoBytesPerRow 已经发过信号；
+        // 没换档（或还没有地址空间/视口尚未布局）时模式变了也要通知一次。
+        if (!applyAutoBytesPerRow())
+        {
+            emit rowWidthModeChanged(bytesPerRow(), true);
+        }
+    }
+
+    // 是否处于自适应行宽模式。
+    bool HexCanvas::isAutoBytesPerRow() const
+    {
+        return m_autoBytesPerRow;
+    }
+
     // 设置十六进制列分组。
+    // 分组影响每行内容宽度，自适应模式下要在重算几何之后重选行宽。
     bool HexCanvas::setGroupSize(int groupSize)
     {
         if (groupSize != 1 && groupSize != 2 && groupSize != 4 && groupSize != 8)
@@ -621,6 +708,7 @@ namespace ks::ui
         }
         m_groupSize = groupSize;
         recomputeLayout();
+        applyAutoBytesPerRow();
         syncScrollBars();
         viewport()->update();
         return true;

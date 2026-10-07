@@ -1121,6 +1121,9 @@
     <ClCompile Include="UI\MemoryWorkbench\WorkbenchHexPane.Panels.cpp">
       <Filter>Source Files\MemoryWorkbench</Filter>
     </ClCompile>
+    <ClCompile Include="UI\MemoryWorkbench\WorkbenchHexPane.ViewMenu.cpp">
+      <Filter>Source Files\MemoryWorkbench</Filter>
+    </ClCompile>
     <ClCompile Include="UI\MemoryWorkbench\MemoryWorkbenchView.cpp">
       <Filter>Source Files\MemoryWorkbench</Filter>
     </ClCompile>
@@ -1131,6 +1134,12 @@
       <Filter>Source Files\MemoryWorkbench</Filter>
     </ClCompile>
     <ClCompile Include="UI\MemoryWorkbench\MemoryWorkbenchView.Nav.cpp">
+      <Filter>Source Files\MemoryWorkbench</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\MemoryWorkbench\MemoryWorkbenchView.HexPrefs.cpp">
+      <Filter>Source Files\MemoryWorkbench</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\MemoryWorkbench\MemoryWorkbenchView.SubPages.cpp">
       <Filter>Source Files\MemoryWorkbench</Filter>
     </ClCompile>
     <ClCompile Include="UI\MemoryWorkbench\WorkbenchDiagnosticsHost.cpp">
@@ -2372,6 +2381,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="UI\FlowLayout.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="UI\AdaptivePageScroll.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="..\..\shared\evidence\HookPatchCompose.h">

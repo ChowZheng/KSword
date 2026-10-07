@@ -120,6 +120,12 @@ namespace ks::ui::workbench_messages
     QString TargetChipTooltip(bool needsProcess);
     // WriteModeTooltip：写入模式开关的完整悬停提示（含立即/暂存两种语义说明）。
     QString WriteModeTooltip();
+    // WriteModeImmediateLabel / WriteModeStagedLabel：胶囊两半边上显示的短文字（图标旁边）。
+    QString WriteModeImmediateLabel();
+    QString WriteModeStagedLabel();
+    // WriteModeImmediateTooltip / WriteModeStagedTooltip：逐半边的悬停说明，各自只讲自己这一半的语义。
+    QString WriteModeImmediateTooltip();
+    QString WriteModeStagedTooltip();
     // PendingPatchesText："N 字节待写入（M 处）"。
     QString PendingPatchesText(quint64 bytesPending, quint64 blocksPending);
     QString ApplyButtonTooltip();

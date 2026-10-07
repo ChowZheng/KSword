@@ -210,6 +210,26 @@ namespace ks::ui
         endResetModel();
     }
 
+    // firstRowAtOrAfter：分组列表按地址升序，二分找第一个 groupAddress >= address 的行。
+    // 全部分组都在 address 之前就返回最后一行（离目标最近的变化）；没有分组返回 -1。
+    int WorkbenchCompareModel::firstRowAtOrAfter(const std::uint64_t address) const
+    {
+        if (m_groups.isEmpty())
+        {
+            return -1;
+        }
+        const auto found = std::lower_bound(
+            m_groups.begin(),
+            m_groups.end(),
+            address,
+            [](const CompareGroupSummary& group, const std::uint64_t value) { return group.groupAddress < value; });
+        if (found == m_groups.end())
+        {
+            return static_cast<int>(m_groups.size()) - 1;
+        }
+        return static_cast<int>(found - m_groups.begin());
+    }
+
     int WorkbenchCompareModel::rowCount(const QModelIndex& parent) const
     {
         return parent.isValid() ? 0 : m_groups.size();
@@ -365,6 +385,28 @@ namespace ks::ui
         m_length = std::min<std::uint64_t>(length, kMaxWindowBytes);
         m_hasWindow = true;
         rebuildRows();
+    }
+
+    // reset：回到"尚未定位"——窗口清零、hasWindow 置假，rebuildRows 显示占位文案并清空模型。
+    void WorkbenchCompareView::reset()
+    {
+        m_address = 0;
+        m_length = 0;
+        m_hasWindow = false;
+        rebuildRows();
+    }
+
+    // scrollToAddress：滚到并选中第一个分组地址 >= address 对齐到 16 字节的行。
+    void WorkbenchCompareView::scrollToAddress(const std::uint64_t address)
+    {
+        const std::uint64_t alignedAddress = address - (address % kGroupBytes);
+        const int row = m_model->firstRowAtOrAfter(alignedAddress);
+        if (row < 0)
+        {
+            return;
+        }
+        m_table->selectRow(row);
+        m_table->scrollTo(m_model->index(row, 0), QAbstractItemView::PositionAtTop);
     }
 
     void WorkbenchCompareView::setMode(const Mode mode)

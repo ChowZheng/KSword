@@ -53,6 +53,56 @@ namespace ks::ui::hexcanvas_format
         }
     }
 
+    // 一行内容占用的字符数，公式与 HexCanvas::recomputeLayout 逐项对应（见头文件注释）。
+    int RowWidthChars(int bytesPerRow, int groupSize, int addressDigits)
+    {
+        if (bytesPerRow < 1)
+        {
+            return 0;
+        }
+
+        // extra：十六进制区里除"每列 3 个字符"之外的额外间隔字符数。
+        // 第 column 列（从 1 开始，第 0 列前面没有间隔）：落在 8 字节中缝上加 2；
+        // 否则落在分组边界上（分组大于 1 时）加 1；中缝与组边界重合时只算中缝。
+        int extra = 0;
+        for (int column = 1; column < bytesPerRow; ++column)
+        {
+            if (column % 8 == 0)
+            {
+                extra += 2;
+            }
+            else if (groupSize > 1 && column % groupSize == 0)
+            {
+                extra += 1;
+            }
+        }
+
+        // hexChars：十六进制区宽度（每列 2 个字符 + 1 个空格，最后一列没有尾随空格，再补回 2 个字符）。
+        const int hexChars = (bytesPerRow - 1) * 3 + extra + 2;
+
+        // 总宽 = 左边距 1 + 地址位数 + 间隔 2 + 十六进制区 + 间隔 2 + ASCII 区（每字节 1 个字符）+ 右边距 1。
+        return 1 + addressDigits + 2 + hexChars + 2 + bytesPerRow + 1;
+    }
+
+    // 在视口宽度内选放得下的最大行宽，都放不下退到 8。
+    int ChooseAutoBytesPerRow(int viewportWidthPx, int charWidthPx, int groupSize, int addressDigits)
+    {
+        // charWidth：防御性下限 1，避免字符宽度非法时乘出 0 让任何档都"放得下"。
+        const int charWidth = charWidthPx < 1 ? 1 : charWidthPx;
+
+        // 候选从大到小逐档试：第一档放得下的就是"最大的放得下"。
+        for (const int candidate : kAutoBytesPerRowCandidates)
+        {
+            if (RowWidthChars(candidate, groupSize, addressDigits) * charWidth <= viewportWidthPx)
+            {
+                return candidate;
+            }
+        }
+
+        // 一档都放不下：退到最小的候选（候选数组按从大到小排，最后一项就是最小的），横向滚动条兜底。
+        return kAutoBytesPerRowCandidates.back();
+    }
+
     // 判断一个字节是否是可见 ASCII。
     bool IsPrintableAscii(std::uint8_t value)
     {

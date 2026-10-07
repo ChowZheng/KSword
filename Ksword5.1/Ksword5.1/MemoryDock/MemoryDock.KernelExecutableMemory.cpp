@@ -1,4 +1,5 @@
 #include "MemoryDock.Internal.h"
+#include "../UI/AdaptivePageScroll.h" // ks::ui::EnablePageInnerScroll：页内滚动壳。
 #include "../UI/TableInteractionSupport.h"
 #include "../UI/VisibleTableWidget.h"
 #include "../UI/DetailLayoutRegistry.h"
@@ -478,7 +479,10 @@ void MemoryDock::initializeKernelExecutableMemoryScanTab()
         << eol;
 
     m_tabKernelExecutableMemory = new QWidget(m_tabWidget);
-    QVBoxLayout* tabLayout = new QVBoxLayout(m_tabKernelExecutableMemory);
+    // 页面自带内部滚动壳：内容放不下时在页内滚动，不把 Dock 撑高。页面指针身份不变，
+    // 下面按 objectName 的 findChild 是递归查找，仍然能找到壳里的进度条。
+    QWidget* const tabContent = ks::ui::EnablePageInnerScroll(m_tabKernelExecutableMemory);
+    QVBoxLayout* tabLayout = new QVBoxLayout(tabContent);
     tabLayout->setContentsMargins(6, 6, 6, 6);
     tabLayout->setSpacing(6);
 

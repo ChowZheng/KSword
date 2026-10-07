@@ -207,6 +207,11 @@ namespace wpj6_test
     // 供测试读取；重复调用是安全的空操作（只有第一次真正生效，返回同一个实例）。
     SharedBackend& ConfigureSharedOnce();
 
+    // LastFakeServices：最近一次被 WorkbenchShared 的 servicesFactory 构造出来的假服务（每个 Harness 的
+    // WorkbenchTarget 各持有一份），供测试在 AttachProcess 之前配置模块枚举结果/延迟。
+    // 注意：必须在构造 Harness 之后立刻取用；该 Harness 销毁后指针悬空。
+    memwb_wpI_test::FakeWorkbenchServices* LastFakeServices();
+
     // ApplyTheme（修复缺陷 7）：切换深浅主题并同步应用完整调色板，与其它
     // memwb_ui 夹具（wpG_common.cpp 等）同一套惯例——先切 KswordTheme 的深浅
     // 状态（控件 paint 里现取的静态颜色访问器读的是它，不是 QPalette），再

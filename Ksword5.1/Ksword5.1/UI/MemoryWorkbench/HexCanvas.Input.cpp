@@ -251,10 +251,28 @@ namespace ks::ui
         extendSelectionTo(hitTest(clamped));
     }
 
-    // 滚轮：每一档（120）滚 3 行，高精度触摸板的小增量累积到整档再滚；Shift 或横向滚轮滚动横向滚动条。
+    // 滚轮：每一档（120）滚 3 行，高精度触摸板的小增量累积到整档再滚；Shift 或横向滚轮滚动横向滚动条；
+    // Ctrl+滚轮缩放字号（向上放大、向下缩小，按 120 累计成整档），此时不滚动内容。
     void HexCanvas::wheelEvent(QWheelEvent* event)
     {
         const QPoint angle = event->angleDelta();
+
+        // Ctrl+滚轮：字号缩放。重建缓存文字有成本（512 个以上 QStaticText），所以用累加器把触摸板的
+        // 小增量凑成整档再缩放，不是每个事件都重建；accept 之后事件不再往上冒泡成外层滚动区的滚动。
+        if ((event->modifiers() & Qt::ControlModifier) != 0)
+        {
+            m_zoomWheelRemainder += angle.y();
+            const int zoomSteps = m_zoomWheelRemainder / 120;
+            if (zoomSteps != 0)
+            {
+                m_zoomWheelRemainder -= zoomSteps * 120;
+                zoomBy(zoomSteps);
+            }
+            event->accept();
+            return;
+        }
+        m_zoomWheelRemainder = 0;
+
         const bool horizontal = (event->modifiers() & Qt::ShiftModifier) != 0 || (angle.y() == 0 && angle.x() != 0);
         if (horizontal)
         {
@@ -327,10 +345,47 @@ namespace ks::ui
         return true;
     }
 
+    // 字号缩放键：Ctrl+= 与 Ctrl++（美式键盘上加号要按 Shift，Qt 报 Key_Plus）放大，Ctrl+- 缩小，Ctrl+0 恢复默认。
+    // 传入：按键事件。传出：true 表示已处理并 accept。
+    // Ctrl+Alt 同时按下是 AltGr（文字输入），不当缩放键；这些键目前没有被 WorkbenchActions 的快捷键占用
+    // （Ctrl+1..4 是子页切换，Ctrl+0/=/- 空闲）。
+    bool HexCanvas::handleZoomKey(QKeyEvent* event)
+    {
+        const Qt::KeyboardModifiers modifiers = event->modifiers();
+        if ((modifiers & Qt::ControlModifier) == 0 || (modifiers & Qt::AltModifier) != 0)
+        {
+            return false;
+        }
+
+        switch (event->key())
+        {
+        case Qt::Key_Equal:
+        case Qt::Key_Plus:
+            zoomBy(1);
+            break;
+        case Qt::Key_Minus:
+            zoomBy(-1);
+            break;
+        case Qt::Key_0:
+            zoomReset();
+            break;
+        default:
+            return false;
+        }
+        event->accept();
+        return true;
+    }
+
     // 键盘入口。
-    // 优先级：Ctrl 组合键 -> 插入点移动 -> Tab/Esc/Backspace -> 文字输入（编辑）。
+    // 优先级：字号缩放键 -> Ctrl 组合键 -> 插入点移动 -> Tab/Esc/Backspace -> 文字输入（编辑）。
     void HexCanvas::keyPressEvent(QKeyEvent* event)
     {
+        // 字号缩放键（Ctrl+= / Ctrl++ / Ctrl+- / Ctrl+0）与有没有数据无关，放在"无数据直接交给基类"之前。
+        if (handleZoomKey(event))
+        {
+            return;
+        }
+
         if (!m_hasSpace)
         {
             QAbstractScrollArea::keyPressEvent(event);
@@ -453,7 +508,9 @@ namespace ks::ui
         event->accept();
     }
 
-    // 视口事件：处理悬停提示，其余交给基类。
+    // 视口事件：处理悬停提示；视口尺寸变化后重选自适应行宽；其余交给基类。
+    // 自适应放在这里而不是 resizeEvent：此刻视口已经是新尺寸，也覆盖滚动条显隐造成的视口变化；
+    // 先让基类走完（含 resizeEvent 里的夹取首行/同步滚动条/请求页），再按新宽度重选行宽。
     bool HexCanvas::viewportEvent(QEvent* event)
     {
         if (event->type() == QEvent::ToolTip)
@@ -475,7 +532,13 @@ namespace ks::ui
             event->accept();
             return true;
         }
-        return QAbstractScrollArea::viewportEvent(event);
+
+        const bool handled = QAbstractScrollArea::viewportEvent(event);
+        if (event->type() == QEvent::Resize)
+        {
+            applyAutoBytesPerRow();
+        }
+        return handled;
     }
 
     // 让 Tab/Shift+Tab 作为按键到达 keyPressEvent（用来切换面板），而不是移动焦点。

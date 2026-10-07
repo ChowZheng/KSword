@@ -1,6 +1,7 @@
 #include "DdmaPage.h"
 
 #include "../theme.h"
+#include "../UI/AdaptivePageScroll.h"
 #include "../UI/CodeEditorWidget.h"
 #include "../UI/HexEditorWidget.h"
 #include "../UI/MemoryEditorWidget.h"
@@ -114,7 +115,9 @@ void DdmaPage::changeEvent(QEvent* const event)
 
 void DdmaPage::initializeUi()
 {
-    QVBoxLayout* rootLayout = new QVBoxLayout(this);
+    // 页面自带内部滚动壳：四个分组框纵向堆叠约有一千多像素，是内存 Dock 过长的最大单一来源。
+    // 根布局建在壳的内容容器上；放不下时在页内滚动，不再撑高整个 Dock。
+    QVBoxLayout* rootLayout = new QVBoxLayout(ks::ui::EnablePageInnerScroll(this));
     rootLayout->setContentsMargins(6, 6, 6, 6);
     rootLayout->setSpacing(6);
 

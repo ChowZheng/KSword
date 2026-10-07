@@ -101,6 +101,8 @@ int main(int argc, char** argv)
     memwb_test::RunSegmentedTests();
     memwb_test::RunCachedRangeTests();
     memwb_test::RunIconAliasTests();
+    // 十六进制自适应行宽（视口宽度驱动、锚点、不重读、手动优先、联动触发）、最小高度与字号缩放。
+    memwb_test::RunRowFitTests();
     // HexView 复合控件（工具栏 / 查找 / 跳转 / 导出 / 兼容层）：截图单独放在 shots-hexview 子目录。
     memwb_test::RunHexViewTests(QDir(shotsDir).filePath(QStringLiteral("../shots-hexview")));
     // HexEditorWidget 门面（HexView 之上的薄转发层，保持旧控件的公开 API 与语义）：宿主使用形态回放与信号/选区语义。

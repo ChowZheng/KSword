@@ -80,6 +80,10 @@ namespace ks::ui
             bool isPendingMode,
             const QVector<CompareGroupSummary>& groups);
 
+        // firstRowAtOrAfter：第一个分组地址 >= address 的行号（分组按地址升序）；
+        // 所有分组都在 address 之前时返回最后一行；没有任何分组返回 -1。
+        int firstRowAtOrAfter(std::uint64_t address) const;
+
         int rowCount(const QModelIndex& parent = QModelIndex()) const override;
         int columnCount(const QModelIndex& parent = QModelIndex()) const override;
         QVariant data(const QModelIndex& index, int role) const override;
@@ -115,6 +119,14 @@ namespace ks::ui
 
         // setWindow：设置要对比的字节区间（通常跟随十六进制页当前可见范围）。
         void setWindow(std::uint64_t address, std::uint64_t length);
+
+        // reset：回到"尚未定位"的初始状态（清窗口，状态行回到占位文案）。换目标时由宿主调用。
+        void reset();
+
+        // scrollToAddress：把表格滚到并选中"第一个分组地址 >= address 对齐到 16 字节"的行——
+        // 对比页只列出有变化的分组，"跳到某地址"就是跳到它之后（含它所在分组）的第一处变化；
+        // 没有任何分组时什么都不做。
+        void scrollToAddress(std::uint64_t address);
 
         // setMode：切换分段；真的变了才重新渲染。
         void setMode(Mode mode);

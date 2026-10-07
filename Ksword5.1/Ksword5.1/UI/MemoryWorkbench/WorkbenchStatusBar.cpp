@@ -206,6 +206,11 @@ namespace ks::ui
 
         // 第三行（抽屉）：诊断宿主控件 + 换行勾选 + 复制按钮，默认收起。
         m_drawerContainer = new QWidget(this);
+        // 抽屉最大高度：展开状态会被持久化（diagExpanded），而 CodeEditorWidget 的首选高度可以很大，
+        // 不设上限时展开的抽屉会在窗口不高时把十六进制画布挤到只剩一条缝。
+        // 160px = 工具行（换行勾选 + 复制钮）约 28 + 诊断文本约 8 行；文本更长时编辑器自己滚动。
+        constexpr int kDrawerMaxHeight = 160;
+        m_drawerContainer->setMaximumHeight(kDrawerMaxHeight);
         auto* drawerLayout = new QVBoxLayout(m_drawerContainer);
         drawerLayout->setContentsMargins(0, 0, 0, 0);
         drawerLayout->setSpacing(2);

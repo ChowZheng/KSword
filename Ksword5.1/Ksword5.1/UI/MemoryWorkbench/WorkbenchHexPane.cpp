@@ -362,6 +362,17 @@ namespace ks::ui
         return (canvas_ != nullptr) ? canvas_->caretAddress() : 0;
     }
 
+    // selectionStart：选区闭区间的起点；无选区（无地址空间）时退回插入点（此时恒为 0）。
+    std::uint64_t WorkbenchHexPane::selectionStart() const
+    {
+        if (canvas_ == nullptr)
+        {
+            return 0;
+        }
+        const std::optional<HexCanvas::AddressRange> range = canvas_->selectedRange();
+        return range.has_value() ? range->first : canvas_->caretAddress();
+    }
+
     // jumpTo：跳转入口。先用 cellStateAt(address).inSpace 核实目标地址本身是否
     // 落在当前地址空间内——这是"返回 false"的唯一判据，不借助 setCaretAddress
     // 的返回值做这件事（那个返回值还会被"选区末端是否越界"干扰，见下）。
@@ -455,6 +466,45 @@ namespace ks::ui
             (unionFirst == 0 && unionLast == kMaxAddress) ? kMaxAddress : (unionLast - unionFirst + 1ULL);
 
         pageProvider_->rereadByteRange(unionFirst, length);
+    }
+
+    // setRowWidthPreference：应用一份行宽偏好（见头文件）。
+    // 自适应：只记下手选值、把画布切到自适应（画布立即按当前视口宽度重选一档）；
+    // 手动：把画布固定为手选值（HexCanvas::setBytesPerRow 会同时关闭自适应）。
+    void WorkbenchHexPane::setRowWidthPreference(bool automatic, int manualBytes)
+    {
+        if (canvas_ == nullptr)
+        {
+            return;
+        }
+
+        // 手选值只接受画布支持的几档；非法值忽略，沿用已记下的值，不让坏数据污染"上次手选值"。
+        if (manualBytes > 0
+            && ksword::memwb::HexViewport::IsSupportedBytesPerRow(static_cast<std::uint32_t>(manualBytes)))
+        {
+            manualBytesPerRow_ = manualBytes;
+        }
+
+        if (automatic)
+        {
+            canvas_->setAutoBytesPerRow(true);
+        }
+        else
+        {
+            canvas_->setBytesPerRow(manualBytesPerRow_);
+        }
+    }
+
+    // rowWidthAutomatic：画布当前是否自适应行宽。
+    bool WorkbenchHexPane::rowWidthAutomatic() const
+    {
+        return canvas_ != nullptr && canvas_->isAutoBytesPerRow();
+    }
+
+    // manualBytesPerRow：用户上次手选的行宽。
+    int WorkbenchHexPane::manualBytesPerRow() const
+    {
+        return manualBytesPerRow_;
     }
 
     // onCanvasVisibleRangeChanged：画布可见范围变化——缓存下来供 rereadWindow()

@@ -2,6 +2,7 @@
 #include "MemoryAttributionChart.h"
 #include "../ArkDriverClient/ArkDriverPfn.h"
 #include "../Internationalization/LanguageManager.h"
+#include "../UI/AdaptivePageScroll.h"
 #include "../UI/VisibleTableWidget.h"
 #include "../UI/TableInteractionSupport.h"
 #include <QDateTime>
@@ -79,7 +80,9 @@ struct PhysicalPageAttributionPage::Inspection {
 
 PhysicalPageAttributionPage::PhysicalPageAttributionPage(QWidget* parent) : QWidget(parent)
 {
-    auto* root = new QVBoxLayout(this);
+    // 页面自带内部滚动壳：固定高度的归因图加四页签表格约五百像素，嵌在系统内存审计页里
+    // 放不下时在本页内滚动，不再把外层的审计页撑高。根布局建在壳的内容容器上。
+    auto* root = new QVBoxLayout(ks::ui::EnablePageInnerScroll(this));
     root->setContentsMargins(0, 0, 0, 0);
     auto* actions = new QHBoxLayout;
     m_scanButton = new QPushButton(this);

@@ -408,6 +408,28 @@ namespace ks::ui::workbench_messages
             "暂存后应用：修改先只留在本窗口（橙色），点 ✓ 才一次写入。");
     }
 
+    QString WriteModeImmediateLabel()
+    {
+        return QStringLiteral("即时");
+    }
+
+    QString WriteModeStagedLabel()
+    {
+        return QStringLiteral("暂存");
+    }
+
+    QString WriteModeImmediateTooltip()
+    {
+        return QStringLiteral(
+            "即时写入：改完马上写入目标，写前复核原值、写后回读确认（Ctrl+E 切换到暂存）");
+    }
+
+    QString WriteModeStagedTooltip()
+    {
+        return QStringLiteral(
+            "暂存后应用：修改先只留在本窗口（橙色），点 ✓ 才一次写入（Ctrl+E 切换到即时）");
+    }
+
     QString PendingPatchesText(const quint64 bytesPending, const quint64 blocksPending)
     {
         return QStringLiteral("%1 字节待写入（%2 处）")

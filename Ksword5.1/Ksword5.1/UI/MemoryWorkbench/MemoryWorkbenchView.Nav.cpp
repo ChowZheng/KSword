@@ -428,6 +428,16 @@ namespace ks::ui
         {
             int3Panel_->SetInsertionPoint(address, true);
         }
+        // 子页可见时十六进制的插入点/选区变了（点选、地址条回车、后退/前进都会走到这里）：
+        // 让当前这页跟随；跟随过程中自己引起的跳转由 subPageFollowBusy_ 挡住，不会递归。
+        if (subTabStack_ != nullptr && !subPageFollowBusy_)
+        {
+            const int currentTab = subTabStack_->currentIndex();
+            if (currentTab >= 1 && currentTab <= 3)
+            {
+                followSubPage(currentTab, false);
+            }
+        }
     }
 
     void MemoryWorkbenchView::onHexPaneEditRejected(const QString& reason)
@@ -468,9 +478,12 @@ namespace ks::ui
             }
         });
 
+        // "从此处反汇编"：旧实现调的是 onDisasmRequestHexLocate（在十六进制里重定位并停在十六进制页），
+        // 点了之后反汇编页什么都没发生，菜单名与行为相反。现在直接切到反汇编页并锚到被点的地址，
+        // 十六进制的选区保持不变。
         auto* openDisasm = menu->addAction(QStringLiteral("从此处反汇编"));
         connect(openDisasm, &QAction::triggered, this, [this, address]() {
-            onDisasmRequestHexLocate(address);
+            showSubPageAt(1, address);
         });
 
         // 修复缺陷 2（审核报告 wpJ6/wave3 发现 2）：原实现永远调用 Install、从不

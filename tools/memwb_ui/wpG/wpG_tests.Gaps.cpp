@@ -424,7 +424,8 @@ namespace wpg_test
             QToolButton* chip = nullptr;
             for (QToolButton* button : bar.findChildren<QToolButton*>())
             {
-                if (!button->text().isEmpty()) { chip = button; }
+                // 目标 chip = 带文字的 QToolButton，但写入模式胶囊的两个半边现在也带文字（即时/暂存），要排除。
+                if (!button->text().isEmpty() && qobject_cast<ks::ui::WriteModeSwitch*>(button->parentWidget()) == nullptr) { chip = button; }
             }
             WPG_CHECK(chip != nullptr);
             if (chip == nullptr) { return; }

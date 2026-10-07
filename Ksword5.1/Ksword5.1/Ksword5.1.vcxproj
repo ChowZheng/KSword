@@ -577,10 +577,13 @@
     <ClCompile Include="UI\MemoryWorkbench\WorkbenchWriteController.Undo.cpp" />
     <ClCompile Include="UI\MemoryWorkbench\WorkbenchHexPane.cpp" />
     <ClCompile Include="UI\MemoryWorkbench\WorkbenchHexPane.Panels.cpp" />
+    <ClCompile Include="UI\MemoryWorkbench\WorkbenchHexPane.ViewMenu.cpp" />
     <ClCompile Include="UI\MemoryWorkbench\MemoryWorkbenchView.cpp" />
     <ClCompile Include="UI\MemoryWorkbench\MemoryWorkbenchView.Ui.cpp" />
     <ClCompile Include="UI\MemoryWorkbench\MemoryWorkbenchView.Session.cpp" />
     <ClCompile Include="UI\MemoryWorkbench\MemoryWorkbenchView.Nav.cpp" />
+    <ClCompile Include="UI\MemoryWorkbench\MemoryWorkbenchView.HexPrefs.cpp" />
+    <ClCompile Include="UI\MemoryWorkbench\MemoryWorkbenchView.SubPages.cpp" />
     <ClCompile Include="UI\MemoryWorkbench\WorkbenchDiagnosticsHost.cpp" />
     <ClCompile Include="..\..\shared\evidence\memory_workbench\HexViewport.cpp" />
     <ClCompile Include="..\..\shared\evidence\memory_workbench\HexViewport.Cache.cpp" />
@@ -834,6 +837,7 @@
     <ClInclude Include="UI\FlatTableModel.h" />
     <ClInclude Include="UI\DockTabInteraction.h" />
     <ClInclude Include="UI\FlowLayout.h" />
+    <ClInclude Include="UI\AdaptivePageScroll.h" />
     <ClInclude Include="..\..\shared\evidence\HookPatchCompose.h" />
     <ClInclude Include="..\..\shared\evidence\MemoryAddressInput.h" />
     <ClInclude Include="UI\KvmEptLeafProbe.h" />
