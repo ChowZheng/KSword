@@ -278,7 +278,7 @@ namespace ksword::debugger
         if ((state.response.stateFlags & KSWORD_ARK_HVM_STATE_RESIDENT_ACTIVE) != 0)
         {
             if (ownsResident_) return ERROR_SUCCESS;
-            logRepeated("EPT preparation refused: error=170; pre-existing HVM residency belongs to another caller (for example Main KVM or another debugger); stop and release it in the owning UI before retrying; no foreign HVM takeover");
+            logRepeated("EPT preparation refused: error=170; pre-existing HVM residency belongs to another caller (for example Main HVM or another debugger); stop and release it in the owning UI before retrying; no foreign HVM takeover");
             return ERROR_BUSY;
         }
         if (!ownsResident_)

@@ -22,7 +22,7 @@
 #include "ProcessDetailWindow.h"
 
 #include "../ArkDriverClient/ArkDriverClient.h"
-#include "../UI/KvmWatchDialog.h"
+#include "../UI/HvmWatchDialog.h"
 
 #include <QLabel>
 #include <QMetaObject>

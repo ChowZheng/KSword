@@ -85,7 +85,7 @@ const ActionWordEntry kActionWords[] = {
 // "smm.shutdownPending" / "bypassDetected" 这些**陈述**键统统被自己的闸拒收，
 // 一条都进不了 accepted —— 能力反而被来源自称的 observedAvailable 放行。
 // 现在按词匹配：先按分隔符切段，段内再按 camelCase 切词。段号要留着，
-// 因为时态豁免只在同一段内成立（"kvm.disable.running" 不能靠隔壁段的 running 脱罪）。
+// 因为时态豁免只在同一段内成立（"hvm.disable.running" 不能靠隔壁段的 running 脱罪）。
 struct KeyToken final {
     std::string text;
     // 去掉 -ing / -ed 之后的词干。用来接住被变形拆开的动作短语："turningOff"

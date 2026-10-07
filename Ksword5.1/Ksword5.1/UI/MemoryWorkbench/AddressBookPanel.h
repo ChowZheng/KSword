@@ -286,7 +286,7 @@ namespace ks::ui
 
 // Q_DECLARE_METATYPE：promoteRequested/valueEditRequested 把 Core 的这两个普通枚举当
 // 信号参数传出去；跨线程排队连接与 QSignalSpy 一类"把参数存进 QVariant"的消费方都要求
-// 参数类型是已注册的 Qt 元类型，裸枚举默认不是。写法与 UI/KvmControl.h 对
-// ksword::kvm::KvmWatchEntry 的做法一致，放在头文件末尾、命名空间之外。
+// 参数类型是已注册的 Qt 元类型，裸枚举默认不是。写法与 UI/HvmControl.h 对
+// ksword::hvm::HvmWatchEntry 的做法一致，放在头文件末尾、命名空间之外。
 Q_DECLARE_METATYPE(ksword::memwb::EntryKind)
 Q_DECLARE_METATYPE(ksword::memwb::ValueType)

@@ -1,7 +1,7 @@
 ﻿#include "KernelHvmTab.h"
 
 #include "KernelDock.h"
-#include "../UI/KvmControl.h"
+#include "../UI/HvmControl.h"
 #include <QTableWidget>
 #include <QTableWidgetItem>
 #include <QTextEdit>
@@ -39,7 +39,7 @@ QString KernelHvmTab::buildDetail(
         ksword::ark::HvmStatusResult result{};
         result.io.ok = true;
         result.response = response;
-        const auto state = ksword::kvm::stateFromStatus(result);
+        const auto state = ksword::hvm::stateFromStatus(result);
         detail += QLatin1Char('\n') + state.detail;
         return detail;
     }

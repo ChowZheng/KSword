@@ -2,7 +2,7 @@
 
 研究日期：2026-09-08。源码基线：`e3d8106e2bdb5bba2421627b52b9491c5c3fdebb`。
 
-目标是：在当前正在运行的 Windows 宿主根分区内，让 KSwordVM 获得嵌套 VMX 并接管当前 Windows 的执行，同时保持宿主 HVCI/VBS 运行。另开 Hyper-V 子虚拟机、WSL2 中运行 Linux KVM，以及把操作对象换成测试机，都不算完成这个目标。本文的 KVM 按钮指 KSwordVM，不是 Linux KVM。
+目标是：在当前正在运行的 Windows 宿主根分区内，让 KSwordVM 获得嵌套 VMX 并接管当前 Windows 的执行，同时保持宿主 HVCI/VBS 运行。另开 Hyper-V 子虚拟机、WSL2 中运行 Linux KVM，以及把操作对象换成测试机，都不算完成这个目标。本文的 HVM 按钮指 KSwordVM，与 Linux KVM 无关。
 
 **结论：当前代码和本机提供的能力不能直接实现这个目标；没有找到已验证可用的宿主根分区开启办法。** 微软明确把嵌套虚拟化的支持范围限定在来宾分区，并排除 Windows 根分区。这个结论说明现有接口的支持边界，不能扩展成对未知实现、未来版本或改变 hypervisor 实现的数学不可能性证明。[Microsoft TLFS：Nested Virtualization](https://learn.microsoft.com/en-us/virtualization/hyper-v-on-windows/tlfs/nested-virtualization)
 
@@ -54,13 +54,13 @@ Hyper-V 合成 CPUID 叶的解释依据：[Microsoft TLFS：Feature and Interfac
 
 源码链接：[能力探测](../KswordARKDriver/src/features/hvm/hvm_runtime.c)、[常驻入口](../KswordARKDriver/src/features/hvm/hvm_resident.c)、[eVMCS](../KswordARKDriver/src/features/hvm/hvm_evmcs.c)、[向下提供嵌套](../KswordARKDriver/src/features/hvm/hvm_nested.c)。
 
-界面还有一处容易误导研究方向的表述：`MainWindow.Kvm.cpp:653` 将“虚拟机内”和“开着 VBS/HVCI 的机器”并列描述为可以作为 L1 运行；`UI/KvmControl.cpp:360` 也暗示开启菜单即可。对当前 Windows 根分区，这个承诺缺少“外层已经暴露 VMX”的前提。本次只记录问题，没有改动界面或语言包。[菜单实现](../Ksword5.1/Ksword5.1/MainWindow.Kvm.cpp)、[能力说明](../Ksword5.1/Ksword5.1/UI/KvmControl.cpp)
+界面还有一处容易误导研究方向的表述：`MainWindow.Hvm.cpp:653` 将“虚拟机内”和“开着 VBS/HVCI 的机器”并列描述为可以作为 L1 运行；`UI/HvmControl.cpp:360` 也暗示开启菜单即可。对当前 Windows 根分区，这个承诺缺少“外层已经暴露 VMX”的前提。本次只记录问题，没有改动界面或语言包。[菜单实现](../Ksword5.1/Ksword5.1/MainWindow.Hvm.cpp)、[能力说明](../Ksword5.1/Ksword5.1/UI/HvmControl.cpp)
 
 **逐条评估的路线**
 
 | 路线 | 能否完成本次目标 | 依据或缺口 |
 |---|---|---|
-| KVM 菜单开启嵌套、传 `ALLOW_NESTED` | 当前不能 | 本机 VMX=0；该标志只改变 KSword 自身策略 |
+| HVM 菜单开启嵌套、传 `ALLOW_NESTED` | 当前不能 | 本机 VMX=0；该标志只改变 KSword 自身策略 |
 | 删除 Hypervisor/VMX 检测，强行执行 VMX 指令 | 没有成立依据 | 改检测不会改变 L0 对 VMX 指令的处理；本次没有执行这种实验 |
 | 修改 CPUID 返回值、伪装 vendor、换更高 Windows 权限 | 不能作为开启机制 | 可见标志与 L0 提供的执行语义不同；管理员或 R0 身份不等于嵌套 VMX 能力 |
 | 补全 eVMCS、VP-assist page | 不能独立解决 | eVMCS 是已获嵌套能力后可用的接口优化，本机未通告该能力 |

@@ -65,7 +65,7 @@ REQUIRED_CLASS_PAGES: Tuple[str, ...] = (
 )
 
 # SUPPRESS_KEYS：判据函数里必须出现的 Dock 键。
-SUPPRESS_KEYS: Tuple[str, ...] = ("network", "hardware", "kernel", "kvm", "memory")
+SUPPRESS_KEYS: Tuple[str, ...] = ("network", "hardware", "kernel", "hvm", "memory")
 # SUPPRESS_FUNCTION：MainWindow 里唯一的判据函数名。
 SUPPRESS_FUNCTION = "DockSuppressesOuterScrollArea"
 # MIN_MOUNT_SITES：使用该判据的挂载点个数下限（惰性占位页首次挂载 + 真实内容挂载）。

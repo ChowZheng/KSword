@@ -6,7 +6,7 @@
 
 ## AMD/Intel UI 离线回归
 
-在仓库根目录运行 `tools\hvm_lab\build-ui-tests.cmd`。它使用规定的 HostX64 MSVC 与 Qt 6.9.3，在 `/W4 /WX` 下链接生产 Dock、第三方 VM 页、证据页、KvmControl 和 DriverClient；IOCTL 传输、SCM、确认以及未使用的 EPT watch 页由模拟实现替代。不会打开真实驱动、进入虚拟化或变更实际服务，设置写入临时 INI 目录。
+在仓库根目录运行 `tools\hvm_lab\build-ui-tests.cmd`。它使用规定的 HostX64 MSVC 与 Qt 6.9.3，在 `/W4 /WX` 下链接生产 Dock、第三方 VM 页、证据页、HvmControl 和 DriverClient；IOCTL 传输、SCM、确认以及未使用的 EPT watch 页由模拟实现替代。不会打开真实驱动、进入虚拟化或变更实际服务，设置写入临时 INI 目录。
 
 覆盖请求标志、旧 AMD 驱动、准备模式不匹配、代次竞争、失败中断、部分常驻/回滚、metrics 格式与独立记录有效性，以及 AMD 原生/VMware/未知外层/固件关闭/未知后端。默认输出 72 张中英文、深浅主题、520/1050 宽截图到 `tools/hvm_lab/artifacts/ui-admission-20261001/screenshots`，可传入其它输出目录。字体取本机 Microsoft YaHei，Qt/VC 路径使用仓库依赖或 AGENTS.md 规定的回退位置。这些证据不替代实机常驻、内层 OS 启动或性能验收。
 

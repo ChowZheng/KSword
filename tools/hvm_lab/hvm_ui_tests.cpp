@@ -24,16 +24,16 @@
 #include <cstring>
 #include <iostream>
 #include <vector>
-#include "../../Ksword5.1/Ksword5.1/UI/KvmControl.h"
+#include "../../Ksword5.1/Ksword5.1/UI/HvmControl.h"
 #include "../../Ksword5.1/Ksword5.1/Internationalization/LanguageManager.h"
 #include "../../Ksword5.1/Ksword5.1/ksword/service/service.h"
 #include "../../Ksword5.1/Ksword5.1/Framework/DestructiveActionConfirmation.h"
 #include "../../shared/driver/KswordArkHvmRequest.h"
 // Inspect rendered widgets and inject snapshots without a production test API.
 #define private public
-#include "../../Ksword5.1/Ksword5.1/UI/KvmGuestVmPanel.h"
-#include "../../Ksword5.1/Ksword5.1/UI/KvmWatchPanel.h"
-#include "../../Ksword5.1/Ksword5.1/KvmDock/KvmDock.h"
+#include "../../Ksword5.1/Ksword5.1/UI/HvmGuestVmPanel.h"
+#include "../../Ksword5.1/Ksword5.1/UI/HvmWatchPanel.h"
+#include "../../Ksword5.1/Ksword5.1/HvmDock/HvmDock.h"
 #include "../../Ksword5.1/Ksword5.1/KernelDock/KernelHvmTab.h"
 #undef private
 #include "../../Ksword5.1/Ksword5.1/UI/ThemeStatusRole.h"
@@ -67,14 +67,14 @@ void reset(unsigned long backend = KSWORD_ARK_HVM_BACKEND_SVM) {
     } else { snapshot.featureFlags |= KSWORD_ARK_HVM_FEATURE_MSR_BITMAP; }
     snapshot.processors[1].processorNumber = 1;
     commands.clear(); failCommand = badQuery = badMetrics = 0; bumpAtControl = false;
-    ksword::kvm::setNestedAllowed(false);
-    ksword::kvm::setNestedDispatchEnabled(false);
-    ksword::kvm::setWriteAccessEnabled(true);
-    ksword::kvm::setLocalEptEnabled(false);
-    ksword::kvm::setEptpSwitchEnabled(false);
-    ksword::kvm::setVeEnabled(false);
-    ksword::kvm::setVmFuncEnabled(false);
-    ksword::kvm::setHypervisorHidden(false);
+    ksword::hvm::setNestedAllowed(false);
+    ksword::hvm::setNestedDispatchEnabled(false);
+    ksword::hvm::setWriteAccessEnabled(true);
+    ksword::hvm::setLocalEptEnabled(false);
+    ksword::hvm::setEptpSwitchEnabled(false);
+    ksword::hvm::setVeEnabled(false);
+    ksword::hvm::setVmFuncEnabled(false);
+    ksword::hvm::setHypervisorHidden(false);
     metrics = std::make_unique<KSWORD_ARK_HVM_METRICS_RESPONSE>();
     metrics->version = KSWORD_ARK_HVM_METRICS_VERSION;
     metrics->size = sizeof(*metrics); metrics->qpcFrequency = 10000000;
@@ -146,9 +146,9 @@ IoResult DriverClient::deviceIoControl(unsigned long code, void* input, unsigned
 }
 // Only the unused watch page is stubbed. The control, guest and evidence pages
 // below are the production widgets; this fixture cannot mutate real SCM state.
-KvmWatchPanel::KvmWatchPanel(QWidget* parent) : QWidget(parent) {}
-void KvmWatchPanel::refreshAsync() {}
-void KvmWatchPanel::showEvent(QShowEvent* e) { QWidget::showEvent(e); }
+HvmWatchPanel::HvmWatchPanel(QWidget* parent) : QWidget(parent) {}
+void HvmWatchPanel::refreshAsync() {}
+void HvmWatchPanel::showEvent(QShowEvent* e) { QWidget::showEvent(e); }
 namespace ks::settings { bool dangerousActionConfirmationsSuppressed() { return false; } }
 namespace ks::ui {
 bool confirmDestructiveAction(QWidget*, const QString&, const QString&, const QString&, const QString&) { return false; }
@@ -190,33 +190,33 @@ int main(int argc, char** argv) {
     check(bits.contains(KSWORD_ARK_HVM_FEATURE_NESTED_SVM_ARMED) && bits.contains(KSWORD_ARK_HVM_FEATURE_NESTED_VMX_ARMED), "new activation bits audited");
     ksword::ark::DriverClient client;
     reset();
-    check(!ksword::kvm::isNestedDispatchEnabled(), "nesting defaults off");
-    check(ksword::kvm::queryState().residentAdmission, "native AMD admitted");
+    check(!ksword::hvm::isNestedDispatchEnabled(), "nesting defaults off");
+    check(ksword::hvm::queryState().residentAdmission, "native AMD admitted");
     snapshot.featureFlags |= KSWORD_ARK_HVM_FEATURE_HYPERVISOR_PRESENT;
     std::memcpy(snapshot.hypervisorVendor, "VMwareVMware", 12);
-    check(!ksword::kvm::queryState().residentAdmission, "VMware needs explicit opt-in");
-    ksword::kvm::setNestedAllowed(true);
-    check(ksword::kvm::queryState().residentAdmission, "opted-in VMware admitted");
+    check(!ksword::hvm::queryState().residentAdmission, "VMware needs explicit opt-in");
+    ksword::hvm::setNestedAllowed(true);
+    check(ksword::hvm::queryState().residentAdmission, "opted-in VMware admitted");
     std::memcpy(snapshot.hypervisorVendor, "UnknownOuter", 12);
-    check(!ksword::kvm::queryState().residentAdmission, "unknown outer rejected despite opt-in");
+    check(!ksword::hvm::queryState().residentAdmission, "unknown outer rejected despite opt-in");
     reset(); snapshot.svmCapabilities.asidCount = 1;
-    check(!ksword::kvm::queryState().residentAdmission, "ASID zero/one refused");
+    check(!ksword::hvm::queryState().residentAdmission, "ASID zero/one refused");
     reset(); snapshot.svmCapabilities.msrValidMask = 7;
-    check(!ksword::kvm::queryState().residentAdmission, "incomplete privileged discovery refused");
+    check(!ksword::hvm::queryState().residentAdmission, "incomplete privileged discovery refused");
     reset(); snapshot.featureFlags &= ~KSWORD_ARK_HVM_FEATURE_SVM_NRIP;
-    check(!ksword::kvm::queryState().residentAdmission, "NRIP required");
+    check(!ksword::hvm::queryState().residentAdmission, "NRIP required");
     reset(); snapshot.queryStatus = KSWORD_ARK_HVM_QUERY_STATUS_FIRMWARE_DISABLED;
-    check(ksword::kvm::queryState().availability == ksword::kvm::KvmAvailability::FirmwareDisabled, "firmware refusal preserved");
+    check(ksword::hvm::queryState().availability == ksword::hvm::HvmAvailability::FirmwareDisabled, "firmware refusal preserved");
     reset(); snapshot.backend = KSWORD_ARK_HVM_BACKEND_NONE;
-    check(!ksword::kvm::queryState().residentAdmission, "unknown backend closed");
+    check(!ksword::hvm::queryState().residentAdmission, "unknown backend closed");
     reset(); snapshot.featureFlags &= ~KSWORD_ARK_HVM_FEATURE_NESTED_SVM_DISPATCH;
-    ksword::kvm::setNestedDispatchEnabled(true);
-    check(!ksword::kvm::queryState().nestedSupported, "old AMD driver has no nesting capability");
-    check(!ksword::kvm::startResident(1).ok && commands.empty(), "old AMD driver cannot prepare nesting");
-    reset(); ksword::kvm::setNestedDispatchEnabled(true);
-    ksword::kvm::setLocalEptEnabled(true); ksword::kvm::setEptpSwitchEnabled(true);
-    ksword::kvm::setVeEnabled(true); ksword::kvm::setVmFuncEnabled(true); ksword::kvm::setHypervisorHidden(true);
-    check(ksword::kvm::startResident(1).ok, "AMD ignores retained Intel preferences");
+    ksword::hvm::setNestedDispatchEnabled(true);
+    check(!ksword::hvm::queryState().nestedSupported, "old AMD driver has no nesting capability");
+    check(!ksword::hvm::startResident(1).ok && commands.empty(), "old AMD driver cannot prepare nesting");
+    reset(); ksword::hvm::setNestedDispatchEnabled(true);
+    ksword::hvm::setLocalEptEnabled(true); ksword::hvm::setEptpSwitchEnabled(true);
+    ksword::hvm::setVeEnabled(true); ksword::hvm::setVmFuncEnabled(true); ksword::hvm::setHypervisorHidden(true);
+    check(ksword::hvm::startResident(1).ok, "AMD ignores retained Intel preferences");
     check(commands.size() == 3, "prepare, self-test, start order");
     if (commands.size() == 3) {
         check(commands[0].expectedGeneration == 73 && commands[1].expectedGeneration == 74 && commands[2].expectedGeneration == 75, "fresh generation at each step");
@@ -227,34 +227,34 @@ int main(int argc, char** argv) {
             KSWORD_ARK_HVM_CONTROL_FLAG_ALLOW_NESTED | KSWORD_ARK_HVM_CONTROL_FLAG_ENABLE_NESTED_SVM;
         for (const auto& command : commands) { check((command.flags & ~allowed) == 0, "AMD wire contains no Intel flag"); }
     }
-    check(ksword::kvm::queryState().nestedArmed, "activation comes from driver readback");
-    reset(KSWORD_ARK_HVM_BACKEND_VMX); ksword::kvm::setNestedDispatchEnabled(true);
-    check(ksword::kvm::startResident(1).ok, "Intel nesting still starts");
+    check(ksword::hvm::queryState().nestedArmed, "activation comes from driver readback");
+    reset(KSWORD_ARK_HVM_BACKEND_VMX); ksword::hvm::setNestedDispatchEnabled(true);
+    check(ksword::hvm::startResident(1).ok, "Intel nesting still starts");
     check(commands.size() == 3 && (commands.back().flags & KSWORD_ARK_HVM_CONTROL_FLAG_ENABLE_NESTED_VMX) &&
         !(commands.back().flags & KSWORD_ARK_HVM_CONTROL_FLAG_ENABLE_NESTED_SVM), "Intel keeps VMX wire flag");
-    reset(); ksword::kvm::setNestedDispatchEnabled(true); ksword::kvm::setWriteAccessEnabled(false);
-    check(!ksword::kvm::startResident(1).ok && commands.empty(), "write permission enforced before prepare");
+    reset(); ksword::hvm::setNestedDispatchEnabled(true); ksword::hvm::setWriteAccessEnabled(false);
+    check(!ksword::hvm::startResident(1).ok && commands.empty(), "write permission enforced before prepare");
     for (unsigned long fail : {KSWORD_ARK_HVM_CONTROL_PREPARE, KSWORD_ARK_HVM_CONTROL_SELF_TEST, KSWORD_ARK_HVM_CONTROL_START_RESIDENT}) {
         reset(); failCommand = fail;
-        check(!ksword::kvm::startResident(1).ok, "a failing step aborts start workflow");
+        check(!ksword::hvm::startResident(1).ok, "a failing step aborts start workflow");
         check(!commands.empty() && commands.back().command == fail, "no command follows failure");
     }
     reset(); bumpAtControl = true;
-    check(!ksword::kvm::startResident(1).ok && commands.size() == 1, "generation race stops workflow");
+    check(!ksword::hvm::startResident(1).ok && commands.size() == 1, "generation race stops workflow");
     reset(); snapshot.stateFlags = KSWORD_ARK_HVM_STATE_RESOURCES_READY | KSWORD_ARK_HVM_STATE_SELF_TEST_PASSED;
     snapshot.preparedProcessorCount = 2; snapshot.selfTestPassedProcessorCount = 1;
-    check(!ksword::kvm::queryState().selfTestPassed, "a passed bit cannot replace full-set test evidence");
-    check(ksword::kvm::startResident(1).ok && commands.size() == 2 && commands.front().command == KSWORD_ARK_HVM_CONTROL_SELF_TEST, "incomplete test set is retested before start");
-    reset(); snapshot.stateFlags |= KSWORD_ARK_HVM_STATE_RESOURCES_READY; ksword::kvm::setNestedDispatchEnabled(true);
-    check(!ksword::kvm::startResident(1).ok && commands.empty(), "native preparation cannot be silently changed to nested");
+    check(!ksword::hvm::queryState().selfTestPassed, "a passed bit cannot replace full-set test evidence");
+    check(ksword::hvm::startResident(1).ok && commands.size() == 2 && commands.front().command == KSWORD_ARK_HVM_CONTROL_SELF_TEST, "incomplete test set is retested before start");
+    reset(); snapshot.stateFlags |= KSWORD_ARK_HVM_STATE_RESOURCES_READY; ksword::hvm::setNestedDispatchEnabled(true);
+    check(!ksword::hvm::startResident(1).ok && commands.empty(), "native preparation cannot be silently changed to nested");
     snapshot.featureFlags |= KSWORD_ARK_HVM_FEATURE_NESTED_SVM_PREPARED;
-    ksword::kvm::setNestedDispatchEnabled(false);
-    check(!ksword::kvm::startResident(1).ok && commands.empty(), "nested preparation cannot be silently changed to native");
+    ksword::hvm::setNestedDispatchEnabled(false);
+    check(!ksword::hvm::startResident(1).ok && commands.empty(), "nested preparation cannot be silently changed to native");
     reset(); snapshot.residentProcessorCount = 1;
     snapshot.stateFlags = KSWORD_ARK_HVM_STATE_FAULTED | KSWORD_ARK_HVM_STATE_ROLLBACK_REQUIRED;
-    auto partial = ksword::kvm::queryState();
+    auto partial = ksword::hvm::queryState();
     check(partial.residentActive && !partial.residentComplete && !partial.residentAdmission, "partial rollback remains active but cannot acquire");
-    check(ksword::kvm::stopResident(snapshot.generation).ok, "partial rollback can stop");
+    check(ksword::hvm::stopResident(snapshot.generation).ok, "partial rollback can stop");
     reset();
     for (badQuery = 1; badQuery <= 4; ++badQuery) { check(!client.queryHvmStatus().io.ok, "malformed query rejected"); }
     badQuery = 0;
@@ -281,13 +281,13 @@ int main(int argc, char** argv) {
             app.setPalette(palette); app.setStyleSheet(ks::ui::BuildStatusRoleStyleRules());
             for (unsigned long backend : {KSWORD_ARK_HVM_BACKEND_VMX, KSWORD_ARK_HVM_BACKEND_SVM}) {
                 reset(backend);
-                KvmDock dock;
+                HvmDock dock;
                 dock.m_queryInFlight = true;
                 dock.m_guestVmPanel->m_queryInFlight = true;
                 dock.m_guestVmPanel->m_vmwareQueryValid = true;
                 dock.m_hvmTab->m_firstRefreshStarted = true;
-                dock.applyState(ksword::kvm::stateFromStatus(status()));
-                dock.m_guestVmPanel->applyState(ksword::kvm::stateFromStatus(status()));
+                dock.applyState(ksword::hvm::stateFromStatus(status()));
+                dock.m_guestVmPanel->applyState(ksword::hvm::stateFromStatus(status()));
                 dock.m_hvmTab->applyStatus(status());
                 if (lang == QStringLiteral("en-US")) {
                     check(!QRegularExpression(QStringLiteral("[\\x{4e00}-\\x{9fff}]"))
@@ -326,7 +326,7 @@ int main(int argc, char** argv) {
                     check(dock.m_hvmTab->m_cpuTable->columnCount() == 6, "different generation not merged");
                     snapshot.stateFlags = KSWORD_ARK_HVM_STATE_FAULTED | KSWORD_ARK_HVM_STATE_ROLLBACK_REQUIRED;
                     snapshot.residentProcessorCount = 1;
-                    dock.m_hvmTab->applyStatus(status()); dock.applyState(ksword::kvm::stateFromStatus(status()));
+                    dock.m_hvmTab->applyStatus(status()); dock.applyState(ksword::hvm::stateFromStatus(status()));
                     check(dock.m_hvmTab->m_stopResidentButton->isEnabled() && dock.m_residentButton->isEnabled(), "both pages can stop partial rollback");
                     for (int scenario = 0; scenario < 6; ++scenario) {
                         reset(); bool admitted = false;
@@ -335,10 +335,10 @@ int main(int argc, char** argv) {
                         if (scenario >= 2 && scenario <= 4) {
                             snapshot.featureFlags |= KSWORD_ARK_HVM_FEATURE_HYPERVISOR_PRESENT;
                             std::memcpy(snapshot.hypervisorVendor, scenario == 4 ? "UnknownOuter" : "VMwareVMware", 12);
-                            ksword::kvm::setNestedAllowed(scenario != 2); admitted = scenario == 3;
+                            ksword::hvm::setNestedAllowed(scenario != 2); admitted = scenario == 3;
                         }
                         if (scenario == 5) { snapshot.featureFlags &= ~KSWORD_ARK_HVM_FEATURE_NESTED_SVM_DISPATCH; admitted = true; }
-                        const auto state = ksword::kvm::stateFromStatus(status());
+                        const auto state = ksword::hvm::stateFromStatus(status());
                         dock.applyState(state); dock.m_guestVmPanel->applyState(state); dock.m_hvmTab->applyStatus(status());
                         check(dock.m_prepareButton->isEnabled() == admitted && dock.m_hvmTab->m_prepareButton->isEnabled() == admitted, "control and evidence use identical environment gate");
                         check(dock.m_guestVmPanel->m_doAll->isEnabled() == (admitted && scenario != 5), "guest activation observes hardware and old-driver gate");
@@ -351,7 +351,7 @@ int main(int argc, char** argv) {
     }
     reset();
     {
-        KvmDock dock; dock.m_queryInFlight = true;
+        HvmDock dock; dock.m_queryInFlight = true;
         QTimer dismiss;
         QObject::connect(&dismiss, &QTimer::timeout, []() {
             if (auto* dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget())) { dialog->accept(); }
@@ -363,18 +363,18 @@ int main(int argc, char** argv) {
         check(!dock.m_hvmTab->m_operationRunning && dock.m_hvmTab->m_cpuTable->columnCount() == 9,
             "AMD evidence includes fresh metrics after lifecycle control");
     }
-    reset(); KvmGuestVmPanel panel; panel.m_queryInFlight = true;
+    reset(); HvmGuestVmPanel panel; panel.m_queryInFlight = true;
     failCommand = KSWORD_ARK_HVM_CONTROL_START_RESIDENT;
-    KvmGuestVmPanel::enableAllSwitches();
-    check(!KvmGuestVmPanel::startMonitor().isEmpty(), "guest workflow reports start failure");
+    HvmGuestVmPanel::enableAllSwitches();
+    check(!HvmGuestVmPanel::startMonitor().isEmpty(), "guest workflow reports start failure");
     check(scmMutations == 0, "failure never restarts VMware services");
-    reset(); ksword::kvm::setNestedDispatchEnabled(true); snapshot.stateFlags = KSWORD_ARK_HVM_STATE_RESOURCES_READY | KSWORD_ARK_HVM_STATE_RESIDENT_ACTIVE;
+    reset(); ksword::hvm::setNestedDispatchEnabled(true); snapshot.stateFlags = KSWORD_ARK_HVM_STATE_RESOURCES_READY | KSWORD_ARK_HVM_STATE_RESIDENT_ACTIVE;
     snapshot.residentProcessorCount = 2;
     snapshot.featureFlags |= KSWORD_ARK_HVM_FEATURE_NESTED_SVM_PREPARED | KSWORD_ARK_HVM_FEATURE_NESTED_SVM_ARMED;
-    panel.m_vmwareQueryValid = false; panel.applyState(ksword::kvm::stateFromStatus(status()));
+    panel.m_vmwareQueryValid = false; panel.applyState(ksword::hvm::stateFromStatus(status()));
     check(panel.m_stepRestartVmware.status->text() != ks::i18n::sourceText(QStringLiteral("没装 VMware")), "SCM query failure is not treated as VMware absent");
     check(panel.m_verdict->text() == ks::i18n::sourceText(QStringLiteral("无法查询 VMware 驱动服务，未继续重启。")), "SCM failure cannot complete workflow");
-    snapshot.backend = KSWORD_ARK_HVM_BACKEND_NONE; panel.applyState(ksword::kvm::stateFromStatus(status()));
+    snapshot.backend = KSWORD_ARK_HVM_BACKEND_NONE; panel.applyState(ksword::hvm::stateFromStatus(status()));
     check(!panel.m_doAll->isEnabled() && !panel.m_stepStartMonitor.action->isEnabled(), "unknown backend closes guest actions");
     std::cout << "HVM_UI_TESTS checks=" << checks << " failures=" << failures << '\n';
     return failures ? 1 : 0;

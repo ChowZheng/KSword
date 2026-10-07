@@ -4,7 +4,7 @@
 //
 // 为什么需要它：QHBoxLayout 在宽度不够时不会换行，也不会省略号，而是把每个
 // 子控件压到 sizeHint 以下——QPushButton 的文字就被**直接裁掉**。1024×768
-// 上 KVM 页那两排按钮正是这么变成「efresh Capabilitie」「'repare VMX/EP」的：
+// 上 HVM 页那两排按钮正是这么变成「efresh Capabilitie」「'repare VMX/EP」的：
 // 布局本身没报错，按钮也还能点，但标签读不出来了。
 //
 // 用 QGridLayout 固定列数不能解决问题：列数在构造期就定死了，宽窗口浪费一半

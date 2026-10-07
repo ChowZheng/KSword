@@ -534,7 +534,7 @@ struct KswordCapabilityConstraintView final {
 };
 
 struct KswordCapabilityInput final {
-    std::string capabilityId;  // 例如 "kvm.ept.view"
+    std::string capabilityId;  // 例如 "hvm.ept.view"
     // 来源直接观测到的"能不能用"。只有 availabilityOutcome 携带观测时才被采纳。
     TriState observedAvailable = TriState::Unknown;
     CollectionOutcome availabilityOutcome;

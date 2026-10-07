@@ -5,7 +5,7 @@
 #include "../UI/IntegrityRiskPresentation.h"
 #include "../UI/KernelDisassemblyDialog.h"
 // IDT/GDT 表项、它指向的代码、以及这张表所在页的 PTE，三条监视共用统一入口。
-#include "../UI/KvmWatchDialog.h"
+#include "../UI/HvmWatchDialog.h"
 #include "../UI/TableInteractionSupport.h"
 #include "../UI/VisibleTableWidget.h"
 #include "../theme.h"

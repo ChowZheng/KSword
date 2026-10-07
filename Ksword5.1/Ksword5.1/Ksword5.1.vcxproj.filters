@@ -60,28 +60,28 @@
     <QtMoc Include="Ksword5.h">
       <Filter>Header Files</Filter>
     </QtMoc>
-    <QtMoc Include="UI\KvmMemoryDialog.h">
+    <QtMoc Include="UI\HvmMemoryDialog.h">
       <Filter>Header Files</Filter>
     </QtMoc>
-    <QtMoc Include="UI\KvmViewDialog.h">
+    <QtMoc Include="UI\HvmViewDialog.h">
       <Filter>Header Files</Filter>
     </QtMoc>
-    <QtMoc Include="UI\KvmDomainDialog.h">
+    <QtMoc Include="UI\HvmDomainDialog.h">
       <Filter>Header Files</Filter>
     </QtMoc>
-    <QtMoc Include="UI\KvmMsrPolicyDialog.h">
+    <QtMoc Include="UI\HvmMsrPolicyDialog.h">
       <Filter>Header Files</Filter>
     </QtMoc>
-    <QtMoc Include="UI\KvmProcessDialog.h">
+    <QtMoc Include="UI\HvmProcessDialog.h">
       <Filter>Header Files</Filter>
     </QtMoc>
-    <QtMoc Include="UI\KvmWatchDialog.h">
+    <QtMoc Include="UI\HvmWatchDialog.h">
       <Filter>Header Files</Filter>
     </QtMoc>
-    <QtMoc Include="UI\KvmEventDialog.h">
+    <QtMoc Include="UI\HvmEventDialog.h">
       <Filter>Header Files</Filter>
     </QtMoc>
-    <QtMoc Include="UI\KvmCrPolicyDialog.h">
+    <QtMoc Include="UI\HvmCrPolicyDialog.h">
       <Filter>Header Files</Filter>
     </QtMoc>
   </ItemGroup>
@@ -95,7 +95,7 @@
     <ClCompile Include="MainWindow.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="MainWindow.Kvm.cpp">
+    <ClCompile Include="MainWindow.Hvm.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="MiscDock\BootEditor\BootEditorTab.Actions.cpp">
@@ -332,7 +332,7 @@
     <ClCompile Include="KernelDock\KernelHvmTab.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="KvmDock\KvmDock.cpp">
+    <ClCompile Include="HvmDock\HvmDock.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="KernelDock\KernelSlatIommuAuditTab.cpp">
@@ -1289,64 +1289,64 @@
     <ClCompile Include="..\..\shared\evidence\HookPatchCompose.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="UI\KvmEptLeafProbe.cpp">
+    <ClCompile Include="UI\HvmEptLeafProbe.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="UI\KvmWriteAccessGate.cpp">
+    <ClCompile Include="UI\HvmWriteAccessGate.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="UI\KvmHookWizard.cpp">
+    <ClCompile Include="UI\HvmHookWizard.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="UI\KvmHookWizard.Patch.cpp">
+    <ClCompile Include="UI\HvmHookWizard.Patch.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="UI\KvmHookWizard.Verify.cpp">
+    <ClCompile Include="UI\HvmHookWizard.Verify.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="UI\KvmControl.cpp">
+    <ClCompile Include="UI\HvmControl.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="UI\KvmMemoryDialog.cpp">
+    <ClCompile Include="UI\HvmMemoryDialog.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="UI\KvmViewDialog.cpp">
+    <ClCompile Include="UI\HvmViewDialog.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="UI\KvmDomainDialog.cpp">
+    <ClCompile Include="UI\HvmDomainDialog.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="UI\KvmMsrPolicyDialog.cpp">
+    <ClCompile Include="UI\HvmMsrPolicyDialog.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="UI\KvmProcessDialog.cpp">
+    <ClCompile Include="UI\HvmProcessDialog.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="UI\KvmWatch.cpp">
+    <ClCompile Include="UI\HvmWatch.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="UI\KvmWatchEvidence.cpp">
+    <ClCompile Include="UI\HvmWatchEvidence.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="UI\KvmWatchPanel.cpp">
+    <ClCompile Include="UI\HvmWatchPanel.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="UI\KvmWatchPanel.Evidence.cpp">
+    <ClCompile Include="UI\HvmWatchPanel.Evidence.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="UI\KvmWatchDialog.cpp">
+    <ClCompile Include="UI\HvmWatchDialog.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="UI\KvmWatchEventDialog.cpp">
+    <ClCompile Include="UI\HvmWatchEventDialog.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="ProcessDock\ProcessDetailWindow.HvmWatch.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="UI\KvmEventDialog.cpp">
+    <ClCompile Include="UI\HvmEventDialog.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="UI\KvmCrPolicyDialog.cpp">
+    <ClCompile Include="UI\HvmCrPolicyDialog.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="UI\CommandExecutionPopup.cpp">
@@ -2392,22 +2392,22 @@
     <ClInclude Include="..\..\shared\evidence\MemoryAddressInput.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="UI\KvmEptLeafProbe.h">
+    <ClInclude Include="UI\HvmEptLeafProbe.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="UI\KvmWriteAccessGate.h">
+    <ClInclude Include="UI\HvmWriteAccessGate.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="UI\KvmHookPlan.h">
+    <ClInclude Include="UI\HvmHookPlan.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="UI\KvmControl.h">
+    <ClInclude Include="UI\HvmControl.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="UI\KvmWatchPanel.h">
+    <ClInclude Include="UI\HvmWatchPanel.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="UI\KvmWatchEventDialog.h">
+    <ClInclude Include="UI\HvmWatchEventDialog.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <QtMoc Include="UI\CodeEditorWidget.h">
@@ -2494,7 +2494,7 @@
     <QtMoc Include="UI\WindowPickerButton.h">
       <Filter>Header Files</Filter>
     </QtMoc>
-    <QtMoc Include="UI\KvmHookWizard.h">
+    <QtMoc Include="UI\HvmHookWizard.h">
       <Filter>Header Files</Filter>
     </QtMoc>
   </ItemGroup>
@@ -2598,7 +2598,7 @@
     <ClInclude Include="KernelDock\KernelHvmTab.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="KvmDock\KvmDock.h">
+    <ClInclude Include="HvmDock\HvmDock.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="KernelDock\KernelSlatIommuAuditTab.h">
@@ -3075,10 +3075,10 @@
     </MASM>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="UI\KvmGuestVmPanel.cpp">
+    <ClCompile Include="UI\HvmGuestVmPanel.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClInclude Include="UI\KvmGuestVmPanel.h">
+    <ClInclude Include="UI\HvmGuestVmPanel.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>

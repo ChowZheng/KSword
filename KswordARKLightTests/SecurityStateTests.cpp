@@ -1315,39 +1315,39 @@ void TestCodeIntegrity(KswordTests::Suite& s) {
 // ---------------------------------------------------------------------------
 void TestConstraintKeyWordGate(KswordTests::Suite& s) {
     // --- 13 个动作词逐个都要拦住 ---
-    s.expect(!IsStatementOnlyConstraintKey("kvm.action.disable.hvci"),
+    s.expect(!IsStatementOnlyConstraintKey("hvm.action.disable.hvci"),
              L"S-06 word gate rejects disable");
-    s.expect(!IsStatementOnlyConstraintKey("kvm.action.turnOff.vbs"),
+    s.expect(!IsStatementOnlyConstraintKey("hvm.action.turnOff.vbs"),
              L"S-06 word gate rejects turnoff");
-    s.expect(!IsStatementOnlyConstraintKey("kvm.action.switch-off.hvci"),
+    s.expect(!IsStatementOnlyConstraintKey("hvm.action.switch-off.hvci"),
              L"S-06 word gate rejects switchoff");
-    s.expect(!IsStatementOnlyConstraintKey("kvm.action.shutdown.smm"),
+    s.expect(!IsStatementOnlyConstraintKey("hvm.action.shutdown.smm"),
              L"S-06 word gate rejects shutdown");
-    s.expect(!IsStatementOnlyConstraintKey("kvm.action.uninstall.driver"),
+    s.expect(!IsStatementOnlyConstraintKey("hvm.action.uninstall.driver"),
              L"S-06 word gate rejects uninstall");
-    s.expect(!IsStatementOnlyConstraintKey("kvm.action.bypass.hvci"),
+    s.expect(!IsStatementOnlyConstraintKey("hvm.action.bypass.hvci"),
              L"S-06 word gate rejects bypass");
-    s.expect(!IsStatementOnlyConstraintKey("kvm.remediation.hvci"),
+    s.expect(!IsStatementOnlyConstraintKey("hvm.remediation.hvci"),
              L"S-06 word gate rejects the remediat stem");
-    s.expect(!IsStatementOnlyConstraintKey("kvm.recommend.reboot"),
+    s.expect(!IsStatementOnlyConstraintKey("hvm.recommend.reboot"),
              L"S-06 word gate rejects recommend");
-    s.expect(!IsStatementOnlyConstraintKey("kvm.suggestion.hvci"),
+    s.expect(!IsStatementOnlyConstraintKey("hvm.suggestion.hvci"),
              L"S-06 word gate rejects suggest");
-    s.expect(!IsStatementOnlyConstraintKey("kvm.workaround.forHvci"),
+    s.expect(!IsStatementOnlyConstraintKey("hvm.workaround.forHvci"),
              L"S-06 word gate rejects workaround");
-    s.expect(!IsStatementOnlyConstraintKey("kvm.how-to-fix.hvci"),
+    s.expect(!IsStatementOnlyConstraintKey("hvm.how-to-fix.hvci"),
              L"S-06 word gate rejects howtofix");
-    s.expect(!IsStatementOnlyConstraintKey("kvm.please-turn.off.hvci"),
+    s.expect(!IsStatementOnlyConstraintKey("hvm.please-turn.off.hvci"),
              L"S-06 word gate rejects pleaseturn");
-    s.expect(!IsStatementOnlyConstraintKey("kvm.you-should.rebootFirst"),
+    s.expect(!IsStatementOnlyConstraintKey("hvm.you-should.rebootFirst"),
              L"S-06 word gate rejects youshould");
 
     // 大小写与分隔符变体照样拦住。
-    s.expect(!IsStatementOnlyConstraintKey("kvm.fix.disableHvci"),
+    s.expect(!IsStatementOnlyConstraintKey("hvm.fix.disableHvci"),
              L"S-06 word gate rejects an imperative glued to its object");
-    s.expect(!IsStatementOnlyConstraintKey("kvm.turn-off.memoryIntegrity"),
+    s.expect(!IsStatementOnlyConstraintKey("hvm.turn-off.memoryIntegrity"),
              L"S-06 word gate rejects a hyphen split action phrase");
-    s.expect(!IsStatementOnlyConstraintKey("kvm.Turn_Off.protection"),
+    s.expect(!IsStatementOnlyConstraintKey("hvm.Turn_Off.protection"),
              L"S-06 word gate rejects case and underscore variants");
     s.expect(!IsStatementOnlyConstraintKey("dse.fix.disableMemoryIntegrityAndReboot"),
              L"S-06 word gate rejects the full disable-and-reboot advice key");
@@ -1355,37 +1355,37 @@ void TestConstraintKeyWordGate(KswordTests::Suite& s) {
 
     // 时态豁免只给动作动词的 -ed 过去分词。动名词还在描述动作，劝说词变成任何形态
     // 都还是建议 —— 这三条是"豁免不能宽到把建议放回来"的门闩。
-    s.expect(!IsStatementOnlyConstraintKey("kvm.fix.byDisablingHvci"),
+    s.expect(!IsStatementOnlyConstraintKey("hvm.fix.byDisablingHvci"),
              L"S-06 a gerund of an action verb is still an action, not a state");
-    s.expect(!IsStatementOnlyConstraintKey("kvm.fix.byTurningOffMemoryIntegrity"),
+    s.expect(!IsStatementOnlyConstraintKey("hvm.fix.byTurningOffMemoryIntegrity"),
              L"S-06 an inflected two word action phrase is still an action");
-    s.expect(!IsStatementOnlyConstraintKey("kvm.hint.suggestedFix"),
+    s.expect(!IsStatementOnlyConstraintKey("hvm.hint.suggestedFix"),
              L"S-06 the past participle of an advice verb is still advice");
-    s.expect(!IsStatementOnlyConstraintKey("kvm.hint.recommendedReboot"),
+    s.expect(!IsStatementOnlyConstraintKey("hvm.hint.recommendedReboot"),
              L"S-06 a recommended action is advice regardless of its tense");
 
     // --- 近似的**陈述**键必须放行。这些是子串匹配下的假阳性：键里出现动作词的
     // 字母序列，但整句在陈述现状。被误拦时它们一条也进不了 accepted，
     // 于是 ExplainKswordCapability 会顺着 fall-through 把能力放行 —— 闸变成洞。 ---
-    s.expect(IsStatementOnlyConstraintKey("kvm.constraint.hvci.running"),
+    s.expect(IsStatementOnlyConstraintKey("hvm.constraint.hvci.running"),
              L"S-06 a statement style constraint key is accepted");
-    s.expect(IsStatementOnlyConstraintKey("kvm.constraint.vendor.amd"),
+    s.expect(IsStatementOnlyConstraintKey("hvm.constraint.vendor.amd"),
              L"S-06 a vendor constraint key is accepted");
-    s.expect(IsStatementOnlyConstraintKey("kvm.constraint.dse.isDisabledByPolicy"),
+    s.expect(IsStatementOnlyConstraintKey("hvm.constraint.dse.isDisabledByPolicy"),
              L"S-06 isDisabledByPolicy is a statement, not an instruction to disable");
-    s.expect(IsStatementOnlyConstraintKey("kvm.constraint.hvci.notDisabled"),
+    s.expect(IsStatementOnlyConstraintKey("hvm.constraint.hvci.notDisabled"),
              L"S-06 notDisabled is a statement, not an instruction to disable");
-    s.expect(IsStatementOnlyConstraintKey("kvm.constraint.hvci.disabled"),
+    s.expect(IsStatementOnlyConstraintKey("hvm.constraint.hvci.disabled"),
              L"S-06 the past participle disabled states a current state");
     s.expect(IsStatementOnlyConstraintKey("vt.constraint.bypassDetected"),
              L"S-06 bypassDetected states an observation, it does not ask for a bypass");
-    s.expect(IsStatementOnlyConstraintKey("kvm.constraint.driver.uninstalled"),
+    s.expect(IsStatementOnlyConstraintKey("hvm.constraint.driver.uninstalled"),
              L"S-06 uninstalled states a driver state, it does not ask for an uninstall");
-    s.expect(IsStatementOnlyConstraintKey("kvm.constraint.smm.shutdownPending"),
+    s.expect(IsStatementOnlyConstraintKey("hvm.constraint.smm.shutdownPending"),
              L"S-06 shutdownPending states a pending state, it does not ask for a shutdown");
-    s.expect(IsStatementOnlyConstraintKey("kvm.constraint.vbs.turnedOff"),
+    s.expect(IsStatementOnlyConstraintKey("hvm.constraint.vbs.turnedOff"),
              L"S-06 turnedOff states a configuration, it is not the turn-off action phrase");
-    s.expect(IsStatementOnlyConstraintKey("kvm.constraint.profile.absent"),
+    s.expect(IsStatementOnlyConstraintKey("hvm.constraint.profile.absent"),
              L"S-06 a profile absence statement is accepted");
 }
 
@@ -1394,19 +1394,19 @@ void TestConstraintKeyWordGate(KswordTests::Suite& s) {
 // ---------------------------------------------------------------------------
 void TestCapabilityExplanation(KswordTests::Suite& s) {
     // 词表闸单测。
-    s.expect(IsStatementOnlyConstraintKey("kvm.constraint.hvci.running"),
+    s.expect(IsStatementOnlyConstraintKey("hvm.constraint.hvci.running"),
              L"S-06 a statement style constraint key is accepted");
-    s.expect(IsStatementOnlyConstraintKey("kvm.constraint.vendor.amd"),
+    s.expect(IsStatementOnlyConstraintKey("hvm.constraint.vendor.amd"),
              L"S-06 a vendor constraint key is accepted");
-    s.expect(!IsStatementOnlyConstraintKey("kvm.fix.disableHvci"),
+    s.expect(!IsStatementOnlyConstraintKey("hvm.fix.disableHvci"),
              L"S-06 a key containing disable is rejected");
-    s.expect(!IsStatementOnlyConstraintKey("kvm.turn-off.memoryIntegrity"),
+    s.expect(!IsStatementOnlyConstraintKey("hvm.turn-off.memoryIntegrity"),
              L"S-06 a key containing turn-off is rejected");
-    s.expect(!IsStatementOnlyConstraintKey("kvm.Turn_Off.protection"),
+    s.expect(!IsStatementOnlyConstraintKey("hvm.Turn_Off.protection"),
              L"S-06 case and separator variants are rejected too");
-    s.expect(!IsStatementOnlyConstraintKey("kvm.recommend.reboot"),
+    s.expect(!IsStatementOnlyConstraintKey("hvm.recommend.reboot"),
              L"S-06 a key containing recommend is rejected");
-    s.expect(!IsStatementOnlyConstraintKey("kvm.suggestion.hvci"),
+    s.expect(!IsStatementOnlyConstraintKey("hvm.suggestion.hvci"),
              L"S-06 a key containing suggest is rejected");
     s.expect(!IsStatementOnlyConstraintKey(""), L"S-06 an empty key is not a statement");
 
@@ -1428,25 +1428,25 @@ void TestCapabilityExplanation(KswordTests::Suite& s) {
     // 四类约束分别表示。
     {
         KswordCapabilityInput input;
-        input.capabilityId = "kvm.ept.view";
+        input.capabilityId = "hvm.ept.view";
         KswordCapabilityConstraint vendorConstraint;
         vendorConstraint.kind = CapabilityConstraintKind::VendorUnsupported;
-        vendorConstraint.constraintKey = "kvm.constraint.vendor.amdBackendAbsent";
+        vendorConstraint.constraintKey = "hvm.constraint.vendor.amdBackendAbsent";
         vendorConstraint.sourceFieldId = "cpu.vendor";
         vendorConstraint.observed = RawText("AuthenticAMD");
         KswordCapabilityConstraint driverConstraint;
         driverConstraint.kind = CapabilityConstraintKind::DriverMissing;
-        driverConstraint.constraintKey = "kvm.constraint.driver.notLoaded";
+        driverConstraint.constraintKey = "hvm.constraint.driver.notLoaded";
         driverConstraint.sourceFieldId = "driver.loaded";
         driverConstraint.observed = RawText("False");
         KswordCapabilityConstraint profileConstraint;
         profileConstraint.kind = CapabilityConstraintKind::ProfileMissing;
-        profileConstraint.constraintKey = "kvm.constraint.profile.absent";
+        profileConstraint.constraintKey = "hvm.constraint.profile.absent";
         profileConstraint.sourceFieldId = "dyndata.profile";
         profileConstraint.observed = RawText("missing:26300.9022");
         KswordCapabilityConstraint securityConstraint;
         securityConstraint.kind = CapabilityConstraintKind::SecurityConfiguration;
-        securityConstraint.constraintKey = "kvm.constraint.hvci.running";
+        securityConstraint.constraintKey = "hvm.constraint.hvci.running";
         securityConstraint.sourceFieldId = "hvci.running";
         securityConstraint.observed = RawNumber("2", 2U);
         input.constraints = {vendorConstraint, driverConstraint, profileConstraint,
@@ -1498,10 +1498,10 @@ void TestCapabilityExplanation(KswordTests::Suite& s) {
     // 约束指向没采到的字段：不算数。
     {
         KswordCapabilityInput input;
-        input.capabilityId = "kvm.msr.policy";
+        input.capabilityId = "hvm.msr.policy";
         KswordCapabilityConstraint constraint;
         constraint.kind = CapabilityConstraintKind::QueryUnavailable;
-        constraint.constraintKey = "kvm.constraint.query.timeout";
+        constraint.constraintKey = "hvm.constraint.query.timeout";
         constraint.sourceFieldId = "query.broken";
         input.constraints = {constraint};
         const KswordCapabilityExplanation explanation = ExplainKswordCapability(input, report.fields);
@@ -1516,10 +1516,10 @@ void TestCapabilityExplanation(KswordTests::Suite& s) {
     // 约束指向不存在的字段。
     {
         KswordCapabilityInput input;
-        input.capabilityId = "kvm.ept.view";
+        input.capabilityId = "hvm.ept.view";
         KswordCapabilityConstraint constraint;
         constraint.kind = CapabilityConstraintKind::HardwareUnsupported;
-        constraint.constraintKey = "kvm.constraint.hardware.absent";
+        constraint.constraintKey = "hvm.constraint.hardware.absent";
         constraint.sourceFieldId = "does.not.exist";
         input.constraints = {constraint};
         const KswordCapabilityExplanation explanation = ExplainKswordCapability(input, report.fields);
@@ -1532,7 +1532,7 @@ void TestCapabilityExplanation(KswordTests::Suite& s) {
     // 明确观测到可用：允许启动。
     {
         KswordCapabilityInput input;
-        input.capabilityId = "kvm.ept.view";
+        input.capabilityId = "hvm.ept.view";
         input.observedAvailable = TriState::Yes;
         input.availabilityOutcome = CollectionOutcome::success();
         const KswordCapabilityExplanation explanation = ExplainKswordCapability(input, report.fields);
@@ -1544,7 +1544,7 @@ void TestCapabilityExplanation(KswordTests::Suite& s) {
     // 没约束也没观测：未知，不放行。
     {
         KswordCapabilityInput input;
-        input.capabilityId = "kvm.ept.view";
+        input.capabilityId = "hvm.ept.view";
         const KswordCapabilityExplanation explanation = ExplainKswordCapability(input, report.fields);
         s.expect(explanation.available == TriState::Unknown,
                  L"S-06 with no evidence the availability is Unknown");
@@ -1554,12 +1554,12 @@ void TestCapabilityExplanation(KswordTests::Suite& s) {
     // 约束与"可用"观测矛盾：取受限的一侧并记账。
     {
         KswordCapabilityInput input;
-        input.capabilityId = "kvm.ept.view";
+        input.capabilityId = "hvm.ept.view";
         input.observedAvailable = TriState::Yes;
         input.availabilityOutcome = CollectionOutcome::success();
         KswordCapabilityConstraint constraint;
         constraint.kind = CapabilityConstraintKind::SecurityConfiguration;
-        constraint.constraintKey = "kvm.constraint.hvci.running";
+        constraint.constraintKey = "hvm.constraint.hvci.running";
         constraint.sourceFieldId = "hvci.running";
         input.constraints = {constraint};
         const KswordCapabilityExplanation explanation = ExplainKswordCapability(input, report.fields);
@@ -1576,12 +1576,12 @@ void TestCapabilityExplanation(KswordTests::Suite& s) {
     // (a) 约束指向一个超时没采到的字段。
     {
         KswordCapabilityInput input;
-        input.capabilityId = "kvm.ept.view";
+        input.capabilityId = "hvm.ept.view";
         input.observedAvailable = TriState::Yes;
         input.availabilityOutcome = CollectionOutcome::success();
         KswordCapabilityConstraint constraint;
         constraint.kind = CapabilityConstraintKind::SecurityConfiguration;
-        constraint.constraintKey = "kvm.constraint.hvci.running";
+        constraint.constraintKey = "hvm.constraint.hvci.running";
         constraint.sourceFieldId = "query.broken";
         input.constraints = {constraint};
         const KswordCapabilityExplanation explanation = ExplainKswordCapability(input, report.fields);
@@ -1600,7 +1600,7 @@ void TestCapabilityExplanation(KswordTests::Suite& s) {
     // (b) 约束键被词表闸拒收。拒收的是键，不是约束存在这件事。
     {
         KswordCapabilityInput input;
-        input.capabilityId = "kvm.ept.view";
+        input.capabilityId = "hvm.ept.view";
         input.observedAvailable = TriState::Yes;
         input.availabilityOutcome = CollectionOutcome::success();
         KswordCapabilityConstraint advice;
@@ -1623,12 +1623,12 @@ void TestCapabilityExplanation(KswordTests::Suite& s) {
     // (c) 约束指向根本不存在的字段。
     {
         KswordCapabilityInput input;
-        input.capabilityId = "kvm.ept.view";
+        input.capabilityId = "hvm.ept.view";
         input.observedAvailable = TriState::Yes;
         input.availabilityOutcome = CollectionOutcome::success();
         KswordCapabilityConstraint constraint;
         constraint.kind = CapabilityConstraintKind::HardwareUnsupported;
-        constraint.constraintKey = "kvm.constraint.hardware.absent";
+        constraint.constraintKey = "hvm.constraint.hardware.absent";
         constraint.sourceFieldId = "does.not.exist";
         input.constraints = {constraint};
         const KswordCapabilityExplanation explanation = ExplainKswordCapability(input, report.fields);
@@ -1641,12 +1641,12 @@ void TestCapabilityExplanation(KswordTests::Suite& s) {
     // (d) 反向：来源明确说"不可用"时，判不了的约束不把这条负面证据抹成 Unknown。
     {
         KswordCapabilityInput input;
-        input.capabilityId = "kvm.ept.view";
+        input.capabilityId = "hvm.ept.view";
         input.observedAvailable = TriState::No;
         input.availabilityOutcome = CollectionOutcome::success();
         KswordCapabilityConstraint constraint;
         constraint.kind = CapabilityConstraintKind::QueryUnavailable;
-        constraint.constraintKey = "kvm.constraint.query.timeout";
+        constraint.constraintKey = "hvm.constraint.query.timeout";
         constraint.sourceFieldId = "query.broken";
         input.constraints = {constraint};
         const KswordCapabilityExplanation explanation = ExplainKswordCapability(input, report.fields);
@@ -1660,9 +1660,9 @@ void TestCapabilityExplanation(KswordTests::Suite& s) {
     //     available 会落成 Yes 且 mayStart()=1。 ---
     {
         const char* const statementKeys[] = {
-            "kvm.constraint.dse.isDisabledByPolicy",
-            "kvm.constraint.hvci.notDisabled",
-            "kvm.constraint.smm.shutdownPending",
+            "hvm.constraint.dse.isDisabledByPolicy",
+            "hvm.constraint.hvci.notDisabled",
+            "hvm.constraint.smm.shutdownPending",
         };
         const wchar_t* const labels[] = {
             L"S-06 isDisabledByPolicy is accepted and blocks a capability claiming to be available",
@@ -1671,7 +1671,7 @@ void TestCapabilityExplanation(KswordTests::Suite& s) {
         };
         for (std::size_t i = 0; i < 3U; ++i) {
             KswordCapabilityInput input;
-            input.capabilityId = "kvm.ept.view";
+            input.capabilityId = "hvm.ept.view";
             input.observedAvailable = TriState::Yes;
             input.availabilityOutcome = CollectionOutcome::success();
             KswordCapabilityConstraint constraint;
@@ -1692,10 +1692,10 @@ void TestCapabilityExplanation(KswordTests::Suite& s) {
     // S-06 要求"权限不足"能单独表达出来，而不是混进 QueryUnavailable。
     {
         KswordCapabilityInput input;
-        input.capabilityId = "kvm.msr.policy";
+        input.capabilityId = "hvm.msr.policy";
         KswordCapabilityConstraint constraint;
         constraint.kind = CapabilityConstraintKind::PrivilegeInsufficient;
-        constraint.constraintKey = "kvm.constraint.privilege.notElevated";
+        constraint.constraintKey = "hvm.constraint.privilege.notElevated";
         constraint.sourceFieldId = "driver.loaded";
         constraint.observed = RawText("False");
         input.constraints = {constraint};
