@@ -719,6 +719,18 @@
     <ClCompile Include="OtherDock\WindowInputControl.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="OtherDock\WindowControlInspection.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="OtherDock\WindowControlInspectionInput.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="OtherDock\WindowControlInspectionOverlay.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="OtherDock\WindowControlInspectionPage.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="PrivilegeDock\PrivilegeDock.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -2018,6 +2030,15 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="OtherDock\WindowInputControl.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="OtherDock\WindowControlInspectionInput.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="OtherDock\WindowControlInspectionOverlay.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="OtherDock\WindowControlInspection.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="..\..\shared\window\DwmZOrderProtocol.h">

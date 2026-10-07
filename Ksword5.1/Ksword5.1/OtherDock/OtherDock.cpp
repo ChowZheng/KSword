@@ -19,6 +19,7 @@
 #include "WindowListInteraction.h"
 #include <QSignalBlocker>
 #include "WindowInputControl.h"
+#include "WindowControlInspection.h"
 #include "../theme.h"
 #include "../UI/CodeEditorWidget.h"
 
@@ -1684,6 +1685,12 @@ private:
         m_tabWidget->addTab(classPage, QStringLiteral("类信息"));
         ks::i18n::LanguageManager::instance().bindTab(
             m_tabWidget, classPage, QStringLiteral("window.detail.tab.class"), QStringLiteral("类信息"));
+
+        auto* inspectionPage = ks::control_inspection::CreatePage(toHwnd(m_info.hwndValue),
+            m_info.processId, m_info.threadId, m_info.processCreationTime100ns, m_tabWidget);
+        m_tabWidget->addTab(inspectionPage, QStringLiteral("控件检查"));
+        ks::i18n::LanguageManager::instance().bindTab(m_tabWidget, inspectionPage,
+            QStringLiteral("window.detail.tab.control_inspection"), QStringLiteral("控件检查"));
 
         // ==================== 4. 消息钩子 Tab ====================
         QWidget* hookPage = new QWidget(m_tabWidget);

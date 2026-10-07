@@ -422,6 +422,10 @@
     <ClCompile Include="OtherDock\DwmZOrderControl.cpp" />
     <ClCompile Include="OtherDock\WindowInputClient.cpp" />
     <ClCompile Include="OtherDock\WindowInputControl.cpp" />
+    <ClCompile Include="OtherDock\WindowControlInspection.cpp" />
+    <ClCompile Include="OtherDock\WindowControlInspectionInput.cpp" />
+    <ClCompile Include="OtherDock\WindowControlInspectionOverlay.cpp" />
+    <ClCompile Include="OtherDock\WindowControlInspectionPage.cpp" />
     <ClCompile Include="PrivilegeDock\PrivilegeDock.cpp" />
     <ClCompile Include="RegistryDock_Themed.cpp" />
     <ClCompile Include="RegistryDock\RegistryOptimizationPage.cpp" />
@@ -979,6 +983,9 @@
     <ClInclude Include="OtherDock\DwmZOrderControl.h" />
     <ClInclude Include="OtherDock\WindowInputClient.h" />
     <ClInclude Include="OtherDock\WindowInputControl.h" />
+    <ClInclude Include="OtherDock\WindowControlInspectionInput.h" />
+    <ClInclude Include="OtherDock\WindowControlInspectionOverlay.h" />
+    <ClInclude Include="OtherDock\WindowControlInspection.h" />
     <ClInclude Include="..\..\shared\window\DwmZOrderProtocol.h" />
     <ClInclude Include="..\..\shared\window\DwmRemoteLoader.h" />
     <QtMoc Include="PrivilegeDock\PrivilegeDock.h" />
