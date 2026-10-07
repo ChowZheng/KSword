@@ -201,6 +201,8 @@ NTSTATUS KswordSvmNestedInitializeGeneral(KSW_SVM_CPU* Cpu)
     /* Every virtual CPU uses its own cache epoch and composition pages. */
     io->Shadow = &nested->Shadow; io->Mmu = &nested->Config;
     io->ReuseNpt = 1;
+    /* Fresh local page reads replace repeated per-PTE NPT01 walks; no persistent cache is retained. */
+    io->SourceSyncPage = nested->SourceSyncPage;
     /* Bind the ordinary register image instead of a driver-owned fixed probe marker. */
     RtlZeroMemory(&nested->GeneralExecution, sizeof(nested->GeneralExecution));
     /* Hardware RAX/RSP remain in VMCB, while other GPRs use the established assembly prefix. */

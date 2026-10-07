@@ -52,8 +52,12 @@ int KswordSvmNestedReadPage(void* Context, KSW_SVM_U64 Address,
     if (!Destination || (Address & 4095ULL) || !KswordSvmNestedRamRange(nested, Address, 4096) ||
         KswordARKHvmPhysWindowMap(nested->Window, Address, 4096, &mapped) != KSW_HVM_PHYS_WINDOW_OK) { return 0; }
     for (word = 0; word < 512; ++word) {
+        /* Keep each source read atomic at the original aligned qword granularity. */
         ULONGLONG value = ((volatile ULONGLONG*)mapped)[word];
-        for (byte = 0; byte < 8; ++byte) { Destination[word * 8 + byte] = (unsigned char)(value >> (byte * 8)); }
+        /* Prepared VMCB/map/sync buffers are aligned; avoid eight shifts/stores per word. */
+        if (!((ULONG_PTR)Destination & 7U)) { ((ULONGLONG*)Destination)[word] = value; }
+        /* Preserve arbitrary destination alignment for the generic callback contract. */
+        else for (byte = 0; byte < 8; ++byte) { Destination[word * 8 + byte] = (unsigned char)(value >> (byte * 8)); }
     }
     KswordARKHvmPhysWindowUnmap(nested->Window);
     *WordsRead = 512;

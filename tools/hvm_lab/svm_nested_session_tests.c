@@ -16,6 +16,8 @@ typedef struct _MODEL {
     KSW_SVM_VMCB current, before;
     unsigned char msr[8192], iopm[12288], mergedMsr[8192], mergedIo[12288];
     unsigned failCommit, commitCalls, iterations, id;
+    unsigned pageReads[16], wordReads[16], failSourcePage;
+    unsigned char sourceScratch[4097];
 } MODEL;
 static MODEL model[8];
 __declspec(align(4096)) static KSW_SVM_U64 tables[8][4][512];
@@ -24,7 +26,17 @@ static int read_word(void* context, KSW_SVM_U64 pa, KSW_SVM_U64* value)
 {
     MODEL* m = context;
     if ((pa & 7) || pa >= sizeof(m->ram)) { return 0; }
+    ++m->wordReads[pa >> 12];
     *value = m->ram[pa >> 12][(pa & 4095) / 8]; return 1;
+}
+static int read_source_page(void* context, KSW_SVM_U64 pa, unsigned char* page, unsigned* words)
+{
+    MODEL* m = context;
+    *words = 0;
+    if ((pa & 4095) || pa >= sizeof(m->ram)) { return 0; }
+    ++m->pageReads[pa >> 12];
+    if (pa == 0x7000 && m->failSourcePage) { page[0] = 0xff; return 0; }
+    memcpy(page, m->ram[pa >> 12], 4096); *words = 512; return 1;
 }
 static int commit(void* context, KSW_SVM_U64 pa, const KSW_SVM_VMCB* image,
     unsigned op, unsigned np, unsigned* written)
@@ -379,6 +391,7 @@ static int test_npt_source_sync(void)
     for (scenario = 0; scenario < sizeof(changes) / sizeof(changes[0]); ++scenario) {
         KSW_SVM_U64 epoch;
         CHECK(initialize(m, 0)); m->io.ReuseNpt = m->mmu.OuterImmutable = 1;
+        m->io.Operand.ReadPage = read_source_page; m->io.SourceSyncPage = m->sourceScratch;
         m->ram[4][7] = 0x7007; m->ram[7][7] = 0x3067;
         CHECK(cache_roundtrip(m) == 0); epoch = m->shadow.Epoch;
         mapping.Status = KSW_NNPT_OK; mapping.Gpa = 0x1000; mapping.Epoch = epoch; mapping.Leaf = 0x3067;
@@ -409,6 +422,38 @@ static int test_npt_source_sync(void)
     CHECK(m->shadow.SourceCount == KSW_NSHADOW_SOURCE_WORDS && m->shadow.SourceUntracked);
     CHECK(!KswSvmNestedShadowSourcesMatch(&m->shadow, read_word, m));
     CHECK(KswSvmNestedShadowReset(&m->shadow) == KSW_NSHADOW_OK && !m->shadow.SourceCount && !m->shadow.SourceUntracked);
+    return 0;
+}
+static int test_source_bulk_capture(void)
+{
+    MODEL* m = &model[0];
+    unsigned mode, i;
+    for (mode = 0; mode < 3; ++mode) {
+        KSW_SVM_U64 epoch;
+        CHECK(initialize(m, 0)); m->io.ReuseNpt = m->mmu.OuterImmutable = 1;
+        m->ram[4][7] = 0x7007;
+        m->io.Operand.ReadPage = read_source_page;
+        m->io.SourceSyncPage = m->sourceScratch + (mode == 1);
+        m->failSourcePage = mode == 2;
+        CHECK(cache_roundtrip(m) == 0); epoch = m->shadow.Epoch;
+        /* A dense NPT12 source page must still compare every tracked entry. */
+        m->shadow.SourceCount = 200;
+        for (i = 0; i < 200; ++i) {
+            m->ram[7][i] = 0x3007 + 4096ULL * i;
+            m->shadow.SourceAddress[i] = 0x7000 + 8ULL * i;
+            m->shadow.SourceValue[i] = m->ram[7][i];
+        }
+        ((unsigned char*)m->ram[6])[KSW_VMCB_TLB] = 3;
+        memset(m->pageReads, 0, sizeof(m->pageReads));
+        memset(m->wordReads, 0, sizeof(m->wordReads));
+        CHECK(cache_roundtrip(m) == 0);
+        CHECK(m->shadow.Epoch == epoch && m->shadow.SourceCount == 200);
+        CHECK(m->pageReads[7] == 1 && m->wordReads[7] == (mode == 2 ? 200U : 0U));
+        /* The next VMRUN must recapture rather than trusting the previous image. */
+        m->ram[7][199] ^= 2;
+        CHECK(cache_roundtrip(m) == 0);
+        CHECK(m->pageReads[7] == 2 && m->shadow.Epoch == epoch + 1 && !m->shadow.SourceCount);
+    }
     return 0;
 }
 static int test_tlb_consumption(void)
@@ -482,7 +527,7 @@ static int test_perf_boundaries(void)
 int main(void)
 {
     HANDLE threads[8]; unsigned i; DWORD resultCode;
-    if (test_transitions() || test_event_consumption() || test_cache_lifetime() || test_cache_transfer_chain() || test_cache_counter_edges() || test_npt_source_sync() || test_tlb_consumption() || test_perf_boundaries()) { return 1; }
+    if (test_transitions() || test_event_consumption() || test_cache_lifetime() || test_cache_transfer_chain() || test_cache_counter_edges() || test_npt_source_sync() || test_source_bulk_capture() || test_tlb_consumption() || test_perf_boundaries()) { return 1; }
     for (i = 0; i < 8; ++i) { CHECK(initialize(&model[i], i)); threads[i] = CreateThread(NULL, 0, run_parallel, &model[i], 0, NULL); CHECK(threads[i]); }
     CHECK(WaitForMultipleObjects(8, threads, TRUE, 30000) == WAIT_OBJECT_0);
     for (i = 0; i < 8; ++i) {

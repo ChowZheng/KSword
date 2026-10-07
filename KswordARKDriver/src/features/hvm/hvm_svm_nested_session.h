@@ -69,6 +69,8 @@ typedef struct _KSW_NSVM_SESSION_IO {
     KSW_NSHADOW* Shadow;
     KSW_NMMU_CONFIG* Mmu;
     unsigned ReuseNpt;
+    /* Optional preallocated page for one-call source checks; never proof across VMRUNs. */
+    unsigned char* SourceSyncPage;
     /* Optional root clock and sampled row; unset in ordinary execution and portable fixtures. */
     KSW_SVM_U64 (*PerfClock)(void* Context);
     /* Output belongs to the current odd per-CPU sample sequence, never a retained guest pointer. */

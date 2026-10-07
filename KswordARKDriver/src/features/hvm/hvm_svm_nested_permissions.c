@@ -101,26 +101,46 @@ unsigned int KswSvmNestedPermissionView(const KSW_NSVM_PERMISSION_IMAGE* Image,
     return 1;
 }
 
+/* Merge owned bytes eight at a time when all participating addresses permit aligned accesses. */
+static void KswNsvmMergeMap(unsigned char* Output, const unsigned char* A,
+    const unsigned char* B, unsigned Size, unsigned EnableA, unsigned EnableB)
+{
+    /* Enabled sources are validated by the caller; disabled sources are never dereferenced. */
+    unsigned index;
+    /* Preserve generic unaligned buffers and the original forward byte-copy semantics. */
+    if (((size_t)Output & 7U) || (EnableA && ((size_t)A & 7U)) || (EnableB && ((size_t)B & 7U))) {
+        /* Only enabled owners contribute their original intercept bits. */
+        for (index = 0; index < Size; ++index) {
+            /* Exact byte fallback also handles partial aliases that cannot use qword loads. */
+            Output[index] = (unsigned char)((EnableA ? A[index] : 0) | (EnableB ? B[index] : 0));
+        }
+        /* No caller may publish partially merged output while this routine executes. */
+        return;
+    }
+    /* Hardware allocation sizes are multiples of eight; each output includes all tail bits. */
+    for (index = 0; index < Size / 8U; ++index) {
+        /* A disabled map contributes zero, regardless of its stale bytes or null address. */
+        KSW_SVM_U64 left = EnableA ? ((const KSW_SVM_U64*)A)[index] : 0;
+        /* L1 cannot erase any immutable L0 intercept in the combined word. */
+        KSW_SVM_U64 right = EnableB ? ((const KSW_SVM_U64*)B)[index] : 0;
+        /* The aligned destination is CPU-private, not a guest-supplied mapping. */
+        ((KSW_SVM_U64*)Output)[index] = left | right;
+    }
+}
+
 /* OR only enabled source maps: disabling an intercept must ignore stale map bits. */
 unsigned int KswSvmNestedMergePermissions(const KSW_NSVM_PERMISSION_VIEW* Outer,
     const KSW_NSVM_PERMISSION_VIEW* Inner, unsigned char* Msr, unsigned char* Io)
 {
     /* All inputs are owned snapshots; no guest read takes place in the merge. */
-    unsigned int index;
     /* Reject missing active maps before touching either hardware output. */
     if (!Msr || !Io || !KswNsvmPermissionValid(Outer) || !KswNsvmPermissionValid(Inner)) { return 0; }
     /* Preserve every L0 protection even if L1 leaves its permission map clear. */
-    for (index = 0; index < KSW_NSVM_MSRPM_BYTES; ++index) {
-        /* Bits outside the three MSR ranges remain opaque, not routed as extra MSRs. */
-        Msr[index] = (unsigned char)(((Outer->Flags & KSW_NSVM_MSR_PROT) ? Outer->Msr[index] : 0) |
-            ((Inner->Flags & KSW_NSVM_MSR_PROT) ? Inner->Msr[index] : 0));
-    }
+    KswNsvmMergeMap(Msr, Outer->Msr, Inner->Msr, KSW_NSVM_MSRPM_BYTES,
+        Outer->Flags & KSW_NSVM_MSR_PROT, Inner->Flags & KSW_NSVM_MSR_PROT);
     /* The tail bits are significant for multibyte I/O at the last port. */
-    for (index = 0; index < KSW_NSVM_IOPM_BYTES; ++index) {
-        /* Hardware control bits must separately be the OR of both owners' intercepts. */
-        Io[index] = (unsigned char)(((Outer->Flags & KSW_NSVM_IOIO_PROT) ? Outer->Io[index] : 0) |
-            ((Inner->Flags & KSW_NSVM_IOIO_PROT) ? Inner->Io[index] : 0));
-    }
+    KswNsvmMergeMap(Io, Outer->Io, Inner->Io, KSW_NSVM_IOPM_BYTES,
+        Outer->Flags & KSW_NSVM_IOIO_PROT, Inner->Flags & KSW_NSVM_IOIO_PROT);
     /* Caller may now publish these pre-resolved physical pointers into VMCB02. */
     return 1;
 }

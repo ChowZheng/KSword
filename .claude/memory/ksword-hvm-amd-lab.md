@@ -2,6 +2,8 @@
 
 ## 2026-10-07 fast 硬件采样与收尾
 
+测量后的批量候选：权限图合并对齐时每次OR一个64位word，未对齐保留byte路径，disabled/null语义和IOPM尾页不变；物理整页读取保留volatile qword源读取，对齐私有输出用qword存储。NPT12源同步借每CPU预分配4KiB scratch，只在当前VMRUN内复用连续同页，仍通过NPT01/PAT/RAM和源路径回读；缺少回调/整页读取失败则原exact-word路径，不跨VMRUN保留证明。200词夹具只1次源页读、下一调用源变化仍reset；未对齐、失败fallback、Accessed容忍/权限frame/cache/NX/Dirty变化均测试。24 C目标与Python6项通过，permission999733/session3423 checks；标准64位WDK /WX/API Universal/INF/CAT无警告，fast integer gate229指令通过。候选artifacts/amd-perf-20261007-bulk尚未签/加载，metrics仍v10，CLI复用已编译版本；这些是离线结果，未证明性能改善。
+
 同一签后1c528dd3候选，profile全核stop/teardown后进入fast，32/32 self-test和ACTIVE通过。单核VM只到Windows标志转圈，用户描述静止，未进入桌面。原始证据artifacts/amd-perf-20261007-fast-live；两个QPC窗口10.9415527/10.9344453秒，快路EFER读190814、HSAVE读95359，证明整数快路执行，不证明XSTATE专项或完整L2通过。采样root786788100ticks，VMRUN48.72%、NPF39.25%；NPF新增963087/609072。启动早期漏采约109秒，A/B阶段不同且硬关机可能改变来宾恢复路径，不作整体加速结论。
 
 收尾实验VM已关，32核全部DEVIRTUALIZED，teardown资源/SLAT归零；SCM一度STOP_PENDING，用户正常退出KSword后16:07:35独立SCM确认STOPPED/exit0。final/gui-closed-recheck.txt是卸载完成证据，不能用此前STOP_PENDING替代。

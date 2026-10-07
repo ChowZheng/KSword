@@ -63,10 +63,65 @@ static int KswNsvmSessionReadSource(void* Context, KSW_SVM_U64 Address, KSW_SVM_
     return io->Operand.Read(io->Operand.Context, resolved.HostPa + (Address & 4095ULL), Value);
 }
 
+/* Group adjacent source words without caching any translation or data across entry attempts. */
+typedef struct _KSW_NSVM_SOURCE_CAPTURE {
+    /* Each capture descriptor lives only on the current root stack. */
+    const KSW_NSVM_SESSION_IO* Io;
+    /* Reset each call: zero is absent, one is captured, two preserves exact-word fallback. */
+    KSW_SVM_U64 Page;
+    unsigned Valid;
+} KSW_NSVM_SOURCE_CAPTURE;
+
+/* Full pages use the existing RAM/PAT translator and its final NPT01 structural recheck. */
+static int KswNsvmSessionReadSourceBatch(void* Context, KSW_SVM_U64 Address, KSW_SVM_U64* Value)
+{
+    /* No borrowed physical-window mapping escapes into this descriptor. */
+    KSW_NSVM_SOURCE_CAPTURE* capture = Context;
+    /* The scratch allocation belongs to this CPU's prepared lifetime. */
+    const KSW_NSVM_SESSION_IO* io = capture->Io;
+    /* Snapshot progress is separate from the source value being validated. */
+    KSW_NSVM_OPERAND_RESULT result;
+    /* Assemble bytes without imposing an alignment requirement on optional test scratch storage. */
+    unsigned byte;
+    /* Misaligned source words are never normalized into different PTE identities. */
+    if (Address & 7ULL) { return 0; }
+    /* Callers without optional scratch/transport retain the exact previous word-based contract. */
+    if (!io->SourceSyncPage || !io->Operand.ReadPage) {
+        /* No optional callback is attempted on the bounded-probe path. */
+        return KswNsvmSessionReadSource((void*)io, Address, Value);
+    }
+    /* Changing pages discards the previous image; consecutive words reuse only this fresh call's copy. */
+    if (!capture->Valid || capture->Page != (Address & ~4095ULL)) {
+        /* A failed copy cannot authorize reuse of old contents. */
+        capture->Page = Address & ~4095ULL; capture->Valid = 2;
+        /* Full-page transport is optional; failure preserves the original exact-word fallback. */
+        if (KswSvmNestedReadOperandPage(&io->Operand, Address & ~4095ULL,
+                io->SourceSyncPage, &result) != KSW_NNPT_OK) {
+            /* The fallback still resolves fresh NPT01/PAT and validates RAM for this exact word. */
+            return KswNsvmSessionReadSource((void*)io, Address, Value);
+        }
+        /* Only a complete, revalidated image becomes readable by later same-page checks. */
+        capture->Page = Address & ~4095ULL; capture->Valid = 1;
+    }
+    /* A partial-page transport need not be retried for every word during this same call. */
+    if (capture->Valid != 1) { return KswNsvmSessionReadSource((void*)io, Address, Value); }
+    /* Every ledger word is checked, including permissions/frame/cache/Dirty; only Accessed is ignored. */
+    *Value = 0;
+    /* Portable byte assembly avoids aliasing or partial alignment assumptions. */
+    for (byte = 0; byte < 8; ++byte) {
+        /* Addresses were aligned above and cannot cross the retained page. */
+        *Value |= (KSW_SVM_U64)io->SourceSyncPage[(unsigned)(Address & 4095ULL) + byte] << (byte * 8);
+    }
+    /* No kernel allocation, wait, page-table mutation or hardware flush occurred. */
+    return 1;
+}
+
 static unsigned KswNsvmSessionCacheImpl(KSW_NSVM_SESSION* Session,
     KSW_NSVM_SESSION_IO* Io, const KSW_SVM_VMCB* Current)
 {
     KSW_SVM_U64 key[13];
+    /* Initialized on every virtual VMRUN; source snapshots cannot survive into a later flush. */
+    KSW_NSVM_SOURCE_CAPTURE source = { Io, 0, 0 };
     unsigned i, miss = 0;
     KSWORD_HVM_NPT_CACHE_STATS* stats = &Session->CacheStats;
     key[0] = Session->OperandHostPa;
@@ -98,7 +153,7 @@ static unsigned KswNsvmSessionCacheImpl(KSW_NSVM_SESSION* Session,
     /* Immutable NPT01 permits bounded source rechecks; all other lifetimes reset conservatively. */
     if (((const unsigned char*)&Session->Vmcb12)[KSW_VMCB_TLB] &&
         (miss || !Io->Mmu->OuterImmutable ||
-         !KswSvmNestedShadowSourcesMatch(Io->Shadow, KswNsvmSessionReadSource, Io))) {
+         !KswSvmNestedShadowSourcesMatch(Io->Shadow, KswNsvmSessionReadSourceBatch, &source))) {
         /* A hardware flush alone cannot repair changed or untracked software mappings. */
         miss |= 1U << KSW_HVM_NPT_CACHE_TLB;
     }

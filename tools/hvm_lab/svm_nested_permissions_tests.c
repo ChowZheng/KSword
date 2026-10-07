@@ -119,6 +119,30 @@ static int test_merge(void)
     CHECK(outMsr[0] == 0 && outIo[12287] == 0);
     return 0;
 }
+static int test_merge_alignment(void)
+{
+    __declspec(align(8)) static unsigned char ma[8194], mb[8194], mo[8194];
+    __declspec(align(8)) static unsigned char ia[12290], ib[12290], io[12290];
+    unsigned shifted, alias, i;
+    for (shifted = 0; shifted < 2; ++shifted) {
+        for (alias = 0; alias < 2; ++alias) {
+            unsigned char* destM = (alias ? ma : mo) + shifted;
+            unsigned char* destI = (alias ? ia : io) + shifted;
+            memset(ma, 0xa5, sizeof(ma)); memset(mb, 0x5a, sizeof(mb)); memset(mo, 0xcc, sizeof(mo));
+            memset(ia, 0xa5, sizeof(ia)); memset(ib, 0x5a, sizeof(ib)); memset(io, 0xcc, sizeof(io));
+            a.Flags = b.Flags = KSW_NSVM_PERMISSION_FLAGS;
+            a.Msr = ma + shifted; b.Msr = mb + shifted; a.Io = ia + shifted; b.Io = ib + shifted;
+            for (i = 0; i < 8192; ++i) { ma[i + shifted] = (unsigned char)(i * 17); mb[i + shifted] = (unsigned char)(i * 31 + 1); }
+            for (i = 0; i < 12288; ++i) { ia[i + shifted] = (unsigned char)(i * 13); ib[i + shifted] = (unsigned char)(i * 7 + 3); }
+            CHECK(KswSvmNestedMergePermissions(&a, &b, destM, destI));
+            for (i = 0; i < 8192; ++i) { CHECK(destM[i] == ((unsigned char)(i * 17) | (unsigned char)(i * 31 + 1))); }
+            for (i = 0; i < 12288; ++i) { CHECK(destI[i] == ((unsigned char)(i * 13) | (unsigned char)(i * 7 + 3))); }
+            CHECK(destM[8192] == (alias ? 0xa5 : 0xcc) && destI[12288] == (alias ? 0xa5 : 0xcc));
+            if (shifted) { CHECK(destM[-1] == (alias ? 0xa5 : 0xcc) && destI[-1] == (alias ? 0xa5 : 0xcc)); }
+        }
+    }
+    return 0;
+}
 static int read_page(void* context, KSW_SVM_U64 address, unsigned char* page)
 {
     unsigned index;
@@ -176,7 +200,7 @@ static int test_capture(void)
 }
 int main(void)
 {
-    if (test_msr_owners() || test_io_owners() || test_merge() || test_capture()) { return 1; }
+    if (test_msr_owners() || test_io_owners() || test_merge() || test_merge_alignment() || test_capture()) { return 1; }
     printf("SVM_PERMISSION_CHECKS=%u RESULT=PASS (no hardware executed)\n", checks);
     return 0;
 }

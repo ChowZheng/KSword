@@ -53,6 +53,8 @@ typedef struct _KSW_SVM_NESTED {
     KSW_SVM_PERF Perf;
     /* Stable prepared binding used before the assembly bridge saves guest XSTATE. */
     KSW_SVM_FAST Fast;
+    /* Source validation borrows this RAM snapshot only during the current entry transaction. */
+    __declspec(align(8)) unsigned char SourceSyncPage[4096];
     /* Bracket every root-side general mutation independently of the bounded probe sequence. */
     volatile LONG64 GeneralSequence;
     /* A prepared attempt and an observed physical exit are deliberately different counters. */
