@@ -1,5 +1,11 @@
 # AMD 实验后端与重启续接
 
+## 2026-10-07 architecture 首轮宿主硬锁分析
+
+781f28ee签后候选32/32 serial selftest及resident-svm-accel ACTIVE通过，VMware单核冷启动初始化期间宿主硬锁，用户硬重启后授权Enter-AmdLab再重启。现场artifacts/amd-perf-20261007-architecture-live与architecture-lockup；无本次dump，Kernel-Power41 BugcheckCode0，旧MEMORY.DMP不可当本次现场。最后metrics在VMstart之前，requested0xb0005不含WATCH/FAST，vGIF/VLS计数0不能排除随后启用。vmrun启动未返回，VMware自身日志证实CPL0/NPT及vcpu线程已创建；没有guest BIOS/OS通过证据。恢复后driver STOPPED、HypervisorFalse/VBS0。
+
+静态明确错误：interrupt prepare的!Gif&&!HardwareGif跳过physical INTR mask及NMI intercept，accel又删CLGI/STGI拦截；APM15.33.2 vGIF只控制虚拟中断，不能替代透明Windows宿主的physical GIF屏蔽。直接链接未改生产函数的无SVM夹具复现闭GIF时ForcedMask/V_INTR_MASKING/NMI三项从1变0。此为最强嫌疑，非已有硬件因果证明。后续保留CLGI/STGI软件拦截及物理mask，VLS另分门；仅改if仍不足以覆盖guest无exit CLGI。旧测试只查位值未覆盖物理语义。采集需与VM启动并发，不能等待vmrun返回再采。详细docs/next/evidence/amd-architecture-lockup-20261007.md。本轮只分析未改驱动未动态重试。
+
 ## 2026-10-07 架构优化静态续接（测试禁止）
 
 用户要求把大幅优化路线全落代码、暂不测试。新增accel/watch/cache模块，独立硬件01/02、VLS/vGIF、私有clean四组、clone NPT01 CPU写保护/全核flush证明、增量叶表组失效、targeted guest-DPC双QUERY确认、VMCB identity共享NPT02根及跨核交接。root无分配/等待，dirty页永久回读到all-native start reset；原生期间写不能继承旧证明。CPU写之外DMA不在证明范围。64MiB表总预算含身份/clone/splits/CPUfallback/shared；注册表满回每CPU根，准备预算不足报错。
