@@ -1,5 +1,7 @@
 /* Windows platform binding for the portable nested execution/event transactions. */
 #include "hvm_svm_nested_runtime.h"
+#include "hvm_svm_watch.h"
+#include "hvm_svm_cache.h"
 #include <intrin.h>
 
 /* Optional detail clock runs only while the bridge has saved the guest extended state. */
@@ -203,6 +205,17 @@ NTSTATUS KswordSvmNestedInitializeGeneral(KSW_SVM_CPU* Cpu)
     io->ReuseNpt = 1;
     /* Fresh local page reads replace repeated per-PTE NPT01 walks; no persistent cache is retained. */
     io->SourceSyncPage = nested->SourceSyncPage;
+    /* A physical image remains assigned to one layer for the complete prepared lifetime. */
+    io->StableL1 = nested->Vmcb01; io->StableL2 = nested->Vmcb02;
+    /* Proof callbacks are bound only when the independent write-watch option allocated its full ledger. */
+    if (nested->Watch) {
+        /* Hardware L1 permission tightening must not alter software translation/PAT provenance. */
+        KswSvmWrite64(Cpu->Guest, KSW_VMCB_NCR3, nested->Watch->RootPa);
+        io->BeginWatch = KswordSvmWatchBegin; io->ArmSource = KswordSvmWatchArm;
+        io->SourceStable = KswordSvmWatchStable; io->ProtectMapping = KswordSvmWatchMapping;
+        /* Each shared root is selected only after acquiring its real translated VMCB execution lease. */
+        io->BindCache = KswordSvmCacheBind; io->UnbindCache = KswordSvmCacheUnbind; io->InvalidateCaches = KswordSvmCacheInvalidate;
+    }
     /* Bind the ordinary register image instead of a driver-owned fixed probe marker. */
     RtlZeroMemory(&nested->GeneralExecution, sizeof(nested->GeneralExecution));
     /* Hardware RAX/RSP remain in VMCB, while other GPRs use the established assembly prefix. */
@@ -252,12 +265,24 @@ NTSTATUS KswordSvmNestedInitializeGeneral(KSW_SVM_CPU* Cpu)
     nested->GeneralMachine.Io.ReadTpr = KswNsvmReadTpr; nested->GeneralMachine.Io.WriteTpr = KswNsvmWriteTpr;
     /* Private control cannot run until raw overlay/event state has been processed. */
     nested->GeneralMachine.Io.PrivateControl = KswNsvmGeneralControl;
+    /* Only write NPFs owned by the private hardware clone may bypass ordinary nested fault routing. */
+    nested->GeneralMachine.Io.ProtectionFault = nested->Watch ? KswordSvmWatchFault : NULL;
+    /* Hardware acceleration is independently requested and bounded by this CPU's real features. */
+    RtlZeroMemory(&nested->Accel, sizeof(nested->Accel)); nested->Accel.Features = Cpu->Caps.Features;
+    /* Missing VLS/vGIF/clean support keeps the same software execution contract. */
+    nested->Accel.Enabled = ((((KSW_SVM_STATE*)Cpu->Runtime->BackendContext)->PreparedFlags & KSWORD_ARK_HVM_CONTROL_FLAG_SVM_ACCEL) != 0);
+    /* The coordinator declines vGIF whenever software-owned pending events need an STGI notification. */
+    nested->GeneralMachine.HardwareGifAllowed = nested->Accel.Enabled && ((Cpu->Caps.Features & (1U << 16)) != 0);
     /* Capture actual initial TPR, but do not create an executable overlay before assembly sets final RIP/RFLAGS. */
     if (KswSvmNestedMachineInitialize(&nested->GeneralMachine) != KSW_NSVM_MACHINE_READY) { return STATUS_NOT_SUPPORTED; }
     /* This is bound-resource readiness; public activation and hardware success are separate evidence. */
     nested->GeneralHardwareExits = nested->GeneralLastHardwareExit = 0;
     /* Physical ASIDs may contain translations from a prior prepared resource lifetime. */
     nested->FirstEntryFlush = 1;
+    /* A new residency has no hardware ASID provenance or idle shared-root telemetry. */
+    nested->LastNptRoot[0] = nested->LastNptRoot[1] = 0; nested->SharedRoot = NULL;
+    nested->LastSharedRootPa = nested->CacheMigrations = nested->LastShadowEpoch = nested->LastDependencyRetirements = 0;
+    nested->LastShadowPages = 0; nested->WatchProofHits = 0;
     /* Reset sampled timings before publishing any executable pointer. */
     RtlZeroMemory(&nested->Perf, sizeof(nested->Perf));
     /* Profiling is an explicit prepared-mode option, never enabled by a query. */
@@ -323,6 +348,10 @@ ULONG KswordSvmNestedGeneralEntry(KSW_SVM_CPU* Cpu)
     InterlockedIncrement64(&Cpu->Nested->GeneralSequence);
     /* This writes only processor-owned state and invokes the closed-root callbacks above. */
     action = KswSvmNestedMachineEntry(&Cpu->Nested->GeneralMachine);
+    /* Entry-side event reflection may also switch layers before physical VMRUN. */
+    Cpu->Guest = Cpu->Nested->GeneralExecution.Current;
+    /* Both retained execution operands were pre-resolved before residency. */
+    Cpu->GuestPa = Cpu->Guest == Cpu->Nested->Vmcb01 ? Cpu->Nested->Vmcb01Pa : Cpu->Nested->Vmcb02Pa;
     /* Observe actual installed entry controls; terminal entry errors are explicitly post-dispatch. */
     KswNsvmObserve(Cpu, KSW_HVM_FLIGHT_ENTRY,
         (action == KSW_NSVM_MACHINE_FAULT || action == KSW_NSVM_MACHINE_UNSUPPORTED ||
@@ -334,10 +363,27 @@ ULONG KswordSvmNestedGeneralEntry(KSW_SVM_CPU* Cpu)
         /* Selection is separate from completion: INVALID preserves all pending work. */
         Cpu->NestedTlbControl = Cpu->Nested->FirstEntryFlush ? 1U :
             KswSvmNestedSessionTlbSelect(&Cpu->Nested->Session,
-                &Cpu->Nested->Shadow, (Cpu->Caps.Features & 64U) != 0);
+                Cpu->Nested->GeneralIo.Shadow, (Cpu->Caps.Features & 64U) != 0);
     } else {
         Cpu->NestedTlbControl = 1U;
     }
+    /* Recompute fast eligibility only after full event preparation succeeded. */
+    if (action == KSW_NSVM_MACHINE_READY) {
+        /* New protections retire only affected destination aliases and require full hardware TLB acknowledgement. */
+        KswordSvmWatchEntry(Cpu);
+        /* Root migration/virtual invalidation preserves software data only when its generation remains valid. */
+        KswordSvmCacheEntry(Cpu);
+        /* A failed bounded root reset never permits a blind VMRUN. */
+        if (Cpu->Nested->GeneralMachine.LastAction == KSW_NSVM_MACHINE_FAULT) { action = KSW_NSVM_MACHINE_FAULT; }
+        /* Original intercepts are restored before the next exit's route/reflect transaction. */
+        KswSvmAccelApply(&Cpu->Nested->Accel, Cpu->Guest,
+            Cpu->Nested->Session.Phase == KSW_NSVM_SESSION_L2, Cpu->Nested->Msrs.Efer,
+            Cpu->Nested->GeneralMachine.Overlay.HardwareGif);
+        /* Changes to merged map contents must invalidate permission hardware caching. */
+        Cpu->Nested->Accel.MapsGeneration = Cpu->Nested->Session.PermissionsGeneration;
+        /* Only exact unchanged private control groups become hardware clean. */
+        Cpu->HardwareCleanMask = KswSvmAccelCleanPrepare(&Cpu->Nested->Accel, Cpu->Guest, Cpu->GuestPa);
+    } else { Cpu->HardwareCleanMask = 0; }
     /* Recompute fast eligibility only after full event preparation succeeded. */
     if (Cpu->Fast) {
         /* No virtual execution owner or pending event can be hidden by the short bridge. */
@@ -354,6 +400,9 @@ ULONG KswordSvmNestedGeneralEntry(KSW_SVM_CPU* Cpu)
             Cpu->Fast->IntCtl = KswSvmRead64(Cpu->Guest, KSW_VMCB_INTCTL);
             /* Physical priority is read while GIF/IF are closed on the owner CPU. */
             Cpu->Fast->PhysicalTpr = __readcr8(); Cpu->Fast->Enabled = 1;
+            /* A newly armed/revoked page must interrupt the otherwise unchanged integer bridge. */
+            Cpu->Fast->GuardEpoch = Cpu->Nested->Watch ? (volatile KSW_SVM_U64*)&Cpu->Nested->Watch->Generation : NULL;
+            Cpu->Fast->GuardGeneration = Cpu->Nested->WatchEntryGeneration;
         }
     }
     /* Publish the complete result, including a retained failure/window action. */
@@ -382,6 +431,10 @@ ULONG KswordSvmNestedGeneralExit(KSW_SVM_CPU* Cpu)
     ++Cpu->Nested->GeneralHardwareExits;
     /* Preserve raw hardware input even if a missing overlay makes machine dispatch fail before classification. */
     Cpu->Nested->GeneralLastHardwareExit = KswSvmRead64(Cpu->Guest, KSW_VMCB_EXITCODE);
+    /* Cross-CPU proof includes only generations whose full hardware flush actually completed. */
+    KswordSvmWatchComplete(Cpu, Cpu->Nested->GeneralLastHardwareExit);
+    /* Hardware root/ASID provenance is also consumed only by actual non-INVALID execution. */
+    KswordSvmCacheComplete(Cpu, Cpu->Nested->GeneralLastHardwareExit);
     /* Charge a sampled interval to its original level and reason before any reflection. */
     if (Cpu->Perf && Cpu->Perf->Selected && Cpu->Nested->Session.Phase <= KSW_NSVM_SESSION_L2) {
         /* This writes no SIMD state and the full bridge has already saved guest XSTATE. */
@@ -408,7 +461,7 @@ ULONG KswordSvmNestedGeneralExit(KSW_SVM_CPU* Cpu)
         if (!Cpu->Perf->Selected) { InterlockedIncrement64((volatile LONG64*)&Cpu->Perf->Sequence); }
     }
     /* Retire the request before dispatch can install a new NPT02 leaf or change the running level. */
-    KswSvmNestedSessionTlbComplete(&Cpu->Nested->Session, &Cpu->Nested->Shadow,
+    KswSvmNestedSessionTlbComplete(&Cpu->Nested->Session, Cpu->Nested->GeneralIo.Shadow,
         Cpu->NestedTlbControl, Cpu->Nested->GeneralLastHardwareExit);
     /* A non-INVALID hardware return proves the initial resource-lifetime flush executed. */
     if (Cpu->Nested->GeneralLastHardwareExit != KSW_SVM_EXIT_INVALID) { Cpu->Nested->FirstEntryFlush = 0; }
@@ -425,10 +478,23 @@ ULONG KswordSvmNestedGeneralExit(KSW_SVM_CPU* Cpu)
     KswNsvmObserve(Cpu, KSW_HVM_FLIGHT_EXIT,
         Cpu->Nested->GeneralLastHardwareExit == 0x7fULL ? KSW_HVM_FLIGHT_SHUTDOWN :
         (Cpu->Nested->GeneralLastHardwareExit == KSW_SVM_EXIT_INVALID ? KSW_HVM_FLIGHT_INVALID : 0U), 1U);
+    /* Hardware clean provenance is acknowledged only for an actually executed physical entry. */
+    KswSvmAccelComplete(&Cpu->Nested->Accel, Cpu->Nested->GeneralLastHardwareExit);
+    /* Route/reflect sees the source intercepts, not the acceleration overlay. */
+    if (!KswSvmAccelRestore(&Cpu->Nested->Accel, Cpu->Guest)) {
+        /* Keep the complete retained resource graph on a missing acceleration transaction. */
+        InterlockedIncrement64(&Cpu->Nested->GeneralSequence); return KSW_NSVM_MACHINE_FAULT;
+    }
     /* Native return is requested only by the private, quiescent stop callback. */
     {
         /* Keep the exact coordinator outcome after all mutation is complete. */
         ULONG action = KswSvmNestedMachineExit(&Cpu->Nested->GeneralMachine);
+        /* Native Windows bypasses NPT, so global proof must retire before any actual native instruction. */
+        if (action == KSW_NSVM_MACHINE_NATIVE) { KswordSvmWatchDisable(Cpu); }
+        /* Commit the physical/virtual pair only after the coordinator completed its layer transaction. */
+        Cpu->Guest = Cpu->Nested->GeneralExecution.Current;
+        /* Both physical operands were derived from owned contiguous pages at PASSIVE_LEVEL. */
+        Cpu->GuestPa = Cpu->Guest == Cpu->Nested->Vmcb01 ? Cpu->Nested->Vmcb01Pa : Cpu->Nested->Vmcb02Pa;
         /* Internal failures have a separately labelled post-dispatch snapshot; raw faults already won. */
         if (action == KSW_NSVM_MACHINE_FAULT || action == KSW_NSVM_MACHINE_UNSUPPORTED || action == KSW_NSVM_MACHINE_SHUTDOWN) {
             /* Preserve retained owners and failure output even when no hardware SHUTDOWN was seen. */

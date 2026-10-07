@@ -1,6 +1,7 @@
 /* Snapshot sparse AMD exit telemetry without reinterpreting Intel exit numbers. */
 #include "hvm_svm.h"
 #include "hvm_svm_nested_runtime.h"
+#include "hvm_svm_watch.h"
 
 /* Query copies into the existing buffered response, never a large kernel-stack temporary. */
 static VOID KswSvmFlightMetrics(KSW_SVM_NESTED* Nested, KSWORD_HVM_FLIGHT_RECORDER* Output)
@@ -111,7 +112,8 @@ static VOID KswSvmGeneralMetrics(KSW_SVM_CPU* Cpu, KSWORD_ARK_HVM_SVM_GENERAL_ME
         /* Source instruction capture evidence identifies an opcode/width refusal without guessing. */
         copy.instructionStatus = nested->GeneralExecution.InstructionStatus; copy.instructionLength = nested->GeneralExecution.InstructionLength;
         /* Address width and page consumption are independent of physical CPU numbering. */
-        copy.operandAddressBits = nested->GeneralExecution.OperandAddressBits; copy.shadowPages = nested->Shadow.Used;
+        copy.operandAddressBits = nested->GeneralExecution.OperandAddressBits;
+        copy.shadowPages = nested->Session.Phase == KSW_NSVM_SESSION_L2 ? nested->GeneralIo.Shadow->Used : nested->LastShadowPages;
         /* The two entry/exit counts intentionally have different semantics. */
         copy.preparedEntries = nested->GeneralMachine.Transitions; copy.hardwareExits = nested->GeneralHardwareExits;
         /* A raw code is sparse AMD data, never an Intel histogram index. */
@@ -125,11 +127,39 @@ static VOID KswSvmGeneralMetrics(KSW_SVM_CPU* Cpu, KSWORD_ARK_HVM_SVM_GENERAL_ME
         /* Cache eviction is a software action; hardware invalidation remains the separate TLB counter. */
         copy.cacheRecycles = nested->GeneralExecution.CacheRecycles;
         copy.nptCache = nested->Session.CacheStats;
-        copy.invlpgaCount = nested->Session.Invalidations; copy.shadowEpoch = nested->Shadow.Epoch;
+        copy.invlpgaCount = nested->Session.Invalidations;
+        copy.shadowEpoch = nested->Session.Phase == KSW_NSVM_SESSION_L2 ? nested->GeneralIo.Shadow->Epoch : nested->LastShadowEpoch;
         /* These are virtual register values, not MSR probes of the query CPU. */
         copy.virtualEfer = nested->Msrs.Efer; copy.virtualHsave = nested->Msrs.Hsave;
         /* XSTATE values refer to the owner CPU's current virtual execution context. */
         copy.guestXcr0 = Cpu->GuestXcr0; copy.guestXss = Cpu->GuestXss;
+        /* These fields share the same complete CPU sequence as the architectural general snapshot. */
+        copy.optimization.requestedFlags = ((KSW_SVM_STATE*)Cpu->Runtime->BackendContext)->PreparedFlags;
+        copy.optimization.vmcb01Pa = nested->Vmcb01Pa; copy.optimization.vmcb02Pa = nested->Vmcb02Pa;
+        copy.optimization.vlsSelected = nested->Accel.VlsActive; copy.optimization.vgifSelected = nested->GeneralMachine.Overlay.HardwareGif;
+        copy.optimization.cleanMask = Cpu->HardwareCleanMask;
+        copy.optimization.vlsEntries = nested->Accel.VlsEntries; copy.optimization.vgifEntries = nested->Accel.VgifEntries;
+        copy.optimization.cleanEntries = nested->Accel.CleanEntries;
+        copy.optimization.watchProofHits = nested->WatchProofHits;
+        copy.optimization.permissionsReusable = nested->Session.PermissionsReusable;
+        copy.optimization.permissionsGeneration = nested->Session.PermissionsGeneration;
+        copy.optimization.dependencyRetirements = nested->Session.Phase == KSW_NSVM_SESSION_L2 ? nested->GeneralIo.Shadow->DependencyRetirements : nested->LastDependencyRetirements;
+        copy.optimization.sharedRootPa = nested->LastSharedRootPa; copy.optimization.cacheMigrations = nested->CacheMigrations;
+        if (nested->Watch) {
+            /* Shared counters are atomic, and their protection generation is independently checked. */
+            ULONGLONG generation = (ULONGLONG)InterlockedCompareExchange64(&nested->Watch->Generation, 0, 0);
+            copy.optimization.watchState = nested->Watch->Disabled ? 2U : 1U;
+            copy.optimization.watchGeneration = generation; copy.optimization.watchProof = nested->WatchProof;
+            copy.optimization.watchAcknowledged = (ULONGLONG)InterlockedCompareExchange64(&nested->Watch->Acknowledged[nested->WatchCpuIndex], 0, 0);
+            if (!nested->WatchCpuIndex) {
+                /* Consumers never sum these same global counters across all CPU rows. */
+                copy.optimization.watchArms = (ULONGLONG)InterlockedCompareExchange64(&nested->Watch->Arms, 0, 0);
+                copy.optimization.watchWrites = (ULONGLONG)InterlockedCompareExchange64(&nested->Watch->Writes, 0, 0);
+                copy.optimization.watchDeclines = (ULONGLONG)InterlockedCompareExchange64(&nested->Watch->Declines, 0, 0);
+
+                copy.optimization.watchGlobalValid = generation == (ULONGLONG)InterlockedCompareExchange64(&nested->Watch->Generation, 0, 0);
+            }
+        }
         /* Acquire ordering around the copy rejects any concurrent writer transition. */
         if (before == InterlockedCompareExchange64(&nested->GeneralSequence, 0, 0)) {
             /* Only a stable full-width sequence authorizes publishing all copied fields. */
@@ -214,6 +244,8 @@ VOID KswordSvmMetrics(KSW_HVM_RUNTIME* Runtime, KSWORD_ARK_HVM_METRICS_RESPONSE*
         }
         /* General-run evidence uses an independent sequence from the raw exit ring and bounded probe. */
         KswSvmGeneralMetrics(cpu, &output->general);
+        /* These allocated identities do not change during layer switches or depend on general.valid. */
+        if (cpu->Nested) { output->stableVmcb01Pa = cpu->Nested->Vmcb01Pa; output->stableVmcb02Pa = cpu->Nested->Vmcb02Pa; }
         /* Read at most three times; an invalid snapshot is preferable to a root stall. */
         for (attempt = 0; attempt < 3; ++attempt) {
             /* Observe the last completely published ring position. */

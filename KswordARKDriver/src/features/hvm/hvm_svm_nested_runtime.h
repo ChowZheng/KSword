@@ -25,6 +25,7 @@
 #include "hvm_svm_hotspots.h"
 #include "hvm_svm_perf.h"
 #include "hvm_svm_fast.h"
+#include "hvm_svm_accel.h"
 /* Enough sparse tables for the bounded probe; exhaustion returns a failed test. */
 #define KSW_NSVM_PROBE_PAGES 64U
 /* Private markers distinguish the inner exit from the final outer continuation. */
@@ -53,6 +54,20 @@ typedef struct _KSW_SVM_NESTED {
     KSW_SVM_PERF Perf;
     /* Stable prepared binding used before the assembly bridge saves guest XSTATE. */
     KSW_SVM_FAST Fast;
+    /* Hardware capability gates and last-entry clean provenance stay CPU private. */
+    KSW_SVM_ACCEL Accel;
+    /* Shared protection lifetime; proof is local to one capture attempt. */
+    struct _KSW_SVM_WATCH_TABLE* Watch;
+    KSW_SVM_CPU* Cpu;
+    ULONG WatchCpuIndex;
+    ULONGLONG WatchProof, WatchEntryGeneration;
+    /* High-frequency proof accounting is CPU-local; root validation never locks a global counter. */
+    ULONGLONG WatchProofHits;
+    /* Only the current lease may access a shared root; idle diagnostics use copied summaries. */
+    struct _KSW_SVM_CACHE_ROOT* SharedRoot;
+    ULONGLONG LastSharedRootPa, CacheMigrations, LastShadowEpoch, LastDependencyRetirements;
+    ULONG LastShadowPages, EntryNptLevel;
+    ULONGLONG EntryNptRoot, LastNptRoot[2];
     /* Source validation borrows this RAM snapshot only during the current entry transaction. */
     __declspec(align(8)) unsigned char SourceSyncPage[4096];
     /* Bracket every root-side general mutation independently of the bounded probe sequence. */
@@ -87,6 +102,12 @@ typedef struct _KSW_SVM_NESTED {
     KSW_SVM_VMCB* Operand;
     /* Operand identity is resolved before any SVM instruction executes. */
     ULONGLONG OperandPa;
+    /* The third contiguous page is an independent physical VMCB02, never the guest operand. */
+    KSW_SVM_VMCB* Vmcb02;
+    ULONGLONG Vmcb02Pa;
+    /* Original VMCB01 identity survives every layer switch and is the release allocation. */
+    KSW_SVM_VMCB* Vmcb01;
+    ULONGLONG Vmcb01Pa;
     /* Private nonpaged stack for the bounded inner guest. */
     PVOID Stack;
     /* Preallocated translation cache and ownership descriptors. */

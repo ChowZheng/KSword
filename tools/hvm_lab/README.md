@@ -197,3 +197,6 @@ Intel 保留原执行路径，新增调度边界目前由 AMD 接入；共享 ph
 正常收尾额外等待 SCM STOPPED，失败/超时不推断回滚，不自动卸载未知状态驱动。
 需要先取得宿主 LabHostReady、VMware原生模式与来宾KD连接证据；不要在普通启动环境运行。
 `Test-GeneralAcceptance.ps1` 只验证离线快照门禁；`Test-AcceptanceCapture.ps1` 只验证进程输出采集。
+
+
+2026-10-07 架构候选：`prepare-svm-accel/resident-svm-accel` 独立测试物理 VLS/vGIF/clean；`prepare-svm-opt/resident-svm-opt` 追加受控 CPU 写跟踪和共享虚拟 VMCB 根缓存。metrics v11，需配套 CLI/GUI；候选目录 `artifacts/amd-perf-20261007-architecture`。本轮仅编译，测试执行 NOT_RUN，不启用宿主或来宾硬件。每 CPU targeted DPC 通过两次私有 QUERY 取得全 flush 确认证据，不在 root 调 IPI 或等待锁；退出后先撤销证明，再在 all-native 释放时排空 DPC。共享根注册表满时用原每 CPU 根，64 MiB 表预算不足则准备拒绝。详见性能计划末尾和 CLI 文档。

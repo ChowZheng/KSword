@@ -531,3 +531,15 @@ AMD metrics v10 增加可选 `perf`。命令 `prepare-svm-profile → self-test 
 
 
 `prepare-svm-fast → self-test → resident-svm-fast → stop → teardown` 在采样模式上增加 `SVM_FAST_MSR=0x00040000`。仅无 L2/租约/事件/注入/窗口且 GIF 遮罩、物理 CR8、完整 INT_CTL 不变时，EFER/HSAVE/XSS 的读取和同值写入通过纯整数叶完成；XSS 仍要求 XSAVES。变值写入、状态不符、IRQ/NMI/NPF/SVM 指令及 stop 请求使用完整状态桥。快路不取消 MSRPM 拦截、不转发真实 HSAVE。它跳过 XSAVE/XRSTOR、XCR0/XSS 切换及 host/guest VMLOAD/VMSAVE 配对（来宾非自动状态全程未被 host 修改），同时保留全量 hotspot 和生命周期计数；诊断 ring 只记录慢路。`perf.fastMsr[3][2]` 是 EFER/HSAVE/XSS 读取/同值写入的快路子集，不能再加到 hotspot 总数。构建在 Link 前检查完整叶机器码，无 call/SIMD/x87/FS/GS 或间接跳转，否则拒绝链接；硬件 XSTATE 和事件验证仍需单独完成。
+
+
+### AMD 架构优化实验入口（metrics v11，尚未实机验收）
+
+`hvm prepare-svm-accel → hvm self-test → hvm resident-svm-accel` 单独选择物理 VLS/vGIF 和私有 clean 控制；硬件缺少对应能力时继续软件执行。
+`hvm prepare-svm-opt → hvm self-test → hvm resident-svm-opt` 另外启用 CPU 写入跟踪、VMCB 身份共享 NPT02 缓存和整数 MSR 快路。`hvm_ctl` 直接使用同名命令，不加 `hvm` 前缀。两种准备/启动模式必须匹配；结束仍使用 `stop → teardown`，不能从 CLI 退出推断驱动已经停止。
+
+metrics 升为 v11，主协议仍 v6；旧 metrics 请求明确版本不匹配。`svmProcessors[].optimization` 报告请求标志、VLS/vGIF 选择、clean mask、共享根/迁移计数、写跟踪代次/逐核确认与源依赖撤销。`stableVmcb01Pa/stableVmcb02Pa` 是固定资源身份，`vmcbPa` 仍为当前选择的物理执行页，跨窗口统计不能把正常切层当成资源更换。选择次数不是被消除的退出次数，也不是完整 L2 OS 通过。
+
+`watchState=1` 表示跟踪器可用，`2` 表示已经撤销；只有源页保护和所有 CPU 刷新确认一致时才可跳过源读取。CPU 私有 `watchProofHits` 可分核统计，其他 `watchArms/watchWrites/watchDeclines` 是共享计数，仅索引零且 `watchGlobalValid=1` 时可用。依赖撤销是当前共享根的计数，根更换时不能直接做差。CPU 写故障永久撤销该页的复用证明，直到完整退出后的下一次受控 start 重置；DMA 写入不属于这项 CPU 写入证明。写跟踪未覆盖或预算不足的源不会获得缓存证明；准备分配失败明确报错，不启动部分配置。
+
+本轮仅编译；源证明、DPC确认、VLS/vGIF、中断、XSTATE、原生停止和多核迁移的真实行为尚未测试。不要把该候选覆盖到运行中的驱动目录。

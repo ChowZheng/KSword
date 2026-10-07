@@ -255,7 +255,8 @@ KswSvmPreparedEntry:
 KswSvmFullTlbFlush:
     mov byte ptr [rbx+5ch], 1    ; Full TLB flush for ordinary residency and bounded probes.
 KswSvmTlbSelected:
-    mov dword ptr [rbx+0c0h], 0  ; Do not trust clean-bit caching in this first backend.
+    mov eax, [rcx+160h]         ; Exact private control provenance selects only implemented clean groups.
+    mov dword ptr [rbx+0c0h], eax ; Zero keeps baseline and unacknowledged entries fully dirty.
     cmp qword ptr [rcx+138h], 0 ; Nested event arbiter selects saved host IF independently of guest IF.
     je KswSvmHostIfClosed        ; Baseline/probe keep the existing IF=0 root policy.
     sti                          ; GIF is still zero, so no physical event can enter this root window.
@@ -308,7 +309,9 @@ KswSvmHardwareRun:
 KswSvmFastTimed:
     mov rbx, [rcx+10h]         ; Hardware automatic guest state remains in its own VMCB.
     mov byte ptr [rbx+5ch], 0  ; Fast admission requires a previously consumed flush request.
-    mov dword ptr [rbx+0c0h], 0 ; Keep clean-bit optimization separate from this experiment.
+    mov eax, [rcx+160h]         ; The unchanged integer bridge retains private clean provenance.
+    and eax, 0fffffffbh         ; ASID/TLB is dirty because this fast entry writes TLB_CONTROL=0.
+    mov dword ptr [rbx+0c0h], eax
     cmp qword ptr [rcx+138h], 0 ; Match the same host IF contract as the retained overlay.
     je KswSvmFastIfReady         ; VMEXIT CLI already closed host IF.
     sti                         ; Physical GIF remains closed throughout this root window.

@@ -39,6 +39,9 @@ typedef struct _KSW_SVM_FAST {
     unsigned* MachineLastAction;
     /* The experimental mode requires profiling, including direct fast-path counters. */
     KSW_SVM_PERF* Perf;
+    /* Shared write-protection changes force the complete flush/event coordinator without SIMD or calls. */
+    volatile KSW_SVM_U64* GuardEpoch;
+    KSW_SVM_U64 GuardGeneration;
 } KSW_SVM_FAST;
 
 /* Returns zero with no mutation unless the complete integer-only instruction is admissible. */

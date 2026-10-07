@@ -1,5 +1,7 @@
 /* AMD capability discovery and PASSIVE_LEVEL resource ownership. */
 #include "hvm_svm.h"
+#include "hvm_svm_watch.h"
+#include "hvm_svm_cache.h"
 #include "hvm_svm_nested_runtime.h"
 #include "../../platform/pool_compat.h"
 #include <intrin.h>
@@ -220,7 +222,8 @@ NTSTATUS KswordSvmValidateFlags(KSW_HVM_RUNTIME* Runtime, ULONG Flags)
     /* Only baseline lifecycle flags have AMD implementations. */
     const ULONG allowed = KSWORD_ARK_HVM_CONTROL_FLAG_UI_CONFIRMED | KSWORD_ARK_HVM_CONTROL_FLAG_FORCE |
         KSWORD_ARK_HVM_CONTROL_FLAG_ALLOW_NESTED | KSWORD_ARK_HVM_CONTROL_FLAG_SVM_NESTED_PROBE |
-        KSWORD_ARK_HVM_CONTROL_FLAG_ENABLE_NESTED_SVM | KSWORD_ARK_HVM_CONTROL_FLAG_SVM_PROFILE | KSWORD_ARK_HVM_CONTROL_FLAG_SVM_FAST_MSR;
+        KSWORD_ARK_HVM_CONTROL_FLAG_ENABLE_NESTED_SVM | KSWORD_ARK_HVM_CONTROL_FLAG_SVM_PROFILE | KSWORD_ARK_HVM_CONTROL_FLAG_SVM_FAST_MSR |
+            KSWORD_ARK_HVM_CONTROL_FLAG_SVM_ACCEL | KSWORD_ARK_HVM_CONTROL_FLAG_SVM_WRITE_WATCH;
     /* Unknown/Intel-specific features must not silently degrade to baseline. */
     if (Flags & ~allowed) { return STATUS_NOT_SUPPORTED; }
     /* The pre-XSTATE leaf requires the general coordinator and sampled integer accounting. */
@@ -229,6 +232,9 @@ NTSTATUS KswordSvmValidateFlags(KSW_HVM_RUNTIME* Runtime, ULONG Flags)
          !(Flags & KSWORD_ARK_HVM_CONTROL_FLAG_SVM_PROFILE))) { return STATUS_INVALID_PARAMETER; }
     /* Timing cannot silently change the baseline/probe execution contract. */
     if ((Flags & KSWORD_ARK_HVM_CONTROL_FLAG_SVM_PROFILE) &&
+        !(Flags & KSWORD_ARK_HVM_CONTROL_FLAG_ENABLE_NESTED_SVM)) { return STATUS_INVALID_PARAMETER; }
+    /* Neither hardware acceleration nor write tracking may silently enable the general coordinator. */
+    if ((Flags & (KSWORD_ARK_HVM_CONTROL_FLAG_SVM_ACCEL | KSWORD_ARK_HVM_CONTROL_FLAG_SVM_WRITE_WATCH)) &&
         !(Flags & KSWORD_ARK_HVM_CONTROL_FLAG_ENABLE_NESTED_SVM)) { return STATUS_INVALID_PARAMETER; }
     /* Bounded probe and arbitrary VMM execution have different continuation contracts. */
     if ((Flags & KSWORD_ARK_HVM_CONTROL_FLAG_SVM_NESTED_PROBE) &&
@@ -300,6 +306,10 @@ VOID KswordSvmRelease(KSW_HVM_RUNTIME* Runtime)
         Runtime->Processors[index].BackendContext = NULL;
     }
     /* Shared NPT is freed only after all per-CPU owners are gone. */
+    KswordSvmCacheRelease(state);
+    /* Shared virtual roots and their execution leases retire before the hardware watch clone. */
+    KswordSvmWatchRelease(state);
+    /* The immutable software NPT survives until its private hardware clone is retired. */
     KswordNptRelease(&state->Npt);
     /* Free the context array when prepare reached its allocation. */
     if (state->Cpus) { ExFreePoolWithTag(state->Cpus, 'cSvK'); }
@@ -456,6 +466,10 @@ NTSTATUS KswordSvmPrepare(KSW_HVM_RUNTIME* Runtime, ULONG Flags)
     }
     /* NPT uses the common cache/address-width contract established above. */
     if (NT_SUCCESS(status)) { status = KswordNptBuild(&state->Npt, &state->Cpus[0].Caps); }
+    /* The optional hardware clone and all split pages are allocated before any CPU enters SVM. */
+    if (NT_SUCCESS(status) && (Flags & KSWORD_ARK_HVM_CONTROL_FLAG_SVM_WRITE_WATCH)) { status = KswordSvmWatchPrepare(state); }
+    /* Shared virtual-CPU roots are optional; their complete allocation budget is checked before entry. */
+    if (NT_SUCCESS(status) && (Flags & KSWORD_ARK_HVM_CONTROL_FLAG_SVM_WRITE_WATCH)) { status = KswordSvmCachePrepare(state); }
     /* Probe resources are opt-in and never allocated by ordinary prepare. */
     if (NT_SUCCESS(status) && (Flags & (KSWORD_ARK_HVM_CONTROL_FLAG_SVM_NESTED_PROBE |
         KSWORD_ARK_HVM_CONTROL_FLAG_ENABLE_NESTED_SVM))) {

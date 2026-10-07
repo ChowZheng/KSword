@@ -27,6 +27,8 @@ static void KswNshadowTrackSources(KSW_NSHADOW* Shadow, const KSW_NMMU_RESULT* R
         if (source < Shadow->SourceCount && Shadow->SourceAddress[source] == Result->Inner.EntryAddress[path]) {
             /* Conflicting provenance cannot replace a value used by already published mappings. */
             if ((Shadow->SourceValue[source] ^ Result->Inner.EntryValue[path]) & ~0x20ULL) { Shadow->SourceUntracked = 1; }
+            /* Every published leaf group records all ancestors that contributed to its permissions/frame. */
+            Shadow->Dependencies[Shadow->LastLeafPage][Shadow->SourceId[source] / 64U] |= 1ULL << (Shadow->SourceId[source] & 63U);
             /* Continue validating every word in the newly committed path. */
             continue;
         }
@@ -38,11 +40,21 @@ static void KswNshadowTrackSources(KSW_NSHADOW* Shadow, const KSW_NMMU_RESULT* R
             Shadow->SourceAddress[move] = Shadow->SourceAddress[move - 1U];
             /* Keep each permission/frame value attached to its original address. */
             Shadow->SourceValue[move] = Shadow->SourceValue[move - 1U];
+            /* Provenance cannot move independently of its address/value pair. */
+            Shadow->SourceProven[move] = Shadow->SourceProven[move - 1U];
+            /* Dependency bit positions remain stable even when the sorted address position changes. */
+            Shadow->SourceId[move] = Shadow->SourceId[move - 1U];
         }
         /* Preserve committed source identity and every architectural permission/cache bit. */
         Shadow->SourceAddress[source] = Result->Inner.EntryAddress[path];
         /* Source values describe the mapping currently held by this root's leaves. */
         Shadow->SourceValue[source] = Result->Inner.EntryValue[path];
+        /* A snapshot captured before protection/all-CPU flush is not a proof of later immutability. */
+        Shadow->SourceProven[source] = 0;
+        /* Distinct IDs never exceed the same fixed source budget. */
+        Shadow->SourceId[source] = Shadow->NextSourceId++;
+        /* New source words affect the leaf group just committed by the installer. */
+        Shadow->Dependencies[Shadow->LastLeafPage][Shadow->SourceId[source] / 64U] |= 1ULL << (Shadow->SourceId[source] & 63U);
         /* Readers never inspect uninitialized array entries. */
         ++Shadow->SourceCount;
     }
@@ -68,6 +80,43 @@ int KswSvmNestedShadowSourcesMatch(const KSW_NSHADOW* Shadow,
             ((value ^ Shadow->SourceValue[source]) & ~0x20ULL)) { return 0; }
     }
     /* Hardware invalidation remains independently pending even when page-table bytes match. */
+    return 1;
+}
+
+/* A guard removes repeated RAM reads only after the original value was verified while armed. */
+int KswSvmNestedShadowSourcesVerify(KSW_NSHADOW* Shadow, KSW_NNPT_READ ReadGuestWord,
+    void* Context, int (*Stable)(void*, KSW_SVM_U64), void* StableContext)
+{
+    /* Every published dependency still gets a provenance check on each virtual invalidation. */
+    unsigned source;
+    if (!Stable) { return KswSvmNestedShadowSourcesMatch(Shadow, ReadGuestWord, Context); }
+    if (!Shadow || !ReadGuestWord || Shadow->SourceUntracked || Shadow->SourceCount > KSW_NSHADOW_SOURCE_WORDS) { return 0; }
+    if (!Shadow->SourceCount) { return Shadow->Used == 1U; }
+    for (source = 0; source < Shadow->SourceCount; ++source) {
+        /* A permanent dirty revocation or missing all-CPU acknowledgement returns to exact source checks. */
+        int stable = Stable(StableContext, Shadow->SourceAddress[source]);
+        KSW_SVM_U64 value;
+        if (stable && Shadow->SourceProven[source]) { continue; }
+        /* Prior to the first armed validation, no read may be skipped. */
+        if (!ReadGuestWord(Context, Shadow->SourceAddress[source], &value)) { return 0; }
+        /* Changed values retire every dependent leaf group, keeping unrelated branches alive. */
+        if ((value ^ Shadow->SourceValue[source]) & ~0x20ULL) {
+            unsigned page, word, id = Shadow->SourceId[source];
+            if (id >= KSW_NSHADOW_SOURCE_WORDS || Shadow->Epoch == ~0ULL) { return 0; }
+            for (page = 0; page < Shadow->Used; ++page) {
+                if (!(Shadow->Dependencies[page][id / 64U] & (1ULL << (id & 63U)))) { continue; }
+                /* No other CPU executes this private root; hardware flush remains explicitly pending. */
+                for (word = 0; word < 512U; ++word) { Shadow->Pages[page].Words[word] = 0; }
+                for (word = 0; word < KSW_NSHADOW_SOURCE_WORDS / 64U; ++word) { Shadow->Dependencies[page][word] = 0; }
+                Shadow->FlushPending = 1;
+                if (Shadow->DependencyRetirements != ~0ULL) { ++Shadow->DependencyRetirements; }
+            }
+            /* Future candidates bind to a fresh epoch; existing unaffected leaves remain installed. */
+            ++Shadow->Epoch; Shadow->SourceValue[source] = value;
+        }
+        /* Guard identity must survive the entire read; otherwise this remains only an ordinary observation. */
+        Shadow->SourceProven[source] = (unsigned char)(stable && Stable(StableContext, Shadow->SourceAddress[source]));
+    }
     return 1;
 }
 
@@ -118,6 +167,8 @@ static int KswNshadowTryLarge(KSW_NSHADOW* Shadow,
     for (level = missing; level < TargetLevel; ++level) {
         unsigned int child = Shadow->Used++;
         KswNshadowClear(Shadow->Pages[child].Words);
+        /* Private level metadata distinguishes leaf PAT bit7 from nonleaf/large-page PS. */
+        Shadow->Levels[child] = (unsigned char)(3U - level);
         Shadow->Pages[page].Words[Indices[level]] = Shadow->Pages[child].Physical | 7ULL;
         page = child;
     }
@@ -126,6 +177,8 @@ static int KswNshadowTryLarge(KSW_NSHADOW* Shadow,
         Shadow->Pages[page].Words[Indices[TargetLevel]] = Leaf;
         Shadow->FlushPending = 1;
     }
+    /* The source ledger associates this committed large leaf with its actual table group. */
+    Shadow->LastLeafPage = page;
     return 0;
 }
 
@@ -161,13 +214,22 @@ unsigned int KswSvmNestedShadowInitialize(KSW_NSHADOW* Shadow,
     /* Initially only the empty root belongs to the hardware tree. */
     Shadow->Used = 1;
     /* Bind the first translation resolution to epoch one. */
-    Shadow->Epoch = 1;
+    Shadow->Epoch = 1; Shadow->DependencyRetirements = 0;
     /* Preserve the exact PA mask used for every later entry. */
     Shadow->AddressMask = mask;
     /* First use must not inherit translations from an earlier ASID owner. */
     Shadow->FlushPending = 1;
     /* Newly empty roots have no source dependencies. */
-    Shadow->SourceCount = Shadow->SourceUntracked = 0;
+    Shadow->SourceCount = Shadow->SourceUntracked = Shadow->NextSourceId = 0;
+    /* Clear only software provenance; reserved hardware pool pages stay owned. */
+    {
+        unsigned metaPage, word;
+        for (metaPage = 0; metaPage < KSW_NSHADOW_MAX_PAGES; ++metaPage) {
+            Shadow->Levels[metaPage] = 0;
+            for (word = 0; word < KSW_NSHADOW_SOURCE_WORDS / 64U; ++word) { Shadow->Dependencies[metaPage][word] = 0; }
+        }
+        Shadow->Levels[0] = 4; Shadow->LastLeafPage = 0;
+    }
     /* No guest entry may observe allocator residue. */
     KswNshadowClear(Pages[0].Words);
     /* Unused child pages are cleared just before they are linked. */
@@ -188,7 +250,16 @@ unsigned int KswSvmNestedShadowReset(KSW_NSHADOW* Shadow)
     /* The owner must issue a real hardware flush before using this root again. */
     Shadow->FlushPending = 1;
     /* Disconnected mappings no longer own any recorded NPT12 source paths. */
-    Shadow->SourceCount = Shadow->SourceUntracked = 0;
+    Shadow->SourceCount = Shadow->SourceUntracked = Shadow->NextSourceId = 0;
+    /* Clear only software provenance; reserved hardware pool pages stay owned. */
+    {
+        unsigned metaPage, word;
+        for (metaPage = 0; metaPage < KSW_NSHADOW_MAX_PAGES; ++metaPage) {
+            Shadow->Levels[metaPage] = 0;
+            for (word = 0; word < KSW_NSHADOW_SOURCE_WORDS / 64U; ++word) { Shadow->Dependencies[metaPage][word] = 0; }
+        }
+        Shadow->Levels[0] = 4; Shadow->LastLeafPage = 0;
+    }
     /* Resource ownership remains unchanged. */
     return KSW_NSHADOW_OK;
 }
@@ -284,6 +355,8 @@ unsigned int KswSvmNestedShadowInstall(KSW_NSHADOW* Shadow, const KSW_NMMU_RESUL
         unsigned int child = Shadow->Used++;
         /* Eliminate stale leaf entries before making this page reachable. */
         KswNshadowClear(Shadow->Pages[child].Words);
+        /* Private level metadata distinguishes leaf PAT bit7 from nonleaf/large-page PS. */
+        Shadow->Levels[child] = (unsigned char)(3U - level);
         /* The owner is outside VMRUN; publication completes before the next entry. */
         Shadow->Pages[page].Words[indices[level]] = Shadow->Pages[child].Physical | 7ULL;
         /* Continue down the newly constructed suffix. */
@@ -319,6 +392,32 @@ unsigned int KswSvmNestedShadowInstall(KSW_NSHADOW* Shadow, const KSW_NMMU_RESUL
     }
     /* New leaves are visible on the next walk; reset/replacement paths already request a flush. */
     /* No source A/D work or memory allocation remains in this installation. */
+    /* This PT group owns every ordinary or prefilled leaf affected by the same source path. */
+    Shadow->LastLeafPage = page;
     KswNshadowTrackSources(Shadow, Result);
     return KSW_NSHADOW_OK;
+}
+
+/* Hardware permission tightening affects only aliases of the newly armed/revoked host pages. */
+void KswSvmNestedShadowRestrict(KSW_NSHADOW* Shadow,
+    unsigned (*Range)(void*, KSW_SVM_U64, KSW_SVM_U64), void* Context)
+{
+    unsigned page, word;
+    if (!Shadow || !Range || Shadow->Used > Shadow->Capacity) { return; }
+    for (page = 0; page < Shadow->Used; ++page) {
+        unsigned level = Shadow->Levels[page];
+        if (!level || level > 3U) { continue; }
+        for (word = 0; word < 512U; ++word) {
+            KSW_SVM_U64 value = Shadow->Pages[page].Words[word], span = 1ULL << (12U + 9U * (level - 1U));
+            unsigned restriction;
+            if (!(value & 1ULL) || (level > 1U && !(value & 0x80ULL))) { continue; }
+            restriction = Range(Context, value & Shadow->AddressMask & ~(span - 1ULL), span);
+            if (!restriction) { continue; }
+            /* A revoked page is recomposed from NPT12; a large leaf must split rather than protect unrelated pages. */
+            if (level > 1U || restriction == 2U) { Shadow->Pages[page].Words[word] = 0; }
+            /* Ordinary read-only aliases keep their original frame, PAT and source permission bounds. */
+            else { Shadow->Pages[page].Words[word] = value & ~2ULL; }
+            Shadow->FlushPending = 1;
+        }
+    }
 }

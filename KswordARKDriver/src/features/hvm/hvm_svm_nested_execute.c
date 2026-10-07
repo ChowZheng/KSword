@@ -124,6 +124,17 @@ static unsigned KswNsvmResolve(KSW_NSVM_EXECUTION* Execution)
     /* Outer access/cache/RAM failures must not be disguised as a virtual guest's page fault. */
     if (status != KSW_NNPT_OK) { return KSW_NSVM_EXEC_FAULT; }
     /* Install only a completed walk from the current invalidation epoch. */
+    if (Execution->Io->ArmSource) {
+        /* Each dependency is a guest physical page translated by the trusted original NPT01 lifetime. */
+        unsigned path;
+        for (path = 0; path < Execution->Translation.Inner.Count; ++path) {
+            /* Failed arming merely keeps the fresh-read fallback; it never grants a proof. */
+            (void)Execution->Io->ArmSource(Execution->Io->Operand.Context, Execution->Translation.Inner.EntryAddress[path] & ~4095ULL);
+        }
+    }
+    /* A watched host page must remain read-only even through an L2 GPA alias or large mapping. */
+    if (Execution->Io->ProtectMapping) { Execution->Io->ProtectMapping(Execution->Io->Operand.Context, &Execution->Translation); }
+    /* Install only a completed walk from the current invalidation epoch. */
     tick = KswSvmPerfBegin(Execution->Io);
     /* Count composition publication independently from the source walk. */
     status = KswSvmNestedShadowInstall(Execution->Io->Shadow, &Execution->Translation);
@@ -191,7 +202,7 @@ unsigned KswSvmNestedExecute(KSW_NSVM_EXECUTION* Execution)
         /* A stale/incomplete capture cannot authorize a route. */
         if (!KswSvmNestedPermissionView(&Execution->Session->Permissions, &maps)) { return KSW_NSVM_EXEC_FAULT; }
         /* Preserve the exact route and operands for later platform event decisions. */
-        action = KswSvmNestedRouteExit(&Execution->Session->L1, &Execution->Session->Vmcb12,
+        action = KswSvmNestedRouteExit(KswSvmNestedHostImage(Execution->Session), &Execution->Session->Vmcb12,
             &Execution->Io->OuterPermissions, &maps, code, KswSvmRead64(Execution->Current, KSW_VMCB_EXITINFO1),
             (unsigned)Execution->Gpr[1], &Execution->Route);
         /* A requested inner exit is reflected before RIP/register/injection changes. */
@@ -304,6 +315,11 @@ unsigned KswSvmNestedExecute(KSW_NSVM_EXECUTION* Execution)
             result = KswSvmNestedSessionEnter(Execution->Session, Execution->Io, Execution->Current, operand);
             /* Entry and INVALID return each have their own architecture-defined GIF result. */
             if (result == KSW_NSVM_ACTION_ENTER || result == KSW_NSVM_ACTION_INVALID) {
+                /* Switch only after the complete portable transaction committed its new owner. */
+                if (result == KSW_NSVM_ACTION_ENTER && Execution->Session->HostImage) {
+                    /* Register virtualization and event coordination now address VMCB02. */
+                    Execution->Current = Execution->Io->StableL2; Execution->Registers.Current = Execution->Current;
+                }
                 /* VMRUN sets L2 GIF; VMEXIT_INVALID clears the resumed virtual host's GIF. */
                 Execution->Gif = Execution->GifRequested = result == KSW_NSVM_ACTION_ENTER;
                 /* The transaction has already installed the appropriate RIP; do not advance again. */

@@ -39,6 +39,8 @@ unsigned int KswSvmNestedSessionInvalidate(KSW_NSVM_SESSION* Session,
         Session->Phase != KSW_NSVM_SESSION_IDLE) { return KSW_NSVM_ACTION_UNSUPPORTED; }
     /* Invalidation counters cannot wrap into a prior diagnostic generation. */
     if (Session->Invalidations == ~0ULL) { return KSW_NSVM_ACTION_FAULT; }
+    /* Shared roots observe a conservative virtual invalidation on their owning CPU at the next entry. */
+    if (Io->InvalidateCaches) { Io->InvalidateCaches(Io->Operand.Context); }
     /* Discard the entire NPT02 cache instead of attempting an incomplete linear-address walk. */
     if (KswSvmNestedShadowReset(Io->Shadow) != KSW_NSHADOW_OK) {
         /* The current virtual CPU must not enter a root with uncertain cache ownership. */

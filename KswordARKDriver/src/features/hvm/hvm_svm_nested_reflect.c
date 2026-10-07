@@ -26,6 +26,11 @@ unsigned KswSvmNestedReturnL1(KSW_NSVM_EXECUTION* Execution)
         return KSW_NSVM_EXEC_FAULT;
     }
     /* Only the complete writeback authorizes the exact hardware-observed event's transfer. */
+    if (Execution->Session->HostImage) {
+        /* VMCB01 retains the advanced L1 continuation and current VMLOAD-owned state. */
+        Execution->Current = Execution->Session->HostImage; Execution->Registers.Current = Execution->Current;
+    }
+    /* Only the complete writeback authorizes the exact hardware-observed event's transfer. */
     if (transferToken && !KswSvmNestedPendingTransfer(&Execution->Pending, transferToken, transferEvent)) {
         /* A violated single-writer invariant after writeback still cannot authorize reentry. */
         return KSW_NSVM_EXEC_FAULT;

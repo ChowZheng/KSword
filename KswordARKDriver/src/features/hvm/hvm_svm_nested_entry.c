@@ -180,11 +180,11 @@ unsigned int KswSvmNestedValidateEntry(const KSW_SVM_VMCB* Inner,
 }
 
 /* Build from two owned snapshots; the destination may alias Outer, but not Inner. */
-unsigned int KswSvmNestedBuildEntry(KSW_SVM_VMCB* Destination,
+static unsigned int KswNsvmBuildEntry(KSW_SVM_VMCB* Destination,
     const KSW_SVM_VMCB* Outer, const KSW_SVM_VMCB* Inner,
     const KSW_NSVM_ENTRY_POLICY* Policy, KSW_SVM_U64 RootPa,
     KSW_SVM_U64 MsrPa, KSW_SVM_U64 IoPa, unsigned int Asid,
-    KSW_NSVM_ENTRY_RESULT* Result)
+    KSW_NSVM_ENTRY_RESULT* Result, unsigned Stable)
 {
     /* Keep host-pointer failures separate from invalid virtual guest controls. */
     KSW_SVM_U64 base;
@@ -205,7 +205,17 @@ unsigned int KswSvmNestedBuildEntry(KSW_SVM_VMCB* Destination,
         return KswNsvmEntryFail(Result, KSW_NSVM_ENTRY_UNSUPPORTED, KSW_VMCB_NCR3, RootPa);
     }
     /* Preserve VMLOAD-owned state and outer-only controls from the current L1 image. */
-    KswNsvmEntryCopy(Destination, Outer, sizeof(*Destination));
+    if (Stable) {
+        /* Only the implemented control area is inherited; reserved bytes stay initialized zero. */
+        KswNsvmEntryCopy(Destination, Outer, 0x100U);
+        /* VMLOAD state is live across virtual VMEXIT; it does not come from VMCB12. */
+        KswSvmNestedCopyVmload(Destination, Outer);
+        /* Unsupported debug extensions remain zero rather than retaining a previous operand's fields. */
+        KswSvmWrite64(Destination, KSW_VMCB_DEBUGCTL, 0);
+    } else {
+        /* Portable probes preserve the existing full-image fallback contract. */
+        KswNsvmEntryCopy(Destination, Outer, sizeof(*Destination));
+    }
     /* VMRUN switches only the documented automatic subset. */
     KswSvmNestedCopyVmrun(Destination, Inner, 1);
     /* Every L0 intercept remains active regardless of the inner permission request. */
@@ -237,6 +247,27 @@ unsigned int KswSvmNestedBuildEntry(KSW_SVM_VMCB* Destination,
     return KswNsvmEntryFail(Result, KSW_NSVM_ENTRY_OK, 0, 0);
 }
 
+/* Existing in-place callers retain their complete-copy behavior. */
+unsigned int KswSvmNestedBuildEntry(KSW_SVM_VMCB* Destination,
+    const KSW_SVM_VMCB* Outer, const KSW_SVM_VMCB* Inner,
+    const KSW_NSVM_ENTRY_POLICY* Policy, KSW_SVM_U64 RootPa,
+    KSW_SVM_U64 MsrPa, KSW_SVM_U64 IoPa, unsigned int Asid, KSW_NSVM_ENTRY_RESULT* Result)
+{
+    /* Admission is shared so an optimized builder cannot widen guest support. */
+    return KswNsvmBuildEntry(Destination, Outer, Inner, Policy, RootPa, MsrPa, IoPa, Asid, Result, 0);
+}
+/* The distinct physical page cannot alias either input. */
+unsigned int KswSvmNestedBuildStableEntry(KSW_SVM_VMCB* Destination,
+    const KSW_SVM_VMCB* Outer, const KSW_SVM_VMCB* Inner,
+    const KSW_NSVM_ENTRY_POLICY* Policy, KSW_SVM_U64 RootPa,
+    KSW_SVM_U64 MsrPa, KSW_SVM_U64 IoPa, unsigned int Asid, KSW_NSVM_ENTRY_RESULT* Result)
+{
+    /* Invalid pointer ownership never publishes a partial VMCB02. */
+    if (!Destination || Destination == Outer || Destination == Inner) { return KSW_NSVM_ENTRY_UNSUPPORTED; }
+    /* Only owned, zero-initialized VMCB02 allocations select this path. */
+    return KswNsvmBuildEntry(Destination, Outer, Inner, Policy, RootPa, MsrPa, IoPa, Asid, Result, 1);
+}
+
 /* Invalid-entry reflection preserves unexecuted save state but consumes EVENTINJ on VMEXIT. */
 void KswSvmNestedInvalidExit(KSW_SVM_VMCB* Inner)
 {
@@ -261,7 +292,7 @@ void KswSvmNestedRestoreL1(KSW_SVM_VMCB* Destination, KSW_SVM_VMCB* SavedL1,
     /* Keep the inner execution's latest debug status rather than an old L1 snapshot. */
     KswSvmWrite64(SavedL1, KSW_VMCB_DR6, KswSvmRead64(CurrentL2, KSW_VMCB_DR6));
     /* Restore L1 core state and L0-owned execution controls, including its original RAX. */
-    KswNsvmEntryCopy(Destination, SavedL1, sizeof(*Destination));
+    if (Destination != SavedL1) { KswNsvmEntryCopy(Destination, SavedL1, sizeof(*Destination)); }
     /* Hardware VMEXIT forces protected mode and privilege level zero. */
     KswSvmWrite64(Destination, KSW_VMCB_CR0, KswSvmRead64(Destination, KSW_VMCB_CR0) | 1ULL);
     /* Virtual-x86 mode is cleared, and completion of VMRUN consumes RF. */

@@ -203,3 +203,23 @@ fast模式补测：两个真实QPC窗口10.9415527/10.9344453秒内，EFER/HSAVE
 实体机32CPU profile准入、自检、ACTIVE与周期计数有效性已真实通过；单核VM启动到Windows标志，有用户进展观察，完整桌面尚未通过。摘要与原始文件哈希见 `evidence/amd-root-profile-20261007.json`。软件root样本中的VMRUN约72.73%，权限图/源同步/取指分别32.31/30.04/14.52%；MSR3.56%。应先在实际profile数据下进一步削减页表重复翻译、权限图捕获/合并与源表同步的内存窗口开销；P2快路保留为独立比较，不宣称凭退出次数就能恢复原生性能。
 
 NPF逐步增多，补采达到73k/95k每秒，没有terminal锁存；raw RIP/CR3/GPA仍变化，无法仅据计数断言固定NPF循环或正常启动成功。Root采样不包含硬件VMEXIT/VMRUN和VMware自身工作；周期性1/64可能相位偏采样。测试B按同签后SYS、同单核VM独立切fast；收尾必须确认32核全部原生且teardown成功。8核、XSTATE专项、VLS/vGIF与clean仍未完成动态验收。
+
+
+## 2026-10-07 架构优化静态交付（未执行测试）
+
+本轮新增 `hvm_svm_accel`、`hvm_svm_watch`、`hvm_svm_cache`，分别处理物理硬件加速、CPU 写入证明、虚拟 VMCB 身份的共享软件页表。用户明确要求暂不测试：只编译生产代码和25个离线夹具目标，夹具与Python测试均 NOT_RUN；没有签名、加载、UAC、VM操作或宿主重启。编译不能证明正确性或性能。
+
+- 独立物理 VMCB01/02：L1 原页保留每次 VMRUN 的真实续接，只有事务提交才推进 RIP；L2 用独立预分配页，刷新已实现控制和自动/VMLOAD字段，避免两次整页切层复制。失败保留旧 L1 RIP、资源与实际执行租约。
+- 物理 VLS：仅真实 bit15、NPT、长模式、虚拟 SVME=1 的 L1 清除 VMLOAD/VMSAVE 拦截；L2 和不符合条件的路径仍软件处理，不公开更深嵌套。退出先恢复原拦截再路由，VMLOAD状态在01/02间按实际架构状态交接。
+- 物理 vGIF：仅 bit16、无待注入/排队/IRET/NMI软件所有权的 L1；硬件输出回读更新逻辑GIF，再恢复控制；出现待处理软件事件时回软件 STGI/CLGI 通知路径。该路径的真实NMI/IRQ/GIF行为仍待专项验证。
+- clean：只允许私有上一成功入口、同物理 VMCB 和精确一致的 intercept、permission-base、ASID/TLB、NPT控制组；permission内容代次变化也清dirty。首次、切层/换物理页、INVALID、自检重建不继承证明；interrupt/CR/DR/descriptor/segment/CET仍保守dirty，没有把L1的clean位复制给硬件。
+- CPU写证明：克隆硬件NPT01，软件翻译原根保持结构不变；预分配256个拆页和1024个永久身份槽，保留原缓存/PAT/帧属性。源页只读后必须全部CPU实际完成full TLB flush，才可给重新读取的基线标记证明；首次保护以前的值不能跳读。写NPF和显式L0写先永久撤销该页证明，再恢复精确身份页RW并保持原RIP/事件重试。dirty页到下一次all-native start前均回读，不以TLB请求替代变化检测。这是CPU写证明，不声称覆盖DMA。
+- 增量失效：源身份保留稳定dependency ID，变化只清相关叶表组；无关NPT02分支保留。保护变更只收紧/撤销对应host-page别名，覆盖大页时拆分重建。证明缺失、源不可读或溢出仍走原重读/整根失效，不能无证据保留映射。
+- 全核确认：正常Windows guest中每100ms仅对缺确认的CPU排入独立targeted DPC，每个本核两次私有QUERY取得刷新完成证据；root不调用IPI、不等锁/线程。HIGH_LEVEL保护Active检查到VMMCALL的窗口，native return前撤销全局证明；all-native release先排空timer生产者再排空子DPC，保留卸载互锁。协议与停机并发实测仍未做。
+- 跨核缓存：2×CPU数的永久VMCB-keyed根注册表，在实际VMCB lease下交接；满时用每CPU根。迁移保留已验证软件页表，物理ASID根变化仍flush；INVLPGA通过代次使各持有者在本核失效，不远程修改活跃表。NPT12物理格式缓存不再因无关L1进程CR3/CR0.TS变化清空；原格式/PAT/NX/ASID/物理宽度证据仍保留。完整退出后的start清旧共享证明，原生期间的写不能继承。
+
+新增 `prepare-svm-accel/resident-svm-accel` 与 `prepare-svm-opt/resident-svm-opt` 共用CLI/help目录；metrics独立升v11，主HVM v6不变。计数区分selected entries、局部proof hits、共享arms/writes、迁移和根私有dependency retirements；固定VMCB01/02资源身份支持周期比较，当前物理VMCB身份仍保留原含义。新结构只定义于shared/driver，工程和filters同步。
+
+表预算包括原身份根、watch克隆/拆页、CPU私有根及共享根，合计不超过64MiB；资源在PASSIVE预分配，root不分配。主32LP允许该预分配拓扑；其它拓扑超预算明确拒绝，不声称多组已验证。
+
+构建：标准MSVC/WDK Release x64 /WX、x64 Universal API与INF/CAT通过，整数叶机器码238指令/no call/SIMD/x87/TLS门通过；hvm_ctl、主程序、KswordCLI同ABI构建。测试与实际加载均NOT_RUN。候选 `artifacts/amd-perf-20261007-architecture`，独立保留已签旧bulk候选及其运行现场。下一轮先选accel单核分离硬件正确性，再opt观察proof/代次/迁移与root周期；完整桌面、事件、XSTATE和停止证明通过后直接8核，不据选择计数宣称加速。

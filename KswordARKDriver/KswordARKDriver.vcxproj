@@ -870,6 +870,9 @@
     <ClInclude Include="src\features\hvm\hvm_svm_hotspots.h" />
     <ClInclude Include="src\features\hvm\hvm_svm_perf.h" />
     <ClInclude Include="src\features\hvm\hvm_svm_fast.h" />
+    <ClInclude Include="src\features\hvm\hvm_svm_accel.h" />
+    <ClInclude Include="src\features\hvm\hvm_svm_watch.h" />
+    <ClInclude Include="src\features\hvm\hvm_svm_cache.h" />
     <ClInclude Include="..\shared\driver\KswordArkHvmFlightRecorder.h" />
     <ClCompile Include="src\features\hvm\hvm_svm_flightrecorder.c">
       <EnableEnhancedInstructionSet>StreamingSIMDExtensions2</EnableEnhancedInstructionSet>
@@ -1007,6 +1010,27 @@
       <ExcludedFromBuild Condition="'$(Platform)'=='ARM64'">true</ExcludedFromBuild>
     </ClCompile>
     <ClCompile Include="src\features\hvm\hvm_svm_fast.c">
+      <TreatWarningAsError>true</TreatWarningAsError>
+      <BufferSecurityCheck>false</BufferSecurityCheck>
+      <AdditionalOptions>/Ob3 %(AdditionalOptions)</AdditionalOptions>
+      <WholeProgramOptimization>false</WholeProgramOptimization>
+      <ExcludedFromBuild Condition="'$(Platform)'=='ARM64'">true</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="src\features\hvm\hvm_svm_accel.c">
+      <TreatWarningAsError>true</TreatWarningAsError>
+      <BufferSecurityCheck>false</BufferSecurityCheck>
+      <AdditionalOptions>/Ob3 %(AdditionalOptions)</AdditionalOptions>
+      <WholeProgramOptimization>false</WholeProgramOptimization>
+      <ExcludedFromBuild Condition="'$(Platform)'=='ARM64'">true</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="src\features\hvm\hvm_svm_watch.c">
+      <TreatWarningAsError>true</TreatWarningAsError>
+      <BufferSecurityCheck>false</BufferSecurityCheck>
+      <AdditionalOptions>/Ob3 %(AdditionalOptions)</AdditionalOptions>
+      <WholeProgramOptimization>false</WholeProgramOptimization>
+      <ExcludedFromBuild Condition="'$(Platform)'=='ARM64'">true</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="src\features\hvm\hvm_svm_cache.c">
       <TreatWarningAsError>true</TreatWarningAsError>
       <BufferSecurityCheck>false</BufferSecurityCheck>
       <AdditionalOptions>/Ob3 %(AdditionalOptions)</AdditionalOptions>

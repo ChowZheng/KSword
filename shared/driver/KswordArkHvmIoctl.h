@@ -402,6 +402,10 @@
 #define KSWORD_ARK_HVM_CONTROL_FLAG_SVM_PROFILE 0x00020000UL
 /* Experimental integer-only L1 MSR leaf; requires general mode plus explicit profiling. */
 #define KSWORD_ARK_HVM_CONTROL_FLAG_SVM_FAST_MSR 0x00040000UL
+/* Physical VLS/vGIF and private clean provenance; unsupported hardware keeps software execution. */
+#define KSWORD_ARK_HVM_CONTROL_FLAG_SVM_ACCEL 0x00080000UL
+/* NPT source/permission write tracking; separate from physical instruction acceleration. */
+#define KSWORD_ARK_HVM_CONTROL_FLAG_SVM_WRITE_WATCH 0x00100000UL
 #define KSWORD_ARK_HVM_CONTROL_FLAG_ONE_SHOT_GUEST 0x00000008UL
 #define KSWORD_ARK_HVM_CONTROL_FLAG_ENABLE_EPT_EVENTS 0x00000010UL
 #define KSWORD_ARK_HVM_CONTROL_FLAG_ENABLE_NESTED_VMX 0x00000020UL

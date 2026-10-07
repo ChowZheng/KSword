@@ -1,5 +1,11 @@
 # AMD 实验后端与重启续接
 
+## 2026-10-07 架构优化静态续接（测试禁止）
+
+用户要求把大幅优化路线全落代码、暂不测试。新增accel/watch/cache模块，独立硬件01/02、VLS/vGIF、私有clean四组、clone NPT01 CPU写保护/全核flush证明、增量叶表组失效、targeted guest-DPC双QUERY确认、VMCB identity共享NPT02根及跨核交接。root无分配/等待，dirty页永久回读到all-native start reset；原生期间写不能继承旧证明。CPU写之外DMA不在证明范围。64MiB表总预算含身份/clone/splits/CPUfallback/shared；注册表满回每CPU根，准备预算不足报错。
+
+入口prepare/resident-svm-accel单独选择物理加速；prepare/resident-svm-opt额外watch/shared cache/fast，准备启动必须匹配。主HVM仍v6，metricsv11，SYS/CLI/GUI/KswordCLI同批编译。selected计数不等于退出减少/性能/OS成功。25夹具仅--build-only编译，所有测试NOT_RUN；WDK/WX/API/CAT与integer gate238通过，未签未加载，无UAC/VM/重启。完整细节与后续测试门在docs/next/ksword-amd-nested-performance-plan.md末尾。候选artifacts/amd-perf-20261007-architecture；旧bulk签后驱动和VM现场保留，实时采集须继续用旧目录v10 CLI直到换版，新根目录CLI已v11。用户睡觉，不沿用早前关机指令。
+
 ## 2026-10-07 bulk 实测与下一静态候选
 
 df1a584d签后装载/selftest32/profile ACTIVE32成功；clone1CPU/CPL0冷启动后5秒起采。用户反馈仍很慢、无明显改善，未确认桌面。原始artifacts/amd-perf-20261007-bulk/profile-live；摘要docs/next/evidence/amd-bulk-profile-20261007.json。32CPU perf/hotspot有效，两窗10.4242669/10.6282817秒，root样本632146950ticks，NPT12sync58.47%、permissions6.99%、fetch12.83%、NPTwalk6.26%；NPF+106536/+145326。cache各仅31CPU有效（完整性不能声明32），hits16432/16610与52505/52607，source-sync标志重置178/102，无pool回收。不是整体性能通过；不同boot阶段不能直接算加速倍数。

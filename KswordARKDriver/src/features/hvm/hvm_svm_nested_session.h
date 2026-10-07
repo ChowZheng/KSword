@@ -18,9 +18,19 @@
 #define KSW_NSVM_ACTION_UNSUPPORTED 3U
 #define KSW_NSVM_ACTION_FAULT 4U
 
+/* Shared metadata is mutated only under the VMCB execution lease, independent of host CPU placement. */
+typedef struct _KSW_NSVM_CACHE {
+    KSW_SVM_U64 Key[13], Epoch, OwnerToken, WatchGeneration;
+    unsigned Valid;
+} KSW_NSVM_CACHE;
+
 typedef struct _KSW_NSVM_SESSION {
     /* All images are owned nonpaged storage, never a mapped guest pointer. */
     KSW_SVM_VMCB Vmcb12, L1;
+    /* General residency retains the physical L1 image instead of copying its whole page. */
+    KSW_SVM_VMCB* HostImage;
+    /* The retained hardware L1 page is advanced only after the virtual instruction transaction commits. */
+    KSW_SVM_U64 HostNextRip;
     /* Original inner permission maps are retained for exit ownership decisions. */
     KSW_NSVM_PERMISSION_IMAGE Permissions;
     /* Both identities bind reflection to exactly the operand captured at entry. */
@@ -45,6 +55,11 @@ typedef struct _KSW_NSVM_SESSION {
     KSWORD_HVM_NPT_CACHE_STATS CacheStats;
     /* A virtual VMRUN flush request remains pending until a real successful hardware entry. */
     unsigned PendingTlbControl;
+    /* Every rewritten merged bitmap starts a new hardware permission-cache generation. */
+    KSW_SVM_U64 PermissionsGeneration;
+    /* Permission captures have their own protected-page identity and fresh-baseline proof. */
+    KSW_SVM_U64 PermissionKey[4];
+    unsigned PermissionsReusable;
 } KSW_NSVM_SESSION;
 
 typedef struct _KSW_NSVM_SESSION_IO {
@@ -71,6 +86,19 @@ typedef struct _KSW_NSVM_SESSION_IO {
     unsigned ReuseNpt;
     /* Optional preallocated page for one-call source checks; never proof across VMRUNs. */
     unsigned char* SourceSyncPage;
+    /* Optional independent physical VMCBs; bounded probes keep the original in-place contract. */
+    KSW_SVM_VMCB* StableL1;
+    KSW_SVM_VMCB* StableL2;
+    /* Optional CPU-write provenance, never supplied by the virtual VMM. */
+    void (*BeginWatch)(void* Context);
+    int (*ArmSource)(void* Context, KSW_SVM_U64 Page);
+    int (*SourceStable)(void* Context, KSW_SVM_U64 Address);
+    void (*ProtectMapping)(void* Context, KSW_NMMU_RESULT* Mapping);
+    /* An exhausted shared cache registry leaves Shadow on its private fallback. */
+    void (*BindCache)(void* Context, struct _KSW_NSVM_SESSION_IO* Io, const KSW_NSVM_LEASE* Lease);
+    void (*UnbindCache)(void* Context, struct _KSW_NSVM_SESSION_IO* Io);
+    void (*InvalidateCaches)(void* Context);
+    KSW_NSVM_CACHE* SharedCache;
     /* Optional root clock and sampled row; unset in ordinary execution and portable fixtures. */
     KSW_SVM_U64 (*PerfClock)(void* Context);
     /* Output belongs to the current odd per-CPU sample sequence, never a retained guest pointer. */
@@ -78,6 +106,13 @@ typedef struct _KSW_NSVM_SESSION_IO {
     /* Diagnostic saturation cannot affect architectural execution. */
     KSW_SVM_U64* PerfSaturated;
 } KSW_NSVM_SESSION_IO;
+
+/* The fixed probe still uses its embedded image; general execution keeps VMCB01 live. */
+static __inline KSW_SVM_VMCB* KswSvmNestedHostImage(const KSW_NSVM_SESSION* Session)
+{
+    /* A null binding is the original portable/probe continuation contract. */
+    return Session->HostImage ? Session->HostImage : (KSW_SVM_VMCB*)&Session->L1;
+}
 
 /* No timestamp instruction executes when profiling is disabled or this exit is unselected. */
 static __inline KSW_SVM_U64 KswSvmPerfBegin(const KSW_NSVM_SESSION_IO* Io)

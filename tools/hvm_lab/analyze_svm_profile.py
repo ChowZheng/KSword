@@ -119,7 +119,8 @@ def analyze(snapshots):
         for cpu in sorted(left):
             label, x, y = f'g{cpu[0]}p{cpu[1]}', left[cpu], right[cpu]
             try:
-                for identity in ('generation', 'vmcbPa', 'asid'):
+                identities = ('generation', 'stableVmcb01Pa', 'stableVmcb02Pa', 'asid') if a['version'] == 11 else ('generation', 'vmcbPa', 'asid')
+                for identity in identities:
                     if x[identity] != y[identity]:
                         raise ValueError(identity+' changed')
                 changes = exit_delta(x['hotspots'], y['hotspots'])
@@ -128,7 +129,7 @@ def analyze(snapshots):
             except (ValueError, KeyError) as error:
                 excluded.append({'interval': i, 'cpu': label, 'reason': str(error)})
                 continue
-            if a['version'] == 10:
+            if a['version'] in (10, 11):
                 try:
                     weights, ns, controls = cycle_delta(x.get('perf', {}), y.get('perf', {}))
                     cycles.update({f'svm;{label};L{l};{code};{stage}': n for (l, code, stage), n in weights.items()})

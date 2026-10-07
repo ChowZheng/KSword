@@ -28,15 +28,20 @@ int KswSvmNestedInterruptPrepare(KSW_SVM_VMCB* Current, const KSW_NSVM_SESSION* 
     Overlay->ForcedMask = Overlay->SuppressedVirq = 0; Overlay->Inner = inner;
     /* With the inner masking bit set, saved L1 IF controls physical interrupts. */
     Overlay->HostIf = inner && (control & (1ULL << 24)) &&
-        (KswSvmRead64(&Session->L1, KSW_VMCB_RFLAGS) & (1ULL << 9));
+        (KswSvmRead64(KswSvmNestedHostImage(Session), KSW_VMCB_RFLAGS) & (1ULL << 9));
     /* Closed L1 GIF must mask physical interrupts even if L1 executes STI. */
-    if (!Gif) {
+    if (!Gif && !Overlay->HardwareGif) {
         /* V_INTR_MASKING with host IF=0 supplies physical INTR masking independently of guest IF. */
         control |= 1ULL << 24; Overlay->ForcedMask = 1; Overlay->HostIf = 0;
         /* Virtual IRQs also wait for virtual STGI, regardless of the guest's IF. */
         Overlay->SuppressedVirq = (unsigned)((control >> 8) & 1ULL); control &= ~(1ULL << 8);
         /* NMI is intercepted for acknowledgement/retention instead of entering the closed-GIF guest. */
         misc |= 1U << 1;
+    }
+    /* Do not alter V_TPR: the platform prepared it from real or virtual CR8 as appropriate. */
+    if (Overlay->HardwareGif) {
+        /* Hardware STGI/CLGI must control physical delivery even when GIF changes without an exit. */
+        control = (control & ~((1ULL << 9) | (1ULL << 25))) | (1ULL << 25) | ((KSW_SVM_U64)Gif << 9);
     }
     /* Do not alter V_TPR: the platform prepared it from real or virtual CR8 as appropriate. */
     KswSvmWrite64(Current, KSW_VMCB_INTCTL, control);

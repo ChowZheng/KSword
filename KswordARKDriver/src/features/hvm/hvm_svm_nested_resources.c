@@ -1,5 +1,6 @@
 /* PASSIVE_LEVEL ownership plus VMEXIT-safe, RAM-only physical operand access. */
 #include "hvm_svm_nested_runtime.h"
+#include "hvm_svm_watch.h"
 #include "../../platform/pool_compat.h"
 
 /* Validate full operands against the retained, immutable RAM inventory. */
@@ -78,6 +79,8 @@ int KswordSvmNestedCompareOr(void* Context, KSW_SVM_U64 Address,
     if ((Bits & ~0x60ULL) || !KswordSvmNestedRamRange(nested, Address, 8) ||
         KswordARKHvmPhysWindowMap(nested->Window, Address, 8, &mapped) != KSW_HVM_PHYS_WINDOW_OK) { return 0; }
     /* LOCK CMPXCHG is nonblocking and does not acquire a kernel spinlock. */
+    if ((Expected | Bits) != Expected) { KswordSvmWatchWrite(nested->Cpu, Address); }
+    /* LOCK CMPXCHG is nonblocking and does not acquire a kernel spinlock. */
     observed = InterlockedCompareExchange64((volatile LONG64*)mapped, (LONG64)(Expected | Bits), (LONG64)Expected);
     /* Drop the mapping even when a competing writer changed the slot. */
     KswordARKHvmPhysWindowUnmap(nested->Window);
@@ -108,7 +111,12 @@ VOID KswordSvmNestedRelease(KSW_SVM_CPU* Cpu)
     /* Hardware permission maps remain owned until the inner CPU is native. */
     if (nested->MergedMaps) { MmFreeContiguousMemory(nested->MergedMaps); }
     /* One contiguous allocation owns both operand and virtual HSAVE pages. */
-    if (nested->Operand) { MmFreeContiguousMemory(nested->Operand); }
+    if (nested->Operand) {
+        /* Never leave the enclosing release ledger pointing into the freed VMCB02 suballocation. */
+        if (Cpu->Guest == nested->Vmcb02) { Cpu->Guest = nested->Vmcb01; Cpu->GuestPa = nested->Vmcb01Pa; }
+        /* The parent allocation owns the operand, virtual HSAVE and VMCB02 together. */
+        MmFreeContiguousMemory(nested->Operand);
+    }
     /* Drop CPU-local snapshots last. */
     ExFreePoolWithTag(nested, 'pSvK');
     /* Prevent reuse after teardown. */
@@ -142,6 +150,8 @@ NTSTATUS KswordSvmNestedPrepare(KSW_SVM_CPU* Cpu, ULONG Index)
     nested->Window = KswordARKHvmPhysWindowForProcessor(Index);
     /* Borrow the backend lifetime's immutable outer map. */
     nested->Outer = &state->Npt;
+    /* The shared write tracker is optional; software callbacks always retain the original immutable root. */
+    nested->Watch = state->Watch; nested->Cpu = Cpu; nested->WatchCpuIndex = Index;
     /* All virtual CPUs share one translated VMCB ownership domain. */
     nested->Owners = &state->NestedOwners;
     /* Stable Windows topology identity, independent of sparse hardware APIC IDs. */
@@ -151,7 +161,7 @@ NTSTATUS KswordSvmNestedPrepare(KSW_SVM_CPU* Cpu, ULONG Index)
     /* Highest representable host physical byte. */
     highest.QuadPart = (LONGLONG)(state->Npt.Limit - 1);
     /* VMCB12 and virtual HSAVE are adjacent only for the bounded assembly probe. */
-    nested->Operand = MmAllocateContiguousMemory(8192, highest);
+    nested->Operand = MmAllocateContiguousMemory(12288, highest);
     /* Independent merged maps ensure L1 cannot weaken or overwrite L0's maps. */
     nested->MergedMaps = MmAllocateContiguousMemory(KSW_NSVM_MSRPM_BYTES + KSW_NSVM_IOPM_BYTES, highest);
     /* The inner test has a full private kernel-sized stack. */
@@ -167,6 +177,14 @@ NTSTATUS KswordSvmNestedPrepare(KSW_SVM_CPU* Cpu, ULONG Index)
             KSW_NSVM_IOPM_BYTES, Cpu->Caps.PhysicalBits, &mapBase)) { return STATUS_DATA_ERROR; }
     /* Resolve the operand identity only at PASSIVE_LEVEL. */
     nested->OperandPa = (ULONGLONG)MmGetPhysicalAddress(nested->Operand).QuadPart;
+    /* Keep the bounded operand and virtual HSAVE in their original first two pages. */
+    nested->Vmcb02 = (KSW_SVM_VMCB*)((PUCHAR)nested->Operand + 8192);
+    /* Resolve the independent physical execution page only at PASSIVE_LEVEL. */
+    nested->Vmcb02Pa = nested->OperandPa + 8192;
+    /* Reserved fields and unimplemented save areas are never inherited from another operand. */
+    RtlZeroMemory(nested->Vmcb02, 4096);
+    /* Release and native return always retain the original allocation's identity. */
+    nested->Vmcb01 = Cpu->Guest; nested->Vmcb01Pa = Cpu->GuestPa;
     /* Every shadow table must be independently aligned/physically contiguous. */
     for (page = 0; page < KSW_NSVM_PROBE_PAGES; ++page) {
         /* Keep each allocation in the ledger before deriving its address. */

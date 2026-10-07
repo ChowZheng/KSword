@@ -7524,6 +7524,23 @@ static int DoProcess(HANDLE h, unsigned long op, unsigned long pid,
 
 /* Flight data is already copied by the driver; printing never changes the recorder. */
 /* Emit exact bounded counters; consumers must reject invalid or saturated snapshots. */
+/* Metrics v11 distinguishes selected acceleration from measured guest progress. */
+static void PrintOptimizationJson(const KSWORD_ARK_HVM_SVM_GENERAL_METRICS* General)
+{
+    const KSWORD_ARK_HVM_SVM_OPT_METRICS* opt = &General->optimization;
+    printf(",\"optimization\":{\"valid\":%lu,\"requestedFlags\":%lu,\"vlsSelected\":%lu,\"vgifSelected\":%lu,\"cleanMask\":%lu,"
+           "\"watchState\":%lu,\"permissionsReusable\":%lu,\"watchGlobalValid\":%lu,"
+           "\"vmcb01Pa\":\"0x%016llX\",\"vmcb02Pa\":\"0x%016llX\","
+           "\"vlsEntries\":\"%llu\",\"vgifEntries\":\"%llu\",\"cleanEntries\":\"%llu\","
+           "\"watchGeneration\":\"%llu\",\"watchAcknowledged\":\"%llu\",\"watchProof\":\"%llu\","
+           "\"watchArms\":\"%llu\",\"watchWrites\":\"%llu\",\"watchDeclines\":\"%llu\",\"watchProofHits\":\"%llu\","
+           "\"dependencyRetirements\":\"%llu\",\"permissionsGeneration\":\"%llu\",\"sharedRootPa\":\"0x%016llX\",\"cacheMigrations\":\"%llu\"}",
+           General->valid, opt->requestedFlags, opt->vlsSelected, opt->vgifSelected, opt->cleanMask,
+           opt->watchState, opt->permissionsReusable, opt->watchGlobalValid, opt->vmcb01Pa, opt->vmcb02Pa,
+           opt->vlsEntries, opt->vgifEntries, opt->cleanEntries, opt->watchGeneration, opt->watchAcknowledged, opt->watchProof,
+           opt->watchArms, opt->watchWrites, opt->watchDeclines, opt->watchProofHits, opt->dependencyRetirements, opt->permissionsGeneration, opt->sharedRootPa, opt->cacheMigrations);
+}
+
 static void PrintNptCacheJson(const KSWORD_ARK_HVM_SVM_GENERAL_METRICS* general)
 {
     static const char* const reasons[KSW_HVM_NPT_CACHE_REASONS] = {
@@ -7735,6 +7752,8 @@ static int DoMetrics(HANDLE h, int asJson)
                    row->general.armedToken, row->general.retryToken, row->general.delivered, row->general.retried,
                    row->general.cacheRecycles, row->general.virtualEfer, row->general.virtualHsave, row->general.guestXcr0, row->general.guestXss);
             PrintNptCacheJson(&row->general);
+            PrintOptimizationJson(&row->general);
+            printf(",\"stableVmcb01Pa\":\"0x%016llX\",\"stableVmcb02Pa\":\"0x%016llX\"", row->stableVmcb01Pa, row->stableVmcb02Pa);
             PrintFlightJson(&row->flight); PrintHotspotsJson(&row->hotspots);
             {
                 unsigned level, bucket, stage;

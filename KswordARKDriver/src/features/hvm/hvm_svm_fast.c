@@ -23,6 +23,8 @@ unsigned KswSvmFastTry(KSW_SVM_FAST* Fast, KSW_SVM_VMCB* Current,
     KSWORD_HVM_HOT_LEVEL* hot;
     /* Unpublished bindings and changed physical priority require normal event coordination. */
     if (!Fast || !Fast->Enabled || PhysicalTpr != Fast->PhysicalTpr) { return 0; }
+    /* No private-cache proof survives a new cross-CPU protection generation. */
+    if (Fast->GuardEpoch && *Fast->GuardEpoch != Fast->GuardGeneration) { return 0; }
     /* Only the original event-free L1 entry can retain its unmodified overlay. */
     if (FAST_WORD(Current, KSW_VMCB_EXITCODE) != 0x7cULL ||
         FAST_WORD(Current, KSW_VMCB_INTCTL) != Fast->IntCtl ||

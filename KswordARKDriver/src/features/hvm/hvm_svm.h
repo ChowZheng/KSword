@@ -151,6 +151,8 @@ typedef struct _KSW_SVM_CPU {
     struct _KSW_SVM_PERF* Perf;
     /* 158: optional scalar MSR leaf; null unless the separate fast mode was prepared. */
     struct _KSW_SVM_FAST* Fast;
+    /* 160: exact private-provenance hardware clean mask; zero outside acceleration mode. */
+    ULONG HardwareCleanMask;
     /* Resource and runtime ownership beyond the assembly prefix. */
     KSW_HVM_RUNTIME* Runtime;
     /* Chosen under the common transition before the all-CPU resident launch. */
@@ -219,6 +221,8 @@ C_ASSERT(FIELD_OFFSET(KSW_SVM_CPU, NestedTlbControl) == 0x148);
 C_ASSERT(FIELD_OFFSET(KSW_SVM_CPU, Perf) == 0x150);
 /* MASM calls the scalar leaf only through this appended prepared pointer. */
 C_ASSERT(FIELD_OFFSET(KSW_SVM_CPU, Fast) == 0x158);
+/* Appending a clean-mask anchor preserves every existing assembly-visible field. */
+C_ASSERT(FIELD_OFFSET(KSW_SVM_CPU, HardwareCleanMask) == 0x160);
 /* MASM native restoration consumes these exact ordinary-VMCB offsets. */
 C_ASSERT(KSW_VMCB_S_CET == 0x5e0 && KSW_VMCB_SSP == 0x5e8 && KSW_VMCB_ISST == 0x5f0);
 
@@ -263,6 +267,10 @@ typedef struct _KSW_SVM_STATE {
     KSW_SVM_CPU* Cpus;
     /* Frozen topology size. */
     ULONG Count;
+    /* Optional private hardware NPT01 clone and cross-CPU write provenance. */
+    struct _KSW_SVM_WATCH_TABLE* Watch;
+    /* Permanent virtual-VMCB cache roots are retained under the same all-native release barrier. */
+    struct _KSW_SVM_CACHE_DOMAIN* Caches;
     /* Resource mode is frozen at prepare; a later start cannot reinterpret probe allocations. */
     ULONG PreparedFlags;
     /* Power generation that produced the self-test evidence. */

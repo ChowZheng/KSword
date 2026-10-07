@@ -1,5 +1,6 @@
 /* VMEXIT-safe output adapter; one processor-private mapping per VMCB writeback. */
 #include "hvm_svm_nested_runtime.h"
+#include "hvm_svm_watch.h"
 
 /* The caller has already translated the operand with write permission through NPT01. */
 int KswordSvmNestedCommitVmcb(void* Context, KSW_SVM_U64 HostPa,
@@ -10,6 +11,8 @@ int KswordSvmNestedCommitVmcb(void* Context, KSW_SVM_U64 HostPa,
     KSW_SVM_NESTED* nested = Context;
     /* The mapping is held only while applying the bounded field whitelist. */
     volatile VOID* mapped = NULL;
+    /* Each iteration handles one aligned word, preserving all unowned bits. */
+    KswordSvmWatchWrite(nested->Cpu, HostPa);
     /* Each iteration handles one aligned word, preserving all unowned bits. */
     ULONG offset, attempt;
     /* A failure after progress is not equivalent to a rejected, untouched operand. */

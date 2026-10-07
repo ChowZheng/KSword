@@ -1,5 +1,6 @@
 /* All-processor SVM lifecycle using the existing power/unload transition guard. */
 #include "hvm_svm.h"
+#include "hvm_svm_watch.h"
 #include <intrin.h>
 
 /* Debugger-only deterministic fault controls default to inert. */
@@ -76,6 +77,8 @@ static ULONG_PTR KswSvmIpi(ULONG_PTR Parameter)
             if (NT_SUCCESS(status) && KswordSvmFault(3, index)) { status = STATUS_CANCELLED; }
         }
     } else if (cpu->Active) {
+        /* Any native return retires global CPU-write proof before Windows can bypass NPT. */
+        KswordSvmWatchDisable(cpu);
         /* Publish ownership of the private stop operation before VMMCALL. */
         InterlockedExchange(&cpu->StopRequested, 1);
         /* Request complete native restoration, not just exit from VMRUN. */
@@ -268,13 +271,17 @@ NTSTATUS KswordSvmStart(KSW_HVM_RUNTIME* Runtime, ULONG Flags)
     /* Changing the command flags cannot convert a fixed probe preparation into ordinary residency. */
     if ((state->PreparedFlags & KSWORD_ARK_HVM_CONTROL_FLAG_SVM_NESTED_PROBE) ||
         ((Flags ^ state->PreparedFlags) & (KSWORD_ARK_HVM_CONTROL_FLAG_ENABLE_NESTED_SVM |
-            KSWORD_ARK_HVM_CONTROL_FLAG_SVM_PROFILE | KSWORD_ARK_HVM_CONTROL_FLAG_SVM_FAST_MSR))) { return STATUS_INVALID_DEVICE_STATE; }
+            KSWORD_ARK_HVM_CONTROL_FLAG_SVM_PROFILE | KSWORD_ARK_HVM_CONTROL_FLAG_SVM_FAST_MSR |
+            KSWORD_ARK_HVM_CONTROL_FLAG_SVM_ACCEL | KSWORD_ARK_HVM_CONTROL_FLAG_SVM_WRITE_WATCH))) { return STATUS_INVALID_DEVICE_STATE; }
     /* Never replace a live or uncertain ownership state. */
     if (Runtime->ResidentProcessorCount || (Runtime->StateFlags & (KSWORD_ARK_HVM_STATE_FAULTED | KSWORD_ARK_HVM_STATE_ROLLBACK_REQUIRED))) { return STATUS_INVALID_DEVICE_STATE; }
     /* Serialize against power and other hardware transitions. */
     status = KswordARKHvmAcquireResidentTransition(Runtime);
     /* Preserve busy semantics of the existing lifecycle. */
     if (!NT_SUCCESS(status)) { return status; }
+    /* The common transition excludes live writers before resetting protection identities. */
+    status = KswordSvmWatchReset(state);
+    if (!NT_SUCCESS(status)) { KswordARKHvmReleaseResidentTransition(Runtime); return status; }
     /* Revalidate topology and power immediately before entering. */
     if (Runtime->PowerTransitionPending || Runtime->PowerTransitionGeneration != state->TestedPowerGeneration ||
         KeQueryActiveProcessorCountEx(ALL_PROCESSOR_GROUPS) != state->Count) {
@@ -312,6 +319,8 @@ NTSTATUS KswordSvmStart(KSW_HVM_RUNTIME* Runtime, ULONG Flags)
         KswordARKHvmStateSet(Runtime, KSWORD_ARK_HVM_STATE_RESIDENT_ACTIVE);
         /* The implementation enum now describes observed hardware state. */
         Runtime->ResidentImplementation = KSWORD_ARK_HVM_IMPLEMENTATION_ACTIVE;
+        /* Guest-side independent DPCs keep protection acknowledgements progressing on otherwise idle cores. */
+        KswordSvmWatchStartPokes(state);
     } else {
         /* Roll back already-entered CPUs while still holding the same transition. */
         rollback = KswSvmBroadcast(state, FALSE);
@@ -360,6 +369,8 @@ NTSTATUS KswordSvmStop(KSW_HVM_RUNTIME* Runtime)
     /* The mutation barrier drains this phase before replacing or freeing the ledger. */
     state = Runtime->BackendContext;
     /* Publish the stop transition before sending any private hypercalls. */
+    /* Timer cancellation is a guest operation; queued callbacks still verify Active at HIGH_LEVEL. */
+    KswordSvmWatchStopPokes(state);
     KswordARKHvmStateSet(Runtime, KSWORD_ARK_HVM_STATE_RESIDENT_STOPPING);
     /* An absent context needs no IPI, but still needs unload-guard handling. */
     status = state && state->Cpus ? KswSvmBroadcast(state, FALSE) : STATUS_SUCCESS;
@@ -380,6 +391,11 @@ NTSTATUS KswordSvmStop(KSW_HVM_RUNTIME* Runtime)
     KswordARKHvmStateClear(Runtime, KSWORD_ARK_HVM_STATE_RESIDENT_STOPPING);
     /* Release the same phase shared with power, self-test and start. */
     KswordARKHvmReleaseResidentTransition(Runtime);
+    /* Never report a partially stopped machine as successful. */
+    if (!NT_SUCCESS(status) && state && Runtime->ResidentProcessorCount == (LONG)state->Count) {
+        /* A refused all-CPU stop leaves the active write tracker able to collect later acknowledgements. */
+        KswordSvmWatchStartPokes(state);
+    }
     /* Never report a partially stopped machine as successful. */
     return status;
 }
