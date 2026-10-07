@@ -1,5 +1,13 @@
 # AMD 实验后端与重启续接
 
+## 2026-10-07 vGIF 修复签后实测续接
+
+189e3445候选签后实际load/prepare/selftest32/accel ACTIVE32成功，SYS SHA5640b39a…88ec5，RSDS20387c97-4039-43e5-88fd-b169677f89d5 age1。单核8192MiB clone冷启进入EFI runtime/用户Windowslogo转圈；观察内未复现立即宿主硬锁，未确认桌面，不宣称完整OS/8CPU通过。raw artifacts/amd-perf-20261007-vgif-fix-live。启动异步采集先因busy optimization错误断言中止，后纯采样15份raw完整（最终摘要序列化失败不影响raw），再补两组三样本；未重复start/stop。最后三status32ACTIVE/lastStatus0，vgif0/watch0/flags0xb0005。flight与optimization瞬时各31/32有效，不可把无效行当无fault；可读flight未锁存。hotspot/perf选定三窗32完整。
+
+root按sample0/7/14实际27.9909994s算5,843,319退出/NPF4,964,126，root样本1,012,227,900 cycles，walk75.52%/sourceSync4.15%。cache59,742lookup/49,301hit/10,441reset/9,499poolrecycle，原general仍64table探针池、FULL整根清空重建是已见贡献项；不是所有NPF都已归因。VLS真实选中，所比窗口VMLOAD/VMSAVE退出消失。下一静态重点general pool容量与叶组回收/TLB，不只继续削VMLoad。详见docs/next/evidence/amd-vgif-fix-retry-20261007.md。
+
+用户洗澡要求一次提权后维持管理员会话。tools/hvm_lab/Start-LabAdminSession.ps1及Invoke-LabAdminCommand.ps1（commit ede19d01）已创建受当前用户/admin/SYSTEM ACL保护的脚本SHA队列；实际往返PID1840/adminTrue。当前会话artifacts/admin-session-20261007 ready.json，后续通过Invoke提交绝对脚本，无新UAC；Pending不得重复提交控制，脚本自行校验LASTEXITCODE/逐核结果。stop.flag只让worker完成当前命令后退出，不代表VM/driver停。当前VM/driver/adminworker保留，Luna已停止采集等待用户回来；不再动态换模式或重启。
+
 ## 2026-10-07 vGIF 物理屏蔽修复候选
 
 用户授权修复重试。所有通用模式继续截获CLGI/STGI；machine/interrupt将HardwareGif强制0，闭GIF始终设置V_INTR_MASKING/hostIF0和NMI截获；accel只去VMLOAD/VMSAVE intercept，保留VLS/clean，vgifEntries为0。协议/模式不变；重试accel不带WATCH/FAST。新增生产overlay双模式屏蔽回归、coordinator实际CLGI→闭mask→STGI→开mask回归和accel拦截保留回归；修正此前仅编译的accel夹具页表缺少4KiB对齐。25 C目标+Python6项实际执行通过，accel42 checks；标准WDK x64/WX/API Universal/INF/CAT和integer gate238通过。
