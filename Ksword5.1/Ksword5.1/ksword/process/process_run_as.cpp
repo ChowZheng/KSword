@@ -30,6 +30,13 @@ namespace
         ~ServiceHandle() { if (value) ::CloseServiceHandle(value); }
     };
 
+    std::uint64_t creationTime100ns(HANDLE process)
+    {
+        FILETIME creation{}, exit{}, kernel{}, user{};
+        if (!process || !::GetProcessTimes(process, &creation, &exit, &kernel, &user)) return 0;
+        return (static_cast<std::uint64_t>(creation.dwHighDateTime) << 32) | creation.dwLowDateTime;
+    }
+
     // 所有调权仅作用于临时线程令牌；离开作用域恢复原线程上下文。
     struct ThreadContext
     {
@@ -272,7 +279,8 @@ ks::process::RunAsResult ks::process::RunExecutableAs(
         if (!::ShellExecuteExW(&info)) return failure(L"ShellExecuteExW(runas)");
         Handle process;
         process.value = info.hProcess;
-        return { true, 0, process.value ? ::GetProcessId(process.value) : 0, L"UAC launch succeeded" };
+        return { true, 0, process.value ? ::GetProcessId(process.value) : 0, L"UAC launch succeeded",
+            creationTime100ns(process.value) };
     }
     if (identity != RunAsIdentity::System && identity != RunAsIdentity::TrustedInstaller && identity != RunAsIdentity::Administrator
         && identity != RunAsIdentity::StandardUser) return failure(L"Unknown identity", ERROR_INVALID_PARAMETER);
@@ -385,5 +393,5 @@ ks::process::RunAsResult ks::process::RunExecutableAs(
     Handle processHandle, threadHandle;
     processHandle.value = process.hProcess;
     threadHandle.value = process.hThread;
-    return { true, 0, process.dwProcessId, L"Token launch succeeded" };
+    return { true, 0, process.dwProcessId, L"Token launch succeeded", creationTime100ns(processHandle.value) };
 }

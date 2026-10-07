@@ -97,7 +97,7 @@
     </ClCompile>
     <Link>
       <AdditionalLibraryDirectories>$(QTDIR)\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>qtadvanceddockingd.lib;Ole32.lib;Shell32.lib;Advapi32.lib;Setupapi.lib;Crypt32.lib;ImageHlp.lib;Propsys.lib;Wintrust.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>qtadvanceddockingd.lib;Ole32.lib;Shell32.lib;Advapi32.lib;Authz.lib;Secur32.lib;Netapi32.lib;Userenv.lib;Setupapi.lib;Crypt32.lib;ImageHlp.lib;Propsys.lib;Wintrust.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <AdditionalOptions>"/MANIFESTDEPENDENCY:type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' publicKeyToken='6595b64144ccf1df' language='*' processorArchitecture='*'" %(AdditionalOptions)</AdditionalOptions>
     </Link>
   </ItemDefinitionGroup>
@@ -118,7 +118,7 @@
     </ClCompile>
     <Link>
       <AdditionalLibraryDirectories>$(QTDIR)\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>qtadvanceddocking.lib;Ole32.lib;Shell32.lib;Advapi32.lib;Setupapi.lib;Crypt32.lib;ImageHlp.lib;Propsys.lib;Wintrust.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>qtadvanceddocking.lib;Ole32.lib;Shell32.lib;Advapi32.lib;Authz.lib;Secur32.lib;Netapi32.lib;Userenv.lib;Setupapi.lib;Crypt32.lib;ImageHlp.lib;Propsys.lib;Wintrust.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <AdditionalOptions>"/MANIFESTDEPENDENCY:type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' publicKeyToken='6595b64144ccf1df' language='*' processorArchitecture='*'" %(AdditionalOptions)</AdditionalOptions>
       <UACUIAccess>false</UACUIAccess>
     </Link>
@@ -423,6 +423,11 @@
     <ClCompile Include="OtherDock\WindowInputClient.cpp" />
     <ClCompile Include="OtherDock\WindowInputControl.cpp" />
     <ClCompile Include="PrivilegeDock\PrivilegeDock.cpp" />
+    <ClCompile Include="PrivilegeDock\PrivilegeAccessPage.cpp" />
+    <ClCompile Include="PrivilegeDock\PrivilegeAccountPages.cpp" />
+    <ClCompile Include="PrivilegeDock\PrivilegeSnapshotModel.cpp" />
+    <ClCompile Include="PrivilegeDock\PrivilegeSnapshotPage.cpp" />
+    <ClCompile Include="PrivilegeDock\PrivilegeTokenPages.cpp" />
     <ClCompile Include="RegistryDock_Themed.cpp" />
     <ClCompile Include="RegistryDock\RegistryOptimizationPage.cpp" />
     <ClCompile Include="ProcessDock\ProcessDetailWindow.cpp" />
@@ -981,6 +986,12 @@
     <ClInclude Include="OtherDock\WindowInputControl.h" />
     <ClInclude Include="..\..\shared\window\DwmZOrderProtocol.h" />
     <ClInclude Include="..\..\shared\window\DwmRemoteLoader.h" />
+    <ClInclude Include="PrivilegeDock\PrivilegeAccessPage.h" />
+    <ClInclude Include="PrivilegeDock\PrivilegeAccessSecurity.h" />
+    <ClInclude Include="PrivilegeDock\PrivilegeAccountPages.h" />
+    <ClInclude Include="PrivilegeDock\PrivilegeSnapshotModel.h" />
+    <ClInclude Include="PrivilegeDock\PrivilegeSnapshotPage.h" />
+    <ClInclude Include="PrivilegeDock\PrivilegeTokenPages.h" />
     <QtMoc Include="PrivilegeDock\PrivilegeDock.h" />
     <QtMoc Include="RegistryDock\RegistryDock.h" />
     <ClInclude Include="KernelDock\KernelCleanImageBaseline.h" />
