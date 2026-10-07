@@ -1,5 +1,13 @@
 # AMD 实验后端与重启续接
 
+## 2026-10-07 用户要求暂停以准备 release（实验已完整收尾）
+
+用户在继续NPT性能优化时要求优雅暂停准备release。尚未落任何general pool/叶组回收新源码；驱动源码停在189e3445，测试证据54213056，管理员工具ede19d01。外部其他UI/syscall未提交改动不属于本轮，保留未staged。
+
+Luna保存暂停status/metrics/log后，精确实验克隆soft stop20s无响应；root说明并授权只对该克隆hard stop一次。pause-finish-20261007-133815-773Z独立vmrun list=0及对应vmx进程消失确认OFF（hard工具ExitCode缺失不能当成功码）。随后stop rc0，32/32 executionStage6/resident0/lastStatus0；teardown rc0，prepared/resident/slatReady0；sc stop及独立query STOPPED。raw artifacts/amd-perf-20261007-vgif-fix-live/pause-finish-20261007-133815-773Z。无实体机重启/BCD变更，无其他VM操作。root写admin-session-20261007/stop.flag后ready.json已Stopped，PID1840管理员会话结束。
+
+release可保留已签候选artifacts/amd-perf-20261007-vgif-fix SYS/PDB/metrics-v11 CLI；不得用architecture事故候选。AMD仍实验范围：本轮只证实32CPU自检/常驻/退出及单核VM到logo，完整L2桌面/8vCPU、watch/shared-root未通过。续接重点来自已存数据：64table池FULL整根reset，9,499次/28s回收、NPTwalk75.52%；需后续capacity/增量回收实现，不直接关必要TLB失效或放宽权限。用户仅请求暂停，当前不自动做发行包/新动态验证。
+
 ## 2026-10-07 vGIF 修复签后实测续接
 
 189e3445候选签后实际load/prepare/selftest32/accel ACTIVE32成功，SYS SHA5640b39a…88ec5，RSDS20387c97-4039-43e5-88fd-b169677f89d5 age1。单核8192MiB clone冷启进入EFI runtime/用户Windowslogo转圈；观察内未复现立即宿主硬锁，未确认桌面，不宣称完整OS/8CPU通过。raw artifacts/amd-perf-20261007-vgif-fix-live。启动异步采集先因busy optimization错误断言中止，后纯采样15份raw完整（最终摘要序列化失败不影响raw），再补两组三样本；未重复start/stop。最后三status32ACTIVE/lastStatus0，vgif0/watch0/flags0xb0005。flight与optimization瞬时各31/32有效，不可把无效行当无fault；可读flight未锁存。hotspot/perf选定三窗32完整。
