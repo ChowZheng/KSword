@@ -16,6 +16,7 @@
 #include <QHBoxLayout>
 #include <QCoreApplication>
 #include <QCheckBox>
+#include <QComboBox>
 #include <QDateTime>
 #include <QDir>
 #include <QEvent>
@@ -387,6 +388,19 @@ namespace
         return ks::i18n::packedSourceText(QString::fromUtf8(sourceText));
     }
 
+    QString commitEvidence(const ksword::memoryaudit::SystemCommit& commit)
+    {
+        using ksword::memoryaudit::CommitSource;
+        const QString source = commit.source == CommitSource::PerformanceInfo
+            ? QStringLiteral("GetPerformanceInfo")
+            : (commit.source == CommitSource::NativeMemoryUsage
+                ? QStringLiteral("SystemMemoryUsageInformation") : localized("Unavailable"));
+        return localized("System commit source: %1 | GetPerformanceInfo Win32: %2 | Native status: %3")
+            .arg(source)
+            .arg(commit.publicAttempted ? QString::number(commit.publicStatus) : localized("Not queried"))
+            .arg(commit.nativeAttempted ? statusHex(commit.nativeStatus) : localized("Not queried"));
+    }
+
     class ScopedHandle final
     {
     public:
@@ -461,17 +475,129 @@ namespace
         return false;
     }
 
-    QString mappedFilePath(HANDLE processHandle, const void* address)
+    struct MappedPathObservation
     {
+        QString path;
+        std::uint32_t status = 0;
+        bool regionKnown = false;
+        std::uint32_t regionStatus = ERROR_CALL_NOT_IMPLEMENTED;
+        ksword::memoryaudit::BackingProof proof = ksword::memoryaudit::BackingProof::Unresolved;
+    };
+
+    // Documented WIN32_MEMORY_REGION_INFORMATION ABI. SDKs gated below RS1 do
+    // not expose its names; this private mirror avoids changing the application
+    // OS target or importing an API unavailable on older Windows installations.
+    struct PublicMemoryRegionInformation
+    {
+        PVOID AllocationBase;
+        ULONG AllocationProtect;
+        ULONG Private : 1;
+        ULONG MappedDataFile : 1;
+        ULONG MappedImage : 1;
+        ULONG MappedPageFile : 1;
+        ULONG MappedPhysical : 1;
+        ULONG DirectMapped : 1;
+        ULONG Reserved : 26;
+        SIZE_T RegionSize;
+        SIZE_T CommitSize;
+    };
+    static_assert(offsetof(PublicMemoryRegionInformation, RegionSize) == (sizeof(void*) == 8 ? 16 : 12));
+    static_assert(sizeof(PublicMemoryRegionInformation) == (sizeof(void*) == 8 ? 32 : 20));
+
+    MappedPathObservation queryMappedBacking(HANDLE processHandle, const void* address, const MEMORY_BASIC_INFORMATION& region)
+    {
+        MappedPathObservation observation;
+        using RegionQuery = BOOL(WINAPI*)(HANDLE, const VOID*, int, PVOID, SIZE_T, PSIZE_T);
+        static const auto queryRegion = [] {
+            auto function = reinterpret_cast<RegionQuery>(::GetProcAddress(
+                ::GetModuleHandleW(L"kernel32.dll"), "QueryVirtualMemoryInformation"));
+            if (!function)
+            {
+                const HMODULE memoryApi = ::LoadLibraryExW(L"api-ms-win-core-memory-l1-1-4.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
+                if (memoryApi) { function = reinterpret_cast<RegionQuery>(::GetProcAddress(memoryApi, "QueryVirtualMemoryInformation")); }
+            }
+            return function;
+        }();
+        if (queryRegion)
+        {
+            PublicMemoryRegionInformation information{};
+            SIZE_T returned = 0;
+            ::SetLastError(ERROR_SUCCESS);
+            constexpr int memoryRegionInfo = 0;
+            const bool success = queryRegion(processHandle, address, memoryRegionInfo, &information, sizeof(information), &returned) != FALSE;
+            observation.regionStatus = success ? ERROR_SUCCESS : ::GetLastError();
+            const auto allocation = reinterpret_cast<std::uintptr_t>(information.AllocationBase);
+            const auto virtualAddress = reinterpret_cast<std::uintptr_t>(address);
+            const bool complete = success && returned == sizeof(information)
+                && information.AllocationBase == region.AllocationBase
+                && information.AllocationProtect == region.AllocationProtect
+                && information.RegionSize && virtualAddress >= allocation
+                && virtualAddress - allocation < information.RegionSize
+                && information.CommitSize <= information.RegionSize && information.Reserved == 0;
+            if (complete)
+            {
+                observation.regionKnown = true;
+                using ksword::memoryaudit::BackingProof;
+                // Named documented flags establish backing; a missing path
+                // establishes only the failed path observation.
+                if (region.Type == MEM_MAPPED && information.MappedPageFile && !information.MappedDataFile
+                    && !information.MappedImage && !information.MappedPhysical && !information.Private && !information.DirectMapped)
+                {
+                    observation.proof = BackingProof::Pagefile;
+                }
+                else if (region.Type == MEM_MAPPED && information.MappedDataFile && !information.MappedPageFile
+                    && !information.MappedImage && !information.MappedPhysical && !information.Private)
+                {
+                    observation.proof = BackingProof::DataFile;
+                }
+                else if (region.Type == MEM_IMAGE && information.MappedImage) { observation.proof = BackingProof::Image; }
+                else if (information.MappedPhysical) { observation.proof = BackingProof::Physical; }
+            }
+            else if (success) { observation.regionStatus = ERROR_INVALID_DATA; }
+        }
+        return observation;
+    }
+
+    MappedPathObservation mappedFilePath(HANDLE processHandle, const void* address, const MEMORY_BASIC_INFORMATION& region)
+    {
+        auto observation = queryMappedBacking(processHandle, address, region);
+        const auto confirmBacking = [&] {
+            MEMORY_BASIC_INFORMATION afterRegion{};
+            ::SetLastError(ERROR_SUCCESS);
+            if (::VirtualQueryEx(processHandle, address, &afterRegion, sizeof(afterRegion)) != sizeof(afterRegion))
+            {
+                observation.regionKnown = false;
+                observation.regionStatus = ::GetLastError();
+                observation.proof = ksword::memoryaudit::BackingProof::Unresolved;
+                observation.path.clear();
+                observation.status = observation.regionStatus;
+                return;
+            }
+            const auto after = queryMappedBacking(processHandle, address, afterRegion);
+            const bool regionChanged = afterRegion.AllocationBase != region.AllocationBase || afterRegion.Type != region.Type
+                || afterRegion.AllocationProtect != region.AllocationProtect || afterRegion.BaseAddress != region.BaseAddress
+                || afterRegion.RegionSize != region.RegionSize || afterRegion.State != region.State;
+            if (regionChanged || !observation.regionKnown || !after.regionKnown || observation.proof != after.proof)
+            {
+                observation.regionKnown = false;
+                observation.regionStatus = after.regionStatus ? after.regionStatus : ERROR_INVALID_DATA;
+                observation.proof = ksword::memoryaudit::BackingProof::Unresolved;
+                if (regionChanged) { observation.path.clear(); observation.status = ERROR_INVALID_DATA; }
+            }
+        };
         std::wstring buffer(32768, L'\0');
+        ::SetLastError(ERROR_SUCCESS);
         const DWORD length = ::GetMappedFileNameW(
             processHandle,
             const_cast<void*>(address),
             buffer.data(),
             static_cast<DWORD>(buffer.size()));
-        if (length == 0)
+        const auto outcome = ksword::memoryaudit::mappedPathOutcome(length, buffer.size(), ::GetLastError());
+        if (!outcome.valid)
         {
-            return {};
+            observation.status = outcome.error;
+            confirmBacking();
+            return observation;
         }
         buffer.resize(length);
         QString path = QString::fromStdWString(buffer);
@@ -503,7 +629,17 @@ namespace
                 break;
             }
         }
-        return QDir::toNativeSeparators(path);
+        observation.path = QDir::toNativeSeparators(path);
+        confirmBacking();
+        if (!observation.path.isEmpty() && observation.proof == ksword::memoryaudit::BackingProof::Pagefile)
+        {
+            observation.path.clear();
+            observation.status = ERROR_INVALID_DATA;
+            observation.regionKnown = false;
+            observation.regionStatus = ERROR_INVALID_DATA;
+            observation.proof = ksword::memoryaudit::BackingProof::Unresolved;
+        }
+        return observation;
     }
 
     void configureTable(QTableWidget* table, const QStringList& headers)
@@ -710,8 +846,22 @@ void SystemMemoryAuditPage::initializeUi()
     QWidget* const overviewPage = new QWidget(m_detailTabs);
     QVBoxLayout* const overviewLayout = new QVBoxLayout(overviewPage);
     overviewLayout->setContentsMargins(0, 0, 0, 0);
+    auto* const overviewControls = new QHBoxLayout();
+    m_overviewSource = new QComboBox(overviewPage);
+    m_overviewSource->addItem(localized("Fast snapshot"));
+    overviewControls->addWidget(m_overviewSource);
+    m_overviewSample = new QLabel(overviewPage);
+    m_overviewSample->setWordWrap(true);
+    m_overviewSample->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    overviewControls->addWidget(m_overviewSample, 1);
+    overviewLayout->addLayout(overviewControls);
     m_snapshotChart = new MemoryAttributionChart(overviewPage);
-    m_snapshotChart->selected = [this](int) { m_detailTabs->setCurrentWidget(m_pfnPage); };
+    m_snapshotChart->selected = [this](int use) {
+        const bool pfn = usePfnOverview();
+        m_detailTabs->setCurrentWidget(m_pfnPage);
+        if (!m_pfnOverviewScan) { m_pfnPage->startScan(); }
+        else if (pfn) { m_pfnPage->focusCategory(use); }
+    };
     overviewLayout->addWidget(m_snapshotChart);
     m_overviewTree = new QTreeWidget(overviewPage);
     m_overviewTree->setColumnCount(6);
@@ -781,7 +931,10 @@ void SystemMemoryAuditPage::initializeUi()
     m_detailTabs->addTab(m_pfnPage, localized("Physical page attribution"));
     m_hyperVPage = new HyperVMemoryPage(m_detailTabs);
     m_detailTabs->addTab(m_hyperVPage, localized("Hyper-V / host memory"));
-    m_pfnPage->snapshotReady = [this](const std::shared_ptr<ksword::pfn::Scan>& scan) { m_hyperVPage->setPfnContext(scan); };
+    m_pfnPage->snapshotReady = [this](const std::shared_ptr<ksword::pfn::Scan>& scan) {
+        m_hyperVPage->setPfnContext(scan);
+        applyPfnOverview(scan);
+    };
     ks::i18n::LanguageManager::instance().bindTab(
         m_detailTabs, overviewPage, QStringLiteral("memory.audit.tab.distribution"), QStringLiteral("物理内存分布"));
     ks::i18n::LanguageManager::instance().bindTab(
@@ -906,14 +1059,91 @@ void SystemMemoryAuditPage::applyThemedStyle()
 // - 把当前快照写进 6 格摘要卡片的下行数值，标题固定在上行由 retranslateUi 维护；
 // - 采集完成与语言切换后都走这一个入口，避免两处各写一遍导致文案不一致；
 // - 无入参；无返回值；尚未拿到快照或控件未建时静默返回。
+bool SystemMemoryAuditPage::usePfnOverview() const
+{
+    return m_detailTabs && m_detailTabs->currentIndex() == 0 &&
+        m_overviewSource->currentIndex() == 1 && m_pfnOverviewScan &&
+        m_pfnOverviewScan->accounting.expected && m_pfnOverviewScan->accounting.reconciles();
+}
+
+void SystemMemoryAuditPage::applyPfnOverview(const std::shared_ptr<ksword::pfn::Scan>& scan)
+{
+    // Preserve the last usable ledger after an unavailable rerun. Its own time
+    // and coverage remain visible; never subtract it from a newer quick sample.
+    m_pfnOverviewAttemptFailed = !scan || !scan->accounting.expected || !scan->accounting.valid || !scan->accounting.reconciles();
+    if (!m_pfnOverviewAttemptFailed)
+    {
+        m_pfnOverviewScan = scan;
+        if (m_overviewSource->count() == 1) { m_overviewSource->addItem(localized("Latest PFN ledger")); }
+        m_overviewSource->setCurrentIndex(1);
+    }
+    m_overviewDirty = true;
+    updateSummaryTiles();
+    scheduleCurrentDetailViewRebuild();
+    updateDetails();
+}
+
 void SystemMemoryAuditPage::updateSummaryTiles()
 {
-    if (m_installedLabel == nullptr || !m_hasSnapshot)
+    if (m_installedLabel == nullptr || (!m_hasSnapshot && !usePfnOverview()))
     {
         return;
     }
 
-    m_installedLabel->setText(formatBytes(m_snapshot.installedPhysicalBytes));
+    const bool pfn = usePfnOverview();
+    for (std::size_t i = 0; i < kSummaryTileTitles.size(); ++i)
+    {
+        if (auto* title = findChild<QLabel*>(QString::fromLatin1(kSummaryTileTitles[i].objectName)))
+        {
+            const char* source = kSummaryTileTitles[i].sourceText;
+            if (pfn && i == 1) { source = "NT RAM"; }
+            if (pfn && i == 4) { source = "Commit (quick snapshot)"; }
+            if (pfn && i == 5) { source = "Unknown / coverage gap"; }
+            title->setText(localized(source));
+        }
+    }
+    if (pfn)
+    {
+        using namespace ksword::pfn;
+        const auto& scan = *m_pfnOverviewScan;
+        const auto& counts = scan.accounting;
+        const auto total = counts.expected * pageBytes;
+        std::uint64_t inUse = 0;
+        std::vector<MemoryAttributionChart::Segment> segments;
+        for (std::size_t i = 0; i < useCount; ++i)
+        {
+            const auto amount = counts.inUse(static_cast<Use>(i)) * pageBytes;
+            inUse += amount;
+            if (amount) { segments.push_back({PhysicalPageAttributionPage::classificationName(static_cast<Use>(i)), amount, static_cast<int>(i)}); }
+        }
+        if (counts.availablePages) { segments.push_back({localized("Available"), counts.availablePages * pageBytes, 17}); }
+        if (counts.bad()) { segments.push_back({localized("Bad"), counts.bad() * pageBytes, -1}); }
+        if (counts.unreadable) { segments.push_back({localized("Query failed"), counts.unreadable * pageBytes, -2}); }
+        if (counts.notScanned()) { segments.push_back({localized("Not scanned"), counts.notScanned() * pageBytes, -3}); }
+        m_installedLabel->setText(scan.installed ? formatBytes(scan.installed) : localized("Unavailable"));
+        m_totalLabel->setText(formatBytes(total));
+        m_inUseLabel->setText(QStringLiteral("%1 (%2)").arg(formatBytes(inUse), formatPercent(inUse, total)));
+        m_availableLabel->setText(QStringLiteral("%1 (%2)").arg(formatBytes(counts.availablePages * pageBytes), formatPercent(counts.availablePages * pageBytes, total)));
+        m_commitLabel->setText(m_hasSnapshot && m_snapshot.commit.valid
+            ? QStringLiteral("%1 / %2").arg(formatBytes(m_snapshot.commit.bytes), formatBytes(m_snapshot.commit.limit)) : localized("Unavailable"));
+        m_commitLabel->setToolTip(localized("Quick snapshot sampled at %1").arg(m_snapshot.sampledAt)
+            + QStringLiteral("\n") + commitEvidence(m_snapshot.commit));
+        m_unattributedLabel->setText(QStringLiteral("%1 / %2").arg(formatBytes(counts.inUse(Use::Unknown) * pageBytes), formatBytes((counts.unreadable + counts.notScanned()) * pageBytes)));
+        m_snapshotChart->setSegments(std::move(segments), localized("One physical page, one category. Click a category to inspect PFNs."));
+        QString source = localized("PFN interval %1 to %2 | valid coverage %3%")
+            .arg(scan.started, scan.finished).arg(100.0 * static_cast<double>(counts.valid) / static_cast<double>(counts.expected), 0, 'f', 2);
+        source += QStringLiteral(" | ") + localized("Known use, owner unresolved: %1")
+            .arg(formatBytes(scan.ownerCoverage.knownInUseUnresolved() * pageBytes));
+        if (!scan.semanticsValidated) { source += QStringLiteral(" | ") + localized("Classification semantics have not been validated on this Windows build."); }
+        if (!scan.complete) { source += QStringLiteral(" | ") + localized("Partial / unavailable"); }
+        if (scan.rangesChanged) { source += QStringLiteral(" | ") + localized("RAM ranges changed or could not be rechecked; treat this scan as partial."); }
+        if (m_pfnOverviewAttemptFailed) { source += QStringLiteral(" | ") + localized("Latest PFN attempt failed; showing the previous ledger."); }
+        m_overviewSample->setText(source);
+        return;
+    }
+    m_overviewSample->setText(localized("Quick snapshot sampled at %1").arg(m_snapshot.sampledAt));
+    m_commitLabel->setToolTip(commitEvidence(m_snapshot.commit));
+    m_installedLabel->setText(m_snapshot.installedPhysicalValid ? formatBytes(m_snapshot.installedPhysicalBytes) : localized("Unavailable"));
     m_totalLabel->setText(formatBytes(m_snapshot.totalPhysicalBytes));
     // 下面三格是“绝对值 + 占比/上限”的组合，模板只有括号和斜杠，不需要进语言包。
     m_inUseLabel->setText(QStringLiteral("%1 (%2)").arg(
@@ -922,9 +1152,9 @@ void SystemMemoryAuditPage::updateSummaryTiles()
     m_availableLabel->setText(QStringLiteral("%1 (%2)").arg(
         formatBytes(m_snapshot.availableBytes),
         formatPercent(m_snapshot.availableBytes, m_snapshot.totalPhysicalBytes)));
-    m_commitLabel->setText(QStringLiteral("%1 / %2").arg(
-        formatBytes(m_snapshot.committedBytes),
-        formatBytes(m_snapshot.commitLimitBytes)));
+    m_commitLabel->setText(m_snapshot.commit.valid ? QStringLiteral("%1 / %2").arg(
+        formatBytes(m_snapshot.commit.bytes),
+        formatBytes(m_snapshot.commit.limit)) : localized("Unavailable"));
     m_unattributedLabel->setText(QStringLiteral("%1 (%2)").arg(
         formatBytes(m_snapshot.unattributedResidentBytes),
         formatPercent(m_snapshot.unattributedResidentBytes, m_snapshot.totalPhysicalBytes)));
@@ -944,6 +1174,12 @@ void SystemMemoryAuditPage::updateSummaryTiles()
 
 void SystemMemoryAuditPage::initializeConnections()
 {
+    connect(m_overviewSource, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int) {
+        m_overviewDirty = true;
+        updateSummaryTiles();
+        scheduleCurrentDetailViewRebuild();
+        updateDetails();
+    });
     connect(m_pfnScanButton, &QPushButton::clicked, this, [this]() {
         m_detailTabs->setCurrentWidget(m_pfnPage);
         m_pfnPage->startScan();
@@ -991,6 +1227,7 @@ void SystemMemoryAuditPage::initializeConnections()
             value->parentWidget()->setVisible(showSnapshot);
         }
         scheduleCurrentDetailViewRebuild();
+        updateSummaryTiles();
         updateDetails();
     });
     connect(m_ddmaCrossCheckButton, &QPushButton::clicked, this, [this]() {
@@ -1133,6 +1370,8 @@ void SystemMemoryAuditPage::runDdmaCrossCheck()
 
 void SystemMemoryAuditPage::retranslateUi()
 {
+    m_overviewSource->setItemText(0, localized("Fast snapshot"));
+    if (m_overviewSource->count() > 1) { m_overviewSource->setItemText(1, localized("Latest PFN ledger")); }
     m_pfnScanButton->setText(localized("PFN deep attribution"));
     m_refreshButton->setText(localized("Refresh snapshot"));
     m_refreshButton->setToolTip(localized("Re-collect the whole-machine physical memory snapshot."));
@@ -1460,8 +1699,12 @@ void SystemMemoryAuditPage::rebuildOverview()
 {
     m_overviewTree->setUpdatesEnabled(false);
     m_overviewTree->clear();
+    const bool pfn = usePfnOverview();
+    const std::uint64_t denominator = pfn
+        ? m_pfnOverviewScan->accounting.expected * ksword::pfn::pageBytes
+        : m_snapshot.totalPhysicalBytes;
 
-    const auto addRow = [this](
+    const auto addRow = [this, denominator](
         QTreeWidgetItem* parent,
         const QString& name,
         const std::uint64_t bytes,
@@ -1473,7 +1716,7 @@ void SystemMemoryAuditPage::rebuildOverview()
             : new QTreeWidgetItem(m_overviewTree);
         item->setText(0, name);
         item->setText(1, formatBytes(bytes));
-        item->setText(2, formatPercent(bytes, m_snapshot.totalPhysicalBytes));
+        item->setText(2, formatPercent(bytes, denominator));
         item->setText(3, formatDelta(delta));
         item->setText(4, role);
         item->setText(5, interpretation);
@@ -1489,12 +1732,86 @@ void SystemMemoryAuditPage::rebuildOverview()
         return item;
     };
 
+    if (pfn)
+    {
+        using namespace ksword::pfn;
+        const auto& counts = m_pfnOverviewScan->accounting;
+        auto* const physical = addRow(nullptr, localized("NT RAM"), denominator, 0,
+            localized("Exact partition"), localized("One physical page, one category. Click a category to inspect PFNs."));
+        std::uint64_t inUse = 0;
+        for (std::size_t i = 0; i < useCount; ++i) { inUse += counts.inUse(static_cast<Use>(i)); }
+        auto* const used = addRow(physical, localized("In use"), inUse * pageBytes, 0,
+            localized("Exact partition"), localized("Active, modified and transition PFNs from this collection interval."));
+        auto* const known = addRow(used, localized("Attributed in use"), (inUse - counts.inUse(Use::Unknown)) * pageBytes, 0,
+            localized("Exact partition"), localized("Known physical-page uses; a missing owner name does not make the use unknown."));
+        for (std::size_t i = 0; i < useCount; ++i)
+        {
+            const auto use = static_cast<Use>(i);
+            const auto amount = counts.inUse(use);
+            if (!amount && use != Use::Unknown) { continue; }
+            const auto& states = counts.byUseAndState[i];
+            auto* const category = addRow(use == Use::Unknown ? used : known,
+                PhysicalPageAttributionPage::classificationName(use), amount * pageBytes, 0,
+                localized("Exact partition"), localized("Active %1 | Modified %2 | Modified no-write %3 | Transition %4")
+                    .arg(formatBytes(states[6] * pageBytes), formatBytes(states[3] * pageBytes),
+                        formatBytes(states[4] * pageBytes), formatBytes(states[7] * pageBytes)));
+            if (use == Use::Unknown) { category->setForeground(0, KswordTheme::WarningColor()); }
+            std::vector<const Group*> groups;
+            for (const auto& group : m_pfnOverviewScan->groups)
+            {
+                if (group.use == use && group.pages) { groups.push_back(&group); }
+            }
+            std::sort(groups.begin(), groups.end(), [](const Group* a, const Group* b) { return a->pages > b->pages; });
+            const std::size_t visible = std::min<std::size_t>(8, groups.size());
+            std::uint64_t shown = 0;
+            for (std::size_t j = 0; j < visible; ++j)
+            {
+                const auto& group = *groups[j];
+                QString name = group.name.isEmpty() ? (group.key ? QStringLiteral("0x%1").arg(group.key, 0, 16) : localized("Unavailable")) : group.name;
+                if (group.pid) { name += QStringLiteral(" [PID %1]").arg(group.pid); }
+                const QString ownerEvidence = group.pid
+                    ? localized("Owner seen before / after: %1 / %2").arg(group.ownerSeenBefore ? localized("Yes") : localized("No"), group.ownerSeenAfter ? localized("Yes") : localized("No"))
+                    : localized("Backing / owner evidence");
+                addRow(category, name, group.pages * pageBytes, 0,
+                    localized("Backing subset"), ownerEvidence);
+                shown += group.pages;
+            }
+            if (amount > shown)
+            {
+                addRow(category, localized("Other backing identities"), (amount - shown) * pageBytes, 0,
+                    localized("Backing subset"), localized("Open physical-page attribution for the full collected owner list."));
+            }
+        }
+        addRow(physical, localized("Available"), counts.availablePages * pageBytes, 0,
+            localized("Exact partition"), localized("Standby, free, and zeroed pages available to satisfy demand."));
+        addRow(physical, localized("Bad"), counts.bad() * pageBytes, 0,
+            localized("Exact partition"), localized("Bad pages retained separately from usable in-use RAM."));
+        addRow(physical, localized("Query failed"), counts.unreadable * pageBytes, 0,
+            localized("Coverage gap"), localized("No valid identity was returned for these pages; their use remains unverified."));
+        addRow(physical, localized("Not scanned"), counts.notScanned() * pageBytes, 0,
+            localized("Coverage gap"), localized("Pages left unqueried after cancellation, budget or source failure."));
+        auto* const coverage = addRow(nullptr, localized("Coverage diagnostics"), 0, 0,
+            localized("Do not add"), localized("Consumer coverage is a separate dimension from physical-page use."));
+        addRow(coverage, localized("Known use, owner unresolved"),
+            m_pfnOverviewScan->ownerCoverage.knownInUseUnresolved() * pageBytes, 0,
+            localized("Coverage, not another category"),
+            localized("These in-use pages already have a known use, but no directly verified consumer. They remain inside their physical categories."));
+        m_overviewTree->expandToDepth(2);
+        for (int column = 0; column < 5; ++column) { m_overviewTree->resizeColumnToContents(column); }
+        m_overviewTree->setUpdatesEnabled(true);
+        return;
+    }
+
     QTreeWidgetItem* const installed = addRow(
         nullptr, localized("Installed physical RAM"), m_snapshot.installedPhysicalBytes, 0,
-        localized("Exact boundary"), localized("Physical memory installed in the machine."));
-    addRow(installed, localized("Hardware and firmware reserved"), m_snapshot.hardwareReservedBytes, 0,
-        localized("Exact partition"),
-        localized("Installed RAM not exposed as usable pages to Windows, including device and firmware reservations."));
+        localized("Firmware-reported boundary"), localized("SMBIOS installed RAM; GetPhysicallyInstalledSystemMemory Win32 status: %1")
+            .arg(m_snapshot.installedPhysicalStatus));
+    if (!m_snapshot.installedPhysicalValid) { installed->setText(1, localized("Unavailable")); installed->setText(2, localized("Unavailable")); }
+    auto* const reserved = addRow(installed, localized("Reserved / unavailable estimate"), m_snapshot.reserved.bytes, 0,
+        localized("Aggregate estimate"),
+        localized("Installed minus Windows usable RAM; this aggregate does not identify firmware, devices, or an owner. Usable source: %1")
+            .arg(m_snapshot.usablePhysicalSource.isEmpty() ? localized("Unavailable") : m_snapshot.usablePhysicalSource));
+    if (!m_snapshot.reserved.valid) { reserved->setText(1, localized("Unavailable")); reserved->setText(2, localized("Unavailable")); }
     QTreeWidgetItem* const physical = addRow(
         installed, localized("Windows usable physical RAM"), m_snapshot.totalPhysicalBytes, 0,
         localized("Exact partition"), localized("The physical-memory denominator exposed by the Windows memory manager."));
@@ -1505,8 +1822,10 @@ void SystemMemoryAuditPage::rebuildOverview()
         m_summaryDeltaBytes.value(QStringLiteral("available")), localized("Exact partition"),
         localized("Standby, free, and zeroed pages available to satisfy demand."));
 
+    QTreeWidgetItem* const quickAccounting = addRow(nullptr, localized("In-use accounting"), m_snapshot.inUseBytes, 0,
+        localized("Snapshot estimate"), localized("Counters are sampled separately; use the PFN ledger for a disjoint physical-page partition."));
     QTreeWidgetItem* const identified = addRow(
-        nullptr, localized("Identified in-use lower bound"), m_snapshot.identifiedResidentLowerBoundBytes, 0,
+        quickAccounting, localized("Snapshot category sum"), m_snapshot.identifiedResidentLowerBoundBytes, 0,
         localized("Additive lower bound"),
         localized("Non-overlapping categories that can be safely added without counting shared working sets twice."));
     addRow(identified, localized("Process private resident"), m_snapshot.processPrivateResidentBytes,
@@ -1529,11 +1848,17 @@ void SystemMemoryAuditPage::rebuildOverview()
         m_summaryDeltaBytes.value(QStringLiteral("modified")), localized("Additive"),
         localized("Dirty transition pages that still occupy RAM and are not immediately reusable."));
     QTreeWidgetItem* const residual = addRow(
-        identified, localized("Unattributed in-use remainder"), m_snapshot.unattributedResidentBytes,
+        quickAccounting, localized("Snapshot remainder"), m_snapshot.unattributedResidentBytes,
         m_summaryDeltaBytes.value(QStringLiteral("unattributed")), localized("Explicit remainder"),
         localized("Shared/image pages, page tables, kernel stacks, locked pages, compression, secure memory, and other categories not uniquely attributable here."));
     residual->setForeground(0, KswordTheme::WarningColor());
     residual->setForeground(1, KswordTheme::WarningColor());
+    if (m_snapshot.overAccountedResidentBytes)
+    {
+        auto* const excess = addRow(quickAccounting, localized("Counters exceed sampled in-use RAM"), m_snapshot.overAccountedResidentBytes, 0,
+            localized("Sampling discrepancy"), localized("A zero remainder here does not prove full attribution; sampled counters exceed the physical in-use total."));
+        excess->setForeground(0, KswordTheme::WarningColor());
+    }
 
     if (m_snapshot.memoryListAvailable)
     {
@@ -1591,8 +1916,12 @@ void SystemMemoryAuditPage::rebuildOverview()
         localized("Commit, not residency"), localized("Pageable pool bytes can reside in RAM or backing storage."));
     addRow(overlap, localized("Process private commit"), m_snapshot.processPrivateCommitBytes, 0,
         localized("Commit, not residency"), localized("Private committed virtual memory can be in RAM or the page file."));
-    addRow(overlap, localized("Shared committed"), m_snapshot.sharedCommittedBytes, 0,
+    auto* const systemCommit = addRow(overlap, localized("System commit"), m_snapshot.commit.bytes, 0,
+        localized("Commit, not residency"), commitEvidence(m_snapshot.commit));
+    if (!m_snapshot.commit.valid) { systemCommit->setText(1, localized("Unavailable")); systemCommit->setText(2, localized("Unavailable")); }
+    auto* const sharedCommit = addRow(overlap, localized("Shared committed"), m_snapshot.sharedCommittedBytes, 0,
         localized("Commit, not residency"), localized("System-wide shared commitment."));
+    if (!m_snapshot.sharedCommittedValid) { sharedCommit->setText(1, localized("Unavailable")); sharedCommit->setText(2, localized("Unavailable")); }
     if (m_snapshot.mdlAllocatedBytes != 0 || m_snapshot.pfnDatabaseCommittedBytes != 0 ||
         m_snapshot.systemPageTableCommittedBytes != 0 || m_snapshot.contiguousAllocatedBytes != 0)
     {
@@ -1625,12 +1954,16 @@ void SystemMemoryAuditPage::rebuildUserResidencyTable()
         {
         case UserMemoryKind::Private:
             return localized("Private anonymous");
+        case UserMemoryKind::PrivateMappedCopy:
+            return localized("Private mapped copy");
         case UserMemoryKind::Image:
             return localized("Mapped image");
         case UserMemoryKind::MappedFile:
             return localized("Mapped file");
         case UserMemoryKind::PagefileSection:
             return localized("Pagefile-backed section");
+        case UserMemoryKind::MappedBackingUnknown:
+            return localized("Mapped backing unresolved");
         default:
             return localized("Unknown mapping");
         }
@@ -1644,9 +1977,17 @@ void SystemMemoryAuditPage::rebuildUserResidencyTable()
         {
             backingEvidence = localized("Private allocation owned by this process");
         }
+        else if (backingEvidence == QStringLiteral(":mapped-unknown"))
+        {
+            backingEvidence = localized("Mapped backing unresolved; path query Win32 status: %1").arg(row.backingPathStatus);
+        }
         else if (backingEvidence == QStringLiteral(":pagefile"))
         {
-            backingEvidence = localized("Pagefile-backed shared section without a file path");
+            backingEvidence = localized("Pagefile backing observed with MemoryRegionInfo.MappedPageFile");
+        }
+        else if (backingEvidence == QStringLiteral(":file-path-unavailable"))
+        {
+            backingEvidence = localized("Data-file backing observed; path query Win32 status: %1").arg(row.backingPathStatus);
         }
         else if (backingEvidence == QStringLiteral(":image"))
         {
@@ -1671,6 +2012,12 @@ void SystemMemoryAuditPage::rebuildUserResidencyTable()
         m_userResidencyTable->setItem(rowIndex, 1, numericItem(QString::number(row.pid), row.pid));
         m_userResidencyTable->setItem(rowIndex, 2, textItem(category));
         m_userResidencyTable->setItem(rowIndex, 3, textItem(backingEvidence));
+        if (row.backingPathQueryAttempted)
+        {
+            m_userResidencyTable->item(rowIndex, 3)->setToolTip(localized("GetMappedFileNameW Win32: %1 | MemoryRegionInfo Win32: %2 | region metadata available: %3")
+                .arg(row.backingPathStatus).arg(row.backingRegionStatus)
+                .arg(row.backingRegionKnown ? localized("Yes") : localized("No")));
+        }
         m_userResidencyTable->setItem(rowIndex, 4, numericItem(
             formatBytes(row.residentReferenceBytes), static_cast<qulonglong>(row.residentReferenceBytes)));
         m_userResidencyTable->setItem(rowIndex, 5, numericItem(
@@ -1807,13 +2154,14 @@ void SystemMemoryAuditPage::updateDetails()
     QString text;
     if (m_detailTabs->currentIndex() == 0)
     {
-        text = localized(
-            "The unattributed remainder is deliberate: it prevents false precision. It can contain shared/image pages, kernel stacks, page tables, locked MDL/AWE/large pages, the compression store, VBS/Hyper-V secure memory, and hardware-reserved consumers. Use the other tabs to narrow it without adding overlapping counters together.");
+        text = usePfnOverview() ? localized(
+            "The PFN ledger replaces snapshot estimates with unique physical-page classifications. Unknown use, failed queries and unscanned pages remain separate. Missing process or file names do not change a known use. This collection has its own time and is not combined with newer quick counters.") : localized(
+            "The quick remainder can include shared/image pages, page tables, kernel stacks, locked pages and other unmeasured uses. Run PFN deep attribution to classify unique physical pages. Hardware reservations are outside Windows usable RAM; overlapping cache, commitment and Hyper-V counters are not subtracted from this remainder.");
     }
     else if (m_detailTabs->currentIndex() == 1)
     {
         text = localized(
-            "The user-mode deep scan follows each resident virtual-page reference back to its process and VirtualQueryEx region, separating private allocations, mapped images, mapped files, and pagefile-backed sections. Shared pages intentionally remain attached to every observed owner; the proportional column is an estimate, not a unique PFN count.");
+            "The user-mode deep scan groups resident references by virtual region and backing evidence. A failed file-path query leaves the mapped backing unresolved; it does not prove a pagefile-backed section. The working-set Shared bit preserves private COW copies. Shared pages remain attached to each observed mapper; proportional bytes are an estimate, not unique PFNs.");
     }
     else if (m_detailTabs->currentIndex() == 2)
     {
@@ -1993,7 +2341,7 @@ SystemMemoryAuditPage::UserResidencyScan SystemMemoryAuditPage::collectUserResid
         MEMORY_BASIC_INFORMATION region{};
         std::uintptr_t regionBegin = 0;
         std::uintptr_t regionEnd = 0;
-        QHash<quintptr, QString> mappedPathByAllocationBase;
+        QHash<quintptr, MappedPathObservation> mappedPathByAllocationBase;
 
         for (const PSAPI_WORKING_SET_BLOCK& block : workingSetBlocks)
         {
@@ -2029,48 +2377,44 @@ SystemMemoryAuditPage::UserResidencyScan SystemMemoryAuditPage::collectUserResid
 
             UserMemoryKind kind = UserMemoryKind::Unknown;
             QString backingKey = QStringLiteral(":unknown");
+            bool pathQueryAttempted = false;
+            std::uint32_t pathStatus = 0;
+            bool backingRegionKnown = false;
+            std::uint32_t backingRegionStatus = 0;
             if (region.Type == MEM_PRIVATE)
             {
                 kind = UserMemoryKind::Private;
                 backingKey = QStringLiteral(":private");
             }
-            else if (region.Type == MEM_IMAGE)
-            {
-                kind = UserMemoryKind::Image;
-                const quintptr allocationBase = reinterpret_cast<quintptr>(region.AllocationBase);
-                QString path = mappedPathByAllocationBase.value(allocationBase);
-                if (path.isNull())
-                {
-                    path = mappedFilePath(processHandle.get(), reinterpret_cast<const void*>(virtualAddress));
-                    mappedPathByAllocationBase.insert(allocationBase, path);
-                }
-                backingKey = path.isEmpty() ? QStringLiteral(":image") : path;
-            }
-            else if (region.Type == MEM_MAPPED)
+            else if (region.Type == MEM_IMAGE || region.Type == MEM_MAPPED)
             {
                 const quintptr allocationBase = reinterpret_cast<quintptr>(region.AllocationBase);
-                QString path = mappedPathByAllocationBase.value(allocationBase);
-                if (path.isNull())
+                auto observed = mappedPathByAllocationBase.constFind(allocationBase);
+                if (observed == mappedPathByAllocationBase.constEnd())
                 {
-                    path = mappedFilePath(processHandle.get(), reinterpret_cast<const void*>(virtualAddress));
-                    mappedPathByAllocationBase.insert(allocationBase, path);
+                    mappedPathByAllocationBase.insert(allocationBase,
+                        mappedFilePath(processHandle.get(), reinterpret_cast<const void*>(virtualAddress), region));
+                    observed = mappedPathByAllocationBase.constFind(allocationBase);
                 }
-                if (path.isEmpty())
-                {
-                    kind = UserMemoryKind::PagefileSection;
-                    backingKey = QStringLiteral(":pagefile");
-                }
-                else
-                {
-                    kind = UserMemoryKind::MappedFile;
-                    backingKey = path;
-                }
+                const auto& observation = observed.value();
+                pathQueryAttempted = true;
+                pathStatus = observation.status;
+                backingRegionKnown = observation.regionKnown;
+                backingRegionStatus = observation.regionStatus;
+                kind = ksword::memoryaudit::classifyResident(
+                    region.Type == MEM_IMAGE ? ksword::memoryaudit::RegionKind::Image : ksword::memoryaudit::RegionKind::Mapped,
+                    block.Shared != 0, !observation.path.isEmpty(), observation.proof);
+                backingKey = observation.path.isEmpty()
+                    ? (region.Type == MEM_IMAGE ? QStringLiteral(":image") : QStringLiteral(":mapped-unknown")) : observation.path;
+                if (observation.path.isEmpty() && observation.proof == ksword::memoryaudit::BackingProof::Pagefile) { backingKey = QStringLiteral(":pagefile"); }
+                if (observation.path.isEmpty() && observation.proof == ksword::memoryaudit::BackingProof::DataFile) { backingKey = QStringLiteral(":file-path-unavailable"); }
             }
 
-            const QString aggregationKey = QStringLiteral("%1\x1f%2\x1f%3")
+            const QString aggregationKey = QStringLiteral("%1\x1f%2\x1f%3\x1f%4\x1f%5\x1f%6")
                 .arg(process.pid)
                 .arg(static_cast<int>(kind))
-                .arg(backingKey);
+                .arg(backingKey)
+                .arg(pathStatus).arg(backingRegionStatus).arg(backingRegionKnown);
             int rowIndex = rowIndexByKey.value(aggregationKey, -1);
             if (rowIndex < 0)
             {
@@ -2079,6 +2423,10 @@ SystemMemoryAuditPage::UserResidencyScan SystemMemoryAuditPage::collectUserResid
                 row.processName = process.name;
                 row.kind = kind;
                 row.backingPath = backingKey;
+                row.backingPathQueryAttempted = pathQueryAttempted;
+                row.backingPathStatus = pathStatus;
+                row.backingRegionKnown = backingRegionKnown;
+                row.backingRegionStatus = backingRegionStatus;
                 scan.rows.push_back(std::move(row));
                 rowIndex = static_cast<int>(scan.rows.size() - 1);
                 rowIndexByKey.insert(aggregationKey, rowIndex);
@@ -2088,7 +2436,7 @@ SystemMemoryAuditPage::UserResidencyScan SystemMemoryAuditPage::collectUserResid
             row.residentReferenceBytes += pageSize;
             scan.residentReferenceBytes += pageSize;
 
-            if (block.ShareCount == 0)
+            if (block.Shared == 0)
             {
                 row.privateResidentBytes += pageSize;
                 scan.privateResidentBytes += pageSize;
@@ -2139,10 +2487,17 @@ SystemMemoryAuditPage::Snapshot SystemMemoryAuditPage::collectSnapshot()
     snapshot.pageSize = systemInfo.dwPageSize != 0 ? systemInfo.dwPageSize : 4096;
 
     ULONGLONG installedKilobytes = 0;
-    if (::GetPhysicallyInstalledSystemMemory(&installedKilobytes) != FALSE &&
+    const bool installedSucceeded = ::GetPhysicallyInstalledSystemMemory(&installedKilobytes) != FALSE;
+    snapshot.installedPhysicalStatus = installedSucceeded ? ERROR_SUCCESS : ::GetLastError();
+    if (installedSucceeded && installedKilobytes &&
         installedKilobytes <= (std::numeric_limits<std::uint64_t>::max)() / 1024ULL)
     {
         snapshot.installedPhysicalBytes = installedKilobytes * 1024ULL;
+        snapshot.installedPhysicalValid = true;
+    }
+    else if (installedSucceeded)
+    {
+        snapshot.installedPhysicalStatus = ERROR_INVALID_DATA;
     }
 
     MEMORYSTATUSEX memoryStatus{};
@@ -2151,10 +2506,10 @@ SystemMemoryAuditPage::Snapshot SystemMemoryAuditPage::collectSnapshot()
     {
         snapshot.totalPhysicalBytes = memoryStatus.ullTotalPhys;
         snapshot.availableBytes = memoryStatus.ullAvailPhys;
-        snapshot.committedBytes = memoryStatus.ullTotalPageFile >= memoryStatus.ullAvailPageFile
-            ? memoryStatus.ullTotalPageFile - memoryStatus.ullAvailPageFile
-            : 0;
-        snapshot.commitLimitBytes = memoryStatus.ullTotalPageFile;
+        snapshot.usablePhysicalValid = true;
+        snapshot.usablePhysicalSource = QStringLiteral("GlobalMemoryStatusEx");
+        // MEMORYSTATUSEX pagefile fields can be constrained by this process or
+        // its job. They are never a source for the system commitment ledger.
     }
     else
     {
@@ -2163,7 +2518,11 @@ SystemMemoryAuditPage::Snapshot SystemMemoryAuditPage::collectSnapshot()
 
     PERFORMANCE_INFORMATION publicPerformance{};
     publicPerformance.cb = sizeof(publicPerformance);
-    if (::GetPerformanceInfo(&publicPerformance, sizeof(publicPerformance)))
+    const bool publicSucceeded = ::GetPerformanceInfo(&publicPerformance, sizeof(publicPerformance)) != FALSE;
+    const DWORD publicError = publicSucceeded ? ERROR_SUCCESS : ::GetLastError();
+    snapshot.commit.recordPublic(publicSucceeded, publicError, publicPerformance.CommitTotal,
+        publicPerformance.CommitLimit, publicPerformance.CommitPeak, publicPerformance.PageSize);
+    if (publicSucceeded)
     {
         const std::uint64_t publicPageSize = publicPerformance.PageSize != 0
             ? static_cast<std::uint64_t>(publicPerformance.PageSize)
@@ -2172,20 +2531,13 @@ SystemMemoryAuditPage::Snapshot SystemMemoryAuditPage::collectSnapshot()
         snapshot.pagedPoolCommittedBytes = multiplyPages(publicPerformance.KernelPaged, publicPageSize);
         snapshot.nonPagedPoolBytes = multiplyPages(publicPerformance.KernelNonpaged, publicPageSize);
         snapshot.broadSystemCacheBytes = multiplyPages(publicPerformance.SystemCache, publicPageSize);
-        if (snapshot.totalPhysicalBytes == 0)
+        if (!snapshot.usablePhysicalValid)
         {
             snapshot.totalPhysicalBytes = multiplyPages(publicPerformance.PhysicalTotal, publicPageSize);
-        }
-        if (snapshot.availableBytes == 0)
-        {
             snapshot.availableBytes = multiplyPages(publicPerformance.PhysicalAvailable, publicPageSize);
+            snapshot.usablePhysicalValid = true;
+            snapshot.usablePhysicalSource = QStringLiteral("GetPerformanceInfo");
         }
-        if (snapshot.committedBytes == 0)
-        {
-            snapshot.committedBytes = multiplyPages(publicPerformance.CommitTotal, publicPageSize);
-            snapshot.commitLimitBytes = multiplyPages(publicPerformance.CommitLimit, publicPageSize);
-        }
-        snapshot.peakCommitmentBytes = multiplyPages(publicPerformance.CommitPeak, publicPageSize);
     }
     else
     {
@@ -2207,17 +2559,19 @@ SystemMemoryAuditPage::Snapshot SystemMemoryAuditPage::collectSnapshot()
             &memoryUsage,
             sizeof(memoryUsage),
             &returnedBytes);
-        if (nativeSuccess(status))
+        snapshot.commit.recordNative(static_cast<std::int32_t>(status), returnedBytes, sizeof(memoryUsage),
+            memoryUsage.CommittedBytes, memoryUsage.CommitLimitBytes, memoryUsage.PeakCommitmentBytes);
+        if (nativeSuccess(status) && returnedBytes == sizeof(memoryUsage))
         {
             snapshot.totalPhysicalBytes = memoryUsage.TotalPhysicalBytes;
             snapshot.availableBytes = memoryUsage.AvailableBytes;
+            snapshot.usablePhysicalValid = true;
+            snapshot.usablePhysicalSource = QStringLiteral("SystemMemoryUsageInformation");
             snapshot.residentAvailableBytes = memoryUsage.ResidentAvailableBytes > 0
                 ? static_cast<std::uint64_t>(memoryUsage.ResidentAvailableBytes)
                 : 0;
-            snapshot.committedBytes = memoryUsage.CommittedBytes;
             snapshot.sharedCommittedBytes = memoryUsage.SharedCommittedBytes;
-            snapshot.commitLimitBytes = memoryUsage.CommitLimitBytes;
-            snapshot.peakCommitmentBytes = memoryUsage.PeakCommitmentBytes;
+            snapshot.sharedCommittedValid = true;
         }
 
         NativeSystemMemoryListInformation memoryList{};
@@ -2451,15 +2805,20 @@ SystemMemoryAuditPage::Snapshot SystemMemoryAuditPage::collectSnapshot()
         }
         snapshot.identifiedResidentLowerBoundBytes += component;
     }
-    snapshot.installedPhysicalBytes = std::max(
-        snapshot.installedPhysicalBytes,
-        snapshot.totalPhysicalBytes);
-    snapshot.hardwareReservedBytes = snapshot.installedPhysicalBytes > snapshot.totalPhysicalBytes
-        ? snapshot.installedPhysicalBytes - snapshot.totalPhysicalBytes
-        : 0;
+    snapshot.reserved = ksword::memoryaudit::reservedEstimate(snapshot.installedPhysicalValid,
+        snapshot.usablePhysicalValid, snapshot.installedPhysicalBytes, snapshot.totalPhysicalBytes);
+    if (!snapshot.commit.valid)
+    {
+        snapshot.pendingErrors.push_back({QStringLiteral("System commit is unavailable (%1)"),
+            QStringLiteral("Win32 %1 / NT %2").arg(snapshot.commit.publicStatus)
+                .arg(snapshot.commit.nativeAttempted ? statusHex(snapshot.commit.nativeStatus) : QStringLiteral("not-queried"))});
+    }
 
     snapshot.unattributedResidentBytes = snapshot.inUseBytes > snapshot.identifiedResidentLowerBoundBytes
         ? snapshot.inUseBytes - snapshot.identifiedResidentLowerBoundBytes
+        : 0;
+    snapshot.overAccountedResidentBytes = snapshot.identifiedResidentLowerBoundBytes > snapshot.inUseBytes
+        ? snapshot.identifiedResidentLowerBoundBytes - snapshot.inUseBytes
         : 0;
     return snapshot;
 }

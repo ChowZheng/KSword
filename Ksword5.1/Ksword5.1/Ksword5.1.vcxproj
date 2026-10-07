@@ -326,6 +326,9 @@
     <ClCompile Include="MemoryDock\PhysicalPageScan.cpp" />
     <ClCompile Include="MemoryDock\PhysicalPageMappings.cpp" />
     <ClCompile Include="MemoryDock\PhysicalPageAttributionPage.cpp" />
+    <ClCompile Include="MemoryDock\MemoryConsumerEvidencePage.cpp" />
+    <ClCompile Include="MemoryDock\PhysicalPageConsumers.cpp" />
+    <ClCompile Include="..\..\shared\evidence\GpuMemoryEvidence.cpp" />
     <ClCompile Include="MemoryDock\MemoryAttributionChart.cpp" />
     <ClCompile Include="MemoryDock\HyperVMemoryEvidence.cpp" />
     <ClCompile Include="MemoryDock\HyperVMemoryProviders.cpp" />
@@ -892,6 +895,11 @@
     <ClInclude Include="MemoryDock\PhysicalPageScan.h" />
     <ClInclude Include="MemoryDock\PhysicalPageMappings.h" />
     <ClInclude Include="MemoryDock\PhysicalPageAttributionPage.h" />
+    <ClInclude Include="MemoryDock\MemoryConsumerEvidencePage.h" />
+    <ClInclude Include="MemoryDock\PhysicalPageConsumers.h" />
+    <ClInclude Include="..\..\shared\evidence\GpuMemoryEvidence.h" />
+    <ClInclude Include="..\..\shared\evidence\MemorySnapshotAccounting.h" />
+    <ClInclude Include="..\..\shared\evidence\PoolTraceCapturePolicy.h" />
     <ClInclude Include="MemoryDock\MemoryAttributionChart.h" />
     <ClInclude Include="MemoryDock\HyperVMemoryEvidence.h" />
     <ClInclude Include="MemoryDock\HyperVMemoryPage.h" />
