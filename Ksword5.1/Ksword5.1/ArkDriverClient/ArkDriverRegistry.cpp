@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <initializer_list>
 #include <memory>
 #include <sstream>
 #include <vector>
@@ -10,20 +11,68 @@ namespace ksword::ark
 {
     namespace
     {
+        struct RegistryStringArgument
+        {
+            const std::wstring& text;
+            std::size_t capacity;
+        };
+
+        template <typename Result>
+        bool validateRegistryRequest(
+            Result& result,
+            const std::uint32_t failedStatus,
+            const std::initializer_list<RegistryStringArgument> strings,
+            const std::size_t dataBytes = 0U)
+        {
+            // 定长协议必须完整表达目标与数据；拒绝截断，防止写入另一个键或值。
+            unsigned long error = ERROR_SUCCESS;
+            const char* message = nullptr;
+            for (const auto& argument : strings)
+            {
+                if (argument.text.find(L'\0') != std::wstring::npos)
+                {
+                    error = ERROR_INVALID_NAME;
+                    message = "registry path or name contains an embedded NUL";
+                    break;
+                }
+                if (argument.text.size() >= argument.capacity)
+                {
+                    error = ERROR_FILENAME_EXCED_RANGE;
+                    message = "registry path or name exceeds the R0 protocol capacity";
+                    break;
+                }
+            }
+            if (error == ERROR_SUCCESS && dataBytes > KSWORD_ARK_REGISTRY_DATA_MAX_BYTES)
+            {
+                error = ERROR_INSUFFICIENT_BUFFER;
+                message = "registry value data exceeds the R0 protocol capacity (4096 bytes)";
+            }
+            if (error == ERROR_SUCCESS)
+            {
+                return true;
+            }
+
+            result.status = failedStatus;
+            result.io.ok = false;
+            result.io.win32Error = error;
+            result.io.message = message;
+            return false;
+        }
+
         void copyRegistryWideToFixed(
             wchar_t* destination,
             const std::size_t destinationChars,
             const std::wstring& source)
         {
             // 作用：把 R3 路径/值名复制到共享协议定长 WCHAR 数组。
-            // 返回：无；超长时截断并保留 NUL 结尾。
+            // 前置条件：validateRegistryRequest 已确认可完整存入并保留 NUL 结尾。
             if (destination == nullptr || destinationChars == 0U)
             {
                 return;
             }
 
             std::fill(destination, destination + destinationChars, L'\0');
-            const std::size_t copyChars = std::min<std::size_t>(source.size(), destinationChars - 1U);
+            const std::size_t copyChars = source.size();
             if (copyChars != 0U)
             {
                 std::copy(source.data(), source.data() + copyChars, destination);
@@ -66,11 +115,14 @@ namespace ksword::ark
                     std::to_string(result.io.win32Error);
                 return result;
             }
-            if (result.io.bytesReturned < sizeof(response))
+            if (result.io.bytesReturned < sizeof(response) ||
+                response.version != KSWORD_ARK_REGISTRY_PROTOCOL_VERSION)
             {
+                result.status = KSWORD_ARK_REGISTRY_OPERATION_STATUS_FAILED;
                 result.io.ok = false;
+                result.io.win32Error = ERROR_INVALID_DATA;
                 result.io.message =
-                    std::string("registry operation response too small, bytesReturned=") +
+                    std::string("registry operation response has invalid size or version, bytesReturned=") +
                     std::to_string(result.io.bytesReturned);
                 return result;
             }
@@ -96,6 +148,12 @@ namespace ksword::ark
         // 作用：读取 R0 注册表值，路径必须是 \REGISTRY\... 内核路径。
         // 返回：RegistryReadResult；结构化失败也会携带 R0 status/lastStatus。
         RegistryReadResult readResult{};
+        if (!validateRegistryRequest(readResult, KSWORD_ARK_REGISTRY_READ_STATUS_FAILED,
+            {{kernelKeyPath, KSWORD_ARK_REGISTRY_PATH_CHARS},
+             {valueName, KSWORD_ARK_REGISTRY_VALUE_NAME_CHARS}}))
+        {
+            return readResult;
+        }
         KSWORD_ARK_READ_REGISTRY_VALUE_REQUEST request{};
         KSWORD_ARK_READ_REGISTRY_VALUE_RESPONSE response{};
         request.version = KSWORD_ARK_REGISTRY_PROTOCOL_VERSION;
@@ -126,11 +184,14 @@ namespace ksword::ark
                 std::to_string(readResult.io.win32Error);
             return readResult;
         }
-        if (readResult.io.bytesReturned < sizeof(response))
+        if (readResult.io.bytesReturned < sizeof(response) ||
+            response.version != KSWORD_ARK_REGISTRY_PROTOCOL_VERSION)
         {
+            readResult.status = KSWORD_ARK_REGISTRY_READ_STATUS_FAILED;
             readResult.io.ok = false;
+            readResult.io.win32Error = ERROR_INVALID_DATA;
             readResult.io.message =
-                "registry read response too small, bytesReturned=" +
+                "registry read response has invalid size or version, bytesReturned=" +
                 std::to_string(readResult.io.bytesReturned);
             return readResult;
         }
@@ -147,6 +208,13 @@ namespace ksword::ark
             static_cast<std::size_t>(readResult.dataBytes),
             KSWORD_ARK_REGISTRY_DATA_MAX_BYTES);
         readResult.data.assign(response.data, response.data + copyBytes);
+        readResult.dataBytes = static_cast<std::uint32_t>(copyBytes);
+        if (readResult.status == KSWORD_ARK_REGISTRY_READ_STATUS_SUCCESS &&
+            (response.dataBytes != copyBytes || readResult.requiredBytes != copyBytes))
+        {
+            // 即使旧驱动误报 SUCCESS，前缀也不能被当成完整值提交或备份。
+            readResult.status = KSWORD_ARK_REGISTRY_READ_STATUS_BUFFER_TOO_SMALL;
+        }
 
         std::ostringstream stream;
         stream << "status=" << readResult.status
@@ -165,6 +233,11 @@ namespace ksword::ark
         // 作用：通过 R0 枚举注册表键下的子键和值。
         // 返回：RegistryEnumResult；部分返回时 status 为 PARTIAL。
         RegistryEnumResult enumResult{};
+        if (!validateRegistryRequest(enumResult, KSWORD_ARK_REGISTRY_ENUM_STATUS_FAILED,
+            {{kernelKeyPath, KSWORD_ARK_REGISTRY_PATH_CHARS}}))
+        {
+            return enumResult;
+        }
         KSWORD_ARK_ENUM_REGISTRY_KEY_REQUEST request{};
         auto response = std::make_unique<KSWORD_ARK_ENUM_REGISTRY_KEY_RESPONSE>();
         request.version = KSWORD_ARK_REGISTRY_PROTOCOL_VERSION;
@@ -190,11 +263,14 @@ namespace ksword::ark
                 std::to_string(enumResult.io.win32Error);
             return enumResult;
         }
-        if (enumResult.io.bytesReturned < sizeof(*response))
+        if (enumResult.io.bytesReturned < sizeof(*response) ||
+            response->version != KSWORD_ARK_REGISTRY_PROTOCOL_VERSION)
         {
+            enumResult.status = KSWORD_ARK_REGISTRY_ENUM_STATUS_FAILED;
             enumResult.io.ok = false;
+            enumResult.io.win32Error = ERROR_INVALID_DATA;
             enumResult.io.message =
-                "registry enum response too small, bytesReturned=" +
+                "registry enum response has invalid size or version, bytesReturned=" +
                 std::to_string(enumResult.io.bytesReturned);
             return enumResult;
         }
@@ -208,6 +284,16 @@ namespace ksword::ark
         enumResult.lastStatus = static_cast<long>(response->lastStatus);
         enumResult.io.ntStatus = enumResult.lastStatus;
 
+        if (enumResult.status == KSWORD_ARK_REGISTRY_ENUM_STATUS_SUCCESS &&
+            (enumResult.lastStatus < 0 ||
+             enumResult.returnedSubKeyCount != enumResult.subKeyCount ||
+             enumResult.returnedValueCount != enumResult.valueCount ||
+             enumResult.returnedSubKeyCount > KSWORD_ARK_REGISTRY_ENUM_MAX_SUBKEYS ||
+             enumResult.returnedValueCount > KSWORD_ARK_REGISTRY_ENUM_MAX_VALUES))
+        {
+            enumResult.status = KSWORD_ARK_REGISTRY_ENUM_STATUS_PARTIAL;
+        }
+
         const std::size_t subKeyCount = std::min<std::size_t>(
             enumResult.returnedSubKeyCount,
             KSWORD_ARK_REGISTRY_ENUM_MAX_SUBKEYS);
@@ -218,6 +304,15 @@ namespace ksword::ark
             entry.name = registryFixedWideToString(
                 response->subKeys[index].name,
                 KSWORD_ARK_REGISTRY_ENUM_KEY_NAME_CHARS);
+            if (entry.name.empty() ||
+                entry.name.size() == KSWORD_ARK_REGISTRY_ENUM_KEY_NAME_CHARS ||
+                (enumResult.status == KSWORD_ARK_REGISTRY_ENUM_STATUS_PARTIAL &&
+                 entry.name.size() == KSWORD_ARK_REGISTRY_ENUM_KEY_NAME_CHARS - 1U))
+            {
+                // v1 不提供单项名称长度；PARTIAL 的边界名称可能是别的键的前缀。
+                enumResult.status = KSWORD_ARK_REGISTRY_ENUM_STATUS_PARTIAL;
+                continue;
+            }
             enumResult.subKeys.push_back(std::move(entry));
         }
 
@@ -234,7 +329,20 @@ namespace ksword::ark
                 KSWORD_ARK_REGISTRY_VALUE_NAME_CHARS);
             if ((source.flags & KSWORD_ARK_REGISTRY_ENUM_VALUE_FLAG_NAME_PRESENT) == 0UL)
             {
+                if (!entry.name.empty())
+                {
+                    // 不一致的命名标志不能把一个普通值误认成默认值。
+                    enumResult.status = KSWORD_ARK_REGISTRY_ENUM_STATUS_PARTIAL;
+                    continue;
+                }
                 entry.name.clear();
+            }
+            if (entry.name.size() == KSWORD_ARK_REGISTRY_VALUE_NAME_CHARS ||
+                (enumResult.status == KSWORD_ARK_REGISTRY_ENUM_STATUS_PARTIAL &&
+                 entry.name.size() == KSWORD_ARK_REGISTRY_VALUE_NAME_CHARS - 1U))
+            {
+                enumResult.status = KSWORD_ARK_REGISTRY_ENUM_STATUS_PARTIAL;
+                continue;
             }
             entry.valueType = static_cast<std::uint32_t>(source.valueType);
             entry.dataBytes = static_cast<std::uint32_t>(source.dataBytes);
@@ -243,8 +351,19 @@ namespace ksword::ark
                 static_cast<std::size_t>(entry.dataBytes),
                 KSWORD_ARK_REGISTRY_ENUM_VALUE_DATA_MAX_BYTES);
             entry.data.assign(source.data, source.data + dataBytes);
+            entry.dataBytes = static_cast<std::uint32_t>(dataBytes);
+            if (source.dataBytes != dataBytes || entry.requiredBytes != dataBytes)
+            {
+                if (enumResult.status == KSWORD_ARK_REGISTRY_ENUM_STATUS_SUCCESS)
+                {
+                    enumResult.status = KSWORD_ARK_REGISTRY_ENUM_STATUS_PARTIAL;
+                }
+            }
             enumResult.values.push_back(std::move(entry));
         }
+
+        enumResult.returnedSubKeyCount = static_cast<std::uint32_t>(enumResult.subKeys.size());
+        enumResult.returnedValueCount = static_cast<std::uint32_t>(enumResult.values.size());
 
         std::ostringstream stream;
         stream << "status=" << enumResult.status
@@ -263,11 +382,18 @@ namespace ksword::ark
     {
         // 作用：通过 R0 写入或创建注册表值。
         // 返回：RegistryOperationResult，status 表示 R0 聚合状态。
+        RegistryOperationResult result{};
+        if (!validateRegistryRequest(result, KSWORD_ARK_REGISTRY_OPERATION_STATUS_FAILED,
+            {{kernelKeyPath, KSWORD_ARK_REGISTRY_PATH_CHARS},
+             {valueName, KSWORD_ARK_REGISTRY_VALUE_NAME_CHARS}}, data.size()))
+        {
+            return result;
+        }
         KSWORD_ARK_SET_REGISTRY_VALUE_REQUEST request{};
         KSWORD_ARK_REGISTRY_OPERATION_RESPONSE response{};
         request.version = KSWORD_ARK_REGISTRY_PROTOCOL_VERSION;
         request.valueType = valueType;
-        request.dataBytes = static_cast<unsigned long>(std::min<std::size_t>(data.size(), KSWORD_ARK_REGISTRY_DATA_MAX_BYTES));
+        request.dataBytes = static_cast<unsigned long>(data.size());
         copyRegistryWideToFixed(request.keyPath, KSWORD_ARK_REGISTRY_PATH_CHARS, kernelKeyPath);
         if (!valueName.empty())
         {
@@ -287,6 +413,13 @@ namespace ksword::ark
         const std::wstring& kernelKeyPath,
         const std::wstring& valueName) const
     {
+        RegistryOperationResult result{};
+        if (!validateRegistryRequest(result, KSWORD_ARK_REGISTRY_OPERATION_STATUS_FAILED,
+            {{kernelKeyPath, KSWORD_ARK_REGISTRY_PATH_CHARS},
+             {valueName, KSWORD_ARK_REGISTRY_VALUE_NAME_CHARS}}))
+        {
+            return result;
+        }
         KSWORD_ARK_REGISTRY_VALUE_NAME_REQUEST request{};
         KSWORD_ARK_REGISTRY_OPERATION_RESPONSE response{};
         request.version = KSWORD_ARK_REGISTRY_PROTOCOL_VERSION;
@@ -303,6 +436,12 @@ namespace ksword::ark
 
     RegistryOperationResult DriverClient::createRegistryKey(const std::wstring& kernelKeyPath) const
     {
+        RegistryOperationResult result{};
+        if (!validateRegistryRequest(result, KSWORD_ARK_REGISTRY_OPERATION_STATUS_FAILED,
+            {{kernelKeyPath, KSWORD_ARK_REGISTRY_PATH_CHARS}}))
+        {
+            return result;
+        }
         KSWORD_ARK_REGISTRY_KEY_PATH_REQUEST request{};
         KSWORD_ARK_REGISTRY_OPERATION_RESPONSE response{};
         request.version = KSWORD_ARK_REGISTRY_PROTOCOL_VERSION;
@@ -314,6 +453,12 @@ namespace ksword::ark
 
     RegistryOperationResult DriverClient::deleteRegistryKey(const std::wstring& kernelKeyPath) const
     {
+        RegistryOperationResult result{};
+        if (!validateRegistryRequest(result, KSWORD_ARK_REGISTRY_OPERATION_STATUS_FAILED,
+            {{kernelKeyPath, KSWORD_ARK_REGISTRY_PATH_CHARS}}))
+        {
+            return result;
+        }
         KSWORD_ARK_REGISTRY_KEY_PATH_REQUEST request{};
         KSWORD_ARK_REGISTRY_OPERATION_RESPONSE response{};
         request.version = KSWORD_ARK_REGISTRY_PROTOCOL_VERSION;
@@ -328,6 +473,14 @@ namespace ksword::ark
         const std::wstring& oldValueName,
         const std::wstring& newValueName) const
     {
+        RegistryOperationResult result{};
+        if (!validateRegistryRequest(result, KSWORD_ARK_REGISTRY_OPERATION_STATUS_FAILED,
+            {{kernelKeyPath, KSWORD_ARK_REGISTRY_PATH_CHARS},
+             {oldValueName, KSWORD_ARK_REGISTRY_VALUE_NAME_CHARS},
+             {newValueName, KSWORD_ARK_REGISTRY_VALUE_NAME_CHARS}}))
+        {
+            return result;
+        }
         KSWORD_ARK_RENAME_REGISTRY_VALUE_REQUEST request{};
         KSWORD_ARK_REGISTRY_OPERATION_RESPONSE response{};
         request.version = KSWORD_ARK_REGISTRY_PROTOCOL_VERSION;
@@ -343,6 +496,13 @@ namespace ksword::ark
         const std::wstring& kernelKeyPath,
         const std::wstring& newKeyName) const
     {
+        RegistryOperationResult result{};
+        if (!validateRegistryRequest(result, KSWORD_ARK_REGISTRY_OPERATION_STATUS_FAILED,
+            {{kernelKeyPath, KSWORD_ARK_REGISTRY_PATH_CHARS},
+             {newKeyName, KSWORD_ARK_REGISTRY_ENUM_KEY_NAME_CHARS}}))
+        {
+            return result;
+        }
         KSWORD_ARK_RENAME_REGISTRY_KEY_REQUEST request{};
         KSWORD_ARK_REGISTRY_OPERATION_RESPONSE response{};
         request.version = KSWORD_ARK_REGISTRY_PROTOCOL_VERSION;

@@ -3151,4 +3151,22 @@
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>
+  <!-- Registry workbench -->
+  <ItemGroup>
+    <ClCompile Include="RegistryDock\RegistryDock.Workbench.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="RegistryDock\RegistryDock.Search.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="RegistryDock\RegistryDock.Documents.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="RegistryDock\RegistryValueCodec.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="RegistryDock\RegistryValueEditorWidget.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="RegistryDock\RegistryWorkbenchAccess.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="RegistryDock\RegistryDocument.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="RegistryDock\RegistryDocumentApply.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="RegistryDock\RegistryAdvancedDialogs.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClInclude Include="RegistryDock\RegistryValueCodec.h"><Filter>Header Files</Filter></ClInclude>
+    <QtMoc Include="RegistryDock\RegistryValueEditorWidget.h"><Filter>Header Files</Filter></QtMoc>
+    <ClInclude Include="RegistryDock\RegistryWorkbenchAccess.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="RegistryDock\RegistryDocument.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="RegistryDock\RegistryDocumentApply.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="RegistryDock\RegistryAdvancedDialogs.h"><Filter>Header Files</Filter></ClInclude>
+  </ItemGroup>
 </Project>
