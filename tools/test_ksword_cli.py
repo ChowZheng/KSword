@@ -129,9 +129,10 @@ def main():
                 assert b"nt_status=0x0" not in result.stdout
             known = subprocess.run([str(binary), "--known-status"], capture_output=True, check=True)
             assert b"nt_status=0x0" in known.stdout and b"nt_status=0xc0000022" in known.stdout, known.stdout
-            for command in ["process enum", "kernel ipc", "callback runtime-state", "misc vbs"]:
+            for command in ["process enum", "kernel ipc", "callback runtime-state", "misc vbs", "callback monitor-status", "r0 object-types"]:
                 result = subprocess.run([str(binary), "--missing-device", *command.split()], capture_output=True)
-                assert result.returncode == 2 and b"win32=2" in result.stderr, (command, result.returncode, result.stderr)
+                assert result.returncode == 2 and b"sc start KswordARK" in result.stderr, (command, result.returncode, result.stderr)
+                assert b"win32=2" in result.stderr or b"win32_error=2" in result.stdout
             for alias in ["major", "fastio"]:
                 result = subprocess.run([str(binary), "driver", alias], capture_output=True)
                 assert result.returncode == 5 and ("alias: driver " + alias + " -> driver device").encode() in result.stdout

@@ -188,6 +188,13 @@ namespace
     {
         std::wcerr << L"error: " << operation << L" failed, win32=" << error
                    << L" (0x" << std::hex << error << std::dec << L")\n";
+        if ((error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND) &&
+            std::wcsstr(operation, L"CreateFileW(") == operation)
+            std::wcerr << L"hint: run 'sc start KswordARK' for an installed service, "
+                       << L"or run Launcher.exe / Ksword5.1.exe as administrator to load the driver.\n";
+        // Some callers retain GetLastError after diagnostics; stream writes
+        // must not replace the original failed operation's error.
+        ::SetLastError(error);
     }
 
     // openDriver opens the shared KswordARK control/log device.

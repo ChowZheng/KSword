@@ -4,6 +4,8 @@
 
 ## Help 查询
 
+设备打开返回 `win32=2` 或 `3` 时会提示启动已安装的 `KswordARK` 服务（`sc start KswordARK`），或以管理员身份运行配套 `Launcher.exe` / `Ksword5.1.exe` 加载驱动；原始错误码保留。仅复制 CLI 文件并不自动安装驱动服务。
+
 ```powershell
 KswordCLI.exe help
 KswordCLI.exe help <family>

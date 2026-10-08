@@ -177,6 +177,10 @@ namespace
         {
             std::wcout << L"detail=" << utf8ToWide(result.io.message) << L"\n";
         }
+        if (!result.io.ok && result.io.message.rfind("CreateFileW", 0U) == 0U &&
+            (result.io.win32Error == ERROR_FILE_NOT_FOUND || result.io.win32Error == ERROR_PATH_NOT_FOUND))
+            std::wcerr << L"hint: run 'sc start KswordARK' for an installed service, "
+                       << L"or run Launcher.exe / Ksword5.1.exe as administrator to load the driver.\n";
         return result.io.ok;
     }
 
