@@ -1,5 +1,7 @@
 # Memory Index
 
+- [CLI 崩溃报告与 VMware 验收](ksword-cli-crash-report.md) — Unicode CRT 日志 fastfail、旧 OS build 门禁归因、参数/状态诊断、VIX 自动通道与只读回归
+
 - [ETW 解析与进程归属](ksword-etw-decoding.md) — 事件头与关联身份、映像枚举、数组/结构体布局、网络端口和 TraceLogging 缓存
 
 - [API Monitor 生命周期与事件协议](ksword-api-monitor.md) — x86/x64 工程与自动注入、JSON 定义、异步/覆盖协议、会话互斥、退役 Hook 保留与回归证据

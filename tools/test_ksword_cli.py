@@ -144,7 +144,7 @@ def main():
                 if b"unsupported / unavailable:" in result.stderr:
                     assert result.stderr.index(b"error:") < result.stderr.index(b"unsupported / unavailable:")
                     assert b"unsupported / unavailable:" not in result.stdout
-            print("CLI regression: log default/0/1/2/100 passed (real CRT UTF-8 redirection)")
+            print("CLI regression passed: CRT log output, protocol, options, exit codes, NTSTATUS, aliases, help, and diagnostic order")
 
 
 if __name__ == "__main__":
