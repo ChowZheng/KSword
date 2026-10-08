@@ -297,7 +297,7 @@ public class GhidraPseudocode extends GhidraScript {
         const auto plugin = installedGhidraPlugin();
         if (!plugin.isEmpty())
         {
-            const auto metadata = ks::plugin_host::ghidra_runtime::manifest();
+            const auto metadata = ks::plugin_host::ghidra_runtime::installedManifest(plugin);
             const auto runtime = QDir(plugin).filePath(metadata.value(QStringLiteral("runtime_root")).toString());
             if (QFileInfo(runtime).canonicalFilePath().compare(QFileInfo(ghidraDirectory).canonicalFilePath(),
 #ifdef Q_OS_WIN
@@ -405,7 +405,7 @@ namespace ks::ui
         if (!environment.isEmpty()) return validDirectory(environment) ? QFileInfo(environment).absoluteFilePath() : QString();
         const auto plugin = installedGhidraPlugin();
         if (!plugin.isEmpty())
-            return QDir(plugin).filePath(ks::plugin_host::ghidra_runtime::manifest()
+            return QDir(plugin).filePath(ks::plugin_host::ghidra_runtime::installedManifest(plugin)
                 .value(QStringLiteral("runtime_root")).toString());
         const QDir executable(QCoreApplication::applicationDirPath());
         for (const QString& relative : { QStringLiteral("tools/ghidra"), QStringLiteral("ghidra") }) {

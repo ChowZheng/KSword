@@ -1,5 +1,6 @@
-#include "PluginHost.h"
-#include "PluginHost.Ghidra.h"
+﻿#include "PluginHost.h"
+#include "PluginHost.Upstream.h"
+#include "../../GhidraRuntimePlugin/RuntimeProfile.h"
 #include "UI/CodeTextEdit.h"
 #include "UI/VisibleTableWidget.h"
 
@@ -147,26 +148,9 @@ namespace
         QString sha256;
         QString licenseName;
         QUrl licenseUrl;
-        bool nativeGhidra = false;
+        bool upstreamAssets = false; // 分发方式独立于插件运行方式。
+        ks::plugin_host::UpstreamPlan upstreamPlan; // 市场维护的完整安装事务。
     };
-
-    MarketplacePlugin builtinGhidraRuntime()
-    {
-        MarketplacePlugin plugin;
-        const auto metadata = ks::plugin_host::ghidra_runtime::manifest();
-        const auto assets = ks::plugin_host::ghidra_runtime::assets();
-        plugin.id = QStringLiteral("ghidra");
-        plugin.installDirectory = plugin.id;
-        plugin.name = metadata.value(QStringLiteral("name")).toString();
-        plugin.version = metadata.value(QStringLiteral("version")).toString();
-        plugin.description = metadata.value(QStringLiteral("description")).toString();
-        plugin.targets = QStringList{QStringLiteral("decompiler")};
-        plugin.licenseName = QStringLiteral("Apache 2.0 / GPL v2 + Classpath Exception");
-        plugin.licenseUrl = QUrl(QStringLiteral("https://raw.githubusercontent.com/NationalSecurityAgency/ghidra/Ghidra_12.0.4_build/LICENSE"));
-        if (!assets.isEmpty()) { plugin.archiveUrl = assets.front().url; plugin.sha256 = assets.front().sha256; }
-        plugin.nativeGhidra = true;
-        return plugin;
-    }
 
     enum class MarketplaceUpdateState
     {
@@ -606,7 +590,9 @@ namespace
     bool isApprovedMarketplaceUrl(const QUrl& url)
     {
         return url.isValid() && url.scheme().compare(QStringLiteral("https"), Qt::CaseInsensitive) == 0 &&
-            url.host().compare(QStringLiteral("raw.githubusercontent.com"), Qt::CaseInsensitive) == 0;
+            url.host().compare(QStringLiteral("raw.githubusercontent.com"), Qt::CaseInsensitive) == 0 &&
+            url.userInfo().isEmpty() && (url.port(-1) == -1 || url.port() == 443) &&
+            !url.hasQuery() && !url.hasFragment();
     }
 
     QString networkReplyErrorText(QNetworkReply* reply)
@@ -634,8 +620,6 @@ namespace
             !readRequiredString(object, "version", &plugin.version, errorOut) ||
             !readRequiredString(object, "description", &plugin.description, errorOut) ||
             !readRequiredString(object, "install_directory", &plugin.installDirectory, errorOut) ||
-            !readRequiredString(object, "archive_url", &archiveUrlText, errorOut) ||
-            !readRequiredString(object, "sha256", &plugin.sha256, errorOut) ||
             !readRequiredString(object, "license_name", &plugin.licenseName, errorOut) ||
             !readRequiredString(object, "license_url", &licenseUrlText, errorOut))
         {
@@ -646,24 +630,62 @@ namespace
             *errorOut = QStringLiteral("商城条目的 id 或 install_directory 不合法。");
             return false;
         }
-        plugin.archiveUrl = QUrl(archiveUrlText);
         plugin.licenseUrl = QUrl(licenseUrlText);
-        if (!isApprovedMarketplaceUrl(plugin.archiveUrl) || !isApprovedMarketplaceUrl(plugin.licenseUrl))
+        if (!isApprovedMarketplaceUrl(plugin.licenseUrl))
         {
             *errorOut = QStringLiteral("商城仅接受 raw.githubusercontent.com 的 HTTPS 下载地址。");
             return false;
         }
-        if (!QRegularExpression(QStringLiteral("^[0-9A-Fa-f]{64}$")).match(plugin.sha256).hasMatch())
+        // 未声明 distribution 的旧条目保持 ZIP 分发；新条目按协议解析多资源计划。
+        if (object.contains(QStringLiteral("distribution")))
         {
-            *errorOut = QStringLiteral("商城条目的 sha256 必须是 64 位十六进制值。");
-            return false;
+            plugin.upstreamAssets = true;
+            if (!ks::plugin_host::parseUpstreamDistribution(object.value(QStringLiteral("distribution")).toObject(),
+                    plugin.id, &plugin.upstreamPlan, errorOut) || plugin.installDirectory != plugin.id)
+            {
+                if (errorOut->isEmpty()) *errorOut = QStringLiteral("上游插件安装目录必须与 id 一致。");
+                return false;
+            }
+            const auto& manifest = plugin.upstreamPlan.manifest;
+            if (manifest.value(QStringLiteral("version")).toString() != plugin.version ||
+                manifest.value(QStringLiteral("name")).toString() != plugin.name ||
+                manifest.value(QStringLiteral("description")).toString() != plugin.description ||
+                manifest.value(QStringLiteral("targets")) != object.value(QStringLiteral("targets")))
+            {
+                *errorOut = QStringLiteral("上游分发清单与商城元数据不一致。");
+                return false;
+            }
+            // 许可证正文必须正是计划中的哈希固定文件，不能展示另一份文本后安装。
+            bool licenseMatches = false;
+            for (const auto& file : plugin.upstreamPlan.metadata)
+            {
+                if (file.path == manifest.value(QStringLiteral("license")).toString() && file.url == plugin.licenseUrl)
+                    licenseMatches = true;
+            }
+            if (!licenseMatches)
+            {
+                *errorOut = QStringLiteral("上游插件许可证 URL 与分发计划不一致。");
+                return false;
+            }
+        }
+        else
+        {
+            if (!readRequiredString(object, "archive_url", &archiveUrlText, errorOut) ||
+                !readRequiredString(object, "sha256", &plugin.sha256, errorOut)) return false;
+            plugin.archiveUrl = QUrl(archiveUrlText);
+            if (!isApprovedMarketplaceUrl(plugin.archiveUrl) || !ks::plugin_host::validUpstreamSha256(plugin.sha256))
+            {
+                *errorOut = QStringLiteral("商城 ZIP 下载地址或 SHA-256 不合法。");
+                return false;
+            }
         }
         const QJsonArray targetValues = object.value(QStringLiteral("targets")).toArray();
         for (const QJsonValue& value : targetValues)
         {
             const QString target = value.toString().trimmed().toLower();
             if ((target == QStringLiteral("file") || target == QStringLiteral("process") ||
-                target == QStringLiteral("network") || target == QStringLiteral("tab")) &&
+                target == QStringLiteral("network") || target == QStringLiteral("tab") ||
+                (plugin.upstreamAssets && target == QStringLiteral("decompiler"))) &&
                 !plugin.targets.contains(target))
             {
                 plugin.targets.push_back(target);
@@ -671,7 +693,7 @@ namespace
         }
         if (plugin.targets.isEmpty())
         {
-            *errorOut = QStringLiteral("商城条目的 targets 必须包含 file、process、network 和/或 tab。");
+            *errorOut = QStringLiteral("商城条目的 targets 不包含受支持的插件能力。");
             return false;
         }
         *pluginOut = plugin;
@@ -2039,6 +2061,17 @@ namespace
             return false;
         }
 
+        // 上游计划生成的清单必须逐字段相同；版本、能力和入口不能被载荷替换。
+        if (plugin.upstreamAssets)
+        {
+            QFile manifestFile(QDir(extractedDirectory).filePath(QStringLiteral("plugin.json")));
+            if (!manifestFile.open(QIODevice::ReadOnly) ||
+                QJsonDocument::fromJson(manifestFile.readAll()).object() != plugin.upstreamPlan.manifest)
+            {
+                *errorOut = QStringLiteral("已解压插件清单与上游分发计划不一致。");
+                return false;
+            }
+        }
         QDir rootDirectory(pluginRoot);
         const QString stagingName = QFileInfo(stagingDirectory).fileName();
         const QString stagedPluginPath = manifestAtRoot
@@ -2295,9 +2328,19 @@ namespace
         {
             m_marketplaceTable->setRowCount(0);
             m_marketplacePlugins.clear();
-            // The built-in pinned runtime is available even when the external
-            // marketplace is offline, and a remote catalog cannot replace it.
-            m_marketplacePlugins.push_back(builtinGhidraRuntime());
+            // 初始元数据快照使用同一公开协议；在线目录按 id 覆盖，后续版本由 plugins 维护。
+            QFile bootstrap(QStringLiteral(":/plugin-marketplace/catalog.json"));
+            if (bootstrap.open(QIODevice::ReadOnly))
+            {
+                const auto root = QJsonDocument::fromJson(bootstrap.readAll()).object();
+                for (const auto& value : root.value(QStringLiteral("plugins")).toArray())
+                {
+                    MarketplacePlugin plugin;
+                    QString error;
+                    if (value.isObject() && parseMarketplacePlugin(value.toObject(), &plugin, &error))
+                        m_marketplacePlugins.append(plugin);
+                }
+            }
             populateMarketplaceTable();
             selectMarketplaceEntry();
             const auto generation = ++m_marketplaceGeneration;
@@ -2315,7 +2358,7 @@ namespace
                 if (!networkOk)
                 {
                     m_status->setText(QStringLiteral(
-                        "在线商城暂不可用；仍可安装内置 Ghidra 插件。"));
+                        "在线插件商城暂不可用；已安装插件仍可使用。"));
                     kLogEvent requestEvent;
                     warn << requestEvent
                         << "[PluginHost] marketplace catalog request failed, detail="
@@ -2345,11 +2388,16 @@ namespace
                 QStringList ignoredEntries;
                 for (const QJsonValue& value : root.value(QStringLiteral("plugins")).toArray())
                 {
-                    if (value.toObject().value(QStringLiteral("id")).toString() == QStringLiteral("ghidra")) continue;
                     MarketplacePlugin plugin;
                     QString errorText;
                     if (value.isObject() && parseMarketplacePlugin(value.toObject(), &plugin, &errorText))
                     {
+                        // 同 id 的在线条目替换初始快照，确保市场能独立维护版本、JDK 和文件哈希。
+                        for (qsizetype index = m_marketplacePlugins.size(); index > 0; --index)
+                        {
+                            if (m_marketplacePlugins[index - 1].id == plugin.id)
+                                m_marketplacePlugins.removeAt(index - 1);
+                        }
                         m_marketplacePlugins.push_back(plugin);
                     }
                     else
@@ -2537,14 +2585,6 @@ namespace
             const MarketplacePlugin& plugin,
             const std::function<void(bool, QByteArray, QString)>& completion)
         {
-            if (plugin.nativeGhidra)
-            {
-                const auto payload = ks::plugin_host::ghidra_runtime::licenseText();
-                QTimer::singleShot(0, this, [completion, payload]() {
-                    completion(!payload.isEmpty(), payload, QStringLiteral("Ghidra 运行环境许可证正文为空。"));
-                });
-                return;
-            }
             QNetworkRequest request(plugin.licenseUrl);
             request.setHeader(
                 QNetworkRequest::UserAgentHeader,
@@ -2554,7 +2594,7 @@ namespace
                 reply,
                 &QNetworkReply::finished,
                 this,
-                [reply, completion]() {
+                [reply, plugin, completion]() {
                     const QByteArray payload = reply->readAll();
                     const bool networkOk =
                         reply->error() == QNetworkReply::NoError;
@@ -2562,6 +2602,23 @@ namespace
                         ? QStringLiteral("许可证正文为空。")
                         : networkReplyErrorText(reply);
                     reply->deleteLater();
+                    // 上游许可证与实际安装文件共用固定哈希，内容变化必须由维护者更新清单。
+                    if (plugin.upstreamAssets)
+                    {
+                        for (const auto& file : plugin.upstreamPlan.metadata)
+                        {
+                            if (file.url == plugin.licenseUrl && file.path ==
+                                plugin.upstreamPlan.manifest.value(QStringLiteral("license")).toString())
+                            {
+                                const auto digest = QString::fromLatin1(QCryptographicHash::hash(payload, QCryptographicHash::Sha256).toHex());
+                                if (payload.size() > file.maxBytes || digest.compare(file.sha256, Qt::CaseInsensitive) != 0)
+                                {
+                                    completion(false, {}, QStringLiteral("上游插件许可证 SHA-256 校验失败。"));
+                                    return;
+                                }
+                            }
+                        }
+                    }
                     completion(
                         networkOk && !payload.isEmpty(),
                         payload,
@@ -2575,7 +2632,7 @@ namespace
             int pendingLicenseConfirmation = 0;
             for (const MarketplacePlugin& plugin : updates)
             {
-                if (hasMarketplaceLicenseAcceptanceRecord(plugin))
+                if (!plugin.upstreamAssets && hasMarketplaceLicenseAcceptanceRecord(plugin))
                 {
                     m_autoUpdateQueue.push_back(plugin);
                 }
@@ -2682,9 +2739,9 @@ namespace
 
         void requestSelectedMarketplaceLicense()
         {
-            if (m_nativeInstaller || m_licenseRequestInProgress)
+            if (m_upstreamInstaller || m_licenseRequestInProgress)
             {
-                m_status->setText(QStringLiteral("Ghidra 插件安装正在进行，请等待或关闭窗口取消。"));
+                m_status->setText(QStringLiteral("上游插件安装正在进行，请等待或关闭窗口取消。"));
                 return;
             }
             if (m_autoUpdateInProgress)
@@ -2804,9 +2861,9 @@ namespace
             const MarketplacePlugin& plugin,
             InstallCompletion completion = {})
         {
-            if (plugin.nativeGhidra)
+            if (plugin.upstreamAssets)
             {
-                installNativeGhidra(plugin, completion);
+                installUpstreamAssets(plugin, completion);
                 return;
             }
             m_status->setText(QStringLiteral("正在下载 %1；将校验 SHA-256 后一键安装。").arg(plugin.name));
@@ -2845,25 +2902,30 @@ namespace
             });
         }
 
-        void installNativeGhidra(const MarketplacePlugin& plugin, const InstallCompletion& completion)
+        void installUpstreamAssets(const MarketplacePlugin& plugin, const InstallCompletion& completion)
         {
-            if (m_nativeInstaller)
+            if (m_upstreamInstaller)
             {
-                completeMarketplaceInstall(completion, false, QStringLiteral("Ghidra 插件安装已在进行。"));
+                completeMarketplaceInstall(completion, false, QStringLiteral("上游插件安装已在进行。"));
                 return;
             }
-            auto* installer = new ks::plugin_host::GhidraRuntimeInstaller(this,
+            auto* installer = new ks::plugin_host::UpstreamAssetInstaller(this,
                 [](const QString& source) { return ks::i18n::sourceText(source); });
-            installer->setObjectName(QStringLiteral("ksword_ghidra_runtime_installer"));
-            m_nativeInstaller = installer;
+            installer->setObjectName(QStringLiteral("ksword_upstream_asset_installer"));
+            m_upstreamInstaller = installer;
             const auto pluginRoot = resolvePluginInstallRoot();
-            installer->start(pluginRoot,
+            // 将生产清单解析器作为结构校验入口，安装阶段不执行任何插件。
+            installer->start(pluginRoot, plugin.upstreamPlan,
+                [plugin](const QString& stage, QString* error) {
+                    PluginDescriptor descriptor;
+                    return loadPluginManifestDirectory(stage, plugin.installDirectory, &descriptor, error);
+                },
                 [this](const QString& stage, int percent) {
                     updateInstallProgress(stage, percent);
                     m_status->setText(stage);
                 },
                 [this, plugin, pluginRoot, completion, installer](bool success, const QString& stage, const QString& error) {
-                    m_nativeInstaller.clear();
+                    m_upstreamInstaller.clear();
                     installer->deleteLater();
                     if (!success)
                     {
@@ -2879,7 +2941,7 @@ namespace
                         const auto canonicalRoot = QFileInfo(pluginRoot).canonicalFilePath();
                         const auto canonicalStage = QFileInfo(stage).canonicalFilePath();
                         if (!canonicalRoot.isEmpty() && canonicalStage.startsWith(canonicalRoot + QLatin1Char('/'), Qt::CaseInsensitive) &&
-                            QFileInfo(stage).fileName().startsWith(QStringLiteral(".ksword-plugin-stage-ghidra-")) && !QFileInfo(stage).isSymLink())
+                            QFileInfo(stage).fileName().startsWith(QStringLiteral(".ksword-plugin-stage-%1-").arg(plugin.id)) && !QFileInfo(stage).isSymLink())
                             QDir(canonicalStage).removeRecursively();
                     }
                     if (!promoted)
@@ -2890,9 +2952,9 @@ namespace
                     refreshPlugins();
                     populateMarketplaceTable();
                     selectMarketplaceEntry();
-                    const auto message = QStringLiteral("Ghidra 插件已安装；通用字节组件的 C 伪代码页可直接使用。");
+                    const auto message = QStringLiteral("上游插件 %1 已安装到：%2").arg(plugin.name, QDir::toNativeSeparators(QDir(pluginRoot).filePath(plugin.installDirectory)));
                     m_status->setText(message);
-                    updateInstallProgress(QStringLiteral("Ghidra 插件安装完成"), 100);
+                    updateInstallProgress(QStringLiteral("上游插件安装完成"), 100);
                     const QPointer<PluginManagerDialog> self(this);
                     if (!completion) QMessageBox::information(this, QStringLiteral("插件商城"), message);
                     if (!self) return;
@@ -3023,7 +3085,7 @@ namespace
         QCheckBox* m_autoUpdateCheck = nullptr;
         QPushButton* m_openFolderButton = nullptr;
         QNetworkAccessManager* m_networkManager = nullptr;
-        QPointer<ks::plugin_host::GhidraRuntimeInstaller> m_nativeInstaller;
+        QPointer<ks::plugin_host::UpstreamAssetInstaller> m_upstreamInstaller;
         QList<PluginDescriptor> m_plugins;
         QHash<QString, PluginDescriptor> m_installedPluginsById;
         QList<MarketplacePlugin> m_marketplacePlugins;

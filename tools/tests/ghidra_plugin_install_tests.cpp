@@ -4,7 +4,7 @@
 #include <QtCore/QtCore>
 #include <Windows.h>
 #include "GhidraRuntimePlugin/RuntimeProfile.h"
-#include "Ksword5.1/Ksword5.1/PluginHost.Ghidra.h"
+#include "Ksword5.1/Ksword5.1/PluginHost.Upstream.h"
 #include "production_plugin_helpers.inc"
 #include <cstdio>
 #include <cstdlib>
@@ -14,7 +14,8 @@ namespace
     unsigned checks = 0;
     QString caseRoot;
     QString inertExecutable;
-    using Asset = ks::plugin_host::ghidra_runtime::RuntimeAsset;
+    using Plan = ks::plugin_host::UpstreamPlan;
+    using Asset = ks::plugin_host::UpstreamAsset;
 
     void check(bool value, const char* description)
     {
@@ -157,11 +158,96 @@ namespace
         std::puts("Plugin promotion checks completed");
     }
 
-    QList<Asset> localAssets(const QString& source, const QString& output, const QString& fault = QStringLiteral("valid"))
+    // 从实际发布元数据解析计划，测试不另写一套协议定义。
+    Plan catalogPlan()
     {
-        auto result = ks::plugin_host::ghidra_runtime::assets();
-        for (int index = 0; index < result.size(); ++index) {
-            auto& asset = result[index];
+        const auto catalog = QJsonDocument::fromJson(get(QStringLiteral("PluginMarketplace/catalog.json"))).object();
+        const auto entry = catalog.value(QStringLiteral("plugins")).toArray().first().toObject();
+        MarketplacePlugin plugin;
+        QString error;
+        check(parseMarketplacePlugin(entry, &plugin, &error) && plugin.upstreamAssets,
+            "production marketplace parser accepts the published upstream entry");
+        return plugin.upstreamPlan;
+    }
+
+    // 校验生产协议的信任边界与旧 ZIP 兼容性；不访问任何下载端点。
+    void distributionProtocol()
+    {
+        using namespace ks::plugin_host;
+        const auto original = catalogPlan().description;
+        QString error;
+        UpstreamPlan parsed;
+        for (const auto& field : {QStringLiteral("platform"), QStringLiteral("type")})
+        {
+            auto changed = original;
+            changed.insert(field, QStringLiteral("unsupported"));
+            check(!parseUpstreamDistribution(changed, QStringLiteral("ghidra"), &parsed, &error),
+                "unsupported upstream platform and distribution type reject before download");
+        }
+        const QList<QPair<QString, QJsonValue>> faults {
+            {QStringLiteral("repository"), QStringLiteral("attacker/ghidra")},
+            {QStringLiteral("url"), QStringLiteral("https://github.com/NationalSecurityAgency/ghidra/releases/latest/download/ghidra.zip")},
+            {QStringLiteral("url"), QStringLiteral("https://github.com/attacker/ghidra/releases/download/v1/ghidra.zip")},
+            {QStringLiteral("url"), QStringLiteral("http://github.com/NationalSecurityAgency/ghidra/releases/download/v1/ghidra.zip")},
+            {QStringLiteral("sha256"), QString(64, QLatin1Char('z'))},
+            {QStringLiteral("root_directory"), QStringLiteral("../outside")},
+            {QStringLiteral("destination_directory"), QStringLiteral("C:/outside")},
+            {QStringLiteral("destination_directory"), QStringLiteral("jdk/nested")},
+            {QStringLiteral("destination_directory"), QStringLiteral(".archives")},
+            {QStringLiteral("max_archive_bytes"), 1.5},
+            {QStringLiteral("max_archive_bytes"), 2.0 * 1024 * 1024 * 1024}
+        };
+        for (const auto& fault : faults)
+        {
+            auto changed = original;
+            auto assets = changed.value(QStringLiteral("assets")).toArray();
+            auto asset = assets.first().toObject();
+            asset.insert(fault.first, fault.second);
+            assets.replace(0, asset);
+            changed.insert(QStringLiteral("assets"), assets);
+            check(!parseUpstreamDistribution(changed, QStringLiteral("ghidra"), &parsed, &error) && !error.isEmpty(),
+                "repository mismatch, unpinned URL, unsafe paths, digests and budgets reject");
+        }
+        // 元数据只能是固定哈希文本，不能充当从 plugins 仓库下载的可执行载荷。
+        auto changed = original;
+        auto files = changed.value(QStringLiteral("metadata")).toArray();
+        auto file = files.first().toObject();
+        file.insert(QStringLiteral("path"), QStringLiteral("install.ps1"));
+        files.replace(0, file);
+        changed.insert(QStringLiteral("metadata"), files);
+        check(!parseUpstreamDistribution(changed, QStringLiteral("ghidra"), &parsed, &error),
+            "upstream metadata cannot carry executable installer scripts");
+        const QUrl release(original.value(QStringLiteral("assets")).toArray().first().toObject().value(QStringLiteral("url")).toString());
+        check(approvedUpstreamRedirect(QUrl(QStringLiteral("https://release-assets.githubusercontent.com/vendor/file?signature=fixture")), release),
+            "normal signed GitHub release CDN redirect is accepted");
+        for (const auto& target : {QStringLiteral("https://attacker.example/file"),
+            QStringLiteral("http://release-assets.githubusercontent.com/file"),
+            QStringLiteral("https://github.com/attacker/repo/releases/download/v1/file.zip")})
+            check(!approvedUpstreamRedirect(QUrl(target), release), "redirect cannot switch publisher or downgrade HTTPS");
+        auto entry = QJsonDocument::fromJson(get(QStringLiteral("GhidraRuntimePlugin/marketplace-entry.json"))).object();
+        MarketplacePlugin plugin;
+        check(parseMarketplacePlugin(entry, &plugin, &error), "standalone publication entry matches embedded snapshot");
+        entry.insert(QStringLiteral("version"), QStringLiteral("999.0"));
+        check(!parseMarketplacePlugin(entry, &plugin, &error), "marketplace version cannot differ from generated manifest");
+        entry = {{QStringLiteral("id"), QStringLiteral("legacy")}, {QStringLiteral("name"), QStringLiteral("Legacy")},
+            {QStringLiteral("version"), QStringLiteral("1.0")}, {QStringLiteral("description"), QStringLiteral("legacy fixture")},
+            {QStringLiteral("install_directory"), QStringLiteral("legacy")},
+            {QStringLiteral("targets"), QJsonArray{QStringLiteral("process")}},
+            {QStringLiteral("archive_url"), QStringLiteral("https://raw.githubusercontent.com/KSwordDEV/Plugins/main/legacy.zip")},
+            {QStringLiteral("sha256"), QString(64, QLatin1Char('a'))},
+            {QStringLiteral("license_name"), QStringLiteral("Fixture license")},
+            {QStringLiteral("license_url"), QStringLiteral("https://raw.githubusercontent.com/KSwordDEV/Plugins/main/LICENSE.txt")}};
+        check(parseMarketplacePlugin(entry, &plugin, &error) && !plugin.upstreamAssets,
+            "ordinary ZIP marketplace entries remain compatible without a distribution field");
+    }
+
+    // 构造 ZIP 与小型文本的本地夹具；本地 URL 只在专用测试构建入口可用。
+    Plan localAssets(const QString& source, const QString& output, const QString& fault = QStringLiteral("valid"),
+        Plan result = catalogPlan())
+    {
+        for (int index = 0; index < result.assets.size(); ++index)
+        {
+            auto& asset = result.assets[index];
             const auto zip = output + QStringLiteral("/asset-%1.zip").arg(index);
             QProcess generator;
             const auto python = qEnvironmentVariable("KSWORD_PLUGIN_TEST_PYTHON");
@@ -170,22 +256,29 @@ namespace
                 QStringLiteral("--source"), source + u'/' + asset.destinationDirectory + u'/' + asset.rootDirectory,
                 QStringLiteral("--output"), zip, QStringLiteral("--mode"),
                 index == (fault == QStringLiteral("missing-source") ? 1 : 0) ? fault : QStringLiteral("valid")});
-            if (!generator.waitForFinished(10000) || generator.exitCode() != 0) {
-                std::fprintf(stderr, "Fixture ZIP generator failed: %s\n", generator.readAllStandardError().constData()); std::exit(2);
+            if (!generator.waitForFinished(10000) || generator.exitCode() != 0)
+            {
+                std::fprintf(stderr, "Fixture ZIP generator failed: %s\n", generator.readAllStandardError().constData());
+                std::exit(2);
             }
             asset.url = QUrl::fromLocalFile(zip);
             asset.sha256 = QString::fromLatin1(QCryptographicHash::hash(get(zip), QCryptographicHash::Sha256).toHex());
             asset.maxArchiveBytes = 1024 * 1024;
         }
+        for (auto& file : result.metadata)
+        {
+            const auto local = QDir::current().filePath(QStringLiteral("GhidraRuntimePlugin/") + file.path);
+            file.url = QUrl::fromLocalFile(local);
+        }
         return result;
     }
 
     struct Outcome { bool completed = false; bool success = false; QString stage; QString error; int progress = 0; QString progressStage; };
-    Outcome install(const QString& root, const QList<Asset>& assets, bool cancelOnProgress = false)
+    Outcome install(const QString& root, const Plan& assets, bool cancelOnProgress = false)
     {
         Outcome result;
         QEventLoop loop;
-        ks::plugin_host::GhidraRuntimeInstaller installer;
+        ks::plugin_host::UpstreamAssetInstaller installer;
         QTimer watchdog;
         watchdog.setSingleShot(true);
         QObject::connect(&watchdog, &QTimer::timeout, &loop, [&]() {
@@ -193,7 +286,11 @@ namespace
             installer.cancel(); loop.quit();
         });
         watchdog.start(120000);
-        installer.startForTests(root, assets, [&](const QString& stage, int percent) {
+        installer.startForTests(root, assets,
+            [assets](const QString& stage, QString* error) {
+                PluginDescriptor descriptor;
+                return loadPluginManifestDirectory(stage, assets.id, &descriptor, error);
+            }, [&](const QString& stage, int percent) {
             ++result.progress;
             result.progressStage = stage;
             check(percent >= 0 && percent <= 100, "native installer progress stays within the public percentage range");
@@ -234,11 +331,12 @@ namespace
         put(root + QStringLiteral("/ghidra/preserved-marker.txt"), "keep after rejected update");
         for (const auto& fault : {QStringLiteral("checksum"), QStringLiteral("download-size"), QStringLiteral("traversal"),
             QStringLiteral("device"), QStringLiteral("link"), QStringLiteral("duplicate"),
-            QStringLiteral("wrong-wrapper"), QStringLiteral("missing-source")}) {
+            QStringLiteral("wrong-wrapper"), QStringLiteral("missing-source"), QStringLiteral("metadata-checksum")}) {
             auto bad = fault == QStringLiteral("checksum") || fault == QStringLiteral("download-size")
-                ? assets : localAssets(source, caseRoot + u'/' + fault, fault);
-            if (fault == QStringLiteral("checksum")) bad[0].sha256 = QString(64, QLatin1Char('0'));
-            if (fault == QStringLiteral("download-size")) bad[0].maxArchiveBytes = 1;
+                || fault == QStringLiteral("metadata-checksum") ? assets : localAssets(source, caseRoot + u'/' + fault, fault);
+            if (fault == QStringLiteral("checksum")) bad.assets[0].sha256 = QString(64, QLatin1Char('0'));
+            if (fault == QStringLiteral("download-size")) bad.assets[0].maxArchiveBytes = 1;
+            if (fault == QStringLiteral("metadata-checksum")) bad.metadata.last().sha256 = QString(64, QLatin1Char('0'));
             const auto result = install(root, bad);
             check(!result.success && result.stage.isEmpty() && !result.error.isEmpty() && noStages(root),
                 "invalid hash size archive path or legal/source payload leaves no usable partial plugin");
@@ -248,13 +346,13 @@ namespace
         const auto cancelled = install(root, assets, true);
         check(!cancelled.success && !cancelled.error.isEmpty() && noStages(root),
             "cancelling from progress cleans the private stage without publishing a package");
-        ks::plugin_host::GhidraRuntimeInstaller first;
-        ks::plugin_host::GhidraRuntimeInstaller second;
+        ks::plugin_host::UpstreamAssetInstaller first;
+        ks::plugin_host::UpstreamAssetInstaller second;
         Outcome firstResult, secondResult;
-        first.startForTests(root, assets, {}, [&](bool ok, const QString&, const QString& error) {
+        first.startForTests(root, assets, [](const QString&, QString*) { return true; }, {}, [&](bool ok, const QString&, const QString& error) {
             firstResult.completed = true; firstResult.success = ok; firstResult.error = error;
         });
-        second.startForTests(root, assets, {}, [&](bool ok, const QString&, const QString& error) {
+        second.startForTests(root, assets, [](const QString&, QString*) { return true; }, {}, [&](bool ok, const QString&, const QString& error) {
             secondResult.completed = true; secondResult.success = ok; secondResult.error = error;
         });
         check(secondResult.completed && !secondResult.success && !secondResult.error.isEmpty(),
@@ -262,22 +360,102 @@ namespace
         first.cancel();
         check(firstResult.completed && !firstResult.success && noStages(root),
             "cancelling the lock owner leaves no stage from either installer");
-        QPointer<ks::plugin_host::GhidraRuntimeInstaller> retiring = new ks::plugin_host::GhidraRuntimeInstaller;
+        QPointer<ks::plugin_host::UpstreamAssetInstaller> retiring = new ks::plugin_host::UpstreamAssetInstaller;
         bool completedAfterDeletion = false;
-        retiring->startForTests(root, assets, [retiring](const QString&, int) { delete retiring.data(); },
+        retiring->startForTests(root, assets, [](const QString&, QString*) { return true; }, [retiring](const QString&, int) { delete retiring.data(); },
             [&](bool, const QString&, const QString&) { completedAfterDeletion = true; });
         QCoreApplication::processEvents();
         check(retiring.isNull() && !completedAfterDeletion && noStages(root),
             "destroying installer from progress safely cancels all callbacks and owned files");
+        // 同一安装器能够处理普通命令插件，证明安装逻辑不依赖 ghidra id 或两项资源。
+        auto generic = assets;
+        generic.id = QStringLiteral("vendor-tool");
+        generic.assets = {assets.assets.first()};
+        generic.manifest = {{QStringLiteral("ksword_plugin_api"), QStringLiteral("1")},
+            {QStringLiteral("id"), generic.id}, {QStringLiteral("name"), QStringLiteral("Vendor tool")},
+            {QStringLiteral("version"), QStringLiteral("1.0")}, {QStringLiteral("description"), QStringLiteral("generic upstream fixture")},
+            {QStringLiteral("runtime"), QStringLiteral("executable")},
+            {QStringLiteral("entrypoint"), QStringLiteral("runtime/ghidra_12.0.4_PUBLIC/Ghidra/Features/Decompiler/os/win_x86_64/decompile.exe")},
+            {QStringLiteral("default_command"), QStringLiteral("info")},
+            {QStringLiteral("targets"), QJsonArray{QStringLiteral("process")}},
+            {QStringLiteral("license"), QStringLiteral("LICENSE.txt")}};
+        generic.description.insert(QStringLiteral("manifest"), generic.manifest);
+        generic.description.insert(QStringLiteral("assets"), QJsonArray{assets.description.value(QStringLiteral("assets")).toArray().first()});
+        Plan genericParsed;
+        check(ks::plugin_host::parseUpstreamDistribution(generic.description, generic.id, &genericParsed, &error),
+            "generic executable plan passes the same production protocol parser");
+        const auto ordinary = install(root, generic);
+        MarketplacePlugin genericPlugin;
+        genericPlugin.id = generic.id;
+        genericPlugin.installDirectory = generic.id;
+        genericPlugin.upstreamAssets = true;
+        genericPlugin.upstreamPlan = generic;
+        check(ordinary.success && promoteExtractedPlugin(genericPlugin, root, ordinary.stage, &error),
+            "one-resource upstream executable installs through the production promotion transaction");
+        // 模拟维护者同时更新包版本、Ghidra/JDK 版本和官方 ZIP 顶层目录。
+        // 所有内容仍是本地惰性夹具，绝不执行 Java 或分析样本。
+        auto future = catalogPlan();
+        const auto futureSource = caseRoot + QStringLiteral("/future-source");
+        fixtureRuntime(futureSource);
+        check(QDir(futureSource + QStringLiteral("/runtime")).rename(QStringLiteral("ghidra_12.0.4_PUBLIC"), QStringLiteral("ghidra_next")) &&
+            QDir(futureSource + QStringLiteral("/jdk")).rename(QStringLiteral("jdk-21.0.12.1+1"), QStringLiteral("jdk_next")),
+            "future fixture uses changed archive roots");
+        future.assets[0].rootDirectory = QStringLiteral("ghidra_next");
+        future.assets[1].rootDirectory = QStringLiteral("jdk_next");
+        future.manifest.insert(QStringLiteral("version"), QStringLiteral("12.0.4.1"));
+        future.manifest.insert(QStringLiteral("runtime_version"), QStringLiteral("12.0.5"));
+        future.manifest.insert(QStringLiteral("java_version"), QStringLiteral("21.0.13"));
+        future.manifest.insert(QStringLiteral("runtime_root"), QStringLiteral("runtime/ghidra_next"));
+        future.manifest.insert(QStringLiteral("java_executable"), QStringLiteral("jdk/jdk_next/bin/java.exe"));
+        future.description.insert(QStringLiteral("manifest"), future.manifest);
+        auto futureDescriptions = future.description.value(QStringLiteral("assets")).toArray();
+        for (int index = 0; index < future.assets.size(); ++index)
+        {
+            auto asset = futureDescriptions[index].toObject();
+            asset.insert(QStringLiteral("root_directory"), future.assets[index].rootDirectory);
+            futureDescriptions.replace(index, asset);
+        }
+        future.description.insert(QStringLiteral("assets"), futureDescriptions);
+        put(futureSource + QStringLiteral("/runtime/ghidra_next/Ghidra/application.properties"), "application.version=12.0.5\n");
+        put(futureSource + QStringLiteral("/jdk/jdk_next/release"),
+            "JAVA_VERSION=\"21.0.13\"\nOS_ARCH=\"x86_64\"\nIMPLEMENTOR=\"Eclipse Adoptium\"\n");
+        future = localAssets(futureSource, caseRoot + QStringLiteral("/future-zips"), QStringLiteral("valid"), future);
+        const auto updated = install(root, future);
+        MarketplacePlugin futurePlugin;
+        futurePlugin.id = QStringLiteral("ghidra");
+        futurePlugin.installDirectory = futurePlugin.id;
+        futurePlugin.upstreamAssets = true;
+        futurePlugin.upstreamPlan = future;
+        check(updated.success && promoteExtractedPlugin(futurePlugin, root, updated.stage, &error),
+            "changed package and runtime versions install without rebuilding a fixed runtime profile");
+        const auto installed = ks::plugin_host::ghidra_runtime::installedManifest(root + QStringLiteral("/ghidra"));
+        check(installed == future.manifest && ks::plugin_host::ghidra_runtime::validateDirectory(root + QStringLiteral("/ghidra"), &error),
+            "installed manifest resolves the new runtime and bundled Java paths");
+        // 被篡改的安装回执不能让不匹配的运行环境被标记为就绪。
+        put(root + QStringLiteral("/ghidra/jdk/jdk_next/release"), "JAVA_VERSION=\"21.0.12.1\"\n");
+        check(!ks::plugin_host::ghidra_runtime::validateDirectory(root + QStringLiteral("/ghidra"), &error),
+            "future runtime still verifies its actual version against the distribution manifest");
+        // 生产入口重新解析 JSON，不允许测试本地 URL 被意外用于正常安装。
+        auto invalidProduction = generic;
+        auto invalidAssets = invalidProduction.description.value(QStringLiteral("assets")).toArray();
+        auto invalidAsset = invalidAssets.first().toObject();
+        invalidAsset.insert(QStringLiteral("url"), generic.assets.first().url.toString());
+        invalidAssets.replace(0, invalidAsset);
+        invalidProduction.description.insert(QStringLiteral("assets"), invalidAssets);
+        bool refused = false;
+        ks::plugin_host::UpstreamAssetInstaller production;
+        production.start(root, invalidProduction, [](const QString&, QString*) { return true; }, {},
+            [&](bool ok, const QString&, const QString&) { refused = !ok; });
+        check(refused, "production entry rejects local resource URLs even in a test-enabled binary");
         std::puts("Native plugin installer checks completed");
     }
 
     int officialInstall(const QString& ghidraZip, const QString& jdkZip, const QString& pluginRoot)
     {
-        auto assets = ks::plugin_host::ghidra_runtime::assets();
-        assets[0].url = QUrl::fromLocalFile(ghidraZip);
-        assets[1].url = QUrl::fromLocalFile(jdkZip);
-        ks::plugin_host::GhidraRuntimeInstaller installer;
+        auto assets = catalogPlan();
+        assets.assets[0].url = QUrl::fromLocalFile(ghidraZip);
+        assets.assets[1].url = QUrl::fromLocalFile(jdkZip);
+        ks::plugin_host::UpstreamAssetInstaller installer;
         QEventLoop loop;
         QTimer watchdog;
         watchdog.setSingleShot(true);
@@ -286,7 +464,10 @@ namespace
         int lastPercent = -10;
         QObject::connect(&watchdog, &QTimer::timeout, &loop, [&]() { installer.cancel(); loop.quit(); });
         watchdog.start(600000);
-        installer.startForTests(pluginRoot, assets, [&](const QString& stage, int percent) {
+        for (auto& file : assets.metadata)
+            file.url = QUrl::fromLocalFile(QDir::current().filePath(QStringLiteral("GhidraRuntimePlugin/") + file.path));
+        installer.startForTests(pluginRoot, assets, ks::plugin_host::ghidra_runtime::validateDirectory,
+            [&](const QString& stage, int percent) {
             if (percent >= lastPercent + 10 || stage.contains(QStringLiteral("解压")) || percent >= 95) {
                 std::printf("OFFICIAL_INSTALL_PROGRESS=%d %s\n", percent, stage.toUtf8().constData());
                 lastPercent = percent;
@@ -322,6 +503,7 @@ int main(int argc, char** argv)
     QTemporaryDir temporary(QString::fromLocal8Bit(argv[1]) + QStringLiteral("/cases-XXXXXX"));
     if (!temporary.isValid()) return 2;
     caseRoot = temporary.path();
+    distributionProtocol();
     metadataAndParser();
     promotion();
     nativeInstaller();

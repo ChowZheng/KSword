@@ -108,6 +108,13 @@ namespace ks::plugin_host::ghidra_runtime
     QByteArray licenseText() { return payloadLicenseBytes(); }
     QByteArray noticeText() { return runtimeNoticeBytes(); }
 
+    QJsonObject installedManifest(const QString& pluginDirectory)
+    {
+        // 按实际安装清单选择运行环境路径，更新组件不需要重新编译宿主。
+        const auto bytes = readBounded(QDir(pluginDirectory).filePath(QStringLiteral("plugin.json")));
+        return QJsonDocument::fromJson(bytes).object();
+    }
+
     bool writePackageMetadata(const QString& pluginDirectory, QString* error)
     {
         if (!QFileInfo(pluginDirectory).isDir()) return fail(error, QStringLiteral("runtime_staging_missing"));
@@ -134,9 +141,10 @@ namespace ks::plugin_host::ghidra_runtime
         const auto document = QJsonDocument::fromJson(file.readAll());
         const auto actual = document.object();
         const auto expected = manifest();
-        for (const auto& key : {QStringLiteral("ksword_plugin_api"), QStringLiteral("id"), QStringLiteral("version"),
+        // 后端类型和能力固定，版本与目录来自市场维护且已验哈希的安装计划。
+        for (const auto& key : {QStringLiteral("ksword_plugin_api"), QStringLiteral("id"),
             QStringLiteral("plugin_type"), QStringLiteral("runtime"), QStringLiteral("targets"),
-            QStringLiteral("runtime_root"), QStringLiteral("java_executable"), QStringLiteral("license"), QStringLiteral("notice")}) {
+            QStringLiteral("license"), QStringLiteral("notice")}) {
             if (!document.isObject() || actual.value(key) != expected.value(key))
                 return fail(error, QStringLiteral("runtime_manifest_invalid"));
         }
@@ -144,10 +152,17 @@ namespace ks::plugin_host::ghidra_runtime
             QStringLiteral("tab"), QStringLiteral("visualization")}) {
             if (actual.contains(key)) return fail(error, QStringLiteral("runtime_manifest_executable"));
         }
-        const QString ghidra = QStringLiteral("runtime/ghidra_12.0.4_PUBLIC/");
-        const QString jdk = QStringLiteral("jdk/jdk-21.0.12.1+1/");
+        const auto runtimeRoot = actual.value(QStringLiteral("runtime_root")).toString();
+        const auto javaExecutable = actual.value(QStringLiteral("java_executable")).toString();
+        if (!insideRoot(pluginDirectory, runtimeRoot, true) ||
+            !javaExecutable.endsWith(QStringLiteral("/bin/java.exe")) ||
+            !insideRoot(pluginDirectory, javaExecutable, false))
+            return fail(error, QStringLiteral("runtime_manifest_invalid"));
+        const QString ghidra = runtimeRoot + u'/';
+        const QString jdk = javaExecutable.left(javaExecutable.size() - QStringLiteral("bin/java.exe").size());
+        const bool upstream = QFileInfo::exists(QDir(pluginDirectory).filePath(QStringLiteral("upstream-install.json")));
         const QStringList required {
-            QStringLiteral("LICENSE.txt"), QStringLiteral("NOTICE.md"), QStringLiteral("runtime-assets.json"),
+            QStringLiteral("LICENSE.txt"), QStringLiteral("NOTICE.md"),
             QStringLiteral("KSword-LICENSE.txt"), QStringLiteral("UPSTREAM-GHIDRA-NOTICE.txt"),
             ghidra + QStringLiteral("Ghidra/Framework/Utility/lib/Utility.jar"),
             ghidra + QStringLiteral("Ghidra/application.properties"),
@@ -165,14 +180,43 @@ namespace ks::plugin_host::ghidra_runtime
                 return fail(error, QStringLiteral("runtime_licenses_missing"));
         }
         const auto recordedAssets = QJsonDocument::fromJson(readBounded(QDir(pluginDirectory).filePath(QStringLiteral("runtime-assets.json"))));
-        if (!recordedAssets.isObject() || recordedAssets.object() != assetDescription())
-            return fail(error, QStringLiteral("runtime_assets_invalid"));
+        // 新协议保存市场分发回执；旧包仍按旧固定清单验证，避免升级破坏已有安装。
+        QString ghidraVersion;
+        QString javaVersion;
+        if (upstream)
+        {
+            if (!insideRoot(pluginDirectory, QStringLiteral("upstream-install.json"), false))
+                return fail(error, QStringLiteral("runtime_assets_invalid"));
+            const auto receipt = QJsonDocument::fromJson(readBounded(QDir(pluginDirectory).filePath(QStringLiteral("upstream-install.json")))).object();
+            if (receipt.value(QStringLiteral("type")).toString() != QStringLiteral("upstream-assets") ||
+                receipt.value(QStringLiteral("platform")).toString() != QStringLiteral("windows-x64") ||
+                receipt.value(QStringLiteral("manifest")).toObject() != actual)
+                return fail(error, QStringLiteral("runtime_assets_invalid"));
+            ghidraVersion = actual.value(QStringLiteral("runtime_version")).toString();
+            javaVersion = actual.value(QStringLiteral("java_version")).toString();
+            if (ghidraVersion.isEmpty() || javaVersion.isEmpty())
+                return fail(error, QStringLiteral("runtime_manifest_invalid"));
+        }
+        else
+        {
+            if (!insideRoot(pluginDirectory, QStringLiteral("runtime-assets.json"), false) ||
+                !recordedAssets.isObject() || recordedAssets.object() != assetDescription() ||
+                actual.value(QStringLiteral("version")) != expected.value(QStringLiteral("version")) ||
+                actual.value(QStringLiteral("runtime_root")) != expected.value(QStringLiteral("runtime_root")) ||
+                actual.value(QStringLiteral("java_executable")) != expected.value(QStringLiteral("java_executable")))
+                return fail(error, QStringLiteral("runtime_assets_invalid"));
+            ghidraVersion = QStringLiteral("12.0.4");
+            javaVersion = QStringLiteral("21.0.12.1");
+        }
         const auto properties = readBounded(QDir(pluginDirectory).filePath(ghidra + QStringLiteral("Ghidra/application.properties")));
         const auto release = readBounded(QDir(pluginDirectory).filePath(jdk + QStringLiteral("release")));
-        if (!properties.split('\n').contains("application.version=12.0.4") &&
-            !properties.split('\n').contains("application.version=12.0.4\r"))
+        const auto versionLine = QByteArray("application.version=") + ghidraVersion.toUtf8();
+        if (!properties.split('\n').contains(versionLine) && !properties.split('\n').contains(versionLine + '\r'))
             return fail(error, QStringLiteral("runtime_version_mismatch"));
-        if (!release.contains("JAVA_VERSION=\"21.0.12.1\"") || !release.contains("OS_ARCH=\"x86_64\"") ||
+        if (!release.split('\n').contains(QByteArray("JAVA_VERSION=\"") + javaVersion.toUtf8() + '"') &&
+            !release.split('\n').contains(QByteArray("JAVA_VERSION=\"") + javaVersion.toUtf8() + "\"\r"))
+            return fail(error, QStringLiteral("runtime_java_version_mismatch"));
+        if (!release.contains("OS_ARCH=\"x86_64\"") ||
             !release.contains("IMPLEMENTOR=\"Eclipse Adoptium\""))
             return fail(error, QStringLiteral("runtime_java_version_mismatch"));
         if (!amd64Executable(QDir(pluginDirectory).filePath(jdk + QStringLiteral("bin/java.exe"))) ||

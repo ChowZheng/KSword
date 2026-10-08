@@ -4,21 +4,30 @@
 
 在 KSword 的插件商城安装 Ghidra 后端后，组件使用插件目录中的 Ghidra 和 JDK，不需要设置系统 Java 或手工选择后端目录。插件通过现有插件管理器安装和更新；安装目录通过验证后即可使用。高级用户仍可在 C 页使用自定义 Ghidra 目录和 Java 环境；这属于显式覆盖。
 
-## 固定的官方运行环境
+## 上游直下载分发
+
+该插件现在使用通用 `upstream-assets` 协议。`KSwordDEV/Plugins` 维护版本、官方资源 URL、
+SHA-256、解压布局和清单，客户端直接从 Ghidra/Temurin 的官方 GitHub Release 下载完整 ZIP。
+协议和维护流程见 [插件上游分发协议](../docs/插件上游分发协议.md)。初始市场条目见
+[`marketplace-entry.json`](marketplace-entry.json)，客户端目录快照见
+[`PluginMarketplace/catalog.json`](../PluginMarketplace/catalog.json)。在线同 ID 条目优先。
+
+安装与更新由用户点击触发；不自动追踪上游最新版本，也不进入普通 ZIP 的自动更新队列。
+仅更新 JDK 时，也应递增插件包 `version`。下面是初始条目与历史离线构包的参考版本。
 
 | 组件 | 固定版本 | 官方 ZIP SHA-256 |
 | --- | --- | --- |
 | Ghidra | 12.0.4 | `c3b458661d69e26e203d739c0c82d143cc8a4a29d9e571f099c2cf4bda62a120` |
 | Eclipse Temurin JDK | 21.0.12.1+1，Windows x64 | `f9d6e191ab098c0d416e7d588a24420a8621cd2f4720dab2459b8b7b2d2d8b4e` |
 
-下载地址、根目录名称和大小上限固定在 `RuntimeProfile.cpp`，另有一致的 `runtime-assets.json` 供离线构包使用。商城目录不能替换这两个官方 URL 或 SHA。下载校验、解压、结构验证全部成功后才推广暂存目录；旧插件不会被部分下载替换。
+生产安装读取市场的分发计划；`RuntimeProfile.cpp` 和 `runtime-assets.json` 中的参考配置只供历史包兼容及离线构包使用。下载校验、完整解压、结构验证全部成功后才推广暂存目录；旧插件不会被部分下载替换。
 
 安装后的布局：
 
 ```text
 plugin/ghidra/
   plugin.json
-  runtime-assets.json
+  upstream-install.json
   LICENSE.txt
   NOTICE.md
   KSword-LICENSE.txt
@@ -27,7 +36,7 @@ plugin/ghidra/
   jdk/jdk-21.0.12.1+1/
 ```
 
-`RuntimeProfile::validateDirectory` 验证固定后端类型、能力和相对路径，拒绝入口点/Tab/命令字段、目录逃逸、丢失许可、错误版本和非 amd64 的 Java/反编译器程序。Ghidra 的完整 `licenses/`、`GPL/`、模块许可，以及 JDK 的完整 `legal/`、NOTICE、release、Java 源码包均随官方文件树保留。
+`RuntimeProfile::validateDirectory` 验证固定后端类型、能力和清单声明的相对路径，拒绝入口点/Tab/命令字段、目录逃逸、丢失许可、版本与清单不一致和非 amd64 的 Java/反编译器程序。后端从已验证的安装清单读取实际路径。Ghidra 的完整 `licenses/`、`GPL/`、模块许可，以及 JDK 的完整 `legal/`、NOTICE、release、Java 源码包均随官方文件树保留。历史离线包仍使用 `runtime-assets.json`。
 
 ## 许可证
 

@@ -1523,7 +1523,10 @@
     <ClCompile Include="UI\Decompiler\GhidraDecompiler.cpp">
       <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
-    <ClCompile Include="PluginHost.Ghidra.cpp">
+    <ClCompile Include="PluginHost.Distribution.cpp">
+      <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
+    </ClCompile>
+    <ClCompile Include="PluginHost.Upstream.cpp">
       <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
     <ClCompile Include="..\..\GhidraRuntimePlugin\RuntimeProfile.cpp">
@@ -1531,7 +1534,8 @@
     </ClCompile>
     <ClInclude Include="UI\BinaryOverviewBar.h" />
     <ClInclude Include="ksword\scanner\binary_layout.h" />
-    <ClInclude Include="PluginHost.Ghidra.h" />
+    <ClInclude Include="PluginHost.Distribution.h" />
+    <ClInclude Include="PluginHost.Upstream.h" />
     <ClInclude Include="..\..\GhidraRuntimePlugin\RuntimeProfile.h" />
     <ClInclude Include="..\..\GhidraRuntimePlugin\RuntimeLicense.inc" />
     <QtMoc Include="UI\Decompiler\GhidraDecompiler.h" />

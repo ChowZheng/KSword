@@ -50,6 +50,7 @@ def main() -> None:
         "isValidPluginId", "isSafeRelativePath", "isSafeCommandToken", "readRequiredString",
         "isValidProtocolName", "isAllowedVisualizationFormat", "isAllowedVisualizationTone",
         "parseVisualizationField", "parseVisualization", "parseTabPresentation",
+        "isApprovedMarketplaceUrl", "parseMarketplacePlugin",
         "loadPluginManifestDirectory", "loadPluginManifest", "promoteExtractedPlugin",
     )]
     arguments.output.parent.mkdir(parents=True, exist_ok=True)

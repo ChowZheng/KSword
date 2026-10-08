@@ -3305,7 +3305,10 @@
     <ClCompile Include="UI\Decompiler\GhidraDecompiler.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="PluginHost.Ghidra.cpp">
+    <ClCompile Include="PluginHost.Distribution.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="PluginHost.Upstream.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="..\..\GhidraRuntimePlugin\RuntimeProfile.cpp">
@@ -3317,7 +3320,10 @@
     <ClInclude Include="ksword\scanner\binary_layout.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="PluginHost.Ghidra.h">
+    <ClInclude Include="PluginHost.Distribution.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="PluginHost.Upstream.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="..\..\GhidraRuntimePlugin\RuntimeProfile.h">

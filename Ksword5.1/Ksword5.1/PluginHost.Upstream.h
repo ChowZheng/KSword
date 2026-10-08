@@ -1,6 +1,6 @@
 #pragma once
 
-#include "../../GhidraRuntimePlugin/RuntimeProfile.h"
+#include "PluginHost.Distribution.h"
 #include <QObject>
 #include <QPointer>
 #include <functional>
@@ -16,27 +16,28 @@ class QTimer;
 
 namespace ks::plugin_host
 {
-    // Streams the two pinned vendor archives into a private sibling stage.
-    // Never launches Ghidra, Java, or any installed plugin. The caller performs
-    // the existing manifest-validated directory promotion after success.
-    class GhidraRuntimeInstaller final : public QObject
+    // 上游分发安装器：逐项下载并验哈希，完整解压到私有暂存区。
+    // 输入已验证的计划和宿主清单验证函数；输出待事务推广的完整目录。
+    // 不执行 Java、插件入口或任何远程安装脚本。
+    class UpstreamAssetInstaller final : public QObject
     {
     public:
         using Progress = std::function<void(const QString&, int)>;
         using Completion = std::function<void(bool, const QString&, const QString&)>;
+        using Validator = std::function<bool(const QString&, QString*)>;
         using Translator = std::function<QString(const QString&)>;
-        explicit GhidraRuntimeInstaller(QObject* parent = nullptr, Translator translator = {});
-        ~GhidraRuntimeInstaller() override;
-        void start(const QString& pluginRoot, Progress progress, Completion completion);
+        explicit UpstreamAssetInstaller(QObject* parent = nullptr, Translator translator = {});
+        ~UpstreamAssetInstaller() override;
+        void start(const QString& pluginRoot, const UpstreamPlan& plan, Validator validator,
+            Progress progress, Completion completion);
         void cancel();
 #ifdef KSWORD_PLUGIN_INSTALL_TESTING
-        // Exists only in isolated test binaries. Production cannot replace the
-        // fixed vendor URLs/digests with local or catalog-supplied artifacts.
+        // 仅测试构建允许本地夹具 URL；生产构建始终重新解析市场分发计划。
         void startForTests(const QString& pluginRoot,
-            const QList<ghidra_runtime::RuntimeAsset>& assets, Progress progress, Completion completion);
+            const UpstreamPlan& plan, Validator validator, Progress progress, Completion completion);
 #endif
     private:
-        void begin(const QString& pluginRoot, const QList<ghidra_runtime::RuntimeAsset>& assets,
+        void begin(const QString& pluginRoot, const UpstreamPlan& plan, Validator validator,
             Progress progress, Completion completion);
         void downloadNext();
         void openDownload(const QUrl& url);
@@ -55,7 +56,9 @@ namespace ks::plugin_host
         std::unique_ptr<QSaveFile> m_archive;
         std::unique_ptr<QCryptographicHash> m_digest;
         std::unique_ptr<QLockFile> m_installLock;
-        QList<ghidra_runtime::RuntimeAsset> m_assets;
+        QList<UpstreamAsset> m_assets; // ZIP 与小型元数据共用流式下载队列。
+        UpstreamPlan m_plan; // 用于生成清单与安装回执。
+        Validator m_validator; // 宿主提供的结构校验，不运行插件。
         QString m_pluginRoot;
         QString m_stage;
         QString m_archivePath;

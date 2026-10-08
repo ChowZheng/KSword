@@ -1,8 +1,9 @@
-#include "PluginHost.Ghidra.h"
+#include "PluginHost.Upstream.h"
 #include <QCryptographicHash>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QJsonDocument>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QNetworkRequest>
@@ -28,9 +29,8 @@ namespace ks::plugin_host
         {
             return QLatin1Char('\'') + value.replace(QLatin1Char('\''), QStringLiteral("''")) + QLatin1Char('\'');
         }
-        // Preflight every ZIP entry before extracting any payload. The official
-        // wrapper must be exact; links, traversal, Windows aliases and bombs are
-        // rejected even though both archives have already passed their pin.
+        // 先检查 ZIP 全部路径、大小和属性，再提取任何文件。保留官方完整树，
+        // 拒绝链接、路径穿越、Windows 别名、大小炸弹和重复项。
         QString extractionScript(const QString& archive, const QString& destination,
             const QString& wrapper, const qint64 budget)
         {
@@ -54,12 +54,12 @@ try {
   $names=New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
   foreach($entry in $zip.Entries){
     $name=$entry.FullName.Replace('\','/')
-    if(!$name -or $name.StartsWith('/') -or $name.Contains(':') -or $name.Contains([char]0)){throw 'Unsafe ZIP entry'}
+    if(!$name -or $name.StartsWith('/') -or $name.Contains(':') -or $name -match '[\x00-\x1f]'){throw 'Unsafe ZIP entry'}
     $parts=$name.Split('/',[System.StringSplitOptions]::RemoveEmptyEntries)
     if(!$parts.Length -or $parts[0] -cne $wrapper){throw 'Unexpected ZIP wrapper'}
     foreach($part in $parts){
-      if($part.Length -gt 255 -or $part -eq '.' -or $part -eq '..' -or $part.EndsWith('.') -or $part.EndsWith(' ') -or $part.IndexOfAny([char[]]'<>|?*') -ge 0){throw 'Unsafe ZIP component'}
-      if($part -match '^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(\..*)?$'){throw 'Windows device alias in ZIP'}
+      if($part.Length -gt 255 -or $part -eq '.' -or $part -eq '..' -or $part.EndsWith('.') -or $part.EndsWith(' ') -or $part.IndexOfAny([char[]]'<>"|?*') -ge 0){throw 'Unsafe ZIP component'}
+      if($part -match '^(CON|PRN|AUX|NUL|COM[0-9]|LPT[0-9])(\..*)?$'){throw 'Windows device alias in ZIP'}
     }
     if(!$names.Add($name.TrimEnd('/'))){throw 'Duplicate ZIP path'}
     if((($entry.ExternalAttributes -shr 16) -band 61440) -eq 40960 -or ($entry.ExternalAttributes -band 1024)){throw 'ZIP links/reparse entries are forbidden'}
@@ -88,115 +88,136 @@ try {
         }
     }
 
-    GhidraRuntimeInstaller::GhidraRuntimeInstaller(QObject* parent, Translator translator)
+    UpstreamAssetInstaller::UpstreamAssetInstaller(QObject* parent, Translator translator)
         : QObject(parent), m_translator(std::move(translator))
     {
         m_network = new QNetworkAccessManager(this);
         m_deadline = new QTimer(this);
         m_deadline->setSingleShot(true);
         connect(m_deadline, &QTimer::timeout, this, [this]() {
-            if (m_active) finish(false, text(QStringLiteral("Ghidra 插件安装超时。")));
+            if (m_active) finish(false, text(QStringLiteral("上游插件安装超时。")));
         });
     }
-    GhidraRuntimeInstaller::~GhidraRuntimeInstaller()
+    UpstreamAssetInstaller::~UpstreamAssetInstaller()
     {
         m_active = false;
         m_completion = {};
         stopOperations();
         cleanupStage();
     }
-    QString GhidraRuntimeInstaller::text(const QString& source) const
+    QString UpstreamAssetInstaller::text(const QString& source) const
     {
         return m_translator ? m_translator(source) : source;
     }
-    void GhidraRuntimeInstaller::start(const QString& pluginRoot, Progress progress, Completion completion)
+    void UpstreamAssetInstaller::start(const QString& pluginRoot, const UpstreamPlan& plan,
+        Validator validator, Progress progress, Completion completion)
     {
         if (!m_active) m_allowLocalTestAssets = false;
-        begin(pluginRoot, ghidra_runtime::assets(), std::move(progress), std::move(completion));
+        begin(pluginRoot, plan, std::move(validator), std::move(progress), std::move(completion));
     }
 #ifdef KSWORD_PLUGIN_INSTALL_TESTING
-    void GhidraRuntimeInstaller::startForTests(const QString& pluginRoot,
-        const QList<ghidra_runtime::RuntimeAsset>& assets, Progress progress, Completion completion)
+    void UpstreamAssetInstaller::startForTests(const QString& pluginRoot,
+        const UpstreamPlan& plan, Validator validator, Progress progress, Completion completion)
     {
         if (!m_active) m_allowLocalTestAssets = true;
-        begin(pluginRoot, assets, std::move(progress), std::move(completion));
+        begin(pluginRoot, plan, std::move(validator), std::move(progress), std::move(completion));
     }
 #endif
-    void GhidraRuntimeInstaller::begin(const QString& pluginRoot,
-        const QList<ghidra_runtime::RuntimeAsset>& assets, Progress progress, Completion completion)
+    void UpstreamAssetInstaller::begin(const QString& pluginRoot,
+        const UpstreamPlan& plan, Validator validator, Progress progress, Completion completion)
     {
         if (m_active)
         {
-            if (completion) completion(false, {}, text(QStringLiteral("Ghidra 插件安装已在进行。")));
+            if (completion) completion(false, {}, text(QStringLiteral("上游插件安装已在进行。")));
             return;
         }
         m_progress = std::move(progress);
         m_completion = std::move(completion);
-        m_assets = assets;
+        // 生产入口以原始 JSON 重新验证计划，拒绝调用方绕过 URL、路径或预算校验。
+        m_plan = plan;
+        QString planError;
+        if (!m_allowLocalTestAssets && !parseUpstreamDistribution(plan.description, plan.id, &m_plan, &planError))
+        {
+            m_active = true;
+            finish(false, planError);
+            return;
+        }
+        m_validator = std::move(validator);
+        m_assets = m_plan.assets;
+        for (const auto& file : m_plan.metadata)
+        {
+            // 小型元数据只保存原始字节；不解压，不执行。
+            m_assets.append({file.path, file.url, file.sha256, {}, file.path, file.maxBytes, {}});
+        }
         m_assetIndex = 0;
         ++m_operationGeneration;
         m_active = true;
-        if (assets.size() != 2 || !QDir().mkpath(pluginRoot))
+        if (m_plan.assets.isEmpty() || m_plan.assets.size() > 8 || !m_validator || !QDir().mkpath(pluginRoot))
         {
-            finish(false, text(QStringLiteral("无法创建 Ghidra 插件安装目录。")));
+            finish(false, text(QStringLiteral("无法创建上游插件安装目录。")));
             return;
         }
         m_pluginRoot = QFileInfo(pluginRoot).canonicalFilePath();
         if (m_pluginRoot.isEmpty()) { finish(false, text(QStringLiteral("插件目录无法规范化。"))); return; }
-        m_installLock = std::make_unique<QLockFile>(QDir(m_pluginRoot).filePath(QStringLiteral(".ksword-ghidra-install.lock")));
+        m_installLock = std::make_unique<QLockFile>(QDir(m_pluginRoot).filePath(QStringLiteral(".ksword-plugin-install-%1.lock").arg(m_plan.id)));
         m_installLock->setStaleLockTime(0);
         if (!m_installLock->tryLock(0))
         {
-            finish(false, text(QStringLiteral("另一个窗口正在安装 Ghidra 插件。")));
+            finish(false, text(QStringLiteral("另一个窗口正在安装此上游插件。")));
             return;
         }
-        m_stage = QDir(m_pluginRoot).filePath(QStringLiteral(".ksword-plugin-stage-ghidra-%1")
-            .arg(QUuid::createUuid().toString(QUuid::WithoutBraces)));
+        m_stage = QDir(m_pluginRoot).filePath(QStringLiteral(".ksword-plugin-stage-%1-%2")
+            .arg(m_plan.id, QUuid::createUuid().toString(QUuid::WithoutBraces)));
         if (!QDir().mkpath(QDir(m_stage).filePath(QStringLiteral(".archives"))))
         {
-            finish(false, text(QStringLiteral("无法创建 Ghidra 安装暂存目录。")));
+            finish(false, text(QStringLiteral("无法创建上游插件安装暂存目录。")));
             return;
         }
         m_deadline->start(30 * 60 * 1000);
         downloadNext();
     }
-    bool GhidraRuntimeInstaller::report(const QString& stage, const int percent)
+    bool UpstreamAssetInstaller::report(const QString& stage, const int percent)
     {
-        const QPointer<GhidraRuntimeInstaller> self(this);
+        const QPointer<UpstreamAssetInstaller> self(this);
         const auto generation = m_operationGeneration;
         const auto progress = m_progress;
         if (m_active && progress) progress(stage, std::clamp(percent, 0, 100));
         return self && m_active && generation == m_operationGeneration;
     }
-    bool GhidraRuntimeInstaller::trustedRedirect(const QUrl& url) const
+    bool UpstreamAssetInstaller::trustedRedirect(const QUrl& url) const
     {
         if (m_allowLocalTestAssets && url.isLocalFile()) return true;
-        if (!url.isValid() || url.scheme() != QStringLiteral("https") ||
-            !url.userInfo().isEmpty() || (url.port(-1) != -1 && url.port() != 443)) return false;
-        const auto host = url.host().toLower();
-        return host == QStringLiteral("github.com") || host == QStringLiteral("release-assets.githubusercontent.com") ||
-            host == QStringLiteral("objects.githubusercontent.com");
+        // 初始 URL 在计划解析时绑定仓库；后续只允许该 URL 或 GitHub 的 Release CDN。
+        return approvedUpstreamRedirect(url, m_assets[m_assetIndex].url);
     }
-    void GhidraRuntimeInstaller::downloadNext()
+    void UpstreamAssetInstaller::downloadNext()
     {
         if (!m_active) return;
         if (m_assetIndex >= m_assets.size())
         {
             QString error;
-            if (!report(text(QStringLiteral("正在验证 Ghidra 与 Java 运行环境")), 95)) return;
-            if (!ghidra_runtime::writePackageMetadata(m_stage, &error) ||
-                !ghidra_runtime::validateDirectory(m_stage, &error))
+            if (!report(text(QStringLiteral("正在验证上游插件清单和完整文件")), 95)) return;
+            // 所有资源验哈希后才写生成清单；使用 NewOnly 拒绝载荷预埋同名文件。
+            const auto writeJson = [this](const QString& name, const QJsonObject& object) {
+                QFile file(QDir(m_stage).filePath(name));
+                const auto bytes = QJsonDocument(object).toJson();
+                return file.open(QIODevice::WriteOnly | QIODevice::NewOnly) &&
+                    file.write(bytes) == bytes.size() && file.flush();
+            };
+            if (!writeJson(QStringLiteral("plugin.json"), m_plan.manifest) ||
+                !writeJson(QStringLiteral("upstream-install.json"), m_plan.description) ||
+                !m_validator(m_stage, &error))
             {
-                finish(false, error);
+                finish(false, error.isEmpty() ? text(QStringLiteral("上游插件清单或运行环境验证失败。")) : error);
                 return;
             }
             finish(true, {});
             return;
         }
         const auto& asset = m_assets[m_assetIndex];
-        if (!trustedRedirect(asset.url) || asset.sha256.size() != 64 || asset.maxArchiveBytes <= 0)
+        if (!trustedRedirect(asset.url) || !validUpstreamSha256(asset.sha256) || asset.maxArchiveBytes <= 0)
         {
-            finish(false, text(QStringLiteral("Ghidra 官方下载配置不合法。")));
+            finish(false, text(QStringLiteral("上游插件下载配置不合法。")));
             return;
         }
         m_archivePath = QDir(m_stage).filePath(QStringLiteral(".archives/download-%1.zip").arg(m_assetIndex));
@@ -210,15 +231,15 @@ try {
         m_received = 0;
         m_redirectCount = 0;
         m_downloadError.clear();
-        if (!report(text(QStringLiteral("正在下载 %1")).arg(asset.name), m_assetIndex * 45)) return;
+        if (!report(text(QStringLiteral("正在下载 %1")).arg(asset.name), m_assetIndex * 90 / m_assets.size())) return;
         openDownload(asset.url);
     }
-    void GhidraRuntimeInstaller::openDownload(const QUrl& url)
+    void UpstreamAssetInstaller::openDownload(const QUrl& url)
     {
         QNetworkRequest request(url);
         request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::ManualRedirectPolicy);
         request.setTransferTimeout(60000);
-        request.setHeader(QNetworkRequest::UserAgentHeader, QStringLiteral("KSword-GhidraRuntime/1"));
+        request.setHeader(QNetworkRequest::UserAgentHeader, QStringLiteral("KSword-UpstreamAssets/1"));
         m_reply = m_network->get(request);
         auto* reply = m_reply.data();
         reply->setReadBufferSize(256 * 1024);
@@ -235,7 +256,7 @@ try {
             }
             const int part = total > 0 ? static_cast<int>(std::min<qint64>(35, received * 35 / total)) : 0;
             report(text(QStringLiteral("正在下载 %1（%2 MiB）")).arg(m_assets[m_assetIndex].name)
-                .arg(received / (1024.0 * 1024.0), 0, 'f', 1), m_assetIndex * 45 + part);
+                .arg(received / (1024.0 * 1024.0), 0, 'f', 1), (m_assetIndex * 90 + part * 2) / m_assets.size());
         });
         connect(reply, &QNetworkReply::finished, this, [this, reply]() {
             if (!m_active || reply != m_reply) return;
@@ -253,7 +274,7 @@ try {
                 openDownload(target);
                 return;
             }
-            const QPointer<GhidraRuntimeInstaller> self(this);
+            const QPointer<UpstreamAssetInstaller> self(this);
             consumeReply();
             if (!self || !m_active || reply != m_reply) return;
             const bool ok = m_downloadError.isEmpty() && reply->error() == QNetworkReply::NoError;
@@ -262,7 +283,7 @@ try {
             m_reply.clear();
             if (!ok || m_received == 0)
             {
-                finish(false, text(QStringLiteral("Ghidra 运行环境下载失败：%1")).arg(error));
+                finish(false, text(QStringLiteral("上游插件资源下载失败：%1")).arg(error));
                 return;
             }
             const auto digest = QString::fromLatin1(m_digest->result().toHex());
@@ -281,7 +302,7 @@ try {
             extractArchive();
         });
     }
-    void GhidraRuntimeInstaller::consumeReply()
+    void UpstreamAssetInstaller::consumeReply()
     {
         if (!m_reply || !m_archive || !m_downloadError.isEmpty()) return;
         // Redirect response bodies are not part of the pinned ZIP digest.
@@ -310,14 +331,27 @@ try {
             m_received += bytes.size();
         }
     }
-    void GhidraRuntimeInstaller::extractArchive()
+    void UpstreamAssetInstaller::extractArchive()
     {
+        // 元数据资源不交给解压器，校验后的文件原子移动到计划声明的落点。
+        if (m_assetIndex >= m_plan.assets.size())
+        {
+            const auto target = QDir(m_stage).filePath(m_assets[m_assetIndex].destinationDirectory);
+            if (!QDir().mkpath(QFileInfo(target).absolutePath()) || !QFile::rename(m_archivePath, target))
+            {
+                finish(false, text(QStringLiteral("无法保存已验证的上游插件元数据。")));
+                return;
+            }
+            ++m_assetIndex;
+            downloadNext();
+            return;
+        }
         auto powerShell = QStandardPaths::findExecutable(QStringLiteral("pwsh.exe"));
         if (powerShell.isEmpty()) powerShell = QStandardPaths::findExecutable(QStringLiteral("powershell.exe"));
-        if (powerShell.isEmpty()) { finish(false, text(QStringLiteral("未找到 PowerShell，无法解压 Ghidra 运行环境。"))); return; }
+        if (powerShell.isEmpty()) { finish(false, text(QStringLiteral("未找到 PowerShell，无法解压上游插件。"))); return; }
         const auto destination = QDir(m_stage).filePath(m_assets[m_assetIndex].destinationDirectory);
         if (!QDir().mkpath(destination)) { finish(false, text(QStringLiteral("无法创建运行环境解压目录。"))); return; }
-        if (!report(text(QStringLiteral("正在安全解压 %1")).arg(m_assets[m_assetIndex].name), m_assetIndex * 45 + 38)) return;
+        if (!report(text(QStringLiteral("正在安全解压 %1")).arg(m_assets[m_assetIndex].name), (m_assetIndex * 90 + 76) / m_assets.size())) return;
         auto* process = new QProcess(this);
         m_extractor = process;
         process->setProgram(powerShell);
@@ -349,7 +383,7 @@ try {
             });
         process->start();
     }
-    void GhidraRuntimeInstaller::stopOperations()
+    void UpstreamAssetInstaller::stopOperations()
     {
         m_deadline->stop();
         if (m_reply)
@@ -370,18 +404,18 @@ try {
         m_archive.reset();
         m_digest.reset();
     }
-    void GhidraRuntimeInstaller::cleanupStage()
+    void UpstreamAssetInstaller::cleanupStage()
     {
         if (m_stage.isEmpty() || m_pluginRoot.isEmpty()) return;
         const auto root = QFileInfo(m_pluginRoot).canonicalFilePath();
         const auto stage = QFileInfo(m_stage).canonicalFilePath();
         const auto prefix = QDir::cleanPath(root) + QLatin1Char('/');
         if (!root.isEmpty() && !stage.isEmpty() && stage.startsWith(prefix, Qt::CaseInsensitive) &&
-            QFileInfo(m_stage).fileName().startsWith(QStringLiteral(".ksword-plugin-stage-ghidra-")) &&
+            QFileInfo(m_stage).fileName().startsWith(QStringLiteral(".ksword-plugin-stage-%1-").arg(m_plan.id)) &&
             !QFileInfo(m_stage).isSymLink()) QDir(stage).removeRecursively();
         m_stage.clear();
     }
-    void GhidraRuntimeInstaller::finish(const bool success, const QString& error)
+    void UpstreamAssetInstaller::finish(const bool success, const QString& error)
     {
         if (!m_active) return;
         m_active = false;
@@ -397,8 +431,8 @@ try {
         else { cleanupStage(); m_installLock.reset(); }
         if (completion) completion(success, preparedStage, error);
     }
-    void GhidraRuntimeInstaller::cancel()
+    void UpstreamAssetInstaller::cancel()
     {
-        if (m_active) finish(false, text(QStringLiteral("Ghidra 插件安装已取消。")));
+        if (m_active) finish(false, text(QStringLiteral("上游插件安装已取消。")));
     }
 }

@@ -18,9 +18,11 @@ namespace ks::plugin_host::ghidra_runtime
         qint64 maxArchiveBytes = 0;
     };
 
-    // Fixed upstream assets, never latest-version or catalog-controlled URLs.
+    // 离线构包的参考配置；生产下载使用市场的 upstream-assets 分发计划。
     QList<RuntimeAsset> assets();
     QJsonObject manifest();
+    // 读取已安装目录内的清单；调用方先通过 validateDirectory 验证该目录。
+    QJsonObject installedManifest(const QString& pluginDirectory);
     QJsonObject assetDescription();
     QByteArray licenseText();
     QByteArray noticeText();
