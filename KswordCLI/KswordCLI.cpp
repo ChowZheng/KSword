@@ -1671,7 +1671,7 @@ namespace
     {
         if (rc == 3 && isUnsupportedTransportError(io.win32Error))
         {
-            std::wcout << L"unsupported / unavailable: " << feature
+            std::wcerr << L"unsupported / unavailable: " << feature
                        << L" (driver does not expose this read-only IOCTL)\n";
             return 5;
         }
@@ -1684,7 +1684,7 @@ namespace
     // Returns: non-zero CLI status to let scripts detect degraded support.
     int commandUnsupported(const wchar_t* feature, const wchar_t* reason)
     {
-        std::wcout << L"unsupported / unavailable: " << feature
+        std::wcerr << L"unsupported / unavailable: " << feature
                    << L" (" << reason << L")\n";
         return 5;
     }

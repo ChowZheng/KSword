@@ -137,6 +137,13 @@ def main():
                 result = subprocess.run([str(binary), "driver", alias], capture_output=True)
                 assert result.returncode == 5 and ("alias: driver " + alias + " -> driver device").encode() in result.stdout
                 assert ("unsupported / unavailable: driver " + alias).encode() in result.stdout + result.stderr
+            for command in ["driver integrity", "kernel cid", "driver major", "kernel ipc"]:
+                result = subprocess.run([str(binary), *command.split()], capture_output=True)
+                # Fixed-response failures can have only the cause; when an audit
+                # conclusion is emitted, both lines must stay ordered on stderr.
+                if b"unsupported / unavailable:" in result.stderr:
+                    assert result.stderr.index(b"error:") < result.stderr.index(b"unsupported / unavailable:")
+                    assert b"unsupported / unavailable:" not in result.stdout
             print("CLI regression: log default/0/1/2/100 passed (real CRT UTF-8 redirection)")
 
 
