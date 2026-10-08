@@ -205,6 +205,20 @@ class FailureReleaseTests(unittest.TestCase):
             self.publish(gh, Path(directory))
         self.assertFalse(gh.calls)
 
+    def test_interrupted_upload_draft_is_published_after_retry_upload(self):
+        gh = FakeGh()
+        gh.releases = [{"tag_name": f"ci-build-{SHA[:8]}-10-2", "name": "[CI Build] fixture",
+                        "prerelease": True, "draft": True, "target_commitish": SHA,
+                        "html_url": "https://github.com/existing-draft"}]
+        with tempfile.TemporaryDirectory() as directory:
+            self.publish(gh, Path(directory))
+        upload_index = next(i for i, c in enumerate(gh.calls) if c[:2] == ("release", "upload"))
+        edit_index = next(i for i, c in enumerate(gh.calls) if c[:2] == ("release", "edit"))
+        self.assertLess(upload_index, edit_index)
+        self.assertIn("--draft=false", gh.calls[edit_index])
+        self.assertIn("--latest=false", gh.calls[edit_index])
+        self.assertFalse(any(c[:2] == ("release", "delete") for c in gh.calls))
+
     def test_error_excerpt_bounds_and_escapes_fences(self):
         text = "\n".join("error C4996: ```" + "a" * 2000 for _ in range(30))
         excerpt = release.error_excerpt(text)

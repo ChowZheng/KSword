@@ -212,8 +212,9 @@ def publish(gh: Gh, repo: str, sha: str, run_id: str, attempt: str, root: Path,
     if existing:
         if not existing.get("prerelease") or not existing.get("name", "").startswith("[CI Build] ") or existing.get("target_commitish") != sha:
             raise RuntimeError("Existing release does not match this automatic CI release")
-        gh.call("release", "edit", tag, "--repo", repo, "--title", title, "--notes-file", str(notes_path), "--prerelease")
         gh.call("release", "upload", tag, *(str(p) for p in assets), "--repo", repo, "--clobber")
+        gh.call("release", "edit", tag, "--repo", repo, "--title", title, "--notes-file", str(notes_path),
+                "--prerelease", "--draft=false", "--latest=false")
         url = existing["html_url"]
     else:
         url = gh.call("release", "create", tag, *(str(p) for p in assets), "--repo", repo,
