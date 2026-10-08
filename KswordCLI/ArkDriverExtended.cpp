@@ -64,7 +64,9 @@ namespace
         const std::wstring value = optionValue(args, key);
         if (value.empty())
         {
-            throw std::runtime_error("missing required r0 command option");
+            std::string keyText;
+            for (const wchar_t* cursor = key; *cursor; ++cursor) keyText.push_back(static_cast<char>(*cursor));
+            throw std::invalid_argument("missing required option " + keyText);
         }
         return value;
     }
@@ -157,9 +159,12 @@ namespace
     {
         std::wcout << label << L": io_ok=" << (result.io.ok ? L"true" : L"false")
                    << L" bytes_returned=" << result.io.bytesReturned
-                   << L" win32_error=" << result.io.win32Error
-                   << L" nt_status=0x" << std::hex << static_cast<std::uint32_t>(result.io.ntStatus)
-                   << std::dec << L"\n";
+                   << L" win32_error=" << result.io.win32Error;
+        // A failed Win32 transport with the default zero has no returned
+        // NTSTATUS. Preserve nonzero statuses supplied by response parsers.
+        if (!result.io.ok && result.io.ntStatus == 0) std::wcout << L" nt_status=n/a";
+        else std::wcout << L" nt_status=0x" << std::hex << static_cast<std::uint32_t>(result.io.ntStatus) << std::dec;
+        std::wcout << L"\n";
         if constexpr (HasUnsupported<Result>::value)
         {
             std::wcout << L"unsupported=" << (result.unsupported ? L"true" : L"false") << L"\n";
@@ -172,6 +177,10 @@ namespace
         {
             std::wcout << L"detail=" << utf8ToWide(result.io.message) << L"\n";
         }
+        if (!result.io.ok && (result.io.deviceOpenFailed || result.io.message.rfind("CreateFileW", 0U) == 0U) &&
+            (result.io.win32Error == ERROR_FILE_NOT_FOUND || result.io.win32Error == ERROR_PATH_NOT_FOUND))
+            std::wcerr << L"hint: run 'sc start KswordARK' for an installed service, "
+                       << L"or run Launcher.exe / Ksword5.1.exe as administrator to load the driver.\n";
         return result.io.ok;
     }
 
@@ -363,7 +372,16 @@ namespace
     template <typename Result>
     int finishResult(const wchar_t* label, const Result& result)
     {
-        return printResultState(label, result) ? 0 : 3;
+        if (printResultState(label, result)) return 0;
+        if (result.io.deviceOpenFailed || result.io.message.rfind("CreateFileW", 0U) == 0U) return 2;
+        const auto error = result.io.win32Error;
+        if (error == ERROR_INVALID_FUNCTION || error == ERROR_NOT_SUPPORTED ||
+            error == ERROR_CALL_NOT_IMPLEMENTED || error == ERROR_PROC_NOT_FOUND) return 5;
+        if constexpr (HasUnsupported<Result>::value)
+        {
+            if (result.unsupported) return 5;
+        }
+        return 3;
     }
 }
 

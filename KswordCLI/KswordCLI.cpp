@@ -76,6 +76,8 @@ namespace
     constexpr std::size_t kHugeResponseBytes = 4U * 1024U * 1024U;
     constexpr std::size_t kMaxCommandBytes = 64U * 1024U * 1024U;
     constexpr std::size_t kMaxHexBytes = 256U;
+    DWORD lastIoctlError = ERROR_SUCCESS;
+    DWORD lastOpenError = ERROR_SUCCESS;
 
     // IoctlResult mirrors the Win32 DeviceIoControl completion state.
     // Inputs: fields are assigned by sendIoctl after each kernel request.
@@ -186,6 +188,13 @@ namespace
     {
         std::wcerr << L"error: " << operation << L" failed, win32=" << error
                    << L" (0x" << std::hex << error << std::dec << L")\n";
+        if ((error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND) &&
+            std::wcsstr(operation, L"CreateFileW(") == operation)
+            std::wcerr << L"hint: run 'sc start KswordARK' for an installed service, "
+                       << L"or run Launcher.exe / Ksword5.1.exe as administrator to load the driver.\n";
+        // Some callers retain GetLastError after diagnostics; stream writes
+        // must not replace the original failed operation's error.
+        ::SetLastError(error);
     }
 
     // openDriver opens the shared KswordARK control/log device.
@@ -194,7 +203,7 @@ namespace
     // Returns: RAII DriverHandle; caller checks valid() before issuing requests.
     DriverHandle openDriver(DWORD desiredAccess = kDefaultDesiredAccess)
     {
-        return DriverHandle(::CreateFileW(
+        DriverHandle handle(::CreateFileW(
             KSWORD_ARK_LOG_WIN32_PATH,
             desiredAccess,
             kDefaultShareMode,
@@ -202,6 +211,8 @@ namespace
             OPEN_EXISTING,
             FILE_ATTRIBUTE_NORMAL,
             nullptr));
+        lastOpenError = handle.valid() ? ERROR_SUCCESS : ::GetLastError();
+        return handle;
     }
 
     // sendIoctl wraps synchronous DeviceIoControl for fixed and variable buffers.
@@ -236,6 +247,7 @@ namespace
             nullptr);
         result.ok = (ok != FALSE);
         result.win32Error = result.ok ? ERROR_SUCCESS : ::GetLastError();
+        lastIoctlError = result.win32Error;
         result.bytesReturned = bytesReturned;
         return result;
     }
@@ -319,10 +331,14 @@ namespace
     const std::wstring& requireOptionText(const NamedArgs& args, const wchar_t* key)
     {
         const std::wstring* value = getOptionText(args, key);
+        std::string keyText;
+        for (const wchar_t* cursor = key; *cursor; ++cursor) keyText.push_back(static_cast<char>(*cursor));
         if (value == nullptr)
         {
-            throw std::invalid_argument("missing option");
+            throw std::invalid_argument("missing option " + keyText);
         }
+        if (value->empty())
+            throw std::invalid_argument("missing value for option " + keyText);
         return *value;
     }
 
@@ -1149,7 +1165,7 @@ namespace
     };
 
     constexpr CommandHelp kCommandHelps[] = {
-        { L"log", L"", L"KswordCLI.exe log [--max-frames N]", L"Read up to N log frames from the shared log device.", L"--max-frames defaults to 64.", L"No subcommand is used for the log family." },
+        { L"log", L"", L"KswordCLI.exe log [--max-frames N]", L"Read up to N log frames from the shared log device.", L"--max-frames defaults to 64.", L"No subcommand is used for the log family. Output is UTF-8; legacy log bytes use the system ANSI code page." },
         { L"process", L"terminate", L"KswordCLI.exe process terminate --pid PID [--exit-status NTSTATUS]", L"Terminate one process through the driver.", L"Required: --pid. Optional: --exit-status defaults to 0xC000013A.", L"" },
         { L"process", L"suspend", L"KswordCLI.exe process suspend --pid PID", L"Suspend one process.", L"Required: --pid.", L"" },
         { L"process", L"resume", L"KswordCLI.exe process resume --pid PID", L"Resume one suspended process.", L"Required: --pid.", L"Pairs with process suspend; the driver prefers PsResumeProcess and falls back to Zw/NtResumeProcess." },
@@ -1231,7 +1247,7 @@ namespace
         { L"dyn", L"apply-profile-v4", L"KswordCLI.exe dyn apply-profile-v4 --blob PATH", L"Apply a raw v4 DynData profile packet.", L"Required: --blob.", L"" },
         { L"dyn", L"apply-profile", L"KswordCLI.exe dyn apply-profile --blob PATH", L"Apply a raw legacy DynData profile packet.", L"Required: --blob.", L"" },
         { L"dyn", L"apply-profile-ex", L"KswordCLI.exe dyn apply-profile-ex --blob PATH", L"Apply a raw extended DynData profile packet.", L"Required: --blob.", L"" },
-        { L"capability", L"query-driver-capabilities", L"KswordCLI.exe capability query-driver-capabilities [--limit N]", L"Query unified driver feature capability rows.", L"Optional: --limit.", L"" },
+        { L"capability", L"query-driver-capabilities", L"KswordCLI.exe capability query-driver-capabilities [--limit N]", L"Query unified driver feature capability rows.", L"Optional: --limit.", L"If unsupported, inspect preflight query and r0 ioctl-registry; older drivers may reject the OS build before capability dispatch." },
         { L"thread", L"enum", L"KswordCLI.exe thread enum [--flags 0xN] [--pid PID] [--limit N]", L"Enumerate threads.", L"Optional: --flags, --pid, --limit.", L"" },
         { L"thread", L"crossview", L"KswordCLI.exe thread crossview [--flags 0xN] [--pid PID] [--start-tid TID] [--end-tid TID] [--max-nodes N] [--limit N]", L"Compare thread evidence across supported sources.", L"Optional: --flags, --pid, --start-tid, --end-tid, --max-nodes, --limit.", L"" },
         { L"thread", L"detail", L"KswordCLI.exe thread detail --tid TID [--pid PID] [--flags 0xN]", L"Query fixed R0 ETHREAD/KTHREAD runtime detail.", L"Required: --tid. Optional: --pid, --flags defaults to include-all.", L"Backed by IOCTL_KSWORD_ARK_QUERY_THREAD_DETAIL." },
@@ -1306,8 +1322,8 @@ namespace
         { L"driver", L"integrity", L"KswordCLI.exe driver integrity [--driver NAME] [--module-base VA] [--flags 0xN] [--max-rows N] [--max-idt-vectors N] [--max-devices N] [--max-attached N] [--limit N]", L"Query driver integrity evidence.", L"Optional: --driver, --module-base, --flags, --max-rows, --max-idt-vectors, --max-devices, --max-attached, --limit.", L"" },
         { L"driver", L"detail", L"KswordCLI.exe driver detail --driver NAME [--flags 0xN] [--max-devices N] [--max-attached N] [--limit N]", L"Query one DriverObject detail projection.", L"Required: --driver. Optional: --flags, --max-devices, --max-attached, --limit.", L"" },
         { L"driver", L"device", L"KswordCLI.exe driver device [--profile-flags 0xN] [--max-rows N] [--max-attached N] [--target NAME] [--limit N]", L"Query driver device stack audit rows.", L"Optional: --profile-flags, --max-rows, --max-attached, --target, --limit.", L"Aliases: driver major, driver fastio." },
-        { L"driver", L"major", L"KswordCLI.exe driver major [--profile-flags 0xN] [--max-rows N] [--max-attached N] [--target NAME] [--limit N]", L"Alias for driver device audit rows.", L"Optional: --profile-flags, --max-rows, --max-attached, --target, --limit.", L"Alias: driver device." },
-        { L"driver", L"fastio", L"KswordCLI.exe driver fastio [--profile-flags 0xN] [--max-rows N] [--max-attached N] [--target NAME] [--limit N]", L"Alias for driver device audit rows.", L"Optional: --profile-flags, --max-rows, --max-attached, --target, --limit.", L"Alias: driver device." },
+        { L"driver", L"major", L"KswordCLI.exe driver major [--profile-flags 0xN] [--max-rows N] [--max-attached N] [--target NAME] [--limit N]", L"Alias for driver device audit rows.", L"Optional: --profile-flags, --max-rows, --max-attached, --target, --limit.", L"Alias: driver device. Prints the alias mapping; diagnostics retain driver major." },
+        { L"driver", L"fastio", L"KswordCLI.exe driver fastio [--profile-flags 0xN] [--max-rows N] [--max-attached N] [--target NAME] [--limit N]", L"Alias for driver device audit rows.", L"Optional: --profile-flags, --max-rows, --max-attached, --target, --limit.", L"Alias: driver device. Prints the alias mapping; diagnostics retain driver fastio." },
         { L"driver", L"unloaded", L"KswordCLI.exe driver unloaded [--flags 0xN] [--max-rows N] [--max-idt-vectors N] [--max-devices N] [--max-attached N] [--module-base VA] [--limit N]", L"Project MmUnloadedDrivers optional-global evidence.", L"Optional: --flags, --max-rows, --max-idt-vectors, --max-devices, --max-attached, --module-base, --limit.", L"" },
         { L"driver", L"piddb", L"KswordCLI.exe driver piddb [--flags 0xN] [--max-rows N] [--max-idt-vectors N] [--max-devices N] [--max-attached N] [--module-base VA] [--limit N]", L"Project PiDDBCacheTable optional-global evidence.", L"Optional: --flags, --max-rows, --max-idt-vectors, --max-devices, --max-attached, --module-base, --limit.", L"" },
         { L"hardware", L"audit", L"KswordCLI.exe hardware audit [--profile-flags 0xN] [--max-rows N] [--max-attached N] [--target NAME] [--limit N]", L"Query generic hardware device stack audit rows.", L"Optional: --profile-flags, --max-rows, --max-attached, --target, --limit.", L"Alias: hardware pnp." },
@@ -1375,6 +1391,37 @@ namespace
         return nullptr;
     }
 
+    // Use the same syntax metadata as help to reject misspelled switches before
+    // handlers inspect required values or issue an IOCTL.
+    void validateCommandOptions(const std::wstring& family, const std::wstring& subcommand,
+        int argc, wchar_t* argv[], int startIndex)
+    {
+        for (const CommandHelp& command : kCommandHelps)
+        {
+            if (family != command.family || subcommand != command.subcommand) continue;
+            std::set<std::wstring> allowed;
+            const std::wstring syntax = command.syntax;
+            for (std::size_t offset = 0; (offset = syntax.find(L"--", offset)) != std::wstring::npos;)
+            {
+                std::size_t end = offset + 2;
+                while (end < syntax.size() && (std::iswalnum(syntax[end]) || syntax[end] == L'-')) ++end;
+                allowed.insert(syntax.substr(offset, end - offset));
+                offset = end;
+            }
+            const NamedArgs args = parseNamedArgs(argc, argv, startIndex);
+            for (const auto& option : args.options)
+            {
+                if (allowed.find(option.first) != allowed.end()) continue;
+                std::string key;
+                for (const wchar_t ch : option.first) key.push_back(static_cast<char>(ch));
+                std::string message = "unknown option " + key;
+                if (option.first == L"--name" && allowed.count(L"--driver")) message += " (use --driver)";
+                throw std::invalid_argument(message);
+            }
+            return;
+        }
+    }
+
     // printCommandHelpEntry renders detailed help for one command row.
     // Inputs: static CommandHelp metadata.
     // Processing: writes syntax, summary, options, and optional notes to stdout.
@@ -1421,6 +1468,9 @@ namespace
             {
                 std::wcout << L"  " << command.syntax << L"\n"
                            << L"    " << command.summary << L"\n";
+                const std::wstring options = command.options;
+                if (options.find(L"Required:") != std::wstring::npos || options.find(L"必填") != std::wstring::npos)
+                    std::wcout << L"    " << command.options << L"\n";
             }
         }
         return true;
@@ -1621,7 +1671,7 @@ namespace
     {
         if (rc == 3 && isUnsupportedTransportError(io.win32Error))
         {
-            std::wcout << L"unsupported / unavailable: " << feature
+            std::wcerr << L"unsupported / unavailable: " << feature
                        << L" (driver does not expose this read-only IOCTL)\n";
             return 5;
         }
@@ -1634,7 +1684,7 @@ namespace
     // Returns: non-zero CLI status to let scripts detect degraded support.
     int commandUnsupported(const wchar_t* feature, const wchar_t* reason)
     {
-        std::wcout << L"unsupported / unavailable: " << feature
+        std::wcerr << L"unsupported / unavailable: " << feature
                    << L" (" << reason << L")\n";
         return 5;
     }
@@ -1813,6 +1863,27 @@ namespace
         return 0;
     }
 
+    // The CRT rejects narrow writes on stdout after configureConsole selects
+    // _O_U8TEXT. Decode each byte frame before sending it to the wide stream.
+    std::wstring logTextToWide(const std::string& text)
+    {
+        if (text.empty()) return {};
+        UINT codePage = CP_UTF8;
+        DWORD flags = MB_ERR_INVALID_CHARS;
+        int count = ::MultiByteToWideChar(codePage, flags, text.data(), static_cast<int>(text.size()), nullptr, 0);
+        if (count == 0)
+        {
+            codePage = CP_ACP;
+            flags = 0;
+            count = ::MultiByteToWideChar(codePage, flags, text.data(), static_cast<int>(text.size()), nullptr, 0);
+        }
+        if (count == 0) throw std::runtime_error("cannot decode log frame");
+        std::wstring wide(static_cast<std::size_t>(count), L'\0');
+        if (::MultiByteToWideChar(codePage, flags, text.data(), static_cast<int>(text.size()), wide.data(), count) == 0)
+            throw std::runtime_error("cannot decode log frame");
+        return wide;
+    }
+
     // commandLogFamily reads the non-IOCTL log ReadFile channel.
     // Inputs: argc/argv from wmain.
     // Processing: reads bounded frames until END_OF_LOG or --max-frames.
@@ -1842,10 +1913,10 @@ namespace
             if (marker != std::string::npos)
             {
                 text.resize(marker);
-                std::cout << text;
+                std::wcout << logTextToWide(text);
                 break;
             }
-            std::cout << text;
+            std::wcout << logTextToWide(text);
         }
         return 0;
     }
@@ -6005,7 +6076,16 @@ namespace
         IoctlResult io{};
         std::vector<std::uint8_t> buffer(kSmallResponseBytes, 0U);
         const int rc = sendRawIoctl(L"IOCTL_KSWORD_ARK_QUERY_DRIVER_CAPABILITIES", IOCTL_KSWORD_ARK_QUERY_DRIVER_CAPABILITIES, nullptr, 0U, buffer, io);
-        if (rc != 0) return rc;
+        if (rc != 0)
+        {
+            if (isUnsupportedTransportError(io.win32Error))
+            {
+                std::wcerr << L"hint: run 'KswordCLI.exe preflight query' and 'KswordCLI.exe r0 ioctl-registry'. "
+                           << L"Older drivers may reject a newer OS build before capability dispatch; "
+                           << L"verify the loaded service image and use a matching current release.\n";
+            }
+            return rc;
+        }
         constexpr std::size_t headerSize = sizeof(KSWORD_ARK_QUERY_DRIVER_CAPABILITIES_RESPONSE) - sizeof(KSWORD_ARK_FEATURE_CAPABILITY_ENTRY);
         const auto* response = reinterpret_cast<const KSWORD_ARK_QUERY_DRIVER_CAPABILITIES_RESPONSE*>(buffer.data());
         std::size_t available = 0U;
@@ -7166,7 +7246,9 @@ namespace
         }
         if (sub == L"device" || sub == L"major" || sub == L"fastio")
         {
-            return queryDeviceAudit(args, IOCTL_KSWORD_ARK_QUERY_DEVICE_STACK_AUDIT, KSWORD_ARK_DEVICE_AUDIT_PROFILE_DEVICE_STACK, L"IOCTL_KSWORD_ARK_QUERY_DEVICE_STACK_AUDIT", L"driver device");
+            const std::wstring label = L"driver " + sub;
+            if (sub != L"device") std::wcout << L"alias: " << label << L" -> driver device\n";
+            return queryDeviceAudit(args, IOCTL_KSWORD_ARK_QUERY_DEVICE_STACK_AUDIT, KSWORD_ARK_DEVICE_AUDIT_PROFILE_DEVICE_STACK, L"IOCTL_KSWORD_ARK_QUERY_DEVICE_STACK_AUDIT", label.c_str());
         }
         if (sub == L"unloaded")
         {
@@ -8394,6 +8476,8 @@ namespace
         {
             return printSpecificCommandHelp(family, argv[2]) ? 0 : 1;
         }
+        validateCommandOptions(family, family == L"log" || argc < 3 ? L"" : argv[2],
+            argc, argv, family == L"log" ? 2 : 3);
         if (family == L"log") return commandLogFamily(argc, argv);
         if (family == L"process") return commandProcessFamily(argc, argv);
         if (family == L"memory") return commandMemoryFamily(argc, argv);
@@ -8468,7 +8552,27 @@ int wmain(int argc, wchar_t* argv[])
     configureConsole();
     try
     {
-        return dispatchCommand(argc, argv);
+        const int rc = dispatchCommand(argc, argv);
+        // Fixed-response handlers return 3 on transport failure; audit handlers
+        // already return 5 for an unsupported IOCTL. Keep both paths consistent.
+        if (rc == 3 && lastOpenError != ERROR_SUCCESS) return 2;
+        return rc == 3 && isUnsupportedTransportError(lastIoctlError) ? 5 : rc;
+    }
+    catch (const std::invalid_argument& ex)
+    {
+        const std::string message = ex.what();
+        std::wcerr << L"error: " << std::wstring(message.begin(), message.end()) << L"\n";
+        const std::wstring family = argc > 1 ? argv[1] : L"";
+        const std::wstring subcommand = argc > 2 && family != L"log" ? argv[2] : L"";
+        for (const CommandHelp& command : kCommandHelps)
+        {
+            if (family == command.family && subcommand == command.subcommand)
+            {
+                std::wcerr << L"usage: " << command.syntax << L"\n" << command.options << L"\n";
+                break;
+            }
+        }
+        return 1;
     }
     catch (const std::exception& ex)
     {

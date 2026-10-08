@@ -128,7 +128,14 @@ namespace ks::ui
                 + std::min<std::uint64_t>(static_cast<std::uint64_t>(display.back().bytes.size()), UINT64_MAX - display.back().address);
             if (m_addressRange) note.address = std::min(note.address, m_addressRange->second);
             note.selectable = false;
-            note.tokens.push_back({display.isEmpty() ? m_status->text() : ks::i18n::sourceText(QStringLiteral("继续滚动以读取下一段")), note.address, 0, MemoryTokenRole::Comment});
+            const bool atRangeEnd = !display.isEmpty() && m_addressRange && display.back().selectable
+                && !display.back().bytes.isEmpty()
+                && display.back().address <= m_addressRange->second
+                && static_cast<std::uint64_t>(display.back().bytes.size() - 1)
+                    >= m_addressRange->second - display.back().address;
+            note.tokens.push_back({display.isEmpty() ? m_status->text()
+                : ks::i18n::sourceText(atRangeEnd ? QStringLiteral("超出已读取窗口")
+                    : QStringLiteral("继续滚动以读取下一段")), note.address, 0, MemoryTokenRole::Comment});
             display.push_back(note);
         }
         if (m_browseHistory.size() > 8192) m_browseHistory.erase(m_browseHistory.begin(), m_browseHistory.end() - 8192);

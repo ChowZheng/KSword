@@ -81,8 +81,65 @@ static int test_provenance(void)
     CHECK(shadow.FlushPending && !shadow.SourceProven[0] && shadow.SourceProven[1]);
     return 0;
 }
+static int test_group_reclaim(void)
+{
+    KSW_NMMU_RESULT mapping = {0};
+    unsigned i, source, target;
+    KSW_SVM_U64 rootEntry, pdptEntry, epoch;
+    memset(&shadow, 0, sizeof(shadow)); memset(tableWords, 0, sizeof(tableWords));
+    for (i = 0; i < 5; ++i) { pages[i].Words = tableWords[i]; pages[i].Physical = 0x100000 + 4096ULL * i; }
+    CHECK(KswSvmNestedShadowInitialize(&shadow, pages, 5, 45) == KSW_NSHADOW_OK);
+    mapping.Status = KSW_NNPT_OK; mapping.Inner.Complete = mapping.Outer.Complete = 1;
+    mapping.Inner.Permissions = mapping.Outer.Permissions = 7; mapping.Inner.Count = 1;
+    for (i = 0; i < 2; ++i) {
+        mapping.Epoch = shadow.Epoch; mapping.Gpa = mapping.Inner.InputAddress = 0x1000 + 0x200000ULL * i;
+        mapping.Inner.Address = mapping.Outer.InputAddress = mapping.Outer.Address = 0x3000 + 4096ULL * i;
+        mapping.Leaf = mapping.Inner.EntryValue[0] = (0x3000 + 4096ULL * i) | 0x67;
+        mapping.Inner.EntryAddress[0] = 0x7000 + 4096ULL * i;
+        CHECK(KswSvmNestedShadowInstall(&shadow, &mapping) == KSW_NSHADOW_OK);
+    }
+    CHECK(shadow.Used == 5 && shadow.SourceCount == 2);
+    rootEntry = tableWords[0][0]; pdptEntry = tableWords[1][0]; epoch = shadow.Epoch;
+    tableWords[2][0] |= 0x20;
+    mapping.Gpa = mapping.Inner.InputAddress = 0x401000;
+    CHECK(KswSvmNestedShadowInstall(&shadow, &mapping) == KSW_NSHADOW_FULL);
+    CHECK(shadow.Epoch == epoch && tableWords[2][2] == 0);
+    CHECK(KswSvmNestedShadowReclaim(&shadow, mapping.Gpa) == KSW_NSHADOW_OK);
+    CHECK(shadow.Epoch == epoch + 1 && shadow.FlushPending && shadow.Used == 5);
+    CHECK(tableWords[0][0] == rootEntry && tableWords[1][0] == pdptEntry);
+    CHECK(tableWords[3][1] == 0x3067 && tableWords[2][1] == 0);
+    CHECK(tableWords[2][2] == (pages[4].Physical | 7) && tableWords[4][1] == 0);
+    CHECK(shadow.SourceCount == 1 && shadow.SourceAddress[0] == 0x7000);
+    CHECK(KswSvmNestedShadowInstall(&shadow, &mapping) == KSW_NSHADOW_STALE);
+    mapping.Epoch = shadow.Epoch;
+    CHECK(KswSvmNestedShadowInstall(&shadow, &mapping) == KSW_NSHADOW_OK);
+    for (i = 0; i < KSW_NSHADOW_SOURCE_WORDS * 2U + 17U; ++i) {
+        for (target = 0; target < 3 && tableWords[2][target]; ++target) {}
+        CHECK(target < 3);
+        mapping.Gpa = mapping.Inner.InputAddress = 0x1000 + 0x200000ULL * target;
+        CHECK(KswSvmNestedShadowReclaim(&shadow, mapping.Gpa) == KSW_NSHADOW_OK);
+        mapping.Epoch = shadow.Epoch;
+        mapping.Inner.EntryAddress[0] = 0x10000 + 8ULL * i;
+        CHECK(KswSvmNestedShadowInstall(&shadow, &mapping) == KSW_NSHADOW_OK);
+        CHECK(shadow.Used == 5 && shadow.SourceCount <= 2 && !shadow.SourceUntracked);
+        for (source = 0; source < shadow.SourceCount; ++source) { CHECK(shadow.SourceId[source] < KSW_NSHADOW_SOURCE_WORDS); }
+    }
+    CHECK(tableWords[0][0] == rootEntry && tableWords[1][0] == pdptEntry);
+    epoch = shadow.Epoch; shadow.SourceUntracked = 1;
+    CHECK(KswSvmNestedShadowReclaim(&shadow, 0x601000) == KSW_NSHADOW_FULL && shadow.Epoch == epoch);
+    shadow.SourceUntracked = 0;
+    CHECK(KswSvmNestedShadowReclaim(&shadow, 0x40001000) == KSW_NSHADOW_FULL && shadow.Epoch == epoch);
+    CHECK(KswSvmNestedShadowReset(&shadow) == KSW_NSHADOW_OK && shadow.Used == 1 && !shadow.SourceCount);
+    for (i = 0; i < KSW_NSHADOW_SOURCE_WORDS / 64U; ++i) { CHECK(!shadow.SourceIdsUsed[i]); }
+    CHECK(KswSvmNestedShadowBudget(16384, 1282, 32, 256, 64, 256) == 26);
+    CHECK(KswSvmNestedShadowBudget(16384, 1282, 16, 256, 32, 256) == 32);
+    CHECK(KswSvmNestedShadowBudget(16384, 1282, 64, 256, 128, 256) == 0);
+    CHECK(KswSvmNestedShadowBudget(16384, 16385, 1, 256, 2, 256) == 0);
+    CHECK(KswSvmNestedShadowBudget(16384, 0, ~0U, 256, 2, 256) == 0);
+    return 0;
+}
 int main(void)
 {
-    if (test_accel() || test_provenance()) { return 1; }
+    if (test_accel() || test_provenance() || test_group_reclaim()) { return 1; }
     printf("SVM_ACCEL_CHECKS=%u RESULT=PASS (no hardware)\n", checks); return 0;
 }

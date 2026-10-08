@@ -1,4 +1,5 @@
 #include "MemoryConsumerEvidencePage.h"
+#include "PoolAllocationAnalysisWidget.h"
 #include "../../../shared/evidence/GpuMemoryEvidence.h"
 #include "../../../shared/evidence/PoolTraceCapturePolicy.h"
 #include "../Internationalization/LanguageManager.h"
@@ -6,6 +7,7 @@
 #include "../UI/TableInteractionSupport.h"
 #include <Windows.h>
 #include <QDateTime>
+#include <QTimeZone>
 #include <QEvent>
 #include <QFileDialog>
 #include <QFile>
@@ -21,6 +23,7 @@
 #include <QPushButton>
 #include <QSaveFile>
 #include <QSpinBox>
+#include <QTabWidget>
 #include <QTimer>
 #include <QTimeZone>
 #include <QTemporaryDir>
@@ -73,14 +76,27 @@ MemoryConsumerEvidencePage::MemoryConsumerEvidencePage(QWidget* parent) : QWidge
     controls->addWidget(m_duration); controls->addWidget(m_traceStop);
     controls->addStretch(); layout->addLayout(controls);
     m_note = new QLabel(this); m_note->setWordWrap(true); layout->addWidget(m_note);
-    m_gpuStatus = new QLabel(this); m_gpuStatus->setWordWrap(true); layout->addWidget(m_gpuStatus);
-    m_gpuTable = new ks::ui::VisibleTableWidget(this);
+    m_detailTabs = new QTabWidget(this);
+    m_detailTabs->setMinimumSize(0, 0);
+    m_detailTabs->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Ignored);
+    auto* gpuPage = new QWidget(m_detailTabs);
+    auto* gpuLayout = new QVBoxLayout(gpuPage);
+    m_gpuStatus = new QLabel(gpuPage); m_gpuStatus->setWordWrap(true); gpuLayout->addWidget(m_gpuStatus);
+    m_gpuTable = new ks::ui::VisibleTableWidget(gpuPage);
     m_gpuTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
     m_gpuTable->setAlternatingRowColors(true);
     m_gpuTable->horizontalHeader()->setStretchLastSection(true);
-    layout->addWidget(m_gpuTable, 1);
-    m_traceLog = new QPlainTextEdit(this); m_traceLog->setReadOnly(true);
-    m_traceLog->setMaximumBlockCount(300); layout->addWidget(m_traceLog, 1);
+    gpuLayout->addWidget(m_gpuTable, 1);
+    m_detailTabs->addTab(gpuPage, {});
+    m_poolAnalysis = new PoolAllocationAnalysisWidget(m_detailTabs);
+    m_poolAnalysis->setOpenModuleDetails([this](const QString& path) {
+        const auto handler = openModuleDetails;
+        if (handler) { handler(path); }
+    });
+    m_detailTabs->addTab(m_poolAnalysis, {});
+    m_traceLog = new QPlainTextEdit(m_detailTabs); m_traceLog->setReadOnly(true);
+    m_traceLog->setMaximumBlockCount(300); m_detailTabs->addTab(m_traceLog, {});
+    layout->addWidget(m_detailTabs, 1);
     m_captureTimer = new QTimer(this); m_captureTimer->setSingleShot(true);
     connect(m_captureTimer, &QTimer::timeout, this, [this] { stopTrace(); });
     m_commandTimer = new QTimer(this); m_commandTimer->setSingleShot(true);
@@ -145,6 +161,9 @@ void MemoryConsumerEvidencePage::retranslate()
 {
     m_gpuButton->setText(L("Collect GPU consumer evidence"));
     m_traceStart->setText(L("Capture pool allocation history"));
+    m_detailTabs->setTabText(0, L("GPU consumers"));
+    m_detailTabs->setTabText(1, L("Pool allocation analysis"));
+    m_detailTabs->setTabText(2, L("Recorder output"));
     m_duration->setSuffix(L(" s"));
     m_note->setText(L("GPU counters are a separate, fallible consumer view. Process sharing is not summed into physical RAM; dedicated metrics can include UMA. Pool tracing requests 32 MiB of circular buffers; actual ETW overhead and event loss remain separate evidence. Only the chosen interval is observed; older allocations and overwritten events are unavailable."));
     if (!m_gpuResult) { m_gpuStatus->setText(L("GPU consumer evidence has not been collected.")); }
@@ -337,7 +356,7 @@ void MemoryConsumerEvidencePage::traceFinished(int exitCode, bool normal)
         m_traceEvidence.insert(QStringLiteral("finished"), QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs));
         if (m_capture.saved) {
             m_traceEvidence.insert(QStringLiteral("bytes"), QString::number(output.size()));
-            m_traceLog->appendPlainText(L("Allocation trace saved. Inspect allocation stacks and event loss in WPA; the ETL is separate from the PFN ledger."));
+            m_traceLog->appendPlainText(L("Allocation trace saved. Pool analysis shows observed allocations and capture gaps separately from the PFN ledger."));
         } else { m_traceLog->appendPlainText(L("The recorder stopped, but a new nonempty ETL was not verified. The capture is not reported as saved.")); }
     } else if (action == Command::Stop && m_capture.mayOwnSession) {
         m_traceLog->appendPlainText(L("Stopping or saving failed; releasing only this recording instance."));
@@ -350,6 +369,10 @@ void MemoryConsumerEvidencePage::traceFinished(int exitCode, bool normal)
     if (action == Command::Cancel && m_capture.mayOwnSession) { m_traceLog->appendPlainText(L("Instance cleanup is unverified. Retry instance cleanup to release only this recording.")); }
     updateTraceControls();
     persistTrace();
+    if (action == Command::Stop && m_capture.saved) {
+        m_detailTabs->setCurrentWidget(m_poolAnalysis);
+        m_poolAnalysis->analyzeFile(m_output);
+    }
 }
 void MemoryConsumerEvidencePage::persistTrace()
 {

@@ -4,6 +4,8 @@
 
 ## Help 查询
 
+设备打开返回 `win32=2` 或 `3` 时会提示启动已安装的 `KswordARK` 服务（`sc start KswordARK`），或以管理员身份运行配套 `Launcher.exe` / `Ksword5.1.exe` 加载驱动；原始错误码保留。仅复制 CLI 文件并不自动安装驱动服务。
+
 ```powershell
 KswordCLI.exe help
 KswordCLI.exe help <family>
@@ -14,9 +16,23 @@ KswordCLI.exe <family> <subcommand> --help
 
 维护要求：每新增、删除或调整一个 `KswordCLI` 命令、别名或参数，必须同步更新 `KswordCLI.cpp` 内置 help 元数据和本文档。
 
+顶层 `help` 与 `help driver` 均列出 `integrity`、`detail`、`device`、`major`、`fastio`、`unloaded`、`piddb`；这些项由同一命令元数据生成。当前版本已包含此行为，回归测试同时核对两种帮助形式。
+
+命令族帮助会直接显示含必填项的参数说明，例如 `help handle` 中 `enum` 的 `Required: --pid`，与具体命令帮助使用同一条元数据。
+
 ## 参数约定
 
+`r0` 和 Callback Monitor 的 `nt_status=n/a` 表示传输失败且没有返回 NTSTATUS；它不代表内核执行成功。响应解析器取得的实际非零 NTSTATUS 仍按十六进制显示。
+
+IOCTL 失败的 `error:` 原因和其后的 `unsupported / unavailable:` 审计结论统一写入 stderr，保证合并重定向时先原因、后结论；成功数据继续写入 stdout。
+
+退出码沿用既有约定：`0` 成功，`1` 用法/参数错误，`2` 设备打开失败，`3` I/O 调用失败，`4` 响应格式错误，`5` 不支持或证据不可用。所有未支持的 IOCTL 传输错误（Win32 1/50/120/127）统一返回 `5`，包括固定响应、变长审计和 `r0`/Callback Monitor 命令。个别证据命令另以 `6` 表示扫描不完整，见该命令说明。
+
+若所有只读命令连同 `capability query-driver-capabilities` 都返回 `win32=50`，不能仅凭 IOCTL 名称判断驱动缺少实现。请运行 `preflight query` 和 `r0 ioctl-registry`，核对 `sc qc KswordARK` 的实际加载路径及配套版本。2026-10-01 的旧驱动会在 OS build 高于 26100 时拦截包括能力查询在内的请求；该上限已于 2026-10-03 移除，仍须使用匹配的内核 profile。
+
 - 数值参数支持十进制或 `0x` 前缀十六进制。
+- 缺少必填参数会指出参数名，例如 `missing option --pid`；有参数但无值会显示 `missing value for option --pid`。参数错误同时显示该命令的语法及内置 help 的参数说明。
+- 未知选项在发送请求前报 `unknown option --name`；`driver detail` 使用 `--driver`，不接受 `--name`。允许的选项与该命令的 help 语法一致。
 - `--flags 0xN` 是按位标志；具体含义以 `shared/driver/` 中对应协议头为准。
 - `--limit N` 只限制 CLI 打印行数；`--max-*` 通常控制传给驱动的查询预算。
 - `--hex`/`--*-hex` 接收十六进制字节串；`--data-file`/`--*-file` 从文件读取原始字节；同一 payload 的 hex 和 file 形式互斥。
@@ -60,6 +76,8 @@ KswordCLI.exe <family> <subcommand> --help
 ### `log`
 
 Read bounded frames from the KswordARK log device.
+
+日志与其他命令统一输出 UTF-8，可直接重定向到文件。日志帧先按 UTF-8 解码；旧版 ANSI 日志按系统代码页解码。默认最多读取 64 帧，`--max-frames 0` 不读取帧。
 
 | 命令 | 语法 | 用途 | 参数 | 备注 |
 | --- | --- | --- | --- | --- |
@@ -212,6 +230,8 @@ Enumerate process handles and inspect object metadata.
 | `handle type-matrix` | `KswordCLI.exe handle type-matrix --pid PID --handle HANDLE [--access 0xN] [--flags 0xN]` | Query one handle object type projection. | Required: --pid, --handle. Optional: --access, --flags. | Alias: handle query-object. |
 
 ### `driver`
+
+`major` 和 `fastio` 共用 `device` 审计请求。输出先明确 `alias: driver major -> driver device` 或 `alias: driver fastio -> driver device`，不可用诊断保留用户输入的别名。
 
 Driver integrity, device stack, and optional global evidence aliases.
 

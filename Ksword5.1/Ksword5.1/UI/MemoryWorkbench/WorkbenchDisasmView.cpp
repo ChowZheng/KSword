@@ -97,6 +97,15 @@ namespace ks::ui
             return QString::number(value, 16).rightJustified(width, QChar('0')).toUpper();
         }
 
+        QString decodedStatus(quint64 anchor, int count, bool x64, bool editable)
+        {
+            return (editable
+                ? QStringLiteral("从 0x%1 解码 %2 条指令（%3）。双击/F2/Enter 行内编辑，Backspace 返回跳转。")
+                : QStringLiteral("从 0x%1 解码 %2 条指令（%3，只读）。Backspace 返回跳转。"))
+                .arg(formatHexDigitsUpper(anchor, 16)).arg(count)
+                .arg(x64 ? QStringLiteral("x64") : QStringLiteral("x86"));
+        }
+
         // rowChangeKind：一行覆盖的若干字节里，取"最该被看见"的那一种变化种类用于着色，
         // 优先级与 MemoryDiffOverlay::ChangeKind 一致：Pending > SelfWritten > ExternalChange。
         // 入参：窗口与该行在窗口内的字节偏移、长度；传出：变化种类，窗口越界时视为 Unchanged。
@@ -513,7 +522,16 @@ namespace ks::ui
             {
                 m_refreshPending = false;
                 rebuildRowsNow();
+                return;
             }
+        }
+        // Permission changes affect wording without re-reading or decoding.
+        // Keep unavailable/not-positioned statuses until a real row exists.
+        if (m_model->rowAt(0))
+        {
+            const int count = m_model->rowCount()
+                - (m_model->isEndOfWindowRow(m_model->rowCount() - 1) ? 1 : 0);
+            m_status->setText(decodedStatus(m_anchor, count, isX64(), m_editable));
         }
     }
 
@@ -781,8 +799,7 @@ namespace ks::ui
         m_model->setRows(rows, rowKinds, note);
         // D4：数字部分单独大写再 .arg() 进模板，模板本身（含 Enter/Backspace/x64 等英文
         // 字面量）原样保留，不会被 toUpper() 误伤导致运行时翻译的模板匹配失效。
-        m_status->setText(QStringLiteral("从 0x%1 解码 %2 条指令（%3）。双击/F2/Enter 行内编辑，Backspace 返回跳转。")
-            .arg(formatHexDigitsUpper(m_anchor, 16)).arg(rows.size()).arg(isX64() ? QStringLiteral("x64") : QStringLiteral("x86")));
+        m_status->setText(decodedStatus(m_anchor, static_cast<int>(rows.size()), isX64(), m_editable));
         emit statusMessage(m_status->text());
         updateCanvas(keepScrollPosition);
         m_lastRebuiltAnchor = m_anchor;

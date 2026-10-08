@@ -129,6 +129,7 @@ public:
     //   （工作台跟随 Dock；若它钉在别的进程上会被带回跟随）；
     // - 返回：true=已跳转；false=工作台不可用或被拒绝（原因在工作台状态条里）。
     bool openAddressInWorkbench(std::uint64_t address, bool kernelAddress = false);
+    std::function<void(const QString&)> openPoolModuleDetails;
 
 protected:
     // changeEvent：

@@ -7,13 +7,17 @@ NTSTATUS KswordSvmCachePrepare(KSW_SVM_STATE* State)
 {
     KSW_SVM_CACHE_DOMAIN* domain;
     PHYSICAL_ADDRESS highest;
-    ULONG root, page;
+    ULONG root, page, rootCount;
     /* Identity root, watch clone/splits, CPU-local fallback roots and shared roots together stay within 64 MiB. */
     ULONG identityPages = State->Npt.PageCount * 2U + KSW_SVM_WATCH_SPLITS;
-    if (State->Count > (KSW_NPT_MAX_PAGES - identityPages) / (3U * 64U)) { return STATUS_INSUFFICIENT_RESOURCES; }
+    /* Bound shared-root count rather than silently exceeding the original 64-MiB table budget. */
+    rootCount = KswSvmNestedShadowBudget(KSW_NPT_MAX_PAGES, identityPages, State->Count,
+        KSW_NSHADOW_GENERAL_PAGES, State->Count * 2U, KSW_NSHADOW_GENERAL_PAGES);
+    /* A prepared write-watch/shared-root mode needs at least one complete root. */
+    if (!rootCount) { return STATUS_INSUFFICIENT_RESOURCES; }
     domain = KswordARKAllocateNonPagedPool(sizeof(*domain), 'kSvK');
     if (!domain) { return STATUS_INSUFFICIENT_RESOURCES; }
-    RtlZeroMemory(domain, sizeof(*domain)); State->Caches = domain; domain->Count = State->Count * 2U;
+    RtlZeroMemory(domain, sizeof(*domain)); State->Caches = domain; domain->Count = rootCount;
     domain->Roots = KswordARKAllocateNonPagedPool(sizeof(*domain->Roots) * domain->Count, 'kSvK');
     if (!domain->Roots) { return STATUS_INSUFFICIENT_RESOURCES; }
     RtlZeroMemory(domain->Roots, sizeof(*domain->Roots) * domain->Count);
@@ -21,13 +25,13 @@ NTSTATUS KswordSvmCachePrepare(KSW_SVM_STATE* State)
     for (root = 0; root < domain->Count; ++root) {
         KSW_SVM_CACHE_ROOT* cache = &domain->Roots[root];
         cache->LastCpu = MAXULONG;
-        for (page = 0; page < 64U; ++page) {
+        for (page = 0; page < KSW_NSHADOW_GENERAL_PAGES; ++page) {
             cache->Pages[page].Words = MmAllocateContiguousMemory(4096, highest);
             if (!cache->Pages[page].Words) { return STATUS_INSUFFICIENT_RESOURCES; }
             ++cache->Allocated;
             cache->Pages[page].Physical = (ULONGLONG)MmGetPhysicalAddress(cache->Pages[page].Words).QuadPart;
         }
-        if (KswSvmNestedShadowInitialize(&cache->Shadow, cache->Pages, 64U, State->Cpus[0].Caps.PhysicalBits)) { return STATUS_DATA_ERROR; }
+        if (KswSvmNestedShadowInitialize(&cache->Shadow, cache->Pages, KSW_NSHADOW_GENERAL_PAGES, State->Cpus[0].Caps.PhysicalBits)) { return STATUS_DATA_ERROR; }
     }
     return STATUS_SUCCESS;
 }

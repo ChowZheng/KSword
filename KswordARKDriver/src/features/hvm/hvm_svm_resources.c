@@ -466,6 +466,16 @@ NTSTATUS KswordSvmPrepare(KSW_HVM_RUNTIME* Runtime, ULONG Flags)
     }
     /* NPT uses the common cache/address-width contract established above. */
     if (NT_SUCCESS(status)) { status = KswordNptBuild(&state->Npt, &state->Cpus[0].Caps); }
+    /* Account for every CPU-local nested pool before any of those tables are allocated. */
+    if (NT_SUCCESS(status) && (Flags & (KSWORD_ARK_HVM_CONTROL_FLAG_SVM_NESTED_PROBE |
+        KSWORD_ARK_HVM_CONTROL_FLAG_ENABLE_NESTED_SVM))) {
+        /* Both immutable identity tables and expanded fallback pools belong to the same budget. */
+        ULONG localPages = (Flags & KSWORD_ARK_HVM_CONTROL_FLAG_ENABLE_NESTED_SVM) ?
+            KSW_NSHADOW_GENERAL_PAGES : KSW_NSVM_PROBE_PAGES;
+        /* Division precedes multiplication so excessive processor counts fail without overflow. */
+        if (state->Npt.PageCount > KSW_NPT_MAX_PAGES ||
+            count > (KSW_NPT_MAX_PAGES - state->Npt.PageCount) / localPages) { status = STATUS_INSUFFICIENT_RESOURCES; }
+    }
     /* The optional hardware clone and all split pages are allocated before any CPU enters SVM. */
     if (NT_SUCCESS(status) && (Flags & KSWORD_ARK_HVM_CONTROL_FLAG_SVM_WRITE_WATCH)) { status = KswordSvmWatchPrepare(state); }
     /* Shared virtual-CPU roots are optional; their complete allocation budget is checked before entry. */

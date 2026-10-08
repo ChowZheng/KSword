@@ -165,6 +165,7 @@ namespace ks::ui
         void refreshView();
         void invalidateEditContext();
         void reset();
+        bool hasAnchor() const { return m_hasAnchor; }
         std::uint64_t anchorAddress() const;
         MemoryRowCanvas* canvas() const;
         WorkbenchDisasmModel* model() const;

@@ -246,6 +246,10 @@ PhysicalPageAttributionPage::PhysicalPageAttributionPage(QWidget* parent) : QWid
     m_objects = table(m_tabs); m_tabs->addTab(m_objects, {});
     m_pageConsumers = table(m_tabs); m_tabs->addTab(m_pageConsumers, {});
     m_consumerPage = new MemoryConsumerEvidencePage(m_tabs); m_tabs->addTab(m_consumerPage, {});
+    m_consumerPage->openModuleDetails = [this](const QString& path) {
+        const auto handler = openModuleDetails;
+        if (handler) { handler(path); }
+    };
     root->addWidget(m_tabs, 1);
     connect(m_scanButton, &QPushButton::clicked, this, [this] { startScan(); });
     connect(m_cancelButton, &QPushButton::clicked, this, [this] {

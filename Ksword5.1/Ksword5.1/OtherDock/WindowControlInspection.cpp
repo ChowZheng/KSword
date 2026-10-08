@@ -1,0 +1,524 @@
+#include "WindowControlInspection.h"
+#include <objbase.h>
+#include <oleauto.h>
+#include <UIAutomation.h>
+#include <wrl/client.h>
+#include <QSet>
+#include <atomic>
+#include <condition_variable>
+#include <deque>
+#include <mutex>
+#include <thread>
+#include <algorithm>
+#include <cmath>
+#include <tuple>
+
+#pragma comment(lib, "UIAutomationCore.lib")
+#pragma comment(lib, "OleAut32.lib")
+
+namespace ks::control_inspection
+{
+    using Microsoft::WRL::ComPtr;
+    namespace
+    {
+        struct DpiScope
+        {
+            DPI_AWARENESS_CONTEXT previous = ::SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+            ~DpiScope() { if (previous) ::SetThreadDpiAwarenessContext(previous); }
+        };
+        QString hex(quintptr value) { return QStringLiteral("0x%1").arg(value, 0, 16).toUpper(); }
+        QString valueText(const VARIANT& value)
+        {
+            switch (value.vt)
+            {
+            case VT_BSTR: return QString::fromWCharArray(value.bstrVal, static_cast<int>(::SysStringLen(value.bstrVal)));
+            case VT_BOOL: return value.boolVal ? QStringLiteral("true") : QStringLiteral("false");
+            case VT_I4: return QString::number(value.lVal);
+            case VT_UI4: return QString::number(value.ulVal);
+            case VT_R8: return QString::number(value.dblVal);
+            default: return {};
+            }
+        }
+        struct Property { PROPERTYID id; const char* name; };
+        const Property properties[] = {
+            {UIA_NamePropertyId, "Name"}, {UIA_ControlTypePropertyId, "ControlType"},
+            {UIA_LocalizedControlTypePropertyId, "LocalizedControlType"},
+            {UIA_AutomationIdPropertyId, "AutomationId"}, {UIA_FrameworkIdPropertyId, "FrameworkId"},
+            {UIA_ClassNamePropertyId, "ClassName"}, {UIA_ProcessIdPropertyId, "ProcessId"},
+            {UIA_NativeWindowHandlePropertyId, "NativeWindowHandle"},
+            {UIA_IsOffscreenPropertyId, "IsOffscreen"}, {UIA_IsEnabledPropertyId, "IsEnabled"},
+            {UIA_HasKeyboardFocusPropertyId, "HasKeyboardFocus"},
+            {UIA_IsKeyboardFocusablePropertyId, "IsKeyboardFocusable"}, {UIA_IsPasswordPropertyId, "IsPassword"},
+            {UIA_AccessKeyPropertyId, "AccessKey"}, {UIA_AcceleratorKeyPropertyId, "AcceleratorKey"},
+            {UIA_HelpTextPropertyId, "HelpText"}, {UIA_ProviderDescriptionPropertyId, "ProviderDescription"},
+            {UIA_IsInvokePatternAvailablePropertyId, "Invoke"}, {UIA_IsValuePatternAvailablePropertyId, "Value"},
+            {UIA_IsRangeValuePatternAvailablePropertyId, "RangeValue"},
+            {UIA_IsSelectionPatternAvailablePropertyId, "Selection"},
+            {UIA_IsSelectionItemPatternAvailablePropertyId, "SelectionItem"},
+            {UIA_IsTogglePatternAvailablePropertyId, "Toggle"},
+            {UIA_IsExpandCollapsePatternAvailablePropertyId, "ExpandCollapse"},
+            {UIA_IsScrollPatternAvailablePropertyId, "Scroll"}, {UIA_IsTextPatternAvailablePropertyId, "Text"},
+            {UIA_IsGridPatternAvailablePropertyId, "Grid"}, {UIA_IsGridItemPatternAvailablePropertyId, "GridItem"},
+            {UIA_IsWindowPatternAvailablePropertyId, "Window"}, {UIA_IsTransformPatternAvailablePropertyId, "Transform"},
+            {UIA_IsTablePatternAvailablePropertyId, "Table"}, {UIA_IsTableItemPatternAvailablePropertyId, "TableItem"},
+            {UIA_IsScrollItemPatternAvailablePropertyId, "ScrollItem"},
+            {UIA_IsMultipleViewPatternAvailablePropertyId, "MultipleView"},
+            {UIA_IsDockPatternAvailablePropertyId, "Dock"}, {UIA_IsItemContainerPatternAvailablePropertyId, "ItemContainer"},
+            {UIA_IsVirtualizedItemPatternAvailablePropertyId, "VirtualizedItem"}
+        };
+        QString runtimeKey(IUIAutomationElement* element)
+        {
+            SAFEARRAY* ids = nullptr;
+            QStringList parts;
+            if (SUCCEEDED(element->GetRuntimeId(&ids)) && ids)
+            {
+                LONG first = 0, last = -1;
+                ::SafeArrayGetLBound(ids, 1, &first);
+                ::SafeArrayGetUBound(ids, 1, &last);
+                for (LONG index = first; index <= last; ++index)
+                {
+                    int value = 0;
+                    if (SUCCEEDED(::SafeArrayGetElement(ids, &index, &value))) parts << QString::number(value);
+                }
+                ::SafeArrayDestroy(ids);
+            }
+            return parts.join(QLatin1Char('/'));
+        }
+        Node readElement(IUIAutomationElement* element, HWND host, const QString& parent)
+        {
+            Node node;
+            node.id = runtimeKey(element);
+            node.parent = parent;
+            node.host = host;
+            node.hostBounds = physicalBounds(host);
+            node.properties.insert(QStringLiteral("RuntimeId"), node.id);
+            for (const auto& property : properties)
+            {
+                VARIANT value; ::VariantInit(&value);
+                if (SUCCEEDED(element->GetCachedPropertyValue(property.id, &value)))
+                {
+                    const QString text = valueText(value);
+                    if (!text.isEmpty()) node.properties.insert(QString::fromLatin1(property.name), text);
+                }
+                ::VariantClear(&value);
+            }
+            node.name = node.properties.value(QStringLiteral("Name"));
+            node.type = node.properties.value(QStringLiteral("LocalizedControlType"));
+            node.enabled = node.properties.value(QStringLiteral("IsEnabled")) != QStringLiteral("false");
+            node.offscreen = node.properties.value(QStringLiteral("IsOffscreen")) == QStringLiteral("true");
+            UIA_HWND native = nullptr;
+            if (SUCCEEDED(element->get_CachedNativeWindowHandle(&native))) node.window = static_cast<HWND>(native);
+            node.properties.insert(QStringLiteral("NativeWindowHandle"), hex(reinterpret_cast<quintptr>(native)));
+            RECT bounds{};
+            if (SUCCEEDED(element->get_CachedBoundingRectangle(&bounds)))
+                node.bounds = QRect(bounds.left, bounds.top, bounds.right - bounds.left, bounds.bottom - bounds.top);
+            return node;
+        }
+        void readPatternValues(IUIAutomationElement* element, Node& node)
+        {
+            const Property values[] = {
+                {UIA_ValueValuePropertyId, "Value.Value"}, {UIA_ValueIsReadOnlyPropertyId, "Value.IsReadOnly"},
+                {UIA_RangeValueValuePropertyId, "RangeValue.Value"}, {UIA_RangeValueMinimumPropertyId, "RangeValue.Minimum"},
+                {UIA_RangeValueMaximumPropertyId, "RangeValue.Maximum"},
+                {UIA_ToggleToggleStatePropertyId, "Toggle.State"},
+                {UIA_ExpandCollapseExpandCollapseStatePropertyId, "ExpandCollapse.State"},
+                {UIA_SelectionItemIsSelectedPropertyId, "SelectionItem.IsSelected"},
+                {UIA_ScrollHorizontalScrollPercentPropertyId, "Scroll.HorizontalPercent"},
+                {UIA_ScrollVerticalScrollPercentPropertyId, "Scroll.VerticalPercent"},
+                {UIA_GridRowCountPropertyId, "Grid.RowCount"}, {UIA_GridColumnCountPropertyId, "Grid.ColumnCount"}
+            };
+            for (const auto& property : values)
+            {
+                const QString label = QString::fromLatin1(property.name);
+                const QString pattern = label.section(QLatin1Char('.'), 0, 0);
+                if (node.properties.value(pattern) != QStringLiteral("true")) continue;
+                if (property.id == UIA_ValueValuePropertyId
+                    && node.properties.value(QStringLiteral("IsPassword")) == QStringLiteral("true")) continue;
+                VARIANT value; ::VariantInit(&value);
+                if (SUCCEEDED(element->GetCurrentPropertyValue(property.id, &value)))
+                    node.properties.insert(label, valueText(value));
+                ::VariantClear(&value);
+            }
+        }
+        Node readNative(HWND window, HWND host, const QString& parent)
+        {
+            const DpiScope dpi;
+            Node node;
+            node.id = nativeKey(window); node.parent = parent; node.window = window; node.host = host;
+            node.hostBounds = physicalBounds(host);
+            wchar_t text[1024]{};
+            ::GetWindowTextW(window, text, 1024);
+            node.name = QString::fromWCharArray(text);
+            ::GetClassNameW(window, text, 1024);
+            node.type = QString::fromWCharArray(text);
+            node.bounds = physicalBounds(window);
+            node.offscreen = !::IsWindowVisible(window) || ::IsIconic(host);
+            node.enabled = ::IsWindowEnabled(window) != FALSE;
+            DWORD pid = 0;
+            const DWORD tid = ::GetWindowThreadProcessId(window, &pid);
+            node.properties = {{QStringLiteral("Name"), node.name}, {QStringLiteral("ClassName"), node.type},
+                {QStringLiteral("NativeWindowHandle"), hex(reinterpret_cast<quintptr>(window))},
+                {QStringLiteral("ProcessId"), QString::number(pid)}, {QStringLiteral("ThreadId"), QString::number(tid)},
+                {QStringLiteral("ControlId"), QString::number(::GetDlgCtrlID(window))},
+                {QStringLiteral("Style"), hex(static_cast<quintptr>(::GetWindowLongPtrW(window, GWL_STYLE)))},
+                {QStringLiteral("ExStyle"), hex(static_cast<quintptr>(::GetWindowLongPtrW(window, GWL_EXSTYLE)))},
+                {QStringLiteral("IsEnabled"), node.enabled ? QStringLiteral("true") : QStringLiteral("false")},
+                {QStringLiteral("IsOffscreen"), node.offscreen ? QStringLiteral("true") : QStringLiteral("false")}};
+            return node;
+        }
+        // COM events only mark the mailbox dirty; no Qt widgets or translations.
+        class Events final : public IUIAutomationStructureChangedEventHandler,
+            public IUIAutomationPropertyChangedEventHandler
+        {
+        public:
+            explicit Events(std::shared_ptr<std::atomic_bool> dirty) : m_dirty(std::move(dirty)) {}
+            HRESULT STDMETHODCALLTYPE QueryInterface(REFIID id, void** result) override
+            {
+                if (!result) return E_POINTER;
+                *result = nullptr;
+                if (id == __uuidof(IUnknown) || id == __uuidof(IUIAutomationStructureChangedEventHandler))
+                    *result = static_cast<IUIAutomationStructureChangedEventHandler*>(this);
+                else if (id == __uuidof(IUIAutomationPropertyChangedEventHandler))
+                    *result = static_cast<IUIAutomationPropertyChangedEventHandler*>(this);
+                else return E_NOINTERFACE;
+                AddRef(); return S_OK;
+            }
+            ULONG STDMETHODCALLTYPE AddRef() override { return ++m_refs; }
+            ULONG STDMETHODCALLTYPE Release() override { const ULONG refs = --m_refs; if (!refs) delete this; return refs; }
+            HRESULT STDMETHODCALLTYPE HandleStructureChangedEvent(IUIAutomationElement*, StructureChangeType, SAFEARRAY*) override
+            { m_dirty->store(true); return S_OK; }
+            HRESULT STDMETHODCALLTYPE HandlePropertyChangedEvent(IUIAutomationElement*, PROPERTYID, VARIANT) override
+            { m_dirty->store(true); return S_OK; }
+        private:
+            std::atomic<ULONG> m_refs{1};
+            std::shared_ptr<std::atomic_bool> m_dirty;
+        };
+    }
+
+    QRect physicalBounds(HWND window)
+    {
+        const DpiScope dpi;
+        RECT bounds{};
+        if (!::GetWindowRect(window, &bounds)) return {};
+        return QRect(bounds.left, bounds.top, bounds.right - bounds.left, bounds.bottom - bounds.top);
+    }
+    QString nativeKey(HWND window)
+    {
+        DWORD pid = 0;
+        const DWORD tid = ::GetWindowThreadProcessId(window, &pid);
+        return QStringLiteral("hwnd/%1/%2/%3").arg(reinterpret_cast<quintptr>(window)).arg(pid).arg(tid);
+    }
+    bool belongs(HWND window, HWND root, HWND excluded)
+    {
+        if (!window || !root || window == excluded || ::IsChild(excluded, window)) return false;
+        if (window == root || ::IsChild(root, window)) return true;
+        HWND ancestor = ::GetAncestor(window, GA_ROOT);
+        for (HWND owner = ancestor; owner; owner = ::GetWindow(owner, GW_OWNER))
+            if (owner == root || ::IsChild(root, owner)) return true;
+        // Menus/combobox popups may have no owner. Confirm their GUI-thread
+        // active/focus relationship, rather than admitting every same-PID window.
+        DWORD pid = 0, rootPid = 0;
+        const DWORD tid = ::GetWindowThreadProcessId(ancestor, &pid);
+        ::GetWindowThreadProcessId(root, &rootPid);
+        if (pid != rootPid) return false;
+        wchar_t name[128]{}; ::GetClassNameW(ancestor, name, 128);
+        if (wcscmp(name, L"#32768") && wcscmp(name, L"ComboLBox") && wcscmp(name, L"tooltips_class32")) return false;
+        GUITHREADINFO info{}; info.cbSize = sizeof(info);
+        if (!::GetGUIThreadInfo(tid, &info)) return false;
+        return info.hwndActive == root || ::IsChild(root, info.hwndActive)
+            || info.hwndFocus == root || ::IsChild(root, info.hwndFocus);
+    }
+    QVector<HWND> relatedRoots(HWND root, HWND excluded)
+    {
+        QVector<HWND> roots{root};
+        struct Context { HWND root, excluded; QVector<HWND>* roots; } context{root, excluded, &roots};
+        ::EnumWindows([](HWND window, LPARAM argument) -> BOOL {
+            auto& context = *reinterpret_cast<Context*>(argument);
+            if (window != context.root && ::IsWindowVisible(window)
+                && belongs(window, context.root, context.excluded)) context.roots->push_back(window);
+            return TRUE;
+        }, reinterpret_cast<LPARAM>(&context));
+        return roots;
+    }
+    bool PickGate::mouse(UINT message, QPoint point, bool inScope, bool& completed)
+    {
+        completed = false;
+        if (message == WM_LBUTTONDOWN && armed && !consuming && inScope)
+        { consuming = true; pressed = point; return true; }
+        if (message == WM_LBUTTONUP && consuming)
+        { consuming = false; completed = armed; armed = false; return true; }
+        return false;
+    }
+
+    struct Collector::State
+    {
+        std::mutex mutex;
+        std::condition_variable wake;
+        Request request;
+        quint64 epoch = 0, serial = 0;
+        QPoint point;
+        QString hitId;
+        bool stopped = false, scan = false, hit = false, picked = false;
+        QVector<Reply> replies;
+        std::shared_ptr<std::atomic_bool> dirty = std::make_shared<std::atomic_bool>(false);
+        HDESK desktop = nullptr;
+        ~State() { if (desktop) ::CloseDesktop(desktop); }
+    };
+    Collector::Collector() : m_state(std::make_shared<State>())
+    {
+        const auto state = m_state;
+        HANDLE desktop = nullptr;
+        if (::DuplicateHandle(::GetCurrentProcess(), ::GetThreadDesktop(::GetCurrentThreadId()),
+            ::GetCurrentProcess(), &desktop, 0, FALSE, DUPLICATE_SAME_ACCESS)) state->desktop = static_cast<HDESK>(desktop);
+        // Detached lifetime is backed by shared state, never by this/dialog.
+        // A slow provider cannot keep a closing dialog blocked on join().
+        std::thread([state] {
+            const HDESK previousDesktop = ::GetThreadDesktop(::GetCurrentThreadId());
+            const bool bound = state->desktop && ::SetThreadDesktop(state->desktop);
+            const HRESULT initialized = bound ? ::CoInitializeEx(nullptr, COINIT_MULTITHREADED) : E_ACCESSDENIED;
+            {
+                ComPtr<IUIAutomation> automation;
+                HRESULT setup = initialized;
+                if (SUCCEEDED(initialized)) setup = ::CoCreateInstance(CLSID_CUIAutomation8, nullptr,
+                    CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&automation));
+                if (FAILED(setup) && SUCCEEDED(initialized)) setup = ::CoCreateInstance(CLSID_CUIAutomation, nullptr,
+                    CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&automation));
+                ComPtr<IUIAutomation2> modern;
+                if (automation && SUCCEEDED(automation.As(&modern)))
+                { modern->put_ConnectionTimeout(1000); modern->put_TransactionTimeout(1000); modern->put_AutoSetFocus(FALSE); }
+                ComPtr<IUIAutomationCacheRequest> cache;
+                if (automation)
+                {
+                    automation->CreateCacheRequest(&cache);
+                    if (cache)
+                    {
+                        cache->put_TreeScope(TreeScope_Element);
+                        cache->AddProperty(UIA_BoundingRectanglePropertyId);
+                        for (const auto& property : properties) cache->AddProperty(property.id);
+                    }
+                }
+                ComPtr<Events> events;
+                events.Attach(new Events(state->dirty));
+                struct Pending { ComPtr<IUIAutomationElement> element; QString parent; HWND host; bool root = false; };
+                std::deque<Pending> pending;
+                std::deque<std::tuple<HWND, HWND, QString>> nativePending;
+                QSet<QString> visited;
+                QMap<QString, Pending> elements;
+                QMap<QString, Node> records;
+                ComPtr<IUIAutomationTreeWalker> walker;
+                Request current;
+                bool scanning = false;
+                const auto publish = [&](Reply reply) {
+                    std::lock_guard<std::mutex> lock(state->mutex);
+                    if (!state->stopped && state->epoch == reply.generation) state->replies.push_back(std::move(reply));
+                };
+                for (;;)
+                {
+                    Request request;
+                    QPoint point;
+                    quint64 serial = 0;
+                    QString hitId;
+                    bool scan = false, hit = false, picked = false;
+                    {
+                        std::unique_lock<std::mutex> lock(state->mutex);
+                        if (!scanning) state->wake.wait(lock, [&] { return state->stopped || state->scan || state->hit; });
+                        if (state->stopped) break;
+                        request = state->request;
+                        if (scanning && current.generation != state->epoch)
+                        { pending.clear(); nativePending.clear(); scanning = false; }
+                        scan = state->scan; state->scan = false;
+                        hit = state->hit; state->hit = false;
+                        point = state->point; serial = state->serial; picked = state->picked;
+                        hitId = state->hitId;
+                    }
+                    if (scan)
+                    {
+                        if (automation) automation->RemoveAllEventHandlers();
+                        pending.clear(); nativePending.clear(); visited.clear(); elements.clear(); records.clear(); current = request;
+                        scanning = true;
+                        const auto roots = relatedRoots(current.root, current.excluded);
+                        if (current.view == View::Native)
+                        {
+                            for (HWND root : roots) nativePending.emplace_back(root, root,
+                                root == current.root ? QString() : nativeKey(current.root));
+                        }
+                        else if (automation && cache)
+                        {
+                            walker.Reset();
+                            if (current.view == View::Controls) automation->get_ControlViewWalker(&walker);
+                            else automation->get_RawViewWalker(&walker);
+                            PROPERTYID changed[] = {UIA_BoundingRectanglePropertyId, UIA_IsOffscreenPropertyId,
+                                UIA_IsEnabledPropertyId, UIA_NamePropertyId};
+                            QString rootId;
+                            for (HWND root : roots)
+                            {
+                                ComPtr<IUIAutomationElement> element;
+                                const HRESULT result = automation->ElementFromHandleBuildCache(root, cache.Get(), &element);
+                                if (SUCCEEDED(result) && element)
+                                {
+                                    if (root == current.root) rootId = runtimeKey(element.Get());
+                                    pending.push_back({element, root == current.root ? QString() : rootId, root, true});
+                                    automation->AddStructureChangedEventHandler(element.Get(), TreeScope_Subtree, nullptr, events.Get());
+                                    automation->AddPropertyChangedEventHandlerNativeArray(element.Get(), TreeScope_Subtree,
+                                        nullptr, events.Get(), changed, 4);
+                                }
+                                else publish({current.generation, 0, {}, {}, result, false, false, false});
+                            }
+                        }
+                        else publish({current.generation, 0, {}, {}, FAILED(setup) ? setup : E_FAIL, false, false, false});
+                    }
+                    if (hit)
+                    {
+                        Reply reply; reply.generation = request.generation; reply.serial = serial;
+                        reply.hover = true; reply.picked = picked;
+                        reply.fromTree = !hitId.isEmpty();
+                        const DpiScope dpi;
+                        HWND window = ::WindowFromPhysicalPoint(POINT{point.x(), point.y()});
+                        if (reply.fromTree)
+                        {
+                            const auto found = records.constFind(hitId);
+                            if (found == records.cend()) reply.error = UIA_E_ELEMENTNOTAVAILABLE;
+                            else if (request.view == View::Native)
+                            {
+                                if (nativeKey(found->window) == hitId) reply.hit = readNative(found->window, found->host, found->parent);
+                                else reply.error = UIA_E_ELEMENTNOTAVAILABLE;
+                            }
+                            else
+                            {
+                                const auto entry = elements.value(hitId);
+                                ComPtr<IUIAutomationElement> cached;
+                                reply.error = entry.element ? entry.element->BuildUpdatedCache(cache.Get(), &cached) : UIA_E_ELEMENTNOTAVAILABLE;
+                                if (SUCCEEDED(reply.error) && cached)
+                                { reply.hit = readElement(cached.Get(), entry.host, entry.parent); readPatternValues(cached.Get(), reply.hit); }
+                            }
+                        }
+                        else if (belongs(window, request.root, request.excluded))
+                        {
+                            const HWND host = ::IsChild(request.root, window) || window == request.root
+                                ? request.root : ::GetAncestor(window, GA_ROOT);
+                            if (request.view == View::Native) reply.hit = readNative(window, host, {});
+                            else if (automation && cache)
+                            {
+                                ComPtr<IUIAutomationElement> element, normalized, cached;
+                                reply.error = automation->ElementFromPoint(POINT{point.x(), point.y()}, &element);
+                                if (SUCCEEDED(reply.error) && element)
+                                {
+                                    ComPtr<IUIAutomationTreeWalker> hitWalker;
+                                    if (request.view == View::Controls) automation->get_ControlViewWalker(&hitWalker);
+                                    else automation->get_RawViewWalker(&hitWalker);
+                                    if (hitWalker) hitWalker->NormalizeElement(element.Get(), &normalized);
+                                    if (!normalized) normalized = element;
+                                    reply.error = normalized->BuildUpdatedCache(cache.Get(), &cached);
+                                    if (SUCCEEDED(reply.error) && cached)
+                                    {
+                                        reply.hit = readElement(cached.Get(), host, {});
+                                        if (reply.hit.window && !belongs(reply.hit.window, request.root, request.excluded)) reply.hit = {};
+                                        else readPatternValues(cached.Get(), reply.hit);
+                                    }
+                                }
+                            }
+                        }
+                        publish(std::move(reply));
+                    }
+                    if (scanning)
+                    {
+                        Reply batch; batch.generation = current.generation;
+                        for (int count = 0; count < 64; ++count)
+                        {
+                            { std::lock_guard<std::mutex> lock(state->mutex);
+                                if (state->stopped || state->epoch != current.generation || state->hit) break; }
+                            if (current.view == View::Native)
+                            {
+                                if (nativePending.empty()) break;
+                                const auto entry = nativePending.front(); nativePending.pop_front();
+                                const HWND window = std::get<0>(entry), host = std::get<1>(entry);
+                                Node node = readNative(window, host, std::get<2>(entry));
+                                if (!::IsWindow(window) || visited.contains(node.id)) continue;
+                                visited.insert(node.id);
+                                records.insert(node.id, node);
+                                for (HWND child = ::GetWindow(window, GW_CHILD); child; child = ::GetWindow(child, GW_HWNDNEXT))
+                                    nativePending.emplace_back(child, host, node.id);
+                                batch.nodes.push_back(std::move(node));
+                            }
+                            else
+                            {
+                                if (pending.empty() || !walker) break;
+                                Pending entry = pending.front(); pending.pop_front();
+                                Node node = readElement(entry.element.Get(), entry.host, entry.parent);
+                                if (node.id.isEmpty() || visited.contains(node.id)) continue;
+                                visited.insert(node.id);
+                                records.insert(node.id, node); elements.insert(node.id, entry);
+                                ComPtr<IUIAutomationElement> child;
+                                HRESULT result = walker->GetFirstChildElement(entry.element.Get(), &child);
+                                if (child)
+                                {
+                                    ComPtr<IUIAutomationElement> cached;
+                                    result = child->BuildUpdatedCache(cache.Get(), &cached);
+                                    if (SUCCEEDED(result)) child = cached;
+                                    else child.Reset();
+                                }
+                                if (FAILED(result)) batch.error = result;
+                                // Children are queued one at a time, so hovering/cancellation
+                                // can preempt traversal of a huge sibling list.
+                                if (child) pending.push_back({child, node.id, entry.host});
+                                if (!entry.root)
+                                {
+                                    ComPtr<IUIAutomationElement> sibling;
+                                    result = walker->GetNextSiblingElement(entry.element.Get(), &sibling);
+                                    if (sibling)
+                                    {
+                                        ComPtr<IUIAutomationElement> cached;
+                                        result = sibling->BuildUpdatedCache(cache.Get(), &cached);
+                                        if (SUCCEEDED(result)) sibling = cached;
+                                        else sibling.Reset();
+                                    }
+                                    if (FAILED(result)) batch.error = result;
+                                    if (sibling) pending.push_back({sibling, entry.parent, entry.host});
+                                }
+                                batch.nodes.push_back(std::move(node));
+                            }
+                        }
+                        batch.done = pending.empty() && nativePending.empty();
+                        scanning = !batch.done;
+                        if (!batch.nodes.isEmpty() || batch.done || FAILED(batch.error)) publish(std::move(batch));
+                    }
+                }
+                if (automation) automation->RemoveAllEventHandlers();
+            }
+            if (SUCCEEDED(initialized)) ::CoUninitialize();
+            if (bound) ::SetThreadDesktop(previousDesktop);
+        }).detach();
+    }
+    Collector::~Collector()
+    { std::lock_guard<std::mutex> lock(m_state->mutex); m_state->stopped = true; m_state->wake.notify_one(); }
+    void Collector::scan(const Request& request)
+    {
+        std::lock_guard<std::mutex> lock(m_state->mutex);
+        m_state->request = request; m_state->epoch = request.generation;
+        m_state->scan = true; m_state->hit = false; m_state->replies.clear(); m_state->wake.notify_one();
+    }
+    void Collector::hit(const Request& request, QPoint physical, quint64 serial, bool picked)
+    {
+        std::lock_guard<std::mutex> lock(m_state->mutex);
+        // Do not overwrite a pending one-shot pick with an ordinary hover.
+        if (m_state->hit && m_state->picked && !picked) return;
+        m_state->request = request; m_state->point = physical; m_state->serial = serial;
+        m_state->hitId.clear();
+        m_state->picked = picked; m_state->hit = true; m_state->wake.notify_one();
+    }
+    void Collector::details(const Request& request, const QString& id, quint64 serial)
+    {
+        std::lock_guard<std::mutex> lock(m_state->mutex);
+        if (m_state->hit && m_state->picked) return;
+        m_state->request = request; m_state->serial = serial; m_state->hitId = id;
+        m_state->picked = false; m_state->hit = true; m_state->wake.notify_one();
+    }
+    void Collector::cancel()
+    {
+        std::lock_guard<std::mutex> lock(m_state->mutex);
+        ++m_state->epoch; m_state->scan = false; m_state->hit = false; m_state->replies.clear(); m_state->wake.notify_one();
+    }
+    QVector<Reply> Collector::take()
+    { std::lock_guard<std::mutex> lock(m_state->mutex); QVector<Reply> replies; replies.swap(m_state->replies); return replies; }
+    bool Collector::takeDirty() { return m_state->dirty->exchange(false); }
+}

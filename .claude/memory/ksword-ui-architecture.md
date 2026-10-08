@@ -122,6 +122,10 @@ KSword 主程序位于 `Ksword5.1/Ksword5.1`（Qt 6.9.3 Widgets + Qt Advanced Do
 
 ## 踩坑记录
 
+- 2026-10-08 窗口详情置顶/透明度编辑：基础页置顶与 `WS_EX_TOPMOST` 勾选双向同步，回填用 `QSignalBlocker`。Alpha 滑块与数值输入共用 0–255 待应用值，用户修改自动勾选 `WS_EX_LAYERED` 并启用应用按钮；读取/刷新不能触发用户修改链路。应用时只对 Alpha 有改动或新启用分层的目标调用 `SetLayeredWindowAttributes`，保留已有 `LWA_COLORKEY`，不因仅调整置顶改动逐像素透明机制。置顶和 Alpha API 的错误必须纳入应用结果，不能只检查 SetWindowLongPtr。`.codex-build-logs/window-detail-layout/appearance.cpp` 从生产基础页、状态同步及应用逻辑抽取夹具，使用自建隐藏 HWND 实际验证置顶/取消、Alpha 回读、输入同步、颜色键保留与 0/255；错误路径注入 API 失败。33 项检查通过，未操纵外部程序窗口。
+
+- 2026-10-08 窗口详情基础属性布局：`OtherDock.cpp::WindowDetailDialog` 使用 `AdaptivePageScroll` 隔离基础页内容尺寸，主标签栈同时隔离最小尺寸；初始/最低窗口尺寸通过 `applyResponsiveWindowGeometry` 钳制。常规字段双列、坐标/尺寸成对，样式/扩展样式/明细占独立子页的完整宽度。样式复选框页不再嵌套滚动，由基础页统一滚动；只读报告保留自身滚动。长类名/状态值的 QLabel 除 wordWrap 外还需水平 `Ignored`，否则无空格长文本的 minimumSizeHint 仍会撑宽内容。离屏预览按生产基础页布局片段构造，使用真实 CodeEditorWidget、主题基线与字体，验证深浅主题的 1000×820 / 800×640 / 640×480、子页切换、控件尺寸和长文本；不等同于完整主程序 GUI 验收。预览位于 `.codex-build-logs/window-detail-layout/`。
+
 - 2026-10-04 主题恢复：`theme.h::AccentSeedOffset` 记录角色相对默认强调色的 RGB 偏移，角色不能重新固化成独立配色；`UI/ThemeControlGlyphs` 按实际底色生成控件图形，QSS 调用方所属目标必须链接其 `.cpp`。
 - QADS provider 注册只影响后续生成的图标，现存标题栏和标签按钮还须由 `UI/DockThemeIcons` 刷新。其按钮带 `ksword_theme_icon_managed` 属性，通用图标扫描必须跳过，避免覆盖 Disabled/Selected/DPR 状态。模型项中的自制单色图标使用 `UI/ThemeAccentIcon` 保留源图并在绘制时读取当前主题；Shell/进程多色图不要接入该包装。
 - 可复现主题回归入口为 `tools/Invoke-ThemeRecoveryUiTests.ps1`，使用真实 QADS、项目 `shared/ui/KsPainterChart` 与 Qt offscreen，不启动主程序或访问驱动。项目自有 `QChart/QLineSeries` 不能误当成 QtCharts 同名类型。历史三方集合与功能入口审查见 `docs/合并功能恢复审查.md`；范围语言审计通过不能替代整库语言门禁或生产 GUI 验收。

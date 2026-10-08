@@ -140,13 +140,28 @@ static unsigned KswNsvmResolve(KSW_NSVM_EXECUTION* Execution)
     status = KswSvmNestedShadowInstall(Execution->Io->Shadow, &Execution->Translation);
     /* Recycling below remains in dispatch remainder rather than this leaf. */
     KswSvmPerfEnd(Execution->Io, KSW_HVM_PERF_INSTALL, tick);
-    /* Preallocated cache exhaustion is recoverable by evicting all composition entries. */
+    /* Ordinary PT capacity pressure retires one leaf group instead of every mapping. */
     if (status == KSW_NSHADOW_FULL) {
+        /* A partial recycle and a full reset both invalidate the already walked candidate. */
+        unsigned reclaimed;
+        /* Counter exhaustion cannot hide a new physical-table mutation. */
+        if (Execution->CacheRecycles == ~0ULL) { return KSW_NSVM_EXEC_FAULT; }
+        /* Incomplete provenance or missing upper levels retain the whole-root fallback. */
+        reclaimed = KswSvmNestedShadowReclaim(Execution->Io->Shadow, gpa);
+        /* Only a validated complete recycle may preserve unrelated translations. */
+        if (reclaimed == KSW_NSHADOW_INVALID) { return KSW_NSVM_EXEC_FAULT; }
         /* Epoch/counter wrap is never accepted as fresh invalidation evidence. */
-        if (Execution->CacheRecycles == ~0ULL || KswSvmNestedShadowReset(Execution->Io->Shadow) != KSW_NSHADOW_OK) { return KSW_NSVM_EXEC_FAULT; }
+        if (reclaimed != KSW_NSHADOW_OK && KswSvmNestedShadowReset(Execution->Io->Shadow) != KSW_NSHADOW_OK) { return KSW_NSVM_EXEC_FAULT; }
+        /* Capacity-only rebinding does not change the retained source/control cache key. */
+        if (reclaimed == KSW_NSHADOW_OK) {
+            /* Otherwise the next virtual VMRUN would undo the partial recycle with an epoch-miss reset. */
+            if (Execution->Io->SharedCache) { Execution->Io->SharedCache->Epoch = Execution->Io->Shadow->Epoch; }
+            /* Processor-local cache provenance is owned by this same execution session. */
+            else { Execution->Session->CacheEpoch = Execution->Io->Shadow->Epoch; }
+        }
         /* Do not install the now-stale candidate; the next NPF performs a fresh source walk. */
         Execution->Io->Mmu->Epoch = Execution->Io->Shadow->Epoch; ++Execution->CacheRecycles;
-        /* Assembly must issue TLB_CONTROL=1 before reentry into the emptied root. */
+        /* Assembly must consume FlushPending with a global-capable hardware ASID flush before retry. */
         return KswSvmNestedResumeNpfEvent(Execution->Current, &Execution->EventEntry, Execution->Session->Lease.Token) == KSW_NSVM_EVENT_OK ? KSW_NSVM_EXEC_RESUME : KSW_NSVM_EXEC_FAULT;
     }
     /* Wrong epoch or corrupt storage is not a reason to widen guest permissions. */

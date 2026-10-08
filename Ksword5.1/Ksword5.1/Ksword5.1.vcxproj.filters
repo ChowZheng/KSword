@@ -521,6 +521,15 @@
     <ClCompile Include="MemoryDock\MemoryConsumerEvidencePage.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="MemoryDock\PoolTraceReader.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="MemoryDock\PoolAllocationAnalysisWidget.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\shared\evidence\PoolAllocationAnalysis.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="MemoryDock\PhysicalPageConsumers.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -759,6 +768,18 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="OtherDock\WindowInputControl.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="OtherDock\WindowControlInspection.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="OtherDock\WindowControlInspectionInput.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="OtherDock\WindowControlInspectionOverlay.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="OtherDock\WindowControlInspectionPage.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="PrivilegeDock\PrivilegeDock.cpp">
@@ -1906,6 +1927,15 @@
     <ClInclude Include="MemoryDock\MemoryConsumerEvidencePage.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="MemoryDock\PoolTraceReader.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="MemoryDock\PoolAllocationAnalysisWidget.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\shared\evidence\PoolAllocationAnalysis.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="MemoryDock\PhysicalPageConsumers.h">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -2093,6 +2123,15 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="OtherDock\WindowInputControl.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="OtherDock\WindowControlInspectionInput.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="OtherDock\WindowControlInspectionOverlay.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="OtherDock\WindowControlInspection.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="..\..\shared\window\DwmZOrderProtocol.h">

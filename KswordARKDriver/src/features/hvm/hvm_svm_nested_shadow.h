@@ -13,7 +13,9 @@
 /* Bound lookup cost and table memory to one MiB per prepared CPU. */
 #define KSW_NSHADOW_MAX_PAGES 256U
 /* Distinct committed NPT12 source words; overflow falls back to whole-root synchronization. */
-#define KSW_NSHADOW_SOURCE_WORDS 512U
+#define KSW_NSHADOW_SOURCE_WORDS 4096U
+/* General OS workloads use the full one-MiB pool; bounded probes keep their smaller pool. */
+#define KSW_NSHADOW_GENERAL_PAGES 256U
 
 /* The allocator owns these pages; this module neither allocates nor frees them. */
 typedef struct _KSW_NSHADOW_PAGE {
@@ -44,6 +46,12 @@ typedef struct _KSW_NSHADOW {
     /* Conservative leaf-table groups avoid discarding unrelated NPT02 branches after one changed source. */
     KSW_SVM_U64 Dependencies[KSW_NSHADOW_MAX_PAGES][KSW_NSHADOW_SOURCE_WORDS / 64U];
     unsigned char Levels[KSW_NSHADOW_MAX_PAGES];
+    /* Parent identities are private metadata; reuse still requires a forward owned hardware edge. */
+    unsigned short ParentPage[KSW_NSHADOW_MAX_PAGES], ParentSlot[KSW_NSHADOW_MAX_PAGES];
+    /* Stable IDs can be reused only after every dependent leaf group has been disconnected. */
+    KSW_SVM_U64 SourceIdsUsed[KSW_NSHADOW_SOURCE_WORDS / 64U];
+    /* A bounded second-chance cursor chooses only ordinary PT pages, never upper levels. */
+    unsigned ReclaimCursor;
     KSW_SVM_U64 DependencyRetirements;
     /* Untracked provenance can never authorize reuse across a virtual invalidation. */
     unsigned SourceCount, SourceUntracked;
@@ -54,6 +62,11 @@ unsigned int KswSvmNestedShadowInitialize(KSW_NSHADOW* Shadow,
     KSW_NSHADOW_PAGE* Pages, unsigned int Count, unsigned int PhysicalBits);
 /* Owning CPU must be outside VMRUN, and must request a hardware flush before reentry. */
 unsigned int KswSvmNestedShadowReset(KSW_NSHADOW* Shadow);
+/* Rebind one owned PT group to an empty existing PD slot; caller must rewalk at the new epoch. */
+unsigned int KswSvmNestedShadowReclaim(KSW_NSHADOW* Shadow, KSW_SVM_U64 Gpa);
+/* Return a shared-root count fitting the complete physical-table budget, or zero if local pools exceed it. */
+unsigned KswSvmNestedShadowBudget(unsigned MaxPages, unsigned IdentityPages,
+    unsigned Cpus, unsigned LocalPages, unsigned RequestedRoots, unsigned SharedPages);
 /* Installs a fully committed MMU result; a full pool leaves the tables unchanged. */
 unsigned int KswSvmNestedShadowInstall(KSW_NSHADOW* Shadow, const KSW_NMMU_RESULT* Result);
 /* Revalidate all captured NPT12 words; unchanged mappings may survive an ASID flush. */

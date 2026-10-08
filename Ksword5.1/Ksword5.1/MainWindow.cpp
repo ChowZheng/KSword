@@ -10180,6 +10180,9 @@ void MainWindow::ensureDockContentInitialized(ads::CDockWidget* dockWidget)
     else if (dockKey == QStringLiteral("memory"))
     {
         if (m_memoryWidget == nullptr) { m_memoryWidget = new MemoryDock(this); }
+        m_memoryWidget->openPoolModuleDetails = [guard = QPointer<MainWindow>(this)](const QString& path) {
+            if (guard) { guard->openFileDetailDockByPath(path); }
+        };
         realWidget = m_memoryWidget;
     }
     else if (dockKey == QStringLiteral("file"))
@@ -10781,6 +10784,11 @@ void MainWindow::initDockWidgets()
     }
     if (shouldEagerLoad(QStringLiteral("network"))) { m_networkWidget = new NetworkDock(this); }
     if (shouldEagerLoad(QStringLiteral("memory"))) { m_memoryWidget = new MemoryDock(this); }
+    if (m_memoryWidget) {
+        m_memoryWidget->openPoolModuleDetails = [guard = QPointer<MainWindow>(this)](const QString& path) {
+            if (guard) { guard->openFileDetailDockByPath(path); }
+        };
+    }
     if (shouldEagerLoad(QStringLiteral("file"))) { m_fileWidget = new FileDock(this); }
     if (shouldEagerLoad(QStringLiteral("driver"))) { m_driverWidget = new DriverDock(this); }
     // KernelDock 不再参与主 Dock 惰性占位：

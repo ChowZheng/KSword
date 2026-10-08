@@ -20,6 +20,7 @@ namespace ks::ui
 {
     class WorkbenchDisasmView;
     class WorkbenchTextView;
+    enum class SnapshotAddressKind { MemoryAddress, FileOffset };
     struct MemoryEditBlock
     {
         std::uint64_t address = 0;
@@ -27,8 +28,9 @@ namespace ks::ui
         QByteArray bytes;
     };
 
-    // Backend-independent snapshot editor. All edits are staged; the owner alone
-    // reads/writes the target and decides when a verified snapshot is committed.
+    // Shared byte snapshot viewer/editor for memory and files. All edits are
+    // staged; only the owner reads/writes the source. File offsets stay 64-bit
+    // independently of the selected instruction architecture.
     class MemoryEditorWidget final : public QWidget
     {
         Q_OBJECT
@@ -36,6 +38,8 @@ namespace ks::ui
         explicit MemoryEditorWidget(QWidget* parent = nullptr);
         ~MemoryEditorWidget() override;
         HexEditorWidget* hexEditor() const;
+        void setAddressKind(SnapshotAddressKind kind);
+        SnapshotAddressKind addressKind() const { return m_addressKind; }
         // A stable nonempty source identity enables comparison across actual
         // reads. Without one, only the current snapshot's edit baseline is used.
         void setSnapshot(const QByteArray& bytes, std::uint64_t base,
@@ -53,6 +57,8 @@ namespace ks::ui
         void clear();
         void refreshFromHexEditor();
         void jumpToAddress(std::uint64_t address);
+        // Search the visible byte/code/text view; comparison redirects to HEX.
+        void openFindPanel();
         void showDisassemblyAt(std::uint64_t address);
         WorkbenchDisasmView* disassemblyView() const;
         WorkbenchTextView* textView() const;
@@ -103,6 +109,7 @@ namespace ks::ui
         WorkbenchTextView* m_text = nullptr;
         QComboBox* m_architecture = nullptr;
         QLineEdit* m_decodeAddress = nullptr;
+        QLabel* m_decodeLabel = nullptr;
         QPushButton* m_assemble = nullptr;
         QPushButton* m_undo = nullptr;
         QPushButton* m_redo = nullptr;
@@ -120,6 +127,7 @@ namespace ks::ui
         std::uint64_t m_base = 0;
         std::uint64_t m_anchor = 0;
         std::uint64_t m_snapshotRevision = 0;
+        SnapshotAddressKind m_addressKind = SnapshotAddressKind::MemoryAddress;
         bool m_editable = false;
         bool m_syncing = false;
         std::uint32_t m_processPid = 0;

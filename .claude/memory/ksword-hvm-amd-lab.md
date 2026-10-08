@@ -1,5 +1,11 @@
 # AMD 实验后端与重启续接
 
+## 2026-10-07 NPT 池与叶组回收 R0 候选（与 R3 独立）
+
+用户恢复工作且要求不与R3进度冲突。只改HVM R0/独立fixture/本topic docs与memory，不改GUI/语言/共享IOCTL/CLI，不运行主程序构建。general root池256、probe64，source账本4096；FULL在现有PD空slot下用有界A-bit二次机会回收一个PT，断开旧父边、保留其他组/上层、剪去无依赖源并复用私有SourceId；新epoch丢弃旧walk并待下一NPF新resolve，FlushPending真实硬件确认保留。partial回收同步session/sharedCacheEpoch避免下次VMRUN再全reset。upper geometry/untracked用原full reset，corrupt拒绝。local/shared/identity/clone/split仍64MiB table budget；共享256页根数量按余量限制，满registry回local，例如32cpu+1282reserved允许26shared。poolRecycles含partial事件，resets仍实际cache-reset决策，协议v6/metricsv11未变。
+
+25C+Python6实际通过，production shadow fixture49,383 checks/8,209次回收跨SourceId两轮、另一叶组/上层保留/Source prune/A二次机会/stale/budget覆盖。标准MSVC/WDK x64/WX/API Universal/INF/CAT与integer gate238通过。候选artifacts/amd-perf-20261007-npt-reclaim，OutDir及IntDir独立，不覆盖Release或signed-vgif-fix；未签未加载，无宿主/VM/UAC操作。详细docs/next/evidence/amd-npt-group-reclaim-20261007.md。下一硬件先相同单核accel对比NPF/reset/软件walk与OS进展，后8核；不把unit或扩池当真实性能通过。
+
 ## 2026-10-07 用户要求暂停以准备 release（实验已完整收尾）
 
 用户在继续NPT性能优化时要求优雅暂停准备release。尚未落任何general pool/叶组回收新源码；驱动源码停在189e3445，测试证据54213056，管理员工具ede19d01。外部其他UI/syscall未提交改动不属于本轮，保留未staged。

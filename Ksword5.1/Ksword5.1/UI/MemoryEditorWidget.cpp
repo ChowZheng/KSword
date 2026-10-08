@@ -118,7 +118,8 @@ namespace ks::ui
         auto* codeLayout = new QVBoxLayout(codePage);
         codeLayout->setContentsMargins(0, 0, 0, 0);
         auto* navigation = new QHBoxLayout;
-        navigation->addWidget(new QLabel(trText(QStringLiteral("反汇编起点")), codePage));
+        m_decodeLabel = new QLabel(trText(QStringLiteral("反汇编起点")), codePage);
+        navigation->addWidget(m_decodeLabel);
         m_decodeAddress = new QLineEdit(codePage);
         m_decodeAddress->setToolTip(trText(QStringLiteral("从此地址开始解码，避免从指令中间或无关数据处解码；地址必须在快照内。")));
         auto* decode = new QPushButton(trText(QStringLiteral("定位并解码")), codePage);
@@ -320,7 +321,9 @@ namespace ks::ui
             const auto address = value.toULongLong(&ok, 16);
             if (!ok || !contains(address))
             {
-                m_decodeStatus->setText(trText(QStringLiteral("反汇编起点必须是当前快照内的十六进制地址。")));
+                m_decodeStatus->setText(m_addressKind == SnapshotAddressKind::FileOffset
+                    ? trText(QStringLiteral("反汇编起点必须是当前范围内的十六进制文件偏移。"))
+                    : trText(QStringLiteral("反汇编起点必须是当前快照内的十六进制地址。")));
                 return;
             }
             m_anchor = address;
@@ -383,6 +386,27 @@ namespace ks::ui
     }
 
     HexEditorWidget* MemoryEditorWidget::hexEditor() const { return m_hex; }
+    void MemoryEditorWidget::setAddressKind(SnapshotAddressKind kind)
+    {
+        if (m_addressKind == kind) return;
+        m_addressKind = kind;
+        // Do not carry process navigation, read comparisons or staged edits
+        // across coordinate domains, even when numeric offsets happen to match.
+        const QPointer<MemoryEditorWidget> self(this);
+        clear();
+        if (!self || m_addressKind != kind) return;
+        const bool file = kind == SnapshotAddressKind::FileOffset;
+        m_decodeLabel->setText(file ? trText(QStringLiteral("反汇编起点（文件偏移）"))
+            : trText(QStringLiteral("反汇编起点")));
+        m_decodeAddress->setToolTip(file
+            ? trText(QStringLiteral("从此文件偏移开始解码；偏移必须在当前已加载范围内。"))
+            : trText(QStringLiteral("从此地址开始解码，避免从指令中间或无关数据处解码；地址必须在快照内。")));
+        m_architecture->setToolTip(file
+            ? trText(QStringLiteral("按所选 x86/x64 指令集解码原始文件字节；文件偏移不等于 PE 虚拟地址。"))
+            : trText(QStringLiteral("指令架构；可手动切换，物理地址和 CR3 无法自动判断目标位数。")));
+        m_comparison->horizontalHeaderItem(0)->setText(file
+            ? trText(QStringLiteral("文件偏移")) : trText(QStringLiteral("地址")));
+    }
     QByteArray MemoryEditorWidget::data() const { return m_hex->data(); }
     QByteArray MemoryEditorWidget::originalBytes() const { return m_original; }
     std::uint64_t MemoryEditorWidget::baseAddress() const { return m_base; }
@@ -592,7 +616,12 @@ namespace ks::ui
         m_assemble->setEnabled(m_editable && loaded);
         m_undo->setEnabled(m_editable && loaded && m_history.canUndo());
         m_redo->setEnabled(m_editable && loaded && m_history.canRedo());
-        m_status->setText(loaded
+        const bool fileReadOnly = m_addressKind == SnapshotAddressKind::FileOffset && !m_editable;
+        for (auto* button : {m_assemble, m_undo, m_redo}) button->setVisible(!fileReadOnly);
+        m_status->setText(fileReadOnly
+            ? (loaded ? trText(QStringLiteral("已加载 %1 字节（只读）。")).arg(m_hex->regionSize())
+                : trText(QStringLiteral("加载文件范围后可查看十六进制、反汇编和文本。")))
+            : loaded
             ? trText(QStringLiteral("%1 字节 | %2 处差异待应用")).arg(m_hex->regionSize()).arg(diffBlocks().size())
             : trText(QStringLiteral("读取内存后可查看指令和编辑缓存。")));
     }
@@ -631,6 +660,17 @@ namespace ks::ui
         m_tabs->setCurrentIndex(1);
         jumpToAddress(address);
     }
+    void MemoryEditorWidget::openFindPanel()
+    {
+        if (m_tabs->currentIndex() == 1) m_disassembly->openFind();
+        else if (m_tabs->currentIndex() == 2) m_text->openFind();
+        else
+        {
+            const QPointer<MemoryEditorWidget> self(this);
+            m_tabs->setCurrentIndex(0);
+            if (self) m_hex->openFindPanel();
+        }
+    }
     WorkbenchDisasmView* MemoryEditorWidget::disassemblyView() const { return m_disassembly; }
     WorkbenchTextView* MemoryEditorWidget::textView() const { return m_text; }
     std::optional<DisassemblySelection> MemoryEditorWidget::selectedInstruction() const
@@ -664,7 +704,8 @@ namespace ks::ui
         synchronizeSnapshotProvider();
         m_syncing = true;
         m_disassembly->setArchitectureOverride(architecture() == DisassemblyArchitecture::X64);
-        if (m_disassembly->anchorAddress() != m_anchor)
+        // Zero is a valid file offset/address, distinct from an unpositioned view.
+        if (!m_disassembly->hasAnchor() || m_disassembly->anchorAddress() != m_anchor)
             m_disassembly->jumpTo(m_anchor);
         else
             m_disassembly->refreshView();
