@@ -19,6 +19,7 @@ KswordCLI.exe <family> <subcommand> --help
 若所有只读命令连同 `capability query-driver-capabilities` 都返回 `win32=50`，不能仅凭 IOCTL 名称判断驱动缺少实现。请运行 `preflight query` 和 `r0 ioctl-registry`，核对 `sc qc KswordARK` 的实际加载路径及配套版本。2026-10-01 的旧驱动会在 OS build 高于 26100 时拦截包括能力查询在内的请求；该上限已于 2026-10-03 移除，仍须使用匹配的内核 profile。
 
 - 数值参数支持十进制或 `0x` 前缀十六进制。
+- 缺少必填参数会指出参数名，例如 `missing option --pid`；有参数但无值会显示 `missing value for option --pid`。参数错误同时显示该命令的语法及内置 help 的参数说明。
 - `--flags 0xN` 是按位标志；具体含义以 `shared/driver/` 中对应协议头为准。
 - `--limit N` 只限制 CLI 打印行数；`--max-*` 通常控制传给驱动的查询预算。
 - `--hex`/`--*-hex` 接收十六进制字节串；`--data-file`/`--*-file` 从文件读取原始字节；同一 payload 的 hex 和 file 形式互斥。

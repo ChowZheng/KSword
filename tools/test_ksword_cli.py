@@ -76,6 +76,13 @@ def main():
             assert protocol.stdout.decode().split() == [str(0x222014), str(0x222028)], protocol.stdout
             unsupported = subprocess.run([str(binary), "capability", "query-driver-capabilities"], capture_output=True)
             assert b"preflight query" in unsupported.stderr and b"r0 ioctl-registry" in unsupported.stderr
+            for command, option in [("process terminate", "--pid"), ("driver detail", "--driver"),
+                                    ("kernel object-summary", "--target-kind"), ("handle enum --limit 4", "--pid")]:
+                result = subprocess.run([str(binary), *command.split()], capture_output=True)
+                assert result.returncode == 1 and ("missing option " + option).encode() in result.stderr, result.stderr
+                assert b"usage: KswordCLI.exe" in result.stderr, result.stderr
+            empty = subprocess.run([str(binary), "process", "terminate", "--pid"], capture_output=True)
+            assert b"missing value for option --pid" in empty.stderr, empty.stderr
             print("CLI regression: log default/0/1/2/100 passed (real CRT UTF-8 redirection)")
 
 

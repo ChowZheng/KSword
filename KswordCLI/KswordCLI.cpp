@@ -319,10 +319,14 @@ namespace
     const std::wstring& requireOptionText(const NamedArgs& args, const wchar_t* key)
     {
         const std::wstring* value = getOptionText(args, key);
+        std::string keyText;
+        for (const wchar_t* cursor = key; *cursor; ++cursor) keyText.push_back(static_cast<char>(*cursor));
         if (value == nullptr)
         {
-            throw std::invalid_argument("missing option");
+            throw std::invalid_argument("missing option " + keyText);
         }
+        if (value->empty())
+            throw std::invalid_argument("missing value for option " + keyText);
         return *value;
     }
 
@@ -8499,6 +8503,22 @@ int wmain(int argc, wchar_t* argv[])
     try
     {
         return dispatchCommand(argc, argv);
+    }
+    catch (const std::invalid_argument& ex)
+    {
+        const std::string message = ex.what();
+        std::wcerr << L"error: " << std::wstring(message.begin(), message.end()) << L"\n";
+        const std::wstring family = argc > 1 ? argv[1] : L"";
+        const std::wstring subcommand = argc > 2 && family != L"log" ? argv[2] : L"";
+        for (const CommandHelp& command : kCommandHelps)
+        {
+            if (family == command.family && subcommand == command.subcommand)
+            {
+                std::wcerr << L"usage: " << command.syntax << L"\n" << command.options << L"\n";
+                break;
+            }
+        }
+        return 1;
     }
     catch (const std::exception& ex)
     {

@@ -64,7 +64,9 @@ namespace
         const std::wstring value = optionValue(args, key);
         if (value.empty())
         {
-            throw std::runtime_error("missing required r0 command option");
+            std::string keyText;
+            for (const wchar_t* cursor = key; *cursor; ++cursor) keyText.push_back(static_cast<char>(*cursor));
+            throw std::invalid_argument("missing required option " + keyText);
         }
         return value;
     }
