@@ -44,11 +44,12 @@ namespace ks::ui
 
     void MemoryEditorWidget::synchronizeSnapshotProvider()
     {
+        const int addressBits = m_addressKind == SnapshotAddressKind::FileOffset
+            || architecture() == DisassemblyArchitecture::X64 ? 64 : 32;
         m_bytesProvider.setSnapshot(m_base, data(), m_original, m_previousRead,
-            architecture() == DisassemblyArchitecture::X64 ? 64 : 32,
-            m_highlightChanges->isChecked());
+            addressBits, m_highlightChanges->isChecked());
         m_disassembly->setAddressRange(m_base, static_cast<std::uint64_t>(data().size()));
-        m_text->setAddressBits(architecture() == DisassemblyArchitecture::X64 ? 64 : 32);
+        m_text->setAddressBits(addressBits);
         m_text->setAddressRange(m_base, static_cast<std::uint64_t>(data().size()));
     }
 
@@ -79,6 +80,12 @@ namespace ks::ui
 
     void MemoryEditorWidget::setProcessContext(std::uint32_t pid, std::uint64_t createTime100ns)
     {
+        if (m_addressKind == SnapshotAddressKind::FileOffset)
+        {
+            m_processPid = 0;
+            m_processCreateTime100ns = 0;
+            return;
+        }
         const auto creation = pid != 0 && createTime100ns == 0
             ? x64dbg_navigation::ProcessCreateTime100ns(pid) : createTime100ns;
         m_processPid = pid != 0 && creation != 0 ? pid : 0;
