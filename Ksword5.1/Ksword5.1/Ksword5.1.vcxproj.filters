@@ -578,6 +578,12 @@
     <ClCompile Include="MemoryDock\MemoryDock.Workbench.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="MemoryDock\MemoryDebugPage.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="MemoryDock\MemoryDebugProcessCatalog.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="MemoryDock\MemoryDock.WorkbenchEntry.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -1224,6 +1230,9 @@
       <Filter>Source Files\MemoryWorkbench</Filter>
     </ClCompile>
     <ClCompile Include="UI\MemoryWorkbench\MemoryWorkbenchView.Nav.cpp">
+      <Filter>Source Files\MemoryWorkbench</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\MemoryWorkbench\MemoryWorkbenchView.MemoryDebug.cpp">
       <Filter>Source Files\MemoryWorkbench</Filter>
     </ClCompile>
     <ClCompile Include="UI\MemoryWorkbench\MemoryWorkbenchView.HexPrefs.cpp">
@@ -2950,6 +2959,12 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="ksword\file\pe_analyzer.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="MemoryDock\MemoryDebugPage.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="MemoryDock\MemoryDebugProcessCatalog.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="ksword\scanner\atomic_file_patch.h">

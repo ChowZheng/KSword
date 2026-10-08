@@ -88,7 +88,8 @@ cl %CLFLAGS% ^
   "%FIX%\wpJ6_tests.Identity.cpp" "%FIX%\wpJ6_tests.Embedded.cpp" "%FIX%\wpJ6_tests.Actions.cpp" "%FIX%\wpJ6_tests.Gate.cpp" "%FIX%\wpJ6_tests.Write.cpp" "%FIX%\wpJ6_tests.Nav.cpp" "%FIX%\wpJ6_tests.Visual.cpp" ^
   "%FIX%\wpJ6_tests.Review2A.cpp" "%FIX%\wpJ6_tests.Review2B.cpp" "%FIX%\wpJ6_tests.Review2C.cpp" "%FIX%\wpJ6_tests.Review2Fixes.cpp" "%FIX%\wpJ6_tests.Quit.cpp" "%FIX%\wpJ6_tests.Entry3b.cpp" "%FIX%\wpJ6_tests.Narrow.cpp" "%FIX%\wpJ6_tests.DarkLabels.cpp" "%FIX%\wpJ6_tests.Chrome.cpp" "%FIX%\wpJ6_tests.RowFit.cpp" "%FIX%\wpJ6_tests.DockFill.cpp" "%FIX%\wpJ6_tests.SubPages.cpp" ^
   "%WPI%\memwb_wpI_common.cpp" ^
-  "%UI%\MemoryWorkbenchView.cpp" "%UI%\MemoryWorkbenchView.Ui.cpp" "%UI%\MemoryWorkbenchView.Session.cpp" "%UI%\MemoryWorkbenchView.Nav.cpp" "%UI%\MemoryWorkbenchView.HexPrefs.cpp" "%UI%\MemoryWorkbenchView.SubPages.cpp" "%UI%\MemoryWorkbenchView.RowCanvas.cpp" "%UI%\WorkbenchDiagnosticsHost.cpp" ^
+  "%UI%\MemoryWorkbenchView.cpp" "%UI%\MemoryWorkbenchView.MemoryDebug.cpp" "%UI%\MemoryWorkbenchView.Ui.cpp" "%UI%\MemoryWorkbenchView.Session.cpp" "%UI%\MemoryWorkbenchView.Nav.cpp" "%UI%\MemoryWorkbenchView.HexPrefs.cpp" "%UI%\MemoryWorkbenchView.SubPages.cpp" "%UI%\MemoryWorkbenchView.RowCanvas.cpp" "%UI%\WorkbenchDiagnosticsHost.cpp" ^
+  "%FIX%\wpJ6_tests.MemoryDebug.cpp" ^
   "%UI%\MemoryWorkbenchView.PointerChains.cpp" "%APP%\MemoryDock\WorkbenchPointerChainAccess.cpp" ^
   "%UI%\WorkbenchShared.cpp" ^
   "%UI%\WorkbenchHexPane.cpp" "%UI%\WorkbenchHexPane.Panels.cpp" "%UI%\WorkbenchHexPane.ViewMenu.cpp" ^
@@ -103,13 +104,18 @@ if errorlevel 1 exit /b %errorlevel%
 cl %CLFLAGS% ^
   "%UI%\HexInspectorPanel.cpp" "%UI%\HexInspectorPanel.Rows.cpp" "%UI%\HexInspectorPanel.Edit.cpp" "%UI%\HexInspectorPanel.Menu.cpp" "%UI%\HexInspectorRowView.cpp" "%UI%\HexInspectorRowView.Paint.cpp" "%UI%\HexInspectorWidgets.cpp" ^
   "%UI%\HexFindBar.cpp" "%UI%\HexFindSearch.cpp" "%UI%\HexViewWidgets.cpp" "%UI%\HexViewWidgets.Text.cpp" "%UI%\HexViewFormat.cpp" ^
-  "%UI%\WorkbenchDisasmView.cpp" "%UI%\WorkbenchDisasmView.Edit.cpp" "%UI%\WorkbenchDisasmView.Canvas.cpp" "%UI%\MemoryRowCanvas.cpp" "%UI%\WorkbenchTextView.cpp" "%UI%\WorkbenchCompareView.cpp" ^
+  "%UI%\WorkbenchDisasmView.cpp" "%UI%\WorkbenchDisasmView.Edit.cpp" "%UI%\WorkbenchDisasmView.Canvas.cpp" "%UI%\WorkbenchTextView.cpp" "%UI%\WorkbenchCompareView.cpp" ^
   "%UI%\WorkbenchSessionBar.cpp" "%UI%\WriteModeSwitch.cpp" "%UI%\WorkbenchStatusBar.cpp" "%UI%\WorkbenchConfirmations.cpp" "%UI%\WorkbenchStringWriteDialog.cpp" ^
   "%UI%\WorkbenchMessages.cpp" "%UI%\WorkbenchSettings.cpp" "%UI%\WorkbenchActions.cpp" ^
   "%UI%\AddressBookStore.cpp" "%UI%\AddressBookModel.cpp" "%UI%\AddressBookModel.StoreSync.cpp" "%UI%\AddressBookPanel.cpp" "%UI%\AddressBookPanel.RowActions.cpp" "%UI%\AddressBookPanel.Menu.cpp" ^
   "%UI%\Int3Controller.cpp" "%UI%\Int3PatchPanel.cpp" "%UI%\WorkbenchBookIntake.cpp" ^
   "%APP%\UI\X64DbgNavigation.cpp" "%APP%\UI\FlowLayout.cpp" "%APP%\UI\ThemeStatusRole.cpp" "%APP%\UI\GlobalUiBaseStyle.cpp" "%APP%\UI\ThemeControlGlyphs.cpp" ^
   /Fo"%OBJ%\\"
+if errorlevel 1 exit /b %errorlevel%
+
+rem 既有 MemoryRowCanvas 的 data 局部名隐藏 QWidget::data；仅此 TU 隔离 C4458，
+rem 其余生产类和本次新增模式/测试仍按 /W4 /WX 编译，不降低全夹具门禁。
+cl %CLFLAGS% /wd4458 "%UI%\MemoryRowCanvas.cpp" /Fo"%OBJ%\\"
 if errorlevel 1 exit /b %errorlevel%
 
 cl %CLFLAGS% ^

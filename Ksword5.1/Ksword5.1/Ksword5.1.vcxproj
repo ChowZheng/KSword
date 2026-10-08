@@ -343,6 +343,8 @@
     <ClCompile Include="MemoryDock\WorkbenchIoPorts.Kernel.cpp" />
     <ClCompile Include="MemoryDock\WorkbenchIoMapping.cpp" />
     <ClCompile Include="MemoryDock\MemoryDock.Workbench.cpp" />
+    <ClCompile Include="MemoryDock\MemoryDebugPage.cpp" />
+    <ClCompile Include="MemoryDock\MemoryDebugProcessCatalog.cpp" />
     <ClCompile Include="MemoryDock\MemoryDock.WorkbenchEntry.cpp" />
     <ClCompile Include="MemoryDock\WorkbenchServicesMapping.cpp" />
     <ClCompile Include="MemoryDock\WorkbenchServicesAudit.cpp" />
@@ -607,6 +609,7 @@
     <ClCompile Include="UI\MemoryWorkbench\MemoryWorkbenchView.Ui.cpp" />
     <ClCompile Include="UI\MemoryWorkbench\MemoryWorkbenchView.Session.cpp" />
     <ClCompile Include="UI\MemoryWorkbench\MemoryWorkbenchView.Nav.cpp" />
+    <ClCompile Include="UI\MemoryWorkbench\MemoryWorkbenchView.MemoryDebug.cpp" />
     <ClCompile Include="UI\MemoryWorkbench\MemoryWorkbenchView.HexPrefs.cpp" />
     <ClCompile Include="UI\MemoryWorkbench\MemoryWorkbenchView.SubPages.cpp" />
     <ClCompile Include="UI\MemoryWorkbench\WorkbenchDiagnosticsHost.cpp" />
@@ -829,6 +832,8 @@
     <ClInclude Include="ksword\file\file_handle_query_worker.h" />
     <ClInclude Include="ksword\file\file_metadata_transaction.h" />
     <ClInclude Include="ksword\file\pe_analyzer.h" />
+    <ClInclude Include="MemoryDock\MemoryDebugPage.h" />
+    <ClInclude Include="MemoryDock\MemoryDebugProcessCatalog.h" />
     <ClInclude Include="ksword\scanner\atomic_file_patch.h" />
     <ClInclude Include="ksword\scanner\binary_scanner.h" />
     <ClInclude Include="ksword\scanner\scanner.h" />

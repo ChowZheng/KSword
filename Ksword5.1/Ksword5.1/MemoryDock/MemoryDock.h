@@ -62,6 +62,7 @@ namespace ks::ui
     class VisibleTableWidget;
     class MemoryEditorWidget;
     class MemoryWorkbenchView; // 内存工作台视图：懒创建，只用指针。
+    class MemoryDebugPage;     // 不附加内存调试页：独立于 Dock 的目标会话。
     struct NavRequest;         // 工作台跳转请求：navigateWorkbench 的参数类型。
 }
 
@@ -1415,6 +1416,8 @@ private:
     // initializeWorkbenchTab：在 initializeTabs 的图标循环之后调用，建空容器并插入页签。
     // 视图本身懒创建（首次切到该页签时由 ensureWorkbenchView 创建），避免拖慢 Dock 构造。
     void initializeWorkbenchTab();
+    // initializeMemoryDebugTab：插入独立的不附加内存调试页，页面首次显示才访问系统。
+    void initializeMemoryDebugTab();
     // ensureWorkbenchView：幂等地创建视图并完成全部接线；内嵌窗口里恒为空操作。
     void ensureWorkbenchView();
     // connectWorkbenchLiveness：视图与既有书签计时器都就绪后幂等接线，锚定目标退出时孤立 int3 记录。
@@ -1439,6 +1442,7 @@ private:
     void applyProcessDetailTabVisibility();
 
     QWidget* m_tabWorkbench = nullptr;                   // 工作台页签的容器页。
+    ks::ui::MemoryDebugPage* m_memoryDebugPage = nullptr; // 独立进程内存会话，不跟随 Dock 附加。
     ks::ui::MemoryWorkbenchView* m_workbenchView = nullptr; // 工作台视图（懒创建，容器页的子对象）。
     bool m_workbenchRouteJumps = true;                    // 旧入口的跳转是否交给工作台（3b 起默认真）。
     bool m_workbenchEmbedded = false;                     // 是否是进程详情窗口里的内嵌实例（视图以内嵌模式创建）。
