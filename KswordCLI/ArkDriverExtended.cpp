@@ -365,7 +365,16 @@ namespace
     template <typename Result>
     int finishResult(const wchar_t* label, const Result& result)
     {
-        return printResultState(label, result) ? 0 : 3;
+        if (printResultState(label, result)) return 0;
+        if (result.io.message.rfind("CreateFileW", 0U) == 0U) return 2;
+        const auto error = result.io.win32Error;
+        if (error == ERROR_INVALID_FUNCTION || error == ERROR_NOT_SUPPORTED ||
+            error == ERROR_CALL_NOT_IMPLEMENTED || error == ERROR_PROC_NOT_FOUND) return 5;
+        if constexpr (HasUnsupported<Result>::value)
+        {
+            if (result.unsupported) return 5;
+        }
+        return 3;
     }
 }
 

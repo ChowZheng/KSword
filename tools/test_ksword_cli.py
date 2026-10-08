@@ -88,6 +88,13 @@ def main():
             assert b"missing option" not in unknown.stderr
             valid = subprocess.run([str(binary), "driver", "detail", "--driver", "SkaProtect"], capture_output=True)
             assert valid.returncode == 5 and b"IOCTL_KSWORD_ARK_QUERY_DRIVER_OBJECT" in valid.stderr, valid.stderr
+            for command in ["process enum --limit 4", "thread enum --limit 4", "kernel cid", "kernel ipc",
+                            "driver integrity --limit 4", "callback runtime-state", "misc vbs", "dyn status"]:
+                result = subprocess.run([str(binary), *command.split()], capture_output=True)
+                assert result.returncode == 5 and b"win32=50" in result.stderr, (command, result.returncode, result.stderr)
+            for command in ["process enum", "kernel ipc", "callback runtime-state", "misc vbs"]:
+                result = subprocess.run([str(binary), "--missing-device", *command.split()], capture_output=True)
+                assert result.returncode == 2 and b"win32=2" in result.stderr, (command, result.returncode, result.stderr)
             print("CLI regression: log default/0/1/2/100 passed (real CRT UTF-8 redirection)")
 
 

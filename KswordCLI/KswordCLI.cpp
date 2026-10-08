@@ -76,6 +76,8 @@ namespace
     constexpr std::size_t kHugeResponseBytes = 4U * 1024U * 1024U;
     constexpr std::size_t kMaxCommandBytes = 64U * 1024U * 1024U;
     constexpr std::size_t kMaxHexBytes = 256U;
+    DWORD lastIoctlError = ERROR_SUCCESS;
+    DWORD lastOpenError = ERROR_SUCCESS;
 
     // IoctlResult mirrors the Win32 DeviceIoControl completion state.
     // Inputs: fields are assigned by sendIoctl after each kernel request.
@@ -194,7 +196,7 @@ namespace
     // Returns: RAII DriverHandle; caller checks valid() before issuing requests.
     DriverHandle openDriver(DWORD desiredAccess = kDefaultDesiredAccess)
     {
-        return DriverHandle(::CreateFileW(
+        DriverHandle handle(::CreateFileW(
             KSWORD_ARK_LOG_WIN32_PATH,
             desiredAccess,
             kDefaultShareMode,
@@ -202,6 +204,8 @@ namespace
             OPEN_EXISTING,
             FILE_ATTRIBUTE_NORMAL,
             nullptr));
+        lastOpenError = handle.valid() ? ERROR_SUCCESS : ::GetLastError();
+        return handle;
     }
 
     // sendIoctl wraps synchronous DeviceIoControl for fixed and variable buffers.
@@ -236,6 +240,7 @@ namespace
             nullptr);
         result.ok = (ok != FALSE);
         result.win32Error = result.ok ? ERROR_SUCCESS : ::GetLastError();
+        lastIoctlError = result.win32Error;
         result.bytesReturned = bytesReturned;
         return result;
     }
@@ -8535,7 +8540,11 @@ int wmain(int argc, wchar_t* argv[])
     configureConsole();
     try
     {
-        return dispatchCommand(argc, argv);
+        const int rc = dispatchCommand(argc, argv);
+        // Fixed-response handlers return 3 on transport failure; audit handlers
+        // already return 5 for an unsupported IOCTL. Keep both paths consistent.
+        if (rc == 3 && lastOpenError != ERROR_SUCCESS) return 2;
+        return rc == 3 && isUnsupportedTransportError(lastIoctlError) ? 5 : rc;
     }
     catch (const std::invalid_argument& ex)
     {
