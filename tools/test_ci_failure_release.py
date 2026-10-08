@@ -223,6 +223,7 @@ class FailureReleaseTests(unittest.TestCase):
         self.assertIn("CI_JOB_RESULTS: ${{ toJSON(needs) }}", publication)
         self.assertIn("publish_status=${PIPESTATUS[0]}", publication)
         self.assertIn("--publication-error-log", publication)
+        self.assertIn('exit "$publish_status"', publication)
         self.assertNotIn("continue-on-error:", workflow)
         self.assertIn("needs.source-integrity.result == 'success'", workflow)
 

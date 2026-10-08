@@ -1026,4 +1026,5 @@ jobs:
           set -e
           if (( publish_status != 0 )); then
             python3 tools/ci_failure_release.py --publication-error-log "$RUNNER_TEMP/ci-release-publish.log"
+            exit "$publish_status"
           fi
