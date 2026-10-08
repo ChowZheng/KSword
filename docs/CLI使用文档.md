@@ -61,6 +61,8 @@ KswordCLI.exe <family> <subcommand> --help
 
 Read bounded frames from the KswordARK log device.
 
+日志与其他命令统一输出 UTF-8，可直接重定向到文件。日志帧先按 UTF-8 解码；旧版 ANSI 日志按系统代码页解码。默认最多读取 64 帧，`--max-frames 0` 不读取帧。
+
 | 命令 | 语法 | 用途 | 参数 | 备注 |
 | --- | --- | --- | --- | --- |
 | `log` | `KswordCLI.exe log [--max-frames N]` | Read up to N log frames from the shared log device. | --max-frames defaults to 64. | No subcommand is used for the log family. |

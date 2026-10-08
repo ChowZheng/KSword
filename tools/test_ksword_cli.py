@@ -1,0 +1,76 @@
+"""Run the production CLI against an in-process Windows transport fixture.
+
+No driver is loaded and no service or target process is changed. Run from an
+x64 VS developer shell: python tools/test_ksword_cli.py.
+"""
+import argparse
+from pathlib import Path
+import subprocess
+import tempfile
+
+ROOT = Path(__file__).resolve().parents[1]
+HARNESS = r'''
+#define NOMINMAX
+#include <WinSock2.h>
+#include <Windows.h>
+#include <cstring>
+#include <string>
+static unsigned reads = 0;
+static DWORD openError = 0, ioctlError = ERROR_NOT_SUPPORTED;
+static HANDLE WINAPI testOpen(LPCWSTR, DWORD, DWORD, LPSECURITY_ATTRIBUTES, DWORD, DWORD, HANDLE) {
+    if (openError) { SetLastError(openError); return INVALID_HANDLE_VALUE; }
+    return reinterpret_cast<HANDLE>(123);
+}
+static BOOL WINAPI testClose(HANDLE) { return TRUE; }
+static BOOL WINAPI testRead(HANDLE, LPVOID data, DWORD capacity, LPDWORD bytes, LPOVERLAPPED) {
+    ++reads;
+    const std::string frame = reads == 1 ? "fixture log!\n" : "END_OF_LOG";
+    if (capacity < frame.size()) { SetLastError(ERROR_INSUFFICIENT_BUFFER); return FALSE; }
+    std::memcpy(data, frame.data(), frame.size()); *bytes = static_cast<DWORD>(frame.size()); return TRUE;
+}
+static BOOL WINAPI testIoctl(HANDLE, DWORD, LPVOID, DWORD, LPVOID, DWORD, LPDWORD bytes, LPOVERLAPPED) {
+    *bytes = 0; SetLastError(ioctlError); return FALSE;
+}
+#define CreateFileW testOpen
+#define CloseHandle testClose
+#define ReadFile testRead
+#define DeviceIoControl testIoctl
+#define wmain productionMain
+#include "CLI_SOURCE"
+#undef wmain
+int commandArkDriverExtended(int, wchar_t*[]) { return 3; }
+int commandArkDriverCallbackMonitor(int, wchar_t*[]) { return 3; }
+int wmain(int argc, wchar_t* argv[]) {
+    if (argc > 1 && std::wstring(argv[1]) == L"--missing-device") { openError = ERROR_FILE_NOT_FOUND; ++argv; --argc; }
+    if (argc > 1 && std::wstring(argv[1]) == L"--unsupported") { ++argv; --argc; }
+    return productionMain(argc, argv);
+}
+'''
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--baseline", action="store_true", help="Observe the pre-fix log fastfail")
+    args = parser.parse_args()
+    with tempfile.TemporaryDirectory(prefix="ksword-cli-") as temp:
+        directory = Path(temp)
+        source = directory / "regression.cpp"
+        source.write_text(HARNESS.replace("CLI_SOURCE", (ROOT / "KswordCLI/KswordCLI.cpp").as_posix()), encoding="utf-8")
+        binary = directory / "regression.exe"
+        subprocess.run(["cl", "/nologo", "/std:c++17", "/EHsc", "/utf-8", "/O2", str(source),
+                        "/Fe:" + str(binary), "/link", "Iphlpapi.lib", "Ws2_32.lib", "Setupapi.lib"], cwd=temp, check=True)
+        cases = [("log",), ("log", "--max-frames", "0"), ("log", "--max-frames", "1"),
+                 ("log", "--max-frames", "2"), ("log", "--max-frames", "100")]
+        for command in cases:
+            result = subprocess.run([str(binary), *command], capture_output=True, timeout=10)
+            if args.baseline:
+                print(command, hex(result.returncode & 0xffffffff), repr(result.stdout))
+            else:
+                assert result.returncode == 0, (command, result.returncode, result.stderr)
+                assert result.stdout.replace(b"\r\n", b"\n") == (b"" if command[-1] == "0" else b"fixture log!\n"), (command, result.stdout)
+        if not args.baseline:
+            print("CLI regression: log default/0/1/2/100 passed (real CRT UTF-8 redirection)")
+
+
+if __name__ == "__main__":
+    main()

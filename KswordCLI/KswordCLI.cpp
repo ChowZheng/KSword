@@ -1149,7 +1149,7 @@ namespace
     };
 
     constexpr CommandHelp kCommandHelps[] = {
-        { L"log", L"", L"KswordCLI.exe log [--max-frames N]", L"Read up to N log frames from the shared log device.", L"--max-frames defaults to 64.", L"No subcommand is used for the log family." },
+        { L"log", L"", L"KswordCLI.exe log [--max-frames N]", L"Read up to N log frames from the shared log device.", L"--max-frames defaults to 64.", L"No subcommand is used for the log family. Output is UTF-8; legacy log bytes use the system ANSI code page." },
         { L"process", L"terminate", L"KswordCLI.exe process terminate --pid PID [--exit-status NTSTATUS]", L"Terminate one process through the driver.", L"Required: --pid. Optional: --exit-status defaults to 0xC000013A.", L"" },
         { L"process", L"suspend", L"KswordCLI.exe process suspend --pid PID", L"Suspend one process.", L"Required: --pid.", L"" },
         { L"process", L"resume", L"KswordCLI.exe process resume --pid PID", L"Resume one suspended process.", L"Required: --pid.", L"Pairs with process suspend; the driver prefers PsResumeProcess and falls back to Zw/NtResumeProcess." },
@@ -1813,6 +1813,27 @@ namespace
         return 0;
     }
 
+    // The CRT rejects narrow writes on stdout after configureConsole selects
+    // _O_U8TEXT. Decode each byte frame before sending it to the wide stream.
+    std::wstring logTextToWide(const std::string& text)
+    {
+        if (text.empty()) return {};
+        UINT codePage = CP_UTF8;
+        DWORD flags = MB_ERR_INVALID_CHARS;
+        int count = ::MultiByteToWideChar(codePage, flags, text.data(), static_cast<int>(text.size()), nullptr, 0);
+        if (count == 0)
+        {
+            codePage = CP_ACP;
+            flags = 0;
+            count = ::MultiByteToWideChar(codePage, flags, text.data(), static_cast<int>(text.size()), nullptr, 0);
+        }
+        if (count == 0) throw std::runtime_error("cannot decode log frame");
+        std::wstring wide(static_cast<std::size_t>(count), L'\0');
+        if (::MultiByteToWideChar(codePage, flags, text.data(), static_cast<int>(text.size()), wide.data(), count) == 0)
+            throw std::runtime_error("cannot decode log frame");
+        return wide;
+    }
+
     // commandLogFamily reads the non-IOCTL log ReadFile channel.
     // Inputs: argc/argv from wmain.
     // Processing: reads bounded frames until END_OF_LOG or --max-frames.
@@ -1842,10 +1863,10 @@ namespace
             if (marker != std::string::npos)
             {
                 text.resize(marker);
-                std::cout << text;
+                std::wcout << logTextToWide(text);
                 break;
             }
-            std::cout << text;
+            std::wcout << logTextToWide(text);
         }
         return 0;
     }
