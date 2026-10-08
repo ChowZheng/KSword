@@ -8,6 +8,15 @@
   "text_direction": "ltr",
   "fallback": "en-US",
   "translations": {
+    "window.detail.topmost.hint": "切换置顶状态后点击“应用修改”生效。",
+    "window.detail.alpha.hint": "调整后点击“应用修改”生效；透明度会自动启用分层窗口。",
+    "window.detail.style.normal": "窗口样式",
+    "window.detail.style.extended": "扩展样式",
+    "window.detail.style.summary": "样式明细",
+    "window.detail.action.refresh": "刷新",
+    "window.detail.action.apply": "应用修改",
+    "window.detail.action.export": "导出信息",
+    "window.detail.action.close": "关闭",
     "window.detail.tab.control_inspection": "控件检查",
     "privilege.workbench.access.stage.cancelled": "已取消",
     "privilege.workbench.access.stage.process": "打开目标进程",
@@ -6557,6 +6566,11 @@
     "notification.copy.log_template": "%1\n%2\n%3\n文件：%4\n函数：%5\nGUID：%6"
   },
   "source_translations": {
+    "切换置顶状态后点击“应用修改”生效。": "切换置顶状态后点击“应用修改”生效。",
+    "调整后点击“应用修改”生效；透明度会自动启用分层窗口。": "调整后点击“应用修改”生效；透明度会自动启用分层窗口。",
+    "部分窗口设置未能应用：Style=%1, ExStyle=%2, 置顶=%3, Alpha=%4。": "部分窗口设置未能应用：Style=%1, ExStyle=%2, 置顶=%3, Alpha=%4。",
+    "扩展样式": "扩展样式",
+    "样式明细": "样式明细",
     "\nFresh owner lookup status %1 | subtype resolved %2 | owner %3": "\n最新归属查询状态 %1 | 子类已核实 %2 | 所有者 %3",
     "\nPrivate subtype could not be validated during this inspection. An older compression label is not reused for a recyclable PFN.": "\n本次检查无法核实私有页子类；不对可复用的 PFN 沿用旧压缩标签。",
     " [PID %1]": " [PID %1]",

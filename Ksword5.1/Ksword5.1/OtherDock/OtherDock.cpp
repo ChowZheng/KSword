@@ -4,6 +4,8 @@
 #include "../Internationalization/LanguageManager.h"
 #include "../UI/TableInteractionSupport.h"
 #include "../UI/VisibleTableWidget.h"
+#include "../UI/AdaptivePageScroll.h"
+#include "../UI/UI_All.h"
 
 // ============================================================
 // OtherDock.cpp
@@ -58,6 +60,7 @@
 #include <QScreen>
 #include <QSlider>
 #include <QSpinBox>
+#include <QStackedWidget>
 #include <QSplitter>
 #include <QStatusBar>
 #include <QTabWidget>
@@ -1184,9 +1187,8 @@ public:
         setWindowTitle(QStringLiteral("窗口属性 - [%1] (%2)")
             .arg(info.titleText.isEmpty() ? QStringLiteral("<无标题>") : info.titleText,
                 hwndToText(info.hwndValue)));
-        resize(900, 680);
-
         initializeUi();
+        ks::ui::applyResponsiveWindowGeometry(this, parent, QSize(1000, 820), QSize(640, 480));
         refreshRuntimeInfo();
         startMessageMonitor();
     }
@@ -1243,9 +1245,11 @@ private:
 
         QGroupBox* groupBox = new QGroupBox(groupTitleText, parentWidget);
         QGridLayout* gridLayout = new QGridLayout(groupBox);
-        gridLayout->setContentsMargins(8, 8, 8, 8);
-        gridLayout->setHorizontalSpacing(12);
-        gridLayout->setVerticalSpacing(4);
+        gridLayout->setContentsMargins(12, 16, 12, 12);
+        gridLayout->setHorizontalSpacing(24);
+        gridLayout->setVerticalSpacing(8);
+        gridLayout->setColumnStretch(0, 1);
+        gridLayout->setColumnStretch(1, 1);
 
         int itemIndex = 0;
         for (const WindowStyleFlagDefinition& definition : definitionList)
@@ -1330,9 +1334,9 @@ private:
     }
 
     // updateDerivedStyleControlsFromCheckBoxes：
-    // - 作用：根据复选框当前状态，联动“置顶状态”和“透明度控件可用性”；
+    // - 作用：根据样式复选框当前状态回填基础页的置顶控件；
     // - 调用：勾选变化后、刷新样式回填后；
-    // - 传入传出：无，直接更新 m_topMostCheck / m_alphaSlider。
+    // - 传入传出：无，回填时阻断用户修改信号。
     void updateDerivedStyleControlsFromCheckBoxes()
     {
         quint64 styleValue = 0;
@@ -1342,12 +1346,39 @@ private:
         if (m_topMostCheck != nullptr)
         {
             Q_UNUSED(styleValue);
+            const QSignalBlocker blocker(m_topMostCheck);
             m_topMostCheck->setChecked((exStyleValue & WS_EX_TOPMOST) != 0);
         }
-        if (m_alphaSlider != nullptr)
+    }
+
+    // 基础页状态控件与样式位共用同一份待应用状态。
+    void setExtendedStyleFlag(const quint64 mask, const bool enabled)
+    {
+        for (const StyleCheckBinding& binding : m_exStyleCheckBindingList)
         {
-            m_alphaSlider->setEnabled((exStyleValue & WS_EX_LAYERED) != 0);
+            if (binding.styleMaskValue == mask && binding.checkBox != nullptr)
+            {
+                binding.checkBox->setChecked(enabled);
+                return;
+            }
         }
+    }
+
+    void markAppearanceChangesPending()
+    {
+        m_styleApplyButton->setEnabled(true);
+        m_applyButton->setEnabled(true);
+    }
+
+    void setPendingAlpha(const int value)
+    {
+        const QSignalBlocker sliderBlocker(m_alphaSlider);
+        const QSignalBlocker spinBlocker(m_alphaSpin);
+        m_alphaSlider->setValue(value);
+        m_alphaSpin->setValue(value);
+        m_alphaChanged = true;
+        setExtendedStyleFlag(WS_EX_LAYERED, true);
+        markAppearanceChangesPending();
     }
 
     // syncStyleCheckBoxes：
@@ -1454,7 +1485,8 @@ private:
         const DWORD exStyleError = ::GetLastError();
 
         // SetWindowPos：触发非客户区重算，确保样式变化立即生效。
-        ::SetWindowPos(
+        ::SetLastError(ERROR_SUCCESS);
+        const BOOL positionApplied = ::SetWindowPos(
             windowHandle,
             (desiredExStyleValue & WS_EX_TOPMOST) != 0 ? HWND_TOPMOST : HWND_NOTOPMOST,
             0,
@@ -1462,15 +1494,36 @@ private:
             0,
             0,
             SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_FRAMECHANGED);
-
-        // 分层窗口透明度：仅在勾选 WS_EX_LAYERED 时应用 Alpha。
-        if ((desiredExStyleValue & WS_EX_LAYERED) != 0 && m_alphaSlider != nullptr)
+        DWORD positionError = positionApplied != FALSE ? ERROR_SUCCESS : ::GetLastError();
+        if (positionApplied == FALSE && positionError == ERROR_SUCCESS)
         {
-            ::SetLayeredWindowAttributes(
+            positionError = ERROR_GEN_FAILURE;
+        }
+
+        // 只在用户改过 Alpha 或新启用分层时写入，保留已有的颜色键透明。
+        // 单纯调整置顶不触碰 UpdateLayeredWindow 管理的逐像素透明窗口。
+        DWORD alphaError = ERROR_SUCCESS;
+        if ((desiredExStyleValue & WS_EX_LAYERED) != 0
+            && (m_alphaChanged || (currentExStyleValue & WS_EX_LAYERED) == 0))
+        {
+            COLORREF colorKey = 0;
+            BYTE previousAlpha = 255;
+            DWORD flags = 0;
+            ::GetLayeredWindowAttributes(windowHandle, &colorKey, &previousAlpha, &flags);
+            ::SetLastError(ERROR_SUCCESS);
+            const BOOL alphaApplied = ::SetLayeredWindowAttributes(
                 windowHandle,
-                0,
+                colorKey,
                 static_cast<BYTE>(m_alphaSlider->value()),
-                LWA_ALPHA);
+                (flags & LWA_COLORKEY) | LWA_ALPHA);
+            if (alphaApplied == FALSE)
+            {
+                alphaError = ::GetLastError();
+                if (alphaError == ERROR_SUCCESS)
+                {
+                    alphaError = ERROR_GEN_FAILURE;
+                }
+            }
         }
 
         ::RedrawWindow(
@@ -1483,45 +1536,64 @@ private:
 
         const bool styleWriteOk = (styleError == ERROR_SUCCESS);
         const bool exStyleWriteOk = (exStyleError == ERROR_SUCCESS);
-        if (!styleWriteOk || !exStyleWriteOk)
+        const bool appearanceWriteOk = styleWriteOk && exStyleWriteOk
+            && positionError == ERROR_SUCCESS && alphaError == ERROR_SUCCESS;
+        if (!appearanceWriteOk)
         {
             // privilegePromptHandled：权限恢复提示已覆盖失败时不再显示部分写入提示。
             const bool privilegePromptHandled = ks::ui::promptForPrivilegeFailure(
                 this,
                 QStringLiteral("修改窗口样式"),
-                styleWriteOk ? exStyleError : styleError);
+                !styleWriteOk ? styleError : !exStyleWriteOk ? exStyleError
+                    : positionError != ERROR_SUCCESS ? positionError : alphaError);
             if (!privilegePromptHandled)
             {
                 QMessageBox::warning(
                     this,
                     QStringLiteral("样式应用提示"),
-                    QStringLiteral("样式写入完成，但部分位返回错误码：Style=%1, ExStyle=%2。")
+                    QStringLiteral("部分窗口设置未能应用：Style=%1, ExStyle=%2, 置顶=%3, Alpha=%4。")
                     .arg(styleError)
-                    .arg(exStyleError));
+                    .arg(exStyleError)
+                    .arg(positionError)
+                    .arg(alphaError));
             }
         }
         else if (showSuccessDialog)
         {
             QMessageBox::information(this, QStringLiteral("窗口样式"), QStringLiteral("样式已应用。"));
         }
-        return styleWriteOk && exStyleWriteOk;
+        return appearanceWriteOk;
     }
 
     // 构建 UI：创建 5 个标签页（前四类属性合并到“基础属性”）并绑定底部操作按钮。
     void initializeUi()
     {
         QVBoxLayout* rootLayout = new QVBoxLayout(this);
+        rootLayout->setContentsMargins(12, 12, 12, 12);
+        rootLayout->setSpacing(12);
 
         m_tabWidget = new QTabWidget(this);
+        ks::ui::IsolateMinimumSize(m_tabWidget);
+        ks::ui::IsolateMinimumSize(m_tabWidget->findChild<QStackedWidget*>());
+        m_tabWidget->setUsesScrollButtons(true);
         rootLayout->addWidget(m_tabWidget, 1);
 
         // ==================== 1. 基础属性 Tab（合并前四个页签） ====================
         QWidget* basicPage = new QWidget(m_tabWidget);
-        QVBoxLayout* basicLayout = new QVBoxLayout(basicPage);
+        QWidget* basicContent = ks::ui::EnablePageInnerScroll(basicPage);
+        QVBoxLayout* basicLayout = new QVBoxLayout(basicContent);
+        basicLayout->setContentsMargins(12, 12, 12, 12);
+        basicLayout->setSpacing(12);
+        const int fieldHeight = std::max(28, fontMetrics().height() + 12);
 
         // 常规信息分组：集中展示句柄关系和标题类名等关键字段。
-        QGroupBox* generalGroup = new QGroupBox(QStringLiteral("常规信息"), basicPage);
-        QFormLayout* generalLayout = new QFormLayout(generalGroup);
+        QGroupBox* generalGroup = new QGroupBox(QStringLiteral("常规信息"), basicContent);
+        QGridLayout* generalLayout = new QGridLayout(generalGroup);
+        generalLayout->setContentsMargins(14, 18, 14, 14);
+        generalLayout->setHorizontalSpacing(16);
+        generalLayout->setVerticalSpacing(10);
+        generalLayout->setColumnStretch(1, 1);
+        generalLayout->setColumnStretch(3, 1);
         m_handleLabel = new QLabel(generalGroup);
         m_parentHandleLabel = new QLabel(generalGroup);
         m_ownerHandleLabel = new QLabel(generalGroup);
@@ -1530,24 +1602,51 @@ private:
         m_instanceLabel = new QLabel(generalGroup);
         m_stateLabel = new QLabel(generalGroup);
         m_relationLabel = new QLabel(generalGroup);
-        generalLayout->addRow(QStringLiteral("句柄"), m_handleLabel);
-        generalLayout->addRow(QStringLiteral("父句柄"), m_parentHandleLabel);
-        generalLayout->addRow(QStringLiteral("所有者句柄"), m_ownerHandleLabel);
         m_titleEdit->setReadOnly(true);
-        generalLayout->addRow(QStringLiteral("标题"), m_titleEdit);
-        generalLayout->addRow(QStringLiteral("类名"), m_classNameLabel);
-        generalLayout->addRow(QStringLiteral("实例句柄"), m_instanceLabel);
-        generalLayout->addRow(QStringLiteral("状态摘要"), m_stateLabel);
-        generalLayout->addRow(QStringLiteral("关系摘要"), m_relationLabel);
+        m_titleEdit->setMinimumHeight(fieldHeight);
+        const auto addGeneralField = [generalLayout, generalGroup](
+            const QString& text, QWidget* value, int row, int column, int span = 1) {
+            auto* label = new QLabel(text, generalGroup);
+            label->setAlignment(Qt::AlignLeft | Qt::AlignTop);
+            generalLayout->addWidget(label, row, column);
+            generalLayout->addWidget(value, row, column + 1, 1, span);
+        };
+        for (QLabel* label : {m_handleLabel, m_parentHandleLabel, m_ownerHandleLabel,
+                 m_classNameLabel, m_instanceLabel, m_stateLabel, m_relationLabel})
+        {
+            label->setTextInteractionFlags(Qt::TextSelectableByMouse);
+            label->setWordWrap(true);
+            label->setMinimumWidth(0);
+            label->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+        }
+        addGeneralField(QStringLiteral("标题"), m_titleEdit, 0, 0, 3);
+        addGeneralField(QStringLiteral("类名"), m_classNameLabel, 1, 0, 3);
+        addGeneralField(QStringLiteral("句柄"), m_handleLabel, 2, 0);
+        addGeneralField(QStringLiteral("实例句柄"), m_instanceLabel, 2, 2);
+        addGeneralField(QStringLiteral("父句柄"), m_parentHandleLabel, 3, 0);
+        addGeneralField(QStringLiteral("所有者句柄"), m_ownerHandleLabel, 3, 2);
+        addGeneralField(QStringLiteral("状态摘要"), m_stateLabel, 4, 0);
+        addGeneralField(QStringLiteral("关系摘要"), m_relationLabel, 4, 2);
         basicLayout->addWidget(generalGroup, 0);
 
         // 位置与状态分组：把可编辑位置和状态控制并排展示，减少标签切换。
-        QGroupBox* layoutStateGroup = new QGroupBox(QStringLiteral("位置与状态"), basicPage);
+        QGroupBox* layoutStateGroup = new QGroupBox(QStringLiteral("位置与状态"), basicContent);
         QHBoxLayout* layoutStateLayout = new QHBoxLayout(layoutStateGroup);
+        layoutStateLayout->setContentsMargins(14, 18, 14, 14);
+        layoutStateLayout->setSpacing(24);
         QWidget* positionPanel = new QWidget(layoutStateGroup);
-        QFormLayout* positionLayout = new QFormLayout(positionPanel);
+        QGridLayout* positionLayout = new QGridLayout(positionPanel);
+        positionLayout->setContentsMargins(0, 0, 0, 0);
+        positionLayout->setHorizontalSpacing(12);
+        positionLayout->setVerticalSpacing(10);
+        positionLayout->setColumnStretch(1, 1);
+        positionLayout->setColumnStretch(3, 1);
         QWidget* statePanel = new QWidget(layoutStateGroup);
         QFormLayout* stateLayout = new QFormLayout(statePanel);
+        stateLayout->setContentsMargins(0, 0, 0, 0);
+        stateLayout->setHorizontalSpacing(12);
+        stateLayout->setVerticalSpacing(10);
+        stateLayout->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
 
         m_xSpin = new QSpinBox(positionPanel);
         m_ySpin = new QSpinBox(positionPanel);
@@ -1558,6 +1657,8 @@ private:
             spinBox->setRange(-32768, 32768);
             spinBox->setReadOnly(true);
             spinBox->setButtonSymbols(QAbstractSpinBox::NoButtons);
+            spinBox->setMinimumHeight(fieldHeight);
+            spinBox->setMinimumWidth(0);
         }
         m_widthSpin->setRange(1, 32768);
         m_heightSpin->setRange(1, 32768);
@@ -1565,80 +1666,105 @@ private:
         QPushButton* centerScreenButton = new QPushButton(QIcon(":/Icon/process_tree.svg"), QStringLiteral("居中到屏幕"), positionPanel);
         centerScreenButton->setToolTip(QStringLiteral("把窗口移动到主屏幕中央"));
         centerScreenButton->setStyleSheet(blueButtonStyle());
-        positionLayout->addRow(QStringLiteral("X"), m_xSpin);
-        positionLayout->addRow(QStringLiteral("Y"), m_ySpin);
-        positionLayout->addRow(QStringLiteral("宽度"), m_widthSpin);
-        positionLayout->addRow(QStringLiteral("高度"), m_heightSpin);
-        positionLayout->addRow(QStringLiteral("快捷操作"), centerScreenButton);
+        positionLayout->addWidget(new QLabel(QStringLiteral("X"), positionPanel), 0, 0);
+        positionLayout->addWidget(m_xSpin, 0, 1);
+        positionLayout->addWidget(new QLabel(QStringLiteral("Y"), positionPanel), 0, 2);
+        positionLayout->addWidget(m_ySpin, 0, 3);
+        positionLayout->addWidget(new QLabel(QStringLiteral("宽度"), positionPanel), 1, 0);
+        positionLayout->addWidget(m_widthSpin, 1, 1);
+        positionLayout->addWidget(new QLabel(QStringLiteral("高度"), positionPanel), 1, 2);
+        positionLayout->addWidget(m_heightSpin, 1, 3);
+        centerScreenButton->setMinimumHeight(fieldHeight);
+        positionLayout->addWidget(centerScreenButton, 2, 1, 1, 3, Qt::AlignLeft);
 
         m_topMostCheck = new QCheckBox(QStringLiteral("置顶窗口"), statePanel);
-        m_topMostCheck->setEnabled(false);
         m_alphaSlider = new QSlider(Qt::Horizontal, statePanel);
-        m_alphaSlider->setRange(20, 255);
-        m_alphaSlider->setEnabled(false);
-        m_alphaLabel = new QLabel(statePanel);
+        m_alphaSlider->setRange(0, 255);
+        m_alphaSpin = new QSpinBox(statePanel);
+        m_alphaSpin->setRange(0, 255);
+        m_alphaSpin->setMinimumHeight(fieldHeight);
+        ks::i18n::LanguageManager::instance().bindToolTip(m_topMostCheck,
+            QStringLiteral("window.detail.topmost.hint"),
+            QStringLiteral("切换置顶状态后点击“应用修改”生效。"));
+        for (QWidget* control : {static_cast<QWidget*>(m_alphaSlider), static_cast<QWidget*>(m_alphaSpin)})
+        {
+            ks::i18n::LanguageManager::instance().bindToolTip(control,
+                QStringLiteral("window.detail.alpha.hint"),
+                QStringLiteral("调整后点击“应用修改”生效；透明度会自动启用分层窗口。"));
+        }
+        m_topMostCheck->setMinimumHeight(fieldHeight);
+        m_alphaSlider->setMinimumHeight(fieldHeight);
         stateLayout->addRow(QStringLiteral("置顶"), m_topMostCheck);
         stateLayout->addRow(QStringLiteral("透明度"), m_alphaSlider);
-        stateLayout->addRow(QStringLiteral("当前 Alpha"), m_alphaLabel);
+        stateLayout->addRow(QStringLiteral("当前 Alpha"), m_alphaSpin);
 
-        layoutStateLayout->addWidget(positionPanel, 1);
-        layoutStateLayout->addWidget(statePanel, 1);
+        layoutStateLayout->addWidget(positionPanel, 3, Qt::AlignTop);
+        layoutStateLayout->addWidget(statePanel, 2, Qt::AlignTop);
         basicLayout->addWidget(layoutStateGroup, 0);
 
-        // 样式分组：左侧复选框编辑样式位，右侧文本展示当前样式明细。
-        QGroupBox* styleGroup = new QGroupBox(QStringLiteral("样式与外观"), basicPage);
-        QHBoxLayout* styleLayout = new QHBoxLayout(styleGroup);
-        styleLayout->setContentsMargins(6, 6, 6, 6);
-        styleLayout->setSpacing(8);
-
-        QWidget* styleEditorPanel = new QWidget(styleGroup);
-        QVBoxLayout* styleEditorLayout = new QVBoxLayout(styleEditorPanel);
-        styleEditorLayout->setContentsMargins(0, 0, 0, 0);
-        styleEditorLayout->setSpacing(6);
+        // 复选框与报告各占完整宽度，避免代码编辑器工具栏挤占样式列表。
+        QGroupBox* styleGroup = new QGroupBox(QStringLiteral("样式与外观"), basicContent);
+        QVBoxLayout* styleLayout = new QVBoxLayout(styleGroup);
+        styleLayout->setContentsMargins(14, 18, 14, 14);
+        styleLayout->setSpacing(10);
+        styleGroup->setMinimumHeight(fieldHeight * 11 + 64);
 
         QHBoxLayout* styleActionLayout = new QHBoxLayout();
-        QLabel* styleHintLabel = new QLabel(QStringLiteral("勾选样式位后点击应用"), styleEditorPanel);
+        QLabel* styleHintLabel = new QLabel(QStringLiteral("勾选样式位后点击应用"), styleGroup);
+        styleHintLabel->setWordWrap(true);
         styleHintLabel->setToolTip(QStringLiteral("通过复选框直接调整 GWL_STYLE / GWL_EXSTYLE。"));
-        m_styleRefreshButton = new QPushButton(QIcon(":/Icon/process_refresh.svg"), QString(), styleEditorPanel);
-        m_styleApplyButton = new QPushButton(QIcon(":/Icon/process_start.svg"), QString(), styleEditorPanel);
+        m_styleRefreshButton = new QPushButton(QIcon(":/Icon/process_refresh.svg"), QString(), styleGroup);
+        m_styleApplyButton = new QPushButton(QIcon(":/Icon/process_start.svg"), QString(), styleGroup);
         m_styleRefreshButton->setToolTip(QStringLiteral("刷新窗口样式位"));
         m_styleApplyButton->setToolTip(QStringLiteral("应用当前样式位勾选状态"));
         m_styleRefreshButton->setStyleSheet(blueButtonStyle());
         m_styleApplyButton->setStyleSheet(blueButtonStyle());
-        m_styleRefreshButton->setFixedWidth(34);
-        m_styleApplyButton->setFixedWidth(34);
+        KswordTheme::ApplyCompactIconButtonMetrics(m_styleRefreshButton);
+        KswordTheme::ApplyCompactIconButtonMetrics(m_styleApplyButton);
         styleActionLayout->addWidget(styleHintLabel, 1);
         styleActionLayout->addWidget(m_styleRefreshButton, 0);
         styleActionLayout->addWidget(m_styleApplyButton, 0);
-        styleEditorLayout->addLayout(styleActionLayout);
+        styleLayout->addLayout(styleActionLayout);
 
-        QScrollArea* styleScrollArea = new QScrollArea(styleEditorPanel);
-        styleScrollArea->setWidgetResizable(true);
-        QWidget* styleCheckContainer = new QWidget(styleScrollArea);
-        QVBoxLayout* styleCheckLayout = new QVBoxLayout(styleCheckContainer);
-        styleCheckLayout->setContentsMargins(0, 0, 0, 0);
-        styleCheckLayout->setSpacing(6);
+        auto* styleTabs = new QTabWidget(styleGroup);
+        styleTabs->setUsesScrollButtons(true);
+        const auto createStylePage = [styleTabs]() {
+            auto* page = new QWidget(styleTabs);
+            auto* layout = new QVBoxLayout(page);
+            layout->setContentsMargins(0, 8, 0, 0);
+            return std::make_pair(page, layout);
+        };
+        const auto normalStylePage = createStylePage();
         appendStyleCheckBoxGroup(
-            styleCheckContainer,
-            styleCheckLayout,
+            normalStylePage.second->parentWidget(),
+            normalStylePage.second,
             QStringLiteral("窗口样式（GWL_STYLE）"),
             windowStyleFlagDefinitionList(),
             &m_styleCheckBindingList);
+        normalStylePage.second->addStretch(1);
+        styleTabs->addTab(normalStylePage.first, QStringLiteral("窗口样式"));
+        ks::i18n::LanguageManager::instance().bindTab(styleTabs, normalStylePage.first,
+            QStringLiteral("window.detail.style.normal"), QStringLiteral("窗口样式"));
+        const auto extendedStylePage = createStylePage();
         appendStyleCheckBoxGroup(
-            styleCheckContainer,
-            styleCheckLayout,
+            extendedStylePage.second->parentWidget(),
+            extendedStylePage.second,
             QStringLiteral("扩展样式（GWL_EXSTYLE）"),
             windowExStyleFlagDefinitionList(),
             &m_exStyleCheckBindingList);
-        styleCheckLayout->addStretch(1);
-        styleScrollArea->setWidget(styleCheckContainer);
-        styleEditorLayout->addWidget(styleScrollArea, 1);
+        extendedStylePage.second->addStretch(1);
+        styleTabs->addTab(extendedStylePage.first, QStringLiteral("扩展样式"));
+        ks::i18n::LanguageManager::instance().bindTab(styleTabs, extendedStylePage.first,
+            QStringLiteral("window.detail.style.extended"), QStringLiteral("扩展样式"));
 
-        m_styleText = new CodeEditorWidget(styleGroup);
+        m_styleText = new CodeEditorWidget(styleTabs);
         m_styleText->setReadOnly(true);
         m_styleText->setToolTip(QStringLiteral("显示实时样式值与每个位的解释状态。"));
-        styleLayout->addWidget(styleEditorPanel, 1);
-        styleLayout->addWidget(m_styleText, 1);
+        ks::ui::IsolateMinimumSize(m_styleText);
+        styleTabs->addTab(m_styleText, QStringLiteral("样式明细"));
+        ks::i18n::LanguageManager::instance().bindTab(styleTabs, m_styleText,
+            QStringLiteral("window.detail.style.summary"), QStringLiteral("样式明细"));
+        styleLayout->addWidget(styleTabs, 1);
         basicLayout->addWidget(styleGroup, 1);
 
         connect(centerScreenButton, &QPushButton::clicked, this, [this]() {
@@ -1653,9 +1779,12 @@ private:
             m_xSpin->setValue(targetX);
             m_ySpin->setValue(targetY);
         });
-        connect(m_alphaSlider, &QSlider::valueChanged, this, [this](int value) {
-            m_alphaLabel->setText(QStringLiteral("%1").arg(value));
+        connect(m_topMostCheck, &QCheckBox::toggled, this, [this](bool checked) {
+            setExtendedStyleFlag(WS_EX_TOPMOST, checked);
+            markAppearanceChangesPending();
         });
+        connect(m_alphaSlider, &QSlider::valueChanged, this, &WindowDetailDialog::setPendingAlpha);
+        connect(m_alphaSpin, &QSpinBox::valueChanged, this, &WindowDetailDialog::setPendingAlpha);
         connect(m_styleRefreshButton, &QPushButton::clicked, this, [this]() {
             refreshRuntimeInfo();
         });
@@ -1837,6 +1966,11 @@ private:
         m_applyButton = new QPushButton(QIcon(":/Icon/process_start.svg"), QString(), this);
         m_exportButton = new QPushButton(QIcon(":/Icon/log_export.svg"), QString(), this);
         m_closeButton = new QPushButton(QIcon(":/Icon/process_terminate.svg"), QString(), this);
+        auto& language = ks::i18n::LanguageManager::instance();
+        language.bindText(m_refreshButton, QStringLiteral("window.detail.action.refresh"), QStringLiteral("刷新"));
+        language.bindText(m_applyButton, QStringLiteral("window.detail.action.apply"), QStringLiteral("应用修改"));
+        language.bindText(m_exportButton, QStringLiteral("window.detail.action.export"), QStringLiteral("导出信息"));
+        language.bindText(m_closeButton, QStringLiteral("window.detail.action.close"), QStringLiteral("关闭"));
 
         m_refreshButton->setToolTip(QStringLiteral("刷新窗口属性"));
         m_applyButton->setToolTip(QStringLiteral("应用修改"));
@@ -1847,7 +1981,8 @@ private:
         for (QPushButton* button : { m_refreshButton, m_applyButton, m_exportButton, m_closeButton })
         {
             button->setStyleSheet(blueButtonStyle());
-            button->setFixedWidth(34);
+            button->setMinimumHeight(32);
+            button->setIconSize(KswordTheme::StandardIconSize());
             buttonLayout->addWidget(button, 0);
         }
 
@@ -1870,6 +2005,11 @@ private:
         if (::IsWindow(windowHandle) == FALSE)
         {
             m_stateLabel->setText(QStringLiteral("窗口已失效"));
+            m_topMostCheck->setEnabled(false);
+            m_alphaSlider->setEnabled(false);
+            m_alphaSpin->setEnabled(false);
+            m_applyButton->setEnabled(false);
+            m_styleApplyButton->setEnabled(false);
             return;
         }
 
@@ -1917,7 +2057,7 @@ private:
         }
 
         // 状态页：置顶与透明度。
-        m_topMostCheck->setChecked((exStyleValue & WS_EX_TOPMOST) != 0);
+        m_topMostCheck->setEnabled(true);
         int alphaValue = 255;
         if ((exStyleValue & WS_EX_LAYERED) != 0)
         {
@@ -1927,13 +2067,21 @@ private:
             if (::GetLayeredWindowAttributes(windowHandle, &colorKey, &alpha, &flags) != FALSE)
             {
                 Q_UNUSED(colorKey);
-                Q_UNUSED(flags);
-                alphaValue = static_cast<int>(alpha);
+                if ((flags & LWA_ALPHA) != 0)
+                {
+                    alphaValue = static_cast<int>(alpha);
+                }
             }
         }
+        const QSignalBlocker alphaSliderBlocker(m_alphaSlider);
+        const QSignalBlocker alphaSpinBlocker(m_alphaSpin);
         m_alphaSlider->setValue(alphaValue);
-        m_alphaSlider->setEnabled((exStyleValue & WS_EX_LAYERED) != 0);
-        m_alphaLabel->setText(QString::number(alphaValue));
+        m_alphaSpin->setValue(alphaValue);
+        m_alphaSlider->setEnabled(true);
+        m_alphaSpin->setEnabled(true);
+        m_alphaChanged = false;
+        m_applyButton->setEnabled(false);
+        m_styleApplyButton->setEnabled(false);
 
         // 进程线程信息：补齐路径、优先级、句柄计数、启动时间和模块摘要，便于排障和行为审计。
         QString processText;
@@ -2913,7 +3061,8 @@ private:
     QSpinBox* m_heightSpin = nullptr;           // 高度输入。
     QCheckBox* m_topMostCheck = nullptr;        // 置顶复选框。
     QSlider* m_alphaSlider = nullptr;           // 透明度滑块。
-    QLabel* m_alphaLabel = nullptr;             // 透明度文本。
+    QSpinBox* m_alphaSpin = nullptr;             // 透明度数值输入。
+    bool m_alphaChanged = false;                // 仅用户调整 Alpha 时写入透明度。
 
     CodeEditorWidget* m_processThreadText = nullptr; // 进程线程页文本（统一文本编辑器，只读）。
     CodeEditorWidget* m_classText = nullptr;         // 类信息页文本（统一文本编辑器，只读）。

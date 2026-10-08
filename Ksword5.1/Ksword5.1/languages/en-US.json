@@ -8,6 +8,15 @@
   "text_direction": "ltr",
   "fallback": "zh-CN",
   "translations": {
+    "window.detail.topmost.hint": "Change the topmost state, then click Apply changes.",
+    "window.detail.alpha.hint": "Adjust the value, then click Apply changes. Layered window style is enabled automatically for opacity changes.",
+    "window.detail.style.normal": "Window styles",
+    "window.detail.style.extended": "Extended styles",
+    "window.detail.style.summary": "Style details",
+    "window.detail.action.refresh": "Refresh",
+    "window.detail.action.apply": "Apply changes",
+    "window.detail.action.export": "Export info",
+    "window.detail.action.close": "Close",
     "window.detail.tab.control_inspection": "Control inspection",
     "privilege.workbench.access.stage.cancelled": "Cancelled",
     "privilege.workbench.access.stage.process": "Open subject process",
@@ -6557,6 +6566,11 @@
     "notification.copy.log_template": "%1\n%2\n%3\nFile: %4\nFunction: %5\nGUID: %6"
   },
   "source_translations": {
+    "切换置顶状态后点击“应用修改”生效。": "Change the topmost state, then click Apply changes.",
+    "调整后点击“应用修改”生效；透明度会自动启用分层窗口。": "Adjust the value, then click Apply changes. Layered window style is enabled automatically for opacity changes.",
+    "部分窗口设置未能应用：Style=%1, ExStyle=%2, 置顶=%3, Alpha=%4。": "Some window settings could not be applied: Style=%1, ExStyle=%2, Topmost=%3, Alpha=%4.",
+    "扩展样式": "Extended styles",
+    "样式明细": "Style details",
     "\nFresh owner lookup status %1 | subtype resolved %2 | owner %3": "\nFresh owner lookup status %1 | subtype resolved %2 | owner %3",
     "\nPrivate subtype could not be validated during this inspection. An older compression label is not reused for a recyclable PFN.": "\nPrivate subtype could not be validated during this inspection. An older compression label is not reused for a recyclable PFN.",
     " [PID %1]": " [PID %1]",
