@@ -95,6 +95,10 @@ def main():
             for command in ["process enum", "kernel ipc", "callback runtime-state", "misc vbs"]:
                 result = subprocess.run([str(binary), "--missing-device", *command.split()], capture_output=True)
                 assert result.returncode == 2 and b"win32=2" in result.stderr, (command, result.returncode, result.stderr)
+            for alias in ["major", "fastio"]:
+                result = subprocess.run([str(binary), "driver", alias], capture_output=True)
+                assert result.returncode == 5 and ("alias: driver " + alias + " -> driver device").encode() in result.stdout
+                assert ("unsupported / unavailable: driver " + alias).encode() in result.stdout + result.stderr
             print("CLI regression: log default/0/1/2/100 passed (real CRT UTF-8 redirection)")
 
 

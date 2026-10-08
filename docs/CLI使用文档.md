@@ -221,6 +221,8 @@ Enumerate process handles and inspect object metadata.
 
 ### `driver`
 
+`major` 和 `fastio` 共用 `device` 审计请求。输出先明确 `alias: driver major -> driver device` 或 `alias: driver fastio -> driver device`，不可用诊断保留用户输入的别名。
+
 Driver integrity, device stack, and optional global evidence aliases.
 
 | 命令 | 语法 | 用途 | 参数 | 备注 |

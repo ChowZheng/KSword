@@ -1315,8 +1315,8 @@ namespace
         { L"driver", L"integrity", L"KswordCLI.exe driver integrity [--driver NAME] [--module-base VA] [--flags 0xN] [--max-rows N] [--max-idt-vectors N] [--max-devices N] [--max-attached N] [--limit N]", L"Query driver integrity evidence.", L"Optional: --driver, --module-base, --flags, --max-rows, --max-idt-vectors, --max-devices, --max-attached, --limit.", L"" },
         { L"driver", L"detail", L"KswordCLI.exe driver detail --driver NAME [--flags 0xN] [--max-devices N] [--max-attached N] [--limit N]", L"Query one DriverObject detail projection.", L"Required: --driver. Optional: --flags, --max-devices, --max-attached, --limit.", L"" },
         { L"driver", L"device", L"KswordCLI.exe driver device [--profile-flags 0xN] [--max-rows N] [--max-attached N] [--target NAME] [--limit N]", L"Query driver device stack audit rows.", L"Optional: --profile-flags, --max-rows, --max-attached, --target, --limit.", L"Aliases: driver major, driver fastio." },
-        { L"driver", L"major", L"KswordCLI.exe driver major [--profile-flags 0xN] [--max-rows N] [--max-attached N] [--target NAME] [--limit N]", L"Alias for driver device audit rows.", L"Optional: --profile-flags, --max-rows, --max-attached, --target, --limit.", L"Alias: driver device." },
-        { L"driver", L"fastio", L"KswordCLI.exe driver fastio [--profile-flags 0xN] [--max-rows N] [--max-attached N] [--target NAME] [--limit N]", L"Alias for driver device audit rows.", L"Optional: --profile-flags, --max-rows, --max-attached, --target, --limit.", L"Alias: driver device." },
+        { L"driver", L"major", L"KswordCLI.exe driver major [--profile-flags 0xN] [--max-rows N] [--max-attached N] [--target NAME] [--limit N]", L"Alias for driver device audit rows.", L"Optional: --profile-flags, --max-rows, --max-attached, --target, --limit.", L"Alias: driver device. Prints the alias mapping; diagnostics retain driver major." },
+        { L"driver", L"fastio", L"KswordCLI.exe driver fastio [--profile-flags 0xN] [--max-rows N] [--max-attached N] [--target NAME] [--limit N]", L"Alias for driver device audit rows.", L"Optional: --profile-flags, --max-rows, --max-attached, --target, --limit.", L"Alias: driver device. Prints the alias mapping; diagnostics retain driver fastio." },
         { L"driver", L"unloaded", L"KswordCLI.exe driver unloaded [--flags 0xN] [--max-rows N] [--max-idt-vectors N] [--max-devices N] [--max-attached N] [--module-base VA] [--limit N]", L"Project MmUnloadedDrivers optional-global evidence.", L"Optional: --flags, --max-rows, --max-idt-vectors, --max-devices, --max-attached, --module-base, --limit.", L"" },
         { L"driver", L"piddb", L"KswordCLI.exe driver piddb [--flags 0xN] [--max-rows N] [--max-idt-vectors N] [--max-devices N] [--max-attached N] [--module-base VA] [--limit N]", L"Project PiDDBCacheTable optional-global evidence.", L"Optional: --flags, --max-rows, --max-idt-vectors, --max-devices, --max-attached, --module-base, --limit.", L"" },
         { L"hardware", L"audit", L"KswordCLI.exe hardware audit [--profile-flags 0xN] [--max-rows N] [--max-attached N] [--target NAME] [--limit N]", L"Query generic hardware device stack audit rows.", L"Optional: --profile-flags, --max-rows, --max-attached, --target, --limit.", L"Alias: hardware pnp." },
@@ -7236,7 +7236,9 @@ namespace
         }
         if (sub == L"device" || sub == L"major" || sub == L"fastio")
         {
-            return queryDeviceAudit(args, IOCTL_KSWORD_ARK_QUERY_DEVICE_STACK_AUDIT, KSWORD_ARK_DEVICE_AUDIT_PROFILE_DEVICE_STACK, L"IOCTL_KSWORD_ARK_QUERY_DEVICE_STACK_AUDIT", L"driver device");
+            const std::wstring label = L"driver " + sub;
+            if (sub != L"device") std::wcout << L"alias: " << label << L" -> driver device\n";
+            return queryDeviceAudit(args, IOCTL_KSWORD_ARK_QUERY_DEVICE_STACK_AUDIT, KSWORD_ARK_DEVICE_AUDIT_PROFILE_DEVICE_STACK, L"IOCTL_KSWORD_ARK_QUERY_DEVICE_STACK_AUDIT", label.c_str());
         }
         if (sub == L"unloaded")
         {
