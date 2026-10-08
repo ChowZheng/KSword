@@ -83,6 +83,11 @@ def main():
                 assert b"usage: KswordCLI.exe" in result.stderr, result.stderr
             empty = subprocess.run([str(binary), "process", "terminate", "--pid"], capture_output=True)
             assert b"missing value for option --pid" in empty.stderr, empty.stderr
+            unknown = subprocess.run([str(binary), "driver", "detail", "--name", "SkaProtect"], capture_output=True)
+            assert unknown.returncode == 1 and b"unknown option --name (use --driver)" in unknown.stderr, unknown.stderr
+            assert b"missing option" not in unknown.stderr
+            valid = subprocess.run([str(binary), "driver", "detail", "--driver", "SkaProtect"], capture_output=True)
+            assert valid.returncode == 5 and b"IOCTL_KSWORD_ARK_QUERY_DRIVER_OBJECT" in valid.stderr, valid.stderr
             print("CLI regression: log default/0/1/2/100 passed (real CRT UTF-8 redirection)")
 
 

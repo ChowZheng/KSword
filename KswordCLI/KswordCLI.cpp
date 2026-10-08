@@ -1379,6 +1379,37 @@ namespace
         return nullptr;
     }
 
+    // Use the same syntax metadata as help to reject misspelled switches before
+    // handlers inspect required values or issue an IOCTL.
+    void validateCommandOptions(const std::wstring& family, const std::wstring& subcommand,
+        int argc, wchar_t* argv[], int startIndex)
+    {
+        for (const CommandHelp& command : kCommandHelps)
+        {
+            if (family != command.family || subcommand != command.subcommand) continue;
+            std::set<std::wstring> allowed;
+            const std::wstring syntax = command.syntax;
+            for (std::size_t offset = 0; (offset = syntax.find(L"--", offset)) != std::wstring::npos;)
+            {
+                std::size_t end = offset + 2;
+                while (end < syntax.size() && (std::iswalnum(syntax[end]) || syntax[end] == L'-')) ++end;
+                allowed.insert(syntax.substr(offset, end - offset));
+                offset = end;
+            }
+            const NamedArgs args = parseNamedArgs(argc, argv, startIndex);
+            for (const auto& option : args.options)
+            {
+                if (allowed.find(option.first) != allowed.end()) continue;
+                std::string key;
+                for (const wchar_t ch : option.first) key.push_back(static_cast<char>(ch));
+                std::string message = "unknown option " + key;
+                if (option.first == L"--name" && allowed.count(L"--driver")) message += " (use --driver)";
+                throw std::invalid_argument(message);
+            }
+            return;
+        }
+    }
+
     // printCommandHelpEntry renders detailed help for one command row.
     // Inputs: static CommandHelp metadata.
     // Processing: writes syntax, summary, options, and optional notes to stdout.
@@ -8428,6 +8459,8 @@ namespace
         {
             return printSpecificCommandHelp(family, argv[2]) ? 0 : 1;
         }
+        validateCommandOptions(family, family == L"log" || argc < 3 ? L"" : argv[2],
+            argc, argv, family == L"log" ? 2 : 3);
         if (family == L"log") return commandLogFamily(argc, argv);
         if (family == L"process") return commandProcessFamily(argc, argv);
         if (family == L"memory") return commandMemoryFamily(argc, argv);
