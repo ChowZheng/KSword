@@ -103,6 +103,8 @@ def main():
             driver_line = next(line for line in overview.splitlines() if line.strip().startswith("driver "))
             for subcommand in ["integrity", "detail", "device", "major", "fastio", "unloaded", "piddb"]:
                 assert subcommand in driver_line and "KswordCLI.exe driver " + subcommand in family_help
+            handle_help = subprocess.run([str(binary), "help", "handle"], capture_output=True, check=True).stdout
+            assert b"Required: --pid" in handle_help, handle_help
             unsupported = subprocess.run([str(binary), "capability", "query-driver-capabilities"], capture_output=True)
             assert b"preflight query" in unsupported.stderr and b"r0 ioctl-registry" in unsupported.stderr
             for command, option in [("process terminate", "--pid"), ("driver detail", "--driver"),

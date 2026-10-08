@@ -16,6 +16,8 @@ KswordCLI.exe <family> <subcommand> --help
 
 顶层 `help` 与 `help driver` 均列出 `integrity`、`detail`、`device`、`major`、`fastio`、`unloaded`、`piddb`；这些项由同一命令元数据生成。当前版本已包含此行为，回归测试同时核对两种帮助形式。
 
+命令族帮助会直接显示含必填项的参数说明，例如 `help handle` 中 `enum` 的 `Required: --pid`，与具体命令帮助使用同一条元数据。
+
 ## 参数约定
 
 `r0` 和 Callback Monitor 的 `nt_status=n/a` 表示传输失败且没有返回 NTSTATUS；它不代表内核执行成功。响应解析器取得的实际非零 NTSTATUS 仍按十六进制显示。

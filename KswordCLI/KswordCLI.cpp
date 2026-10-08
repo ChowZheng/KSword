@@ -1461,6 +1461,9 @@ namespace
             {
                 std::wcout << L"  " << command.syntax << L"\n"
                            << L"    " << command.summary << L"\n";
+                const std::wstring options = command.options;
+                if (options.find(L"Required:") != std::wstring::npos || options.find(L"必填") != std::wstring::npos)
+                    std::wcout << L"    " << command.options << L"\n";
             }
         }
         return true;
