@@ -113,6 +113,8 @@ namespace ks::ui
 
         // insertionAddress：当前插入点地址，转发 canvas_->caretAddress()。
         std::uint64_t insertionAddress() const;
+        void requestBrowseWindow(std::uint64_t address, std::uint64_t length);
+        void setExternalBrowseMode(bool enabled);
 
         // selectionStart：选区的起点（闭区间的 first）；没有选区时退回插入点。
         // 与 insertionAddress 的区别：向前拖选时插入点在选区末端，而用户要看的是选中区域的开头——
@@ -292,5 +294,6 @@ namespace ks::ui
         // manualBytesPerRow_：用户上次手动选的行宽（默认 16）。由画布的 rowWidthModeChanged（automatic 为假）
         // 与 setRowWidthPreference 更新；自适应期间画布实际行宽随窗口变化，本值不变。
         int manualBytesPerRow_ = 16;
+        bool externalBrowseMode_ = false;
     };
 }

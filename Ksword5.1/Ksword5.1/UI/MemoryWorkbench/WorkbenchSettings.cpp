@@ -436,7 +436,7 @@ namespace ks::ui::workbench_settings
 
     int LoadTextEncoding()
     {
-        return ReadInt(QStringLiteral("memwb/workbench/text/encoding"), 0, 0, 2);
+        return ReadInt(QStringLiteral("memwb/workbench/text/encoding"), 0, 0, 8);
     }
 
     void SaveTextEncoding(const int encoding)

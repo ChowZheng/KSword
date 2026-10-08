@@ -502,6 +502,10 @@ namespace ks::ui
 
         // scrollToAddress：滚动让地址可见（不改选区）。传出：false 表示地址不在空间内。
         bool scrollToAddress(std::uint64_t address, ScrollAlign align = ScrollAlign::Center);
+        // Other address-backed views use the same cache/read pool without moving the HEX viewport.
+        void requestAddressRange(std::uint64_t first, std::uint64_t last);
+        void setViewportReadEnabled(bool enabled);
+        std::optional<AddressRange> addressSpaceRange() const;
 
         // firstVisibleRow：当前首行行号。
         std::uint64_t firstVisibleRow() const;
@@ -795,6 +799,7 @@ namespace ks::ui
         // ---- 模型 ----
         ksword::memwb::HexViewport m_viewport;                      // 地址空间/缓存/选区模型
         bool m_hasSpace = false;                                    // 是否有地址空间
+        bool m_viewportReadEnabled = true;
         ksword::memwb::MemoryDiffOverlay* m_overlay = nullptr;      // 暂存叠加层（非拥有）
         IHexPageProvider* m_provider = nullptr;                     // 外部页提供者（非拥有）
         std::unique_ptr<IHexPageProvider> m_staticProvider;         // setStaticData 装的内置提供者

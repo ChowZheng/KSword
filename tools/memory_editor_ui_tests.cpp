@@ -2,7 +2,12 @@
 #include "../Ksword5.1/Ksword5.1/UI/MemoryEditorWidget.h"
 #include "../Ksword5.1/Ksword5.1/UI/HexEditorWidget.h"
 #include <QApplication>
-#include <QAbstractItemDelegate>
+#include "../Ksword5.1/Ksword5.1/UI/MemoryWorkbench/WorkbenchDisasmView.h"
+#include "../Ksword5.1/Ksword5.1/UI/MemoryWorkbench/WorkbenchTextView.h"
+#include "../Ksword5.1/Ksword5.1/UI/MemoryWorkbench/MemoryRowCanvas.h"
+#include "../Ksword5.1/Ksword5.1/UI/MemoryWorkbench/HexCanvas.h"
+#include "../Ksword5.1/Ksword5.1/UI/MemoryWorkbench/HexViewWidgets.h"
+#include "../Ksword5.1/Ksword5.1/UI/MemorySnapshotBytesProvider.h"
 #include <QComboBox>
 #include <QDialog>
 #include <QLineEdit>
@@ -43,49 +48,28 @@ namespace
         QApplication::processEvents();
     }
 
-    // clickEditor 单击指定汇编列并返回实际委托输入框；输入是生产控件和列号。
-    QLineEdit* clickEditor(ks::ui::MemoryEditorWidget& widget, int column = 2)
+    // Exercise the production row canvas, including its selection/edit distinction.
+    QLineEdit* clickEditor(ks::ui::MemoryEditorWidget& widget)
     {
-        auto* table = widget.instructionTable();
-        const auto index = table->model()->index(0, column);
-        QTest::mouseClick(table->viewport(), Qt::LeftButton, Qt::NoModifier,
-            table->visualRect(index).center());
+        auto* view = widget.disassemblyView();
+        auto* canvas = view->canvas();
+        if (view->isEditing())
+        {
+            if (auto* active = view->findChild<QLineEdit*>(QStringLiteral("ksMemwbDisasmInlineEditor")))
+                QTest::keyClick(active, Qt::Key_Escape);
+            flushEvents();
+        }
+        const auto point = canvas->contentRect(0).center();
+        QTest::mouseClick(canvas->viewport(), Qt::LeftButton, Qt::NoModifier, point);
         flushEvents();
-        QLineEdit* editor = nullptr; // 只选当前可见的委托，不误取延迟销毁的旧输入框。
-        for (auto* candidate : table->findChildren<QLineEdit*>(QStringLiteral("memory_inline_assembly")))
-        {
-            if (candidate->isVisible())
-            {
-                editor = candidate;
-            }
-        }
-        if (editor == nullptr)
-        {
-            std::cerr << "row count=" << table->rowCount() << " column=" << column
-                << " visible=" << table->isVisible() << " current column=" << table->currentColumn()
-                << " flags=" << static_cast<int>(table->model()->flags(index)) << '\n';
-        }
-        require(editor != nullptr && editor->isVisible(), "single click opens inline editor");
+        require(!view->isEditing(), "single click selects without starting assembly editing");
+        QTest::mouseDClick(canvas->viewport(), Qt::LeftButton, Qt::NoModifier, point);
+        flushEvents();
+        auto* editor = view->findChild<QLineEdit*>(QStringLiteral("ksMemwbDisasmInlineEditor"));
+        require(editor != nullptr && editor->isVisible(), "double click opens the canvas inline editor");
         for (auto* window : QApplication::topLevelWidgets())
-        {
-            require(qobject_cast<QDialog*>(window) == nullptr || !window->isVisible(), "no dialog on click");
-        }
+            require(qobject_cast<QDialog*>(window) == nullptr || !window->isVisible(), "inline editing opens no dialog");
         return editor;
-    }
-
-    // findDescendantByTypeName 在 root 的全部后代里按运行时类型名片段查找控件。
-    // 十六进制新组件的头文件依赖 C++20，本测试按 C++17 编译，不能直接包含，
-    // 所以用 RTTI 类型名识别自绘控件；输入根控件与类型名片段，返回第一个匹配项，没有则为 nullptr。
-    QWidget* findDescendantByTypeName(QWidget* root, const char* typeNamePart)
-    {
-        for (auto* child : root->findChildren<QWidget*>())
-        {
-            if (std::string(typeid(*child).name()).find(typeNamePart) != std::string::npos)
-            {
-                return child;
-            }
-        }
-        return nullptr;
     }
 
     // submit 输入整条指令并按 Enter；只允许改变编辑器缓存。
@@ -144,13 +128,13 @@ namespace
                         delete owner.data();
                         return;
                     }
-                    auto* source = dialog->findChild<QPlainTextEdit*>(QStringLiteral("memory_assembly_source"));
+                    auto* source = dialog->findChild<QPlainTextEdit*>(QStringLiteral("ksMemwbAssemblySource"));
                     QPushButton* compile = nullptr;
                     QPushButton* stage = nullptr;
                     for (auto* button : dialog->findChildren<QPushButton*>())
                     {
                         if (button->text().contains(QStringLiteral("编译"))) { compile = button; }
-                        if (button->text().contains(QStringLiteral("填入缓存"))) { stage = button; }
+                        if (button->text().contains(QStringLiteral("填入暂存"))) { stage = button; }
                     }
                     if (source == nullptr || compile == nullptr || stage == nullptr) { dialog->reject(); return; }
                     source->setPlainText(QStringLiteral("nop"));
@@ -168,8 +152,8 @@ namespace
                 menu->setActiveAction(assemblyAction);
                 QTest::keyClick(menu, Qt::Key_Return);
             });
-            auto* table = owner->instructionTable();
-            emit table->customContextMenuRequested(table->visualRect(table->model()->index(0, 0)).center());
+            auto* canvas = owner->disassemblyView()->canvas();
+            emit canvas->contextMenuRequested(canvas->rowRect(0).center());
             watchdog.stop();
             require(drovePopup, "modal regression enters the requested popup");
             if (scenario < 2)
@@ -184,6 +168,63 @@ namespace
             }
             flushEvents();
         }
+    }
+
+    void checkSnapshotTextBounds()
+    {
+        using namespace ks::ui;
+        MemoryEditorWidget owner;
+        constexpr std::uint64_t snapshotBase = 0x2000;
+        owner.setSnapshot(QByteArray(128, 'A'), snapshotBase,
+            DisassemblyArchitecture::X64, snapshotBase + 8);
+        owner.textView()->setEncoding(WorkbenchTextView::Encoding::Utf8);
+        owner.findChild<QTabWidget*>()->setCurrentIndex(2);
+        auto* text = owner.textView();
+        require(!text->canvas()->rows().isEmpty(), "snapshot text starts from captured bytes");
+        text->canvas()->requestMore(-1, 3);
+        require(text->windowAddress() == snapshotBase && !text->canvas()->rows().isEmpty(),
+            "snapshot text backward browse clamps to its actual captured base");
+        require(text->canvas()->rows().front().address == snapshotBase,
+            "snapshot text lookbehind cannot read below the captured base");
+        text->setWindow(snapshotBase + 127, 1);
+        text->canvas()->requestMore(1, 3);
+        require(text->windowAddress() == snapshotBase + 127,
+            "snapshot text forward browse stops at its actual captured tail");
+        require(text->canvas()->rows().size() == 1 && text->canvas()->rows().front().bytes == QByteArray("A"),
+            "captured tail remains visible after a rejected forward move");
+
+        owner.setSnapshot(QByteArray(16, 'X'), 0xFFFFFFF0ULL, DisassemblyArchitecture::X86);
+        text->setWindow(0xFFFFFFFFULL, 1);
+        text->canvas()->requestMore(1, 3);
+        require(text->windowAddress() == 0xFFFFFFFFULL && !text->canvas()->rows().isEmpty(),
+            "32-bit snapshot text does not browse beyond its last captured address");
+
+        owner.setSnapshot(QByteArray("Z"), UINT64_MAX, DisassemblyArchitecture::X64);
+        text->canvas()->requestMore(-1, 3);
+        text->canvas()->requestMore(1, 3);
+        require(text->windowAddress() == UINT64_MAX && text->canvas()->rows().size() == 1
+            && text->canvas()->rows().front().bytes == QByteArray("Z"),
+            "one-byte UINT64_MAX snapshot keeps bounded text navigation without overflow");
+        owner.clear();
+        require(text->canvas()->rows().isEmpty(), "empty snapshot has no text evidence");
+        text->canvas()->requestMore(1, 3);
+        require(text->canvas()->rows().isEmpty(), "empty snapshot cannot browse stale captured bytes");
+    }
+
+    void checkKernelModalParentLifetime()
+    {
+        QPointer<ks::ui::KernelDisassemblyDialog> owner = new ks::ui::KernelDisassemblyDialog;
+        owner->setSnapshot(QByteArray::fromHex("90c3"), 0xFFFF800000002000ULL,
+            ks::ui::DisassemblyArchitecture::X64, QStringLiteral("lifetime fixture"));
+        owner->setKernelMutationEnabled(true);
+        bool entered = false;
+        QTimer::singleShot(0, owner, [&]() {
+            entered = QApplication::activeModalWidget() != nullptr;
+            delete owner.data();
+        });
+        owner->requestModifyBytes(0xFFFF800000002000ULL, QByteArray::fromHex("90"));
+        require(entered && owner.isNull(), "kernel modal evidence owner may retire without deleting a stack dialog");
+        flushEvents();
     }
 }
 
@@ -201,17 +242,20 @@ int main(int argc, char** argv)
     flushEvents();
 
     // 内嵌十六进制编辑器已是 HexView 门面：内部是自绘 HexCanvas，不再有旧的页签与 18 列表格。
-    require(findDescendantByTypeName(widget.hexEditor(), "ks::ui::HexCanvas") != nullptr, "embedded HEX paints with HexCanvas");
+    require(widget.hexEditor()->findChild<ks::ui::HexCanvas*>() != nullptr, "embedded HEX paints with HexCanvas");
     require(widget.hexEditor()->findChild<QTableWidget*>() == nullptr, "embedded HEX has no legacy table");
     require(widget.hexEditor()->findChild<QTabWidget*>() == nullptr, "embedded HEX has no legacy tab widget");
     // setHexOnlyView(true) 由统一编辑器调用：隐藏 HexView 自带状态条，避免与统一状态条重复。
-    auto* hexStatusBar = findDescendantByTypeName(widget.hexEditor(), "ks::ui::HexViewStatusBar");
+    ks::ui::HexViewStatusBar* hexStatusBar = nullptr;
+    for (auto* child : widget.hexEditor()->findChildren<QWidget*>())
+        if (auto* bar = dynamic_cast<ks::ui::HexViewStatusBar*>(child)) hexStatusBar = bar;
     require(hexStatusBar != nullptr && hexStatusBar->isHidden(), "embedded HEX status bar hidden");
 
-    // 单击操作数列也编辑完整指令；未改文本的提交保留原机器码。
-    auto* editor = clickEditor(widget, 3);
-    require(editor->text().startsWith(QStringLiteral("mov ")), "operand column edits full instruction");
-    require(editor->width() > widget.instructionTable()->columnWidth(2), "editor spans both assembly columns");
+    require(widget.disassemblyView()->findChild<QTableWidget*>() == nullptr, "disassembly has no legacy instruction table");
+    require(widget.disassemblyView()->canvas()->rows().size() >= 2, "canvas exposes actual instruction rows");
+    auto* editor = clickEditor(widget);
+    require(editor->text().startsWith(QStringLiteral("mov ")), "content pane edits the complete instruction");
+    require(editor->width() > 100, "inline editor spans the right content pane");
     QTest::keyClick(editor, Qt::Key_Return);
     flushEvents();
     require(widget.data() == original && !widget.hasChanges(), "unchanged edit preserves bytes");
@@ -241,53 +285,75 @@ int main(int argc, char** argv)
     widget.undo();
     require(widget.data() == original, "padded edit undoes as one transaction");
 
-    // 委托提交后、事务执行前换快照，旧输入必须被拒绝。
-    editor = clickEditor(widget);
-    editor->setText(QStringLiteral("mov eax, 4"));
-    widget.instructionTable()->itemDelegate()->setModelData(editor,
-        widget.instructionTable()->model(), widget.instructionTable()->model()->index(0, 2));
+    // New snapshots, architecture and permissions cancel the frozen editor.
+    QPointer<QLineEdit> frozenEditor = clickEditor(widget);
+    frozenEditor->setText(QStringLiteral("mov eax, 4"));
     widget.setSnapshot(original, base + 0x100);
     widget.showDisassemblyAt(base + 0x100);
     flushEvents();
-    require(widget.data() == original && !widget.hasChanges(), "snapshot replacement rejects stale edit");
+    require(!frozenEditor || !frozenEditor->isVisible(), "snapshot replacement cancels frozen inline input");
+    require(widget.data() == original && !widget.hasChanges(), "replacement snapshot remains unchanged");
 
-    // 架构切换不能把按 x64 编译的排队事务应用到 x86 快照。
-    editor = clickEditor(widget);
-    editor->setText(QStringLiteral("mov eax, 6"));
-    widget.instructionTable()->itemDelegate()->setModelData(editor,
-        widget.instructionTable()->model(), widget.instructionTable()->model()->index(0, 2));
-    QComboBox* architecture = nullptr; // 生产架构选择器，由 x86/x64 条目识别。
+    frozenEditor = clickEditor(widget);
+    frozenEditor->setText(QStringLiteral("mov eax, 6"));
+    QComboBox* architecture = nullptr;
     for (auto* combo : widget.findChildren<QComboBox*>())
-    {
         if (combo->count() == 2 && combo->itemText(0) == QStringLiteral("x86")
-            && combo->itemText(1) == QStringLiteral("x64"))
-        {
-            architecture = combo;
-        }
-    }
-    require(architecture != nullptr, "architecture selector found");
+            && combo->itemText(1) == QStringLiteral("x64")) architecture = combo;
+    require(architecture != nullptr, "snapshot architecture selector found");
     architecture->setCurrentIndex(0);
     flushEvents();
-    require(widget.data() == original, "architecture change rejects queued edit");
+    require(!frozenEditor || !frozenEditor->isVisible(), "architecture change cancels frozen inline input");
+    require(widget.data() == original, "architecture change preserves snapshot bytes");
     architecture->setCurrentIndex(1);
     flushEvents();
 
-    // 行内事务排队后变为只读，也不得提交；只读点击不创建输入框。
-    editor = clickEditor(widget);
-    editor->setText(QStringLiteral("mov eax, 5"));
-    widget.instructionTable()->itemDelegate()->setModelData(editor,
-        widget.instructionTable()->model(), widget.instructionTable()->model()->index(0, 2));
+    frozenEditor = clickEditor(widget);
+    frozenEditor->setText(QStringLiteral("mov eax, 5"));
     widget.setEditable(false);
     flushEvents();
-    require(widget.data() == original, "read-only transition rejects queued edit");
+    require(!frozenEditor || !frozenEditor->isVisible(), "read-only transition cancels input");
+    require(widget.data() == original, "read-only transition preserves cache");
     widget.setSnapshot(original, base);
     widget.showDisassemblyAt(base);
     flushEvents();
-    QTest::mouseClick(widget.instructionTable()->viewport(), Qt::LeftButton, Qt::NoModifier,
-        widget.instructionTable()->visualRect(widget.instructionTable()->model()->index(0, 2)).center());
+    auto* canvas = widget.disassemblyView()->canvas();
+    QTest::mouseDClick(canvas->viewport(), Qt::LeftButton, Qt::NoModifier, canvas->contentRect(0).center());
     flushEvents();
-    editor = widget.instructionTable()->findChild<QLineEdit*>(QStringLiteral("memory_inline_assembly"));
-    require(editor == nullptr || !editor->isVisible(), "read-only click cannot edit");
+    require(!widget.disassemblyView()->isEditing(), "read-only double click cannot edit");
+
+    // A selected instruction maps to its complete range in the HEX facade.
+    std::uint64_t selectionStart = 99, selectionEnd = 99;
+    bool selected = false;
+    const auto selectionConnection = QObject::connect(widget.hexEditor(), &HexEditorWidget::selectionChanged, &widget,
+        [&](std::uint64_t first, std::uint64_t last, bool valid) {
+            selectionStart = first; selectionEnd = last; selected = valid;
+        });
+    canvas->setSelectedRow(1);
+    canvas->setSelectedRow(0);
+    require(selected && selectionStart == 0 && selectionEnd == 5, "instruction selection synchronizes all five bytes to HEX");
+    QObject::disconnect(selectionConnection);
+
+    // Provider bounds, references and priority are tested independently of painting.
+    ks::ui::MemorySnapshotBytesProvider provider;
+    const auto baseline = QByteArray::fromHex("01020304");
+    provider.setSnapshot(base, QByteArray::fromHex("01090304"), baseline,
+        QByteArray::fromHex("00080304"), 32, true);
+    const auto window = provider.FetchWindow(base, 65536);
+    using Kind = ksword::memwb::ByteChangeKind;
+    require(window.ok && window.bytes.size() == 4, "provider clips at the captured tail");
+    require(window.validMask == std::vector<std::uint8_t>(4, 1), "only actual snapshot bytes are valid");
+    require(window.changeKinds[0] == Kind::ExternalChange, "actual reread changes retain the previous reference");
+    require(window.changeKinds[1] == Kind::Pending, "pending edits take priority over external changes");
+    require(provider.AddressBits() == 32 && provider.HasPreviousRead(), "provider publishes architecture and previous-read availability");
+    require(!provider.FetchWindow(base - 1, 2).ok && !provider.FetchWindow(base + 4, 1).ok,
+        "provider rejects uncaptured address ranges");
+    require(provider.FetchWindow(base, 0).ok, "empty requests have an explicit successful empty window");
+    provider.setSnapshot(base, baseline, baseline, {}, 64, false);
+    require(!provider.HasPreviousRead() && provider.FetchWindow(base, 4).changeKinds[0] == Kind::Unchanged,
+        "highlight suppression and unavailable previous reads stay separate");
     checkModalLifetimeAndStaleRequests();
+    checkSnapshotTextBounds();
+    checkKernelModalParentLifetime();
     std::cout << "PASS: " << checks << " memory editor Qt checks\n";
 }

@@ -31,6 +31,9 @@ namespace ks::plugin_host
         QString filePath;
         quint32 processId = 0;
         QString processName;
+        quint64 processCreateTime100ns = 0;
+        quint64 memoryAddress = 0;
+        bool navigateMemoryDump = false;
     };
 
     // populateTargetMenu：

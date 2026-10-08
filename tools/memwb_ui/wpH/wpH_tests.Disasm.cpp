@@ -189,16 +189,16 @@ namespace wpH_test
             }
 
             // 单击只选择：对第 0 行发送单击不应打开编辑器。
-            QTableView* table = view.table();
+            auto* canvas = view.canvas();
             const QModelIndex pushRow = view.model()->index(0, 2);
-            table->setCurrentIndex(pushRow);
-            QTest::mouseClick(table->viewport(), Qt::LeftButton, Qt::NoModifier, table->visualRect(pushRow).center());
+            canvas->setSelectedRow(pushRow.row());
+            QTest::mouseClick(canvas->viewport(), Qt::LeftButton, Qt::NoModifier, canvas->contentRect(pushRow.row()).center());
             WPH_CHECK(!view.isEditing());
 
             // F2：对"mov rbp, rsp"（第 1 行）打开编辑器。
             const QModelIndex movRow = view.model()->index(1, 2);
-            table->setCurrentIndex(movRow);
-            QTest::keyClick(table, Qt::Key_F2);
+            canvas->setSelectedRow(movRow.row());
+            QTest::keyClick(canvas, Qt::Key_F2);
             auto* editor = qobject_cast<QLineEdit*>(QApplication::focusWidget());
             WPH_CHECK(editor != nullptr);
             if (editor != nullptr)
@@ -209,7 +209,7 @@ namespace wpH_test
                 QTest::keyClicks(editor, QStringLiteral("push 0x11223344"));
                 QTest::keyClick(editor, Qt::Key_Return);
                 WPH_CHECK(view.isEditing());
-                auto* errorLabel = table->viewport()->findChild<QLabel*>(QStringLiteral("ksMemwbDisasmInlineError"));
+                auto* errorLabel = canvas->viewport()->findChild<QLabel*>(QStringLiteral("ksMemwbDisasmInlineError"));
                 WPH_CHECK(errorLabel != nullptr && errorLabel->isVisible() && !errorLabel->text().isEmpty());
 
                 // 改成 1 字节的 nop，应编译成功并按原指令长度（3 字节）补 NOP。
@@ -233,8 +233,8 @@ namespace wpH_test
 
             // Enter 在"nop"（无操作数）行上应进入编辑，而不是跳转。
             const QModelIndex nopRow = view.model()->index(2, 2);
-            table->setCurrentIndex(nopRow);
-            QTest::keyClick(table, Qt::Key_Return);
+            canvas->setSelectedRow(nopRow.row());
+            QTest::keyClick(canvas, Qt::Key_Return);
             auto* nopEditor = qobject_cast<QLineEdit*>(QApplication::focusWidget());
             WPH_CHECK(nopEditor != nullptr);
             if (nopEditor != nullptr)
@@ -248,8 +248,8 @@ namespace wpH_test
             // 输入，专门用来钉住"超出原指令长度"判据不多拒一个字节。
             {
                 const QModelIndex pushCell = view.model()->index(0, 2);
-                table->setCurrentIndex(pushCell);
-                QTest::keyClick(table, Qt::Key_F2);
+                canvas->setSelectedRow(pushCell.row());
+                QTest::keyClick(canvas, Qt::Key_F2);
                 auto* exactEditor = qobject_cast<QLineEdit*>(QApplication::focusWidget());
                 WPH_CHECK(exactEditor != nullptr);
                 if (exactEditor != nullptr)
@@ -271,14 +271,14 @@ namespace wpH_test
             const std::uint64_t jmpAddress = base + 1 + 3 + 1; // push(1)+mov(3)+nop(1) 之后
             const std::uint64_t expectedTarget = jmpAddress + 5; // jmp 本身 5 字节，rel32=0
             const QModelIndex jmpRow = view.model()->index(3, 0);
-            table->setCurrentIndex(jmpRow);
-            QTest::keyClick(table, Qt::Key_Return);
+            canvas->setSelectedRow(jmpRow.row());
+            QTest::keyClick(canvas, Qt::Key_Return);
             WPH_CHECK(!view.isEditing());
             WPH_CHECK_NOTE(view.anchorAddress() == expectedTarget,
                 QStringLiteral("跳转后锚点=0x%1，期望 0x%2").arg(view.anchorAddress(), 0, 16).arg(expectedTarget, 0, 16));
 
             // Backspace 返回：应回到跳转前的原窗口起点。
-            QTest::keyClick(table, Qt::Key_Backspace);
+            QTest::keyClick(canvas, Qt::Key_Backspace);
             WPH_CHECK_NOTE(view.anchorAddress() == base, QStringLiteral("返回后锚点=0x%1").arg(view.anchorAddress(), 0, 16));
 
             // 窗口外提示行：只把前 2 字节标为有效，之后解码应出现"超出已读取窗口"行。

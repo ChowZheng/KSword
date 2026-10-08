@@ -1,4 +1,5 @@
 #include "ProcessDetailWindow.InternalCommon.h"
+#include "../UI/X64DbgNavigation.h"
 
 using namespace process_detail_window_internal;
 
@@ -355,6 +356,10 @@ void ProcessDetailWindow::showModuleContextMenu(const QPoint& localPosition)
     QAction* copyRowAction = contextMenu.addAction(QIcon(":/Icon/process_copy_row.svg"), "复制行");
     contextMenu.addSeparator();
     QAction* gotoModuleAction = contextMenu.addAction(QIcon(":/Icon/process_details.svg"), "查看模块详情");
+    if (const auto* module = selectedModuleRecord(); module != nullptr && m_baseRecord.creationTime100ns != 0)
+        ks::ui::x64dbg_navigation::AddAction(&contextMenu, this,
+            {m_baseRecord.pid, m_baseRecord.creationTime100ns, module->moduleBaseAddress,
+                ks::ui::x64dbg_navigation::View::Disassembly});
     QAction* openFolderAction = contextMenu.addAction(QIcon(":/Icon/process_open_folder.svg"), "打开文件夹");
     QAction* unloadAction = contextMenu.addAction(QIcon(":/Icon/process_terminate.svg"), "卸载");
     QAction* suspendThreadAction = contextMenu.addAction(QIcon(":/Icon/process_suspend.svg"), "挂起线程");

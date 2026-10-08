@@ -1,5 +1,6 @@
 #include "MemoryDock.Internal.h"
 #include "SystemMemoryAuditPage.h"
+#include "../UI/X64DbgNavigation.h"
 #include "../UI/MemoryWorkbench/WorkbenchSettings.h" // LoadRouteJumps/SaveRouteJumps：设置对话框里的"工作台接管跳转"开关。
 
 // 说明：由原聚合式实现迁移为独立 .cpp，成员函数实现保持原样。
@@ -727,6 +728,17 @@ void MemoryDock::initializeConnections()
         QAction* copyAction = menu.addAction("复制基址");
         QAction* copyRowAction = menu.addAction("复制当前行");
         QAction* searchAction = menu.addAction("搜索此区域");
+        std::uint64_t navigationAddress = 0;
+        FILETIME created{}, exited{}, kernel{}, user{};
+        if (m_attachedPid != 0 && m_attachedProcessHandle != nullptr
+            && GetProcessId(m_attachedProcessHandle) == m_attachedPid
+            && GetProcessTimes(m_attachedProcessHandle, &created, &exited, &kernel, &user)
+            && parseAddressText(baseText, navigationAddress))
+        {
+            const auto identity = (static_cast<quint64>(created.dwHighDateTime) << 32) | created.dwLowDateTime;
+            ks::ui::x64dbg_navigation::AddAction(&menu, this,
+                {m_attachedPid, identity, navigationAddress, ks::ui::x64dbg_navigation::View::Dump});
+        }
         QAction* selectedAction = menu.exec(m_regionTable->viewport()->mapToGlobal(localPosition));
         if (selectedAction == nullptr)
         {

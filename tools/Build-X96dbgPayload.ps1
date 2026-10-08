@@ -115,4 +115,9 @@ foreach ($filename in @('x64dbg.exe', 'x64bridge.dll', 'x64dbg.dll', 'x64gui.dll
     $artifact = Join-Path $outputRoot $filename
     if (-not (Test-Path -LiteralPath $artifact) -or (Get-Item -LiteralPath $artifact).Length -eq 0) { throw "Missing x64dbg artifact: $artifact" }
 }
+& (Join-Path $PSScriptRoot 'Build-X64DbgNavigation.ps1') -Platform x64 -Configuration Release
+if ($LASTEXITCODE -ne 0) { throw 'Navigation bridge build failed.' }
+$navigationBridge = Join-Path $RepositoryRoot '.deps\x64dbg-navigation\x64\Release\KSwordNavigation.dp64'
+New-Item -ItemType Directory -Path (Join-Path $outputRoot 'plugins') -Force | Out-Null
+Copy-Item -LiteralPath $navigationBridge -Destination (Join-Path $outputRoot 'plugins\KSwordNavigation.dp64') -Force
 Write-Output "X64DBG_PAYLOAD=$outputRoot"

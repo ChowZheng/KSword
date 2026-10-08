@@ -122,7 +122,7 @@ namespace ks::ui
                     *oldValid = true;
                     *oldByte = window.baselineBytes[index];
                 }
-                if (index < window.validMask.size() && window.validMask[index] != 0)
+                if (index < window.validMask.size() && window.validMask[index] == 1)
                 {
                     *newValid = true;
                     *newByte = window.bytes[index];

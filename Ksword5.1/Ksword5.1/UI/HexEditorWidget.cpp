@@ -95,6 +95,17 @@ HexEditorWidget::HexEditorWidget(QWidget* parent)
 
 HexEditorWidget::~HexEditorWidget() = default;
 
+bool HexEditorWidget::selectAbsoluteRange(const std::uint64_t first, const std::uint64_t last)
+{
+    const auto base = m_view->baseAddress();
+    const auto size = m_view->bufferSize();
+    if (first > last || first < base || last < base || last - base >= size)
+        return false;
+    auto* canvas = m_view->canvas();
+    if (!canvas->setCaretAddress(last, false, false)) return false;
+    return canvas->setCaretAddress(first, true, true);
+}
+
 void HexEditorWidget::setHexOnlyView(const bool enabled)
 {
     // 统一编辑器自己有状态条：嵌入时隐藏 HexView 的状态条，避免重复；工具栏保留。

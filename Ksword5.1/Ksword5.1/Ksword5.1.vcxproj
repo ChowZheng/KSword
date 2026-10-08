@@ -564,6 +564,12 @@
     <ClCompile Include="UI\MemoryWorkbench\WorkbenchCompareView.cpp" />
     <ClCompile Include="UI\MemoryWorkbench\WorkbenchConfirmations.cpp" />
     <ClCompile Include="UI\MemoryWorkbench\WorkbenchDisasmView.cpp" />
+    <ClCompile Include="UI\MemoryWorkbench\MemoryRowCanvas.cpp" />
+    <ClCompile Include="UI\MemoryWorkbench\WorkbenchDisasmView.Canvas.cpp" />
+    <ClCompile Include="UI\MemoryWorkbench\MemoryWorkbenchView.RowCanvas.cpp" />
+    <ClCompile Include="UI\MemorySnapshotBytesProvider.cpp" />
+    <ClCompile Include="UI\X64DbgNavigation.cpp" />
+    <ClCompile Include="..\..\shared\evidence\memory_workbench\MemoryTextDecode.cpp" />
     <ClCompile Include="UI\MemoryWorkbench\WorkbenchDisasmView.Edit.cpp" />
     <ClCompile Include="UI\MemoryWorkbench\WorkbenchMessages.cpp" />
     <ClCompile Include="UI\MemoryWorkbench\WorkbenchBookIntake.cpp" />
@@ -1070,7 +1076,12 @@
     <QtMoc Include="UI\MemoryWorkbench\WorkbenchCompareView.h" />
     <ClInclude Include="UI\MemoryWorkbench\WorkbenchConfirmations.h" />
     <QtMoc Include="UI\MemoryWorkbench\WorkbenchDisasmView.h" />
+    <QtMoc Include="UI\MemoryWorkbench\MemoryRowCanvas.h" />
     <ClInclude Include="UI\MemoryWorkbench\WorkbenchMessages.h" />
+    <ClInclude Include="UI\MemorySnapshotBytesProvider.h" />
+    <ClInclude Include="UI\MemoryWorkbench\WorkbenchTextCodePages.h" />
+    <ClInclude Include="UI\X64DbgNavigation.h" />
+    <ClInclude Include="..\..\shared\evidence\memory_workbench\MemoryTextDecode.h" />
     <ClInclude Include="UI\MemoryWorkbench\WorkbenchNavigation.h" />
     <ClInclude Include="UI\MemoryWorkbench\WorkbenchServices.h" />
     <ClInclude Include="UI\MemoryWorkbench\WorkbenchBookIntake.h" />
