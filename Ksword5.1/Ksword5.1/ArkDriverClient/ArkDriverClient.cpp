@@ -410,6 +410,7 @@ namespace ksword::ark
             const unsigned long openError = ::GetLastError();
             notifyR0PermissionRequired(openError);
             IoResult result = makeWin32IoResult(false, openError, 0, "CreateFileW(KswordARK)");
+            result.deviceOpenFailed = true;
             return result;
         }
 

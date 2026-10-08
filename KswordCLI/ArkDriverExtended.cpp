@@ -177,7 +177,7 @@ namespace
         {
             std::wcout << L"detail=" << utf8ToWide(result.io.message) << L"\n";
         }
-        if (!result.io.ok && result.io.message.rfind("CreateFileW", 0U) == 0U &&
+        if (!result.io.ok && (result.io.deviceOpenFailed || result.io.message.rfind("CreateFileW", 0U) == 0U) &&
             (result.io.win32Error == ERROR_FILE_NOT_FOUND || result.io.win32Error == ERROR_PATH_NOT_FOUND))
             std::wcerr << L"hint: run 'sc start KswordARK' for an installed service, "
                        << L"or run Launcher.exe / Ksword5.1.exe as administrator to load the driver.\n";
@@ -373,7 +373,7 @@ namespace
     int finishResult(const wchar_t* label, const Result& result)
     {
         if (printResultState(label, result)) return 0;
-        if (result.io.message.rfind("CreateFileW", 0U) == 0U) return 2;
+        if (result.io.deviceOpenFailed || result.io.message.rfind("CreateFileW", 0U) == 0U) return 2;
         const auto error = result.io.win32Error;
         if (error == ERROR_INVALID_FUNCTION || error == ERROR_NOT_SUPPORTED ||
             error == ERROR_CALL_NOT_IMPLEMENTED || error == ERROR_PROC_NOT_FOUND) return 5;

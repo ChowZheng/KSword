@@ -23,7 +23,10 @@ namespace extendedFixture {
 struct Result { ksword::ark::IoResult io; bool unsupported = false; };
 static Result failure(DWORD error) {
     Result result; result.io.win32Error = error;
-    if (error == ERROR_FILE_NOT_FOUND) result.io.message = "CreateFileW(KswordARK) failed";
+    if (error == ERROR_FILE_NOT_FOUND) {
+        result.io.deviceOpenFailed = true;
+        result.io.message = "DeviceIoControl(IOCTL_KSWORD_ARK_CALLBACK_MONITOR_QUERY) failed, error=2";
+    }
     return result;
 }
 }

@@ -73,6 +73,8 @@ namespace ksword::ark
         long ntStatus = 0;
         std::string message;
         unsigned long bytesReturned = 0;
+        // Feature wrappers may replace message; retain the transport phase.
+        bool deviceOpenFailed = false;
     };
 
     struct WindowBandResult
