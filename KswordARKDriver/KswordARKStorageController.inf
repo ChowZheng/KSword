@@ -1,0 +1,82 @@
+;
+; Optional manual binding for a dedicated non-boot storage controller.
+; Uses the main KswordARK service and binary. Stop its legacy profile before
+; binding; never bind a Windows, paging, dump, hibernation or mounted-data host.
+;
+[Version]
+Signature="$WINDOWS NT$"
+Class=SCSIAdapter
+ClassGuid={4D36E97B-E325-11CE-BFC1-08002BE10318}
+Provider=%ManufacturerName%
+CatalogFile=KswordARKStorageController.cat
+DriverVer=
+PnpLockDown=1
+
+[DestinationDirs]
+DefaultDestDir=13
+
+[SourceDisksNames]
+1=%DiskName%,,,""
+
+[SourceDisksFiles]
+KswordARK.sys=1,,
+
+[Manufacturer]
+%ManufacturerName%=Standard,NTamd64.10.0...19041
+
+[Standard.NTamd64.10.0...19041]
+%AhciDeviceDesc%=Controller_Install,PCI\CC_010601
+%NvmeDeviceDesc%=Controller_Install,PCI\CC_010802
+%IdeDeviceDesc%=Controller_Install,PCI\CC_0101
+
+[ControlFlags]
+; Class-compatible matches must require an administrator's confirmation.
+; Staging this package must not silently replace an inbox storage driver.
+InteractiveInstall=PCI\CC_010601,PCI\CC_010802,PCI\CC_0101
+
+[Controller_Install.NT]
+CopyFiles=Driver_Copy
+
+[Controller_Install.NT.HW]
+AddReg=Controller_Security
+
+[Controller_Security]
+HKR,,Security,,"D:P(A;;GA;;;SY)(A;;GA;;;BA)"
+
+[Driver_Copy]
+KswordARK.sys
+
+[Controller_Install.NT.Services]
+; Associated function service; preserve an existing display/start/error policy.
+AddService=KswordARK,0x0000003A,Service_Install
+
+[Service_Install]
+DisplayName=%ServiceDesc%
+ServiceType=1
+StartType=3
+ErrorControl=1
+ServiceBinary=%13%\KswordARK.sys
+LoadOrderGroup="FSFilter Activity Monitor"
+AddReg=Controller_Profile,Main_Filter_Instances
+
+[Controller_Profile]
+HKR,"Parameters","StorageControllerPnP",0x00010001,1
+
+[Main_Filter_Instances]
+HKR,"Instances","DefaultInstance",0x00000002,"KswordARK Instance"
+HKR,"Instances\KswordARK Instance","Altitude",0x00000002,"385210"
+HKR,"Instances\KswordARK Instance","Flags",0x00010003,0
+
+[Controller_Install.NT.Wdf]
+KmdfService=KswordARK,Wdf_Section
+
+[Wdf_Section]
+KmdfLibraryVersion=$KMDFVERSION$
+
+[Strings]
+ManufacturerName="Ksword"
+DiskName="KswordARK storage controller profile"
+AhciDeviceDesc="KswordARK dedicated AHCI controller"
+NvmeDeviceDesc="KswordARK dedicated NVMe controller"
+IdeDeviceDesc="KswordARK dedicated IDE controller"
+ServiceDesc="KswordARK Driver"

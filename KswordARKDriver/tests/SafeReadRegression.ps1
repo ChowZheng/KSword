@@ -5,21 +5,34 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+function Get-CCodeText {
+    param([Parameter(Mandatory)] [string]$Text)
+
+    # Preserve offsets, but exclude braces/call names in comments and literals.
+    return [regex]::Replace($Text,
+        '//[^\r\n]*|/\*[\s\S]*?\*/|"(?:\\.|[^"\\])*"|''(?:\\.|[^''\\])*''',
+        [System.Text.RegularExpressions.MatchEvaluator] {
+            param($match)
+            return [regex]::Replace($match.Value, '[^\r\n]', ' ')
+        })
+}
+
 function Get-CFunctionBody {
     param(
         [Parameter(Mandatory)] [string]$Path,
         [Parameter(Mandatory)] [string]$Name
     )
 
-    $text = Get-Content -LiteralPath $Path -Raw
-    $signatureIndex = $text.IndexOf("$Name(", [StringComparison]::Ordinal)
-    if ($signatureIndex -lt 0) {
-        throw "Function '$Name' was not found in '$Path'."
+    $text = Get-CCodeText -Text (Get-Content -LiteralPath $Path -Raw)
+    # Require a definition, not a forward declaration or a call site. StartCore
+    # is declared before DriverEntry, so selecting its first name is unsafe.
+    $definitions = [regex]::Matches($text,
+        '(?m)^\s*(?:[A-Za-z_]\w*\s+)+' + [regex]::Escape($Name) +
+        '\s*\([^;{}]*\)\s*(?<BodyStart>\{)')
+    if ($definitions.Count -ne 1) {
+        throw "Expected one definition of '$Name' in '$Path'; found $($definitions.Count)."
     }
-    $bodyStart = $text.IndexOf('{', $signatureIndex)
-    if ($bodyStart -lt 0) {
-        throw "Function '$Name' has no body in '$Path'."
-    }
+    $bodyStart = $definitions[0].Groups['BodyStart'].Index
 
     $depth = 0
     for ($index = $bodyStart; $index -lt $text.Length; ++$index) {
@@ -156,16 +169,50 @@ Assert-DoesNotMatch `
 
 $driverEntry = Join-Path $RepositoryRoot 'KswordARKDriver\src\framework\driver_entry.c'
 $driverEntryBody = Get-CFunctionBody -Path $driverEntry -Name 'DriverEntry'
+$startCoreBody = Get-CFunctionBody -Path $driverEntry -Name 'KswordARKDriverStartCore'
+$attachControllerBody = Get-CFunctionBody -Path $driverEntry -Name 'KswordARKDriverCoreAttachController'
+$driverLifecycleCode = Get-CCodeText -Text (Get-Content -LiteralPath $driverEntry -Raw)
 Assert-Matches `
     -Text $driverEntryBody `
-    -Pattern '\bKswordARKBugcheckControlInitialize\s*\(' `
-    -FailureMessage 'DriverEntry must initialize only the on-demand bugcheck controller.'
-Assert-DoesNotMatch `
+    -Pattern '\bKswordARKDriverStartCore\s*\(' `
+    -FailureMessage 'The legacy DriverEntry path must initialize the shared core before exposing IOCTLs.'
+Assert-Matches `
     -Text $driverEntryBody `
-    -Pattern '\bKswordARKBugcheckInitialize\s*\(' `
-    -FailureMessage 'DriverEntry must not scan BGP fields or register blue-screen callbacks before R3 requests installation.'
+    -Pattern 'g_KswordArkCore\.PnpProfile\s*\?\s*KsccEvtDeviceAdd\s*:' `
+    -FailureMessage 'The PnP DriverEntry path must register the controller AddDevice lifecycle.'
+Assert-Matches `
+    -Text $attachControllerBody `
+    -Pattern '\bKswordARKDriverStartCore\s*\(' `
+    -FailureMessage 'The first PnP controller must initialize the same shared core as legacy DriverEntry.'
+Assert-Matches `
+    -Text (Get-CFunctionBody -Path (Join-Path $RepositoryRoot 'KswordARKDriver\src\features\storage_controller\driver.c') -Name 'KsccEvtDeviceAdd') `
+    -Pattern '\bKswordARKDriverCoreAttachController\s*\(' `
+    -FailureMessage 'The PnP AddDevice path must reach the shared core lifecycle.'
+Assert-Matches `
+    -Text $startCoreBody `
+    -Pattern '(?s)\bKswordARKBugcheckControlInitialize\s*\(.*?\bKswordARKDriverPublishControlDevice\s*\(' `
+    -FailureMessage 'Shared core startup must initialize the on-demand bugcheck controller before publishing IOCTLs.'
+if ([regex]::Matches($driverLifecycleCode, '\bKswordARKBugcheckControlInitialize\s*\(').Count -ne 1) {
+    throw 'The shared startup lifecycle must have exactly one on-demand bugcheck controller initialization site.'
+}
+$eagerBugcheckPattern = '\b(?:KswordARKBugcheckInitialize|KswordARKBugcheckBgp(?:Initialize|ScanSignatures|ResolveFunctions)|KeRegisterBugCheck(?:Reason)?Callback)\s*\('
+Assert-DoesNotMatch `
+    -Text $driverLifecycleCode `
+    -Pattern $eagerBugcheckPattern `
+    -FailureMessage 'DriverEntry and its core lifecycle helpers must not prepare BGP or register blue-screen callbacks before R3 requests installation.'
 
 $bugcheckControl = Get-Content -LiteralPath (Join-Path $RepositoryRoot 'KswordARKDriver\src\features\bugcheck\bugcheck_control.c') -Raw
+$bugcheckControlInitializeBody = Get-CFunctionBody `
+    -Path (Join-Path $RepositoryRoot 'KswordARKDriver\src\features\bugcheck\bugcheck_control.c') `
+    -Name 'KswordARKBugcheckControlInitialize'
+Assert-DoesNotMatch `
+    -Text $bugcheckControlInitializeBody `
+    -Pattern $eagerBugcheckPattern `
+    -FailureMessage 'On-demand controller initialization must not prepare BGP or register blue-screen callbacks.'
+Assert-DoesNotMatch `
+    -Text $bugcheckControlInitializeBody `
+    -Pattern '\bWdfWorkItemEnqueue\s*\(' `
+    -FailureMessage 'On-demand controller initialization must not enqueue installation before an R3 request.'
 $bugcheckConfigureBody = Get-CFunctionBody `
     -Path (Join-Path $RepositoryRoot 'KswordARKDriver\src\features\bugcheck\bugcheck_control.c') `
     -Name 'KswordARKBugcheckControlConfigure'

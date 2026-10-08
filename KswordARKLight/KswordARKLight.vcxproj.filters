@@ -1418,4 +1418,9 @@
       <Filter>Resources</Filter>
     </Image>
   </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="..\shared\usermode\KswordArkServiceMode.h">
+      <Filter>Shared</Filter>
+    </ClInclude>
+  </ItemGroup>
 </Project>

@@ -13,7 +13,7 @@
 //   ks::ui::InstructionAssembler::assemble 构造生产可用的后端回调，供夹具验证"注入的后端" 这条
 //   接缝；生产环境应改注入包装 ks::ui::InstructionDecoder::decode 的后端（见
 //   WorkbenchDisasmView.h 文件头"二"），本夹具不链接那条路径（它依赖 ArkDriverClient/
-//   KvmWatchDialog/UI_All.h 等与本组件无关的重依赖），这是本夹具唯一的已知覆盖缺口。
+//   HvmWatchDialog/UI_All.h 等与本组件无关的重依赖），这是本夹具唯一的已知覆盖缺口。
 // ============================================================
 
 #include "../../../Ksword5.1/Ksword5.1/UI/MemoryWorkbench/WorkbenchDisasmView.h"

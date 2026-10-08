@@ -21,7 +21,7 @@
 #include "../SettingsDock/AppearanceSettings.h"
 // R-1 处置的前提编排走这一层，不自己拼 controlHvm：每条命令的许可位白名单
 // 各不相同，自己拼等于把驱动的规则在第二个地方重抄一遍。
-#include "../UI/KvmControl.h"
+#include "../UI/HvmControl.h"
 // EnumProcessModules / GetModuleInformation：取目标主模块的入口点，作为处置
 // 对话框里那个可改默认值。
 #include <psapi.h>
@@ -4794,17 +4794,17 @@ void ProcessDock::initializeTopControls()
     // 进程友好视图：
     // - 唯一复选框同时承担两种互斥视图的切换；
     // - 勾选为友好视图，取消勾选为参照 KswordARKLight 父子关系构建的树状视图。
-    m_friendlyViewCheck = new QCheckBox(QStringLiteral("进程友好视图"), this);
+    m_friendlyViewCheck = new QCheckBox(QStringLiteral("进程树视图"), this);
     m_friendlyViewCheck->setChecked(true);
-    m_friendlyViewCheck->setToolTip(QStringLiteral("勾选：友好视图（默认）；取消勾选：树状视图。搜索或查看历史活动快照时自动使用扁平结果。"));
+    m_friendlyViewCheck->setToolTip(QStringLiteral("勾选：按应用、后台进程和系统分组（默认）；取消勾选：按父子进程关系显示进程树。搜索或查看历史活动快照时自动使用扁平结果。"));
     languageManager.bindText(
         m_friendlyViewCheck,
         QStringLiteral("process.toolbar.friendly"),
-        QStringLiteral("进程友好视图"));
+        QStringLiteral("进程树视图"));
     languageManager.bindToolTip(
         m_friendlyViewCheck,
         QStringLiteral("process.tooltip.friendly"),
-        QStringLiteral("勾选：友好视图（默认）；取消勾选：树状视图。搜索或查看历史活动快照时自动使用扁平结果。"));
+        QStringLiteral("勾选：按应用、后台进程和系统分组（默认）；取消勾选：按父子进程关系显示进程树。搜索或查看历史活动快照时自动使用扁平结果。"));
 
     // 视图模式下拉框：默认监视视图。
     // 项由 rebuildViewModeComboItems 统一生成：内置预设在前，用户自定义视图追加在后。
@@ -11243,7 +11243,7 @@ void ProcessDock::showTableContextMenu(const QPoint& localPosition)
         buildR0ActionIcon(":/Icon/process_terminate.svg"),
         processContextText("process.menu.r0_terminate_tree", QStringLiteral("R0结束进程树")));
     /*
-     * R-1 两项跟随右上角那个显示名（KVM / HVM / R-1）。
+     * R-1 两项跟随右上角那个显示名（HVM / HVM / R-1）。
      *
      * 每次建菜单时现读设置而不是缓存：这个名字可以在设置页随时改，缓存下来会
      * 让菜单里叫一个名字、右上角叫另一个，而两处指的是同一个能力。
@@ -15106,7 +15106,7 @@ bool ProcessDock::stepFailedRestartResident(
     const QString& actionTitle,
     const kLogEvent& actionEvent)
 {
-    const ksword::kvm::KvmCommandResult started = ksword::kvm::startResident(0UL);
+    const ksword::hvm::HvmCommandResult started = ksword::hvm::startResident(0UL);
 
     if (started.ok)
     {
@@ -15127,7 +15127,7 @@ bool ProcessDock::prepareHvmForArming(
     const kLogEvent& actionEvent)
 {
     const auto stepFailed = [&](const QString& stepName,
-                                const ksword::kvm::KvmCommandResult& r) {
+                                const ksword::hvm::HvmCommandResult& r) {
         if (r.ok)
         {
             return false;
@@ -15142,7 +15142,7 @@ bool ProcessDock::prepareHvmForArming(
     };
     // 停常驻。已经停着时返回成功，不需要先查。
     if (stepFailed(ks::i18n::sourceText(QStringLiteral("停止常驻")),
-                   ksword::kvm::stopResident(0UL)))
+                   ksword::hvm::stopResident(0UL)))
     {
         return false;
     }
@@ -15152,7 +15152,7 @@ bool ProcessDock::prepareHvmForArming(
      * 已就绪时不会重发 PREPARE——不先释放，这两个设置这一轮根本不会生效。
      */
     if (stepFailed(ks::i18n::sourceText(QStringLiteral("释放资源")),
-                   ksword::kvm::releaseResources(0UL)))
+                   ksword::hvm::releaseResources(0UL)))
     {
         return false;
     }
@@ -15168,9 +15168,9 @@ bool ProcessDock::prepareHvmForArming(
      * 走 applyCrPolicy 而不是自己发 IOCTL，还因为它带写权限门：R-1 写权限
      * 关着的时候这条链路本来就不该改任何策略。
      */
-    const ksword::kvm::KvmCrPolicyResult currentCrPolicy =
-        ksword::kvm::readCrPolicy();
-    const ksword::kvm::KvmCrPolicyResult crResult = ksword::kvm::applyCrPolicy(
+    const ksword::hvm::HvmCrPolicyResult currentCrPolicy =
+        ksword::hvm::readCrPolicy();
+    const ksword::hvm::HvmCrPolicyResult crResult = ksword::hvm::applyCrPolicy(
         currentCrPolicy.ok ? currentCrPolicy.cr0PinnedMask : 0ULL,
         currentCrPolicy.ok ? currentCrPolicy.cr4PinnedMask : 0ULL,
         true,
@@ -15193,7 +15193,7 @@ bool ProcessDock::prepareHvmForArming(
      * 少了它，最后一步启动常驻会以一个与真因无关的状态码失败，而处置那时
      * 已经装上了。
      */
-    if (ksword::kvm::isLocalEptEnabled() || ksword::kvm::isVmFuncEnabled())
+    if (ksword::hvm::isLocalEptEnabled() || ksword::hvm::isVmFuncEnabled())
     {
         showHvmDispositionResult(
             actionTitle, false,
@@ -15202,9 +15202,9 @@ bool ProcessDock::prepareHvmForArming(
             actionEvent);
         return false;
     }
-    ksword::kvm::setEptpSwitchEnabled(true);
+    ksword::hvm::setEptpSwitchEnabled(true);
     if (stepFailed(ks::i18n::sourceText(QStringLiteral("准备资源")),
-                   ksword::kvm::ensurePrepared()))
+                   ksword::hvm::ensurePrepared()))
     {
         return false;
     }
@@ -15236,7 +15236,7 @@ void ProcessDock::executeHvmProcessDispositionAction(
      * 漏掉它的后果不是"少一层保险"，而是这条链路成了绕过它的路：菜单里把
      * R-1 设成只读观测之后，右键仍然能改 CR 策略、仍然能冻结和结束进程。
      */
-    if (!ksword::kvm::isWriteAccessEnabled())
+    if (!ksword::hvm::isWriteAccessEnabled())
     {
         QMessageBox::information(
             this,
@@ -15409,7 +15409,7 @@ void ProcessDock::executeHvmProcessDispositionAction(
      * 几次 IOCTL。
      */
     /*
-     * 每一步都走 ksword::kvm 那一层，不自己拼 controlHvm。
+     * 每一步都走 ksword::hvm 那一层，不自己拼 controlHvm。
      *
      * 直接拼的代价刚刚付过一次：每条命令的许可位白名单各不相同（stop/teardown
      * 只收 UI_CONFIRMED，prepare 不收 FORCE），而驱动的检查是
@@ -15484,7 +15484,7 @@ void ProcessDock::executeHvmInjectAction(const unsigned long operation)
     const QString hvmName = ks::settings::hvmDisplayNameLabel(
         ks::settings::loadAppearanceSettings().hvmDisplayName);
     // 往别的进程里放可执行代码，写权限门管得比处置更严，不能少。
-    if (!ksword::kvm::isWriteAccessEnabled())
+    if (!ksword::hvm::isWriteAccessEnabled())
     {
         QMessageBox::information(
             this,

@@ -115,7 +115,7 @@ std::uint64_t TargetForDisplacement(const std::uint64_t srcVa, const std::int64_
 // ---------------------------------------------------------------------------
 void TestArchitecturalLiterals(KswordTests::Suite& s) {
     // 一条视图恰好覆盖一页。这个数同时也是 addView 在 Explicit 种子下要求的影子
-    // 字节数（KvmControl.cpp:1142-1150），改小一位会让每一次安装都被驱动拒绝。
+    // 字节数（HvmControl.cpp:1142-1150），改小一位会让每一次安装都被驱动拒绝。
     s.expect(kPatchPageBytes == 4096U, L"the patch page is exactly 4096 bytes");
     // E9 rel32 的指令长度。写成 4 会让位移基准整体前移一个字节，跳转落到目标之前
     // 一字节处 —— 那里通常仍能译码，机器不会当场报错。

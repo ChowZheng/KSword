@@ -2232,7 +2232,7 @@ void ks::i18n::LanguageManager::applyRuntimeTranslations(QObject* object)
 
     std::function<void(QObject*)> visitObject;
     visitObject = [this, &translateModelItems, &visitObject](QObject* currentObject) {
-        if (currentObject == nullptr)
+        if (currentObject == nullptr || currentObject->property("ks_i18n_preserve_data_text").toBool())
         {
             return;
         }
@@ -2541,7 +2541,8 @@ void ks::i18n::LanguageManager::applyRuntimeTranslations(QObject* object)
                     model->setHeaderData(section, Qt::Horizontal, result.appliedText, kRuntimeHeaderAppliedRole);
                 }
                 int remainingIndexBudget = 50000;
-                translateModelItems(model, tableView->rootIndex(), remainingIndexBudget);
+                if (!tableView->property("ks_i18n_preserve_model_data").toBool())
+                    translateModelItems(model, tableView->rootIndex(), remainingIndexBudget);
             }
         }
         else if (QTreeView* treeView = qobject_cast<QTreeView*>(currentObject))
@@ -2580,7 +2581,8 @@ void ks::i18n::LanguageManager::applyRuntimeTranslations(QObject* object)
                     model->setHeaderData(section, Qt::Horizontal, result.appliedText, kRuntimeHeaderAppliedRole);
                 }
                 int remainingIndexBudget = 50000;
-                translateModelItems(model, treeView->rootIndex(), remainingIndexBudget);
+                if (!treeView->property("ks_i18n_preserve_model_data").toBool())
+                    translateModelItems(model, treeView->rootIndex(), remainingIndexBudget);
             }
         }
 

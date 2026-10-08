@@ -105,7 +105,7 @@ DDMA 使用磁盘控制器的 `ATA_PASS_THROUGH_DIRECT` / `SCSI_PASS_THROUGH_DIR
 
 **驱动 / 内核** — 服务管理，DriverObject / DeviceObject / MajorFunction 检查，事务式派发表编辑器，加载链摘除（可恢复），完整性和 cross-view 检查，已卸载驱动 / PiDDB 证据。对象命名空间、SSDT/SSSDT、IAT/EAT/inline Hook、回调（notify、注册表、对象、filter、bugcheck、shutdown、FS、logon、NMI……）、IDT 基线、描述符表和 IOCTL 解码、反汇编。
 
-**文件 / 存储** — 双面板管理器、哈希、签名、PE/字符串/Hex、解锁、NTFS 恢复、minifilter 和 Section 证据、原始文件系统浏览和已删除条目分析（默认只读，写入需解锁）、设备树和 R0 设备栈审计。
+**文件 / 存储** — 双面板管理器、哈希、签名、PE/字符串/Hex、解锁、NTFS 恢复、minifilter 和 Section 证据、原始文件系统浏览和已删除条目分析（默认只读，写入需解锁）、设备树和 R0 设备栈审计。文件侧边栏直接提供 [KSword Controller](StorageController.md) 入口，控制器代码已并入主 `KswordARK.sys`，支持会话控制、条件写入、复读验证与回滚；可选手动 PnP 绑定使用同一个 `KswordARK` 服务，普通加载保留原有 SCM 流程。
 
 **监控** — 按进程 ETW、syscall 采集、WinAPI agent、WMI 订阅、ETW session 管理、风险中心。类任务管理器的实时图表。
 
@@ -121,7 +121,7 @@ DDMA 使用磁盘控制器的 `ATA_PASS_THROUGH_DIRECT` / `SCSI_PASS_THROUGH_DIR
 
 **内核知识** — 71 篇中英双语可搜索文章，每篇链接到 R3/R0 实时证据页。
 
-**HVM / KVM 工作区** — 受保护的多核 Intel VT-x/EPT 常驻、嵌套 VMX 分派与 shadow EPT 合成、EPT 分离视图、EPTP 切换 Hook、执行域、R-1 内存/进程操作与引导式 Hook 向导。AMD SVM/VMCB/NPT 与嵌套 SVM 已实现并接入独立实验路径。准入检查硬件、外层虚拟机监控程序、准备资源、全 CPU 自检及生命周期状态；Intel EPT 扩展不直接适用于 AMD，完整内层系统启动与广泛的 AMD 性能验收仍未完成。仅限实验用途。
+**HVM / HVM 工作区** — 受保护的多核 Intel VT-x/EPT 常驻、嵌套 VMX 分派与 shadow EPT 合成、EPT 分离视图、EPTP 切换 Hook、执行域、R-1 内存/进程操作与引导式 Hook 向导。AMD SVM/VMCB/NPT 与嵌套 SVM 已实现并接入独立实验路径。准入检查硬件、外层虚拟机监控程序、准备资源、全 CPU 自检及生命周期状态；Intel EPT 扩展不直接适用于 AMD，完整内层系统启动与广泛的 AMD 性能验收仍未完成。仅限实验用途。
 
 <details>
 <summary>HVM 位于哪一层，以及已保留实验的范围</summary>
@@ -164,7 +164,7 @@ AMD 保留有限时长的裸机常驻/清理，以及 VMware 来宾中的 1/2/4/
 | **文件** | 双面板管理。哈希/签名/PE/字符串/Hex。PE/ELF/Mach-O 扫描器与安全文件字节编辑。解锁。NTFS 恢复。Minifilter/FileObject/Section 证据。存储和 BitLocker。 |
 | **驱动** | 服务增删改查。已加载模块。DBWIN。DriverObj/DeviceObj/MajorFunction/FastIo。事务式编辑器。可恢复加载链摘除。完整性。Module cross-view。Unloaded/PiDDB 证据。 |
 | **内核** | 对象命名空间。原子表。SSDT/SSSDT。Inline/IAT/EAT Hook。CID cross-view。ALPC/IPC。DynData。能力矩阵。已加载镜像和 IDT 基线。描述符/IOCTL 解码。反汇编。回调清单/监控。内核知识（71 篇）。 |
-| **虚拟化（KVM）** | HVM 准入、自检与常驻。嵌套 VMX / 实验性 SVM、EPT 视图/Hook/执行域、R-1 内存/进程控制、SLAT/IOMMU 证据与诊断。 |
+| **虚拟化（HVM）** | HVM 准入、自检与常驻。嵌套 VMX / 实验性 SVM、EPT 视图/Hook/执行域、R-1 内存/进程控制、SLAT/IOMMU 证据与诊断。 |
 | **监控** | 进程 ETW。Syscall 采集。WinAPI agent。WMI 订阅。ETW session 管理。风险中心。 |
 | **硬件** | CPU/GPU/内存/磁盘/网络图表。进程 I/O 和 ETW 文件活动。SetupAPI/CfgMgr 树。R0 设备审计。 |
 | **权限** | 本地账号、组、当前进程权限。 |

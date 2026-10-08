@@ -1,17 +1,17 @@
 # KswordARKDriver IOCTL Audit Report
 
-- Generated at: `2026-10-05T14:32:22.387613+00:00`
+- Generated at: `2026-10-07T16:30:52.227535+00:00`
 - Repository root: `C:\Users\JiayingLiu\Documents\Codex\2026-10-02\ban-2\KSword`
-- Headers scanned: `57`
+- Headers scanned: `58`
 - Registry scanned: `KswordARKDriver/src/dispatch/ioctl_registry.c`
 
 ## Summary
 
 | Metric | Value |
 | --- | --- |
-| Shared IOCTL definitions | 211 |
-| Registry entries | 211 |
-| Registered definitions | 211 |
+| Shared IOCTL definitions | 216 |
+| Registry entries | 216 |
+| Registered definitions | 216 |
 | Unregistered definitions | 0 |
 | HIGH findings | 0 |
 | MEDIUM findings | 24 |
@@ -111,24 +111,25 @@ No HIGH findings.
 | IOCTL_KSWORD_ARK_FILE_MONITOR_DRAIN | 0x816 | METHOD_BUFFERED | FILE_ANY_ACCESS | yes | KswordARKFileMonitorIoctlDrain | shared/driver/KswordArkFileMonitorIoctl.h:74 |
 | IOCTL_KSWORD_ARK_FILE_MONITOR_QUERY_STATUS | 0x817 | METHOD_BUFFERED | FILE_ANY_ACCESS | yes | KswordARKFileMonitorIoctlQueryStatus | shared/driver/KswordArkFileMonitorIoctl.h:81 |
 | IOCTL_KSWORD_ARK_QUERY_MINIFILTER_INVENTORY | 0x8B0 | METHOD_BUFFERED | FILE_ANY_ACCESS | yes | KswordARKMinifilterIoctlQueryInventory | shared/driver/KswordArkFilterIoctl.h:18 |
-| IOCTL_KSWORD_ARK_ENUM_PROCESS_HANDLES | 0x80C | METHOD_BUFFERED | FILE_ANY_ACCESS | yes | KswordARKHandleIoctlEnumProcessHandles | shared/driver/KswordArkHandleIoctl.h:18 |
-| IOCTL_KSWORD_ARK_QUERY_HANDLE_OBJECT | 0x80D | METHOD_BUFFERED | FILE_ANY_ACCESS | yes | KswordARKHandleIoctlQueryHandleObject | shared/driver/KswordArkHandleIoctl.h:25 |
+| IOCTL_KSWORD_ARK_CLOSE_HANDLE | 0x8D4 | METHOD_BUFFERED | FILE_READ_ACCESS\|FILE_WRITE_ACCESS | yes | KswordARKHandleIoctlCloseHandle | shared/driver/KswordArkHandleIoctl.h:22 |
+| IOCTL_KSWORD_ARK_ENUM_PROCESS_HANDLES | 0x80C | METHOD_BUFFERED | FILE_ANY_ACCESS | yes | KswordARKHandleIoctlEnumProcessHandles | shared/driver/KswordArkHandleIoctl.h:45 |
+| IOCTL_KSWORD_ARK_QUERY_HANDLE_OBJECT | 0x80D | METHOD_BUFFERED | FILE_ANY_ACCESS | yes | KswordARKHandleIoctlQueryHandleObject | shared/driver/KswordArkHandleIoctl.h:52 |
 | IOCTL_KSWORD_ARK_HVM_DEBUG | 0x91E | METHOD_BUFFERED | FILE_WRITE_ACCESS | yes | KswordARKHvmIoctlDebug | shared/driver/KswordArkHvmDebugIoctl.h:8 |
 | IOCTL_KSWORD_ARK_QUERY_HVM | 0x8CA | METHOD_BUFFERED | FILE_ANY_ACCESS | yes | KswordARKHvmIoctlQuery | shared/driver/KswordArkHvmIoctl.h:107 |
 | IOCTL_KSWORD_ARK_CONTROL_HVM | 0x8CB | METHOD_BUFFERED | FILE_WRITE_ACCESS | yes | KswordARKHvmIoctlControl | shared/driver/KswordArkHvmIoctl.h:109 |
 | IOCTL_KSWORD_ARK_HVM_EPT_RULE | 0x8B8 | METHOD_BUFFERED | FILE_WRITE_ACCESS | yes | KswordARKHvmIoctlEptRule | shared/driver/KswordArkHvmIoctl.h:111 |
 | IOCTL_KSWORD_ARK_HVM_EVENTS | 0x8B9 | METHOD_BUFFERED | FILE_WRITE_ACCESS | yes | KswordARKHvmIoctlEvents | shared/driver/KswordArkHvmIoctl.h:113 |
 | IOCTL_KSWORD_ARK_HVM_MEMORY | 0x8BA | METHOD_BUFFERED | FILE_WRITE_ACCESS | yes | KswordARKHvmIoctlMemory | shared/driver/KswordArkHvmIoctl.h:116 |
-| IOCTL_KSWORD_ARK_HVM_VIEW | 0x8BB | METHOD_BUFFERED | FILE_WRITE_ACCESS | yes | KswordARKHvmIoctlView | shared/driver/KswordArkHvmIoctl.h:892 |
-| IOCTL_KSWORD_ARK_HVM_MSR_POLICY | 0x8BC | METHOD_BUFFERED | FILE_WRITE_ACCESS | yes | KswordARKHvmIoctlMsrPolicy | shared/driver/KswordArkHvmIoctl.h:976 |
-| IOCTL_KSWORD_ARK_HVM_CR_POLICY | 0x8BD | METHOD_BUFFERED | FILE_WRITE_ACCESS | yes | KswordARKHvmIoctlCrPolicy | shared/driver/KswordArkHvmIoctl.h:1057 |
-| IOCTL_KSWORD_ARK_HVM_PLATFORM | 0x8BF | METHOD_BUFFERED | FILE_READ_ACCESS | yes | KswordARKHvmIoctlPlatform | shared/driver/KswordArkHvmIoctl.h:1125 |
-| IOCTL_KSWORD_ARK_HVM_DOMAIN | 0x8BE | METHOD_BUFFERED | FILE_WRITE_ACCESS | yes | KswordARKHvmIoctlDomain | shared/driver/KswordArkHvmIoctl.h:1181 |
-| IOCTL_KSWORD_ARK_HVM_PROCESS | 0x90F | METHOD_BUFFERED | FILE_WRITE_ACCESS | yes | KswordARKHvmIoctlProcess | shared/driver/KswordArkHvmIoctl.h:1255 |
-| IOCTL_KSWORD_ARK_HVM_INJECT | 0x910 | METHOD_BUFFERED | FILE_WRITE_ACCESS | yes | KswordARKHvmIoctlInject | shared/driver/KswordArkHvmIoctl.h:1352 |
-| IOCTL_KSWORD_ARK_HVM_NESTED_PROBE | 0x911 | METHOD_BUFFERED | FILE_WRITE_ACCESS | yes | KswordARKHvmIoctlNestedProbe | shared/driver/KswordArkHvmIoctl.h:1459 |
-| IOCTL_KSWORD_ARK_HVM_NESTED_PAGE | 0x915 | METHOD_BUFFERED | FILE_WRITE_ACCESS | yes | KswordARKHvmIoctlNestedPage | shared/driver/KswordArkHvmIoctl.h:1645 |
-| IOCTL_KSWORD_ARK_HVM_METRICS | 0x916 | METHOD_BUFFERED | FILE_READ_ACCESS | yes | KswordARKHvmIoctlMetrics | shared/driver/KswordArkHvmMetricsIoctl.h:58 |
+| IOCTL_KSWORD_ARK_HVM_VIEW | 0x8BB | METHOD_BUFFERED | FILE_WRITE_ACCESS | yes | KswordARKHvmIoctlView | shared/driver/KswordArkHvmIoctl.h:900 |
+| IOCTL_KSWORD_ARK_HVM_MSR_POLICY | 0x8BC | METHOD_BUFFERED | FILE_WRITE_ACCESS | yes | KswordARKHvmIoctlMsrPolicy | shared/driver/KswordArkHvmIoctl.h:984 |
+| IOCTL_KSWORD_ARK_HVM_CR_POLICY | 0x8BD | METHOD_BUFFERED | FILE_WRITE_ACCESS | yes | KswordARKHvmIoctlCrPolicy | shared/driver/KswordArkHvmIoctl.h:1065 |
+| IOCTL_KSWORD_ARK_HVM_PLATFORM | 0x8BF | METHOD_BUFFERED | FILE_READ_ACCESS | yes | KswordARKHvmIoctlPlatform | shared/driver/KswordArkHvmIoctl.h:1133 |
+| IOCTL_KSWORD_ARK_HVM_DOMAIN | 0x8BE | METHOD_BUFFERED | FILE_WRITE_ACCESS | yes | KswordARKHvmIoctlDomain | shared/driver/KswordArkHvmIoctl.h:1189 |
+| IOCTL_KSWORD_ARK_HVM_PROCESS | 0x90F | METHOD_BUFFERED | FILE_WRITE_ACCESS | yes | KswordARKHvmIoctlProcess | shared/driver/KswordArkHvmIoctl.h:1263 |
+| IOCTL_KSWORD_ARK_HVM_INJECT | 0x910 | METHOD_BUFFERED | FILE_WRITE_ACCESS | yes | KswordARKHvmIoctlInject | shared/driver/KswordArkHvmIoctl.h:1360 |
+| IOCTL_KSWORD_ARK_HVM_NESTED_PROBE | 0x911 | METHOD_BUFFERED | FILE_WRITE_ACCESS | yes | KswordARKHvmIoctlNestedProbe | shared/driver/KswordArkHvmIoctl.h:1467 |
+| IOCTL_KSWORD_ARK_HVM_NESTED_PAGE | 0x915 | METHOD_BUFFERED | FILE_WRITE_ACCESS | yes | KswordARKHvmIoctlNestedPage | shared/driver/KswordArkHvmIoctl.h:1653 |
+| IOCTL_KSWORD_ARK_HVM_METRICS | 0x916 | METHOD_BUFFERED | FILE_READ_ACCESS | yes | KswordARKHvmIoctlMetrics | shared/driver/KswordArkHvmMetricsIoctl.h:77 |
 | IOCTL_KSWORD_ARK_HWID_DISPATCH_QUERY | 0x8F0 | METHOD_BUFFERED | FILE_ANY_ACCESS | yes | KswordARKHwidIoctlQueryDispatch | shared/driver/KswordArkHwidIoctl.h:18 |
 | IOCTL_KSWORD_ARK_HWID_DISPATCH_CONTROL | 0x8F1 | METHOD_BUFFERED | FILE_WRITE_ACCESS | yes | KswordARKHwidIoctlControlDispatch | shared/driver/KswordArkHwidIoctl.h:25 |
 | IOCTL_KSWORD_ARK_QUERY_I8042_AUDIT | 0x8E5 | METHOD_BUFFERED | FILE_ANY_ACCESS | yes | KswordARKI8042AuditIoctlQuery | shared/driver/KswordArkI8042AuditIoctl.h:17 |
@@ -235,6 +236,10 @@ No HIGH findings.
 | IOCTL_KSWORD_ARK_QUERY_HYPERV_SUMMARY | 0x8D2 | METHOD_BUFFERED | FILE_ANY_ACCESS | yes | KswordARKSecurityAuditIoctlQueryHyperVSummary | shared/driver/KswordArkSecurityAuditIoctl.h:34 |
 | IOCTL_KSWORD_ARK_QUERY_APP_CONTROL_STATUS | 0x8D3 | METHOD_BUFFERED | FILE_ANY_ACCESS | yes | KswordARKSecurityAuditIoctlQueryAppControlStatus | shared/driver/KswordArkSecurityAuditIoctl.h:41 |
 | IOCTL_KSWORD_ARK_QUERY_SLAT_IOMMU_AUDIT | 0x8CD | METHOD_BUFFERED | FILE_ANY_ACCESS | yes | KswordARKKernelIoctlQuerySlatIommuAudit | shared/driver/KswordArkSlatIommuAuditIoctl.h:10 |
+| IOCTL_KSWORD_ARK_QUERY_STORAGE_CONTROLLER | 0x86C | METHOD_BUFFERED | FILE_READ_ACCESS | yes | KswordARKStorageControllerIoctlQuery | shared/driver/KswordArkStorageControllerIoctl.h:28 |
+| IOCTL_KSWORD_ARK_CONTROL_STORAGE_CONTROLLER | 0x86D | METHOD_BUFFERED | FILE_WRITE_ACCESS | yes | KswordARKStorageControllerIoctlControl | shared/driver/KswordArkStorageControllerIoctl.h:35 |
+| IOCTL_KSWORD_ARK_TRANSFER_STORAGE_CONTROLLER | 0x86E | METHOD_BUFFERED | FILE_WRITE_ACCESS | yes | KswordARKStorageControllerIoctlTransfer | shared/driver/KswordArkStorageControllerIoctl.h:42 |
+| IOCTL_KSWORD_ARK_QUERY_STORAGE_CONTROLLER_AUDIT | 0x86F | METHOD_BUFFERED | FILE_READ_ACCESS | yes | KswordARKStorageControllerIoctlQueryAudit | shared/driver/KswordArkStorageControllerIoctl.h:49 |
 | IOCTL_KSWORD_ARK_QUERY_RAW_DISK_BACKEND | 0x8C4 | METHOD_BUFFERED | FILE_READ_ACCESS | yes | KswordARKStorageIoctlQueryRawDiskBackend | shared/driver/KswordArkStorageForensicsIoctl.h:19 |
 | IOCTL_KSWORD_ARK_READ_RAW_DISK | 0x8C5 | METHOD_BUFFERED | FILE_READ_ACCESS | yes | KswordARKStorageIoctlReadRawDisk | shared/driver/KswordArkStorageForensicsIoctl.h:26 |
 | IOCTL_KSWORD_ARK_WRITE_RAW_DISK | 0x8C6 | METHOD_BUFFERED | FILE_WRITE_ACCESS | yes | KswordARKStorageIoctlWriteRawDisk | shared/driver/KswordArkStorageForensicsIoctl.h:33 |

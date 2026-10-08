@@ -27,6 +27,9 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Verify manual storage controller installation policy
+        run: python3 tools/storage_controller_inf_policy.py --self-test
+
       - name: Detect changed driver inputs
         id: detect
         shell: bash
@@ -146,13 +149,31 @@ jobs:
           if ($LASTEXITCODE -ne 0) {
             throw "Driver MSBuild failed with exit code $LASTEXITCODE."
           }
+
+      - name: Generate unified driver catalogs
+        shell: pwsh
+        run: |
+          $inf2Cat = Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\bin' `
+            -Filter Inf2Cat.exe -Recurse -File -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -match '\\x86\\Inf2Cat\.exe$' } |
+            Sort-Object LastWriteTime -Descending |
+            Select-Object -First 1
+          if ($null -eq $inf2Cat) { throw 'Could not locate Inf2Cat.exe in the installed WDK.' }
+          $package = (Resolve-Path 'Ksword5.1/x64/Release/KswordARKDriver').Path
+          & $inf2Cat.FullName "/driver:$package" '/os:10_X64'
+          if ($LASTEXITCODE -ne 0) { throw "Inf2Cat failed with exit code $LASTEXITCODE." }
+          Copy-Item (Join-Path $package 'KswordARKStorageController.cat') `
+            'Ksword5.1/x64/Release/KswordARKStorageController.cat' -Force
+
       - name: Verify driver artifacts
         shell: pwsh
         run: |
           $artifacts = @(
             'Ksword5.1/x64/Release/KswordARK.sys',
             'Ksword5.1/x64/Release/KswordARK.pdb',
-            'Ksword5.1/x64/Release/KswordARKDriver.inf'
+            'Ksword5.1/x64/Release/KswordARKDriver.inf',
+            'Ksword5.1/x64/Release/KswordARKStorageController.inf',
+            'Ksword5.1/x64/Release/KswordARKStorageController.cat'
           )
           $missing = $artifacts | Where-Object { -not (Test-Path $_) }
           if ($missing) {
@@ -167,4 +188,6 @@ jobs:
             Ksword5.1/x64/Release/KswordARK.sys
             Ksword5.1/x64/Release/KswordARK.pdb
             Ksword5.1/x64/Release/KswordARKDriver.inf
+            Ksword5.1/x64/Release/KswordARKStorageController.inf
+            Ksword5.1/x64/Release/KswordARKStorageController.cat
           if-no-files-found: error

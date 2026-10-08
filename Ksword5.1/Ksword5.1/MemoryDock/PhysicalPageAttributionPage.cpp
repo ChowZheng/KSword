@@ -1,13 +1,19 @@
 #include "PhysicalPageAttributionPage.h"
 #include "MemoryAttributionChart.h"
+#include "MemoryConsumerEvidencePage.h"
+#include "PhysicalPageConsumers.h"
 #include "../ArkDriverClient/ArkDriverPfn.h"
 #include "../Internationalization/LanguageManager.h"
 #include "../UI/AdaptivePageScroll.h"
 #include "../UI/VisibleTableWidget.h"
 #include "../UI/TableInteractionSupport.h"
 #include <QDateTime>
+#include <QCheckBox>
+#include <QCryptographicHash>
 #include <QEvent>
 #include <QFileDialog>
+#include <QFile>
+#include <QFileInfo>
 #include <QHeaderView>
 #include <QHBoxLayout>
 #include <QJsonArray>
@@ -16,6 +22,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QPlainTextEdit>
+#include <QPointer>
 #include <QProgressBar>
 #include <QPushButton>
 #include <QSaveFile>
@@ -23,6 +30,7 @@
 #include <QSplitter>
 #include <QTabWidget>
 #include <QTimer>
+#include <QUuid>
 #include <QVBoxLayout>
 #include <algorithm>
 #include <array>
@@ -46,6 +54,78 @@ QString bytes(std::uint64_t amount)
 }
 QString hex(std::uint64_t value) { return QStringLiteral("0x%1").arg(value, 0, 16); }
 QString status(long value) { return QStringLiteral("0x%1").arg(static_cast<quint32>(value), 8, 16, QLatin1Char('0')); }
+template<class Values> QJsonArray proofValues(const Values& values)
+{
+    QJsonArray result; for (const auto value : values) { result.append(hex(value)); } return result;
+}
+QJsonObject witnessJson(const MappingWitnessProof& proof)
+{
+    return {{QStringLiteral("mappingStatus"), status(proof.mappingStatus)}, {QStringLiteral("entryStatus"), status(proof.entryStatus)},
+        {QStringLiteral("nativeStatus"), status(proof.nativeStatus)}, {QStringLiteral("pfn"), hex(proof.pfn)},
+        {QStringLiteral("nativeFrame"), hex(proof.nativeFrame)}, {QStringLiteral("nativeBacking"), hex(proof.nativeBacking)},
+        {QStringLiteral("pageSize"), static_cast<qint64>(proof.pageSize)}, {QStringLiteral("regionKind"), static_cast<qint64>(proof.regionKind)},
+        {QStringLiteral("allocationBase"), hex(proof.allocationBase)}, {QStringLiteral("regionBase"), hex(proof.regionBase)},
+        {QStringLiteral("regionSize"), QString::number(proof.regionSize)}, {QStringLiteral("nativeQueried"), proof.nativeQueried},
+        {QStringLiteral("regionQueried"), proof.regionQueried}};
+}
+QJsonObject objectQueryJson(const ObjectQueryProof& proof)
+{
+    return {{QStringLiteral("provider"), static_cast<int>(proof.provider)}, {QStringLiteral("transportOk"), proof.transportOk},
+        {QStringLiteral("matchingView"), proof.matchingView}, {QStringLiteral("ioStatus"), status(proof.ioStatus)},
+        {QStringLiteral("lastStatus"), status(proof.lastStatus)}, {QStringLiteral("version"), static_cast<qint64>(proof.version)},
+        {QStringLiteral("queryFlags"), static_cast<qint64>(proof.queryFlags)}, {QStringLiteral("queryStatus"), static_cast<qint64>(proof.queryStatus)},
+        {QStringLiteral("fieldFlags"), static_cast<qint64>(proof.fieldFlags)}, {QStringLiteral("queryPid"), static_cast<qint64>(proof.queryPid)},
+        {QStringLiteral("capabilityMask"), hex(proof.capabilityMask)}, {QStringLiteral("sectionObject"), hex(proof.sectionObject)},
+        {QStringLiteral("controlArea"), hex(proof.controlArea)}, {QStringLiteral("viewPid"), static_cast<qint64>(proof.viewPid)},
+        {QStringLiteral("viewType"), static_cast<qint64>(proof.viewType)}, {QStringLiteral("viewKind"), static_cast<qint64>(proof.viewKind)},
+        {QStringLiteral("viewStart"), hex(proof.viewStart)}, {QStringLiteral("viewEnd"), hex(proof.viewEnd)},
+        {QStringLiteral("viewControlArea"), hex(proof.viewControlArea)}, {QStringLiteral("offsets"), proofValues(proof.offsets)}};
+}
+QJsonObject objectEvidenceJson(const std::shared_ptr<const ObjectEvidence>& proof)
+{
+    if (!proof) { return {{QStringLiteral("available"), false}}; }
+    return {{QStringLiteral("available"), true}, {QStringLiteral("before"), objectQueryJson(proof->before)},
+        {QStringLiteral("after"), objectQueryJson(proof->after)}, {QStringLiteral("witnessBefore"), witnessJson(proof->witnessBefore)},
+        {QStringLiteral("witnessAfter"), witnessJson(proof->witnessAfter)}};
+}
+QJsonObject translationJson(const TranslationProof& proof)
+{
+    return {{QStringLiteral("transportOk"), proof.transportOk}, {QStringLiteral("resolved"), proof.resolved},
+        {QStringLiteral("ioStatus"), status(proof.ioStatus)}, {QStringLiteral("lookupStatus"), status(proof.lookupStatus)},
+        {QStringLiteral("walkStatus"), status(proof.walkStatus)}, {QStringLiteral("version"), static_cast<qint64>(proof.version)},
+        {QStringLiteral("queryStatus"), static_cast<qint64>(proof.queryStatus)}, {QStringLiteral("fieldFlags"), static_cast<qint64>(proof.fieldFlags)},
+        {QStringLiteral("cr3"), hex(proof.cr3)}, {QStringLiteral("physicalAddress"), hex(proof.physicalAddress)},
+        {QStringLiteral("entries"), proofValues(proof.entries)}};
+}
+QJsonObject stackJson(const StackProof& proof)
+{
+    return {{QStringLiteral("transportOk"), proof.transportOk}, {QStringLiteral("ioStatus"), status(proof.ioStatus)},
+        {QStringLiteral("lastStatus"), status(proof.lastStatus)}, {QStringLiteral("version"), static_cast<qint64>(proof.version)},
+        {QStringLiteral("fieldFlags"), static_cast<qint64>(proof.fieldFlags)}, {QStringLiteral("threadObject"), hex(proof.threadObject)},
+        {QStringLiteral("processObject"), hex(proof.processObject)}, {QStringLiteral("cidThread"), hex(proof.cidThread)},
+        {QStringLiteral("cidProcess"), hex(proof.cidProcess)}, {QStringLiteral("limit"), hex(proof.limit)}, {QStringLiteral("base"), hex(proof.base)},
+        {QStringLiteral("sources"), proofValues(proof.sources)}, {QStringLiteral("offsets"), proofValues(proof.offsets)}};
+}
+QJsonObject poolJson(const PoolProof& proof)
+{
+    return {{QStringLiteral("matchingAllocation"), proof.matchingAllocation}, {QStringLiteral("addressAndFlags"), hex(proof.addressAndFlags)},
+        {QStringLiteral("bytes"), QString::number(proof.bytes)}, {QStringLiteral("tag"), static_cast<qint64>(proof.tag)}};
+}
+QString backingProof(const ksword::pfn::Backing& backing)
+{
+    if (!backing.regionInformationKnown) { return L("Backing type unverified"); }
+    if (backing.mappedPageFile) { return L("Pagefile backing explicitly observed"); }
+    if (backing.mappedImage) { return L("Image backing explicitly observed"); }
+    if (backing.mappedDataFile) { return L("Data-file backing explicitly observed"); }
+    if (backing.mappedPhysical) { return L("Physical mapping explicitly observed"); }
+    return L("Observed allocation; Section identity unresolved");
+}
+QString objectProof(const ksword::pfn::Backing& backing)
+{
+    using Source = ksword::pfn::MappingObjectSource;
+    if (backing.objectSource == Source::ObservedAllocation) { return L("Observed allocation; Section identity unresolved"); }
+    return L("Section %1 | ControlArea %2 | creator unavailable").arg(hex(backing.sectionObject), hex(backing.controlArea));
+}
 QTableWidget* table(QWidget* parent)
 {
     auto* value = new ks::ui::VisibleTableWidget(parent);
@@ -76,6 +156,19 @@ struct PhysicalPageAttributionPage::Inspection {
     std::uint64_t pfn = 0;
     ksword::pfn::Identity identity;
     QString sampledAt;
+    ksword::pfn::Use use = ksword::pfn::Use::Unknown;
+    long ownerStatus = 0;
+    bool ownerResolved = false;
+    bool subtypeResolved = false;
+    QString ownerName;
+    std::uint32_t ownerPid = 0;
+};
+
+struct PhysicalPageAttributionPage::ExportJob {
+    std::atomic_bool cancel{false}, done{false};
+    std::atomic<std::uint64_t> rows{0};
+    QString path, error;
+    bool saved = false;
 };
 
 PhysicalPageAttributionPage::PhysicalPageAttributionPage(QWidget* parent) : QWidget(parent)
@@ -89,6 +182,8 @@ PhysicalPageAttributionPage::PhysicalPageAttributionPage(QWidget* parent) : QWid
     m_cancelButton = new QPushButton(this);
     m_mappingButton = new QPushButton(this);
     m_exportButton = new QPushButton(this);
+    m_retainRaw = new QCheckBox(this);
+    m_exportMappings = new QCheckBox(this); m_exportMappings->setChecked(true);
     m_budget = new QSpinBox(this);
     m_budget->setRange(15, 600);
     m_budget->setValue(90);
@@ -97,12 +192,14 @@ PhysicalPageAttributionPage::PhysicalPageAttributionPage(QWidget* parent) : QWid
     actions->addWidget(m_scanButton);
     actions->addWidget(m_cancelButton);
     actions->addWidget(m_mappingButton);
+    actions->addWidget(m_retainRaw);
     actions->addWidget(m_budget);
     actions->addStretch();
     root->addLayout(actions);
     auto* filters = new QHBoxLayout;
     filters->addWidget(m_filter, 1);
     filters->addWidget(m_exportButton);
+    filters->addWidget(m_exportMappings);
     root->addLayout(filters);
     m_summary = new QLabel(this);
     m_summary->setWordWrap(true);
@@ -145,11 +242,16 @@ PhysicalPageAttributionPage::PhysicalPageAttributionPage(QWidget* parent) : QWid
     m_evidence = new QPlainTextEdit(m_tabs);
     m_evidence->setReadOnly(true);
     m_tabs->addTab(m_evidence, {});
+    m_ownerCoverage = table(m_tabs); m_tabs->addTab(m_ownerCoverage, {});
+    m_objects = table(m_tabs); m_tabs->addTab(m_objects, {});
+    m_pageConsumers = table(m_tabs); m_tabs->addTab(m_pageConsumers, {});
+    m_consumerPage = new MemoryConsumerEvidencePage(m_tabs); m_tabs->addTab(m_consumerPage, {});
     root->addWidget(m_tabs, 1);
     connect(m_scanButton, &QPushButton::clicked, this, [this] { startScan(); });
     connect(m_cancelButton, &QPushButton::clicked, this, [this] {
         if (m_job) { m_job->cancel.store(true); }
         if (m_mappingJob) { m_mappingJob->cancel.store(true); }
+        if (m_exportJob) { m_exportJob->cancel.store(true); }
     });
     connect(m_mappingButton, &QPushButton::clicked, this, [this] { startMappings(); });
     connect(m_inspectButton, &QPushButton::clicked, this, [this] { inspectPfn(); });
@@ -188,6 +290,7 @@ PhysicalPageAttributionPage::~PhysicalPageAttributionPage()
 {
     if (m_job) { m_job->cancel.store(true); }
     if (m_mappingJob) { m_mappingJob->cancel.store(true); }
+    if (m_exportJob) { m_exportJob->cancel.store(true); }
 }
 
 void PhysicalPageAttributionPage::changeEvent(QEvent* event)
@@ -205,25 +308,58 @@ void PhysicalPageAttributionPage::retranslate()
     m_budget->setSuffix(L(" s"));
     m_budget->setToolTip(L("Time budget for mapping resolution; at most two million mapping references are retained."));
     m_exportButton->setText(L("Export PFN evidence"));
+    m_retainRaw->setText(L("Retain raw PFN identities"));
+    m_retainRaw->setToolTip(L("Optional bounded-memory JSONL capture of every queried PFN and source status. It writes disk evidence and records observer overhead; disabled scans cannot later export identities that were not retained."));
+    m_exportMappings->setText(L("Export all retained mappings"));
     m_filter->setPlaceholderText(L("Filter backing identity, process or PID"));
     m_pfn->setPlaceholderText(L("PFN number, decimal or 0x hexadecimal (not a byte address)"));
     m_inspectButton->setText(L("Inspect PFN"));
     m_tabs->setTabText(0, L("Usage by page state"));
-    m_tabs->setTabText(1, L("Largest physical owners"));
+    m_tabs->setTabText(1, L("Largest backing identities"));
     m_tabs->setTabText(2, L("PFN and mappings"));
     m_tabs->setTabText(3, L("Coverage and evidence"));
+    m_tabs->setTabText(4, L("Consumer coverage"));
+    m_tabs->setTabText(5, L("Objects and observed consumers"));
+    m_tabs->setTabText(6, L("Page-table, stack and pool consumers"));
+    m_tabs->setTabText(7, L("GPU and allocation history"));
+    headers(m_ownerCoverage, {L("Primary classification"), L("Observed bytes"), L("Consumer resolved"), L("Consumer unresolved"), L("Not applicable"), L("Object key observed")});
+    headers(m_objects, {L("Process"), L("PID"), L("Allocation base"), L("Backing file"), L("Backing proof"), L("Object evidence"), L("Status")});
+    headers(m_pageConsumers, {L("Consumer kind"), L("PFN"), L("PID"), L("TID"), L("Virtual address witness"), L("Allocation / object evidence"), L("Validation boundary")});
     QStringList categoryHeaders{L("Primary classification"), L("In-use pages"), L("Unique bytes")};
     for (const char* name : stateNames) { categoryHeaders << L(name); }
     headers(m_categories, categoryHeaders);
     headers(m_groups, {L("Primary classification"), L("Backing / owner evidence"), L("PID"), L("Unique bytes"), L("Active"), L("First PFN")});
     headers(m_examples, {L("PFN sample"), L("Physical state"), L("Physical address")});
-    headers(m_mappings, {L("PID"), L("Virtual address"), L("Process"), L("Backing file"), L("Page size"), L("Locked"), L("Windows share count (capped)")});
+    headers(m_mappings, {L("PID"), L("Virtual address"), L("Process"), L("Backing file"), L("Page size"), L("Locked"), L("Windows share count (capped)"), L("Backing proof"), L("Object evidence"), L("Native backing evidence")});
+}
+
+QString PhysicalPageAttributionPage::classificationName(ksword::pfn::Use use)
+{
+    const auto index = static_cast<std::size_t>(use);
+    return index < useNames.size() ? L(useNames[index]) : L("True unknown");
+}
+
+void PhysicalPageAttributionPage::focusCategory(int use)
+{
+    if (use < 0 || use >= static_cast<int>(ksword::pfn::useCount)) { return; }
+    selectCategory(use);
+    m_tabs->setCurrentIndex(2);
 }
 
 void PhysicalPageAttributionPage::startScan()
 {
-    if (m_job || m_mappingJob) { return; }
+    if (m_job || m_mappingJob || m_exportJob) { return; }
+    QString rawEvidencePath;
+    if (m_retainRaw->isChecked()) {
+        const QPointer<PhysicalPageAttributionPage> page(this);
+        const QString path = QFileDialog::getSaveFileName(this, L("Retain raw PFN evidence"), QStringLiteral("pfn-raw.jsonl"), L("JSONL files (*.jsonl)"));
+        if (page.isNull()) { return; }
+        if (path.isEmpty()) { return; }
+        rawEvidencePath = path;
+    }
+    if (m_job || m_mappingJob || m_exportJob) { return; }
     m_job = std::make_shared<ScanJob>();
+    m_job->rawEvidencePath = rawEvidencePath;
     // Workers own only shared state; page destruction never invalidates a callback.
     const auto job = m_job;
     try { std::thread([job] { collectPhysicalPages(job); }).detach(); }
@@ -233,8 +369,9 @@ void PhysicalPageAttributionPage::startScan()
 
 void PhysicalPageAttributionPage::startMappings()
 {
-    if (m_job || m_mappingJob) { return; }
+    if (m_job || m_mappingJob || m_exportJob) { return; }
     m_mappingJob = std::make_shared<MappingJob>();
+    if (m_scan) { m_mappingJob->ledgerContextEpoch = m_scan->epoch; }
     const auto job = m_mappingJob;
     const auto seconds = static_cast<unsigned>(m_budget->value());
     try { std::thread([job, seconds] { collectPhysicalMappings(job, seconds); }).detach(); }
@@ -245,9 +382,19 @@ void PhysicalPageAttributionPage::startMappings()
 void PhysicalPageAttributionPage::poll()
 {
     if (m_job && m_job->done.load()) {
-        { std::lock_guard<std::mutex> lock(m_job->mutex); m_scan = m_job->result; }
+        { std::lock_guard<std::mutex> lock(m_job->mutex); m_lastAttempt = m_job->result; }
         m_job.reset();
-        if (snapshotReady) { snapshotReady(m_scan); }
+        m_latestAttemptFailed = !m_lastAttempt || !m_lastAttempt->accounting.expected ||
+            !m_lastAttempt->accounting.valid || !m_lastAttempt->accounting.reconciles();
+        if (!m_latestAttemptFailed || !m_scan) {
+            m_scan = m_lastAttempt;
+            m_mappingScan.reset();
+        }
+        if (m_lastAttempt) {
+            m_auditHistory.push_back(m_lastAttempt->auditSample);
+            if (m_auditHistory.size() > 3) { m_auditHistory.erase(m_auditHistory.begin()); }
+        } else { m_auditHistory.clear(); }
+        if (snapshotReady) { snapshotReady(m_lastAttempt); }
         rebuild();
     }
     if (m_mappingJob && m_mappingJob->done.load()) {
@@ -258,11 +405,16 @@ void PhysicalPageAttributionPage::poll()
         const auto pfn = m_pfn->text().toULongLong(&ok, 0);
         if (ok) { showMappings(pfn); }
     }
-    const bool busy = m_job || m_mappingJob;
+    if (m_exportJob && m_exportJob->done.load()) {
+        const auto result = std::move(m_exportJob);
+        m_summary->setText(result->saved ? L("PFN evidence saved: %1").arg(result->path) : L("Evidence export failed: %1").arg(ks::i18n::packedSourceText(result->error)));
+    }
+    const bool busy = m_job || m_mappingJob || m_exportJob;
     m_scanButton->setEnabled(!busy);
     m_mappingButton->setEnabled(!busy && m_scan && m_scan->accounting.valid != 0);
     m_cancelButton->setEnabled(busy);
     m_exportButton->setEnabled(m_scan != nullptr && !busy);
+    m_retainRaw->setEnabled(!busy); m_exportMappings->setEnabled(!busy);
     if (m_job) {
         const auto total = m_job->total.load();
         const auto visited = m_job->visited.load();
@@ -270,6 +422,8 @@ void PhysicalPageAttributionPage::poll()
         m_progress->setValue(total ? static_cast<int>(visited * 1000 / total) : 0);
     } else if (m_mappingJob) {
         m_summary->setText(L("Resolving mappings: %1 resident references checked. Physical totals are unchanged.").arg(m_mappingJob->tested.load()));
+    } else if (m_exportJob) {
+        m_summary->setText(L("Exporting retained evidence: %1 mapping rows. Physical totals are unchanged.").arg(m_exportJob->rows.load()));
     }
     if (m_inspection && m_inspection->done.load()) {
         const auto result = std::move(m_inspection);
@@ -277,7 +431,7 @@ void PhysicalPageAttributionPage::poll()
         if (result->status < 0 || result->identity.frame == ~0ULL) {
             m_pageEvidence->setPlainText(L("PFN query unavailable: %1").arg(status(result->status)));
         } else {
-            const auto use = classify(result->identity);
+            const auto use = result->use;
             QString description = L("PFN %1 | physical %2 | %3 | %4\nOwner key %5 | backing / VA %6 | sampled %7")
                 .arg(hex(result->pfn), hex(result->pfn * pageBytes), L(useNames[static_cast<std::size_t>(use)]),
                     L(stateNames[state(result->identity)]),
@@ -285,6 +439,13 @@ void PhysicalPageAttributionPage::poll()
                         ? hex(processKey(result->identity)) : L("Unavailable"),
                     hex(result->identity.backing), result->sampledAt);
             description += L("\nMapping observations were collected separately and can change while the system runs. A Windows share count is capped and is not the complete list of owners.");
+            if (nativeUse(result->identity) == 0 && inUseState(state(result->identity))) {
+                description += L("\nFresh owner lookup status %1 | subtype resolved %2 | owner %3")
+                    .arg(status(result->ownerStatus), result->subtypeResolved ? L("Yes") : L("No"), result->subtypeResolved ? result->ownerName : L("Unresolved"));
+            }
+            if (nativeUse(result->identity) == 0 && inUseState(state(result->identity)) && !result->subtypeResolved) {
+                description += L("\nPrivate subtype could not be validated during this inspection. An older compression label is not reused for a recyclable PFN.");
+            }
             m_pageEvidence->setPlainText(description);
         }
         showMappings(result->pfn);
@@ -294,7 +455,8 @@ void PhysicalPageAttributionPage::poll()
 void PhysicalPageAttributionPage::rebuild()
 {
     if (!m_scan) {
-        m_summary->setText(L("Run a PFN scan to replace the snapshot remainder with physical-page evidence. No scan has completed yet."));
+        m_summary->setText(m_latestAttemptFailed ? L("Collection failed because a worker could not retain its result.")
+            : L("Run a PFN scan to replace the snapshot remainder with physical-page evidence. No scan has completed yet."));
         m_chart->setSegments({}, L("Physical page attribution"));
         return;
     }
@@ -320,6 +482,11 @@ void PhysicalPageAttributionPage::rebuild()
     if (!counts.expected) {
         m_summary->setText(L("PFN scan unavailable: %1. No unknown-byte total can be calculated.").arg(status(scan.rangesStatus)));
     }
+    m_summary->setText(m_summary->text() + QStringLiteral("\n") + L("Known use, owner unresolved: %1").arg(bytes(scan.ownerCoverage.knownInUseUnresolved() * pageBytes)));
+    if (!scan.semanticsValidated) { m_summary->setText(m_summary->text() + QStringLiteral("\n") + L("Classification semantics have not been validated on this Windows build.")); }
+    if (m_latestAttemptFailed && m_lastAttempt != m_scan) {
+        m_summary->setText(L("Latest PFN attempt failed; showing the previous ledger.") + QStringLiteral("\n") + m_summary->text());
+    }
     m_progress->setValue(counts.expected ? static_cast<int>(counts.valid * 1000 / counts.expected) : 0);
     m_categories->setSortingEnabled(false);
     m_categories->setRowCount(static_cast<int>(useCount));
@@ -334,11 +501,104 @@ void PhysicalPageAttributionPage::rebuild()
     }
     m_categories->setSortingEnabled(true);
     m_categories->resizeColumnsToContents();
+    m_ownerCoverage->setSortingEnabled(false);
+    m_ownerCoverage->setRowCount(static_cast<int>(useCount));
+    for (std::size_t i = 0; i < useCount; ++i) {
+        const int row = static_cast<int>(i);
+        m_ownerCoverage->setItem(row, 0, new QTableWidgetItem(L(useNames[i])));
+        const auto sum = [](const auto& states) { std::uint64_t value = 0; for (const auto pages : states) { value += pages; } return value * pageBytes; };
+        number(m_ownerCoverage, row, 1, sum(counts.byUseAndState[i]));
+        number(m_ownerCoverage, row, 2, sum(scan.ownerCoverage.resolved[i]));
+        number(m_ownerCoverage, row, 3, sum(scan.ownerCoverage.unresolved[i]));
+        number(m_ownerCoverage, row, 4, sum(scan.ownerCoverage.notApplicable[i]));
+        number(m_ownerCoverage, row, 5, sum(scan.ownerCoverage.objectKeyKnown[i]));
+    }
+    m_ownerCoverage->setSortingEnabled(true); m_ownerCoverage->resizeColumnsToContents();
+    m_objects->setRowCount(0);
+    m_pageConsumers->setRowCount(0);
+    if (m_mappingScan) {
+        for (const auto& object : m_mappingScan->backing) {
+            const int row = m_objects->rowCount(); if (row >= 300) { break; }
+            m_objects->insertRow(row);
+            m_objects->setItem(row, 0, new QTableWidgetItem(object.process));
+            number(m_objects, row, 1, object.pid, false);
+            m_objects->setItem(row, 2, new QTableWidgetItem(hex(object.allocationBase)));
+            m_objects->setItem(row, 3, new QTableWidgetItem(object.path.isEmpty() ? L("Unresolved") : object.path));
+            m_objects->setItem(row, 4, new QTableWidgetItem(backingProof(object)));
+            m_objects->setItem(row, 5, new QTableWidgetItem(objectProof(object)));
+            m_objects->setItem(row, 6, new QTableWidgetItem(L("Path Win32 %1 | object status %2").arg(object.pathError).arg(status(object.objectStatus))));
+        }
+        if (m_mappingScan->consumers) {
+            for (const auto& consumer : m_mappingScan->consumers->relations) {
+                const int row = m_pageConsumers->rowCount(); if (row >= 300) { break; }
+                m_pageConsumers->insertRow(row);
+                QString kind;
+                switch (consumer.kind) {
+                case ConsumerKind::PageTable: kind = L("Page-table address space"); break;
+                case ConsumerKind::KernelStack: kind = L("Kernel-stack thread observation"); break;
+                case ConsumerKind::BigPool: kind = L("Big Pool allocation observation"); break;
+                }
+                m_pageConsumers->setItem(row, 0, new QTableWidgetItem(kind));
+                m_pageConsumers->setItem(row, 1, new QTableWidgetItem(hex(consumer.pfn)));
+                number(m_pageConsumers, row, 2, consumer.pid, false);
+                number(m_pageConsumers, row, 3, consumer.tid, false);
+                m_pageConsumers->setItem(row, 4, new QTableWidgetItem(hex(consumer.virtualAddress)));
+                m_pageConsumers->setItem(row, 5, new QTableWidgetItem(L("TID %1 | thread object %2 | table levels %3 | pool tag %4")
+                    .arg(consumer.tid).arg(hex(consumer.threadObject)).arg(consumer.tableLevels).arg(hex(consumer.tag))));
+                m_pageConsumers->setItem(row, 6, new QTableWidgetItem(L("Process rechecked %1 | thread rechecked %2 | thread lifetime %3 | driver module %4")
+                    .arg(consumer.processIdentityRevalidated ? L("Yes") : L("No"), consumer.threadObjectRevalidated ? L("Yes") : L("No"),
+                        consumer.threadCreationTimeKnown ? L("Available") : L("Unavailable"), consumer.driverModuleKnown ? L("Available") : L("Unresolved"))));
+            }
+        }
+        m_objects->resizeColumnsToContents();
+        m_pageConsumers->resizeColumnsToContents();
+    }
     rebuildGroups();
     if (m_selectedCategory >= 0) { selectCategory(m_selectedCategory); }
     QStringList evidence;
+    evidence << L("Observation domain %1 | epoch %2 | Windows %3.%4.%5 | process/native architecture %6/%7")
+        .arg(scan.domain, scan.epoch).arg(scan.windowsMajor).arg(scan.windowsMinor).arg(scan.windowsBuild).arg(scan.processArchitecture, scan.nativeArchitecture);
+    evidence << L("Native ABI %1 | observed %2 | semantics validated %3. R3 and R0 are access paths to the same Memory Manager provider.")
+        .arg(scan.nativeAbi, scan.nativeAbiObserved ? L("Yes") : L("No"), scan.semanticsValidated ? L("Yes") : L("No"));
+    evidence << L("Known-use consumer unresolved %1. This is separate from type-unknown and already belongs to existing categories.")
+        .arg(bytes(scan.ownerCoverage.knownInUseUnresolved() * pageBytes));
+    evidence << L("Raw identity retention %1 | retained pages %2 | finalized %3 | complete %4 | file %5")
+        .arg(scan.rawEvidenceRequested ? L("Yes") : L("No")).arg(scan.rawEvidenceLedgerPages)
+        .arg(scan.rawEvidenceFinalized ? L("Yes") : L("No"), scan.rawEvidenceComplete ? L("Yes") : L("No"), scan.rawEvidencePath.isEmpty() ? L("Unavailable") : scan.rawEvidencePath);
+    if (scan.rawEvidenceFailed) { evidence << L("Raw evidence failed: %1").arg(scan.rawEvidenceError); }
+    evidence << L("Observer process WS before/after/max %1/%2/%3; private bytes %4/%5/%6. Whole-process samples include other UI activity and are not an isolated allocation measurement.")
+        .arg(bytes(scan.observerWorkingSetBefore), bytes(scan.observerWorkingSetAfter), bytes(scan.observerWorkingSetMax),
+            bytes(scan.observerPrivateBefore), bytes(scan.observerPrivateAfter), bytes(scan.observerPrivateMax));
+    evidence << L("Observer samples available before/after %1/%2 | encoded raw buffer peak %3 | batch timing retention overflow %4")
+        .arg(scan.observerMemoryBeforeKnown ? L("Yes") : L("No"), scan.observerMemoryAfterKnown ? L("Yes") : L("No"))
+        .arg(bytes(scan.rawBufferPeakBytes)).arg(scan.batchTimingOverflow);
+    bool qualified = false;
+    if (m_auditHistory.size() == 3) {
+        const std::array<AuditCriterionSample, 3> samples{m_auditHistory[0], m_auditHistory[1], m_auditHistory[2]};
+        qualified = proposedThreeScanCriterion(samples);
+    }
+    evidence << L("Proposed three-capture 64 MiB type-unknown criterion: %1. Requires a validated Windows build, complete coverage and exact ledger reconciliation; consumer attribution is separate.")
+        .arg(qualified ? L("Passed") : L("Not established"));
+    if (m_latestAttemptFailed && m_lastAttempt != m_scan) {
+        evidence << L("Latest PFN attempt failed; showing the previous ledger.");
+        if (m_lastAttempt) {
+            evidence << L("Failed attempt %1 | range status %2 | page status %3")
+                .arg(m_lastAttempt->finished, status(m_lastAttempt->rangesStatus), status(m_lastAttempt->lastPageStatus));
+        }
+    }
     evidence << L("Collection interval: %1 to %2 (%3 ms)").arg(scan.started, scan.finished).arg(scan.elapsedMs);
     evidence << L("Native batches %1 | R0 batches %2 | failed batches %3").arg(scan.nativeBatches).arg(scan.driverBatches).arg(scan.failedBatches);
+    evidence << L("Recovery queries %1 | recovered physical pages %2. Retries do not add pages to the ledger.")
+        .arg(scan.recoveryQueries).arg(scan.recoveredPages);
+    evidence << L("Private owner resolved %1 | unresolved %2 | conflicting owner keys %3 | owner recheck %4")
+        .arg(bytes(scan.resolvedPrivatePages * pageBytes), bytes(scan.unresolvedPrivatePages * pageBytes))
+        .arg(scan.ownerConflicts).arg(scan.ownersRechecked ? status(scan.ownersRecheckStatus) : L("Not scanned"));
+    evidence << L("Owner names are endpoint observations, not a frozen lifetime. Conflicting keys remain unnamed; missing names do not become unknown uses.");
+    for (unsigned nativeUse = 0; nativeUse < counts.unknownByNativeUse.size(); ++nativeUse) {
+        const auto& states = counts.unknownByNativeUse[nativeUse];
+        const auto amount = states[3] + states[4] + states[6] + states[7];
+        if (amount) { evidence << L("Unknown native use %1: %2").arg(nativeUse).arg(bytes(amount * pageBytes)); }
+    }
     evidence << L("Range status %1 | owner status %2 | page status %3").arg(status(scan.rangesStatus), status(scan.ownersStatus), status(scan.lastPageStatus));
     evidence << L("Ledger reconciliation: %1. Unknown, unreadable and unscanned are separate; none is assigned to a guessed owner.")
         .arg(counts.reconciles() && counts.expected ? L("Passed") : L("Unavailable / failed"));
@@ -365,7 +625,30 @@ void PhysicalPageAttributionPage::rebuild()
             .arg(maps.sampledAt).arg(maps.tested).arg(maps.distinct).arg(maps.failed).arg(maps.scannedProcesses).arg(maps.processes).arg(maps.inaccessible);
         evidence << L("Observed large-page bytes %1 | locked bytes %2 | multiply mapped bytes %3. All are subsets, never added to the PFN ledger.")
             .arg(bytes(maps.large * pageBytes), bytes(maps.locked * pageBytes), bytes(maps.multiplyMapped * pageBytes));
-        evidence << L("Mapping coverage is limited to accessible working sets; AWE, large-page and protected mappings may be absent. Unobserved does not mean zero.");
+        evidence << L("Mapping coverage includes accessible virtual regions within the time and page budget. AWE and large pages are probed; inaccessible or unvisited mappings remain unverified.");
+        evidence << L("Mapping limits: 16 million virtual pages probed, 2 million retained references, and the selected time budget. These limits can leave owner coverage incomplete.");
+        evidence << L("Virtual pages probed %1 | region query failures %2 | working-set query failures %3 | changed mappings %4 | conflicting file keys %5")
+            .arg(maps.virtualPagesProbed).arg(maps.regionQueryFailures).arg(maps.workingSetQueryFailures).arg(maps.changedMappings).arg(maps.conflictingFileKeys);
+        evidence << L("Ordinary working sets scanned %1/%2 | supplemental region scans completed %3/%2")
+            .arg(maps.workingSetProcesses).arg(maps.processes).arg(maps.scannedProcesses);
+        evidence << L("Mapping observer WS before / after %1 / %2 | private before / after %3 / %4 | samples %5. Maxima are sampled observations.")
+            .arg(maps.observerBeforeKnown ? bytes(maps.observerWorkingSetBefore) : L("Unavailable"), maps.observerAfterKnown ? bytes(maps.observerWorkingSetAfter) : L("Unavailable"),
+                maps.observerBeforeKnown ? bytes(maps.observerPrivateBefore) : L("Unavailable"), maps.observerAfterKnown ? bytes(maps.observerPrivateAfter) : L("Unavailable")).arg(maps.observerMemorySamples);
+        evidence << L("Mapping observation domain %1 | epoch %2 | PFN ledger context %3 | interval %4 to %5")
+            .arg(maps.domain, maps.epoch, maps.ledgerContextEpoch, maps.sampledAt, maps.finished);
+        evidence << L("Verified object relations %1 | object queries %2 | object budget reached %3. Creators and anonymous Section identity are not inferred from mapped allocations.")
+            .arg(maps.verifiedObjectRelations).arg(maps.objectQueries).arg(maps.objectBudgetReached ? L("Yes") : L("No"));
+        evidence << L("Cache-only filename provider %1 | anonymous Section provider %2. Missing capabilities remain explicit.")
+            .arg(status(maps.cacheFileNameProviderStatus), status(maps.anonymousSectionProviderStatus));
+        if (maps.consumers) {
+            const auto& consumers = *maps.consumers;
+            evidence << L("Independent page consumers %1 distinct PFNs | candidates %2 | failures %3 | rejected %4 | interval %5 to %6")
+                .arg(consumers.distinct).arg(consumers.candidatePages).arg(consumers.failed).arg(consumers.rejected).arg(consumers.started, consumers.finished);
+            evidence << L("Page-table provider %1 | kernel-stack provider %2 | Big Pool provider %3 | thread creation identity %4 | lock owner provider %5")
+                .arg(status(consumers.tableStatus), status(consumers.stackStatus), status(consumers.bigPoolStatus),
+                    consumers.threadCreationProviderAvailable ? L("Available") : L("Unavailable"), consumers.lockOwnerProviderAvailable ? L("Available") : L("Unavailable"));
+            evidence << L("These relations retain native PFN witnesses and source identities. Thread objects are endpoint observations; pool tags do not identify a unique driver, and these bytes are not added to the physical ledger.");
+        }
         evidence << L("Mapping status %1 | driver available %2 | cancelled %3 | budget reached %4")
             .arg(status(maps.status), maps.driverAvailable ? L("Yes") : L("No"), maps.cancelled ? L("Yes") : L("No"), maps.budgetReached ? L("Yes") : L("No"));
     } else { evidence << L("Mapping resolution has not run. Large-page and per-PFN reference coverage is unavailable."); }
@@ -379,10 +662,6 @@ void PhysicalPageAttributionPage::rebuildGroups()
     const QString filter = m_filter->text().trimmed();
     for (const auto& group : m_scan->groups) {
         QString owner = group.name.isEmpty() ? (group.key ? hex(group.key) : L("Unavailable")) : group.name;
-        if (m_mappingScan && (group.use == Use::MappedFile || group.use == Use::Image || group.use == Use::Metafile)) {
-            const auto file = m_mappingScan->observedFileNames.find(group.key);
-            if (file != m_mappingScan->observedFileNames.end()) { owner += QStringLiteral("  ") + file->second; }
-        }
         const QString kind = L(useNames[static_cast<std::size_t>(group.use)]);
         if (!filter.isEmpty() && !(owner + kind + QString::number(group.pid)).contains(filter, Qt::CaseInsensitive)) { continue; }
         const int row = m_groups->rowCount();
@@ -391,7 +670,15 @@ void PhysicalPageAttributionPage::rebuildGroups()
         auto* item = new QTableWidgetItem(kind);
         item->setData(Qt::UserRole, QVariant::fromValue<qulonglong>(group.firstPfn));
         m_groups->setItem(row, 0, item);
-        m_groups->setItem(row, 1, new QTableWidgetItem(owner));
+        auto* ownerItem = new QTableWidgetItem(owner);
+        QString ownerEvidence = L("Collection interval: %1 to %2 (%3 ms)").arg(m_scan->started, m_scan->finished).arg(m_scan->elapsedMs);
+        if (group.pid) {
+            ownerEvidence += QStringLiteral("\n") + L("Owner seen before / after: %1 / %2")
+                .arg(group.ownerSeenBefore ? L("Yes") : L("No"), group.ownerSeenAfter ? L("Yes") : L("No"));
+        }
+        if (m_mappingScan) { ownerEvidence += QStringLiteral("\n") + L("Mapping observations sampled at %1.").arg(m_mappingScan->sampledAt); }
+        ownerItem->setToolTip(ownerEvidence);
+        m_groups->setItem(row, 1, ownerItem);
         if (group.pid) { number(m_groups, row, 2, group.pid, false); }
         else { m_groups->setItem(row, 2, new QTableWidgetItem(L("Unavailable"))); }
         number(m_groups, row, 3, group.pages * pageBytes);
@@ -435,6 +722,39 @@ void PhysicalPageAttributionPage::inspectPfn()
             std::vector<KSWORD_ARK_PFN_IDENTITY> pages;
             job->status = client.pages(job->pfn, 1, pages);
             if (!pages.empty()) { job->identity = {pages[0].frame, pages[0].backing}; }
+            job->use = classify(job->identity);
+            if (job->status >= 0 && nativeUse(job->identity) == 0 && inUseState(state(job->identity))) {
+                const auto original = job->identity;
+                std::vector<KSWORD_ARK_PFN_OWNER> beforeOwners, afterOwners;
+                const auto beforeStatus = client.owners(beforeOwners);
+                job->ownerStatus = client.owners(afterOwners);
+                pages.clear();
+                job->status = client.pages(job->pfn, 1, pages);
+                if (!pages.empty()) { job->identity = {pages[0].frame, pages[0].backing}; }
+                job->use = classify(job->identity);
+                const auto key = processKey(job->identity);
+                const auto findOwner = [key](const auto& owners, QString& name, std::uint32_t& pid) {
+                    bool found = false;
+                    for (const auto& owner : owners) {
+                        if (!key || owner.processKey != key) { continue; }
+                        const auto end = std::find(std::begin(owner.imageName), std::end(owner.imageName), '\0');
+                        const auto candidate = QString::fromLatin1(owner.imageName, static_cast<qsizetype>(end - owner.imageName));
+                        if (found && (pid != owner.processId || candidate.compare(name, Qt::CaseInsensitive) != 0)) { return false; }
+                        found = true; pid = owner.processId; name = candidate;
+                    }
+                    return found && !name.isEmpty();
+                };
+                QString beforeName, afterName; std::uint32_t beforePid = 0, afterPid = 0;
+                job->subtypeResolved = job->status >= 0 && beforeStatus >= 0 && job->ownerStatus >= 0
+                    && original.frame == job->identity.frame && original.backing == job->identity.backing
+                    && findOwner(beforeOwners, beforeName, beforePid) && findOwner(afterOwners, afterName, afterPid)
+                    && beforePid == afterPid && beforeName.compare(afterName, Qt::CaseInsensitive) == 0;
+                if (job->subtypeResolved) {
+                    job->ownerPid = afterPid; job->ownerName = afterName; job->ownerResolved = afterPid != 0;
+                    job->use = classify(job->identity, afterName.compare(QStringLiteral("MemCompression"), Qt::CaseInsensitive) == 0);
+                }
+                if (beforeStatus < 0 && job->ownerStatus >= 0) { job->ownerStatus = beforeStatus; }
+            }
             job->sampledAt = QDateTime::currentDateTime().toString(Qt::ISODateWithMs);
         } catch (...) { job->status = static_cast<long>(0xC000009AUL); }
         job->done.store(true);
@@ -462,28 +782,78 @@ void PhysicalPageAttributionPage::showMappings(std::uint64_t pfn)
         m_mappings->setItem(row, 5, new QTableWidgetItem(entry->attributesKnown ? (entry->locked ? L("Yes") : L("No")) : L("Unavailable")));
         if (entry->attributesKnown) { number(m_mappings, row, 6, entry->shareCount, false); }
         else { m_mappings->setItem(row, 6, new QTableWidgetItem(L("Unavailable"))); }
+        QString proof = backingProof(backing);
+        if (entry->nativeIdentityKnown && nativeUse({entry->nativeFrame, entry->nativeBacking}) == 0
+            && (backing.kind == MEM_MAPPED || backing.kind == MEM_IMAGE)) { proof += QStringLiteral(" | ") + L("Private mapped copy"); }
+        m_mappings->setItem(row, 7, new QTableWidgetItem(proof));
+        m_mappings->setItem(row, 8, new QTableWidgetItem(objectProof(backing)));
+        m_mappings->setItem(row, 9, new QTableWidgetItem(entry->nativeIdentityKnown ? hex(entry->nativeBacking) : L("Unresolved")));
     }
     m_mappings->resizeColumnsToContents();
 }
 
 void PhysicalPageAttributionPage::exportEvidence()
 {
-    if (!m_scan) { return; }
+    if (!m_scan || m_job || m_mappingJob || m_exportJob) { return; }
+    const QPointer<PhysicalPageAttributionPage> page(this);
     const QString path = QFileDialog::getSaveFileName(this, L("Export PFN evidence"), QStringLiteral("pfn-evidence.json"), L("JSON files (*.json)"));
-    if (path.isEmpty()) { return; }
-    const auto& scan = *m_scan;
+    if (page.isNull() || path.isEmpty()) { return; }
+    if (!m_scan || m_job || m_mappingJob || m_exportJob) { return; }
+    const auto normalizedFile = [](const QString& name) {
+        const QFileInfo info(name);
+        const QString canonical = info.canonicalFilePath();
+        return canonical.isEmpty() ? info.absoluteFilePath() : canonical;
+    };
+    if (!m_scan->rawEvidencePath.isEmpty() && normalizedFile(path).compare(normalizedFile(m_scan->rawEvidencePath), Qt::CaseInsensitive) == 0) {
+        m_summary->setText(L("Choose a manifest path different from the raw PFN evidence file.")); return;
+    }
+    m_exportJob = std::make_shared<ExportJob>(); m_exportJob->path = path;
+    const auto job = m_exportJob;
+    const auto scanPtr = m_scan;
+    const auto mapsPtr = m_mappingScan;
+    const auto lastAttempt = m_lastAttempt;
+    const bool latestAttemptFailed = m_latestAttemptFailed, fullMappings = m_exportMappings->isChecked();
+    const QString interpretation = m_evidence->toPlainText();
+    const QJsonObject consumer = m_consumerPage->evidence();
+    try { std::thread([job, scanPtr, mapsPtr, lastAttempt, latestAttemptFailed, fullMappings, interpretation, consumer, path] {
+        struct Done { std::shared_ptr<ExportJob> job; ~Done() { job->done.store(true); } } done{job};
+        try {
+    const auto& scan = *scanPtr;
     QJsonObject root;
-    root.insert(QStringLiteral("schema"), 1);
+    root.insert(QStringLiteral("schema"), QStringLiteral("ksword.pfn.evidence"));
+    root.insert(QStringLiteral("version"), 2);
     root.insert(QStringLiteral("pageBytes"), static_cast<int>(pageBytes));
     root.insert(QStringLiteral("started"), scan.started);
     root.insert(QStringLiteral("finished"), scan.finished);
     root.insert(QStringLiteral("complete"), scan.complete);
+    root.insert(QStringLiteral("latestAttemptFailed"), latestAttemptFailed);
+    if (latestAttemptFailed && lastAttempt && lastAttempt != scanPtr) {
+        root.insert(QStringLiteral("failedAttemptFinished"), lastAttempt->finished);
+        root.insert(QStringLiteral("failedAttemptRangeStatus"), status(lastAttempt->rangesStatus));
+        root.insert(QStringLiteral("failedAttemptPageStatus"), status(lastAttempt->lastPageStatus));
+    }
     root.insert(QStringLiteral("cancelled"), scan.cancelled);
     root.insert(QStringLiteral("reconciles"), scan.accounting.reconciles());
     root.insert(QStringLiteral("expectedPages"), QString::number(scan.accounting.expected));
     root.insert(QStringLiteral("unreadablePages"), QString::number(scan.accounting.unreadable));
     root.insert(QStringLiteral("unscannedPages"), QString::number(scan.accounting.notScanned()));
-    root.insert(QStringLiteral("interpretation"), m_evidence->toPlainText());
+    root.insert(QStringLiteral("validPages"), QString::number(scan.accounting.valid));
+    root.insert(QStringLiteral("unknownInUsePages"), QString::number(scan.accounting.inUse(Use::Unknown)));
+    root.insert(QStringLiteral("recoveryQueries"), QString::number(scan.recoveryQueries));
+    root.insert(QStringLiteral("recoveredPages"), QString::number(scan.recoveredPages));
+    root.insert(QStringLiteral("resolvedPrivatePages"), QString::number(scan.resolvedPrivatePages));
+    root.insert(QStringLiteral("unresolvedPrivatePages"), QString::number(scan.unresolvedPrivatePages));
+    root.insert(QStringLiteral("ownerConflicts"), QString::number(scan.ownerConflicts));
+    root.insert(QStringLiteral("ownersRechecked"), scan.ownersRechecked);
+    root.insert(QStringLiteral("ownersRecheckStatus"), status(scan.ownersRecheckStatus));
+    QJsonArray unknownUses;
+    for (const auto& row : scan.accounting.unknownByNativeUse) {
+        QJsonArray states;
+        for (const auto amount : row) { states.append(QString::number(amount)); }
+        unknownUses.append(states);
+    }
+    root.insert(QStringLiteral("unknownPagesByNativeUseAndState"), unknownUses);
+    root.insert(QStringLiteral("interpretation"), interpretation);
     QJsonArray categories;
     for (std::size_t i = 0; i < useCount; ++i) {
         QJsonArray states;
@@ -510,17 +880,254 @@ void PhysicalPageAttributionPage::exportEvidence()
         entry.insert(QStringLiteral("pid"), static_cast<qint64>(group.pid));
         entry.insert(QStringLiteral("name"), group.name);
         entry.insert(QStringLiteral("pages"), QString::number(group.pages));
+        entry.insert(QStringLiteral("activePages"), QString::number(group.activePages));
+        entry.insert(QStringLiteral("ownerSeenBefore"), group.ownerSeenBefore);
+        entry.insert(QStringLiteral("ownerSeenAfter"), group.ownerSeenAfter);
+        QJsonArray groupStates;
+        for (const auto amount : group.pagesByState) { groupStates.append(QString::number(amount)); }
+        entry.insert(QStringLiteral("pagesByState"), groupStates);
         entry.insert(QStringLiteral("firstPfn"), hex(group.firstPfn));
-        if (m_mappingScan && (group.use == Use::MappedFile || group.use == Use::Image || group.use == Use::Metafile)) {
-            const auto file = m_mappingScan->observedFileNames.find(group.key);
-            if (file != m_mappingScan->observedFileNames.end()) { entry.insert(QStringLiteral("observed_path"), file->second); }
-        }
         groups.append(entry);
     }
     root.insert(QStringLiteral("groups"), groups);
-    QSaveFile file(path);
-    const auto data = QJsonDocument(root).toJson(QJsonDocument::Indented);
-    if (!file.open(QIODevice::WriteOnly) || file.write(data) != data.size() || !file.commit()) {
-        m_summary->setText(L("Evidence export failed: %1").arg(file.errorString()));
-    } else { m_summary->setText(L("PFN evidence saved: %1").arg(path)); }
+    if (mapsPtr) {
+        const auto& maps = *mapsPtr;
+        QJsonObject mapping;
+        mapping.insert(QStringLiteral("sampledAt"), maps.sampledAt);
+        mapping.insert(QStringLiteral("virtualPagesProbed"), QString::number(maps.virtualPagesProbed));
+        mapping.insert(QStringLiteral("regionQueryFailures"), static_cast<qint64>(maps.regionQueryFailures));
+        mapping.insert(QStringLiteral("workingSetQueryFailures"), static_cast<qint64>(maps.workingSetQueryFailures));
+        mapping.insert(QStringLiteral("workingSetProcesses"), static_cast<qint64>(maps.workingSetProcesses));
+        mapping.insert(QStringLiteral("regionScannedProcesses"), static_cast<qint64>(maps.scannedProcesses));
+        mapping.insert(QStringLiteral("changedMappings"), QString::number(maps.changedMappings));
+        mapping.insert(QStringLiteral("conflictingFileKeys"), QString::number(maps.conflictingFileKeys));
+        mapping.insert(QStringLiteral("cancelled"), maps.cancelled);
+        mapping.insert(QStringLiteral("budgetReached"), maps.budgetReached);
+        root.insert(QStringLiteral("mappingCoverage"), mapping);
+    }
+
+    root.insert(QStringLiteral("domain"), scan.domain);
+    root.insert(QStringLiteral("epoch"), scan.epoch);
+    root.insert(QStringLiteral("windowsBuild"), static_cast<qint64>(scan.windowsBuild));
+    root.insert(QStringLiteral("windowsVersionKnown"), scan.windowsVersionKnown);
+    root.insert(QStringLiteral("processArchitecture"), scan.processArchitecture);
+    root.insert(QStringLiteral("nativeArchitecture"), scan.nativeArchitecture);
+    root.insert(QStringLiteral("nativeAbi"), scan.nativeAbi);
+    root.insert(QStringLiteral("nativeAbiObserved"), scan.nativeAbiObserved);
+    root.insert(QStringLiteral("semanticsValidated"), scan.semanticsValidated);
+    root.insert(QStringLiteral("semanticValidation"), scan.semanticValidation);
+    root.insert(QStringLiteral("consumerEvidence"), consumer);
+    const auto matrix = [](const auto& values) {
+        QJsonArray rows;
+        for (const auto& row : values) {
+            QJsonArray cells; for (const auto count : row) { cells.append(QString::number(count)); } rows.append(cells);
+        }
+        return rows;
+    };
+    root.insert(QStringLiteral("ownerCoverage"), QJsonObject{{QStringLiteral("resolved"), matrix(scan.ownerCoverage.resolved)},
+        {QStringLiteral("unresolved"), matrix(scan.ownerCoverage.unresolved)}, {QStringLiteral("notApplicable"), matrix(scan.ownerCoverage.notApplicable)},
+        {QStringLiteral("objectKeyKnown"), matrix(scan.ownerCoverage.objectKeyKnown)}, {QStringLiteral("reconciles"), scan.ownerCoverage.reconciles(scan.accounting)}});
+    QJsonArray batches;
+    for (const auto& batch : scan.batches) {
+        QJsonObject row{{QStringLiteral("ordinal"), QString::number(batch.ordinal)}, {QStringLiteral("operation"), batch.operation},
+            {QStringLiteral("firstPfn"), hex(batch.firstPfn)}, {QStringLiteral("pageCount"), QString::number(batch.pageCount)},
+            {QStringLiteral("started"), batch.started}, {QStringLiteral("finished"), batch.finished},
+            {QStringLiteral("startUs"), QString::number(batch.startUs)}, {QStringLiteral("endUs"), QString::number(batch.endUs)},
+            {QStringLiteral("status"), status(batch.status)}, {QStringLiteral("selectedPath"), batch.selectedPath},
+            {QStringLiteral("driverInvoked"), batch.trace.driverInvoked}, {QStringLiteral("driverAvailable"), batch.trace.driverAvailable},
+            {QStringLiteral("driverOperation"), static_cast<qint64>(batch.trace.driverOperation)},
+            {QStringLiteral("driverStatus"), status(batch.trace.driverStatus)}, {QStringLiteral("driverTransportStatus"), status(batch.trace.driverTransportStatus)}};
+        QJsonArray native;
+        for (unsigned i = 0; i < batch.trace.nativeAttemptCount && i < batch.trace.nativeAttempts.size(); ++i) {
+            const auto& attempt = batch.trace.nativeAttempts[i];
+            native.append(QJsonObject{{QStringLiteral("informationClass"), static_cast<qint64>(attempt.informationClass)},
+                {QStringLiteral("abiVersion"), static_cast<qint64>(attempt.abiVersion)}, {QStringLiteral("status"), status(attempt.status)},
+                {QStringLiteral("invoked"), attempt.invoked}});
+        }
+        row.insert(QStringLiteral("nativeAttempts"), native); batches.append(row);
+    }
+    root.insert(QStringLiteral("queryBatches"), batches);
+    root.insert(QStringLiteral("batchTimingOverflow"), QString::number(scan.batchTimingOverflow));
+    root.insert(QStringLiteral("groupedOverflowPages"), QString::number(scan.groupedOverflowPages));
+    root.insert(QStringLiteral("observer"), QJsonObject{{QStringLiteral("workingSetBefore"), QString::number(scan.observerWorkingSetBefore)},
+        {QStringLiteral("workingSetAfter"), QString::number(scan.observerWorkingSetAfter)}, {QStringLiteral("workingSetMax"), QString::number(scan.observerWorkingSetMax)},
+        {QStringLiteral("privateBefore"), QString::number(scan.observerPrivateBefore)}, {QStringLiteral("privateAfter"), QString::number(scan.observerPrivateAfter)},
+        {QStringLiteral("privateMax"), QString::number(scan.observerPrivateMax)}, {QStringLiteral("beforeKnown"), scan.observerMemoryBeforeKnown},
+        {QStringLiteral("afterKnown"), scan.observerMemoryAfterKnown}, {QStringLiteral("samples"), QString::number(scan.observerMemorySamples)},
+        {QStringLiteral("rawEncodedBufferPeak"), QString::number(scan.rawBufferPeakBytes)}});
+    const QString exportId = QUuid::createUuid().toString(QUuid::Id128);
+    QJsonObject raw{{QStringLiteral("requested"), scan.rawEvidenceRequested}, {QStringLiteral("finalized"), scan.rawEvidenceFinalized},
+        {QStringLiteral("complete"), scan.rawEvidenceComplete}, {QStringLiteral("failed"), scan.rawEvidenceFailed},
+        {QStringLiteral("error"), scan.rawEvidenceError}, {QStringLiteral("ledgerPages"), QString::number(scan.rawEvidenceLedgerPages)}};
+    if (scan.rawEvidenceRequested) {
+        QFile source(scan.rawEvidencePath);
+        const QFileInfo before(scan.rawEvidencePath);
+        if (!source.open(QIODevice::ReadOnly) || before.size() != static_cast<qint64>(scan.rawEvidenceBytes)) {
+            job->error = QStringLiteral("Retained raw PFN evidence is missing or has changed"); return;
+        }
+        const auto headerBytes = source.readLine(8 * 1024 * 1024 + 1);
+        const auto headerDocument = QJsonDocument::fromJson(headerBytes);
+        const auto header = headerDocument.object();
+        if (!headerBytes.endsWith('\n') || !headerDocument.isObject()
+            || header.value(QStringLiteral("schema")).toString() != QStringLiteral("ksword.pfn.raw")
+            || header.value(QStringLiteral("version")).toInt() != 1
+            || header.value(QStringLiteral("kind")).toString() != QStringLiteral("header")
+            || header.value(QStringLiteral("domain")).toString() != scan.domain
+            || header.value(QStringLiteral("epoch")).toString() != scan.epoch || !source.seek(0)) {
+            job->error = QStringLiteral("Retained raw PFN evidence belongs to a different or invalid capture"); return;
+        }
+        const QString sidecar = path + QStringLiteral(".raw-") + exportId + QStringLiteral(".jsonl");
+        QSaveFile copy(sidecar); QCryptographicHash hash(QCryptographicHash::Sha256);
+        if (!copy.open(QIODevice::WriteOnly)) { job->error = copy.errorString(); return; }
+        while (!source.atEnd() && !job->cancel.load()) {
+            const auto chunk = source.read(1024 * 1024);
+            if (chunk.isEmpty() && source.error() != QFileDevice::NoError) { job->error = source.errorString(); return; }
+            if (copy.write(chunk) != chunk.size()) { job->error = copy.errorString(); return; }
+            hash.addData(chunk);
+        }
+        const QFileInfo after(scan.rawEvidencePath);
+        if (job->cancel.load()) { job->error = QStringLiteral("Evidence export cancelled"); return; }
+        if (after.size() != before.size() || after.lastModified() != before.lastModified()) {
+            job->error = QStringLiteral("Retained raw PFN evidence changed during export"); return;
+        }
+        if (!copy.commit()) { job->error = copy.errorString(); return; }
+        raw.insert(QStringLiteral("file"), QFileInfo(sidecar).fileName());
+        raw.insert(QStringLiteral("sha256"), QString::fromLatin1(hash.result().toHex()));
+        raw.insert(QStringLiteral("bytes"), QString::number(before.size()));
+    }
+    root.insert(QStringLiteral("rawPfnEvidence"), raw);
+    if (mapsPtr) {
+        const auto& maps = *mapsPtr;
+        QJsonObject metadata{{QStringLiteral("domain"), maps.domain}, {QStringLiteral("epoch"), maps.epoch},
+            {QStringLiteral("ledgerContextEpoch"), maps.ledgerContextEpoch}, {QStringLiteral("started"), maps.sampledAt}, {QStringLiteral("finished"), maps.finished},
+            {QStringLiteral("retainedRows"), QString::number(maps.rows.size())}, {QStringLiteral("retainedObjects"), QString::number(maps.backing.size())},
+            {QStringLiteral("objectQueries"), static_cast<qint64>(maps.objectQueries)}, {QStringLiteral("verifiedObjectRelations"), static_cast<qint64>(maps.verifiedObjectRelations)},
+            {QStringLiteral("objectBudgetReached"), maps.objectBudgetReached}, {QStringLiteral("cacheFileNameProviderStatus"), status(maps.cacheFileNameProviderStatus)},
+            {QStringLiteral("anonymousSectionProviderStatus"), status(maps.anonymousSectionProviderStatus)},
+            {QStringLiteral("cancelled"), maps.cancelled}, {QStringLiteral("budgetReached"), maps.budgetReached},
+            {QStringLiteral("failedAllocation"), maps.failedAllocation}, {QStringLiteral("fullRetainedMappingExportRequested"), fullMappings},
+            {QStringLiteral("tested"), QString::number(maps.tested)}, {QStringLiteral("failed"), QString::number(maps.failed)},
+            {QStringLiteral("distinct"), QString::number(maps.distinct)}, {QStringLiteral("large"), QString::number(maps.large)},
+            {QStringLiteral("locked"), QString::number(maps.locked)}, {QStringLiteral("multiplyMapped"), QString::number(maps.multiplyMapped)},
+            {QStringLiteral("virtualPagesProbed"), QString::number(maps.virtualPagesProbed)}, {QStringLiteral("changedMappings"), QString::number(maps.changedMappings)},
+            {QStringLiteral("conflictingFileKeys"), QString::number(maps.conflictingFileKeys)},
+            {QStringLiteral("regionQueryFailures"), static_cast<qint64>(maps.regionQueryFailures)}, {QStringLiteral("workingSetQueryFailures"), static_cast<qint64>(maps.workingSetQueryFailures)},
+            {QStringLiteral("processes"), static_cast<qint64>(maps.processes)}, {QStringLiteral("inaccessible"), static_cast<qint64>(maps.inaccessible)},
+            {QStringLiteral("workingSetProcesses"), static_cast<qint64>(maps.workingSetProcesses)}, {QStringLiteral("regionScannedProcesses"), static_cast<qint64>(maps.scannedProcesses)},
+            {QStringLiteral("status"), status(maps.status)}, {QStringLiteral("driverAvailable"), maps.driverAvailable},
+            {QStringLiteral("observer"), QJsonObject{{QStringLiteral("known"), maps.observerMemoryKnown},
+                {QStringLiteral("beforeKnown"), maps.observerBeforeKnown}, {QStringLiteral("afterKnown"), maps.observerAfterKnown},
+                {QStringLiteral("workingSetBefore"), QString::number(maps.observerWorkingSetBefore)}, {QStringLiteral("workingSetAfter"), QString::number(maps.observerWorkingSetAfter)},
+                {QStringLiteral("workingSetMax"), QString::number(maps.observerWorkingSetMax)}, {QStringLiteral("privateBefore"), QString::number(maps.observerPrivateBefore)},
+                {QStringLiteral("privateAfter"), QString::number(maps.observerPrivateAfter)}, {QStringLiteral("privateMax"), QString::number(maps.observerPrivateMax)},
+                {QStringLiteral("samples"), static_cast<qint64>(maps.observerMemorySamples)}, {QStringLiteral("sampledMaximumOnly"), maps.observerMemoryPeakIsSampled}}},
+            {QStringLiteral("limits"), QJsonObject{{QStringLiteral("mappingRows"), 2097152}, {QStringLiteral("virtualPageProbes"), 16777216},
+                {QStringLiteral("recordBytes"), 8 * 1024 * 1024}, {QStringLiteral("backingChunkRows"), 16}, {QStringLiteral("mappingChunkRows"), 4096}}}};
+        if (fullMappings) {
+            const QString sidecar = path + QStringLiteral(".mappings-") + exportId + QStringLiteral(".jsonl");
+            QSaveFile file(sidecar); QCryptographicHash hash(QCryptographicHash::Sha256);
+            if (!file.open(QIODevice::WriteOnly)) { job->error = file.errorString(); return; }
+            const auto write = [&](QJsonObject record) {
+                record.insert(QStringLiteral("schema"), QStringLiteral("ksword.pfn.mappings"));
+                record.insert(QStringLiteral("version"), 1); record.insert(QStringLiteral("domain"), maps.domain);
+                record.insert(QStringLiteral("epoch"), maps.epoch); record.insert(QStringLiteral("ledgerContextEpoch"), maps.ledgerContextEpoch);
+                const auto data = QJsonDocument(record).toJson(QJsonDocument::Compact) + '\n';
+                if (data.size() > 8 * 1024 * 1024 || job->cancel.load() || file.write(data) != data.size()) {
+                    job->error = job->cancel.load() ? QStringLiteral("Evidence export cancelled") : QStringLiteral("Mapping evidence write failed or exceeded its record bound");
+                    return false;
+                }
+                hash.addData(data); return true;
+            };
+            auto header = metadata; header.insert(QStringLiteral("kind"), QStringLiteral("header"));
+            if (!write(header)) { return; }
+            for (std::size_t first = 0; first < maps.backing.size(); first += 16) {
+                QJsonArray rows;
+                for (std::size_t i = first; i < std::min(first + 16, maps.backing.size()); ++i) {
+                    const auto& b = maps.backing[i];
+                    rows.append(QJsonObject{{QStringLiteral("index"), QString::number(i)}, {QStringLiteral("pid"), static_cast<qint64>(b.pid)},
+                        {QStringLiteral("processCreateTime"), QString::number(b.processCreateTime)}, {QStringLiteral("process"), b.process},
+                        {QStringLiteral("path"), b.path}, {QStringLiteral("regionKind"), static_cast<qint64>(b.kind)},
+                        {QStringLiteral("allocationBase"), hex(b.allocationBase)}, {QStringLiteral("regionBase"), hex(b.regionBase)}, {QStringLiteral("regionSize"), QString::number(b.regionSize)},
+                        {QStringLiteral("pathStatus"), static_cast<int>(b.pathStatus)}, {QStringLiteral("pathError"), static_cast<qint64>(b.pathError)},
+                        {QStringLiteral("regionInformationKnown"), b.regionInformationKnown}, {QStringLiteral("mappedPageFile"), b.mappedPageFile},
+                        {QStringLiteral("mappedDataFile"), b.mappedDataFile}, {QStringLiteral("mappedImage"), b.mappedImage}, {QStringLiteral("mappedPhysical"), b.mappedPhysical},
+                        {QStringLiteral("objectSource"), static_cast<int>(b.objectSource)}, {QStringLiteral("sectionObject"), hex(b.sectionObject)},
+                        {QStringLiteral("controlArea"), hex(b.controlArea)}, {QStringLiteral("objectStatus"), status(b.objectStatus)},
+                        {QStringLiteral("objectQueryStatus"), static_cast<qint64>(b.objectQueryStatus)}, {QStringLiteral("objectFieldFlags"), static_cast<qint64>(b.objectFieldFlags)},
+                        {QStringLiteral("objectCapabilityMask"), hex(b.objectCapabilityMask)}, {QStringLiteral("creatorKnown"), b.creatorKnown},
+                        {QStringLiteral("objectWitnessPfn"), hex(b.objectWitnessPfn)}, {QStringLiteral("objectWitnessVa"), hex(b.objectWitnessVa)},
+                        {QStringLiteral("objectEvidence"), objectEvidenceJson(b.objectEvidence)}});
+                }
+                if (!write(QJsonObject{{QStringLiteral("kind"), QStringLiteral("backing_chunk")}, {QStringLiteral("firstIndex"), QString::number(first)}, {QStringLiteral("rows"), rows}})) { return; }
+            }
+            for (std::size_t first = 0; first < maps.rows.size(); first += 4096) {
+                QJsonArray rows;
+                for (std::size_t i = first; i < std::min(first + 4096, maps.rows.size()); ++i) {
+                    const auto& m = maps.rows[i];
+                    rows.append(QJsonObject{{QStringLiteral("pfn"), hex(m.pfn)}, {QStringLiteral("va"), hex(m.address)},
+                        {QStringLiteral("pid"), static_cast<qint64>(m.pid)}, {QStringLiteral("processCreateTime"), QString::number(m.processCreateTime)},
+                        {QStringLiteral("backingIndex"), static_cast<qint64>(m.backingIndex)}, {QStringLiteral("pageSize"), QString::number(m.pageSize)},
+                        {QStringLiteral("locked"), m.locked}, {QStringLiteral("shared"), m.shared}, {QStringLiteral("shareCount"), static_cast<qint64>(m.shareCount)},
+                        {QStringLiteral("attributesKnown"), m.attributesKnown}, {QStringLiteral("pfnRevalidated"), m.pfnRevalidated},
+                        {QStringLiteral("nativeIdentityKnown"), m.nativeIdentityKnown}, {QStringLiteral("nativeFrameBefore"), hex(m.nativeFrameBefore)},
+                        {QStringLiteral("nativeBackingBefore"), hex(m.nativeBackingBefore)}, {QStringLiteral("nativeFrame"), hex(m.nativeFrame)},
+                        {QStringLiteral("nativeBacking"), hex(m.nativeBacking)}, {QStringLiteral("nativeFileKey"), hex(m.nativeFileKey)},
+                        {QStringLiteral("nativeBeforeStatus"), status(m.nativeBeforeStatus)}, {QStringLiteral("nativeAfterStatus"), status(m.nativeAfterStatus)},
+                        {QStringLiteral("mappingBeforeStatus"), status(m.mappingBeforeStatus)}, {QStringLiteral("mappingAfterStatus"), status(m.mappingAfterStatus)}});
+                }
+                if (!write(QJsonObject{{QStringLiteral("kind"), QStringLiteral("mapping_chunk")}, {QStringLiteral("firstIndex"), QString::number(first)}, {QStringLiteral("rows"), rows}})) { return; }
+                job->rows.store(std::min(first + 4096, maps.rows.size()));
+            }
+            if (maps.consumers) {
+                const auto& c = *maps.consumers;
+                QJsonArray rows;
+                for (const auto& r : c.relations) {
+                    rows.append(QJsonObject{{QStringLiteral("kind"), static_cast<int>(r.kind)}, {QStringLiteral("pfn"), hex(r.pfn)},
+                        {QStringLiteral("pid"), static_cast<qint64>(r.pid)}, {QStringLiteral("tid"), static_cast<qint64>(r.tid)},
+                        {QStringLiteral("processCreateTime"), QString::number(r.processCreateTime)}, {QStringLiteral("processWitnessVa"), hex(r.processWitnessVa)},
+                        {QStringLiteral("processWitnessPfn"), hex(r.processWitnessPfn)}, {QStringLiteral("threadObject"), hex(r.threadObject)},
+                        {QStringLiteral("tableLevels"), static_cast<qint64>(r.tableLevels)}, {QStringLiteral("tag"), static_cast<qint64>(r.tag)},
+                        {QStringLiteral("allocationVa"), hex(r.allocationVa)}, {QStringLiteral("allocationBytes"), QString::number(r.allocationBytes)},
+                        {QStringLiteral("virtualAddress"), hex(r.virtualAddress)},
+                        {QStringLiteral("nativeFrameBefore"), hex(r.nativeFrameBefore)}, {QStringLiteral("nativeBackingBefore"), hex(r.nativeBackingBefore)},
+                        {QStringLiteral("nativeFrame"), hex(r.nativeFrame)}, {QStringLiteral("nativeBacking"), hex(r.nativeBacking)},
+                        {QStringLiteral("processIdentityRevalidated"), r.processIdentityRevalidated}, {QStringLiteral("threadObjectRevalidated"), r.threadObjectRevalidated},
+                        {QStringLiteral("threadCreationTimeKnown"), r.threadCreationTimeKnown}, {QStringLiteral("driverModuleKnown"), r.driverModuleKnown},
+                        {QStringLiteral("translationBefore"), translationJson(r.translationBefore)}, {QStringLiteral("translationAfter"), translationJson(r.translationAfter)},
+                        {QStringLiteral("translationFinal"), translationJson(r.translationFinal)}, {QStringLiteral("processWitnessBefore"), witnessJson(r.processWitnessBefore)},
+                        {QStringLiteral("processWitnessAfter"), witnessJson(r.processWitnessAfter)}, {QStringLiteral("stackBefore"), stackJson(r.stackBefore)},
+                        {QStringLiteral("stackAfter"), stackJson(r.stackAfter)}, {QStringLiteral("poolBefore"), poolJson(r.poolBefore)}, {QStringLiteral("poolAfter"), poolJson(r.poolAfter)}});
+                }
+                QJsonObject record{{QStringLiteral("kind"), QStringLiteral("consumer_relations")}, {QStringLiteral("observationEpoch"), c.epoch},
+                    {QStringLiteral("observationDomain"), c.domain}, {QStringLiteral("ledgerContextEpoch"), c.ledgerContextEpoch},
+                    {QStringLiteral("observationContextOnly"), true}, {QStringLiteral("tableProcesses"), static_cast<qint64>(c.tableProcesses)},
+                    {QStringLiteral("threads"), static_cast<qint64>(c.threads)}, {QStringLiteral("bigPoolAllocations"), static_cast<qint64>(c.bigPoolAllocations)},
+                    {QStringLiteral("started"), c.started}, {QStringLiteral("finished"), c.finished}, {QStringLiteral("rows"), rows},
+                    {QStringLiteral("tableStatus"), status(c.tableStatus)}, {QStringLiteral("stackStatus"), status(c.stackStatus)},
+                    {QStringLiteral("bigPoolStatus"), status(c.bigPoolStatus)}, {QStringLiteral("bigPoolRecheckStatus"), status(c.bigPoolRecheckStatus)},
+                    {QStringLiteral("candidatePages"), QString::number(c.candidatePages)}, {QStringLiteral("failed"), QString::number(c.failed)},
+                    {QStringLiteral("rejected"), QString::number(c.rejected)}, {QStringLiteral("distinct"), QString::number(c.distinct)},
+                    {QStringLiteral("budgetReached"), c.budgetReached},
+                    {QStringLiteral("cancelled"), c.cancelled}, {QStringLiteral("threadCreationProviderAvailable"), c.threadCreationProviderAvailable},
+                    {QStringLiteral("lockOwnerProviderAvailable"), c.lockOwnerProviderAvailable}};
+                if (!write(record)) { return; }
+            }
+            if (!write(QJsonObject{{QStringLiteral("kind"), QStringLiteral("footer")}, {QStringLiteral("retainedRowsWritten"), QString::number(maps.rows.size())},
+                {QStringLiteral("retainedObjectsWritten"), QString::number(maps.backing.size())}, {QStringLiteral("retainedExportComplete"), true},
+                {QStringLiteral("systemReferenceCoverageComplete"), false}})) { return; }
+            if (!file.commit()) { job->error = file.errorString(); return; }
+            metadata.insert(QStringLiteral("file"), QFileInfo(sidecar).fileName());
+            metadata.insert(QStringLiteral("sha256"), QString::fromLatin1(hash.result().toHex()));
+            metadata.insert(QStringLiteral("retainedExportComplete"), true);
+        } else { metadata.insert(QStringLiteral("retainedExportComplete"), false); }
+        root.insert(QStringLiteral("mappingEvidence"), metadata);
+    }
+
+    if (job->cancel.load()) { job->error = QStringLiteral("Evidence export cancelled"); return; }
+    QSaveFile file(path); const auto data = QJsonDocument(root).toJson(QJsonDocument::Indented);
+    if (!file.open(QIODevice::WriteOnly) || file.write(data) != data.size() || !file.commit()) { job->error = file.errorString(); return; }
+    job->saved = true;
+        } catch (...) { job->error = QStringLiteral("Evidence export worker failed"); }
+    }).detach(); } catch (...) { m_exportJob.reset(); m_summary->setText(L("Unable to start evidence export.")); }
+    poll();
 }

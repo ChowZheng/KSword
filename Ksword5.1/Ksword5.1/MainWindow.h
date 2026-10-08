@@ -44,15 +44,15 @@
 #include "ScannerDock/ScannerDock.h"
 #include "DriverDock/DriverDock.h"
 #include "KernelDock/KernelDock.h"
-#include "KvmDock/KvmDock.h"
+#include "HvmDock/HvmDock.h"
 #include "MonitorDock/MonitorDock.h"
 #include "MonitorDock/MonitorPanelWidget.h"
 #include "HardwareDock/HardwareDock.h"
 #include "PrivilegeDock/PrivilegeDock.h"
 #include "SettingsDock/SettingsDock.h"
 #include "SettingsDock/AppearanceSettings.h"
-// KvmAvailability：右上角虚拟化按钮的状态从这个完整取值算，见 m_kvmAvailability。
-#include "UI/KvmControl.h"
+// HvmAvailability：右上角虚拟化按钮的状态从这个完整取值算，见 m_hvmAvailability。
+#include "UI/HvmControl.h"
 #include "StartupDock/StartupDock.h"
 #include "ServerDock/ServiceDock.h"
 #include "WindowDock/WindowDock.h"
@@ -234,33 +234,33 @@ private:
     void handleUiAccessButtonClicked();
     void handleR0StatusButtonClicked();
 
-    // KVM（KSwordVM，R-1 层）按钮：
-    // - handleKvmStatusButtonClicked：左键切换常驻；未准备时自动准备并自检；
-    // - showKvmMenu：右键/长按弹出 R-1 能力菜单（写权限开关、保持自检、故障重置）；
-    // - refreshKvmStatusAsync：后台线程读取 HVM 状态快照，回到 UI 线程刷新按钮。
+    // HVM（KSwordVM，R-1 层）按钮：
+    // - handleHvmStatusButtonClicked：左键切换常驻；未准备时自动准备并自检；
+    // - showHvmMenu：右键/长按弹出 R-1 能力菜单（写权限开关、保持自检、故障重置）；
+    // - refreshHvmStatusAsync：后台线程读取 HVM 状态快照，回到 UI 线程刷新按钮。
     //   状态查询是阻塞 IOCTL，绝不能在权限按钮的同步刷新路径里直接调用。
-    void handleKvmStatusButtonClicked();
+    void handleHvmStatusButtonClicked();
     // DDMA（磁盘直接内存访问）常驻虚扇区按钮：
     // - handleDdmaStatusButtonClicked：跳到内存页的 DDMA 子页去配置或解除常驻；
     // - applyDdmaButtonState：按当前进程级会话刷新亮灭与提示，纯本地读，无 IOCTL。
     void handleDdmaStatusButtonClicked();
     void applyDdmaButtonState();
-    void showKvmMenu(const QPoint& globalPosition);
-    void refreshKvmStatusAsync();
-    void applyKvmButtonState();
-    // runKvmSoak：启动常驻、保持指定毫秒数、再停止，用于证明常驻能长期存活。
-    void runKvmSoak(unsigned long milliseconds);
-    // runKvmFaultReset：清除可恢复的故障与回滚标记；常驻中会被驱动拒绝。
-    void runKvmFaultReset();
-    // runKvmPrepare/runKvmRelease：把 PREPARE 与 TEARDOWN 暴露到 KVM 菜单。
+    void showHvmMenu(const QPoint& globalPosition);
+    void refreshHvmStatusAsync();
+    void applyHvmButtonState();
+    // runHvmSoak：启动常驻、保持指定毫秒数、再停止，用于证明常驻能长期存活。
+    void runHvmSoak(unsigned long milliseconds);
+    // runHvmFaultReset：清除可恢复的故障与回滚标记；常驻中会被驱动拒绝。
+    void runHvmFaultReset();
+    // runHvmPrepare/runHvmRelease：把 PREPARE 与 TEARDOWN 暴露到 HVM 菜单。
     // 缺了这两个入口，装视图/策略/域的窗口期在这个菜单里按不出来。
-    void runKvmPrepare();
-    void runKvmRelease();
-    // handleKvmDockAction：虚拟化 (KVM) 页的唯一出口，逐条落到上面这些实现。
+    void runHvmPrepare();
+    void runHvmRelease();
+    // handleHvmDockAction：虚拟化 页的唯一出口，逐条落到上面这些实现。
     // 两个入口共用同一批实现，是为了让确认口径不可能走出两套。
-    void handleKvmDockAction(KvmDock::Action action);
-    // createKvmDockContent：两处创建点（预加载与惰性补载）共用的构造与接线。
-    KvmDock* createKvmDockContent();
+    void handleHvmDockAction(HvmDock::Action action);
+    // createHvmDockContent：两处创建点（预加载与惰性补载）共用的构造与接线。
+    HvmDock* createHvmDockContent();
 
     // hasUiAccessPrivilege 作用：
     // - 查询当前进程令牌 TokenUIAccess 状态；
@@ -690,7 +690,7 @@ private:
     ads::CDockWidget* m_dockFile = nullptr; // m_dockFile：文件页 Dock。
     ads::CDockWidget* m_dockDriver = nullptr; // m_dockDriver：驱动页 Dock。
     ads::CDockWidget* m_dockKernel = nullptr; // m_dockKernel：内核页 Dock。
-    ads::CDockWidget* m_dockKvm = nullptr; // m_dockKvm：虚拟化 (KVM) 页 Dock。
+    ads::CDockWidget* m_dockHvm = nullptr; // m_dockHvm：虚拟化 页 Dock。
     ads::CDockWidget* m_dockMonitorTab = nullptr; // m_dockMonitorTab：监控页 Dock。
     ads::CDockWidget* m_dockPrivilege = nullptr; // m_dockPrivilege：权限页 Dock。
     ads::CDockWidget* m_dockWindow = nullptr; // m_dockWindow：窗口页 Dock。
@@ -714,7 +714,7 @@ private:
     FileDock* m_shellUnlockerFileDock = nullptr; // m_shellUnlockerFileDock：Shell 右键文件解锁器隐藏宿主。
     DriverDock* m_driverWidget = nullptr; // m_driverWidget：驱动页内容控件。
     KernelDock* m_kernelWidget = nullptr; // m_kernelWidget：内核页内容控件。
-    KvmDock* m_kvmWidget = nullptr; // m_kvmWidget：虚拟化 (KVM) 页内容控件。
+    HvmDock* m_hvmWidget = nullptr; // m_hvmWidget：虚拟化 页内容控件。
     MonitorDock* m_monitorWidget = nullptr; // m_monitorWidget：监控页内容控件。
     MonitorPanelWidget* m_monitorPanelWidget = nullptr; // m_monitorPanelWidget：监视面板性能图内容控件。
     HardwareDock* m_hardwareWidget = nullptr; // m_hardwareWidget：硬件页内容控件。
@@ -755,7 +755,7 @@ private:
     QPushButton* m_debugStatusButton = nullptr;
     QPushButton* m_systemStatusButton = nullptr;
     QPushButton* m_r0StatusButton = nullptr;
-    QPushButton* m_kvmStatusButton = nullptr;   // m_kvmStatusButton：KSwordVM（R-1 层）常驻开关与能力入口。
+    QPushButton* m_hvmStatusButton = nullptr;   // m_hvmStatusButton：KSwordVM（R-1 层）常驻开关与能力入口。
     // m_ddmaStatusButton：DDMA 常驻虚扇区指示灯，排在 R-1 右侧。
     // 亮起代表磁盘上有一块扇区正被登记为 DMA 中转站（"常驻虚扇区"）。
     // 它只是指示灯 + 跳转入口：常驻与否由内存页的 DDMA 子页决定，因为要落地
@@ -766,23 +766,23 @@ private:
     // 只比代次会让首帧被当成"无变化"而跳过，按钮永远停在无样式状态。
     std::uint64_t m_ddmaSessionGeneration = 0;
     bool m_ddmaButtonPainted = false;
-    bool m_kvmResidentActive = false;           // m_kvmResidentActive：最近一次快照中是否有处理器处于 VMX non-root。
-    bool m_kvmAvailable = false;                // m_kvmAvailable：硬件与驱动是否满足常驻硬件门。
-    // m_kvmAvailability：完整的可用性取值。按钮样式从它算，不用上面那个压扁的
+    bool m_hvmResidentActive = false;           // m_hvmResidentActive：最近一次快照中是否有处理器处于 VMX non-root。
+    bool m_hvmAvailable = false;                // m_hvmAvailable：硬件与驱动是否满足常驻硬件门。
+    // m_hvmAvailability：完整的可用性取值。按钮样式从它算，不用上面那个压扁的
     // 布尔量——压扁会把 NotPrepared 并进"可用"、Faulted 并进"不可用"，两处都
     // 会让按钮画出与实情相反的样子。
-    ksword::kvm::KvmAvailability m_kvmAvailability =
-        ksword::kvm::KvmAvailability::DriverNotRunning;
-    bool m_kvmFaulted = false;                  // m_kvmFaulted：存在故障或待回滚，点击前必须先重置。
-    bool m_kvmQueryInFlight = false;            // m_kvmQueryInFlight：合并并发的后台状态查询，避免请求堆积。
-    bool m_kvmOperationRunning = false;         // m_kvmOperationRunning：常驻切换或保持自检期间禁用按钮。
-    unsigned long m_kvmGeneration = 0;          // m_kvmGeneration：用于 compare-before 控制请求的状态代次。
-    // m_kvmBackend：驱动当前选定的虚拟化后端，取 KSWORD_ARK_HVM_BACKEND_*。
-    // 右键菜单靠它灰掉没有 AMD 实现的入口，与 KvmDock 上那组门用同一个判据——
+    ksword::hvm::HvmAvailability m_hvmAvailability =
+        ksword::hvm::HvmAvailability::DriverNotRunning;
+    bool m_hvmFaulted = false;                  // m_hvmFaulted：存在故障或待回滚，点击前必须先重置。
+    bool m_hvmQueryInFlight = false;            // m_hvmQueryInFlight：合并并发的后台状态查询，避免请求堆积。
+    bool m_hvmOperationRunning = false;         // m_hvmOperationRunning：常驻切换或保持自检期间禁用按钮。
+    unsigned long m_hvmGeneration = 0;          // m_hvmGeneration：用于 compare-before 控制请求的状态代次。
+    // m_hvmBackend：驱动当前选定的虚拟化后端，取 KSWORD_ARK_HVM_BACKEND_*。
+    // 右键菜单靠它灰掉没有 AMD 实现的入口，与 HvmDock 上那组门用同一个判据——
     // 两边各判各的，用户会在一个入口里按不动、在另一个入口里按了没反应。
-    unsigned long m_kvmBackend = 0;
-    bool m_kvmNestedSupported = false;
-    QString m_kvmTooltip;                       // m_kvmTooltip：最近一次快照生成的多行状态说明。
+    unsigned long m_hvmBackend = 0;
+    bool m_hvmNestedSupported = false;
+    QString m_hvmTooltip;                       // m_hvmTooltip：最近一次快照生成的多行状态说明。
     bool m_r0DriverServiceRunning = false;      // m_r0DriverServiceRunning：KswordARK 驱动服务当前是否运行。
     bool m_r0UnavailablePromptArmed = false;   // 主窗口显示后才允许 R0 缺失提示，避免启动后台探测造成无意义弹窗。
     bool m_r0UnavailablePromptShowing = false; // 合并同一时间到达的多个 Dock/后台 R0 请求。

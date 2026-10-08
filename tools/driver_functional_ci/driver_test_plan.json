@@ -14,6 +14,8 @@
       "timeout": "该用例故意让请求挂起；超时后被结束视为通过，进程无法退出则判定驱动取消路径缺陷。"
     },
     "mustExcludePatterns": [
+      "^CONTROL_STORAGE_CONTROLLER$",
+      "^TRANSFER_STORAGE_CONTROLLER$",
       "^WRITE_",
       "^RXPF_(REGISTER|UNREGISTER|CHANGE|WRITE|SET_EMULATION|RUN_SELF_TEST)",
       "^CONTROL_DRIVER_",
@@ -2919,6 +2921,26 @@
     }
   ],
   "excluded": [
+    {
+      "ioctl": "QUERY_STORAGE_CONTROLLER",
+      "reason": "requires-dedicated-pnp-controller",
+      "detail": "只允许手动绑定的专用非启动控制器 FDO；普通 CI 没有此设备，不能自动重绑或直接写物理介质。协议、事务与生命周期由离线生产代码回放覆盖，真实控制器行为需专机验收。"
+    },
+    {
+      "ioctl": "CONTROL_STORAGE_CONTROLLER",
+      "reason": "requires-dedicated-pnp-controller",
+      "detail": "只允许手动绑定的专用非启动控制器 FDO；普通 CI 没有此设备，不能自动重绑或直接写物理介质。协议、事务与生命周期由离线生产代码回放覆盖，真实控制器行为需专机验收。"
+    },
+    {
+      "ioctl": "TRANSFER_STORAGE_CONTROLLER",
+      "reason": "requires-dedicated-pnp-controller",
+      "detail": "只允许手动绑定的专用非启动控制器 FDO；普通 CI 没有此设备，不能自动重绑或直接写物理介质。协议、事务与生命周期由离线生产代码回放覆盖，真实控制器行为需专机验收。"
+    },
+    {
+      "ioctl": "QUERY_STORAGE_CONTROLLER_AUDIT",
+      "reason": "requires-dedicated-pnp-controller",
+      "detail": "只允许手动绑定的专用非启动控制器 FDO；普通 CI 没有此设备，不能自动重绑或直接写物理介质。协议、事务与生命周期由离线生产代码回放覆盖，真实控制器行为需专机验收。"
+    },
     {
       "ioctl": "ADJUST_PROCESS_TOKEN_PRIVILEGE",
       "reason": "no-cli-path",

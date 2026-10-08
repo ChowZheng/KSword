@@ -21,6 +21,8 @@ namespace ks::process
         std::uint32_t error = 0;
         std::uint32_t processId = 0;
         std::wstring detail;
+        // Captured from the returned child handle before it is closed; anchors follow-up queries.
+        std::uint64_t creationTime100ns = 0;
     };
 
     // 只读检查；不启动服务、不请求 UAC、不改变调用方令牌。

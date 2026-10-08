@@ -237,7 +237,7 @@ namespace memwb_test
             CHECK(!empty.setByteAtAbsoluteAddress(0, 0x01));
             CHECK(!empty.setByteAtAbsoluteAddress(kMaxAddress, 0x01, false));
 
-            // KvmHookWizard 形态：逐字节写补丁，只有最后一个字节 keepSelection=true，焦点最终落在补丁末尾。
+            // HvmHookWizard 形态：逐字节写补丁，只有最后一个字节 keepSelection=true，焦点最终落在补丁末尾。
             widget->setByteArray(data, 0x4000);
             moved.clear();
             const int patch[4] = { 0xE9, 0x10, 0x20, 0x30 };

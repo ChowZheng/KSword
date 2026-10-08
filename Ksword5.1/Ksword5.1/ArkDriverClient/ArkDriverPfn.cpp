@@ -15,6 +15,12 @@ static_assert(sizeof(KSW_PF_PRIVATE_INFO) == 96);
 
 PfnQueryClient::PfnQueryClient()
 {
+    // Check the native kernel before token changes or either query route.
+    // Native/R0 provenance cannot make an unsupported architecture compatible.
+    SYSTEM_INFO nativeSystem{};
+    GetNativeSystemInfo(&nativeSystem);
+    m_nativeLayoutSupported = pfnNativeLayoutSupported(nativeSystem.wProcessorArchitecture, nativeSystem.dwPageSize);
+    if (!m_nativeLayoutSupported) { return; }
     // Enable required privileges on a temporary impersonation token, never on
     // the GUI process token or another worker's token.
     if (!OpenThreadToken(GetCurrentThread(), TOKEN_QUERY | TOKEN_IMPERSONATE, TRUE, &m_previousToken)
@@ -47,15 +53,25 @@ PfnQueryClient::~PfnQueryClient()
 long PfnQueryClient::nativeQuery(unsigned long kind, void* buffer, unsigned long bytes) const
 {
     using Query = LONG(NTAPI*)(ULONG, PVOID, ULONG, PULONG);
-    const auto query = reinterpret_cast<Query>(GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtQuerySystemInformation"));
-    if (!query) { return unsupported; }
+    const auto query = m_nativeLayoutSupported
+        ? reinterpret_cast<Query>(GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtQuerySystemInformation")) : nullptr;
+    unsigned long abiVersion = 0;
+    if (buffer && bytes >= sizeof(abiVersion)) { std::memcpy(&abiVersion, buffer, sizeof(abiVersion)); }
     KSW_PF_SUPERFETCH info{};
     info.Version = 45;
     info.Magic = 0x6B756843;
     info.InfoClass = kind;
     info.Buffer = buffer;
     info.Length = bytes;
-    return query(79, &info, sizeof(info), nullptr);
+    const long status = query ? query(79, &info, sizeof(info), nullptr) : unsupported;
+    if (m_trace.nativeAttemptCount < m_trace.nativeAttempts.size()) {
+        auto& attempt = m_trace.nativeAttempts[m_trace.nativeAttemptCount++];
+        attempt.informationClass = kind;
+        attempt.abiVersion = abiVersion;
+        attempt.status = status;
+        attempt.invoked = query != nullptr;
+    }
+    return status;
 }
 
 long PfnQueryClient::driverQuery(unsigned long kind, std::uint64_t first, std::uint32_t count,
@@ -63,8 +79,12 @@ long PfnQueryClient::driverQuery(unsigned long kind, std::uint64_t first, std::u
     const std::vector<std::uint64_t>* pfns)
 {
     returned = 0;
+    m_trace.driverOperation = kind;
+    auto finish = [&](long status) { m_trace.driverStatus = status; return status; };
+    if (!m_nativeLayoutSupported) { return finish(unsupported); }
     if (!m_driver.isValid()) { m_driver = m_client.openSilently(); }
-    if (!m_driver.isValid()) { return unsupported; }
+    m_trace.driverAvailable = m_driver.isValid();
+    if (!m_driver.isValid()) { return finish(unsupported); }
     KSWORD_ARK_PFN_REQUEST request{KSWORD_ARK_PFN_VERSION, kind, count, 0, first};
     std::vector<std::uint64_t> input;
     if (pfns) {
@@ -78,20 +98,23 @@ long PfnQueryClient::driverQuery(unsigned long kind, std::uint64_t first, std::u
         pfns ? static_cast<void*>(input.data()) : static_cast<void*>(&request),
         pfns ? static_cast<ULONG>(input.size() * sizeof(std::uint64_t)) : static_cast<ULONG>(sizeof(request)),
         storage.data(), static_cast<unsigned long>(bytes), &m_driver);
-    if (!io.ok) { return io.ntStatus < 0 ? io.ntStatus : unsupported; }
+    m_trace.driverInvoked = true;
+    m_trace.driverTransportStatus = io.ntStatus;
+    if (!io.ok) { return finish(io.ntStatus < 0 ? io.ntStatus : unsupported); }
     const auto* response = reinterpret_cast<const KSWORD_ARK_PFN_RESPONSE*>(storage.data());
     if (io.bytesReturned < sizeof(*response) || response->version != KSWORD_ARK_PFN_VERSION
         || response->operation != kind || response->count > capacity
-        || io.bytesReturned < sizeof(*response) + static_cast<std::size_t>(response->count) * stride) { return invalidData; }
-    if (response->nativeStatus < 0) { return response->nativeStatus; }
+        || io.bytesReturned < sizeof(*response) + static_cast<std::size_t>(response->count) * stride) { return finish(invalidData); }
+    if (response->nativeStatus < 0) { return finish(response->nativeStatus); }
     returned = response->count;
     std::memcpy(records, response + 1, static_cast<std::size_t>(returned) * stride);
     ++driverBatches;
-    return response->nativeStatus;
+    return finish(response->nativeStatus);
 }
 
 long PfnQueryClient::ranges(std::vector<KSWORD_ARK_PFN_RANGE>& result)
 {
+    m_trace = {};
     result.clear();
     const auto bytes = static_cast<unsigned long>(offsetof(KSW_PF_RANGES_V2, Ranges)
         + KSWORD_ARK_PFN_MAX_RANGES * sizeof(KSW_PF_RANGE));
@@ -126,6 +149,7 @@ long PfnQueryClient::ranges(std::vector<KSWORD_ARK_PFN_RANGE>& result)
 
 long PfnQueryClient::owners(std::vector<KSWORD_ARK_PFN_OWNER>& result)
 {
+    m_trace = {};
     result.clear();
     const auto bytes = static_cast<unsigned long>(offsetof(KSW_PF_PRIVATE_QUERY, Sources)
         + KSWORD_ARK_PFN_MAX_OWNERS * sizeof(KSW_PF_PRIVATE_INFO));
@@ -158,6 +182,7 @@ long PfnQueryClient::owners(std::vector<KSWORD_ARK_PFN_OWNER>& result)
 
 long PfnQueryClient::pages(std::uint64_t first, std::uint32_t count, std::vector<KSWORD_ARK_PFN_IDENTITY>& result)
 {
+    m_trace = {};
     result.clear();
     if (count == 0 || count > KSWORD_ARK_PFN_MAX_PAGES || first > (1ULL << 40) - count) { return invalidData; }
     long status = unsupported;
@@ -194,6 +219,7 @@ long PfnQueryClient::pages(std::uint64_t first, std::uint32_t count, std::vector
 
 long PfnQueryClient::identities(const std::vector<std::uint64_t>& pfns, std::vector<KSWORD_ARK_PFN_IDENTITY>& result)
 {
+    m_trace = {};
     result.clear();
     if (pfns.empty() || pfns.size() > KSWORD_ARK_PFN_MAX_PAGES
         || std::any_of(pfns.begin(), pfns.end(), [](auto pfn) { return pfn >= (1ULL << 40); })) { return invalidData; }
@@ -225,6 +251,7 @@ long PfnQueryClient::identities(const std::vector<std::uint64_t>& pfns, std::vec
 
 bool PfnQueryClient::mappingAvailable()
 {
+    if (!m_nativeLayoutSupported) { return false; }
     if (!m_driver.isValid()) { m_driver = m_client.openSilently(); }
     return m_driver.isValid();
 }

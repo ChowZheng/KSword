@@ -418,7 +418,7 @@ private:
     QCheckBox* m_privilegeR0CheckBox = nullptr;
     QCheckBox* m_privilegeHvmCheckBox = nullptr;
     QCheckBox* m_privilegeDdmaCheckBox = nullptr;
-    // m_hvmDisplayNameCombo 作用：选择硬件虚拟化按钮上显示 KVM / HVM / R-1。
+    // m_hvmDisplayNameCombo 作用：选择硬件虚拟化按钮上显示 HVM / R-1。
     QComboBox* m_hvmDisplayNameCombo = nullptr;
 
     // m_scrollBarAutoHideCheckBox 作用：设置滚动条是否弱显示/悬停显示。

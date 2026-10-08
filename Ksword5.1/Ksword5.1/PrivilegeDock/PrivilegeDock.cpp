@@ -1,4 +1,8 @@
 #include "PrivilegeDock.h"
+#include "PrivilegeAccountPages.h"
+#include "PrivilegeTokenPages.h"
+#include "PrivilegeAccessPage.h"
+#include "PrivilegeSnapshotPage.h"
 #include "../UI/VisibleTableWidget.h"
 #include "../UI/TableInteractionSupport.h"
 #include "../Internationalization/LanguageManager.h"
@@ -40,6 +44,7 @@
 #include <algorithm>
 #include <string>
 #include <vector>
+#include <functional>
 
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -173,6 +178,27 @@ namespace
             }
         });
     }
+
+    // A factory runs only when its page is first selected. The placeholder owns its content.
+    QWidget* addWorkbenchPage(QTabWidget* tabs, const char* key, const QString& title,
+        std::function<QWidget*(QWidget*)> factory)
+    {
+        auto* holder = new QWidget(tabs);
+        holder->setObjectName(QString::fromLatin1(key));
+        auto* layout = new QVBoxLayout(holder);
+        layout->setContentsMargins(0, 0, 0, 0);
+        holder->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Ignored);
+        tabs->addTab(holder, title);
+        ks::i18n::LanguageManager::instance().bindTab(tabs, holder, QString::fromLatin1(key), title);
+        QObject::connect(tabs, &QTabWidget::currentChanged, holder, [tabs, holder, layout, factory](int index) {
+            if (tabs->widget(index) != holder || holder->property("ks_privilege_loaded").toBool()) return;
+            holder->setProperty("ks_privilege_loaded", true);
+            QWidget* content = factory(holder);
+            holder->setProperty("ks_privilege_content", QVariant::fromValue(static_cast<QObject*>(content)));
+            layout->addWidget(content);
+        });
+        return holder;
+    }
 }
 
 PrivilegeDock::PrivilegeDock(QWidget* parent)
@@ -245,7 +271,47 @@ void PrivilegeDock::initializeUi()
     m_rootLayout->addWidget(m_tabWidget, 1);
 
     initializeAccountTab();
+    // Keep existing create/reset tools together with the full account manager.
+    m_tabWidget->removeTab(0);
+    auto* accounts = new QWidget(m_tabWidget);
+    auto* accountLayout = new QVBoxLayout(accounts);
+    accountLayout->setContentsMargins(0, 0, 0, 0);
+    auto* accountTabs = new QTabWidget(accounts);
+    accountLayout->addWidget(accountTabs);
+    auto* manager = ks::privilege::createAccountManagementPage(accountTabs,
+        [this](const QString& target, const QString& account) {
+            const QString name = QStringLiteral("privilege.workbench.tab.") + target;
+            QWidget* holder = m_tabWidget->findChild<QWidget*>(name, Qt::FindDirectChildrenOnly);
+            // QTabWidget reparents pages to its stacked widget; select by stable object name.
+            if (!holder)
+                for (int index = 0; index < m_tabWidget->count(); ++index)
+                    if (m_tabWidget->widget(index)->objectName() == name) { holder = m_tabWidget->widget(index); break; }
+            if (!holder) return;
+            m_tabWidget->setCurrentWidget(holder);
+            QWidget* content = qobject_cast<QWidget*>(holder->property("ks_privilege_content").value<QObject*>());
+            if (target == QLatin1String("groups")) ks::privilege::selectGroupAccount(content, account);
+            else if (target == QLatin1String("rights")) ks::privilege::selectRightsAccount(content, account);
+            else if (target == QLatin1String("sessions")) ks::privilege::focusSessionsAccount(content, account);
+        });
+    accountTabs->addTab(manager, QStringLiteral("账号管理"));
+    accountTabs->addTab(m_accountPage, QStringLiteral("创建与重置"));
+    auto& language = ks::i18n::LanguageManager::instance();
+    language.bindTab(accountTabs, manager, QStringLiteral("privilege.workbench.tab.account_manager"), QStringLiteral("账号管理"));
+    language.bindTab(accountTabs, m_accountPage, QStringLiteral("privilege.workbench.tab.account_tools"), QStringLiteral("创建与重置"));
+    m_tabWidget->addTab(accounts, QStringLiteral("账号"));
+    language.bindTab(m_tabWidget, accounts, QStringLiteral("privilege.tab.accounts"), QStringLiteral("账号"));
     initializePermissionTab();
+    addWorkbenchPage(m_tabWidget, "privilege.workbench.tab.groups", QStringLiteral("用户组"), ks::privilege::createGroupsPage);
+    addWorkbenchPage(m_tabWidget, "privilege.workbench.tab.rights", QStringLiteral("权限分配"), ks::privilege::createRightsPage);
+    addWorkbenchPage(m_tabWidget, "privilege.workbench.tab.tokens", QStringLiteral("令牌对比"), ks::privilege::createTokenComparePage);
+    addWorkbenchPage(m_tabWidget, "privilege.workbench.tab.access", QStringLiteral("访问诊断"), ks::privilege::createAccessDiagnosticPage);
+    addWorkbenchPage(m_tabWidget, "privilege.workbench.tab.sessions", QStringLiteral("登录会话"), [](QWidget* parent) {
+        return ks::privilege::createSessionsPage(parent, [](DWORD pid, quint64 creationTime) {
+            ks::ui::OpenProcessDetailByIdentity(pid, creationTime);
+        });
+    });
+    addWorkbenchPage(m_tabWidget, "privilege.workbench.tab.launch", QStringLiteral("指定身份启动"), ks::privilege::createIdentityLaunchPage);
+    addWorkbenchPage(m_tabWidget, "privilege.workbench.tab.snapshots", QStringLiteral("权限快照"), ks::privilege::createPermissionSnapshotPage);
 }
 
 void PrivilegeDock::initializeAccountTab()
@@ -467,11 +533,11 @@ void PrivilegeDock::initializeConnections()
     });
     connect(m_accountTable, &QTableWidget::itemSelectionChanged, this, [this]() {
         const int row = m_accountTable->currentRow();
-        if (row < 0 || row >= static_cast<int>(m_localUserList.size()))
+        if (row < 0 || m_accountTable->item(row, 0) == nullptr)
         {
             return;
         }
-        m_resetUserNameEdit->setText(m_localUserList[static_cast<std::size_t>(row)].name);
+        m_resetUserNameEdit->setText(m_accountTable->item(row, 0)->text());
     });
 }
 

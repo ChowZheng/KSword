@@ -1,8 +1,29 @@
 #pragma once
 #include "ArkDriverClient.h"
 #include "../../../shared/driver/KswordArkPfnIoctl.h"
+#include <array>
 
 namespace ksword::ark {
+// This collector's imported native layouts and PFN units are explicitly
+// x64/4 KiB. An emulated x64 process does not establish the native kernel ABI.
+constexpr bool pfnNativeLayoutSupported(unsigned short architecture, unsigned long systemPageBytes)
+{
+    return sizeof(void*) == 8 && architecture == PROCESSOR_ARCHITECTURE_AMD64 && systemPageBytes == 4096;
+}
+// Passive provenance for the most recent public PFN operation. Both paths call
+// the same Memory Manager Superfetch provider; this is not independent evidence.
+struct PfnNativeAttempt {
+    unsigned long informationClass = 0, abiVersion = 0;
+    long status = 0;
+    bool invoked = false;
+};
+struct PfnQueryTrace {
+    std::array<PfnNativeAttempt, 2> nativeAttempts{};
+    unsigned nativeAttemptCount = 0;
+    unsigned long driverOperation = 0;
+    long driverStatus = 0, driverTransportStatus = 0;
+    bool driverAvailable = false, driverInvoked = false;
+};
 // Native query first; the driver supplies the same bounded identity ABI when
 // Windows denies the user-mode query. A thread-local token is restored on exit.
 class PfnQueryClient final {
@@ -20,6 +41,7 @@ public:
         std::vector<KSWORD_ARK_PFN_MAPPING>& result);
     std::uint64_t nativeBatches = 0;
     std::uint64_t driverBatches = 0;
+    const PfnQueryTrace& lastTrace() const { return m_trace; }
 private:
     long nativeQuery(unsigned long kind, void* buffer, unsigned long bytes) const;
     long driverQuery(unsigned long kind, std::uint64_t first, std::uint32_t count,
@@ -30,5 +52,7 @@ private:
     HANDLE m_previousToken = nullptr;
     bool m_impersonating = false;
     bool m_driverPages = false;
+    bool m_nativeLayoutSupported = false;
+    mutable PfnQueryTrace m_trace;
 };
 }

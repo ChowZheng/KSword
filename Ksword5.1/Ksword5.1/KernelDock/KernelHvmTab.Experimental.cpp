@@ -3,7 +3,7 @@
 #include "KernelDock.h"
 #include "../ArkDriverClient/ArkDriverClient.h"
 // isNestedDispatchEnabled：嵌套派发开关的权威来源，与虚拟化菜单同一处。
-#include "../UI/KvmControl.h"
+#include "../UI/HvmControl.h"
 #include "../../../shared/evidence/MemoryAddressInput.h"
 
 #include <QInputDialog>
@@ -60,14 +60,14 @@ void KernelHvmTab::startResident()
      * 原先它是 `m_featureArea == FeatureArea::NestedVmx`，于是这一位既没有开
      * 关也关不掉：站在嵌套页上按启动，必然暴露嵌套派发；站在别的页上按，必然
      * 不暴露——哪怕用户明确想要。而 ALLOW_NESTED 在同一条请求上已经改成读
-     * ksword::kvm::isNestedAllowed() 了，两位取自两个来源，正是上一轮修掉的
+     * ksword::hvm::isNestedAllowed() 了，两位取自两个来源，正是上一轮修掉的
      * 那类分歧的剩下一半。
      *
      * 开关关着时**不静默**：确认框里说清这次不会暴露嵌套，以及开关在哪。反过
      * 来更重要——在非嵌套页上开着开关按启动，确认框同样会说它会暴露。哪边都
      * 不靠"你在哪一页"来猜。
      */
-    const bool nestedDispatch = ksword::kvm::isNestedDispatchEnabled();
+    const bool nestedDispatch = ksword::hvm::isNestedDispatchEnabled();
     const bool onNestedPage =
         m_featureArea == FeatureArea::NestedVmx;
     /*
@@ -78,7 +78,7 @@ void KernelHvmTab::startResident()
      * 而那条回答只说"请求不合法"，不指是哪一位——菜单那侧已经按方向各拦了
      * 一次，这一侧不拦的话就留下一个绕过去的入口。
      */
-    if (m_snapshot.backend == KSWORD_ARK_HVM_BACKEND_VMX && nestedDispatch && ksword::kvm::isLocalEptEnabled())
+    if (m_snapshot.backend == KSWORD_ARK_HVM_BACKEND_VMX && nestedDispatch && ksword::hvm::isLocalEptEnabled())
     {
         QMessageBox::warning(
             this,
@@ -94,7 +94,7 @@ void KernelHvmTab::startResident()
         "kernel.hvm.resident.start.warning",
         QStringLiteral(
             "全 CPU 自检和生命周期保护通过后，驱动尝试让全部 CPU 进入常驻；任一核失败会回滚已进入的核。AMD SVM/NPT 与嵌套 SVM 仍为实验性，内层系统启动尚未验收。常驻期间驱动不可卸载；无法证明退出完整时保留资源和卸载保护。硬件异常仍可能需要重启。"));
-    if (nestedDispatch && !ksword::kvm::isWriteAccessEnabled())
+    if (nestedDispatch && !ksword::hvm::isWriteAccessEnabled())
     {
         QMessageBox::warning(this, QStringLiteral("HVM"), ks::i18n::sourceText(QStringLiteral("请先开启允许 R-1 写操作，再启用来宾嵌套。")));
         return;

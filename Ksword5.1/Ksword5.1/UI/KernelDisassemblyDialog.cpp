@@ -5,7 +5,7 @@
 #include "../ArkDriverClient/ArkDriverClient.h"
 #include "../theme.h"
 /* 统一入口：这一页不需要知道 GPA、EPT 叶或 ruleId。 */
-#include "KvmWatchDialog.h"
+#include "HvmWatchDialog.h"
 
 #include <QAbstractItemView>
 #include <QAction>

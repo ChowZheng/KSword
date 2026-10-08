@@ -26,7 +26,7 @@
 //   参数与上一次实际生效的相同时 O(1) 返回——宿主在每次 byteEdited 之后都会重复调用它。
 // - setByteAtAbsoluteAddress(addr, value, keepSelection)：不发 byteEdited（回滚路径依赖），越界返回 false。
 //   注意 keepSelection 的真实旧语义与参数名相反：旧实现里它为 true 才把当前单元格移到被改的字节上
-//   （KvmHookWizard 逐字节写补丁时只对最后一个字节传 true，让焦点落在补丁末尾），为 false 不动当前选择。
+//   （HvmHookWizard 逐字节写补丁时只对最后一个字节传 true，让焦点落在补丁末尾），为 false 不动当前选择。
 //   这里保持旧实现的行为，不按参数名"纠正"。
 // - setBytesPerRow(n)：旧控件夹取到 [4, 64]；新画布只支持 8/16/32/48/64，所以先夹取到 [4, 64]，
 //   再取最近的受支持值（等距时取较大者）。宿主传 16 / 32 照常；bytesPerRow() 返回实际生效值。

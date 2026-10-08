@@ -1688,4 +1688,63 @@
     <ClCompile Include="src\features\hvm\hvm_svm_nested_writeback.c" />
     <MASM Include="src\features\hvm\hvm_svm_entry.asm" />
   </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="src\features\storage_controller\driver.c">
+      <Filter>Source Files\Features</Filter>
+    </ClCompile>
+    <ClCompile Include="src\features\storage_controller\device.c">
+      <Filter>Source Files\Features</Filter>
+    </ClCompile>
+    <ClCompile Include="src\features\storage_controller\controller_ioctl.c">
+      <Filter>Source Files\Features</Filter>
+    </ClCompile>
+    <ClCompile Include="src\features\storage_controller\controller_transaction.c">
+      <Filter>Source Files\Features</Filter>
+    </ClCompile>
+    <ClCompile Include="src\features\storage_controller\controller_audit.c">
+      <Filter>Source Files\Features</Filter>
+    </ClCompile>
+    <ClCompile Include="src\features\storage_controller\controller_ahci.c">
+      <Filter>Source Files\Features</Filter>
+    </ClCompile>
+    <ClCompile Include="src\features\storage_controller\controller_nvme.c">
+      <Filter>Source Files\Features</Filter>
+    </ClCompile>
+    <ClCompile Include="src\features\storage_controller\controller_ide.c">
+      <Filter>Source Files\Features</Filter>
+    </ClCompile>
+    <ClCompile Include="src\features\storage_controller\sha256.c">
+      <Filter>Source Files\Features</Filter>
+    </ClCompile>
+    <ClInclude Include="src\features\storage_controller\controller.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="include\ark\ark_storage_controller.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="include\ark\ark_driver_lifecycle.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\shared\driver\KswordArkStorageControllerIoctl.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <Inf Include="KswordARKStorageController.inf">
+      <Filter>Driver Files</Filter>
+    </Inf>
+    <None Include="src\features\storage_controller\tests\ControllerRegression.py">
+      <Filter>Source Files</Filter>
+    </None>
+    <None Include="src\features\storage_controller\tests\controller_regression.c">
+      <Filter>Source Files</Filter>
+    </None>
+    <None Include="src\features\storage_controller\tests\core_lifecycle_test_support.h">
+      <Filter>Source Files</Filter>
+    </None>
+    <None Include="tests\ControllerDispatchRegression.py">
+      <Filter>Source Files</Filter>
+    </None>
+    <None Include="tests\controller_dispatch_regression.c">
+      <Filter>Source Files</Filter>
+    </None>
+  </ItemGroup>
 </Project>

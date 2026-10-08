@@ -12,12 +12,16 @@ class QTableWidget;
 class QPlainTextEdit;
 class QTabWidget;
 class MemoryAttributionChart;
+class QCheckBox;
+class MemoryConsumerEvidencePage;
 
 class PhysicalPageAttributionPage final : public QWidget {
 public:
     explicit PhysicalPageAttributionPage(QWidget* parent = nullptr);
     ~PhysicalPageAttributionPage() override;
     void startScan();
+    static QString classificationName(ksword::pfn::Use use);
+    void focusCategory(int use);
     // Invoked on the UI thread after an immutable scan result has been published.
     std::function<void(const std::shared_ptr<ksword::pfn::Scan>&)> snapshotReady;
 protected:
@@ -38,6 +42,9 @@ private:
     QPushButton* m_exportButton = nullptr;
     QPushButton* m_inspectButton = nullptr;
     QSpinBox* m_budget = nullptr;
+    QCheckBox* m_retainRaw = nullptr;
+    QCheckBox* m_exportMappings = nullptr;
+    MemoryConsumerEvidencePage* m_consumerPage = nullptr;
     QLabel* m_summary = nullptr;
     QProgressBar* m_progress = nullptr;
     QLineEdit* m_filter = nullptr;
@@ -45,6 +52,9 @@ private:
     QPlainTextEdit* m_evidence = nullptr;
     QPlainTextEdit* m_pageEvidence = nullptr;
     QTableWidget* m_categories = nullptr;
+    QTableWidget* m_ownerCoverage = nullptr;
+    QTableWidget* m_objects = nullptr;
+    QTableWidget* m_pageConsumers = nullptr;
     QTableWidget* m_groups = nullptr;
     QTableWidget* m_examples = nullptr;
     QTableWidget* m_mappings = nullptr;
@@ -53,8 +63,13 @@ private:
     int m_selectedCategory = -1;
     std::shared_ptr<ksword::pfn::ScanJob> m_job;
     std::shared_ptr<ksword::pfn::Scan> m_scan;
+    std::shared_ptr<ksword::pfn::Scan> m_lastAttempt;
+    bool m_latestAttemptFailed = false;
+    std::vector<ksword::pfn::AuditCriterionSample> m_auditHistory;
     std::shared_ptr<ksword::pfn::MappingJob> m_mappingJob;
     std::shared_ptr<ksword::pfn::Mappings> m_mappingScan;
     struct Inspection;
     std::shared_ptr<Inspection> m_inspection;
+    struct ExportJob;
+    std::shared_ptr<ExportJob> m_exportJob;
 };

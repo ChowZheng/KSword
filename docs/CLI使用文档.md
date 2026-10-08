@@ -453,7 +453,7 @@ DDMA 借助磁盘控制器的 DMA 通道传输物理页；后端有 ATA 与 SCSI
 ### HVM 后代页控制（探针工具 `hvm_ctl`）
 
 `hvm_ctl.exe` 是独立探针工具，不随主程序发布，也**不再**与主程序共用命令目录——
-主程序那个“完整操作”子页、`--ksword-hvm-command` 入口与 `KvmCommandPanel` 都已删除
+主程序那个“完整操作”子页、`--ksword-hvm-command` 入口与 `HvmCommandPanel` 都已删除
 （见 `docs/next/hvm-gui-command-parity.md`），`HvmCommandCatalog.c` / `HvmCommandEngine.c`
 现在只由 `tools/hvm_ctl/` 编译。`hvm_ctl --json commands`
 是命令、参数、默认值和范围的权威目录；`--parse-only` 验证参数且不打开驱动。

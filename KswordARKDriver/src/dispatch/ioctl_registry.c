@@ -28,6 +28,60 @@ Environment:
 #include "driver/KswordArkHvmDebugIoctl.h"
 #include "driver/KswordArkDebuggerIoctl.h"
 #include "driver/KswordArkDdmaIoctl.h"
+#include "ark/ark_storage_controller.h"
+
+/* The controller backend owns completion, including its protocol failures. */
+static NTSTATUS
+KswordARKStorageControllerIoctlQuery(
+    _In_ WDFDEVICE Device, _In_ WDFREQUEST Request,
+    _In_ size_t InputBufferLength, _In_ size_t OutputBufferLength,
+    _Out_ size_t* BytesReturned)
+{
+    UNREFERENCED_PARAMETER(InputBufferLength);
+    UNREFERENCED_PARAMETER(OutputBufferLength);
+    *BytesReturned = 0U;
+    KswordARKStorageControllerQuery(Device, Request);
+    return STATUS_PENDING;
+}
+
+static NTSTATUS
+KswordARKStorageControllerIoctlControl(
+    _In_ WDFDEVICE Device, _In_ WDFREQUEST Request,
+    _In_ size_t InputBufferLength, _In_ size_t OutputBufferLength,
+    _Out_ size_t* BytesReturned)
+{
+    UNREFERENCED_PARAMETER(InputBufferLength);
+    UNREFERENCED_PARAMETER(OutputBufferLength);
+    *BytesReturned = 0U;
+    KswordARKStorageControllerControl(Device, Request);
+    return STATUS_PENDING;
+}
+
+static NTSTATUS
+KswordARKStorageControllerIoctlTransfer(
+    _In_ WDFDEVICE Device, _In_ WDFREQUEST Request,
+    _In_ size_t InputBufferLength, _In_ size_t OutputBufferLength,
+    _Out_ size_t* BytesReturned)
+{
+    UNREFERENCED_PARAMETER(InputBufferLength);
+    UNREFERENCED_PARAMETER(OutputBufferLength);
+    *BytesReturned = 0U;
+    KswordARKStorageControllerTransfer(Device, Request);
+    return STATUS_PENDING;
+}
+
+static NTSTATUS
+KswordARKStorageControllerIoctlQueryAudit(
+    _In_ WDFDEVICE Device, _In_ WDFREQUEST Request,
+    _In_ size_t InputBufferLength, _In_ size_t OutputBufferLength,
+    _Out_ size_t* BytesReturned)
+{
+    UNREFERENCED_PARAMETER(InputBufferLength);
+    UNREFERENCED_PARAMETER(OutputBufferLength);
+    *BytesReturned = 0U;
+    KswordARKStorageControllerAudit(Device, Request);
+    return STATUS_PENDING;
+}
 
 // Feature handler declarations live here instead of in the central dispatch file.
 NTSTATUS KswordARKKernelIoctlControlDriverDispatch(_In_ WDFDEVICE Device, _In_ WDFREQUEST Request, _In_ size_t InputBufferLength, _In_ size_t OutputBufferLength, _Out_ size_t* BytesReturned);
@@ -247,6 +301,10 @@ NTSTATUS KswordARKRxpfIoctlUnregisterPage(_In_ WDFDEVICE Device, _In_ WDFREQUEST
 NTSTATUS KswordARKRxpfIoctlRunSelfTest(_In_ WDFDEVICE Device, _In_ WDFREQUEST Request, _In_ size_t InputBufferLength, _In_ size_t OutputBufferLength, _Out_ size_t* BytesReturned);
 
 static const KSWORD_ARK_IOCTL_ENTRY g_KswordArkIoctlTable[] = {
+    { IOCTL_KSWORD_ARK_QUERY_STORAGE_CONTROLLER, KswordARKStorageControllerIoctlQuery, "IOCTL_KSWORD_ARK_QUERY_STORAGE_CONTROLLER", KSWORD_ARK_IOCTL_CAPABILITY_NONE, KSWORD_ARK_IOCTL_FLAG_CONTROLLER_ONLY },
+    { IOCTL_KSWORD_ARK_CONTROL_STORAGE_CONTROLLER, KswordARKStorageControllerIoctlControl, "IOCTL_KSWORD_ARK_CONTROL_STORAGE_CONTROLLER", KSWORD_ARK_IOCTL_CAPABILITY_NONE, KSWORD_ARK_IOCTL_FLAG_CONTROLLER_ONLY },
+    { IOCTL_KSWORD_ARK_TRANSFER_STORAGE_CONTROLLER, KswordARKStorageControllerIoctlTransfer, "IOCTL_KSWORD_ARK_TRANSFER_STORAGE_CONTROLLER", KSWORD_ARK_IOCTL_CAPABILITY_NONE, KSWORD_ARK_IOCTL_FLAG_CONTROLLER_ONLY },
+    { IOCTL_KSWORD_ARK_QUERY_STORAGE_CONTROLLER_AUDIT, KswordARKStorageControllerIoctlQueryAudit, "IOCTL_KSWORD_ARK_QUERY_STORAGE_CONTROLLER_AUDIT", KSWORD_ARK_IOCTL_CAPABILITY_NONE, KSWORD_ARK_IOCTL_FLAG_CONTROLLER_ONLY },
     { IOCTL_KSWORD_ARK_TERMINATE_PROCESS, KswordARKProcessIoctlTerminate, "IOCTL_KSWORD_ARK_TERMINATE_PROCESS", KSWORD_ARK_IOCTL_CAPABILITY_NONE, KSWORD_ARK_IOCTL_FLAG_NONE },
     { IOCTL_KSWORD_ARK_SUSPEND_PROCESS, KswordARKProcessIoctlSuspend, "IOCTL_KSWORD_ARK_SUSPEND_PROCESS", KSWORD_ARK_IOCTL_CAPABILITY_NONE, KSWORD_ARK_IOCTL_FLAG_NONE },
     { IOCTL_KSWORD_ARK_RESUME_PROCESS, KswordARKProcessIoctlResume, "IOCTL_KSWORD_ARK_RESUME_PROCESS", KSWORD_ARK_IOCTL_CAPABILITY_NONE, KSWORD_ARK_IOCTL_FLAG_NONE },
