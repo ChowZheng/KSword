@@ -24,9 +24,9 @@ def row(pfn, value, backing=0):
 
 
 def capture(epoch='fixture-epoch', sentinel=True, partial=False, recovery=False, exact_retry=False,
-            validated=False, retention=False):
+            validated=False, retention=False, legacy=False):
     """Independently specified cells and consumers, not expected values decoded by the auditor."""
-    common = {'schema': 'ksword.pfn.raw', 'version': 1, 'domain': 'fixture-NT-domain', 'epoch': epoch}
+    common = {'schema': 'ksword.pfn.raw', 'version': 1 if legacy else 2, 'domain': 'fixture-NT-domain', 'epoch': epoch}
     output = []
     def record(kind, **values):
         value = dict(common, kind=kind, **values)
@@ -54,6 +54,7 @@ def capture(epoch='fixture-epoch', sentinel=True, partial=False, recovery=False,
                       firstPfn=hex(first), startUs=str(query_number * 10), endUs=str(query_number * 10 + 5),
                       started='2026-10-07T12:00:00.001Z', finished='2026-10-07T12:00:00.002Z',
                       status=hex(status), selectedPath='Unavailable' if status & 0x80000000 else 'R3 Native',
+                      nativeAccepted=0 if status & 0x80000000 else 1, driverAccepted=0,
                       nativeAttempts=[{'informationClass': native_class, 'abiVersion': abi,
                                        'status': hex(status), 'invoked': True}],
                       driver={'operation': driver_op if status & 0x80000000 else 0,
@@ -73,7 +74,7 @@ def capture(epoch='fixture-epoch', sentinel=True, partial=False, recovery=False,
         rows.extend(row(102 + index, frame(1, 6), (index + 1) << 12) for index in range(65534))
         rows.append(row(100 + 65536, frame(0, 6, 0xcc)))
         spans = [rows[offset:offset + 4096] for offset in range(0, len(rows), 4096)]
-        cells = [(0, 6, 2), (13, 3, 1), (1, 6, 65534)]
+        cells = [(0, 6, 2), (13 if legacy else 0, 3, 1), (1, 6, 65534)]
     else:
         rows_a = [row(100, frame(0, 6, 0xaa)), row(101, frame(1, 6), 0x1001),
                   row(102, frame(12, 3)), row(103, U64 if sentinel and not exact_retry else frame(11, 7))]
@@ -86,7 +87,7 @@ def capture(epoch='fixture-epoch', sentinel=True, partial=False, recovery=False,
             if not sentinel or exact_retry:
                 cells.append((11, 7, 1))
         if not partial and not recovery:
-            cells.extend([(13, 3, 1), (0, 6, 1), (1, 2, 1), (14, 1, 1)])
+            cells.extend([(13 if legacy else 0, 3, 1), (0, 6, 1), (1, 2, 1), (14, 1, 1)])
     attempts = 0
     for chunk_number, final_rows in enumerate(spans):
         first = int(final_rows[0][0], 16)
@@ -129,7 +130,11 @@ def capture(epoch='fixture-epoch', sentinel=True, partial=False, recovery=False,
     q = query('ranges_after')
     record('ranges', phase='after', queryOrdinal=q['ordinal'], queryStatus=q['status'], ranges=copy.deepcopy(ranges))
     record('owners', phase='final', owners=[dict(key=owner['key'], pid=owner['pid'], name=owner['name'],
-                                              seenBefore=True, seenAfter=True) for owner in owners])
+                                              seenBefore=True, seenAfter=True,
+                                              **({} if legacy else dict(leaseHeld=bool(owner['pid']),
+                                                  createTimeBefore='100' if owner['pid'] else '0',
+                                                  createTimeAfter='100' if owner['pid'] else '0',
+                                                  lifetimeVerified=bool(owner['pid'])))) for owner in owners])
     counts, unknown, resolved, unresolved, na, objects = (ZERO() for _ in range(6))
     for use, state, amount in cells:
         counts[use][state] = str(int(counts[use][state]) + amount)
@@ -154,8 +159,11 @@ def capture(epoch='fixture-epoch', sentinel=True, partial=False, recovery=False,
            unscannedPages=str(unscanned), ledgerPages=str(visited), attemptPages=str(attempts), chunks=str(len(spans)),
            categories=counts, unknownByNativeUse=unknown,
            ownerCoverage={'resolved': resolved, 'unresolved': unresolved, 'notApplicable': na, 'objectKeyKnown': objects},
-           compressionKeys=['0xbb'] if retention or not partial and not recovery else [],
+           compressionKeys=['0xbb'] if legacy and (retention or not partial and not recovery) else [],
            ownerResolvedKeys=['0xaa'], nativeAbiObserved=True, semanticsValidated=validated,
+           successfulNativeBatches=str(sum(x['kind'] == 'query' and x['selectedPath'] == 'R3 Native' for x in output)),
+           successfulDriverBatches='0',
+           statuses=dict(ranges='0x0', ownersBefore='0x0', ownersAfter='0x0', lastPage='0x0'),
            ownerConflicts='0', groupedOverflowPages='1' if retention else '0',
            batchTimingOverflow='0', rawBytesBeforeFooter='0',
            observer={'workingSetBefore': '0', 'workingSetAfter': '0', 'workingSetMax': '0',
@@ -196,8 +204,8 @@ class EvidenceAuditTests(unittest.TestCase):
         self.assertEqual(result['unknownInUseBytes'], '4096')
         self.assertEqual(result['knownUseOwnerUnresolvedBytes'], str(3 * 4096))
         self.assertFalse(result['complete'])
-        self.assertEqual(result['categories'][13][3], '1')  # PID0 compression source is not a resolved consumer.
-        self.assertEqual(result['lookup']['useIndex'], 13)
+        self.assertEqual(result['categories'][0][3], '1')  # PID0 compression source is not a resolved consumer.
+        self.assertEqual(result['lookup']['useIndex'], 0)
         self.assertEqual(result['observer']['privateBefore'], '0')  # Valid zero, not unavailable.
         values = capture()
         for value in values:
@@ -229,11 +237,11 @@ class EvidenceAuditTests(unittest.TestCase):
         self.assertEqual(result['lookup']['useIndex'], 11)
         self.assertTrue(result['complete'])
 
-    def test_retention_boundary_replays_actual_compression_keys(self):
+    def test_retention_boundary_keeps_name_only_compression_private(self):
         result = subject.audit(self.write(capture(retention=True)), 100 + 65536)
         self.assertEqual(result['expectedPages'], '65537')
         self.assertEqual(result['lookup']['useIndex'], 0)  # Named compression source whose group was not retained.
-        self.assertEqual(result['categories'][13][3], '1')
+        self.assertEqual(result['categories'][0][3], '1')
         self.assertEqual(result['categories'][0][6], '2')
         self.assertTrue(result['complete'])
 
@@ -251,7 +259,7 @@ class EvidenceAuditTests(unittest.TestCase):
             'false complete': lambda v: v[-1].update(complete=True),
             'truthy complete': lambda v: v[-1].update(complete='true'),
             'truthy version': lambda v: v[0].update(version=True),
-            'unsupported schema': lambda v: v[0].update(version=2),
+            'unsupported schema': lambda v: v[0].update(version=3),
             'duplicate compression': lambda v: v[-1].update(compressionKeys=['0xbb', '0xbb']),
             'unobserved compression': lambda v: v[-1].update(compressionKeys=['0xcc']),
             'invented resolved': lambda v: v[-1].update(ownerResolvedKeys=['0xaa', '0xbb']),
@@ -383,6 +391,88 @@ class EvidenceAuditTests(unittest.TestCase):
         self.assertFalse(subject.criterion(mutated)['passed'])
         self.assertFalse(subject.criterion(samples[:2])['passed'])
 
+    def test_range_endpoints_and_attempt_provenance_are_recomputed(self):
+        mutations = {
+            'range after changed': lambda v: next(x for x in v if x['kind'] == 'ranges' and x['phase'] == 'after')['ranges'][0].update(pageCount='5'),
+            'range before differs': lambda v: next(x for x in v if x['kind'] == 'ranges' and x['phase'] == 'before')['ranges'][0].update(pageCount='5'),
+            'empty after success': lambda v: next(x for x in v if x['kind'] == 'ranges' and x['phase'] == 'after').update(ranges=[]),
+            'native not called': lambda v: next(x for x in v if x['kind'] == 'query')['nativeAttempts'][0].update(invoked=False),
+            'wrong native class': lambda v: next(x for x in v if x['kind'] == 'query')['nativeAttempts'][0].update(informationClass=6),
+            'wrong ABI': lambda v: next(x for x in v if x['kind'] == 'query')['nativeAttempts'][0].update(abiVersion=8),
+            'wrong native status': lambda v: next(x for x in v if x['kind'] == 'query')['nativeAttempts'][0].update(status='0xc00000bb'),
+            'wrong endpoint request': lambda v: next(x for x in v if x['kind'] == 'query').update(pageCount='1'),
+            'wrong accepted count': lambda v: next(x for x in v if x['kind'] == 'query').update(nativeAccepted=0),
+            'wrong native total': lambda v: v[-1].update(successfulNativeBatches='0'),
+            'false range status': lambda v: v[-1]['statuses'].update(ranges='0xc0000022'),
+            'false owner status': lambda v: v[-1]['statuses'].update(ownersAfter='0xc0000022'),
+            'endpoint swapped': lambda v: next(x for x in v if x['kind'] == 'query' and x['operation'] == 'owners_before').update(operation='owners_after'),
+            'invented driver total': lambda v: v[-1].update(successfulDriverBatches='1'),
+            'wrong observed ABI': lambda v: v[-1].update(nativeAbiObserved=False),
+            'first PFN': lambda v: next(x for x in v if x['kind'] == 'identities').update(firstPfn='0x65'),
+            'page count': lambda v: next(x for x in v if x['kind'] == 'identities').update(pageCount='1'),
+            'attempt start': lambda v: next(x for x in v if x['kind'] == 'identities').update(startUs='0'),
+            'attempt end': lambda v: next(x for x in v if x['kind'] == 'identities').update(endUs='999'),
+            'driver not called': lambda v: next(x for x in v if x['kind'] == 'query').update(selectedPath='R0 fallback'),
+            'driver fake call': lambda v: next(x for x in v if x['kind'] == 'query')['driver'].update(invoked=True),
+        }
+        for name, mutation in mutations.items():
+            with self.subTest(name=name):
+                values = capture(sentinel=False, validated=True)
+                mutation(values)
+                self.check_rejected(values)
+        # Changed ranges are valid partial evidence when both claims agree.
+        values = capture(sentinel=False)
+        next(x for x in values if x['kind'] == 'ranges' and x['phase'] == 'after')['ranges'][0]['pageCount'] = '5'
+        values[-1].update(rangesChanged=True, complete=False)
+        self.assertFalse(subject.audit(self.write(values))['complete'])
+        # An unordered native payload normalizes to the same header scope.
+        values = capture(sentinel=False)
+        for x in values:
+            if x['kind'] == 'ranges': x['ranges'].reverse()
+        self.assertTrue(subject.audit(self.write(values))['complete'])
+        # Successful driver-only PFN operation, after switching to fallback.
+        values = capture(sentinel=False)
+        q = next(x for x in values if x['kind'] == 'query' and x['operation'] == 'pages')
+        q.update(nativeAttempts=[], nativeAccepted=0, driverAccepted=1, selectedPath='R0 fallback',
+                 driver=dict(operation=2, status='0x0', transportStatus='0x0', available=True, invoked=True))
+        values[-1]['successfulNativeBatches'] = str(int(values[-1]['successfulNativeBatches']) - 1)
+        values[-1]['successfulDriverBatches'] = '1'
+        self.assertTrue(subject.audit(self.write(values))['complete'])
+        # Failed range recheck remains partial; a forged complete flag is rejected.
+        values = capture(sentinel=False, validated=True)
+        q = next(x for x in values if x['kind'] == 'query' and x['operation'] == 'ranges_after')
+        q.update(status='0xc0000022', selectedPath='Unavailable', nativeAccepted=0)
+        q['nativeAttempts'][0]['status'] = q['status']
+        r = next(x for x in values if x['kind'] == 'ranges' and x['phase'] == 'after')
+        r.update(queryStatus=q['status'], ranges=[])
+        values[-1].update(rangesChanged=True, complete=False)
+        values[-1]['successfulNativeBatches'] = str(int(values[-1]['successfulNativeBatches']) - 1)
+        self.assertFalse(subject.audit(self.write(values))['complete'])
+        values[-1].update(rangesChanged=False, complete=True)
+        self.check_rejected(values)
+
+    def test_lifetime_witnesses_and_legacy_history_do_not_certify_consumers(self):
+        for field, value in (('leaseHeld', False), ('seenAfter', False), ('createTimeBefore', '0'),
+                             ('createTimeAfter', '101'), ('lifetimeVerified', False)):
+            values = capture(sentinel=False)
+            final = next(x for x in values if x['kind'] == 'owners' and x['phase'] == 'final')
+            final['owners'][0][field] = value
+            self.check_rejected(values)
+        values = capture(sentinel=False)
+        next(x for x in values if x['kind'] == 'owners' and x['phase'] == 'after')['owners'].pop(0)
+        final = next(x for x in values if x['kind'] == 'owners' and x['phase'] == 'final')
+        final['owners'][0].update(seenAfter=False, lifetimeVerified=False)
+        values[-1]['ownerResolvedKeys'] = []
+        values[-1]['ownerCoverage']['resolved'][0][6] = '0'
+        values[-1]['ownerCoverage']['unresolved'][0][6] = '2'
+        result = subject.audit(self.write(values))
+        self.assertTrue(result['complete'])
+        self.assertEqual(result['knownUseOwnerUnresolvedBytes'], str(5 * 4096))
+        samples = [subject.audit(self.write(capture(sentinel=False, validated=True, legacy=True, epoch=f'legacy-{i}'), f'legacy-{i}.jsonl')) for i in range(3)]
+        self.assertEqual(samples[0]['categories'][13][3], '1')
+        self.assertFalse(samples[0]['attributionPolicyValidated'])
+        self.assertFalse(subject.criterion(samples)['passed'])
+
     def test_byte_count_and_cli_exit_and_lookup(self):
         path = self.write(capture())
         content = path.read_bytes()
@@ -400,7 +490,7 @@ class EvidenceAuditTests(unittest.TestCase):
             self.assertEqual(subject.main([str(path), '--pfn', '0xc8', '--output', str(report)]), 0)
             self.assertEqual(subject.main([str(path), '--require-proposed-criterion']), 2)
             self.assertEqual(subject.main([str(path), '--output', str(self.folder / 'missing-parent' / 'report.json')]), 1)
-        self.assertEqual(json.loads(report.read_text())['samples'][0]['lookup']['useIndex'], 13)
+        self.assertEqual(json.loads(report.read_text())['samples'][0]['lookup']['useIndex'], 0)
 
 
 if __name__ == '__main__':

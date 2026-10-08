@@ -1070,7 +1070,7 @@ void SystemMemoryAuditPage::applyPfnOverview(const std::shared_ptr<ksword::pfn::
 {
     // Preserve the last usable ledger after an unavailable rerun. Its own time
     // and coverage remain visible; never subtract it from a newer quick sample.
-    m_pfnOverviewAttemptFailed = !scan || !scan->accounting.expected || !scan->accounting.valid || !scan->accounting.reconciles();
+    m_pfnOverviewAttemptFailed = !scan || !scan->accounting.expected || scan->resourceFailure || !scan->accounting.valid || !scan->accounting.reconciles();
     if (!m_pfnOverviewAttemptFailed)
     {
         m_pfnOverviewScan = scan;

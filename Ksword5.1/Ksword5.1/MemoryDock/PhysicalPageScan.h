@@ -11,6 +11,7 @@ namespace ksword::pfn {
 struct QueryBatch {
     std::uint64_t ordinal = 0, firstPfn = 0, startUs = 0, endUs = 0;
     std::uint32_t pageCount = 0;
+    unsigned nativeAccepted = 0, driverAccepted = 0;
     QString operation, started, finished, selectedPath;
     long status = 0;
     ark::PfnQueryTrace trace;
@@ -19,6 +20,8 @@ struct Owner {
     std::uint32_t pid = 0;
     QString name;
     bool seenBefore = false, seenAfter = false;
+    bool leaseHeld = false, lifetimeVerified = false;
+    std::uint64_t createTimeBefore = 0, createTimeAfter = 0;
 };
 struct Group {
     Use use = Use::Unknown;
@@ -29,7 +32,8 @@ struct Group {
     std::uint32_t pid = 0;
     std::array<std::uint64_t, 8> pagesByState{};
     Identity firstIdentity;
-    bool ownerSeenBefore = false, ownerSeenAfter = false;
+    bool ownerSeenBefore = false, ownerSeenAfter = false, ownerLifetimeVerified = false;
+    std::uint64_t ownerCreateTime = 0;
 };
 struct Scan {
     Accounting accounting;

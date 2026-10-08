@@ -89,7 +89,7 @@ public:
     }
     bool active() const { return m_scan.rawEvidenceRequested && !m_progress.failed && m_file.isOpen(); }
     QJsonObject record(const char* kind) const {
-        return {{QStringLiteral("schema"), QStringLiteral("ksword.pfn.raw")}, {QStringLiteral("version"), 1},
+        return {{QStringLiteral("schema"), QStringLiteral("ksword.pfn.raw")}, {QStringLiteral("version"), 2},
             {QStringLiteral("kind"), QString::fromLatin1(kind)}, {QStringLiteral("domain"), m_scan.domain},
             {QStringLiteral("epoch"), m_scan.epoch}};
     }
@@ -148,6 +148,8 @@ public:
         value.insert(QStringLiteral("finished"), batch.finished);
         value.insert(QStringLiteral("status"), statusHex(batch.status));
         value.insert(QStringLiteral("selectedPath"), batch.selectedPath);
+        value.insert(QStringLiteral("nativeAccepted"), static_cast<int>(batch.nativeAccepted));
+        value.insert(QStringLiteral("driverAccepted"), static_cast<int>(batch.driverAccepted));
         QJsonArray attempts;
         for (unsigned i = 0; i < batch.trace.nativeAttemptCount; ++i) {
             const auto& attempt = batch.trace.nativeAttempts[i];
@@ -177,7 +179,7 @@ public:
         if (ledger) {
             value.insert(QStringLiteral("chunkOrdinal"), QString::number(m_progress.chunks));
             value.insert(QStringLiteral("chunkComplete"), pages.size() == count);
-            value.insert(QStringLiteral("classificationPhase"), QStringLiteral("Native identity; deferred compression keys are listed in the footer"));
+            value.insert(QStringLiteral("classificationPhase"), QStringLiteral("Native identity; process lifetime witnesses are listed in final owner records"));
         } else {
             value.insert(QStringLiteral("role"), QStringLiteral("query_attempt"));
             value.insert(QStringLiteral("synthesized"), synthesized);
@@ -239,7 +241,10 @@ public:
         for (const auto& entry : m_scan.owners) {
             const auto& owner = entry.second;
             ownerRows.append(QJsonObject{{QStringLiteral("key"), hex(entry.first)}, {QStringLiteral("pid"), static_cast<qint64>(owner.pid)},
-                {QStringLiteral("name"), owner.name}, {QStringLiteral("seenBefore"), owner.seenBefore}, {QStringLiteral("seenAfter"), owner.seenAfter}});
+                {QStringLiteral("name"), owner.name}, {QStringLiteral("seenBefore"), owner.seenBefore}, {QStringLiteral("seenAfter"), owner.seenAfter},
+                {QStringLiteral("leaseHeld"), owner.leaseHeld}, {QStringLiteral("lifetimeVerified"), owner.lifetimeVerified},
+                {QStringLiteral("createTimeBefore"), QString::number(owner.createTimeBefore)},
+                {QStringLiteral("createTimeAfter"), QString::number(owner.createTimeAfter)}});
             if (ownerRows.size() == 512) { emitOwners(); }
         }
         emitOwners();
@@ -260,8 +265,8 @@ public:
             {QStringLiteral("objectKeyKnown"), matrix(m_scan.ownerCoverage.objectKeyKnown)}});
         QJsonArray compressionKeys, resolvedKeys;
         for (const auto& group : m_scan.groups) {
-            if (group.use == Use::Compression) { compressionKeys.append(hex(group.key)); }
-            if ((group.use == Use::Private || group.use == Use::Compression) && group.pid && !group.name.isEmpty()) { resolvedKeys.append(hex(group.key)); }
+            // No authoritative compression-store identity provider is available.
+            if (group.use == Use::Private && group.ownerLifetimeVerified) { resolvedKeys.append(hex(group.key)); }
         }
         value.insert(QStringLiteral("compressionKeys"), compressionKeys);
         value.insert(QStringLiteral("ownerResolvedKeys"), resolvedKeys);
@@ -316,9 +321,10 @@ private:
     RawEvidenceProgress m_progress;
 };
 
-std::shared_ptr<Scan> collect(const std::shared_ptr<ScanJob>& job)
+std::shared_ptr<Scan> collect(const std::shared_ptr<ScanJob>& job, std::shared_ptr<Scan>& retained)
 {
     auto scan = std::make_shared<Scan>();
+    retained = scan; // Keep denominator and progress even if a later allocation throws.
     const auto start = std::chrono::steady_clock::now();
     scan->started = utcNow();
     provenance(*scan);
@@ -354,6 +360,10 @@ std::shared_ptr<Scan> collect(const std::shared_ptr<ScanJob>& job)
         const auto nativeBefore = client.nativeBatches, driverBefore = client.driverBatches;
         batch.status = call();
         batch.trace = client.lastTrace();
+        batch.nativeAccepted = static_cast<unsigned>(client.nativeBatches - nativeBefore);
+        batch.driverAccepted = static_cast<unsigned>(client.driverBatches - driverBefore);
+        scan->nativeBatches = client.nativeBatches;
+        scan->driverBatches = client.driverBatches;
         batch.endUs = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count());
         batch.finished = utcNow();
         batch.selectedPath = batch.status < 0 ? QStringLiteral("Unavailable")
@@ -402,7 +412,28 @@ std::shared_ptr<Scan> collect(const std::shared_ptr<ScanJob>& job)
                     });
             }
         };
-        mergeOwners(owners, false);
+        if (ownersBefore.status >= 0) { mergeOwners(owners, false); }
+        struct OwnerLease {
+            HANDLE handle = nullptr;
+            std::uint64_t created = 0;
+            ~OwnerLease() { if (handle) { CloseHandle(handle); } }
+        };
+        std::map<std::uint32_t, OwnerLease> leases;
+        const auto liveCreation = [](HANDLE handle, std::uint32_t pid) -> std::uint64_t {
+            FILETIME created{}, exited{}, kernel{}, user{};
+            if (!handle || GetProcessId(handle) != pid || WaitForSingleObject(handle, 0) != WAIT_TIMEOUT
+                || !GetProcessTimes(handle, &created, &exited, &kernel, &user)) { return 0; }
+            return (static_cast<std::uint64_t>(created.dwHighDateTime) << 32) | created.dwLowDateTime;
+        };
+        // Acquire before any PFN call and retain through the after source query.
+        for (const auto& entry : scan->owners) {
+            if (job->cancel.load()) { break; }
+            const auto pid = entry.second.pid;
+            if (!pid || leases.count(pid)) { continue; }
+            auto& lease = leases[pid];
+            lease.handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, pid);
+            lease.created = liveCreation(lease.handle, pid);
+        }
         // A group is a backing identity, never another physical accounting total.
         std::map<std::pair<Use, std::uint64_t>, std::size_t> groupIndex;
         std::vector<Identity> batch;
@@ -453,8 +484,7 @@ std::shared_ptr<Scan> collect(const std::shared_ptr<ScanJob>& job)
                 for (std::size_t i = 0; i < batch.size(); ++i) {
                     const auto& page = batch[i];
                     const auto pfn = first + i;
-                    // Resolve compression only after the owner recheck;
-                    // otherwise a recycled key could label the wrong pages.
+                    // Native Private remains Private; a short name cannot prove compression.
                     const Use use = classify(page);
                     scan->accounting.add(page, use);
                     if (page.frame == ~0ULL) { continue; }
@@ -504,6 +534,16 @@ std::shared_ptr<Scan> collect(const std::shared_ptr<ScanJob>& job)
         scan->ownersRechecked = scan->ownersRecheckStatus >= 0;
         if (scan->ownersRechecked) { mergeOwners(afterOwners, true); }
         scan->ownerConflicts = conflictingKeys.size();
+        for (auto& entry : scan->owners) {
+            auto& owner = entry.second;
+            const auto lease = leases.find(owner.pid);
+            if (lease == leases.end()) { continue; }
+            owner.leaseHeld = lease->second.handle != nullptr;
+            owner.createTimeBefore = lease->second.created;
+            owner.createTimeAfter = liveCreation(lease->second.handle, owner.pid);
+            owner.lifetimeVerified = owner.pid && !owner.name.isEmpty() && ownerLifetimeVerified(
+                owner.seenBefore, owner.seenAfter, owner.leaseHeld, owner.createTimeBefore, owner.createTimeAfter);
+        }
         for (auto& group : scan->groups) {
             if (group.use != Use::Private) { continue; }
             const auto ownerIt = scan->owners.find(group.key);
@@ -513,29 +553,19 @@ std::shared_ptr<Scan> collect(const std::shared_ptr<ScanJob>& job)
             group.name = owner.name;
             group.ownerSeenBefore = owner.seenBefore;
             group.ownerSeenAfter = owner.seenAfter;
-            if (owner.pid && !owner.name.isEmpty()) { scan->resolvedPrivatePages += group.pages; }
-            if (owner.name.compare(QStringLiteral("MemCompression"), Qt::CaseInsensitive) == 0) {
-                group.use = Use::Compression;
-                scan->accounting.reclassify(Use::Private, Use::Compression, group.pagesByState);
-                auto& samples = scan->examples[static_cast<std::size_t>(Use::Compression)];
-                if (samples.size() < 256) { samples.emplace_back(group.firstPfn, group.firstIdentity); }
-            }
+            group.ownerLifetimeVerified = owner.lifetimeVerified;
+            group.ownerCreateTime = owner.createTimeBefore;
+            if (owner.lifetimeVerified) { scan->resolvedPrivatePages += group.pages; }
         }
         scan->unresolvedPrivatePages = scan->accounting.inUse(Use::Private)
             + scan->accounting.inUse(Use::Compression) - scan->resolvedPrivatePages;
         scan->ownerCoverage.initialize(scan->accounting);
         scan->ownerCoverage.objectKeyKnown = objectKeys;
         for (const auto& group : scan->groups) {
-            if ((group.use == Use::Private || group.use == Use::Compression) && group.pid && !group.name.isEmpty()) {
+            if (group.use == Use::Private && group.ownerLifetimeVerified) {
                 scan->ownerCoverage.resolve(group.use, group.pagesByState);
             }
         }
-        auto& privateExamples = scan->examples[static_cast<std::size_t>(Use::Private)];
-        privateExamples.erase(std::remove_if(privateExamples.begin(), privateExamples.end(), [&](const auto& sample) {
-            const auto owner = scan->owners.find(processKey(sample.second));
-            return inUseState(state(sample.second)) && owner != scan->owners.end()
-                && owner->second.name.compare(QStringLiteral("MemCompression"), Qt::CaseInsensitive) == 0;
-        }), privateExamples.end());
         // A hot-add/remove changes the denominator; don't label it a complete snapshot.
         std::vector<KSWORD_ARK_PFN_RANGE> afterRanges;
         const auto rangesAfter = observedQuery("ranges_after", 0, 0, [&] { return client.ranges(afterRanges); });
@@ -570,13 +600,26 @@ std::shared_ptr<Scan> collect(const std::shared_ptr<ScanJob>& job)
 void collectPhysicalPages(const std::shared_ptr<ScanJob>& job)
 {
     std::shared_ptr<Scan> result;
-    try { result = collect(job); }
+    try { result = collect(job, result); }
     catch (...) {
         // No detached worker may terminate the GUI process on resource exhaustion.
         try {
-            result = std::make_shared<Scan>();
+            if (!result) { result = std::make_shared<Scan>(); }
             result->resourceFailure = true;
-            result->rangesStatus = static_cast<long>(0xC000009AUL);
+            result->complete = false;
+            result->auditSample.complete = false;
+            if (!result->accounting.expected) { result->accounting.expected = job->total.load(); }
+            if (!result->ownerCoverage.reconciles(result->accounting)) {
+                result->ownerCoverage.initialize(result->accounting);
+                result->resolvedPrivatePages = 0;
+                result->unresolvedPrivatePages = result->accounting.inUse(Use::Private) + result->accounting.inUse(Use::Compression);
+            }
+            result->auditSample.unknownInUsePages = result->accounting.inUse(Use::Unknown);
+            result->auditSample.unreadablePages = result->accounting.unreadable;
+            result->auditSample.unscannedPages = result->accounting.notScanned();
+            result->lastPageStatus = static_cast<long>(0xC000009AUL);
+            result->rawEvidenceFinalized = false;
+            result->rawEvidenceComplete = false;
             result->rawEvidencePath = job->rawEvidencePath;
             result->rawEvidenceRequested = !job->rawEvidencePath.isEmpty();
             result->rawEvidenceFailed = result->rawEvidenceRequested;

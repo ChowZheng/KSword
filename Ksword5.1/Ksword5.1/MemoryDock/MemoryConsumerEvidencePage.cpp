@@ -201,7 +201,7 @@ void MemoryConsumerEvidencePage::startTrace()
     if (!m_capture.canStart()) { return; }
     const QPointer<MemoryConsumerEvidencePage> guardedPage(this);
     const QString output = QFileDialog::getSaveFileName(this, L("Save pool allocation trace"), QStringLiteral("pool-allocation.etl"), L("ETL files (*.etl)"));
-    if (!guardedPage || output.isEmpty()) { return; }
+    if (!guardedPage || output.isEmpty() || !m_capture.canStart()) { return; }
     m_output = output;
     wchar_t system[MAX_PATH]{}; const UINT size = GetSystemDirectoryW(system, MAX_PATH);
     if (!size || size >= MAX_PATH) { m_traceLog->appendPlainText(L("Windows Performance Recorder is unavailable.")); return; }
@@ -219,6 +219,14 @@ void MemoryConsumerEvidencePage::startTrace()
     m_profileSpec = profilePath + QStringLiteral("!KSwordPool");
     m_capture = {};
     m_instance = QStringLiteral("KSwordMemory_") + QUuid::createUuid().toString(QUuid::Id128);
+    m_metadataOutput = m_output + QStringLiteral(".metadata-") + m_instance + QStringLiteral(".json");
+    QFile reservation(m_metadataOutput);
+    if (!reservation.open(QIODevice::WriteOnly | QIODevice::NewOnly)) {
+        m_metadataOutput.clear();
+        m_traceLog->appendPlainText(L("Trace metadata could not be saved; the recording state is not inferred from a missing file."));
+        return;
+    }
+    reservation.close();
     const QFileInfo previous(m_output);
     m_outputExisted = previous.exists(); m_previousOutputSize = previous.size();
     m_previousOutputModified = previous.lastModified().toMSecsSinceEpoch();
@@ -228,6 +236,7 @@ void MemoryConsumerEvidencePage::startTrace()
     m_traceEvidence.insert(QStringLiteral("version"), 2);
     m_traceEvidence.insert(QStringLiteral("instance"), m_instance);
     m_traceEvidence.insert(QStringLiteral("output"), m_output);
+    m_traceEvidence.insert(QStringLiteral("metadataOutput"), m_metadataOutput);
     m_traceEvidence.insert(QStringLiteral("durationSeconds"), m_captureDuration);
     m_traceEvidence.insert(QStringLiteral("profileXml"), QString::fromUtf8(xml));
     m_traceEvidence.insert(QStringLiteral("requestedBufferBytes"), QString::number(requestedBufferBytes));
@@ -344,13 +353,13 @@ void MemoryConsumerEvidencePage::traceFinished(int exitCode, bool normal)
 }
 void MemoryConsumerEvidencePage::persistTrace()
 {
-    if (m_output.isEmpty()) { return; }
+    if (m_metadataOutput.isEmpty()) { return; }
     m_traceEvidence.insert(QStringLiteral("recordingState"), static_cast<int>(m_capture.session));
     m_traceEvidence.insert(QStringLiteral("pendingCommand"), static_cast<int>(m_capture.pending));
     m_traceEvidence.insert(QStringLiteral("mayOwnSession"), m_capture.mayOwnSession);
     m_traceEvidence.insert(QStringLiteral("stoppedKnown"), m_capture.stoppedKnown);
     m_traceEvidence.insert(QStringLiteral("saved"), m_capture.saved);
-    QSaveFile file(m_output + QStringLiteral(".metadata.json"));
+    QSaveFile file(m_metadataOutput);
     const auto data = QJsonDocument(m_traceEvidence).toJson(QJsonDocument::Indented);
     if (!file.open(QIODevice::WriteOnly) || file.write(data) != data.size() || !file.commit()) {
         m_traceLog->appendPlainText(L("Trace metadata could not be saved; the recording state is not inferred from a missing file."));

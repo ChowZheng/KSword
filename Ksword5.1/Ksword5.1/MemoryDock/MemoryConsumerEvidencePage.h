@@ -47,7 +47,7 @@ private:
     QProcess* m_process = nullptr;
     std::shared_ptr<GpuJob> m_gpuJob;
     std::shared_ptr<GpuJob> m_gpuResult;
-    QString m_instance, m_output, m_wpr, m_commandOutput, m_profileSpec, m_commandStarted;
+    QString m_instance, m_output, m_metadataOutput, m_wpr, m_commandOutput, m_profileSpec, m_commandStarted;
     std::unique_ptr<QTemporaryDir> m_profileDirectory;
     QJsonObject m_traceEvidence;
     ksword::pool_trace::CaptureState m_capture;

@@ -159,7 +159,7 @@ struct PhysicalPageAttributionPage::Inspection {
     ksword::pfn::Use use = ksword::pfn::Use::Unknown;
     long ownerStatus = 0;
     bool ownerResolved = false;
-    bool subtypeResolved = false;
+    bool ownerHintObserved = false;
     QString ownerName;
     std::uint32_t ownerPid = 0;
 };
@@ -385,7 +385,7 @@ void PhysicalPageAttributionPage::poll()
         { std::lock_guard<std::mutex> lock(m_job->mutex); m_lastAttempt = m_job->result; }
         m_job.reset();
         m_latestAttemptFailed = !m_lastAttempt || !m_lastAttempt->accounting.expected ||
-            !m_lastAttempt->accounting.valid || !m_lastAttempt->accounting.reconciles();
+            m_lastAttempt->resourceFailure || !m_lastAttempt->accounting.valid || !m_lastAttempt->accounting.reconciles();
         if (!m_latestAttemptFailed || !m_scan) {
             m_scan = m_lastAttempt;
             m_mappingScan.reset();
@@ -394,7 +394,11 @@ void PhysicalPageAttributionPage::poll()
             m_auditHistory.push_back(m_lastAttempt->auditSample);
             if (m_auditHistory.size() > 3) { m_auditHistory.erase(m_auditHistory.begin()); }
         } else { m_auditHistory.clear(); }
-        if (snapshotReady) { snapshotReady(m_lastAttempt); }
+        const auto callback = snapshotReady;
+        const auto snapshot = m_lastAttempt;
+        const QPointer<PhysicalPageAttributionPage> guardedPage(this);
+        if (callback) { callback(snapshot); }
+        if (!guardedPage) { return; }
         rebuild();
     }
     if (m_mappingJob && m_mappingJob->done.load()) {
@@ -440,11 +444,11 @@ void PhysicalPageAttributionPage::poll()
                     hex(result->identity.backing), result->sampledAt);
             description += L("\nMapping observations were collected separately and can change while the system runs. A Windows share count is capped and is not the complete list of owners.");
             if (nativeUse(result->identity) == 0 && inUseState(state(result->identity))) {
-                description += L("\nFresh owner lookup status %1 | subtype resolved %2 | owner %3")
-                    .arg(status(result->ownerStatus), result->subtypeResolved ? L("Yes") : L("No"), result->subtypeResolved ? result->ownerName : L("Unresolved"));
+                description += L("\nFresh source hint status %1 | hint observed %2 | candidate %3 | process lifetime unverified")
+                    .arg(status(result->ownerStatus), result->ownerHintObserved ? L("Yes") : L("No"), result->ownerHintObserved ? result->ownerName : L("Unresolved"));
             }
-            if (nativeUse(result->identity) == 0 && inUseState(state(result->identity)) && !result->subtypeResolved) {
-                description += L("\nPrivate subtype could not be validated during this inspection. An older compression label is not reused for a recyclable PFN.");
+            if (nativeUse(result->identity) == 0 && inUseState(state(result->identity)) && !result->ownerHintObserved) {
+                description += L("\nPrivate-source identity could not be validated during this inspection.");
             }
             m_pageEvidence->setPlainText(description);
         }
@@ -612,7 +616,7 @@ void PhysicalPageAttributionPage::rebuild()
         .arg(scan.hypervisor ? L("Yes") : L("No"), scan.secureKnown ? (scan.secureKernel ? L("Yes") : L("No")) : L("Unavailable"));
     evidence << L("Pinned %1 | non-tradeable %2. These are overlapping attributes, not additional physical consumption.").arg(bytes(counts.pinned * pageBytes), bytes(counts.nonTradeable * pageBytes));
     evidence << L("File/cache names are resolved from observed process mappings. A file key without a path still has a known primary classification.");
-    evidence << L("Compression is identified only for private PFNs linked to the MemCompression source; the entire compression store is not inferred from a counter.");
+    evidence << L("Private-source names are hints. Compression classification requires an authoritative store identity; no such provider is currently available.");
     evidence << L("PFN database, secure memory and inaccessible mappings are not guessed from residual bytes or hard-coded private offsets. Existing snapshot counters remain diagnostic only.");
     evidence << L("The table shows up to 300 matching backing identities; export retains all collected groups. PFN samples are bounded to 256 per category and do not limit the accounting scan.");
     if (scan.groupedOverflowPages) { evidence << L("Backing-group retention limit reached: %1 still-counted pages lack a retained group.").arg(scan.groupedOverflowPages); }
@@ -625,6 +629,7 @@ void PhysicalPageAttributionPage::rebuild()
             .arg(maps.sampledAt).arg(maps.tested).arg(maps.distinct).arg(maps.failed).arg(maps.scannedProcesses).arg(maps.processes).arg(maps.inaccessible);
         evidence << L("Observed large-page bytes %1 | locked bytes %2 | multiply mapped bytes %3. All are subsets, never added to the PFN ledger.")
             .arg(bytes(maps.large * pageBytes), bytes(maps.locked * pageBytes), bytes(maps.multiplyMapped * pageBytes));
+        evidence << L("PFNs with incompatible native identities %1. Multiple references are interval observations; simultaneous sharing is unverified.").arg(maps.identityConflicted);
         evidence << L("Mapping coverage includes accessible virtual regions within the time and page budget. AWE and large pages are probed; inaccessible or unvisited mappings remain unverified.");
         evidence << L("Mapping limits: 16 million virtual pages probed, 2 million retained references, and the selected time budget. These limits can leave owner coverage incomplete.");
         evidence << L("Virtual pages probed %1 | region query failures %2 | working-set query failures %3 | changed mappings %4 | conflicting file keys %5")
@@ -662,6 +667,9 @@ void PhysicalPageAttributionPage::rebuildGroups()
     const QString filter = m_filter->text().trimmed();
     for (const auto& group : m_scan->groups) {
         QString owner = group.name.isEmpty() ? (group.key ? hex(group.key) : L("Unavailable")) : group.name;
+        if (group.use == Use::Private && !group.name.isEmpty() && !group.ownerLifetimeVerified) {
+            owner += L(" [source hint; lifetime unverified]");
+        }
         const QString kind = L(useNames[static_cast<std::size_t>(group.use)]);
         if (!filter.isEmpty() && !(owner + kind + QString::number(group.pid)).contains(filter, Qt::CaseInsensitive)) { continue; }
         const int row = m_groups->rowCount();
@@ -675,6 +683,8 @@ void PhysicalPageAttributionPage::rebuildGroups()
         if (group.pid) {
             ownerEvidence += QStringLiteral("\n") + L("Owner seen before / after: %1 / %2")
                 .arg(group.ownerSeenBefore ? L("Yes") : L("No"), group.ownerSeenAfter ? L("Yes") : L("No"));
+            ownerEvidence += QStringLiteral("\n") + L("Process lifetime verified: %1 | creation time: %2")
+                .arg(group.ownerLifetimeVerified ? L("Yes") : L("No"), group.ownerCreateTime ? QString::number(group.ownerCreateTime) : L("Unavailable"));
         }
         if (m_mappingScan) { ownerEvidence += QStringLiteral("\n") + L("Mapping observations sampled at %1.").arg(m_mappingScan->sampledAt); }
         ownerItem->setToolTip(ownerEvidence);
@@ -745,13 +755,16 @@ void PhysicalPageAttributionPage::inspectPfn()
                     return found && !name.isEmpty();
                 };
                 QString beforeName, afterName; std::uint32_t beforePid = 0, afterPid = 0;
-                job->subtypeResolved = job->status >= 0 && beforeStatus >= 0 && job->ownerStatus >= 0
+                job->ownerHintObserved = job->status >= 0 && beforeStatus >= 0 && job->ownerStatus >= 0
                     && original.frame == job->identity.frame && original.backing == job->identity.backing
                     && findOwner(beforeOwners, beforeName, beforePid) && findOwner(afterOwners, afterName, afterPid)
                     && beforePid == afterPid && beforeName.compare(afterName, Qt::CaseInsensitive) == 0;
-                if (job->subtypeResolved) {
-                    job->ownerPid = afterPid; job->ownerName = afterName; job->ownerResolved = afterPid != 0;
-                    job->use = classify(job->identity, afterName.compare(QStringLiteral("MemCompression"), Qt::CaseInsensitive) == 0);
+                if (job->ownerHintObserved) {
+                    // Endpoint names are hints: this on-demand query does not
+                    // hold a process lifetime lease across its observations.
+                    job->ownerPid = afterPid; job->ownerName = afterName;
+                    job->ownerResolved = false;
+                    job->use = classify(job->identity);
                 }
                 if (beforeStatus < 0 && job->ownerStatus >= 0) { job->ownerStatus = beforeStatus; }
             }
@@ -883,6 +896,8 @@ void PhysicalPageAttributionPage::exportEvidence()
         entry.insert(QStringLiteral("activePages"), QString::number(group.activePages));
         entry.insert(QStringLiteral("ownerSeenBefore"), group.ownerSeenBefore);
         entry.insert(QStringLiteral("ownerSeenAfter"), group.ownerSeenAfter);
+        entry.insert(QStringLiteral("ownerLifetimeVerified"), group.ownerLifetimeVerified);
+        entry.insert(QStringLiteral("ownerCreateTime"), QString::number(group.ownerCreateTime));
         QJsonArray groupStates;
         for (const auto amount : group.pagesByState) { groupStates.append(QString::number(amount)); }
         entry.insert(QStringLiteral("pagesByState"), groupStates);
@@ -970,7 +985,7 @@ void PhysicalPageAttributionPage::exportEvidence()
         const auto header = headerDocument.object();
         if (!headerBytes.endsWith('\n') || !headerDocument.isObject()
             || header.value(QStringLiteral("schema")).toString() != QStringLiteral("ksword.pfn.raw")
-            || header.value(QStringLiteral("version")).toInt() != 1
+            || header.value(QStringLiteral("version")).toInt() != 2
             || header.value(QStringLiteral("kind")).toString() != QStringLiteral("header")
             || header.value(QStringLiteral("domain")).toString() != scan.domain
             || header.value(QStringLiteral("epoch")).toString() != scan.epoch || !source.seek(0)) {
@@ -1009,6 +1024,7 @@ void PhysicalPageAttributionPage::exportEvidence()
             {QStringLiteral("tested"), QString::number(maps.tested)}, {QStringLiteral("failed"), QString::number(maps.failed)},
             {QStringLiteral("distinct"), QString::number(maps.distinct)}, {QStringLiteral("large"), QString::number(maps.large)},
             {QStringLiteral("locked"), QString::number(maps.locked)}, {QStringLiteral("multiplyMapped"), QString::number(maps.multiplyMapped)},
+            {QStringLiteral("identityConflicted"), QString::number(maps.identityConflicted)},
             {QStringLiteral("virtualPagesProbed"), QString::number(maps.virtualPagesProbed)}, {QStringLiteral("changedMappings"), QString::number(maps.changedMappings)},
             {QStringLiteral("conflictingFileKeys"), QString::number(maps.conflictingFileKeys)},
             {QStringLiteral("regionQueryFailures"), static_cast<qint64>(maps.regionQueryFailures)}, {QStringLiteral("workingSetQueryFailures"), static_cast<qint64>(maps.workingSetQueryFailures)},

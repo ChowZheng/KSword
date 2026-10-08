@@ -82,7 +82,8 @@ inline bool objectsAvailable, regionInfoAvailable, explicitPagefile, contradicto
 inline bool objectChanged, wrongView, fieldsMissing, remapForObject, objectStarted;
 inline unsigned objectCalls, memorySamples;
 inline bool consumersAvailable, tableChanged, tableFieldsMissing, stackChanged, stackSourceMissing, poolChanged, poolMalformed, pidRecycled;
-inline bool recycleDuringConsumer;
+inline bool recycleDuringConsumer, recycledPfn, missingRegionApi;
+inline unsigned tableLookupFailureAt, tableWalkFailureAt, tableTransportFailureAt, apiSetLoads;
 inline unsigned consumerTranslations, threadQueries, poolQueries, consumerThreadCount, consumerPoolCount;
 inline std::map<std::uint64_t, KSWORD_ARK_PFN_IDENTITY> consumerPages;
 inline std::map<std::uint64_t, std::uint64_t> kernelMappings;
@@ -103,7 +104,8 @@ inline void reset() {
     objectsAvailable = explicitPagefile = contradictoryRegion = regionTruncated = false; regionInfoAvailable = true;
     objectChanged = wrongView = fieldsMissing = remapForObject = objectStarted = false; objectCalls = memorySamples = 0;
     consumersAvailable = tableChanged = tableFieldsMissing = stackChanged = stackSourceMissing = poolChanged = poolMalformed = pidRecycled = false;
-    recycleDuringConsumer = false;
+    recycleDuringConsumer = recycledPfn = false;
+    tableLookupFailureAt = tableWalkFailureAt = tableTransportFailureAt = 0;
     consumerTranslations = threadQueries = poolQueries = 0; consumerThreadCount = 1; consumerPoolCount = 2; consumerPages.clear(); kernelMappings.clear();
     available = true; batchLimit = confirmBatchLimit = 256; lastError = 0; translations.clear(); identities.clear();
     pids = {42}; secondRegions.clear(); secondPages.clear();
@@ -178,7 +180,13 @@ inline BOOL WINAPI FakeQueryVirtualMemoryInformation(HANDLE handle, const VOID* 
     if (mock::contradictoryRegion) { output.MappedDataFile = 1; output.MappedPageFile = 1; }
     *returned = mock::regionTruncated ? size - 1 : size; return TRUE;
 }
-inline HMODULE FakeGetModuleHandleW(const wchar_t*) { return reinterpret_cast<HMODULE>(1); }
+inline HMODULE FakeGetModuleHandleW(const wchar_t* name) {
+    return reinterpret_cast<HMODULE>(std::wstring(name) == L"ntdll.dll" ? 3 : 1);
+}
+inline HMODULE FakeLoadLibraryExW(const wchar_t* name, HANDLE file, DWORD flags) {
+    assert(std::wstring(name) == L"api-ms-win-core-memory-l1-1-4.dll" && !file && flags == LOAD_LIBRARY_SEARCH_SYSTEM32);
+    ++mock::apiSetLoads; return mock::missingRegionApi ? nullptr : reinterpret_cast<HMODULE>(2);
+}
 struct FakePoolEntry { ULONG_PTR addressAndFlags; SIZE_T bytes; ULONG tag; };
 struct FakePoolPacket { ULONG count; FakePoolEntry entries[1]; };
 inline LONG NTAPI FakeNtQuerySystemInformation(ULONG kind, PVOID output, ULONG bytes, PULONG returned) {
@@ -194,12 +202,17 @@ inline LONG NTAPI FakeNtQuerySystemInformation(ULONG kind, PVOID output, ULONG b
     }
     return 0;
 }
-inline void* FakeGetProcAddress(HMODULE, const char* name) {
+inline void* FakeGetProcAddress(HMODULE module, const char* name) {
     if (std::string(name) == "NtQuerySystemInformation") return reinterpret_cast<void*>(&FakeNtQuerySystemInformation);
-    assert(std::string(name) == "QueryVirtualMemoryInformation"); return reinterpret_cast<void*>(&FakeQueryVirtualMemoryInformation);
+    assert(std::string(name) == "QueryVirtualMemoryInformation");
+    return module == reinterpret_cast<HMODULE>(2) ? reinterpret_cast<void*>(&FakeQueryVirtualMemoryInformation) : nullptr;
 }
 inline BOOL FakeQueryWorkingSet(HANDLE handle, void* output, DWORD bytes) {
     assert(mock::readHandle(handle)); const auto pid = mock::handlePid(handle);
+    if (mock::recycledPfn && pid == 43) {
+        mock::pages.clear();
+        mock::consumerPages[20] = {0 | (6ULL << 4) | (0x2222ULL << 9), 20, 0x2000};
+    }
     std::vector<std::uint64_t> addresses;
     for (const auto& entry : mock::processPages(pid)) {
         const auto* region = mock::region(entry.first, pid);
@@ -228,8 +241,8 @@ inline BOOL FakeQueryWorkingSetEx(HANDLE handle, void* output, DWORD bytes) {
         if (page != pages.end() && !(mock::invalidAfterTranslate && mock::translations[{pid, address}] % 2)) {
             entries[i].VirtualAttributes.Valid = 1;
             entries[i].VirtualAttributes.Locked = page->second.locked;
-            entries[i].VirtualAttributes.Shared = 1;
-            entries[i].VirtualAttributes.ShareCount = 2;
+            entries[i].VirtualAttributes.Shared = mock::recycledPfn ? 0 : 1;
+            entries[i].VirtualAttributes.ShareCount = mock::recycledPfn ? 0 : 2;
         }
     }
     return TRUE;
@@ -254,6 +267,7 @@ inline DWORD FakeGetMappedFileNameW(HANDLE value, void* pointer, wchar_t* output
 #undef GetProcessMemoryInfo
 #define GetProcessMemoryInfo FakeGetProcessMemoryInfo
 #define GetModuleHandleW FakeGetModuleHandleW
+#define LoadLibraryExW FakeLoadLibraryExW
 #define GetProcAddress FakeGetProcAddress
 #undef QueryWorkingSet
 #define QueryWorkingSet FakeQueryWorkingSet
@@ -312,6 +326,9 @@ struct DriverClient {
         result.io.ok = true; result.io.ntStatus = 0; result.resolved = true;
         if (pid) {
             ++mock::consumerTranslations;
+            if (mock::tableLookupFailureAt == mock::consumerTranslations) { result.lookupStatus = static_cast<long>(0xC000000BUL); return result; }
+            if (mock::tableWalkFailureAt == mock::consumerTranslations) { result.walkStatus = static_cast<long>(0xC0000005UL); return result; }
+            if (mock::tableTransportFailureAt == mock::consumerTranslations) { result.io.ok = false; result.io.ntStatus = static_cast<long>(0xC0000022UL); return result; }
             if (mock::recycleDuringConsumer) mock::pidRecycled = true;
             const auto shifted = mock::tableChanged && mock::consumerTranslations > 2 ? 20ULL : 0;
             result.cr3PhysicalAddress = (500 + shifted) * 4096;
@@ -386,7 +403,8 @@ struct PfnQueryClient {
         const auto limit = mock::mappingCalls % 2 ? mock::batchLimit : mock::confirmBatchLimit;
         for (std::size_t i = 0; i < std::min<std::size_t>(addresses.size(), limit); ++i) {
             const auto at = addresses[i]; const auto& pages = mock::processPages(pid);
-            const auto found = pages.find(at); assert(found != pages.end());
+            const auto found = pages.find(at);
+            if (found == pages.end()) { result.push_back({~0ULL, 0, static_cast<long>(0xC0000017UL)}); continue; }
             const unsigned observation = ++mock::translations[{pid, at}];
             result.push_back({found->second.pfn + ((mock::changedPfn && observation % 2 == 0)
                 || (mock::remapForObject && mock::objectStarted) ? 100 : 0), found->second.size, 0});
@@ -430,8 +448,14 @@ std::shared_ptr<ksword::pfn::Mappings> run(unsigned seconds = 90, bool cancel = 
     require(mock::opened == mock::closed, "every opened process handle closes");
     return job->result;
 }
-int main() {
-    mock::reset(); auto result = run();
+int main(int argc, char**) {
+    mock::reset(); mock::missingRegionApi = argc > 1;
+    auto result = run();
+    require(mock::apiSetLoads == 1, "module-sensitive fixture requires the system API-set fallback");
+    if (mock::missingRegionApi) {
+        require(std::none_of(result->backing.begin(), result->backing.end(), [](const auto& b) { return b.regionInformationKnown || b.mappedPageFile; }), "missing API remains unknown");
+        std::cout << "PHYSICAL_PAGE_MAPPINGS_MISSING_API=PASS\n"; return 0;
+    }
     require(!result->epoch.isEmpty() && !result->domain.isEmpty() && !result->finished.isEmpty()
         && result->epoch.compare(result->ledgerContextEpoch, Qt::CaseSensitive) != 0,
         "mapping observation has an independent epoch and a separately labelled ledger context");
@@ -613,6 +637,16 @@ int main() {
     require(result->rows.size() == 14 && result->distinct == 5 && result->multiplyMapped == 5,
         "PID and VA dedup preserves distinct process mappings without duplicating either pass");
     require(result->workingSetProcesses == 2 && result->scannedProcesses == 2, "both completed coverage stages count processes independently");
+    mock::reset(); mock::recycledPfn = true;
+    mock::pids = {42, 43};
+    mock::regions = {{0,0x1000,0,MEM_FREE,0,0,{}},{0x1000,0x1000,0x1000,MEM_COMMIT,MEM_PRIVATE,PAGE_READWRITE,{}}};
+    mock::secondRegions = {{0,0x2000,0,MEM_FREE,0,0,{}},{0x2000,0x1000,0x2000,MEM_COMMIT,MEM_PRIVATE,PAGE_READWRITE,{}}};
+    mock::pages = {{0x1000,{20,0,4096,0,false}}}; mock::secondPages = {{0x2000,{20,0,4096,0,false}}};
+    mock::consumerPages[20] = {0 | (6ULL << 4) | (0x1111ULL << 9),20,0x1000};
+    result = run();
+    require(result->rows.size() == 2 && result->distinct == 1, "both sequential PFN observations are retained");
+    require(result->rows[0].nativeFrame != result->rows[1].nativeFrame && !result->rows[0].shared && !result->rows[1].shared, "two private generations have incompatible native identities");
+    require(result->multiplyMapped == 0 && result->identityConflicted == 1, "recycled PFN does not masquerade as shared alias");
     mock::reset(); mock::available = false; result = run();
     require(!result->driverAvailable && mock::opened == 0, "missing driver cannot produce a mapping result");
     std::cout << "PHYSICAL_PAGE_MAPPINGS_TESTS=PASS checks=" << checks << '\n';
@@ -646,6 +680,7 @@ def main():
         subprocess.run([compiler, "-std=c++17", "-Wall", "-Wextra", "-Werror", "-O2", "-I", str(build),
             str(build / "test.cpp"), "-o", str(exe)], check=True)
         subprocess.run([str(exe)], check=True, timeout=60)
+        subprocess.run([str(exe), "--missing-region-api"], check=True, timeout=60)
 
 
 if __name__ == "__main__":

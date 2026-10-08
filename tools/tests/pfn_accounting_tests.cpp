@@ -266,5 +266,11 @@ int main()
     RawEvidenceProgress finalizedSpool;
     finalizedSpool.finalized = true;
     assert(!appendRawEvidence(finalizedSpool, record, writer));
+    assert(ownerLifetimeVerified(true, true, true, 100, 100));
+    assert(!ownerLifetimeVerified(true, false, true, 100, 100));
+    assert(!ownerLifetimeVerified(false, true, true, 100, 100));
+    assert(!ownerLifetimeVerified(true, true, false, 100, 100));
+    assert(!ownerLifetimeVerified(true, true, true, 0, 0));
+    assert(!ownerLifetimeVerified(true, true, true, 100, 101));
     std::cout << "PFN_ACCOUNTING_TESTS=PASS\n";
 }
