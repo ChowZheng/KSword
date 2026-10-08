@@ -6,7 +6,7 @@
 
 ## AMD/Intel UI 离线回归
 
-在仓库根目录运行 `tools\hvm_lab\build-ui-tests.cmd`。它使用规定的 HostX64 MSVC 与 Qt 6.9.3，在 `/W4 /WX` 下链接生产 Dock、第三方 VM 页、证据页、KvmControl 和 DriverClient；IOCTL 传输、SCM、确认以及未使用的 EPT watch 页由模拟实现替代。不会打开真实驱动、进入虚拟化或变更实际服务，设置写入临时 INI 目录。
+在仓库根目录运行 `tools\hvm_lab\build-ui-tests.cmd`。它使用规定的 HostX64 MSVC 与 Qt 6.9.3，在 `/W4 /WX` 下链接生产 Dock、第三方 VM 页、证据页、HvmControl 和 DriverClient；IOCTL 传输、SCM、确认以及未使用的 EPT watch 页由模拟实现替代。不会打开真实驱动、进入虚拟化或变更实际服务，设置写入临时 INI 目录。
 
 覆盖请求标志、旧 AMD 驱动、准备模式不匹配、代次竞争、失败中断、部分常驻/回滚、metrics 格式与独立记录有效性，以及 AMD 原生/VMware/未知外层/固件关闭/未知后端。默认输出 72 张中英文、深浅主题、520/1050 宽截图到 `tools/hvm_lab/artifacts/ui-admission-20261001/screenshots`，可传入其它输出目录。字体取本机 Microsoft YaHei，Qt/VC 路径使用仓库依赖或 AGENTS.md 规定的回退位置。这些证据不替代实机常驻、内层 OS 启动或性能验收。
 
@@ -197,3 +197,14 @@ Intel 保留原执行路径，新增调度边界目前由 AMD 接入；共享 ph
 正常收尾额外等待 SCM STOPPED，失败/超时不推断回滚，不自动卸载未知状态驱动。
 需要先取得宿主 LabHostReady、VMware原生模式与来宾KD连接证据；不要在普通启动环境运行。
 `Test-GeneralAcceptance.ps1` 只验证离线快照门禁；`Test-AcceptanceCapture.ps1` 只验证进程输出采集。
+
+
+2026-10-07 架构候选：`prepare-svm-accel/resident-svm-accel` 测试物理 VLS/clean；vGIF 路径因物理中断屏蔽错误已撤回，CLGI/STGI 始终截获。`prepare-svm-opt/resident-svm-opt` 追加受控 CPU 写跟踪和共享虚拟 VMCB 根缓存。metrics v11，需配套 CLI/GUI；最新修复候选目录 `artifacts/amd-perf-20261007-vgif-fix`，原 `architecture` 候选发生宿主硬锁，不得重用。修复版本 25 C 目标及 6 项 Python 离线测试已执行通过，硬件结果另记。每 CPU targeted DPC 通过两次私有 QUERY 取得全 flush 确认证据，不在 root 调 IPI 或等待锁；退出后先撤销证明，再在 all-native 释放时排空 DPC。共享根注册表满时用原每 CPU 根，64 MiB 表预算不足则准备拒绝。详见性能计划末尾和 CLI 文档。
+
+## 本次调试共用管理员会话
+
+用户明确授权后，可用 `Start-LabAdminSession.ps1 -SessionDirectory <本次独立目录>` 一次 UAC 启动管理员 Windows PowerShell；不会注册服务、计划任务或开机自启，也不修改 UAC。会话目录 ACL 仅允许当前用户、管理员和 SYSTEM；脚本队列按 SHA256 核对后串行执行。
+
+将具体操作写成独立 `.ps1`，使用绝对路径，再以 `Invoke-LabAdminCommand.ps1 -SessionDirectory <目录> -ScriptPath <脚本> -WaitSeconds 5` 提交。该等待最多55秒，返回 `Pending` 时只读给出的 resultPath，不能重复提交同一控制。桥接返回 success 只表示脚本没有抛出异常；脚本必须自行校验原生命令退出码及驱动逐核结果。超时或退出会话均不证明驱动已回滚。
+
+正常结束会话：在目录创建 `stop.flag`，worker 会完成当前命令后退出。结束会话不自动停止虚拟机或驱动；这些仍按各自生命周期独立处理。任务完成后应关闭该临时会话，不复用到无关任务。

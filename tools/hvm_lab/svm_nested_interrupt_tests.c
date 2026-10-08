@@ -8,7 +8,7 @@ int main(void)
 {
     KSW_SVM_VMCB vmcb;
     KSW_NSVM_INTERRUPT_OVERLAY overlay;
-    unsigned reflected = 0;
+    unsigned reflected = 0, hardware;
     memset(&vmcb, 0, sizeof(vmcb)); memset(&overlay, 0, sizeof(overlay));
     KswSvmWrite32(&vmcb, KSW_VMCB_MISC1, 1U << 18);
     KswSvmWrite64(&vmcb, KSW_VMCB_INTCTL, (0x51ULL << 32) | 0x50103ULL);
@@ -44,5 +44,15 @@ int main(void)
     session.Phase = KSW_NSVM_SESSION_IDLE;
     CHECK(KswSvmNestedPhysicalEvent(&session, 0, 0x61, &reflected) == KSW_NSVM_INTERRUPT_ACK_NMI && !reflected);
     CHECK(KswSvmNestedPhysicalEvent(&session, 1, 0x61, &reflected) == KSW_NSVM_INTERRUPT_FAULT);
-    puts("nested interrupt-overlay cases passed"); return 0;
+    for (hardware = 0; hardware < 2; ++hardware) {
+        memset(&vmcb, 0, sizeof(vmcb)); memset(&overlay, 0, sizeof(overlay));
+        overlay.HardwareGif = hardware;
+        CHECK(KswSvmNestedInterruptPrepare(&vmcb, &session, 0, &overlay));
+        CHECK(overlay.ForcedMask && !overlay.HostIf && !overlay.HardwareGif);
+        CHECK((KswSvmRead64(&vmcb, KSW_VMCB_INTCTL) & (1ULL << 24)) != 0);
+        CHECK((KswSvmRead64(&vmcb, KSW_VMCB_INTCTL) & ((1ULL << 9) | (1ULL << 25))) == 0);
+        CHECK(KswSvmNestedInterceptRequested(&vmcb, 0x61) == 1);
+        CHECK(KswSvmNestedInterruptRestore(&vmcb, 0, 1, &overlay));
+    }
+    puts("nested interrupt-overlay cases passed, including physical shielding with vGIF requested"); return 0;
 }

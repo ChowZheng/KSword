@@ -14,6 +14,8 @@ typedef struct _KSW_NSVM_INTERRUPT_OVERLAY {
     unsigned Applied, ForcedMask, SuppressedVirq, Inner;
     /* Assembly consumes HostIf while physical GIF is still zero. */
     unsigned HostIf;
+    /* Reserved selection evidence: vGIF cannot replace physical shielding and remains disabled. */
+    unsigned HardwareGif;
 } KSW_NSVM_INTERRUPT_OVERLAY;
 /* Caller has synchronized the physical TPR with any L1 CR8 changes made under forced masking. */
 int KswSvmNestedInterruptPrepare(KSW_SVM_VMCB* Current, const KSW_NSVM_SESSION* Session,

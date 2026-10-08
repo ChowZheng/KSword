@@ -2,6 +2,7 @@
 param(
     [Parameter(Mandatory)][string]$X64dbgDirectory,
     [string]$ProxyDll = '',
+    [string]$NavigationBridge = '',
     [string]$X64dbgSource = '',
     [string]$QtLicenseDirectory = '',
     [string]$SourceArchive = '',
@@ -16,6 +17,7 @@ $pluginRoot = [IO.Path]::GetFullPath((Join-Path $repositoryRoot 'plugin\x96dbg')
 $runtimeRoot = (Resolve-Path -LiteralPath $X64dbgDirectory).Path
 if ($runtimeRoot.TrimEnd('\') -eq [IO.Path]::GetPathRoot($runtimeRoot).TrimEnd('\')) { throw 'A drive root is not an x64dbg runtime directory.' }
 if ([string]::IsNullOrWhiteSpace($ProxyDll)) { $ProxyDll = Join-Path $repositoryRoot "TitanEnginePlugin\x64\$Configuration\TitanEngine.dll" }
+if ([string]::IsNullOrWhiteSpace($NavigationBridge)) { $NavigationBridge = Join-Path $repositoryRoot ".deps\x64dbg-navigation\x64\$Configuration\KSwordNavigation.dp64" }
 if ([string]::IsNullOrWhiteSpace($X64dbgSource)) { $X64dbgSource = Join-Path $repositoryRoot '.deps\x64dbg-reference' }
 if ([string]::IsNullOrWhiteSpace($SourceArchive)) { $SourceArchive = Join-Path $repositoryRoot 'dist\KSword-x96dbg-source.zip' }
 $x64dbgSourceRoot = (Resolve-Path -LiteralPath $X64dbgSource).Path
@@ -24,7 +26,7 @@ $canonicalDef = Join-Path $x64dbgSourceRoot 'src\dbg\TitanEngine\TitanEngine.def
 
 # Refuse to erase an input that was supplied from a previous package, and do
 # not follow a junction masquerading as the script-owned output directory.
-foreach ($inputPath in @($runtimeRoot, [IO.Path]::GetFullPath($ProxyDll), $x64dbgSourceRoot, $launcher, [IO.Path]::GetFullPath($SourceArchive))) {
+foreach ($inputPath in @($runtimeRoot, [IO.Path]::GetFullPath($ProxyDll), [IO.Path]::GetFullPath($NavigationBridge), $x64dbgSourceRoot, $launcher, [IO.Path]::GetFullPath($SourceArchive))) {
     if ($inputPath -eq $pluginRoot -or $inputPath.StartsWith($pluginRoot + '\', [StringComparison]::OrdinalIgnoreCase)) { throw "Package input is inside the output directory: $inputPath" }
 }
 $includeSourceArchive = Test-Path -LiteralPath $SourceArchive -PathType Leaf
@@ -108,6 +110,8 @@ function Get-Amd64Pe([string]$Path, [switch]$ExportNames) {
 }
 
 if (!(Test-Path -LiteralPath $canonicalDef -PathType Leaf)) { throw "Canonical engine definition is missing: $canonicalDef" }
+$navigationPe = Get-Amd64Pe $NavigationBridge -ExportNames
+if ('pluginit' -cnotin $navigationPe.Exports -or 'plugstop' -cnotin $navigationPe.Exports) { throw 'Navigation bridge is missing its official x64dbg plugin entrypoints.' }
 $canonical = @(Get-Content -LiteralPath $canonicalDef | ForEach-Object { if ($_ -match '^\s+([A-Za-z][A-Za-z0-9_]*)\s*$') { $Matches[1] } })
 if ($canonical.Count -ne 64 -or @($canonical | Sort-Object -Unique).Count -ne 64) { throw 'The selected canonical engine ABI is not the audited 64-export interface. Re-audit it before packaging.' }
 foreach ($path in @($launcher, $ProxyDll, (Join-Path $runtimeRoot 'TitanEngine.dll'), (Join-Path $runtimeRoot 'DbgEng\TitanEngine.dll'))) {
@@ -175,6 +179,8 @@ foreach ($file in $runtimeFiles) {
     Copy-Item -LiteralPath $file.FullName -Destination $destination -Force
 }
 Copy-Item -LiteralPath $ProxyDll -Destination (Join-Path $payloadRoot 'KSword\TitanEngine.dll') -Force
+New-Item -ItemType Directory -Path (Join-Path $payloadRoot 'plugins') -Force | Out-Null
+Copy-Item -LiteralPath $NavigationBridge -Destination (Join-Path $payloadRoot 'plugins\KSwordNavigation.dp64') -Force
 Copy-Item -LiteralPath $launcher -Destination $pluginRoot -Force
 foreach ($file in @('plugin.json', 'README.md', 'SOURCE.md')) { Copy-Item -LiteralPath (Join-Path $sourceRoot $file) -Destination $pluginRoot -Force }
 Copy-Item -LiteralPath (Join-Path $repositoryRoot 'DebuggerBackend\README.md') -Destination (Join-Path $pluginRoot 'DEBUGGER_BACKEND.md') -Force
@@ -211,6 +217,7 @@ $manifest = [ordered]@{
     engine_selection = [ordered]@{ DebugEngine = 4; user_directory = 'sessions/UUID'; path = 'KSword/TitanEngine.dll' }
     baseline_pins = (Get-Content -LiteralPath (Join-Path $repositoryRoot 'X96dbgIntegration\PINNED_BASELINES.json') -Raw | ConvertFrom-Json)
     optional_engine_query_version = 1
+    navigation_protocol_version = 2
     files = $manifestFiles
 }
 $manifest | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $pluginRoot 'payload-manifest.json') -Encoding utf8

@@ -6,7 +6,7 @@
 #include "../SettingsDock/AppearanceSettings.h"
 #include "../UI/FlowLayout.h"
 // isNestedAllowed：嵌套开关的权威来源。这个页面原先自己算一份，且算得比它窄。
-#include "../UI/KvmControl.h"
+#include "../UI/HvmControl.h"
 #include "../UI/VisibleTableWidget.h"
 #include "../theme.h"
 
@@ -699,7 +699,7 @@ void KernelHvmTab::runControlAsync(
         ksword::ark::HvmControlResult control{};
         if (before.io.ok && !before.unsupported)
         {
-            control = ksword::kvm::controlWithPreferences(client, before.response, command,
+            control = ksword::hvm::controlWithPreferences(client, before.response, command,
                 force, enableEptEvents, enableNestedVmx, enableEvmcs);
         }
         auto status = client.queryHvmStatus();
@@ -940,7 +940,7 @@ void KernelHvmTab::updateButtons()
     ksword::ark::HvmStatusResult gateResult{};
     gateResult.io.ok = m_supported;
     gateResult.response = m_snapshot;
-    const auto gate = ksword::kvm::stateFromStatus(gateResult);
+    const auto gate = ksword::hvm::stateFromStatus(gateResult);
     const bool residentAvailable = gate.residentAdmission && gate.configurationReason.isEmpty();
     m_refreshButton->setEnabled(!m_operationRunning);
 

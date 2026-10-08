@@ -223,10 +223,10 @@ namespace wpH_test
         void runFollowCallTests()
         {
             Rig2 rig(QByteArray::fromHex("E805000000") + QByteArray(16, '\x90'));
-            rig.view.table()->setFocus();
-            rig.view.table()->setCurrentIndex(rig.view.model()->index(0, 0));
+            rig.view.canvas()->setFocus();
+            rig.view.canvas()->setSelectedRow(0);
             const auto before = rig.view.anchorAddress();
-            QTest::keyClick(rig.view.table(), Qt::Key_Return);
+            QTest::keyClick(rig.view.canvas(), Qt::Key_Return);
             WPH_CHECK_NOTE(rig.view.anchorAddress() != before, QStringLiteral("call rel32 必须被 Enter 跟随"));
         }
 
@@ -240,10 +240,10 @@ namespace wpH_test
             {
                 const QByteArray bytes = QByteArray::fromHex(h) + QByteArray(32, '\x90');
                 Rig2 rig(bytes);
-                rig.view.table()->setFocus();
-                rig.view.table()->setCurrentIndex(rig.view.model()->index(0, 0));
+                rig.view.canvas()->setFocus();
+                rig.view.canvas()->setSelectedRow(0);
                 const auto before = rig.view.anchorAddress();
-                QTest::keyClick(rig.view.table(), Qt::Key_Return);
+                QTest::keyClick(rig.view.canvas(), Qt::Key_Return);
                 WPH_CHECK_NOTE(rig.view.anchorAddress() != before,
                     QStringLiteral("条件跳转 %1 未被跟随（isEditing=%2）").arg(QString::fromLatin1(h)).arg(rig.view.isEditing()));
                 if (rig.view.isEditing() && QApplication::focusWidget())
@@ -301,9 +301,9 @@ namespace wpH_test
                 if (auto* m = QApplication::activeModalWidget()) { m->close(); }
                 if (auto* p = QApplication::activePopupWidget()) { p->close(); }
             });
-            auto* table = rig.view.table();
-            table->setCurrentIndex(rig.view.model()->index(1, 0));
-            emit table->customContextMenuRequested(table->visualRect(rig.view.model()->index(1, 0)).center());
+            auto* canvas = rig.view.canvas();
+            canvas->setSelectedRow(1);
+            emit canvas->contextMenuRequested(canvas->contentRect(1).center());
             QCoreApplication::processEvents();
             QTest::qWait(300);
             QCoreApplication::processEvents();
@@ -350,9 +350,9 @@ namespace wpH_test
             QTimer::singleShot(2000, []() {
                 if (auto* p = QApplication::activePopupWidget()) { p->close(); }
             });
-            auto* table = rig.view.table();
-            table->setCurrentIndex(rig.view.model()->index(1, 0));
-            emit table->customContextMenuRequested(table->visualRect(rig.view.model()->index(1, 0)).center());
+            auto* canvas = rig.view.canvas();
+            canvas->setSelectedRow(1);
+            emit canvas->contextMenuRequested(canvas->contentRect(1).center());
             WPH_CHECK_NOTE(found && !enabled,
                 QStringLiteral("只读模式下汇编编辑项必须禁用（found=%1 enabled=%2）").arg(found).arg(enabled));
         }

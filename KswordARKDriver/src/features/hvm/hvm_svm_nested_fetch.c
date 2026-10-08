@@ -99,15 +99,17 @@ unsigned KswSvmNestedFetchInstruction(const KSW_NSVM_OPERAND_IO* Io,
     const KSW_SVM_VMCB* Current, unsigned char Bytes[15], unsigned* Length)
 {
     /* Guest paging paths and physical words never escape this CPU-private call. */
-    KSW_NNPT_WALK walk;
+    KSW_NNPT_WALK walks[2];
     /* Segment offsets in compatibility mode must not be confused with long-mode linear RIP. */
     const KSW_SVM_SEGMENT* cs;
     /* Only initialized bytes are exposed when the entire capture succeeds. */
     unsigned char captured[15] = {0};
     /* Physical reads are word-sized while the capture itself is byte-exact. */
-    KSW_SVM_U64 rip, next, linear, word, entry;
+    KSW_SVM_U64 rip, next, linear, word = 0, entry;
     /* At most fifteen byte observations and four path comparisons per byte. */
-    unsigned count, index, path, status;
+    unsigned count, index, path, status, pageCount = 0, page;
+    /* A fifteen-byte instruction spans at most two pages and three aligned words. */
+    KSW_SVM_U64 pageBase = ~0ULL, wordAddress = ~0ULL;
     /* Failure always leaves an unusable zero-length image. */
     if (!Length || !Bytes) { return KSW_NNPT_UNSUPPORTED; }
     /* Remove stale output before validating the current instruction. */
@@ -133,26 +135,45 @@ unsigned KswSvmNestedFetchInstruction(const KSW_NSVM_OPERAND_IO* Io,
     }
     /* Reject arithmetic wrap before the per-byte walk. */
     if (linear > ~0ULL - (count - 1U)) { return KSW_NNPT_UNSUPPORTED; }
-    /* Fetch only the exited instruction, including a genuine cross-page suffix. */
+    /* Capture each code-page translation once within this bounded transaction. */
     for (index = 0; index < count; ++index) {
-        /* Guest and outer translations are separate, bounded operations. */
-        status = KswNsvmFetchTranslate(Io, Current, linear + index, &walk);
-        /* No emulation after a partially captured instruction. */
-        if (status != KSW_NNPT_OK) { return status; }
-        /* A word-aligned read cannot straddle its physical page. */
-        status = KswNsvmFetchWord(Io, walk.Address & ~7ULL, &word);
-        /* Physical callback failure leaves the public image empty. */
-        if (status != KSW_NNPT_OK) { return status; }
+        /* The linear-page offset is preserved by all admitted guest leaf sizes. */
+        KSW_SVM_U64 address = linear + index, physical;
+        /* Crossing a page captures a new independent path, never an assumed adjacent frame. */
+        if ((address & ~4095ULL) != pageBase) {
+            /* Both paths remain private until the final structural rechecks complete. */
+            if (pageCount == 2U) { return KSW_NNPT_UNSUPPORTED; }
+            /* Translate the first requested byte rather than reading preceding instruction bytes. */
+            status = KswNsvmFetchTranslate(Io, Current, address, &walks[pageCount]);
+            /* A partially readable instruction cannot authorize emulation. */
+            if (status != KSW_NNPT_OK) { return status; }
+            /* Publish the local path only after it completed. */
+            ++pageCount; pageBase = address & ~4095ULL; wordAddress = ~0ULL;
+        }
+        /* Never retain a physical-window pointer; cache only a copied aligned word. */
+        physical = (walks[pageCount - 1U].Address & ~4095ULL) | (address & 4095ULL);
+        /* Bytes in the same aligned word share one translated physical observation. */
+        if ((physical & ~7ULL) != wordAddress) {
+            /* An aligned word cannot straddle the translated physical page. */
+            status = KswNsvmFetchWord(Io, physical & ~7ULL, &word);
+            /* Failure leaves the public output zeroed and its length unusable. */
+            if (status != KSW_NNPT_OK) { return status; }
+            /* The word is private storage, valid only during this one capture. */
+            wordAddress = physical & ~7ULL;
+        }
         /* Retain one byte in local storage until all source paths are rechecked. */
-        captured[index] = (unsigned char)(word >> ((unsigned)(walk.Address & 7ULL) * 8U));
-        /* Recheck guest page-table structure after reading its translated instruction byte. */
-        for (path = 0; path < walk.Count; ++path) {
+        captured[index] = (unsigned char)(word >> ((unsigned)(physical & 7ULL) * 8U));
+    }
+    /* Recheck every captured path after all bytes, including changes made during the other page. */
+    for (page = 0; page < pageCount; ++page) {
+        /* Source paths have at most four entries; A/D-only updates do not remap instruction bytes. */
+        for (path = 0; path < walks[page].Count; ++path) {
             /* Revalidation also crosses NPT01 rather than dereferencing a guest CR3 page. */
-            status = KswNsvmFetchWord(Io, walk.EntryAddress[path], &entry);
+            status = KswNsvmFetchWord(Io, walks[page].EntryAddress[path], &entry);
             /* Hardware A/D changes alone do not invalidate a mapping. */
             if (status != KSW_NNPT_OK) { return status; }
             /* This detects remaps; it does not promise atomicity against guest self-modifying code. */
-            if ((entry ^ walk.EntryValue[path]) & ~0x60ULL) { return KSW_NNPT_RETRY; }
+            if ((entry ^ walks[page].EntryValue[path]) & ~0x60ULL) { return KSW_NNPT_RETRY; }
         }
     }
     /* Publish the exact captured instruction only after the complete bounded observation. */

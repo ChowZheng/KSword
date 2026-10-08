@@ -28,7 +28,9 @@ int KswSvmNestedInterruptPrepare(KSW_SVM_VMCB* Current, const KSW_NSVM_SESSION* 
     Overlay->ForcedMask = Overlay->SuppressedVirq = 0; Overlay->Inner = inner;
     /* With the inner masking bit set, saved L1 IF controls physical interrupts. */
     Overlay->HostIf = inner && (control & (1ULL << 24)) &&
-        (KswSvmRead64(&Session->L1, KSW_VMCB_RFLAGS) & (1ULL << 9));
+        (KswSvmRead64(KswSvmNestedHostImage(Session), KSW_VMCB_RFLAGS) & (1ULL << 9));
+    /* vGIF only masks virtual events; it cannot replace the physical INTR/NMI contract. */
+    Overlay->HardwareGif = 0;
     /* Closed L1 GIF must mask physical interrupts even if L1 executes STI. */
     if (!Gif) {
         /* V_INTR_MASKING with host IF=0 supplies physical INTR masking independently of guest IF. */

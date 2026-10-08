@@ -1,4 +1,5 @@
 #include "MainWindow.h"
+#include "../../shared/usermode/KswordArkServiceMode.h"
 #include "Framework/PrivilegeElevationPrompt.h"
 #include "MinidumpDock/DumpAutoCheck.h"
 #include <QMenu>
@@ -145,7 +146,7 @@ namespace
     // kDockLayoutConfigFileVersion 作用：
     // - 作为 ADS saveState/restoreState 的版本号；
     // - Dock 集合或默认布局发生不兼容变化时递增，可自动放弃旧布局。
-    // 7：新增顶层「虚拟化 (KVM)」Dock。旧布局里没有 ksDock_kvm，ADS 恢复后
+    // 7：新增顶层「虚拟化」Dock。旧布局里没有 ksDock_hvm，ADS 恢复后
     // 这一页不会出现在任何 Dock 区，用户看不到新页也没有任何提示。
     constexpr int kDockLayoutConfigFileVersion = 7;
 
@@ -165,10 +166,10 @@ namespace
     // - 判断某个主 Dock 挂进 ADS 时是否要去掉 ADS 自动包的外层 QScrollArea（ForceNoScrollArea）；
     // - 调用方：惰性占位页首次挂载与真实内容挂载两处，两处必须共用这一个判据，
     //   以前同一个布尔表达式复制了两份，漏改其中一份就会让占位页与真实页的滚动结构不一致；
-    // - 入参 dockKey：Dock 的稳定键（network / hardware / kernel / kvm / memory ...）；
+    // - 入参 dockKey：Dock 的稳定键（network / hardware / kernel / hvm / memory ...）；
     // - 返回：true=不要外层滚动区；false=沿用 ADS 的 AutoScrollArea。
     // - 约束：
-    //   network / hardware / kernel / kvm 内部是分隔条加表格，外面再套一层 QScrollArea 会把分隔条压到最小高度；
+    //   network / hardware / kernel / hvm 内部是分隔条加表格，外面再套一层 QScrollArea 会把分隔条压到最小高度；
     //   memory 的每个页签都自带页内滚动壳（ks::ui::EnablePageInnerScroll，由
     //   tools/test_memory_dock_layout_gate.py 把关），整个 MemoryDock 的最小高度因此降到几十像素，
     //   外层再滚动只会把头部、工具栏、页签栏和状态栏一起滚走。
@@ -179,7 +180,7 @@ namespace
         return dockKey == QStringLiteral("network")
             || dockKey == QStringLiteral("hardware")
             || dockKey == QStringLiteral("kernel")
-            || dockKey == QStringLiteral("kvm")
+            || dockKey == QStringLiteral("hvm")
             || dockKey == QStringLiteral("memory");
     }
 
@@ -3715,6 +3716,16 @@ namespace
     R0ServiceOperationOutcome executeR0ServiceStopOnWorker()
     {
         R0ServiceOperationOutcome operationOutcome;
+        const auto mayManageService = [&operationOutcome]()
+        {
+            const auto profile = ksword::ark::queryServiceProfile();
+            if (profile.scmManagementAllowed()) return true;
+            operationOutcome.errorCode = ksword::ark::serviceProfileManagementError(profile);
+            operationOutcome.stageText = QStringLiteral("R0 服务模式不允许通过 SCM 卸载或删除。");
+            operationOutcome.detailText = QStringLiteral("请在设备管理器中恢复控制器的 Windows 驱动绑定或移除设备。全部控制器解绑且驱动映像退出后，手动将 StorageControllerPnP 设为 0 再启用普通 R0；配置读取失败时不修改服务。");
+            return false;
+        };
+        if (!mayManageService()) return operationOutcome;
 
         ScopedServiceHandle scmHandle(::OpenSCManagerW(nullptr, SERVICES_ACTIVE_DATABASE, SC_MANAGER_CONNECT));
         if (!scmHandle.isValid())
@@ -3756,6 +3767,7 @@ namespace
             if (currentStatus.dwCurrentState != SERVICE_STOP_PENDING)
             {
                 SERVICE_STATUS ignoredStatus{};
+                if (!mayManageService()) return operationOutcome;
                 if (::ControlService(serviceHandle.get(), SERVICE_CONTROL_STOP, &ignoredStatus) == FALSE)
                 {
                     const DWORD stopError = ::GetLastError();
@@ -3769,6 +3781,7 @@ namespace
                                 enableCurrentProcessPrivilege(SE_LOAD_DRIVER_NAME, &privilegeError);
 
                             long ntUnloadStatus = 0;
+                            if (!mayManageService()) return operationOutcome;
                             const bool unloadOk = tryNtUnloadDriverByServiceName(
                                 kR0DriverServiceName,
                                 &ntUnloadStatus);
@@ -3826,6 +3839,7 @@ namespace
             }
         }
 
+        if (!mayManageService()) return operationOutcome;
         if (::DeleteService(serviceHandle.get()) == FALSE)
         {
             const DWORD deleteError = ::GetLastError();
@@ -3850,11 +3864,28 @@ namespace
     R0ServiceOperationOutcome executeR0ServiceStartOnWorker(const QString& nativeDriverPath)
     {
         R0ServiceOperationOutcome operationOutcome;
+        const auto profile = ksword::ark::queryServiceProfile();
+        if (profile.profile == ksword::ark::ServiceProfile::Unknown)
+        {
+            operationOutcome.errorCode = ksword::ark::serviceProfileManagementError(profile);
+            operationOutcome.stageText = QStringLiteral("无法确认 KswordARK 服务模式；未修改或启动服务。");
+            return operationOutcome;
+        }
+        const bool pnp = profile.profile == ksword::ark::ServiceProfile::StorageControllerPnp;
+        const auto mayManageService = [&operationOutcome]()
+        {
+            const auto latest = ksword::ark::queryServiceProfile();
+            if (latest.scmManagementAllowed()) return true;
+            operationOutcome.errorCode = ksword::ark::serviceProfileManagementError(latest);
+            operationOutcome.stageText = QStringLiteral("无法确认 KswordARK 服务模式；未修改或启动服务。");
+            operationOutcome.detailText = QStringLiteral("请在设备管理器中恢复控制器的 Windows 驱动绑定或移除设备。全部控制器解绑且驱动映像退出后，手动将 StorageControllerPnP 设为 0 再启用普通 R0；配置读取失败时不修改服务。");
+            return false;
+        };
 
         ScopedServiceHandle scmHandle(::OpenSCManagerW(
             nullptr,
             SERVICES_ACTIVE_DATABASE,
-            SC_MANAGER_CONNECT | SC_MANAGER_CREATE_SERVICE));
+            SC_MANAGER_CONNECT | (pnp ? 0U : SC_MANAGER_CREATE_SERVICE)));
         if (!scmHandle.isValid())
         {
             operationOutcome.errorCode = ::GetLastError();
@@ -3865,7 +3896,25 @@ namespace
         ScopedServiceHandle serviceHandle(::OpenServiceW(
             scmHandle.get(),
             kR0DriverServiceName,
-            SERVICE_QUERY_STATUS | SERVICE_START | SERVICE_STOP | SERVICE_CHANGE_CONFIG | DELETE));
+            pnp ? SERVICE_QUERY_STATUS :
+                SERVICE_QUERY_STATUS | SERVICE_START | SERVICE_STOP | SERVICE_CHANGE_CONFIG | DELETE));
+        if (pnp)
+        {
+            SERVICE_STATUS_PROCESS currentStatus{};
+            DWORD queryError = serviceHandle.isValid() ? ERROR_SUCCESS : ::GetLastError();
+            if (serviceHandle.isValid() &&
+                queryServiceStatus(serviceHandle.get(), currentStatus, queryError) &&
+                currentStatus.dwCurrentState == SERVICE_RUNNING)
+            {
+                operationOutcome.succeeded = true;
+                operationOutcome.alreadyInTargetState = true;
+                return operationOutcome;
+            }
+            operationOutcome.errorCode = queryError == ERROR_SUCCESS
+                ? ERROR_SERVICE_NOT_ACTIVE : queryError;
+            operationOutcome.stageText = QStringLiteral("KswordARK 使用 PnP 存储控制器模式；请在设备管理器中启动已绑定的控制器。");
+            return operationOutcome;
+        }
         if (!serviceHandle.isValid())
         {
             const DWORD openError = ::GetLastError();
@@ -3877,6 +3926,7 @@ namespace
             }
 
             const std::wstring driverPathWide = nativeDriverPath.toStdWString();
+            if (!mayManageService()) return operationOutcome;
             serviceHandle.reset(::CreateServiceW(
                 scmHandle.get(),
                 kR0DriverServiceName,
@@ -3902,6 +3952,7 @@ namespace
         else
         {
             const std::wstring driverPathWide = nativeDriverPath.toStdWString();
+            if (!mayManageService()) return operationOutcome;
             if (::ChangeServiceConfigW(
                 serviceHandle.get(),
                 SERVICE_KERNEL_DRIVER,
@@ -3937,6 +3988,7 @@ namespace
             return operationOutcome;
         }
 
+        if (!mayManageService()) return operationOutcome;
         if (::StartServiceW(serviceHandle.get(), 0, nullptr) == FALSE)
         {
             const DWORD startError = ::GetLastError();
@@ -6756,7 +6808,7 @@ QList<ads::CDockWidget*> MainWindow::collectSearchableDockWidgets() const
         m_dockFile,
         m_dockDriver,
         m_dockKernel,
-        m_dockKvm,
+        m_dockHvm,
         m_dockMonitorTab,
         m_dockHardware,
         m_dockPrivilege,
@@ -7801,8 +7853,8 @@ void MainWindow::initPrivilegeStatusButtons()
     m_debugStatusButton = new QPushButton("Debug", m_privilegeButtonContainer);
     m_systemStatusButton = new QPushButton("System", m_privilegeButtonContainer);
     m_r0StatusButton = new QPushButton("R0", m_privilegeButtonContainer);
-    // KVM 排在 R0 右侧：它比 R0 更低一层（hypervisor / R-1），且以 R0 为前提。
-    m_kvmStatusButton = new QPushButton("KVM", m_privilegeButtonContainer);
+    // HVM 排在 R0 右侧：它比 R0 更低一层（hypervisor / R-1），且以 R0 为前提。
+    m_hvmStatusButton = new QPushButton("HVM", m_privilegeButtonContainer);
     // DDMA 排在 R-1 右侧。它不是又低一层的权限环，而是另一条绕开 CPU 的访问
     // 通路（设备侧 DMA），放在这一排的末尾表示"比 R-1 更少受 CPU 约束"。
     m_ddmaStatusButton = new QPushButton("DDMA", m_privilegeButtonContainer);
@@ -7814,7 +7866,7 @@ void MainWindow::initPrivilegeStatusButtons()
         m_debugStatusButton,
         m_systemStatusButton,
         m_r0StatusButton,
-        m_kvmStatusButton,
+        m_hvmStatusButton,
         m_ddmaStatusButton
     };
     for (QPushButton* statusButton : statusButtons)
@@ -7838,18 +7890,18 @@ void MainWindow::initPrivilegeStatusButtons()
     m_debugStatusButton->setToolTip(QStringLiteral("Debug：调试特权（SeDebugPrivilege）状态，用于访问受保护进程。点击申请该特权（需要管理员）。"));
     m_systemStatusButton->setToolTip(QStringLiteral("System：当前是否以 LocalSystem 系统账户运行。点击查看当前身份说明。"));
     m_r0StatusButton->setToolTip(QStringLiteral("R0：KswordARK 内核驱动服务状态。点击启动或停止驱动（内核功能都依赖它）。"));
-    m_kvmStatusButton->setToolTip(QStringLiteral("KVM：KSwordVM 硬件虚拟化（R-1）常驻状态。左键启动或停止常驻，右键打开 R-1 能力菜单。"));
+    m_hvmStatusButton->setToolTip(QStringLiteral("HVM：KSwordVM 硬件虚拟化（R-1）常驻状态。左键启动或停止常驻，右键打开 R-1 能力菜单。"));
     // 右键菜单承载写权限开关与保持自检等不适合放进单击的能力。
-    m_kvmStatusButton->setContextMenuPolicy(Qt::CustomContextMenu);
-    connect(m_kvmStatusButton, &QPushButton::customContextMenuRequested,
+    m_hvmStatusButton->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(m_hvmStatusButton, &QPushButton::customContextMenuRequested,
         this, [this](const QPoint& position) {
-            if (m_kvmStatusButton != nullptr)
+            if (m_hvmStatusButton != nullptr)
             {
-                showKvmMenu(m_kvmStatusButton->mapToGlobal(position));
+                showHvmMenu(m_hvmStatusButton->mapToGlobal(position));
             }
         });
-    connect(m_kvmStatusButton, &QPushButton::clicked, this, [this]() {
-        handleKvmStatusButtonClicked();
+    connect(m_hvmStatusButton, &QPushButton::clicked, this, [this]() {
+        handleHvmStatusButtonClicked();
     });
 
     // DDMA 指示灯：亮 = 已登记常驻虚扇区。点击跳到内存页的 DDMA 子页，
@@ -8327,7 +8379,7 @@ void MainWindow::applyPrivilegeButtonVisibility()
         {m_debugStatusButton, settings.privilegeButtonDebugVisible},
         {m_systemStatusButton, settings.privilegeButtonSystemVisible},
         {m_r0StatusButton, settings.privilegeButtonR0Visible},
-        {m_kvmStatusButton, settings.privilegeButtonHvmVisible},
+        {m_hvmStatusButton, settings.privilegeButtonHvmVisible},
         {m_ddmaStatusButton, settings.privilegeButtonDdmaVisible}
     }};
     int visibleCount = 0;
@@ -8349,13 +8401,13 @@ void MainWindow::applyPrivilegeButtonVisibility()
     m_privilegeButtonContainer->setVisible(visibleCount > 0);
 
     // 称呼只作用于这一个按钮的标题与提示开头；页面内的说明文字不跟随切换。
-    if (m_kvmStatusButton != nullptr)
+    if (m_hvmStatusButton != nullptr)
     {
         const QString displayName =
             ks::settings::hvmDisplayNameLabel(settings.hvmDisplayName);
-        m_kvmStatusButton->setText(displayName);
+        m_hvmStatusButton->setText(displayName);
         // 整串写在一行：跨行拼接会被 i18n 审计当成多个独立源串，逐段都要词条。
-        m_kvmStatusButton->setToolTip(
+        m_hvmStatusButton->setToolTip(
             QStringLiteral("%1：KSwordVM 硬件虚拟化（R-1）常驻状态。左键启动或停止常驻，右键打开 R-1 能力菜单。")
                 .arg(displayName));
     }
@@ -8390,25 +8442,25 @@ void MainWindow::refreshPrivilegeStatusButtons()
     {
         m_r0StatusButton->setStyleSheet(buildR0ButtonStyle(r0Enabled));
     }
-    // KVM 只用缓存值刷新外观：状态查询是阻塞 IOCTL，必须走后台。
-    applyKvmButtonState();
+    // HVM 只用缓存值刷新外观：状态查询是阻塞 IOCTL，必须走后台。
+    applyHvmButtonState();
     // DDMA 的常驻与否完全是本进程内的一份配置，读它不需要任何 IOCTL，
     // 所以可以直接放在这条同步刷新路径里。
     applyDdmaButtonState();
     // 驱动没运行时不查询，避免每个刷新周期都撞一次不存在的设备。
     if (r0Enabled)
     {
-        refreshKvmStatusAsync();
+        refreshHvmStatusAsync();
     }
-    else if (m_kvmAvailable || m_kvmResidentActive)
+    else if (m_hvmAvailable || m_hvmResidentActive)
     {
-        // 驱动刚被停掉时立刻把 KVM 打回不可用，不保留上一轮的乐观状态。
-        m_kvmAvailable = false;
-        m_kvmResidentActive = false;
-        m_kvmFaulted = false;
-        m_kvmGeneration = 0;
-        m_kvmTooltip.clear();
-        applyKvmButtonState();
+        // 驱动刚被停掉时立刻把 HVM 打回不可用，不保留上一轮的乐观状态。
+        m_hvmAvailable = false;
+        m_hvmResidentActive = false;
+        m_hvmFaulted = false;
+        m_hvmGeneration = 0;
+        m_hvmTooltip.clear();
+        applyHvmButtonState();
     }
 
     if (m_uiAccessStatusButton != nullptr)
@@ -9369,6 +9421,20 @@ bool MainWindow::queryR0DriverServiceRunning(bool& runningOut, const bool fatalO
 
 bool MainWindow::stopR0DriverService(const bool suppressErrorDialog)
 {
+    const auto profile = ksword::ark::queryServiceProfile();
+    if (!profile.scmManagementAllowed())
+    {
+        const QString message = QStringLiteral("请在设备管理器中恢复控制器的 Windows 驱动绑定或移除设备。全部控制器解绑且驱动映像退出后，手动将 StorageControllerPnP 设为 0 再启用普通 R0；配置读取失败时不修改服务。");
+        if (!suppressErrorDialog)
+            showR0FatalError(QStringLiteral("R0 服务模式不允许通过 SCM 卸载或删除。"),
+                ksword::ark::serviceProfileManagementError(profile), message);
+        else
+        {
+            kLogEvent event;
+            err << event << message.toStdString() << eol;
+        }
+        return false;
+    }
     // 作用：
     // - 入参 suppressErrorDialog：true 表示静默停驱，失败只写日志不弹错误框；
     // - 处理：UI 线程只做“收敛本进程持有的驱动句柄 + 派发”，SCM 停止/等待/删除整段交给线程池；
@@ -9669,7 +9735,8 @@ bool MainWindow::startR0DriverService(const bool suppressPrivilegeElevationPromp
     const QString driverPath = QDir(QCoreApplication::applicationDirPath()).absoluteFilePath(QStringLiteral("KswordARK.sys"));
     const QString nativeDriverPath = QDir::toNativeSeparators(driverPath);
     const QFileInfo driverFileInfo(driverPath);
-    if (!driverFileInfo.exists() || !driverFileInfo.isFile())
+    if (ksword::ark::queryServiceProfile().scmManagementAllowed() &&
+        (!driverFileInfo.exists() || !driverFileInfo.isFile()))
     {
         // 驱动文件缺失是立即可判的失败，不必为它派发后台任务。
         g_r0ServiceOperationInFlight.store(false);
@@ -10148,10 +10215,10 @@ void MainWindow::ensureDockContentInitialized(ads::CDockWidget* dockWidget)
         }
         realWidget = m_kernelWidget;
     }
-    else if (dockKey == QStringLiteral("kvm"))
+    else if (dockKey == QStringLiteral("hvm"))
     {
-        if (m_kvmWidget == nullptr) { m_kvmWidget = createKvmDockContent(); }
-        realWidget = m_kvmWidget;
+        if (m_hvmWidget == nullptr) { m_hvmWidget = createHvmDockContent(); }
+        realWidget = m_hvmWidget;
     }
     else if (dockKey == QStringLiteral("monitor"))
     {
@@ -10239,7 +10306,7 @@ void MainWindow::ensureDockContentInitialized(ads::CDockWidget* dockWidget)
                 "}"));
     }
 
-    // KVM 页与内核页同理：内部是分隔条 + 表格 + 详情，外面再套一层 QScrollArea
+    // HVM 页与内核页同理：内部是分隔条 + 表格 + 详情，外面再套一层 QScrollArea
     // 会把分隔条压到最小高度。内存页的各页签自带页内滚动壳，也不再需要外层滚动。
     // 判据只此一处定义（DockSuppressesOuterScrollArea），与惰性占位页的挂载共用。
     const bool shouldSuppressOuterScrollArea = DockSuppressesOuterScrollArea(dockKey);
@@ -10317,7 +10384,10 @@ void MainWindow::configureDockWidgetPersistentIdentity(
         return;
     }
 
-    dockWidget->setObjectName(QStringLiteral("ksDock_%1").arg(normalizedKey));
+    // ADS 布局按 objectName 恢复；保留虚拟化页的旧持久化标识。
+    const QString persistentKey = normalizedKey == QStringLiteral("hvm")
+        ? QStringLiteral("kvm") : normalizedKey;
+    dockWidget->setObjectName(QStringLiteral("ksDock_%1").arg(persistentKey));
     dockWidget->setProperty("ks_dock_layout_key", normalizedKey);
 }
 
@@ -10510,7 +10580,7 @@ void MainWindow::ensureVisibleLazyDocksInitialized(const QString& reasonText)
         m_dockFile,
         m_dockDriver,
         m_dockKernel,
-        m_dockKvm,
+        m_dockHvm,
         m_dockMonitorTab,
         m_dockHardware,
         m_dockPrivilege,
@@ -10723,7 +10793,7 @@ void MainWindow::initDockWidgets()
             m_kernelWidget->kswordSelfDriverPage(),
             m_kernelWidget);
     }
-    if (shouldEagerLoad(QStringLiteral("kvm"))) { m_kvmWidget = createKvmDockContent(); }
+    if (shouldEagerLoad(QStringLiteral("hvm"))) { m_hvmWidget = createHvmDockContent(); }
     if (shouldEagerLoad(QStringLiteral("monitor"))) { m_monitorWidget = new MonitorDock(this); }
     // 欢迎页的性能卡片复用 HardwareDock 的唯一采样源，因此硬件采样器随主窗口一并创建；
     // 硬件 Dock 本身仍保持按需显示，避免复制 PDH/DXGI 采样实现。
@@ -10891,7 +10961,7 @@ void MainWindow::initDockWidgets()
     createLazyDockWidget(m_dockFile, m_fileWidget, ks::i18n::text(QStringLiteral("dock.file"), QStringLiteral("文件")), QStringLiteral("file"));
     createLazyDockWidget(m_dockDriver, m_driverWidget, ks::i18n::text(QStringLiteral("dock.driver"), QStringLiteral("驱动")), QStringLiteral("driver"));
     createLazyDockWidget(m_dockKernel, m_kernelWidget, ks::i18n::text(QStringLiteral("dock.kernel"), QStringLiteral("内核")), QStringLiteral("kernel"));
-    createLazyDockWidget(m_dockKvm, m_kvmWidget, ks::i18n::text(QStringLiteral("dock.kvm"), QStringLiteral("虚拟化 (KVM)")), QStringLiteral("kvm"));
+    createLazyDockWidget(m_dockHvm, m_hvmWidget, ks::i18n::text(QStringLiteral("dock.hvm"), QStringLiteral("虚拟化")), QStringLiteral("hvm"));
     createLazyDockWidget(m_dockMonitorTab, m_monitorWidget, ks::i18n::text(QStringLiteral("dock.monitor"), QStringLiteral("监控")), QStringLiteral("monitor"));
     createLazyDockWidget(m_dockHardware, m_hardwareWidget, ks::i18n::text(QStringLiteral("dock.hardware"), QStringLiteral("硬件")), QStringLiteral("hardware"));
     createLazyDockWidget(m_dockPrivilege, m_privilegeWidget, ks::i18n::text(QStringLiteral("dock.privilege"), QStringLiteral("权限")), QStringLiteral("privilege"));
@@ -10939,7 +11009,7 @@ void MainWindow::initDockWidgets()
         m_dockFile,
         m_dockDriver,
         m_dockKernel,
-        m_dockKvm,
+        m_dockHvm,
         m_dockMonitorTab,
         m_dockHardware,
         m_dockPrivilege,
@@ -11009,7 +11079,7 @@ void MainWindow::setupDockLayout()
     m_pDockManager->addDockWidgetTabToArea(m_dockFile, leftDockArea);
     m_pDockManager->addDockWidgetTabToArea(m_dockDriver, leftDockArea);
     m_pDockManager->addDockWidgetTabToArea(m_dockKernel, leftDockArea);
-    m_pDockManager->addDockWidgetTabToArea(m_dockKvm, leftDockArea);
+    m_pDockManager->addDockWidgetTabToArea(m_dockHvm, leftDockArea);
     m_pDockManager->addDockWidgetTabToArea(m_dockMonitorTab, leftDockArea);
     m_pDockManager->addDockWidgetTabToArea(m_dockHardware, leftDockArea);
     m_pDockManager->addDockWidgetTabToArea(m_dockPrivilege, leftDockArea);
@@ -11702,10 +11772,10 @@ void MainWindow::initAppearanceSettings()
             targetDock = m_dockKernel;
             targetName = QStringLiteral("内核");
         }
-        else if (normalizedKey == QStringLiteral("kvm"))
+        else if (normalizedKey == QStringLiteral("hvm"))
         {
-            targetDock = m_dockKvm;
-            targetName = QStringLiteral("虚拟化 (KVM)");
+            targetDock = m_dockHvm;
+            targetName = QStringLiteral("虚拟化");
         }
         else if (normalizedKey == QStringLiteral("monitor"))
         {

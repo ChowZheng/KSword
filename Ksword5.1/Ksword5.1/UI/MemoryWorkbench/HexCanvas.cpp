@@ -10,6 +10,7 @@
 //   HexCanvas.Menu.cpp    复制与右键菜单
 
 #include "HexCanvas.h"
+#include "HexCanvasFormat.h"
 
 #include <QApplication>
 #include <QEvent>
@@ -29,23 +30,6 @@ namespace ks::ui
 {
     namespace
     {
-        // BuildFixedFont：构造十六进制视图使用的等宽字体。
-        // 参照旧 HexEditorWidget：系统等宽字体 + 中文回退；这里额外把 Consolas 放在最前，
-        // 装了它的机器上数字更清晰，没装则自动落到系统等宽字体。
-        // 传出：字体。
-        QFont BuildFixedFont()
-        {
-            // font：以系统等宽字体为底。
-            QFont font = QFontDatabase::systemFont(QFontDatabase::FixedFont);
-            font.setStyleHint(QFont::Monospace);
-            font.setFixedPitch(true);
-            font.setFamilies(QStringList{
-                QStringLiteral("Consolas"),
-                font.family(),
-                QStringLiteral("Microsoft YaHei UI") });
-            return font;
-        }
-
         // kPageBytes：页大小，与 HexViewport 保持一致。
         constexpr std::uint64_t kPageBytes = ksword::memwb::HexViewport::kPageBytes;
 
@@ -143,7 +127,7 @@ namespace ks::ui
 
         // 字体：先设置等宽字体，随后量出字符宽度与行高。
         // m_baseFont 记下这份基准字体：字号缩放（setZoomLevel）永远从它出发算，级别 0 就是它本身。
-        m_baseFont = BuildFixedFont();
+        m_baseFont = hexcanvas_format::BuildFixedFont();
         setFont(m_baseFont);
         rebuildMetrics();
 

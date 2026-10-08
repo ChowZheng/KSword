@@ -1,5 +1,6 @@
 /* VMEXIT-safe output adapter; one processor-private mapping per VMCB writeback. */
 #include "hvm_svm_nested_runtime.h"
+#include "hvm_svm_watch.h"
 
 /* The caller has already translated the operand with write permission through NPT01. */
 int KswordSvmNestedCommitVmcb(void* Context, KSW_SVM_U64 HostPa,
@@ -11,6 +12,8 @@ int KswordSvmNestedCommitVmcb(void* Context, KSW_SVM_U64 HostPa,
     /* The mapping is held only while applying the bounded field whitelist. */
     volatile VOID* mapped = NULL;
     /* Each iteration handles one aligned word, preserving all unowned bits. */
+    KswordSvmWatchWrite(nested->Cpu, HostPa);
+    /* Each iteration handles one aligned word, preserving all unowned bits. */
     ULONG offset, attempt;
     /* A failure after progress is not equivalent to a rejected, untouched operand. */
     if (!WordsWritten) { return 0; }
@@ -21,8 +24,9 @@ int KswordSvmNestedCommitVmcb(void* Context, KSW_SVM_U64 HostPa,
         Operation < KSW_NSVM_SAVE_VMEXIT || Operation > KSW_NSVM_SAVE_VMSAVE ||
         !KswordSvmNestedRamRange(nested, HostPa, 4096) ||
         KswordARKHvmPhysWindowMap(nested->Window, HostPa, 4096, &mapped) != KSW_HVM_PHYS_WINDOW_OK) { return 0; }
-    /* Fixed page size ensures no write can escape the validated mapping. */
-    for (offset = 0; offset < 4096; offset += 8) {
+    /* Enumerate selected output words rather than scanning reserved VMCB space. */
+    for (offset = KswSvmNestedWritebackNext(0, Operation, NestedPaging); offset < 4096;
+        offset = KswSvmNestedWritebackNext(offset + 8, Operation, NestedPaging)) {
         /* The driver, not the inner VMM, chooses the writable fields. */
         ULONGLONG mask = KswSvmNestedWritebackMask(offset, Operation, NestedPaging);
         /* Reserved fields and all hardware pointer controls are untouched. */

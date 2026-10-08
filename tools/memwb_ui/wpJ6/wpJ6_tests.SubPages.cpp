@@ -12,7 +12,7 @@
 // ============================================================
 #include "wpJ6_common.h"
 
-#include "../../../Ksword5.1/Ksword5.1/UI/CodeEditorWidget.h"
+#include "../../../Ksword5.1/Ksword5.1/UI/MemoryWorkbench/MemoryRowCanvas.h"
 #include "../../../Ksword5.1/Ksword5.1/UI/MemoryWorkbench/HexCanvas.h"
 #include "../../../Ksword5.1/Ksword5.1/UI/MemoryWorkbench/WorkbenchCompareView.h"
 #include "../../../Ksword5.1/Ksword5.1/UI/MemoryWorkbench/WorkbenchDisasmView.h"
@@ -187,8 +187,8 @@ namespace wpj6_test
                     QStringLiteral("文本页状态行应含 0x2010 起的窗口，实际：%1").arg(status));
                 WPJ6_CHECK_NOTE(!status.contains(QStringLiteral("超出已读取窗口")) && !status.contains(QStringLiteral("尚未定位")),
                     QStringLiteral("文本页不应显示占位/超出文案：%1").arg(status));
-                WPJ6_CHECK_NOTE(text->editor()->text().startsWith(QStringLiteral("KSwordFollow")),
-                    QStringLiteral("文本页第一行应是 0x2010 处的字符串，实际 '%1'").arg(text->editor()->text().left(24)));
+                WPJ6_CHECK_NOTE(text->renderedText().startsWith(QStringLiteral("KSwordFollow")),
+                    QStringLiteral("文本页第一行应是 0x2010 处的字符串，实际 '%1'").arg(text->renderedText().left(24)));
             }
 
             // 对比：先切到"暂存后应用"模式（立即写入模式下 stageBytes 会直接写入，不留待写入修改），
@@ -321,15 +321,15 @@ namespace wpj6_test
             {
                 return;
             }
-            const bool loaded = PumpUntil([text]() { return text->editor()->text().count(QLatin1Char('\n')) > 50; }, 3000);
+            const bool loaded = PumpUntil([text]() { return text->renderedText().count(QLatin1Char('\n')) > 50; }, 3000);
             WPJ6_CHECK_NOTE(loaded, QStringLiteral("前置：文本页应载入 50 行以上"));
-            QPlainTextEdit* const edit = text->editor()->findChild<QPlainTextEdit*>();
-            WPJ6_CHECK_NOTE(edit != nullptr, QStringLiteral("前置：应能找到编辑器内部的 QPlainTextEdit"));
-            if (edit == nullptr)
+            auto* const canvas = text->canvas();
+            WPJ6_CHECK_NOTE(canvas != nullptr, QStringLiteral("前置：应能找到共享文本行画布"));
+            if (canvas == nullptr)
             {
                 return;
             }
-            QScrollBar* const bar = edit->verticalScrollBar();
+            QScrollBar* const bar = canvas->verticalScrollBar();
             WPJ6_CHECK_NOTE(bar->maximum() > 10, QStringLiteral("前置：编辑器应可滚动，maximum=%1").arg(bar->maximum()));
             bar->setValue(10);
             PumpFor(50);
@@ -363,7 +363,7 @@ namespace wpj6_test
             {
                 return;
             }
-            WPJ6_CHECK_NOTE(text->editor()->text().startsWith(QStringLiteral("OLDTARGET")),
+            WPJ6_CHECK_NOTE(text->renderedText().startsWith(QStringLiteral("OLDTARGET")),
                 QStringLiteral("前置：文本页应显示旧目标的内容"));
 
             // 回到十六进制页再换一个进程（不同 pid、不同代次）：此刻当前页不是子页，不会立刻重新跟随，
@@ -377,8 +377,8 @@ namespace wpj6_test
             {
                 WPJ6_CHECK_NOTE(StatusOf(textAfter, "ksMemwbTextStatus").contains(QStringLiteral("尚未定位")),
                     QStringLiteral("换目标后文本页应回到'尚未定位'，实际：%1").arg(StatusOf(textAfter, "ksMemwbTextStatus")));
-                WPJ6_CHECK_NOTE(textAfter->editor()->text().isEmpty(),
-                    QStringLiteral("换目标后文本页不应残留旧内容：'%1'").arg(textAfter->editor()->text().left(24)));
+                WPJ6_CHECK_NOTE(textAfter->renderedText().isEmpty(),
+                    QStringLiteral("换目标后文本页不应残留旧内容：'%1'").arg(textAfter->renderedText().left(24)));
             }
             view->hide();
         }
@@ -772,7 +772,7 @@ namespace wpj6_test
             }
             const bool rows = PumpUntil([disasm]() { return disasm->model()->rowCount() > 100; }, 3000);
             WPJ6_CHECK_NOTE(rows, QStringLiteral("前置：反汇编应解码出一百多行"));
-            QScrollBar* const bar = disasm->table()->verticalScrollBar();
+            QScrollBar* const bar = disasm->canvas()->verticalScrollBar();
             WPJ6_CHECK_NOTE(bar->maximum() > 20, QStringLiteral("前置：表格应可滚动，maximum=%1").arg(bar->maximum()));
             bar->setValue(20);
             PumpFor(50);

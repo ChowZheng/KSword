@@ -1,4 +1,4 @@
-"""Compare two metrics-v8 snapshots; invalid rows never become zero activity."""
+"""Compare two metrics-v9/v10 snapshots; invalid rows never become zero activity."""
 import argparse
 import json
 import pathlib
@@ -13,8 +13,8 @@ def read(path):
 
 def compare(first, second):
     for snapshot in (first, second):
-        if snapshot.get('version') != 9 or snapshot.get('backend') != 2:
-            raise ValueError('Matching AMD metrics v9 snapshots required')
+        if first.get('version') != second.get('version') or snapshot.get('version') not in (9, 10, 11) or snapshot.get('backend') != 2:
+            raise ValueError('Matching AMD metrics v9/v10 snapshots required')
     frequency = int(first['qpcFrequency'])
     ticks = int(second['snapshotBeginQpc']) - int(first['snapshotBeginQpc'])
     if frequency <= 0 or frequency != int(second['qpcFrequency']) or ticks <= 0:

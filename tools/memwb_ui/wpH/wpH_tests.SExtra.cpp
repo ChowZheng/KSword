@@ -54,9 +54,9 @@ namespace wpH_test
 
         QLineEdit* openEditorS(RigS& rig, const int row)
         {
-            rig.view.table()->setFocus();
-            rig.view.table()->setCurrentIndex(rig.view.model()->index(row, 2));
-            QTest::keyClick(rig.view.table(), Qt::Key_F2);
+            rig.view.canvas()->setFocus();
+            rig.view.canvas()->setSelectedRow(row);
+            QTest::keyClick(rig.view.canvas(), Qt::Key_F2);
             return qobject_cast<QLineEdit*>(QApplication::focusWidget());
         }
 

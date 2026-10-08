@@ -12,7 +12,7 @@
 #include "../UI/CodeEditorWidget.h"
 #include "../UI/DetailLayoutRegistry.h"
 // SSSDT 槽位的首次写入监视走与 SSDT 页同一个统一入口，调用页不碰 EPT 细节。
-#include "../UI/KvmWatchDialog.h"
+#include "../UI/HvmWatchDialog.h"
 #include "../theme.h"
 
 #include <QAbstractItemView>

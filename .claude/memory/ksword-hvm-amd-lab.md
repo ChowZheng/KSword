@@ -1,5 +1,82 @@
 # AMD 实验后端与重启续接
 
+## 2026-10-07 用户要求暂停以准备 release（实验已完整收尾）
+
+用户在继续NPT性能优化时要求优雅暂停准备release。尚未落任何general pool/叶组回收新源码；驱动源码停在189e3445，测试证据54213056，管理员工具ede19d01。外部其他UI/syscall未提交改动不属于本轮，保留未staged。
+
+Luna保存暂停status/metrics/log后，精确实验克隆soft stop20s无响应；root说明并授权只对该克隆hard stop一次。pause-finish-20261007-133815-773Z独立vmrun list=0及对应vmx进程消失确认OFF（hard工具ExitCode缺失不能当成功码）。随后stop rc0，32/32 executionStage6/resident0/lastStatus0；teardown rc0，prepared/resident/slatReady0；sc stop及独立query STOPPED。raw artifacts/amd-perf-20261007-vgif-fix-live/pause-finish-20261007-133815-773Z。无实体机重启/BCD变更，无其他VM操作。root写admin-session-20261007/stop.flag后ready.json已Stopped，PID1840管理员会话结束。
+
+release可保留已签候选artifacts/amd-perf-20261007-vgif-fix SYS/PDB/metrics-v11 CLI；不得用architecture事故候选。AMD仍实验范围：本轮只证实32CPU自检/常驻/退出及单核VM到logo，完整L2桌面/8vCPU、watch/shared-root未通过。续接重点来自已存数据：64table池FULL整根reset，9,499次/28s回收、NPTwalk75.52%；需后续capacity/增量回收实现，不直接关必要TLB失效或放宽权限。用户仅请求暂停，当前不自动做发行包/新动态验证。
+
+## 2026-10-07 vGIF 修复签后实测续接
+
+189e3445候选签后实际load/prepare/selftest32/accel ACTIVE32成功，SYS SHA5640b39a…88ec5，RSDS20387c97-4039-43e5-88fd-b169677f89d5 age1。单核8192MiB clone冷启进入EFI runtime/用户Windowslogo转圈；观察内未复现立即宿主硬锁，未确认桌面，不宣称完整OS/8CPU通过。raw artifacts/amd-perf-20261007-vgif-fix-live。启动异步采集先因busy optimization错误断言中止，后纯采样15份raw完整（最终摘要序列化失败不影响raw），再补两组三样本；未重复start/stop。最后三status32ACTIVE/lastStatus0，vgif0/watch0/flags0xb0005。flight与optimization瞬时各31/32有效，不可把无效行当无fault；可读flight未锁存。hotspot/perf选定三窗32完整。
+
+root按sample0/7/14实际27.9909994s算5,843,319退出/NPF4,964,126，root样本1,012,227,900 cycles，walk75.52%/sourceSync4.15%。cache59,742lookup/49,301hit/10,441reset/9,499poolrecycle，原general仍64table探针池、FULL整根清空重建是已见贡献项；不是所有NPF都已归因。VLS真实选中，所比窗口VMLOAD/VMSAVE退出消失。下一静态重点general pool容量与叶组回收/TLB，不只继续削VMLoad。详见docs/next/evidence/amd-vgif-fix-retry-20261007.md。
+
+用户洗澡要求一次提权后维持管理员会话。tools/hvm_lab/Start-LabAdminSession.ps1及Invoke-LabAdminCommand.ps1（commit ede19d01）已创建受当前用户/admin/SYSTEM ACL保护的脚本SHA队列；实际往返PID1840/adminTrue。当前会话artifacts/admin-session-20261007 ready.json，后续通过Invoke提交绝对脚本，无新UAC；Pending不得重复提交控制，脚本自行校验LASTEXITCODE/逐核结果。stop.flag只让worker完成当前命令后退出，不代表VM/driver停。当前VM/driver/adminworker保留，Luna已停止采集等待用户回来；不再动态换模式或重启。
+
+## 2026-10-07 vGIF 物理屏蔽修复候选
+
+用户授权修复重试。所有通用模式继续截获CLGI/STGI；machine/interrupt将HardwareGif强制0，闭GIF始终设置V_INTR_MASKING/hostIF0和NMI截获；accel只去VMLOAD/VMSAVE intercept，保留VLS/clean，vgifEntries为0。协议/模式不变；重试accel不带WATCH/FAST。新增生产overlay双模式屏蔽回归、coordinator实际CLGI→闭mask→STGI→开mask回归和accel拦截保留回归；修正此前仅编译的accel夹具页表缺少4KiB对齐。25 C目标+Python6项实际执行通过，accel42 checks；标准WDK x64/WX/API Universal/INF/CAT和integer gate238通过。
+
+候选artifacts/amd-perf-20261007-vgif-fix，与旧签后目录独立；CLI同metricsv11、help已同步。用户已签名done，签后不可重编。Luna负责现场，异步vmrun启动同步每2s采集；准备重试accel单核，不可先宣称硬锁已修复或性能通过。
+
+## 2026-10-07 architecture 首轮宿主硬锁分析
+
+781f28ee签后候选32/32 serial selftest及resident-svm-accel ACTIVE通过，VMware单核冷启动初始化期间宿主硬锁，用户硬重启后授权Enter-AmdLab再重启。现场artifacts/amd-perf-20261007-architecture-live与architecture-lockup；无本次dump，Kernel-Power41 BugcheckCode0，旧MEMORY.DMP不可当本次现场。最后metrics在VMstart之前，requested0xb0005不含WATCH/FAST，vGIF/VLS计数0不能排除随后启用。vmrun启动未返回，VMware自身日志证实CPL0/NPT及vcpu线程已创建；没有guest BIOS/OS通过证据。恢复后driver STOPPED、HypervisorFalse/VBS0。
+
+静态明确错误：interrupt prepare的!Gif&&!HardwareGif跳过physical INTR mask及NMI intercept，accel又删CLGI/STGI拦截；APM15.33.2 vGIF只控制虚拟中断，不能替代透明Windows宿主的physical GIF屏蔽。直接链接未改生产函数的无SVM夹具复现闭GIF时ForcedMask/V_INTR_MASKING/NMI三项从1变0。此为最强嫌疑，非已有硬件因果证明。后续保留CLGI/STGI软件拦截及物理mask，VLS另分门；仅改if仍不足以覆盖guest无exit CLGI。旧测试只查位值未覆盖物理语义。采集需与VM启动并发，不能等待vmrun返回再采。详细docs/next/evidence/amd-architecture-lockup-20261007.md。本轮只分析未改驱动未动态重试。
+
+## 2026-10-07 架构优化静态续接（测试禁止）
+
+用户要求把大幅优化路线全落代码、暂不测试。新增accel/watch/cache模块，独立硬件01/02、VLS/vGIF、私有clean四组、clone NPT01 CPU写保护/全核flush证明、增量叶表组失效、targeted guest-DPC双QUERY确认、VMCB identity共享NPT02根及跨核交接。root无分配/等待，dirty页永久回读到all-native start reset；原生期间写不能继承旧证明。CPU写之外DMA不在证明范围。64MiB表总预算含身份/clone/splits/CPUfallback/shared；注册表满回每CPU根，准备预算不足报错。
+
+入口prepare/resident-svm-accel单独选择物理加速；prepare/resident-svm-opt额外watch/shared cache/fast，准备启动必须匹配。主HVM仍v6，metricsv11，SYS/CLI/GUI/KswordCLI同批编译。selected计数不等于退出减少/性能/OS成功。25夹具仅--build-only编译，所有测试NOT_RUN；WDK/WX/API/CAT与integer gate238通过，未签未加载，无UAC/VM/重启。完整细节与后续测试门在docs/next/ksword-amd-nested-performance-plan.md末尾。候选artifacts/amd-perf-20261007-architecture；旧bulk签后驱动和VM现场保留，实时采集须继续用旧目录v10 CLI直到换版，新根目录CLI已v11。用户睡觉，不沿用早前关机指令。
+
+## 2026-10-07 bulk 实测与下一静态候选
+
+df1a584d签后装载/selftest32/profile ACTIVE32成功；clone1CPU/CPL0冷启动后5秒起采。用户反馈仍很慢、无明显改善，未确认桌面。原始artifacts/amd-perf-20261007-bulk/profile-live；摘要docs/next/evidence/amd-bulk-profile-20261007.json。32CPU perf/hotspot有效，两窗10.4242669/10.6282817秒，root样本632146950ticks，NPT12sync58.47%、permissions6.99%、fetch12.83%、NPTwalk6.26%；NPF+106536/+145326。cache各仅31CPU有效（完整性不能声明32），hits16432/16610与52505/52607，source-sync标志重置178/102，无pool回收。不是整体性能通过；不同boot阶段不能直接算加速倍数。
+
+代码发现源账本按发现次序穿插页，单页scratch会反复批读同页。下一静态候选按GPA排序插入源身份/value对，用binary去重，分组在NPF发布时完成，不把排序放进每次VMRUN。同步时低于4个源项的稀疏页保留exact-word，密集页一次批读；依旧全部校验、每VMRUN新捕获、Accessed-only容忍、overflow/conflict失效。真实publication夹具交错200词四页验证只4个page transport，加一稀疏页只1词读，后续末页权限改变仍reset。24 C目标/6 Python通过，session3897检查，WDK/API/INF/CAT零警告、integer gate229通过；未签候选artifacts/amd-perf-20261007-grouped，尚未加载。用户已去睡觉，最新要求只做理论/静态；VM与旧驱动保留，不再UAC/换版/重启，不沿用旧关机指令。
+
+## 2026-10-07 fast 硬件采样与收尾
+
+测量后的批量候选：权限图合并对齐时每次OR一个64位word，未对齐保留byte路径，disabled/null语义和IOPM尾页不变；物理整页读取保留volatile qword源读取，对齐私有输出用qword存储。NPT12源同步借每CPU预分配4KiB scratch，只在当前VMRUN内复用连续同页，仍通过NPT01/PAT/RAM和源路径回读；缺少回调/整页读取失败则原exact-word路径，不跨VMRUN保留证明。200词夹具只1次源页读、下一调用源变化仍reset；未对齐、失败fallback、Accessed容忍/权限frame/cache/NX/Dirty变化均测试。24 C目标与Python6项通过，permission999733/session3423 checks；标准64位WDK /WX/API Universal/INF/CAT无警告，fast integer gate229指令通过。候选artifacts/amd-perf-20261007-bulk尚未签/加载，metrics仍v10，CLI复用已编译版本；这些是离线结果，未证明性能改善。
+
+同一签后1c528dd3候选，profile全核stop/teardown后进入fast，32/32 self-test和ACTIVE通过。单核VM只到Windows标志转圈，用户描述静止，未进入桌面。原始证据artifacts/amd-perf-20261007-fast-live；两个QPC窗口10.9415527/10.9344453秒，快路EFER读190814、HSAVE读95359，证明整数快路执行，不证明XSTATE专项或完整L2通过。采样root786788100ticks，VMRUN48.72%、NPF39.25%；NPF新增963087/609072。启动早期漏采约109秒，A/B阶段不同且硬关机可能改变来宾恢复路径，不作整体加速结论。
+
+收尾实验VM已关，32核全部DEVIRTUALIZED，teardown资源/SLAT归零；SCM一度STOP_PENDING，用户正常退出KSword后16:07:35独立SCM确认STOPPED/exit0。final/gui-closed-recheck.txt是卸载完成证据，不能用此前STOP_PENDING替代。
+
+## 2026-10-06 P0/P1 实施续接（无实机操作）
+
+P1 已本地提交 `8646bd5c`，未推送：双页批量取指、VMRUN 首遍 identity-only、权限图清零减负及有限 writeback ranges。P0 增加一次性 TLB pending/成功硬件返回消费、NPT12 源账本重新验证（512 PTE 上限、溢出/变化保守 reset）、可选每64退出周期采样，metrics 升 v10，CLI `prepare-svm-profile/resident-svm-profile`。五段 root 软件周期、七个叶 detail、硬件 TLB0/1/3/7 完成计数；不测纯硬件 VMEXIT/VMRUN 和 guest 时间。分析器已改完整 JSONL/UTF16读取和相邻同代次差值，剔除无效/饱和/拓扑改变；去除 flight 时间伪权重，退出图含 NPF，不混生命周期。
+
+驱动标准64位MSVC/WDK Release /WX + x64 API Universal/INF/CAT通过；CLI/JSON/PS5CP936/命令门通过，宿主23测试目标及profile5项通过。候选 `artifacts/amd-perf-20261006-profile` 未签名未加载；GUI需要后续同步构建ABI v10。P2整数MSR快路已实装，见后述；VLS、vGIF、稳定01/02+clean未实装。用户暂时不能UAC，未触碰驱动/VM/启动配置。细节见性能计划末尾实施记录。
+
+## 2026-10-07 实体机周期采样首轮（参考模式，未启用 fast）
+
+用户签名后，Luna 用 `artifacts/amd-perf-20261007-fast` 的 1c528dd3/RSDS 6af862d1-e5f0-4522-9c0e-4d9ae9bd7a7a age5 候选真实加载；普通Authenticode证书时间失败仍记录，不能代替实际内核加载结果。LabHostReady / HypervisorFalse / VBS0 / bootId2026-10-07T07:00:30.5000000Z。32/32 sequential selftest与profile模式32/32 ACTIVE成功。VMX从8CPU冷态只改numvcpus/coresPerSocket=1，内存8192保持；vmrun真实启动，CPL0/NumVCPUs1；用户看到Windowslogo/转圈且有进展，**未确认桌面/完整L2 OS通过**。
+
+原始证据 `artifacts/amd-perf-20261007-profile-live`；独立摘要 `docs/next/evidence/amd-root-profile-20261007.json`。三份perf/hotspot各32CPU有效，两窗actualQPC10.6596797/10.7996037秒，不用10/20/40文件标签作间隔。3,867,015次退出，采样root910,090,475ticks；样本root成本L1 VMRUN72.73%、VMLOAD7.05%、VMSAVE7.01%、L2 NPF8.19%、MSR3.56%；内部permissions32.31%、NPT12sync30.04%、fetch14.52%。这些是周期性1/64样本的软件root分布，非walltime或纯VMEXIT硬件成本。第二窗cache仅30CPU可比，两CPU general序列busy不可当0活动；包括SourceSync触发reset471、pool0，不能把未检验累计计数做差。
+
+补采 `steady-1cpu` QPC12.9236/11.4020秒，32 ACTIVE、perf有效；NPF+943912/+1086009（约73k/95k每秒），无7f/INVALID/DF或首故障锁存，Tools曾短暂恢复再超时，仍无桌面证据。首轮软件瓶颈优先级已实测收敛到VMRUN权限图/源同步/取指，不能按MSR退出次数推断其占用最多。当前已授权Luna保存A-final并仅结束实验克隆，再按stop全核原生→teardown成功的顺序切换同一SYS `prepare-svm-fast/self-test/resident-svm-fast`，测试B单核；busy/不完整必须保留资源。尚无fast动态结果、profile本轮stop结果或8核新候选验收。
+
+## 2026-10-07 P2 整数叶续接（尚无动态结果）
+
+`prepare-svm-fast/resident-svm-fast`：独立 FAST_MSR=0x40000，强制 general+profile，prepare/start模式相等。Fast pointer CPU158h、Perf150h有C_ASSERT；eligible须L1idle无租约/队列/注入/NMI IRQ IRET窗口/TLB，保留固定GIF=0/1遮罩并核对完整INT_CTL/真实CR8。scalar叶仅EFER/HSAVE/XSS读及同值写，XSS仍查XSAVES；不取消MSRPM也不物理HSAVE passthrough，变值/不符/任何非MSR慢路。EFER读实时硬件LMA+虚拟SVME，同值写同步软件镜像。跳过XSTATE/mask和host/guest VMLOAD配对仅因叶不修改guest非自动状态；FastSubset计数包含在普通Hotspots内，ring只记录慢路。
+
+`audit_svm_fast.py` 是Link前必过机器码门：完整叶229整数指令，call/vector/x87/TLS=0、只能函数内部直跳；闭集禁止编译器后来引入 helper/SIMD。叶单独关闭LTCG/GS，无聚合复制，volatile scalar+compiler barrier保护读侧序列。24 C目标/208 fast准入与架构等价用例/6 profile+机器码门用例通过，87命令和生产JSON/PS5CP936通过。标准WDK Release /WX/x64ApiValidator/INF/CAT通过，候选仍在 `artifacts/amd-perf-20261006-profile`，未签未加载。动态测试必须对同一签后SYS分别profile/fast，先1核正常boot后8核；验证XSTATE、GF事件和native停止后状态，不把二进制无SIMD门当硬件PASS。
+
+## 2026-10-06 下一阶段性能研究（无实机操作）
+
+- 基线 `2c3d08c9`；与 `a5d7a2a7` 比较，SVM 算法源码和 metrics 结构没有差异。10 月 1 日主要为 GUI/准入接线。详细阶段方案在 `docs/next/ksword-amd-nested-performance-plan.md`。研究阶段只写文档，后续P0/P1静态实施见上节；不加载、重启、启动 VM 或请求 UAC；用户洗澡期间不可依赖其操作。
+- 重新计算 `artifacts/build-npt-transfer-v8-live/a.json,b.json`：10.3365066 秒、32 对有效 CPU。L1 total=1681507、MSR(0x7c)=885086，全部为 EFER/HSAVE/XSS；XSETBV161047、VMLOAD160807、VMSAVE80419、STGI/CLGI262551、VMRUN131038、CPUID559。L2 total137636、NPF21468。L1占退出次数92.43%，MSR占L1次数52.64%；不是耗时比例。NPT lookups131038/hits131031/resets7/跨CPU54/poolRecycle0。离线复算在忽略目录 `artifacts/amd-perf-research-20261006`，检验总数归属、版本/CPU集合、热点有效/偶数sequence/饱和/单调。
+- 更正历史 native-msr-v9 试验：0x80是VMRUN，不是MSR；从merged MSRPM抹掉L1-owned读取拦截违反嵌套归属，已在a5d7a2a7回滚，不能重用。v9样本NPF8852581/poolRecycle15925/epochChanged15222；不同guest阶段不能单凭对比下根因，Vix10054不单独证明VM崩溃。TSC/P-state不是v8的L1 MSR热点。
+- 优先路线：P0完整汇编/C阶段采样计时与分析器修正（现profile脚本只读首行并相加累计计数）；P1批量取指、VMRUN第一遍只resolve、位图清零/合并与白名单扫描减负；P2可证明仅用整数的L1短路径才可跳过XSTATE保存；P3 Virtual VMLOAD/VMSAVE；P4 vGIF；P5稳定VMCB01/02及dirty/clean。实体机历史CPUID bit5/15/16存在，VMware克隆bit15/16缺失，保留软件路径；不能把物理加速与对L1公开扩展混为一谈。
+- 开发前核对TLB：GeneralEntry反复读取捕获的VMCB12请求，可能在L0内部重入重复flush；按虚拟VMRUN建立一次性pending并正确消费。NPT01固定不证明NPT12固定；virtual flush需要源NPT12同步或保守失效，不能只清硬件TLB保留未经验证的NPT02。现TlbRequests在退出入口无条件递增，是退出/执行计数，不是实际flush次数。
+- Linux KVM固定69f80fef、NoirVisor固定08dd5ec6关键源码/版本hash在本机临时参考目录 `E:/Temp/ksword-amd-research-20261006`。KVM参考OR归属、virtual SVME控制VLS/vGIF、pending event与MMU同步；Noir嵌套STGI/CLGI仍有GIF FIXME，不当完整中断依据。以后1核通过直接8核，性能以同guest工作量/正常桌面和root周期判断，无新的硬件成功证据。
+
 ## 2026-10-01 AMD/Intel Dock 与常驻准入统一（离线交付）
 
 - GUI 已接通现有通用嵌套 SVM：AMD 的 PREPARE/START_RESIDENT 显式发送 ENABLE_NESTED_SVM，自检复用 SVM 路径；Intel 请求与偏好保持原后端语义。AMD 不携带 Intel EPT/VMFUNC/#VE/身份隐藏标志，旧驱动缺少能力位时关闭 AMD 嵌套入口。新增共享 featureFlags 位 54–58，不改协议版本或结构布局；支持、准备和全核实际启用分别由驱动资源/运行状态发布，Intel 嵌套与身份隐藏也读回实际运行状态。

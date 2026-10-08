@@ -1,11 +1,12 @@
 #include "KernelDisassemblyDialog.h"
 #include "MemoryEditorWidget.h"
+#include "MemoryWorkbench/WorkbenchDisasmView.h"
 #include "UI_All.h"
 
 #include "../ArkDriverClient/ArkDriverClient.h"
 #include "../theme.h"
 /* 统一入口：这一页不需要知道 GPA、EPT 叶或 ruleId。 */
-#include "KvmWatchDialog.h"
+#include "HvmWatchDialog.h"
 
 #include <QAbstractItemView>
 #include <QAction>
@@ -15,6 +16,7 @@
 #include <QLabel>
 #include <QMenu>
 #include <QMessageBox>
+#include <QPointer>
 #include <QStringList>
 #include <QTableWidget>
 #include <QTableWidgetItem>
@@ -40,6 +42,20 @@
 
 namespace
 {
+    QMessageBox::StandardButton ownedMessageBox(QWidget* owner, QMessageBox::Icon icon,
+        const QString& title, const QString& text,
+        QMessageBox::StandardButtons buttons = QMessageBox::Ok,
+        QMessageBox::StandardButton defaultButton = QMessageBox::NoButton)
+    {
+        // Modal event loops can retire an evidence window. QObject must never
+        // delete a dialog on the caller's stack as part of parent destruction.
+        QPointer<QMessageBox> box = new QMessageBox(icon, title, text, buttons, owner);
+        if (defaultButton != QMessageBox::NoButton) box->setDefaultButton(defaultButton);
+        const auto result = static_cast<QMessageBox::StandardButton>(box->exec());
+        if (box) delete box.data();
+        return result;
+    }
+
     QString bytesText(const QByteArray& bytes)
     {
         QStringList parts;
@@ -709,9 +725,6 @@ namespace ks::ui
         layout->addWidget(m_mutationStatusLabel);
         m_editor = new MemoryEditorWidget(this);
         m_editor->setEditable(false);
-        m_table = m_editor->instructionTable();
-        // Keep the kernel evidence actions and transaction gate in this owner.
-        disconnect(m_table, &QTableWidget::customContextMenuRequested, m_editor, nullptr);
         layout->addWidget(m_editor, 1);
         auto* buttons = new QDialogButtonBox(
             QDialogButtonBox::Close,
@@ -737,90 +750,50 @@ namespace ks::ui
                         originalBytes);
                 }
             });
-        connect(
-            m_table,
-            &QTableWidget::customContextMenuRequested,
-            this,
-            [this](const QPoint& position)
-            {
-                if (QTableWidgetItem* item =
-                        m_table->itemAt(position);
-                    item != nullptr)
-                {
-                    m_table->setCurrentCell(
-                        item->row(),
-                        0);
-                }
-                const auto selection = selectedByteRange();
-                if (!selection.has_value())
-                {
-                    return;
-                }
+        connect(m_editor->disassemblyView(), &WorkbenchDisasmView::architectureChanged,
+            this, [this](bool x64) {
+                ++m_snapshotRevision;
+                m_architecture = x64 ? DisassemblyArchitecture::X64 : DisassemblyArchitecture::X86;
+            });
+        connect(m_editor, &MemoryEditorWidget::instructionContextMenuAboutToShow,
+            this, [this](QMenu* menu, std::uint64_t, bool valid) {
+                const auto selection = valid ? selectedByteRange() : std::nullopt;
+                if (!selection) return;
+                // All owner actions capture a value snapshot before the menu's
+                // nested event loop. No table row index survives a refresh.
                 const auto revision = m_snapshotRevision;
-                QMenu menu(this);
-                menu.setStyleSheet(
-                    KswordTheme::ContextMenuStyle());
-                QAction* copyAddress = menu.addAction(
-                    QStringLiteral("复制地址"));
-                QAction* copyBytes = menu.addAction(
-                    QStringLiteral("复制原始字节"));
-                /*
-                 * 监视执行，而不是监视写。
-                 *
-                 * 在反汇编页选中的是一条**指令**，用户想知道的是"下一次谁执行
-                 * 到这里"。监视写在这里几乎总是错的：代码页平时没人写它，
-                 * 装上去只会永远等不到命中。
-                 */
-                menu.addSeparator();
-                QAction* watchExecute = menu.addAction(
-                    QStringLiteral("HVM 监视：下一次执行到这里"));
-                watchExecute->setToolTip(
-                    QStringLiteral("装一条首次访问监视，等下一次有人执行这一页时记下现场。EPT 是页粒度，所以实际监视的是这条指令所在的整个 4 KiB 页。"));
-                QAction* modify = nullptr;
-                if (m_kernelMutationEnabled)
-                {
-                    menu.addSeparator();
-                    QMenu* mutationMenu = menu.addMenu(
-                        QStringLiteral("字节事务"));
-                    modify = mutationMenu->addAction(
-                        QStringLiteral("修改所选字节…"));
-                }
-                QAction* selected = menu.exec(
-                    m_table->viewport()->mapToGlobal(position));
-                if (selected == copyAddress)
-                {
-                    QApplication::clipboard()->setText(
-                        addressText(selection->address));
-                }
-                else if (selected == copyBytes)
-                {
-                    QApplication::clipboard()->setText(
-                        bytesText(selection->originalBytes));
-                }
-                else if (selected == watchExecute && revision == m_snapshotRevision)
-                {
+                const auto architecture = m_editor->currentArchitecture();
+                const auto stillCurrent = [this, selection, revision, architecture]() {
+                    if (revision != m_snapshotRevision || architecture != m_editor->currentArchitecture()
+                        || selection->address < m_baseAddress) return false;
+                    const auto offset = selection->address - m_baseAddress;
+                    return offset <= static_cast<std::uint64_t>(m_originalBytes.size())
+                        && m_originalBytes.mid(static_cast<qsizetype>(offset), selection->originalBytes.size())
+                            == selection->originalBytes;
+                };
+                menu->addSeparator();
+                auto* watchExecute = menu->addAction(QStringLiteral("HVM 监视：下一次执行到这里"));
+                watchExecute->setToolTip(QStringLiteral("装一条首次访问监视，等下一次有人执行这一页时记下现场。EPT 是页粒度，所以实际监视的是这条指令所在的整个 4 KiB 页。"));
+                connect(watchExecute, &QAction::triggered, this, [this, selection, stillCurrent]() {
+                    if (!stillCurrent()) return;
                     HvmWatchRequest request;
                     request.virtualAddress = true;
                     request.address = selection->address;
-                    /*
-                     * 长度取这条指令的字节数，而不是整页。
-                     *
-                     * 它不改变硬件监视的范围，只让命中之后能回答"落在你选的
-                     * 这条指令上，还是同一页的别处" —— 而在一个满是代码的页上，
-                     * 这个区别几乎决定了证据有没有用。
-                     */
                     request.length = selection->originalBytes.isEmpty()
-                        ? 1U
-                        : static_cast<quint64>(selection->originalBytes.size());
+                        ? 1U : static_cast<quint64>(selection->originalBytes.size());
                     request.access = KSWORD_ARK_HVM_EPT_ACCESS_EXECUTE;
-                    request.label = QStringLiteral("%1 处的指令")
-                        .arg(addressText(selection->address));
+                    request.label = QStringLiteral("%1 处的指令").arg(addressText(selection->address));
                     openHvmWatch(this, request);
-                }
-                else if (modify != nullptr
-                    && selected == modify && revision == m_snapshotRevision && m_kernelMutationEnabled)
+                });
+                if (m_kernelMutationEnabled)
                 {
-                    emit requestModifyBytes(selection->address, selection->originalBytes);
+                    menu->addSeparator();
+                    auto* mutationMenu = menu->addMenu(QStringLiteral("字节事务"));
+                    auto* modify = mutationMenu->addAction(QStringLiteral("修改所选字节…"));
+                    connect(modify, &QAction::triggered, this, [this, selection, stillCurrent]() {
+                        if (!m_kernelMutationEnabled || !stillCurrent()) return;
+                        emit requestModifyBytes(selection->address, selection->originalBytes);
+                    });
                 }
             });
     }
@@ -833,8 +806,8 @@ namespace ks::ui
     {
         if (address == 0U || byteCount == 0U)
         {
-            QMessageBox::warning(
-                parent,
+            ownedMessageBox(
+                parent, QMessageBox::Warning,
                 QStringLiteral("指令视图"),
                 QStringLiteral("目标内核地址或读取长度无效。"));
             return;
@@ -848,14 +821,15 @@ namespace ks::ui
                 0U,
                 address,
                 boundedBytes,
-                KSWORD_ARK_MEMORY_READ_FLAG_KERNEL_ADDRESS
-                    | KSWORD_ARK_MEMORY_READ_FLAG_ZERO_FILL_UNREADABLE);
+                KSWORD_ARK_MEMORY_READ_FLAG_KERNEL_ADDRESS);
         if (!read.io.ok
-            || read.data.empty()
-            || read.bytesRead == 0U)
+            || read.readStatus != KSWORD_ARK_MEMORY_READ_STATUS_OK
+            || read.copyStatus != 0
+            || read.bytesRead != boundedBytes
+            || read.data.size() < static_cast<std::size_t>(boundedBytes))
         {
-            QMessageBox::warning(
-                parent,
+            ownedMessageBox(
+                parent, QMessageBox::Warning,
                 QStringLiteral("指令视图"),
                 QStringLiteral(
                     "R0 内核字节读取失败。\n"
@@ -873,22 +847,20 @@ namespace ks::ui
                         read.io.message)));
             return;
         }
-        const qsizetype snapshotBytes =
-            static_cast<qsizetype>(std::min<std::size_t>(
-                read.data.size(),
-                static_cast<std::size_t>(
-                    std::numeric_limits<int>::max())));
+        const qsizetype snapshotBytes = static_cast<qsizetype>(boundedBytes);
         const QByteArray snapshot(
             reinterpret_cast<const char*>(read.data.data()),
             snapshotBytes);
-        KernelDisassemblyDialog dialog(parent);
-        dialog.setSnapshot(
+        QPointer<KernelDisassemblyDialog> dialog = new KernelDisassemblyDialog(parent);
+        dialog->setSnapshot(
             snapshot,
             address,
             DisassemblyArchitecture::X64,
             sourceDescription);
-        dialog.setKernelMutationEnabled(true);
-        dialog.exec();
+        if (!dialog) return;
+        dialog->setKernelMutationEnabled(true);
+        dialog->exec();
+        if (dialog) delete dialog.data();
     }
 
     void KernelDisassemblyDialog::setSnapshot(
@@ -965,7 +937,6 @@ namespace ks::ui
                 m_originalBytes,
                 m_baseAddress,
                 m_architecture);
-        m_rows = result.rows;
         m_backendLabel->setText(
             QStringLiteral("解码后端：%1%2")
                 .arg(result.backendName)
@@ -981,7 +952,7 @@ namespace ks::ui
 
     void KernelDisassemblyDialog::executeKernelMutation(
         const std::uint64_t address,
-        const QByteArray& originalBytes)
+        QByteArray originalBytes)
     {
         if (!m_kernelMutationEnabled
             || originalBytes.isEmpty()
@@ -992,10 +963,11 @@ namespace ks::ui
             return;
         }
 
-        QDialog editor(this);
-        editor.setWindowTitle(QStringLiteral("内核字节事务"));
-        applyResponsiveWindowGeometry(&editor, this, QSize(860, 640), QSize(520, 380));
-        auto* layout = new QVBoxLayout(&editor);
+        const QPointer<KernelDisassemblyDialog> self(this);
+        QPointer<QDialog> editor = new QDialog(this);
+        editor->setWindowTitle(QStringLiteral("内核字节事务"));
+        applyResponsiveWindowGeometry(editor, this, QSize(860, 640), QSize(520, 380));
+        auto* layout = new QVBoxLayout(editor);
         auto* risk = new QLabel(
             QStringLiteral(
                 "目标：%1；快照长度：%2 字节。\n"
@@ -1006,7 +978,7 @@ namespace ks::ui
                 "其他 CPU 仍可能并发执行或修改目标。")
                 .arg(addressText(address))
                 .arg(originalBytes.size()),
-            &editor);
+            editor);
         risk->setWordWrap(true);
         risk->setStyleSheet(QStringLiteral(
             "QLabel{border:1px solid %1;border-radius:6px;"
@@ -1017,52 +989,52 @@ namespace ks::ui
             QStringLiteral(
                 "在统一编辑器中暂存字节或汇编修改；确认后沿用内核事务的"
                 "原始字节核对、dry-run、写后校验与回滚。"),
-            &editor);
+            editor);
         inputHint->setWordWrap(true);
         layout->addWidget(inputHint);
         const auto evidence = m_originalBytes;
         const auto evidenceBase = m_baseAddress;
         const auto evidenceArchitecture = m_editor->currentArchitecture();
         const auto evidenceRevision = m_snapshotRevision;
-        auto* input = new MemoryEditorWidget(&editor);
+        auto* input = new MemoryEditorWidget(editor);
         input->setSnapshot(originalBytes, address, evidenceArchitecture, address);
         input->setEditable(true);
         input->showDisassemblyAt(address);
         layout->addWidget(input, 1);
         auto* buttons = new QDialogButtonBox(
             QDialogButtonBox::Ok | QDialogButtonBox::Cancel,
-            &editor);
+            editor);
         layout->addWidget(buttons);
         connect(
             buttons,
             &QDialogButtonBox::accepted,
-            &editor,
+            editor.data(),
             &QDialog::accept);
         connect(
             buttons,
             &QDialogButtonBox::rejected,
-            &editor,
+            editor.data(),
             &QDialog::reject);
-        if (editor.exec() != QDialog::Accepted)
-        {
-            return;
-        }
+        const int editResult = editor->exec();
+        const QByteArray replacementBytes = self && editor && editResult == QDialog::Accepted
+            ? input->data() : QByteArray();
+        if (editor) delete editor.data();
+        if (!self || editResult != QDialog::Accepted) return;
 
         if (!m_kernelMutationEnabled || evidence != m_originalBytes
             || evidenceBase != m_baseAddress || evidenceArchitecture != m_editor->currentArchitecture()
             || evidenceRevision != m_snapshotRevision)
         {
-            QMessageBox::warning(
-                this,
+            ownedMessageBox(
+                this, QMessageBox::Warning,
                 QStringLiteral("内核字节事务"),
                 QStringLiteral("内核证据快照已变化，请重新选择字节后编辑。"));
             return;
         }
-        const QByteArray replacementBytes = input->data();
         if (replacementBytes.size() != originalBytes.size())
         {
-            QMessageBox::warning(
-                this,
+            ownedMessageBox(
+                this, QMessageBox::Warning,
                 QStringLiteral("内核字节事务"),
                 QStringLiteral(
                     "替换长度必须与所选原始指令一致（%1 字节），"
@@ -1078,8 +1050,8 @@ namespace ks::ui
         }
 
         const QMessageBox::StandardButton confirmed =
-            QMessageBox::warning(
-                this,
+            ownedMessageBox(
+                this, QMessageBox::Warning,
                 QStringLiteral("确认内核字节事务"),
                 QStringLiteral(
                     "即将修改内核虚拟地址 %1 的 %2 字节。\n"
@@ -1092,6 +1064,7 @@ namespace ks::ui
                     .arg(bytesText(replacementBytes)),
                 QMessageBox::Yes | QMessageBox::No,
                 QMessageBox::No);
+        if (!self) return;
         if (confirmed != QMessageBox::Yes)
         {
             m_mutationStatusLabel->setText(
@@ -1140,8 +1113,8 @@ namespace ks::ui
                 prepared);
             m_mutationStatusLabel->setText(
                 QStringLiteral("事务后端：%1").arg(detail));
-            QMessageBox::critical(
-                this,
+            ownedMessageBox(
+                this, QMessageBox::Critical,
                 QStringLiteral("内核字节事务"),
                 QStringLiteral(
                     "PREPARE 未通过；没有发出写入。\n%1")
@@ -1189,8 +1162,8 @@ namespace ks::ui
                 dryRun);
             m_mutationStatusLabel->setText(
                 QStringLiteral("事务后端：%1").arg(detail));
-            QMessageBox::critical(
-                this,
+            ownedMessageBox(
+                this, QMessageBox::Critical,
                 QStringLiteral("内核字节事务"),
                 QStringLiteral(
                     "dry-run 未通过；没有发出 FORCE 写入。\n%1")
@@ -1245,8 +1218,8 @@ namespace ks::ui
             m_mutationStatusLabel->setText(
                 QStringLiteral("事务后端：%1；%2")
                     .arg(detail, rollbackDetail));
-            QMessageBox::critical(
-                this,
+            ownedMessageBox(
+                this, QMessageBox::Critical,
                 QStringLiteral("内核字节事务"),
                 (restored
                     ? QStringLiteral(
@@ -1295,8 +1268,8 @@ namespace ks::ui
                     : QStringLiteral(
                         "事务后端：R3 写后复读不一致且回滚未验证；%1"))
                     .arg(rollbackDetail));
-            QMessageBox::critical(
-                this,
+            ownedMessageBox(
+                this, QMessageBox::Critical,
                 QStringLiteral("内核字节事务"),
                 (rollbackVerified
                     ? QStringLiteral(
@@ -1321,8 +1294,8 @@ namespace ks::ui
                     QStringLiteral("COMMIT"),
                     committed));
         m_mutationStatusLabel->setText(completedText);
-        QMessageBox::information(
-            this,
+        ownedMessageBox(
+            this, QMessageBox::Information,
             QStringLiteral("内核字节事务"),
             completedText);
     }

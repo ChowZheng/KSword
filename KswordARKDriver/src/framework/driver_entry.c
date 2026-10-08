@@ -14,13 +14,246 @@ Environment:
 
 --*/
 
+#include <ntifs.h>
 #include "ark/ark_driver.h"
 #include "ark/ark_mutation.h"
 #include "src/features/kernel/kernel_idt_baseline.h"
 #include "src/features/hvm/hvm_runtime.h"
 #include "src/features/debugger/debugger.h"
 #include "src/features/rxpf/rxpf_runtime.h"
+#include "src/features/storage_controller/controller.h"
 #include "driver_entry.tmh"
+
+typedef struct _KSWORD_ARK_CORE_LIFECYCLE {
+    EX_PUSH_LOCK Lock;
+    KSPIN_LOCK DeviceLock;
+    LIST_ENTRY ControllerDevices;
+    EX_RUNDOWN_REF Requests;
+    KEVENT ShutdownDone;
+    WDFDRIVER Driver;
+    PDRIVER_OBJECT DriverObject;
+    UNICODE_STRING RegistryPath;
+    WDFDEVICE ControlDevice;
+    ULONG ControllerCount;
+    BOOLEAN PnpProfile;
+    BOOLEAN EarlyInitialized;
+    BOOLEAN LateInitialized;
+    volatile LONG Retiring;
+    volatile LONG Ready;
+    volatile LONG ShutdownStarted;
+} KSWORD_ARK_CORE_LIFECYCLE;
+
+static KSWORD_ARK_CORE_LIFECYCLE g_KswordArkCore;
+static volatile LONG g_KswordArkTracingActive;
+static NTSTATUS KswordARKDriverStartCore(_In_ WDFDRIVER Driver);
+static VOID KswordARKDriverShutdownCore(VOID);
+
+/* An optional INF selects PnP before the image is loaded. Default stays SCM. */
+static NTSTATUS
+KswordARKDriverReadPnpProfile(
+    _In_ PUNICODE_STRING RegistryPath,
+    _Out_ BOOLEAN* PnpProfile)
+{
+    OBJECT_ATTRIBUTES attributes;
+    HANDLE serviceKey = NULL;
+    HANDLE parametersKey = NULL;
+    UNICODE_STRING parametersName = RTL_CONSTANT_STRING(L"Parameters");
+    UNICODE_STRING valueName = RTL_CONSTANT_STRING(L"StorageControllerPnP");
+    UCHAR buffer[sizeof(KEY_VALUE_PARTIAL_INFORMATION) + sizeof(ULONG)];
+    PKEY_VALUE_PARTIAL_INFORMATION value = (PKEY_VALUE_PARTIAL_INFORMATION)buffer;
+    ULONG resultBytes = 0U;
+    ULONG mode = 0U;
+    NTSTATUS status;
+
+    *PnpProfile = FALSE;
+    InitializeObjectAttributes(&attributes, RegistryPath,
+        OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, NULL, NULL);
+    status = ZwOpenKey(&serviceKey, KEY_QUERY_VALUE, &attributes);
+    if (!NT_SUCCESS(status)) {
+        return status;
+    }
+    InitializeObjectAttributes(&attributes, &parametersName,
+        OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, serviceKey, NULL);
+    status = ZwOpenKey(&parametersKey, KEY_QUERY_VALUE, &attributes);
+    ZwClose(serviceKey);
+    if (status == STATUS_OBJECT_NAME_NOT_FOUND || status == STATUS_OBJECT_PATH_NOT_FOUND) {
+        return STATUS_SUCCESS;
+    }
+    if (!NT_SUCCESS(status)) {
+        return status;
+    }
+    status = ZwQueryValueKey(parametersKey, &valueName, KeyValuePartialInformation,
+        buffer, sizeof(buffer), &resultBytes);
+    ZwClose(parametersKey);
+    if (status == STATUS_OBJECT_NAME_NOT_FOUND) {
+        return STATUS_SUCCESS;
+    }
+    if (!NT_SUCCESS(status)) {
+        return status;
+    }
+    if (resultBytes < FIELD_OFFSET(KEY_VALUE_PARTIAL_INFORMATION, Data) + sizeof(mode) ||
+        value->Type != REG_DWORD || value->DataLength != sizeof(mode)) {
+        return STATUS_INVALID_PARAMETER;
+    }
+    RtlCopyMemory(&mode, value->Data, sizeof(mode));
+    if (mode > 1U) {
+        return STATUS_INVALID_PARAMETER;
+    }
+    *PnpProfile = mode != 0U;
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS
+KswordARKDriverInitializeCoreLifecycle(
+    _In_ PDRIVER_OBJECT DriverObject,
+    _In_ PUNICODE_STRING RegistryPath)
+{
+    NTSTATUS status;
+
+    RtlZeroMemory(&g_KswordArkCore, sizeof(g_KswordArkCore));
+    ExInitializePushLock(&g_KswordArkCore.Lock);
+    KeInitializeSpinLock(&g_KswordArkCore.DeviceLock);
+    InitializeListHead(&g_KswordArkCore.ControllerDevices);
+    ExInitializeRundownProtection(&g_KswordArkCore.Requests);
+    KeInitializeEvent(&g_KswordArkCore.ShutdownDone, NotificationEvent, FALSE);
+    g_KswordArkCore.DriverObject = DriverObject;
+    status = KswordARKDriverReadPnpProfile(RegistryPath, &g_KswordArkCore.PnpProfile);
+    if (!NT_SUCCESS(status)) {
+        return status;
+    }
+    if (RegistryPath->Length > MAXUSHORT - sizeof(WCHAR)) {
+        return STATUS_NAME_TOO_LONG;
+    }
+    g_KswordArkCore.RegistryPath.MaximumLength =
+        (USHORT)(RegistryPath->Length + sizeof(WCHAR));
+    g_KswordArkCore.RegistryPath.Buffer = KswordARKAllocateNonPagedPool(
+        g_KswordArkCore.RegistryPath.MaximumLength, 'lfSK');
+    if (g_KswordArkCore.RegistryPath.Buffer == NULL) {
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+    RtlZeroMemory(g_KswordArkCore.RegistryPath.Buffer,
+        g_KswordArkCore.RegistryPath.MaximumLength);
+    RtlCopyMemory(g_KswordArkCore.RegistryPath.Buffer,
+        RegistryPath->Buffer, RegistryPath->Length);
+    g_KswordArkCore.RegistryPath.Length = RegistryPath->Length;
+    return STATUS_SUCCESS;
+}
+
+BOOLEAN
+KswordARKDriverCoreEnterRequest(VOID)
+{
+    if (g_KswordArkCore.Retiring || !g_KswordArkCore.Ready ||
+        !ExAcquireRundownProtection(&g_KswordArkCore.Requests)) {
+        return FALSE;
+    }
+    if (g_KswordArkCore.Retiring || !g_KswordArkCore.Ready) {
+        ExReleaseRundownProtection(&g_KswordArkCore.Requests);
+        return FALSE;
+    }
+    return TRUE;
+}
+
+VOID
+KswordARKDriverCoreLeaveRequest(VOID)
+{
+    ExReleaseRundownProtection(&g_KswordArkCore.Requests);
+}
+
+BOOLEAN
+KswordARKDriverCoreIsControllerDevice(
+    _In_ WDFDEVICE Device)
+{
+    PLIST_ENTRY entry;
+    KIRQL irql;
+    BOOLEAN found = FALSE;
+
+    KeAcquireSpinLock(&g_KswordArkCore.DeviceLock, &irql);
+    for (entry = g_KswordArkCore.ControllerDevices.Flink;
+         entry != &g_KswordArkCore.ControllerDevices; entry = entry->Flink) {
+        KSCC_DEVICE_CONTEXT* context =
+            CONTAINING_RECORD(entry, KSCC_DEVICE_CONTEXT, CoreLink);
+        if (context->Device == Device) {
+            found = TRUE;
+            break;
+        }
+    }
+    KeReleaseSpinLock(&g_KswordArkCore.DeviceLock, irql);
+    return found;
+}
+
+NTSTATUS
+KswordARKDriverCoreAttachController(
+    _In_ WDFDEVICE Device)
+{
+    KSCC_DEVICE_CONTEXT* context = KsccGetContext(Device);
+    NTSTATUS status = STATUS_SUCCESS;
+    KIRQL irql;
+
+    KeEnterCriticalRegion();
+    ExAcquirePushLockExclusive(&g_KswordArkCore.Lock);
+    if (!g_KswordArkCore.PnpProfile || g_KswordArkCore.Retiring) {
+        status = STATUS_DELETE_PENDING;
+    } else if (!context->CoreRegistered) {
+        KeAcquireSpinLock(&g_KswordArkCore.DeviceLock, &irql);
+        InsertTailList(&g_KswordArkCore.ControllerDevices, &context->CoreLink);
+        context->CoreRegistered = TRUE;
+        g_KswordArkCore.ControllerCount += 1U;
+        KeReleaseSpinLock(&g_KswordArkCore.DeviceLock, irql);
+        if (g_KswordArkCore.ControlDevice == WDF_NO_HANDLE) {
+            status = KswordARKDriverStartCore(g_KswordArkCore.Driver);
+            if (!NT_SUCCESS(status)) {
+                InterlockedExchange(&g_KswordArkCore.Retiring, TRUE);
+            }
+        }
+    }
+    ExReleasePushLockExclusive(&g_KswordArkCore.Lock);
+    KeLeaveCriticalRegion();
+    if (!NT_SUCCESS(status) && g_KswordArkCore.Retiring) {
+        KswordARKDriverShutdownCore();
+    }
+    return status;
+}
+
+VOID
+KswordARKDriverCoreDetachController(
+    _In_ WDFDEVICE Device)
+{
+    KSCC_DEVICE_CONTEXT* context = KsccGetContext(Device);
+    WDFDEVICE controlDevice = WDF_NO_HANDLE;
+    KIRQL irql;
+    BOOLEAN last = FALSE;
+
+    if (!context->CoreRegistered) {
+        return;
+    }
+    KeEnterCriticalRegion();
+    ExAcquirePushLockExclusive(&g_KswordArkCore.Lock);
+    if (context->CoreRegistered) {
+        KeAcquireSpinLock(&g_KswordArkCore.DeviceLock, &irql);
+        RemoveEntryList(&context->CoreLink);
+        InitializeListHead(&context->CoreLink);
+        context->CoreRegistered = FALSE;
+        g_KswordArkCore.ControllerCount -= 1U;
+        KeReleaseSpinLock(&g_KswordArkCore.DeviceLock, irql);
+        if (g_KswordArkCore.PnpProfile && g_KswordArkCore.ControllerCount == 0U) {
+            InterlockedExchange(&g_KswordArkCore.Retiring, TRUE);
+            InterlockedExchange(&g_KswordArkCore.Ready, FALSE);
+            controlDevice = g_KswordArkCore.ControlDevice;
+            g_KswordArkCore.ControlDevice = WDF_NO_HANDLE;
+            last = TRUE;
+        }
+    }
+    ExReleasePushLockExclusive(&g_KswordArkCore.Lock);
+    KeLeaveCriticalRegion();
+    if (last) {
+        /* Global callbacks still need the CDO and its child queues/locks. */
+        KswordARKDriverShutdownCore();
+        if (controlDevice != WDF_NO_HANDLE) {
+            WdfIoQueuePurgeSynchronously(WdfDeviceGetDefaultQueue(controlDevice));
+            WdfObjectDelete(controlDevice);
+        }
+    }
+}
 
 #ifdef ALLOC_PRAGMA
 #pragma alloc_text (INIT, DriverEntry)
@@ -56,11 +289,11 @@ Return Value:
     NTSTATUS status;
     WDF_OBJECT_ATTRIBUTES attributes;
     WDFDRIVER driverHandle = WDF_NO_HANDLE;
-    WDFDEVICE controlDevice = WDF_NO_HANDLE;
     ULONG osBuildNumber = 0UL;
 
     // Initialize WPP tracing as soon as possible.
     WPP_INIT_TRACING(DriverObject, RegistryPath);
+    InterlockedExchange(&g_KswordArkTracingActive, TRUE);
     // 第一条 breadcrumb 必须先于任何可能失败的初始化，否则无法区分
     // “驱动根本没进 DriverEntry（签名/CI/导入/KMDF 绑定）”和“进来后某一步失败”。
     KswordArkStartupBreadcrumbInitialize(DriverObject, RegistryPath);
@@ -72,8 +305,18 @@ Return Value:
     if (osBuildNumber != 0UL && osBuildNumber < KSWORD_ARK_MINIMUM_SUPPORTED_OS_BUILD) {
         TraceEvents(TRACE_LEVEL_ERROR, TRACE_DRIVER,
             "Unsupported OS build %lu, KswordARK requires 16299 or newer", osBuildNumber);
-        WPP_CLEANUP(DriverObject);
+        if (InterlockedExchange(&g_KswordArkTracingActive, FALSE)) {
+            WPP_CLEANUP(DriverObject);
+        }
         return KswordArkStartupFailure(KswordArkStartStageOsVersionCheck, STATUS_NOT_SUPPORTED);
+    }
+
+    status = KswordARKDriverInitializeCoreLifecycle(DriverObject, RegistryPath);
+    if (!NT_SUCCESS(status)) {
+        if (InterlockedExchange(&g_KswordArkTracingActive, FALSE)) {
+            WPP_CLEANUP(DriverObject);
+        }
+        return KswordArkStartupFailure(KswordArkStartStageWdfDriverCreate, status);
     }
 
     KswordARKCapabilityInitialize();
@@ -132,8 +375,10 @@ Return Value:
     WDF_OBJECT_ATTRIBUTES_INIT(&attributes);
     attributes.EvtCleanupCallback = KswordARKDriverEvtDriverContextCleanup;
 
-    WDF_DRIVER_CONFIG_INIT(&config, WDF_NO_EVENT_CALLBACK);
-    config.DriverInitFlags = WdfDriverInitNonPnpDriver;
+    g_KswordArkCore.EarlyInitialized = TRUE;
+    WDF_DRIVER_CONFIG_INIT(&config,
+        g_KswordArkCore.PnpProfile ? KsccEvtDeviceAdd : WDF_NO_EVENT_CALLBACK);
+    config.DriverInitFlags = g_KswordArkCore.PnpProfile ? 0U : WdfDriverInitNonPnpDriver;
     config.EvtDriverUnload = KswordARKDriverEvtDriverUnload;
 
     KswordArkStartupStage(KswordArkStartStageWdfDriverCreate);
@@ -145,64 +390,50 @@ Return Value:
         &driverHandle);
     if (!NT_SUCCESS(status)) {
         TraceEvents(TRACE_LEVEL_ERROR, TRACE_DRIVER, "WdfDriverCreate failed %!STATUS!", status);
-        // 框架失败时对称撤销系统变速状态，确保维护 DPC 不会残留。
-        /* No RXPF exception-visible allocation may survive DriverEntry failure. */
-        KswRxpfRuntimeUninitialize();
-        KswordARKPlatformAuditUninitialize();
-        KswordARKSystemTimeUninitialize();
-        // 中文说明：框架创建失败时撤销通信控制状态和所有潜在引用。
-        // 先恢复映像字段和加载器链，再恢复 IRP/communication 槽位。
-        KswordARKDriverImageUninitialize();
-        KswordARKDriverDispatchUninitialize();
-        KswordARKDriverCommunicationUninitialize();
-        // Release the optional HVM capability state on early framework failure.
-        KswordARKHvmUninitialize();
-        // Release the boot-captured IDT table when framework creation fails.
-        KswordARKIdtBaselineUninitialize();
-        // DriverEntry 失败时关闭 APC 接收状态，保持初始化与退出路径对称。
-        KswordARKThreadApcUninitialize();
-        WPP_CLEANUP(DriverObject);
+        KswordARKDriverShutdownCore();
+        if (InterlockedExchange(&g_KswordArkTracingActive, FALSE)) {
+            WPP_CLEANUP(DriverObject);
+        }
         return KswordArkStartupFailure(KswordArkStartStageWdfDriverCreate, status);
     }
 
-    /*
-     * Bind resident-HVM lifecycle guards only after KMDF installs the final
-     * DriverUnload entry.  Failure keeps resident VMX disabled without taking
-     * down the rest of the driver.
-     */
-    status = KswordARKHvmEnableResidentLifecycle(DriverObject);
-    if (!NT_SUCCESS(status)) {
-        TraceEvents(
-            TRACE_LEVEL_WARNING,
-            TRACE_DRIVER,
-            "Resident HVM lifecycle unavailable %!STATUS!",
-            status);
+    g_KswordArkCore.Driver = driverHandle;
+    /* PnP removal can retire this image; resident HVM must not pin its unload. */
+    if (!g_KswordArkCore.PnpProfile) {
+        status = KswordARKHvmEnableResidentLifecycle(DriverObject);
+        if (!NT_SUCCESS(status)) {
+            TraceEvents(TRACE_LEVEL_WARNING, TRACE_DRIVER,
+                "Resident HVM lifecycle unavailable %!STATUS!", status);
+        }
     }
+    if (g_KswordArkCore.PnpProfile) {
+        /* No orphan CDO: the first successfully created FDO starts the core. */
+        KswordArkStartupReady();
+        return STATUS_SUCCESS;
+    }
+    status = KswordARKDriverStartCore(driverHandle);
+    if (!NT_SUCCESS(status)) {
+        KswordARKDriverShutdownCore();
+    }
+    return status;
+}
 
+static NTSTATUS
+KswordARKDriverStartCore(
+    _In_ WDFDRIVER Driver)
+{
+    WDFDEVICE controlDevice = WDF_NO_HANDLE;
+    NTSTATUS status;
     // 控制设备的内部阶段由 KswordARKDriverCreateControlDevice 自己登记，
     // 失败时它已经写好 breadcrumb，这里只做资源回滚。
-    status = KswordARKDriverCreateControlDevice(driverHandle, &controlDevice);
+    status = KswordARKDriverCreateControlDevice(Driver, &controlDevice);
     if (!NT_SUCCESS(status)) {
-        TraceEvents(TRACE_LEVEL_ERROR, TRACE_DRIVER, "KswordARKDriverCreateControlDevice failed %!STATUS!", status);
-        // 控制设备不可见时不会有合法变速请求，立即释放其运行时状态。
-        /* Restore any RXPF shadow IDT before the driver image can be discarded. */
-        KswRxpfRuntimeUninitialize();
-        KswordARKPlatformAuditUninitialize();
-        KswordARKSystemTimeUninitialize();
-        // 中文说明：控制设备创建失败时不保留通信控制全局状态。
-        // 映像事务可能持有其它 DriverObject 引用，必须在失败返回前释放。
-        KswordARKDriverImageUninitialize();
-        KswordARKDriverDispatchUninitialize();
-        KswordARKDriverCommunicationUninitialize();
-        // Release the optional HVM capability state on early device failure.
-        KswordARKHvmUninitialize();
-        // Release the boot-captured IDT table when the control device is absent.
-        KswordARKIdtBaselineUninitialize();
-        // 控制设备不可用时不会接受线程请求，立即关闭 APC 生命周期管理。
-        KswordARKThreadApcUninitialize();
-        WPP_CLEANUP(DriverObject);
+        TraceEvents(TRACE_LEVEL_ERROR, TRACE_DRIVER,
+            "KswordARKDriverCreateControlDevice failed %!STATUS!", status);
         return status;
     }
+    g_KswordArkCore.ControlDevice = controlDevice;
+    g_KswordArkCore.LateInitialized = TRUE;
 
     // 进程保护挂在对象回调的前置例程上，必须先于回调注册建好状态，
     // 否则回调一挂上就可能读到尚未初始化的配置。分配失败只关闭保护能力。
@@ -231,24 +462,24 @@ Return Value:
     // 把实际注册成功的回调能力写进 breadcrumb，用户报告缺功能时可直接对照。
     KswordArkStartupNoteCallbackMask(KswordARKCallbackGetRegisteredMask());
 
-    status = KswordARKRedirectInitialize(DriverObject, controlDevice);
+    status = KswordARKRedirectInitialize(g_KswordArkCore.DriverObject, controlDevice);
     if (!NT_SUCCESS(status)) {
         TraceEvents(TRACE_LEVEL_WARNING, TRACE_DRIVER, "KswordARKRedirectInitialize recorded failure %!STATUS!", status);
     }
 
-    status = KswordARKNetworkInitialize(DriverObject, controlDevice);
+    status = KswordARKNetworkInitialize(g_KswordArkCore.DriverObject, controlDevice);
     if (!NT_SUCCESS(status)) {
         TraceEvents(TRACE_LEVEL_WARNING, TRACE_DRIVER, "KswordARKNetworkInitialize recorded failure %!STATUS!", status);
     }
 
-    status = KswordARKFileMonitorInitialize(DriverObject, RegistryPath, controlDevice);
+    status = KswordARKFileMonitorInitialize(g_KswordArkCore.DriverObject, &g_KswordArkCore.RegistryPath, controlDevice);
     if (!NT_SUCCESS(status)) {
         TraceEvents(TRACE_LEVEL_WARNING, TRACE_DRIVER, "KswordARKFileMonitorInitialize recorded failure %!STATUS!", status);
     }
 
 #if KSWORD_ARK_BUGCHECK_DIAGNOSTICS_ENABLED
     // DriverEntry 只准备按需安装控制器，避免普通加载时扫描私有 BGP 字段或注册蓝屏回调。
-    status = KswordARKBugcheckControlInitialize(DriverObject, controlDevice);
+    status = KswordARKBugcheckControlInitialize(g_KswordArkCore.DriverObject, controlDevice);
     if (!NT_SUCCESS(status)) {
         TraceEvents(
             TRACE_LEVEL_WARNING,
@@ -270,6 +501,7 @@ Return Value:
 
     // 所有运行时都已建立后才让控制设备对用户态可见。
     KswordArkStartupStage(KswordArkStartStageControlDevicePublish);
+    InterlockedExchange(&g_KswordArkCore.Ready, TRUE);
     KswordARKDriverPublishControlDevice(controlDevice);
 
     // 终态记录会覆盖上一次启动留下的失败记录。
@@ -278,29 +510,22 @@ Return Value:
     return STATUS_SUCCESS;
 }
 
-VOID
-KswordARKDriverEvtDriverUnload(
-    _In_ WDFDRIVER Driver
-    )
-/*++
 
-Routine Description:
-
-    Called when SCM requests to unload the non-PnP control driver.
-
-Arguments:
-
-    Driver - Handle to a WDF Driver object.
-
-Return Value:
-
-    VOID
-
---*/
+static VOID
+KswordARKDriverShutdownCore(VOID)
 {
-    UNREFERENCED_PARAMETER(Driver);
-
     PAGED_CODE();
+    if (InterlockedCompareExchange(&g_KswordArkCore.ShutdownStarted, TRUE, FALSE)) {
+        KeWaitForSingleObject(&g_KswordArkCore.ShutdownDone, Executive,
+            KernelMode, FALSE, NULL);
+        return;
+    }
+    InterlockedExchange(&g_KswordArkCore.Retiring, TRUE);
+    InterlockedExchange(&g_KswordArkCore.Ready, FALSE);
+    ExWaitForRundownProtectionRelease(&g_KswordArkCore.Requests);
+    if (!g_KswordArkCore.EarlyInitialized) {
+        goto Finalize;
+    }
 
     /* Restore every RXPF shadow IDTR and drain #PF readers before other teardown. */
     KswRxpfRuntimeUninitialize();
@@ -317,38 +542,60 @@ Return Value:
     // Release all VMX/VMCS/EPT pages before the driver image can leave memory.
     KswordARKHvmUninitialize();
     // IOCTL 已停止后释放只读 IDT 基线，避免卸载后保留本驱动分配。
-    KswordARKDebuggerShutdown();
+    if (g_KswordArkCore.LateInitialized) {
+        KswordARKDebuggerShutdown();
+    }
     KswordARKIdtBaselineUninitialize();
     // 释放危险写事务为防 PID 复用而持有的请求进程对象引用。
-    KswordARKMutationUninitialize();
+    if (g_KswordArkCore.LateInitialized) {
+        KswordARKMutationUninitialize();
+    }
     // 随后停止并排空所有可能回调到本驱动映像的线程终止 APC。
     KswordARKThreadApcUninitialize();
     // 目录枚举可能缓存了一个用于续扫的目录句柄，卸载前必须关闭。
-    KswordARKDriverResetDirectoryScanCache();
+    if (g_KswordArkCore.LateInitialized) {
+        KswordARKDriverResetDirectoryScanCache();
 
 #if KSWORD_ARK_BUGCHECK_DIAGNOSTICS_ENABLED
-    // 先还原 Guard 入口与 Shield 回调，再撤销 BGP 资源。
-    KswordARKBugcheckGuardUninitialize();
-    KswordARKBugcheckShieldUninitialize();
-    KswordARKBugcheckControlUninitialize();
+        // 先还原 Guard 入口与 Shield 回调，再撤销 BGP 资源。
+        KswordARKBugcheckGuardUninitialize();
+        KswordARKBugcheckShieldUninitialize();
+        KswordARKBugcheckControlUninitialize();
 #endif
 
-    // 必须先注销内核调试回调，防止后续卸载阶段再次进入本驱动代码。
-    KswordARKDebugOutputUninitialize();
-    TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_DRIVER, "%!FUNC! Entry");
-    KswordARKNetworkUninitialize();
-    KswordARKRedirectUninitialize();
-    // 先注销会进入回调规则层的 minifilter，并等待其 post-operation 回调全部退出。
-    KswordARKFileMonitorUninitialize();
-    // minifilter 已停止后才销毁 callback runtime，避免 post-operation 路径访问已释放状态。
-    KswordARKCallbackUninitialize();
-    // 对象回调已在上一步注销完毕，此时再没有前置例程会读保护配置，可以安全释放。
-    KswordARKProcessProtectUninitialize();
-    // 剪贴板策略没有注册任何回调，卸载顺序上不依赖其它模块，这里跟着一起收尾即可。
-    KswordARKClipboardPolicyUninitialize();
-    KswordARKDynDataUninitialize();
-    TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_DRIVER, "%!FUNC! Exit");
+        // 必须先注销内核调试回调，防止后续卸载阶段再次进入本驱动代码。
+        KswordARKDebugOutputUninitialize();
+        TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_DRIVER, "%!FUNC! Entry");
+        KswordARKNetworkUninitialize();
+        KswordARKRedirectUninitialize();
+        // 先注销会进入回调规则层的 minifilter，并等待其 post-operation 回调全部退出。
+        KswordARKFileMonitorUninitialize();
+        // minifilter 已停止后才销毁 callback runtime，避免 post-operation 路径访问已释放状态。
+        KswordARKCallbackUninitialize();
+        // 对象回调已在上一步注销完毕，此时再没有前置例程会读保护配置，可以安全释放。
+        KswordARKProcessProtectUninitialize();
+        // 剪贴板策略没有注册任何回调，卸载顺序上不依赖其它模块，这里跟着一起收尾即可。
+        KswordARKClipboardPolicyUninitialize();
+        KswordARKDynDataUninitialize();
+        TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_DRIVER, "%!FUNC! Exit");
+    }
+
+Finalize:
+    if (g_KswordArkCore.RegistryPath.Buffer != NULL) {
+        ExFreePoolWithTag(g_KswordArkCore.RegistryPath.Buffer, 'lfSK');
+        RtlZeroMemory(&g_KswordArkCore.RegistryPath, sizeof(g_KswordArkCore.RegistryPath));
+    }
+    KeSetEvent(&g_KswordArkCore.ShutdownDone, IO_NO_INCREMENT, FALSE);
 }
+
+VOID
+KswordARKDriverEvtDriverUnload(
+    _In_ WDFDRIVER Driver)
+{
+    UNREFERENCED_PARAMETER(Driver);
+    KswordARKDriverShutdownCore();
+}
+
 
 VOID
 KswordARKDriverEvtDriverContextCleanup(
@@ -376,6 +623,9 @@ Return Value:
 
     TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_DRIVER, "%!FUNC! Entry");
 
-    // Stop WPP tracing.
-    WPP_CLEANUP(WdfDriverWdmGetDriverObject((WDFDRIVER)DriverObject));
+    KswordARKDriverShutdownCore();
+    // DriverEntry failure and ordinary unload can both reach this callback.
+    if (InterlockedExchange(&g_KswordArkTracingActive, FALSE)) {
+        WPP_CLEANUP(WdfDriverWdmGetDriverObject((WDFDRIVER)DriverObject));
+    }
 }

@@ -4,11 +4,20 @@
 #include "HexCanvasFormat.h"
 
 #include <QChar>
+#include <QFontDatabase>
 #include <QRegularExpression>
 #include <QStringList>
 
 namespace ks::ui::hexcanvas_format
 {
+    QFont BuildFixedFont()
+    {
+        QFont font = QFontDatabase::systemFont(QFontDatabase::FixedFont);
+        font.setStyleHint(QFont::Monospace);
+        font.setFixedPitch(true);
+        font.setFamilies(QStringList{QStringLiteral("Consolas"), font.family(), QStringLiteral("Microsoft YaHei UI")});
+        return font;
+    }
     namespace
     {
         // kHexDigits：大写十六进制字符表，按半字节取值索引。

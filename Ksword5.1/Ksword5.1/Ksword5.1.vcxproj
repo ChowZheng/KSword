@@ -97,7 +97,7 @@
     </ClCompile>
     <Link>
       <AdditionalLibraryDirectories>$(QTDIR)\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>qtadvanceddockingd.lib;Ole32.lib;Shell32.lib;Advapi32.lib;Setupapi.lib;Crypt32.lib;ImageHlp.lib;Propsys.lib;Wintrust.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>qtadvanceddockingd.lib;Ole32.lib;Shell32.lib;Advapi32.lib;Authz.lib;Secur32.lib;Netapi32.lib;Userenv.lib;Setupapi.lib;Crypt32.lib;ImageHlp.lib;Propsys.lib;Wintrust.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <AdditionalOptions>"/MANIFESTDEPENDENCY:type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' publicKeyToken='6595b64144ccf1df' language='*' processorArchitecture='*'" %(AdditionalOptions)</AdditionalOptions>
     </Link>
   </ItemDefinitionGroup>
@@ -118,7 +118,7 @@
     </ClCompile>
     <Link>
       <AdditionalLibraryDirectories>$(QTDIR)\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>qtadvanceddocking.lib;Ole32.lib;Shell32.lib;Advapi32.lib;Setupapi.lib;Crypt32.lib;ImageHlp.lib;Propsys.lib;Wintrust.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>qtadvanceddocking.lib;Ole32.lib;Shell32.lib;Advapi32.lib;Authz.lib;Secur32.lib;Netapi32.lib;Userenv.lib;Setupapi.lib;Crypt32.lib;ImageHlp.lib;Propsys.lib;Wintrust.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <AdditionalOptions>"/MANIFESTDEPENDENCY:type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' publicKeyToken='6595b64144ccf1df' language='*' processorArchitecture='*'" %(AdditionalOptions)</AdditionalOptions>
       <UACUIAccess>false</UACUIAccess>
     </Link>
@@ -242,7 +242,7 @@
     <ClCompile Include="KernelDock\KernelPlatformAuditTab.cpp" />
     <ClCompile Include="KernelDock\KernelHvmTab.Experimental.cpp" />
     <ClCompile Include="KernelDock\KernelHvmTab.Formatting.cpp" />
-    <ClCompile Include="KvmDock\KvmDock.cpp" />
+    <ClCompile Include="HvmDock\HvmDock.cpp" />
     <ClCompile Include="KernelDock\KernelIoctlDecoderTab.cpp" />
     <ClCompile Include="KernelDock\KernelDockIpcTab.cpp" />
     <ClCompile Include="KernelDock\KernelBaseNamedObjectsTab.cpp" />
@@ -270,7 +270,7 @@
     <ClCompile Include="KernelDock\KernelThreadAuditTab.cpp" />
     <ClCompile Include="KernelDock\KernelThreadAuditTab.Snapshot.cpp" />
     <ClCompile Include="MainWindow.cpp" />
-    <ClCompile Include="MainWindow.Kvm.cpp" />
+    <ClCompile Include="MainWindow.Hvm.cpp" />
     <ClCompile Include="MiscDock\BootEditor\BootEditorTab.Actions.cpp" />
     <ClCompile Include="MiscDock\ApplicationControlPage.cpp" />
     <ClCompile Include="MiscDock\ClipboardGuard\ClipboardGuardPage.cpp" />
@@ -326,6 +326,9 @@
     <ClCompile Include="MemoryDock\PhysicalPageScan.cpp" />
     <ClCompile Include="MemoryDock\PhysicalPageMappings.cpp" />
     <ClCompile Include="MemoryDock\PhysicalPageAttributionPage.cpp" />
+    <ClCompile Include="MemoryDock\MemoryConsumerEvidencePage.cpp" />
+    <ClCompile Include="MemoryDock\PhysicalPageConsumers.cpp" />
+    <ClCompile Include="..\..\shared\evidence\GpuMemoryEvidence.cpp" />
     <ClCompile Include="MemoryDock\MemoryAttributionChart.cpp" />
     <ClCompile Include="MemoryDock\HyperVMemoryEvidence.cpp" />
     <ClCompile Include="MemoryDock\HyperVMemoryProviders.cpp" />
@@ -423,6 +426,11 @@
     <ClCompile Include="OtherDock\WindowInputClient.cpp" />
     <ClCompile Include="OtherDock\WindowInputControl.cpp" />
     <ClCompile Include="PrivilegeDock\PrivilegeDock.cpp" />
+    <ClCompile Include="PrivilegeDock\PrivilegeAccessPage.cpp" />
+    <ClCompile Include="PrivilegeDock\PrivilegeAccountPages.cpp" />
+    <ClCompile Include="PrivilegeDock\PrivilegeSnapshotModel.cpp" />
+    <ClCompile Include="PrivilegeDock\PrivilegeSnapshotPage.cpp" />
+    <ClCompile Include="PrivilegeDock\PrivilegeTokenPages.cpp" />
     <ClCompile Include="RegistryDock_Themed.cpp" />
     <ClCompile Include="RegistryDock\RegistryOptimizationPage.cpp" />
     <ClCompile Include="ProcessDock\ProcessDetailWindow.cpp" />
@@ -492,26 +500,26 @@
     <ClCompile Include="UI\DockTabInteraction.cpp" />
     <ClCompile Include="UI\FlowLayout.cpp" />
     <ClCompile Include="..\..\shared\evidence\HookPatchCompose.cpp" />
-    <ClCompile Include="UI\KvmEptLeafProbe.cpp" />
-    <ClCompile Include="UI\KvmWriteAccessGate.cpp" />
-    <ClCompile Include="UI\KvmHookWizard.cpp" />
-    <ClCompile Include="UI\KvmHookWizard.Patch.cpp" />
-    <ClCompile Include="UI\KvmHookWizard.Verify.cpp" />
-    <ClCompile Include="UI\KvmControl.cpp" />
-    <ClCompile Include="UI\KvmMemoryDialog.cpp" />
-    <ClCompile Include="UI\KvmViewDialog.cpp" />
-    <ClCompile Include="UI\KvmDomainDialog.cpp" />
-    <ClCompile Include="UI\KvmMsrPolicyDialog.cpp" />
-    <ClCompile Include="UI\KvmProcessDialog.cpp" />
-    <ClCompile Include="UI\KvmWatch.cpp" />
-    <ClCompile Include="UI\KvmWatchEvidence.cpp" />
-    <ClCompile Include="UI\KvmWatchPanel.cpp" />
-    <ClCompile Include="UI\KvmWatchPanel.Evidence.cpp" />
-    <ClCompile Include="UI\KvmWatchDialog.cpp" />
-    <ClCompile Include="UI\KvmWatchEventDialog.cpp" />
+    <ClCompile Include="UI\HvmEptLeafProbe.cpp" />
+    <ClCompile Include="UI\HvmWriteAccessGate.cpp" />
+    <ClCompile Include="UI\HvmHookWizard.cpp" />
+    <ClCompile Include="UI\HvmHookWizard.Patch.cpp" />
+    <ClCompile Include="UI\HvmHookWizard.Verify.cpp" />
+    <ClCompile Include="UI\HvmControl.cpp" />
+    <ClCompile Include="UI\HvmMemoryDialog.cpp" />
+    <ClCompile Include="UI\HvmViewDialog.cpp" />
+    <ClCompile Include="UI\HvmDomainDialog.cpp" />
+    <ClCompile Include="UI\HvmMsrPolicyDialog.cpp" />
+    <ClCompile Include="UI\HvmProcessDialog.cpp" />
+    <ClCompile Include="UI\HvmWatch.cpp" />
+    <ClCompile Include="UI\HvmWatchEvidence.cpp" />
+    <ClCompile Include="UI\HvmWatchPanel.cpp" />
+    <ClCompile Include="UI\HvmWatchPanel.Evidence.cpp" />
+    <ClCompile Include="UI\HvmWatchDialog.cpp" />
+    <ClCompile Include="UI\HvmWatchEventDialog.cpp" />
     <ClCompile Include="ProcessDock\ProcessDetailWindow.HvmWatch.cpp" />
-    <ClCompile Include="UI\KvmEventDialog.cpp" />
-    <ClCompile Include="UI\KvmCrPolicyDialog.cpp" />
+    <ClCompile Include="UI\HvmEventDialog.cpp" />
+    <ClCompile Include="UI\HvmCrPolicyDialog.cpp" />
     <ClCompile Include="UI\CommandExecutionPopup.cpp" />
     <ClCompile Include="UI\WindowChrome.cpp" />
     <ClCompile Include="UI\RescueDesktopSession.cpp" />
@@ -556,6 +564,12 @@
     <ClCompile Include="UI\MemoryWorkbench\WorkbenchCompareView.cpp" />
     <ClCompile Include="UI\MemoryWorkbench\WorkbenchConfirmations.cpp" />
     <ClCompile Include="UI\MemoryWorkbench\WorkbenchDisasmView.cpp" />
+    <ClCompile Include="UI\MemoryWorkbench\MemoryRowCanvas.cpp" />
+    <ClCompile Include="UI\MemoryWorkbench\WorkbenchDisasmView.Canvas.cpp" />
+    <ClCompile Include="UI\MemoryWorkbench\MemoryWorkbenchView.RowCanvas.cpp" />
+    <ClCompile Include="UI\MemorySnapshotBytesProvider.cpp" />
+    <ClCompile Include="UI\X64DbgNavigation.cpp" />
+    <ClCompile Include="..\..\shared\evidence\memory_workbench\MemoryTextDecode.cpp" />
     <ClCompile Include="UI\MemoryWorkbench\WorkbenchDisasmView.Edit.cpp" />
     <ClCompile Include="UI\MemoryWorkbench\WorkbenchMessages.cpp" />
     <ClCompile Include="UI\MemoryWorkbench\WorkbenchBookIntake.cpp" />
@@ -785,7 +799,7 @@
     <ClInclude Include="KernelDock\KernelDockCidTab.h" />
     <ClInclude Include="KernelDock\KernelDescriptorTableTab.h" />
     <ClInclude Include="KernelDock\KernelHvmTab.h" />
-    <ClInclude Include="KvmDock\KvmDock.h" />
+    <ClInclude Include="HvmDock\HvmDock.h" />
     <ClInclude Include="KernelDock\KernelSlatIommuAuditTab.h" />
     <ClInclude Include="KernelDock\KernelTextIntegrityTab.h" />
     <ClInclude Include="KernelDock\KernelVbsPostureTab.h" />
@@ -840,12 +854,12 @@
     <ClInclude Include="UI\AdaptivePageScroll.h" />
     <ClInclude Include="..\..\shared\evidence\HookPatchCompose.h" />
     <ClInclude Include="..\..\shared\evidence\MemoryAddressInput.h" />
-    <ClInclude Include="UI\KvmEptLeafProbe.h" />
-    <ClInclude Include="UI\KvmWriteAccessGate.h" />
-    <ClInclude Include="UI\KvmHookPlan.h" />
-    <ClInclude Include="UI\KvmControl.h" />
-    <ClInclude Include="UI\KvmWatchPanel.h" />
-    <ClInclude Include="UI\KvmWatchEventDialog.h" />
+    <ClInclude Include="UI\HvmEptLeafProbe.h" />
+    <ClInclude Include="UI\HvmWriteAccessGate.h" />
+    <ClInclude Include="UI\HvmHookPlan.h" />
+    <ClInclude Include="UI\HvmControl.h" />
+    <ClInclude Include="UI\HvmWatchPanel.h" />
+    <ClInclude Include="UI\HvmWatchEventDialog.h" />
     <ClInclude Include="UI\EmbeddedRowDelegate.h" />
     <ClInclude Include="UI\DetailLayoutHost.h" />
     <ClInclude Include="UI\DetailLayoutRegistry.h" />
@@ -887,6 +901,11 @@
     <ClInclude Include="MemoryDock\PhysicalPageScan.h" />
     <ClInclude Include="MemoryDock\PhysicalPageMappings.h" />
     <ClInclude Include="MemoryDock\PhysicalPageAttributionPage.h" />
+    <ClInclude Include="MemoryDock\MemoryConsumerEvidencePage.h" />
+    <ClInclude Include="MemoryDock\PhysicalPageConsumers.h" />
+    <ClInclude Include="..\..\shared\evidence\GpuMemoryEvidence.h" />
+    <ClInclude Include="..\..\shared\evidence\MemorySnapshotAccounting.h" />
+    <ClInclude Include="..\..\shared\evidence\PoolTraceCapturePolicy.h" />
     <ClInclude Include="MemoryDock\MemoryAttributionChart.h" />
     <ClInclude Include="MemoryDock\HyperVMemoryEvidence.h" />
     <ClInclude Include="MemoryDock\HyperVMemoryPage.h" />
@@ -981,6 +1000,12 @@
     <ClInclude Include="OtherDock\WindowInputControl.h" />
     <ClInclude Include="..\..\shared\window\DwmZOrderProtocol.h" />
     <ClInclude Include="..\..\shared\window\DwmRemoteLoader.h" />
+    <ClInclude Include="PrivilegeDock\PrivilegeAccessPage.h" />
+    <ClInclude Include="PrivilegeDock\PrivilegeAccessSecurity.h" />
+    <ClInclude Include="PrivilegeDock\PrivilegeAccountPages.h" />
+    <ClInclude Include="PrivilegeDock\PrivilegeSnapshotModel.h" />
+    <ClInclude Include="PrivilegeDock\PrivilegeSnapshotPage.h" />
+    <ClInclude Include="PrivilegeDock\PrivilegeTokenPages.h" />
     <QtMoc Include="PrivilegeDock\PrivilegeDock.h" />
     <QtMoc Include="RegistryDock\RegistryDock.h" />
     <ClInclude Include="KernelDock\KernelCleanImageBaseline.h" />
@@ -1015,15 +1040,15 @@
     <ClInclude Include="UI\GlobalUiBaseStyle.h" />
     <ClInclude Include="UI\GlobalRefreshShortcut.h" />
     <QtMoc Include="UI\GlobalUiSearch.h" />
-    <QtMoc Include="UI\KvmMemoryDialog.h" />
-    <QtMoc Include="UI\KvmViewDialog.h" />
-    <QtMoc Include="UI\KvmHookWizard.h" />
-    <QtMoc Include="UI\KvmDomainDialog.h" />
-    <QtMoc Include="UI\KvmMsrPolicyDialog.h" />
-    <QtMoc Include="UI\KvmProcessDialog.h" />
-    <QtMoc Include="UI\KvmWatchDialog.h" />
-    <QtMoc Include="UI\KvmEventDialog.h" />
-    <QtMoc Include="UI\KvmCrPolicyDialog.h" />
+    <QtMoc Include="UI\HvmMemoryDialog.h" />
+    <QtMoc Include="UI\HvmViewDialog.h" />
+    <QtMoc Include="UI\HvmHookWizard.h" />
+    <QtMoc Include="UI\HvmDomainDialog.h" />
+    <QtMoc Include="UI\HvmMsrPolicyDialog.h" />
+    <QtMoc Include="UI\HvmProcessDialog.h" />
+    <QtMoc Include="UI\HvmWatchDialog.h" />
+    <QtMoc Include="UI\HvmEventDialog.h" />
+    <QtMoc Include="UI\HvmCrPolicyDialog.h" />
     <QtMoc Include="UI\CommandExecutionPopup.h" />
     <ClInclude Include="UI\WindowChrome.h" />
     <ClInclude Include="UI\RescueDesktopSession.h" />
@@ -1051,7 +1076,12 @@
     <QtMoc Include="UI\MemoryWorkbench\WorkbenchCompareView.h" />
     <ClInclude Include="UI\MemoryWorkbench\WorkbenchConfirmations.h" />
     <QtMoc Include="UI\MemoryWorkbench\WorkbenchDisasmView.h" />
+    <QtMoc Include="UI\MemoryWorkbench\MemoryRowCanvas.h" />
     <ClInclude Include="UI\MemoryWorkbench\WorkbenchMessages.h" />
+    <ClInclude Include="UI\MemorySnapshotBytesProvider.h" />
+    <ClInclude Include="UI\MemoryWorkbench\WorkbenchTextCodePages.h" />
+    <ClInclude Include="UI\X64DbgNavigation.h" />
+    <ClInclude Include="..\..\shared\evidence\memory_workbench\MemoryTextDecode.h" />
     <ClInclude Include="UI\MemoryWorkbench\WorkbenchNavigation.h" />
     <ClInclude Include="UI\MemoryWorkbench\WorkbenchServices.h" />
     <ClInclude Include="UI\MemoryWorkbench\WorkbenchBookIntake.h" />
@@ -1385,6 +1415,13 @@
       <Private>false</Private>
     </ProjectReference>
   </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="ArkDriverClient\ArkStorageControllerClient.cpp" />
+    <ClInclude Include="ArkDriverClient\ArkStorageControllerClient.h" />
+    <ClCompile Include="MiscDock\DiskEditor\StorageControllerResearchDialog.cpp" />
+    <ClInclude Include="MiscDock\DiskEditor\StorageControllerResearchDialog.h" />
+    <ClInclude Include="MiscDock\DiskEditor\StorageControllerInput.h" />
+  </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ItemGroup>
     <MASM Include="OtherDock\DwmRemoteLoader.asm" />
@@ -1402,9 +1439,9 @@
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>
   <ItemGroup>
-    <ClCompile Include="UI\KvmGuestVmPanel.cpp">
+    <ClCompile Include="UI\HvmGuestVmPanel.cpp">
     </ClCompile>
-    <ClInclude Include="UI\KvmGuestVmPanel.h" />
+    <ClInclude Include="UI\HvmGuestVmPanel.h" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\..\shared\driver\KswordArkHvmRequest.h" />
@@ -1427,5 +1464,26 @@
     <ClInclude Include="..\..\shared\ApiMonitorInjectionProtocol.h" />
     <ClInclude Include="..\..\shared\ApiMonitorInjectionBroker.h" />
     <ClCompile Include="..\..\shared\ApiMonitorInjectionBroker.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="..\..\shared\usermode\KswordArkServiceMode.h" />
+  </ItemGroup>
+  <!-- Registry workbench -->
+  <ItemGroup>
+    <ClCompile Include="RegistryDock\RegistryDock.Workbench.cpp" />
+    <ClCompile Include="RegistryDock\RegistryDock.Search.cpp" />
+    <ClCompile Include="RegistryDock\RegistryDock.Documents.cpp" />
+    <ClCompile Include="RegistryDock\RegistryValueCodec.cpp" />
+    <ClCompile Include="RegistryDock\RegistryValueEditorWidget.cpp" />
+    <ClCompile Include="RegistryDock\RegistryWorkbenchAccess.cpp" />
+    <ClCompile Include="RegistryDock\RegistryDocument.cpp" />
+    <ClCompile Include="RegistryDock\RegistryDocumentApply.cpp" />
+    <ClCompile Include="RegistryDock\RegistryAdvancedDialogs.cpp" />
+    <ClInclude Include="RegistryDock\RegistryValueCodec.h" />
+    <QtMoc Include="RegistryDock\RegistryValueEditorWidget.h" />
+    <ClInclude Include="RegistryDock\RegistryWorkbenchAccess.h" />
+    <ClInclude Include="RegistryDock\RegistryDocument.h" />
+    <ClInclude Include="RegistryDock\RegistryDocumentApply.h" />
+    <ClInclude Include="RegistryDock\RegistryAdvancedDialogs.h" />
   </ItemGroup>
 </Project>

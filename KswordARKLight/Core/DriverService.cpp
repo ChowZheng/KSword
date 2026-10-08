@@ -4,6 +4,7 @@
 #include "PathUtils.h"
 #include "resource.h"
 #include "../../Ksword5.1/Ksword5.1/ArkDriverClient/ArkDriverClient.h"
+#include "../../shared/usermode/KswordArkServiceMode.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -379,6 +380,19 @@ DriverRuntimeStatus QueryDriverStatus() {
 
 DriverRuntimeStatus InstallAndStartDriver() {
     DriverRuntimeStatus status = QueryDriverStatus();
+    const auto profile = ksword::ark::queryServiceProfile();
+    if (!profile.scmManagementAllowed()) {
+        status.message = ksword::ark::serviceProfileManagementMessage(profile);
+        status.message = AppendControlDeviceMessage(status.message, status);
+        return status;
+    }
+    const auto mayManageService = [&status]()
+    {
+        const auto latest = ksword::ark::queryServiceProfile();
+        if (latest.scmManagementAllowed()) return true;
+        status.message = ksword::ark::serviceProfileManagementMessage(latest);
+        return false;
+    };
     std::wstring driverPreparationNote;
     std::wstring driverPreparationError;
     // The running-driver case deliberately avoids replacing an already loaded
@@ -405,6 +419,7 @@ DriverRuntimeStatus InstallAndStartDriver() {
 
     UniqueServiceHandle service = OpenDriverService(scm.get(), SERVICE_QUERY_STATUS | SERVICE_START | SERVICE_STOP | SERVICE_CHANGE_CONFIG);
     if (!service.valid()) {
+        if (!mayManageService()) return status;
         SC_HANDLE created = ::CreateServiceW(
             scm.get(),
             kDriverServiceName,
@@ -425,6 +440,7 @@ DriverRuntimeStatus InstallAndStartDriver() {
         }
         service.reset(created);
     } else {
+        if (!mayManageService()) return status;
         ::ChangeServiceConfigW(
             service.get(),
             SERVICE_KERNEL_DRIVER,
@@ -442,6 +458,7 @@ DriverRuntimeStatus InstallAndStartDriver() {
     status.serviceInstalled = true;
     FillServiceState(service.get(), status);
     if (!status.serviceRunning) {
+        if (!mayManageService()) return status;
         if (!::StartServiceW(service.get(), 0, nullptr)) {
             const DWORD err = ::GetLastError();
             if (err != ERROR_SERVICE_ALREADY_RUNNING) {
@@ -464,6 +481,11 @@ DriverRuntimeStatus InstallAndStartDriver() {
 
 DriverRuntimeStatus StopDriverService() {
     DriverRuntimeStatus status = QueryDriverStatus();
+    const auto profile = ksword::ark::queryServiceProfile();
+    if (!profile.scmManagementAllowed()) {
+        status.message = ksword::ark::serviceProfileManagementMessage(profile);
+        return status;
+    }
     UniqueServiceHandle scm = OpenScm(SC_MANAGER_CONNECT);
     if (!scm.valid()) {
         status.message = L"OpenSCManager failed: " + LastErrorMessage();
@@ -475,6 +497,11 @@ DriverRuntimeStatus StopDriverService() {
         return status;
     }
     SERVICE_STATUS serviceStatus{};
+    const auto latest = ksword::ark::queryServiceProfile();
+    if (!latest.scmManagementAllowed()) {
+        status.message = ksword::ark::serviceProfileManagementMessage(latest);
+        return status;
+    }
     if (!::ControlService(service.get(), SERVICE_CONTROL_STOP, &serviceStatus)) {
         const DWORD err = ::GetLastError();
         if (err != ERROR_SERVICE_NOT_ACTIVE) {

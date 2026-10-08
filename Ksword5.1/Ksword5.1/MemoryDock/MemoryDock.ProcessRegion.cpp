@@ -1,6 +1,7 @@
 #include "MemoryDock.Internal.h"
 #include "../Framework/PrivilegeElevationPrompt.h"
 #include "../UI/TableInteractionSupport.h"
+#include "../UI/X64DbgNavigation.h"
 #include "../UI/MemoryWorkbench/WorkbenchTarget.h" // AcquireAnchorForPid：与工作台锚点同一取法读进程创建时间。
 
 #include <QCoreApplication>
@@ -370,11 +371,13 @@ namespace
         // CPU 占用没法一次采样得出，只能靠两次采样之间的增量。这里只带回本次的
         // 累计 CPU 时间与它是否取到，占用率由 UI 线程与上一轮相减算出。
         std::uint64_t cpuTime100ns = 0; // 内核态 + 用户态累计时间，单位 100ns。
+        std::uint64_t creationTime100ns = 0; // Bind address navigation to this snapshot's process object.
         bool cpuTimeValid = false;      // 取不到时间的进程（权限不足、已退出）保持 false。
     };
 
     // kProcessNumericSortRole：数值排序键。
     constexpr int kProcessNumericSortRole = Qt::UserRole + 50;
+    constexpr int kProcessCreationTimeRole = Qt::UserRole + 51;
 
     // NumericSortTableItem 作用：
     // - 显示带单位的文本，排序按藏在角色里的裸数值。
@@ -488,6 +491,7 @@ namespace
                         return (static_cast<std::uint64_t>(fileTime.dwHighDateTime) << 32)
                             | static_cast<std::uint64_t>(fileTime.dwLowDateTime);
                     };
+                    snapshotRow.creationTime100ns = toU64(creationTime);
                     snapshotRow.cpuTime100ns = toU64(kernelTime) + toU64(userTime);
                     snapshotRow.cpuTimeValid = true;
                 }
@@ -886,6 +890,8 @@ void MemoryDock::refreshProcessList(const bool keepSelection)
                         // Shell 查询在线程池完成后按路径回填对应单元格。
                         QTableWidgetItem* const processNameItem = new QTableWidgetItem(entry.processName);
                         processNameItem->setData(kIconPathItemRole, imagePath);
+                        processNameItem->setData(kProcessCreationTimeRole,
+                            QVariant::fromValue<qulonglong>((*snapshotRows)[static_cast<std::size_t>(row)].creationTime100ns));
                         processNameItem->setIcon(lookupCachedPathIcon(imagePath));
                         processTable->setItem(row, 0, processNameItem);
 
@@ -1927,6 +1933,11 @@ void MemoryDock::showProcessTableContextMenu(const QPoint& localPosition)
     QAction* copyRowAction = contextMenu.addAction(
         QIcon(QStringLiteral(":/Icon/process_copy_row.svg")),
         QStringLiteral("复制当前行"));
+
+    const auto creationTime100ns = nameItem->data(kProcessCreationTimeRole).toULongLong();
+    if (creationTime100ns != 0)
+        ks::ui::x64dbg_navigation::AddAction(&contextMenu, this,
+            {pid, creationTime100ns, 0, ks::ui::x64dbg_navigation::View::Disassembly});
 
     QAction* selectedAction = contextMenu.exec(m_processTable->viewport()->mapToGlobal(localPosition));
     if (selectedAction == nullptr)

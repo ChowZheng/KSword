@@ -13,10 +13,10 @@
 | --- | --- |
 | `main.cpp` 的 `tryRunHvmCommandLine` | 删除，主程序没有命令行入口 |
 | `ArkDriverClient/HvmCommandProcess.{h,cpp}` | 删除 |
-| `UI/KvmCommandPanel.{h,cpp}`（「完整操作」子页） | 删除 |
+| `UI/HvmCommandPanel.{h,cpp}`（「完整操作」子页） | 删除 |
 | `ArkDriverClient/HvmCommandCatalog.{c,h}`、`HvmCommandEngine.c` | 移到 `tools/hvm_ctl/`，只由探针编译 |
 | `Ksword5.1.vcxproj` 的 `AuditKswordHvmCommandCatalog` 目标 | 删除（目录不再进主程序，改由探针自己的门禁核对） |
-| 标题栏右键菜单 / KvmDock / 内核 HVM 页的「KVM 完整命令面板」入口 | 删除 |
+| 标题栏右键菜单 / HvmDock / 内核 HVM 页的「HVM 完整命令面板」入口 | 删除 |
 | 语言包里 175 条只服务于该面板与命令目录的词条 | 删除 |
 
 判据是成品二进制，不是源码：`Ksword5.1.exe` 与随附的两个语言包里，
@@ -36,15 +36,15 @@
 （`IOCTL_KSWORD_ARK_HVM_PROCESS` / `IOCTL_KSWORD_ARK_HVM_INJECT`），驱动侧是
 实现完整的生产路径，此前只是恰好没有原生 GUI 入口。所以它改写成了原生面板：
 
-- `ksword::kvm` 门面新增 `listProcessDispositions` / `freezeProcess` /
+- `ksword::hvm` 门面新增 `listProcessDispositions` / `freezeProcess` /
   `terminateProcess` / `releaseProcessDisposition` / `releaseAllProcessDispositions`
   与 `listInjections` / `injectDll` / `releaseInjection` / `releaseAllInjections`，
   与视图 / MSR / CR 三组同一个形状：同一道写权限门、同一套状态码翻译、
   每次操作都回填整张表；
-- `UI/KvmProcessDialog` 承载两张表与两组表单，冻结 / 结束 / 注入三项分别过
+- `UI/HvmProcessDialog` 承载两张表与两组表单，冻结 / 结束 / 注入三项分别过
   `confirmDestructiveAction`；
-- 入口有两个：KvmDock 第 2 步分组里的「R-1 进程处置与注入...」，以及标题栏
-  KVM 右键菜单里的同名项。
+- 入口有两个：HvmDock 第 2 步分组里的「R-1 进程处置与注入...」，以及标题栏
+  HVM 右键菜单里的同名项。
 
 `inject-test`（向标记地址写常数）没有跟过来——它是测试用的写入，不是能力。
 
@@ -68,7 +68,7 @@
   一起灰掉就把唯一的关闭入口也关上了。内核 HVM 页那两个被挡住的按钮现在
   逐条点名是哪几个开关开着，并指向右键菜单。
 
-同一个判据（`KvmState::backend`）由 KvmDock、标题栏菜单、内核 HVM 页共用。
+同一个判据（`HvmState::backend`）由 HvmDock、标题栏菜单、内核 HVM 页共用。
 以前这三处各自去翻 QUERY 响应，代价不是麻烦而是不一致。
 
 顺带修掉的三处 AMD 显示缺陷：

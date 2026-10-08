@@ -85,7 +85,7 @@ namespace ksword::debugger
         const auto state = client_.queryHvmStatus();
         if (!state.io.ok) return refused(state.io.win32Error, "driver HVM ownership/state query failed");
         if ((state.response.stateFlags & (KSWORD_ARK_HVM_STATE_RESOURCES_READY | KSWORD_ARK_HVM_STATE_RESIDENT_ACTIVE)) != 0)
-            return refused(ERROR_BUSY, "pre-existing HVM resources/residency belong to another caller (for example Main KVM or another debugger); stop and release them in the owning UI before retrying");
+            return refused(ERROR_BUSY, "pre-existing HVM resources/residency belong to another caller (for example Main HVM or another debugger); stop and release them in the owning UI before retrying");
         const auto prepared = client_.controlHvm(KSWORD_ARK_HVM_CONTROL_PREPARE, state.response.generation,
             false, true, true, false, false, false, false, false, false, true);
         if (!prepared.io.ok) return refused(prepared.io.win32Error, "driver rejected this adapter's Shadow PREPARE request");

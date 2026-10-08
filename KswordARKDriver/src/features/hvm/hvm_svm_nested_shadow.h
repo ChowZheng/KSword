@@ -12,6 +12,8 @@
 #define KSW_NSHADOW_STALE 3U
 /* Bound lookup cost and table memory to one MiB per prepared CPU. */
 #define KSW_NSHADOW_MAX_PAGES 256U
+/* Distinct committed NPT12 source words; overflow falls back to whole-root synchronization. */
+#define KSW_NSHADOW_SOURCE_WORDS 512U
 
 /* The allocator owns these pages; this module neither allocates nor frees them. */
 typedef struct _KSW_NSHADOW_PAGE {
@@ -33,6 +35,18 @@ typedef struct _KSW_NSHADOW {
     KSW_SVM_U64 Epoch;
     /* Physical and GPA widths are deliberately limited to four-level NPT. */
     KSW_SVM_U64 AddressMask;
+    /* Source GPA/value pairs preserve the provenance of every published leaf. */
+    KSW_SVM_U64 SourceAddress[KSW_NSHADOW_SOURCE_WORDS], SourceValue[KSW_NSHADOW_SOURCE_WORDS];
+    /* Only values freshly verified under an all-CPU armed write guard may bypass later reads. */
+    unsigned char SourceProven[KSW_NSHADOW_SOURCE_WORDS];
+    /* Stable dependency IDs survive address-sorted insertion for this root epoch. */
+    unsigned SourceId[KSW_NSHADOW_SOURCE_WORDS], NextSourceId, LastLeafPage;
+    /* Conservative leaf-table groups avoid discarding unrelated NPT02 branches after one changed source. */
+    KSW_SVM_U64 Dependencies[KSW_NSHADOW_MAX_PAGES][KSW_NSHADOW_SOURCE_WORDS / 64U];
+    unsigned char Levels[KSW_NSHADOW_MAX_PAGES];
+    KSW_SVM_U64 DependencyRetirements;
+    /* Untracked provenance can never authorize reuse across a virtual invalidation. */
+    unsigned SourceCount, SourceUntracked;
 } KSW_NSHADOW;
 
 /* Preparation only: verifies all mappings/physical frames and creates an empty root. */
@@ -42,3 +56,13 @@ unsigned int KswSvmNestedShadowInitialize(KSW_NSHADOW* Shadow,
 unsigned int KswSvmNestedShadowReset(KSW_NSHADOW* Shadow);
 /* Installs a fully committed MMU result; a full pool leaves the tables unchanged. */
 unsigned int KswSvmNestedShadowInstall(KSW_NSHADOW* Shadow, const KSW_NMMU_RESULT* Result);
+/* Revalidate all captured NPT12 words; unchanged mappings may survive an ASID flush. */
+int KswSvmNestedShadowSourcesMatch(const KSW_NSHADOW* Shadow,
+    KSW_NNPT_READ ReadGuestWord, void* Context);
+/* Guard callbacks must prove CPU writes are trapped and never silently rearm a dirty identity. */
+int KswSvmNestedShadowSourcesVerify(KSW_NSHADOW* Shadow,
+    KSW_NNPT_READ ReadGuestWord, void* Context,
+    int (*Stable)(void* Context, KSW_SVM_U64 Address), void* StableContext);
+/* Range returns 1 for an armed host page and 2 for a revoked page requiring fresh composition. */
+void KswSvmNestedShadowRestrict(KSW_NSHADOW* Shadow,
+    unsigned (*Range)(void* Context, KSW_SVM_U64 Base, KSW_SVM_U64 Bytes), void* Context);

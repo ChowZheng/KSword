@@ -868,6 +868,11 @@
     <ClInclude Include="src\features\hvm\hvm_svm.h" />
     <ClInclude Include="src\features\hvm\hvm_svm_flightrecorder.h" />
     <ClInclude Include="src\features\hvm\hvm_svm_hotspots.h" />
+    <ClInclude Include="src\features\hvm\hvm_svm_perf.h" />
+    <ClInclude Include="src\features\hvm\hvm_svm_fast.h" />
+    <ClInclude Include="src\features\hvm\hvm_svm_accel.h" />
+    <ClInclude Include="src\features\hvm\hvm_svm_watch.h" />
+    <ClInclude Include="src\features\hvm\hvm_svm_cache.h" />
     <ClInclude Include="..\shared\driver\KswordArkHvmFlightRecorder.h" />
     <ClCompile Include="src\features\hvm\hvm_svm_flightrecorder.c">
       <EnableEnhancedInstructionSet>StreamingSIMDExtensions2</EnableEnhancedInstructionSet>
@@ -1004,6 +1009,34 @@
       <TreatWarningAsError>true</TreatWarningAsError>
       <ExcludedFromBuild Condition="'$(Platform)'=='ARM64'">true</ExcludedFromBuild>
     </ClCompile>
+    <ClCompile Include="src\features\hvm\hvm_svm_fast.c">
+      <TreatWarningAsError>true</TreatWarningAsError>
+      <BufferSecurityCheck>false</BufferSecurityCheck>
+      <AdditionalOptions>/Ob3 %(AdditionalOptions)</AdditionalOptions>
+      <WholeProgramOptimization>false</WholeProgramOptimization>
+      <ExcludedFromBuild Condition="'$(Platform)'=='ARM64'">true</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="src\features\hvm\hvm_svm_accel.c">
+      <TreatWarningAsError>true</TreatWarningAsError>
+      <BufferSecurityCheck>false</BufferSecurityCheck>
+      <AdditionalOptions>/Ob3 %(AdditionalOptions)</AdditionalOptions>
+      <WholeProgramOptimization>false</WholeProgramOptimization>
+      <ExcludedFromBuild Condition="'$(Platform)'=='ARM64'">true</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="src\features\hvm\hvm_svm_watch.c">
+      <TreatWarningAsError>true</TreatWarningAsError>
+      <BufferSecurityCheck>false</BufferSecurityCheck>
+      <AdditionalOptions>/Ob3 %(AdditionalOptions)</AdditionalOptions>
+      <WholeProgramOptimization>false</WholeProgramOptimization>
+      <ExcludedFromBuild Condition="'$(Platform)'=='ARM64'">true</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="src\features\hvm\hvm_svm_cache.c">
+      <TreatWarningAsError>true</TreatWarningAsError>
+      <BufferSecurityCheck>false</BufferSecurityCheck>
+      <AdditionalOptions>/Ob3 %(AdditionalOptions)</AdditionalOptions>
+      <WholeProgramOptimization>false</WholeProgramOptimization>
+      <ExcludedFromBuild Condition="'$(Platform)'=='ARM64'">true</ExcludedFromBuild>
+    </ClCompile>
     <ClCompile Include="src\features\hvm\hvm_svm_nested_general.c">
       <EnableEnhancedInstructionSet>StreamingSIMDExtensions2</EnableEnhancedInstructionSet>
       <TreatWarningAsError>true</TreatWarningAsError>
@@ -1065,4 +1098,63 @@
       <ExcludedFromBuild Condition="'$(Platform)'=='ARM64'">true</ExcludedFromBuild>
     </MASM>
   </ItemGroup>
+  <Target Name="KswordSvmIntegerLeafGate" BeforeTargets="Link" Condition="'$(Platform)'=='x64'">
+    <Exec Command="python &quot;$(ProjectDir)..\tools\hvm_lab\audit_svm_fast.py&quot; --object &quot;$(IntDir)hvm_svm_fast.obj&quot; --dumpbin &quot;$(VCToolsInstallDir)bin\HostX64\x64\dumpbin.exe&quot;" />
+  </Target>
+  <ItemGroup>
+    <ClCompile Include="src\features\storage_controller\driver.c">
+      <WppEnabled>false</WppEnabled>
+      <WppRecorderEnabled>false</WppRecorderEnabled>
+    </ClCompile>
+    <ClCompile Include="src\features\storage_controller\device.c">
+      <WppEnabled>false</WppEnabled>
+      <WppRecorderEnabled>false</WppRecorderEnabled>
+    </ClCompile>
+    <ClCompile Include="src\features\storage_controller\controller_ioctl.c">
+      <WppEnabled>false</WppEnabled>
+      <WppRecorderEnabled>false</WppRecorderEnabled>
+    </ClCompile>
+    <ClCompile Include="src\features\storage_controller\controller_transaction.c">
+      <WppEnabled>false</WppEnabled>
+      <WppRecorderEnabled>false</WppRecorderEnabled>
+    </ClCompile>
+    <ClCompile Include="src\features\storage_controller\controller_audit.c">
+      <WppEnabled>false</WppEnabled>
+      <WppRecorderEnabled>false</WppRecorderEnabled>
+    </ClCompile>
+    <ClCompile Include="src\features\storage_controller\controller_ahci.c">
+      <WppEnabled>false</WppEnabled>
+      <WppRecorderEnabled>false</WppRecorderEnabled>
+    </ClCompile>
+    <ClCompile Include="src\features\storage_controller\controller_nvme.c">
+      <WppEnabled>false</WppEnabled>
+      <WppRecorderEnabled>false</WppRecorderEnabled>
+    </ClCompile>
+    <ClCompile Include="src\features\storage_controller\controller_ide.c">
+      <WppEnabled>false</WppEnabled>
+      <WppRecorderEnabled>false</WppRecorderEnabled>
+    </ClCompile>
+    <ClCompile Include="src\features\storage_controller\sha256.c">
+      <WppEnabled>false</WppEnabled>
+      <WppRecorderEnabled>false</WppRecorderEnabled>
+    </ClCompile>
+    <ClInclude Include="src\features\storage_controller\controller.h" />
+    <ClInclude Include="include\ark\ark_storage_controller.h" />
+    <ClInclude Include="include\ark\ark_driver_lifecycle.h" />
+    <ClInclude Include="..\shared\driver\KswordArkStorageControllerIoctl.h" />
+    <Inf Include="KswordARKStorageController.inf" Condition="'$(Platform)'=='x64'">
+      <SpecifyDriverVerDirectiveDate>true</SpecifyDriverVerDirectiveDate>
+      <DateStamp>10/07/2026</DateStamp>
+    </Inf>
+    <None Include="src\features\storage_controller\tests\ControllerRegression.py" />
+    <None Include="src\features\storage_controller\tests\controller_regression.c" />
+    <None Include="src\features\storage_controller\tests\core_lifecycle_test_support.h" />
+    <None Include="tests\ControllerDispatchRegression.py" />
+    <None Include="tests\controller_dispatch_regression.c" />
+  </ItemGroup>
+  <ItemDefinitionGroup>
+    <Link>
+      <AdditionalDependencies>WdmGuid.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+  </ItemDefinitionGroup>
 </Project>

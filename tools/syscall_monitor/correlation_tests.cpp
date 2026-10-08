@@ -89,7 +89,7 @@ int main()
     assert(output.size() == 1 && output[0].state == CorrelationState::Ambiguous);
     assert(output[0].frames.empty());
 
-    // Resource bounds cannot turn forced eviction into claimed evidence.
+    // Saturation rejects the new row without destroying admitted evidence.
     c.Reset();
     for (std::size_t i = 0; i < C::kEventCapacity; ++i)
     {
@@ -99,10 +99,74 @@ int main()
     c.AddStack(Key{ 100000, 1 }, 42, 99, { 0x4444 }, 1);
     output = c.AddEvent(Key{ 999999, 1 }, unknown, unknown, 99, 2);
     assert(output.size() == 1 && output[0].state == CorrelationState::CapacityEvicted);
+    assert(output[0].row == 99 && output[0].pid == unknown);
     assert(output[0].frames.empty() && c.PendingEventCount() == C::kEventCapacity);
+    c.AddStack(Key{ 999999, 1 }, 42, 99, { 0x4444 }, 2);
+    assert(c.PendingStackCount() == 0); // Rejected row's late stack is retired.
     output = c.Expire(3, true);
     assert(output.size() == C::kEventCapacity && c.PendingEventCount() == 0);
+    assert(output.front().row == 0 && output.front().state == CorrelationState::Matched);
+    assert(output.front().pid == 42 && output.front().frames.size() == 1);
     assert(c.RetiredKeyCount() <= C::kRetiredCapacity);
+
+    // A duplicate rejected at saturation must still invalidate the admitted key.
+    c.Reset();
+    for (std::size_t i = 0; i < C::kEventCapacity; ++i)
+    {
+        c.AddEvent(Key{ 100000 + i, 1 }, unknown, unknown, static_cast<int>(i), 0);
+    }
+    c.AddStack(Key{ 100000, 1 }, 42, 99, { 0x4444 }, 1);
+    output = c.AddEvent(Key{ 100000, 1 }, unknown, unknown, 99, 2);
+    assert(output.size() == 1 && output[0].state == CorrelationState::CapacityEvicted);
+    output = c.Expire(250);
+    assert(output.size() == C::kEventCapacity);
+    assert(output.front().state == CorrelationState::Ambiguous && output.front().frames.empty());
+
+    // Rejecting a row with an early stack also removes that stack's ticket.
+    c.Reset();
+    for (std::size_t i = 0; i < C::kEventCapacity; ++i)
+    {
+        c.AddEvent(Key{ 100000 + i, 1 }, unknown, unknown, static_cast<int>(i), 0);
+    }
+    c.AddStack(Key{ 999999, 1 }, 42, 99, { 0x4444 }, 1);
+    assert(c.PendingStackCount() == 1);
+    c.AddEvent(Key{ 999999, 1 }, unknown, unknown, 99, 2);
+    assert(c.PendingStackCount() == 0);
+    c.Expire(250);
+
+    // Sustained 100k events/s previously produced zero matches despite correct
+    // stacks for every entry. Admitted samples must survive the full 250 ms.
+    c.Reset();
+    std::size_t matched = 0, dropped = 0;
+    const auto count = [&](const std::vector<C::Output>& rows) {
+        for (const auto& result : rows)
+        {
+            if (result.state == CorrelationState::Matched)
+            {
+                assert(result.pid == 42 && result.tid == 99 && result.frames.size() == 2);
+                ++matched;
+            }
+            else
+            {
+                assert(result.state == CorrelationState::CapacityEvicted);
+                assert(result.pid == unknown && result.frames.empty());
+                ++dropped;
+            }
+        }
+    };
+    for (std::uint64_t i = 0; i < 100000; ++i)
+    {
+        const Key key{ 1000000 + i, 1 };
+        count(c.AddEvent(key, unknown, unknown, static_cast<int>(i), i / 100));
+        count(c.AddStack(key, 42, 99, { 0xfffff80100001000ULL, 0x7ffb00001234ULL }, i / 100));
+        assert(c.PendingEventCount() <= C::kEventCapacity);
+        assert(c.PendingStackCount() <= C::kEarlyStackCapacity);
+        assert(c.RetiredKeyCount() <= C::kRetiredCapacity);
+    }
+    assert(matched > 0 && dropped > 0);
+    assert(matched + dropped + c.PendingEventCount() == 100000);
+    std::cout << "SUSTAINED_LOAD_MATCHED=" << matched << " DROPPED=" << dropped << '\n';
+
     c.Reset();
     for (std::size_t i = 0; i <= C::kEarlyStackCapacity; ++i)
     {

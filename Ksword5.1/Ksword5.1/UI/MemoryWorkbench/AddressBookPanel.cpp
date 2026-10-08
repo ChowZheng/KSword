@@ -544,7 +544,7 @@ namespace ks::ui
         }
         const AddressBookModel::KindCounts counts = m_model->kindCounts();
         // 四段文字经语言包翻译（C12）：先翻译带 %1 占位符的模板，拿到当前语言下的格式串，
-        // 再 .arg() 填计数——与仓库既有调用惯例一致（例如 MainWindow.Kvm.cpp 的同类用法）。
+        // 再 .arg() 填计数——与仓库既有调用惯例一致（例如 MainWindow.Hvm.cpp 的同类用法）。
         QStringList labels;
         labels << ks::i18n::sourceText(QStringLiteral("全部(%1)")).arg(counts.all)
                << ks::i18n::sourceText(QStringLiteral("搜索(%1)")).arg(counts.search)

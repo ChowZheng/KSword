@@ -36,23 +36,160 @@ static unsigned int KswNsvmSessionFault(KSW_NSVM_SESSION* Session)
     return KSW_NSVM_ACTION_FAULT;
 }
 
-/* Capture the actual virtual host continuation, including special VMRUN RAX/RSP state. */
-static void KswNsvmSessionSaveL1(KSW_NSVM_SESSION* Session, const KSW_SVM_VMCB* Current)
+/* Permission reuse requires an unchanged identity plus protection of every enabled source page. */
+static unsigned KswNsvmPermissionStable(const KSW_NSVM_SESSION_IO* Io, const KSW_SVM_U64 Key[4])
 {
-    /* This snapshot is made per VMRUN, not once at monitor startup. */
-    KswNsvmSessionCopy(&Session->L1, Current);
-    /* VMRUN resumes at the next instruction after a later virtual VMEXIT. */
-    KswSvmWrite64(&Session->L1, KSW_VMCB_RIP, KswSvmRead64(Current, KSW_VMCB_NRIP));
-    /* An event preceding the intercepted VMRUN already completed; do not inject it twice. */
-    KswSvmWrite64(&Session->L1, KSW_VMCB_EVENT, 0);
-    /* Completing the intercepted VMRUN consumes any preceding single-instruction interrupt shadow. */
-    KswSvmWrite64(&Session->L1, 0x068U, 0);
+    /* With no write tracker, preserve the exact previous recapture behavior. */
+    unsigned page;
+    if (!Io->SourceStable) { return 0; }
+    if (Key[1] & KSW_NSVM_MSR_PROT) {
+        for (page = 0; page < 2; ++page) {
+            if (!Io->SourceStable(Io->Operand.Context, Key[2] + 4096ULL * page)) { return 0; }
+        }
+    }
+    if (Key[1] & KSW_NSVM_IOIO_PROT) {
+        for (page = 0; page < 3; ++page) {
+            if (!Io->SourceStable(Io->Operand.Context, Key[3] + 4096ULL * page)) { return 0; }
+        }
+    }
+    return 1;
+}
+/* Arming is optional, bounded and cannot by itself validate an older permission snapshot. */
+static void KswNsvmPermissionArm(const KSW_NSVM_SESSION_IO* Io, const KSW_SVM_U64 Key[4])
+{
+    unsigned page;
+    if (!Io->ArmSource) { return; }
+    if (Key[1] & KSW_NSVM_MSR_PROT) {
+        for (page = 0; page < 2; ++page) { (void)Io->ArmSource(Io->Operand.Context, Key[2] + 4096ULL * page); }
+    }
+    if (Key[1] & KSW_NSVM_IOIO_PROT) {
+        for (page = 0; page < 3; ++page) { (void)Io->ArmSource(Io->Operand.Context, Key[3] + 4096ULL * page); }
+    }
 }
 
-static unsigned KswNsvmSessionCache(KSW_NSVM_SESSION* Session,
+/* Capture the actual virtual host continuation, including special VMRUN RAX/RSP state. */
+static void KswNsvmSessionSaveL1(KSW_NSVM_SESSION* Session, const KSW_NSVM_SESSION_IO* Io, KSW_SVM_VMCB* Current)
+{
+    /* Only a complete independent pair may replace the embedded fallback snapshot. */
+    Session->HostImage = Io->StableL1 == Current && Io->StableL2 && Io->StableL2 != Current ? Current : NULL;
+    /* Do not modify the live L1 continuation before admission/output/ownership has committed. */
+    Session->HostNextRip = KswSvmRead64(Current, KSW_VMCB_NRIP);
+    /* This snapshot is made per VMRUN, not once at monitor startup. */
+    if (!Session->HostImage) { KswNsvmSessionCopy(&Session->L1, Current); }
+    /* The independent physical L1 image remains untouched on partial builder/writeback failure. */
+    if (Session->HostImage) { return; }
+    /* VMRUN resumes at the next instruction after a later virtual VMEXIT. */
+    KswSvmWrite64(KswSvmNestedHostImage(Session), KSW_VMCB_RIP, KswSvmRead64(Current, KSW_VMCB_NRIP));
+    /* An event preceding the intercepted VMRUN already completed; do not inject it twice. */
+    KswSvmWrite64(KswSvmNestedHostImage(Session), KSW_VMCB_EVENT, 0);
+    /* Completing the intercepted VMRUN consumes any preceding single-instruction interrupt shadow. */
+    KswSvmWrite64(KswSvmNestedHostImage(Session), 0x068U, 0);
+}
+
+/* Complete the retained L1 continuation only when the virtual VMRUN or INVALID return has committed. */
+static void KswNsvmSessionCommitHost(KSW_NSVM_SESSION* Session)
+{
+    if (!Session->HostImage) { return; }
+    KswSvmWrite64(Session->HostImage, KSW_VMCB_RIP, Session->HostNextRip);
+    KswSvmWrite64(Session->HostImage, KSW_VMCB_EVENT, 0);
+    KswSvmWrite64(Session->HostImage, 0x068U, 0);
+}
+
+/* Read a source PTE through NPT01; the guest GPA is never cast to a host pointer. */
+static int KswNsvmSessionReadSource(void* Context, KSW_SVM_U64 Address, KSW_SVM_U64* Value)
+{
+    /* This descriptor has the same retained lifetime as the VMRUN transaction. */
+    const KSW_NSVM_SESSION_IO* io = Context;
+    /* Resolution checks the authoritative outer PAT and page alignment. */
+    KSW_NSVM_OPERAND_RESULT resolved;
+    /* Source words cannot cross page boundaries or use misaligned accesses. */
+    if ((Address & 7ULL) || KswSvmNestedResolveOperand(&io->Operand,
+        Address & ~4095ULL, &resolved) != KSW_NNPT_OK) { return 0; }
+    /* The physical callback still applies RAM ownership validation to the fresh word. */
+    return io->Operand.Read(io->Operand.Context, resolved.HostPa + (Address & 4095ULL), Value);
+}
+
+/* Group adjacent source words without caching any translation or data across entry attempts. */
+typedef struct _KSW_NSVM_SOURCE_CAPTURE {
+    /* Each capture descriptor lives only on the current root stack. */
+    const KSW_NSVM_SESSION_IO* Io;
+    /* Reset each call: zero is absent, one is captured, two preserves exact-word fallback. */
+    KSW_SVM_U64 Page;
+    unsigned Valid;
+} KSW_NSVM_SOURCE_CAPTURE;
+
+/* Full pages use the existing RAM/PAT translator and its final NPT01 structural recheck. */
+static int KswNsvmSessionReadSourceBatch(void* Context, KSW_SVM_U64 Address, KSW_SVM_U64* Value)
+{
+    /* No borrowed physical-window mapping escapes into this descriptor. */
+    KSW_NSVM_SOURCE_CAPTURE* capture = Context;
+    /* The scratch allocation belongs to this CPU's prepared lifetime. */
+    const KSW_NSVM_SESSION_IO* io = capture->Io;
+    /* Snapshot progress is separate from the source value being validated. */
+    KSW_NSVM_OPERAND_RESULT result;
+    /* Assemble bytes without imposing an alignment requirement on optional test scratch storage. */
+    unsigned byte;
+    /* Misaligned source words are never normalized into different PTE identities. */
+    if (Address & 7ULL) { return 0; }
+    /* Callers without optional scratch/transport retain the exact previous word-based contract. */
+    if (!io->SourceSyncPage || !io->Operand.ReadPage) {
+        /* No optional callback is attempted on the bounded-probe path. */
+        return KswNsvmSessionReadSource((void*)io, Address, Value);
+    }
+    /* Changing pages discards the previous image; consecutive words reuse only this fresh call's copy. */
+    if (!capture->Valid || capture->Page != (Address & ~4095ULL)) {
+        /* Singleton ancestor pages are cheaper as exact words than complete 4-KiB snapshots. */
+        unsigned low = 0, high = io->Shadow->SourceCount, middle;
+        /* A failed copy cannot authorize reuse of old contents. */
+        capture->Page = Address & ~4095ULL; capture->Valid = 2;
+        /* The publication ledger is sorted by GPA, allowing one bounded page-density lookup. */
+        while (low < high) {
+            /* Find the first tracked word in this page, including addresses before the submitted word. */
+            middle = low + (high - low) / 2U;
+            /* Comparing page bases does not alter any tracked source identity. */
+            if ((io->Shadow->SourceAddress[middle] & ~4095ULL) < capture->Page) { low = middle + 1U; }
+            /* Keep matching words in the candidate range. */
+            else { high = middle; }
+        }
+        /* Fewer than four tracked words retain the original fresh exact-word path for this page. */
+        if (io->Shadow->SourceCount - low < 4U ||
+            (io->Shadow->SourceAddress[low + 3U] & ~4095ULL) != capture->Page) {
+            /* This call's page marker prevents repeating the density search for its remaining words. */
+            return KswNsvmSessionReadSource((void*)io, Address, Value);
+        }
+        /* Full-page transport is optional; failure preserves the original exact-word fallback. */
+        if (KswSvmNestedReadOperandPage(&io->Operand, Address & ~4095ULL,
+                io->SourceSyncPage, &result) != KSW_NNPT_OK) {
+            /* The fallback still resolves fresh NPT01/PAT and validates RAM for this exact word. */
+            return KswNsvmSessionReadSource((void*)io, Address, Value);
+        }
+        /* Only a complete, revalidated image becomes readable by later same-page checks. */
+        capture->Page = Address & ~4095ULL; capture->Valid = 1;
+    }
+    /* A partial-page transport need not be retried for every word during this same call. */
+    if (capture->Valid != 1) { return KswNsvmSessionReadSource((void*)io, Address, Value); }
+    /* Every ledger word is checked, including permissions/frame/cache/Dirty; only Accessed is ignored. */
+    *Value = 0;
+    /* Portable byte assembly avoids aliasing or partial alignment assumptions. */
+    for (byte = 0; byte < 8; ++byte) {
+        /* Addresses were aligned above and cannot cross the retained page. */
+        *Value |= (KSW_SVM_U64)io->SourceSyncPage[(unsigned)(Address & 4095ULL) + byte] << (byte * 8);
+    }
+    /* No kernel allocation, wait, page-table mutation or hardware flush occurred. */
+    return 1;
+}
+
+static unsigned KswNsvmSessionCacheImpl(KSW_NSVM_SESSION* Session,
     KSW_NSVM_SESSION_IO* Io, const KSW_SVM_VMCB* Current)
 {
     KSW_SVM_U64 key[13];
+    /* Initialized on every virtual VMRUN; source snapshots cannot survive into a later flush. */
+    KSW_NSVM_SOURCE_CAPTURE source = { Io, 0, 0 };
+    /* Shared keys belong to the actual virtual VMCB, not the CPU that last ran it. */
+    KSW_SVM_U64* cacheKey = Io->SharedCache ? Io->SharedCache->Key : Session->CacheKey;
+    KSW_SVM_U64* cacheEpoch = Io->SharedCache ? &Io->SharedCache->Epoch : &Session->CacheEpoch;
+    KSW_SVM_U64* cacheToken = Io->SharedCache ? &Io->SharedCache->OwnerToken : &Session->CacheOwnerToken;
+    unsigned* cacheValid = Io->SharedCache ? &Io->SharedCache->Valid : &Session->CacheValid;
     unsigned i, miss = 0;
     KSWORD_HVM_NPT_CACHE_STATS* stats = &Session->CacheStats;
     key[0] = Session->OperandHostPa;
@@ -69,17 +206,26 @@ static unsigned KswNsvmSessionCache(KSW_NSVM_SESSION* Session,
     key[11] = (KSW_SVM_U64)Io->Mmu->OuterBits |
         ((KSW_SVM_U64)Io->Mmu->OuterPage1Gb << 32) | ((KSW_SVM_U64)Io->Mmu->OuterNx << 40);
     key[12] = (KSW_SVM_U64)Io->Policy.PhysicalBits | ((KSW_SVM_U64)Io->Operand.Page1Gb << 32);
+    /* NPT12 is a physical paging format: L1 process CR3 and task CR0.TS do not change its composition. */
+    if (Io->SharedCache) { key[3] &= 0x60000000ULL; key[4] = key[5] = 0; key[6] &= 1ULL << 11; }
     if (!Io->ReuseNpt) { miss |= 1U << KSW_HVM_NPT_CACHE_DISABLED; }
-    if (!Session->CacheValid) { miss |= 1U << KSW_HVM_NPT_CACHE_COLD; }
+    if (!*cacheValid) { miss |= 1U << KSW_HVM_NPT_CACHE_COLD; }
     if (((const unsigned char*)&Session->Vmcb12)[KSW_VMCB_TLB]) {
         KswHvmNptCacheCount(stats, &stats->tlbRequests);
     }
-    if (Session->CacheValid) {
-        if (Session->CacheEpoch != Io->Shadow->Epoch) { miss |= 1U << KSW_HVM_NPT_CACHE_EPOCH; }
-        if (Session->CacheOwnerToken != Session->Lease.PreviousToken) { miss |= 1U << KSW_HVM_NPT_CACHE_OWNER; }
+    if (*cacheValid) {
+        if (*cacheEpoch != Io->Shadow->Epoch) { miss |= 1U << KSW_HVM_NPT_CACHE_EPOCH; }
+        if (!Io->SharedCache && *cacheToken != Session->Lease.PreviousToken) { miss |= 1U << KSW_HVM_NPT_CACHE_OWNER; }
         for (i = 0; i < KSW_HVM_NPT_CACHE_KEYS; ++i) {
-            if (key[i] != Session->CacheKey[i]) { miss |= 1U << (KSW_HVM_NPT_CACHE_KEY_BASE + i); }
+            if (key[i] != cacheKey[i]) { miss |= 1U << (KSW_HVM_NPT_CACHE_KEY_BASE + i); }
         }
+    }
+    /* Immutable NPT01 permits bounded source rechecks; all other lifetimes reset conservatively. */
+    if (((const unsigned char*)&Session->Vmcb12)[KSW_VMCB_TLB] &&
+        (miss || !Io->Mmu->OuterImmutable ||
+         !KswSvmNestedShadowSourcesVerify(Io->Shadow, KswNsvmSessionReadSourceBatch, &source, Io->SourceStable, Io->Operand.Context))) {
+        /* A hardware flush alone cannot repair changed or untracked software mappings. */
+        miss |= 1U << KSW_HVM_NPT_CACHE_TLB;
     }
     KswHvmNptCacheCount(stats, &stats->lookups);
     if (miss) {
@@ -94,11 +240,25 @@ static unsigned KswNsvmSessionCache(KSW_NSVM_SESSION* Session,
     } else {
         KswHvmNptCacheCount(stats, &stats->hits);
     }
-    for (i = 0; i < 13; ++i) { Session->CacheKey[i] = key[i]; }
-    Session->CacheEpoch = Io->Shadow->Epoch;
-    Session->CacheOwnerToken = Session->Lease.Token;
-    Session->CacheValid = 1;
+    for (i = 0; i < 13; ++i) { cacheKey[i] = key[i]; }
+    *cacheEpoch = Io->Shadow->Epoch;
+    *cacheToken = Session->Lease.Token;
+    *cacheValid = 1;
     return 1;
+}
+
+/* Time source synchronization separately from VMCB capture and permission maps. */
+static unsigned KswNsvmSessionCache(KSW_NSVM_SESSION* Session,
+    KSW_NSVM_SESSION_IO* Io, const KSW_SVM_VMCB* Current)
+{
+    /* Unprofiled calls execute no timestamp instruction. */
+    KSW_SVM_U64 tick = KswSvmPerfBegin(Io);
+    /* Preserve the exact architectural cache result. */
+    unsigned status = KswNsvmSessionCacheImpl(Session, Io, Current);
+    /* Failed or recycled source checks still consumed root work. */
+    KswSvmPerfEnd(Io, KSW_HVM_PERF_SYNC, tick);
+    /* Telemetry cannot change whether the transaction may execute. */
+    return status;
 }
 
 /* Bind each transaction to one arbitrary translated operand and one processor-private cache. */
@@ -110,7 +270,11 @@ unsigned int KswSvmNestedSessionEnter(KSW_NSVM_SESSION* Session,
     /* Keep the exact failed permission-page identity in transaction diagnostics. */
     KSW_NSVM_CAPTURE_CONTEXT capture;
     /* Keep software validation status distinct from an eventual hardware exit. */
-    unsigned int status;
+    unsigned int status, mapIndex, reuseMaps;
+    /* These keys bind cached bytes to this VMCB and exact enabled map source pages. */
+    KSW_SVM_U64 permissionKey[4];
+    /* Optional timing boundaries never borrow transient guest storage. */
+    KSW_SVM_U64 tick;
     /* No partial context is allowed to reach entry preparation. */
     if (!Session || !Io || !Current || !Io->Commit || !Io->Owners || !Io->MergedMsr || !Io->MergedIo ||
         !Io->Shadow || !Io->Mmu || !Io->Shadow->Pages || !Io->Shadow->Capacity) { return KSW_NSVM_ACTION_UNSUPPORTED; }
@@ -121,11 +285,10 @@ unsigned int KswSvmNestedSessionEnter(KSW_NSVM_SESSION* Session,
         /* State is retained for diagnosis; the instruction has not completed. */
         return KswNsvmSessionFault(Session);
     }
-    /* Old permission evidence is invalid even if the next operand capture fails. */
-    Session->Permissions.Ready = 0;
-    /* Capture a complete VMCB using the trusted outer physical/cache contract. */
-    status = KswSvmNestedReadOperandPage(&Io->Operand, OperandPa,
-        (unsigned char*)&Session->Vmcb12, &Session->OperandResult);
+    /* A scope proof cannot become valid halfway through a snapshot or bypass missing CPU acknowledgements. */
+    if (Io->BeginWatch) { Io->BeginWatch(Io->Operand.Context); }
+    /* Resolve only identity before leasing; executable state is captured after acquisition. */
+    status = KswSvmNestedResolveOperand(&Io->Operand, OperandPa, &Session->OperandResult);
     /* This is a monitor memory failure, not an invented architectural INVALID. */
     if (status != KSW_NNPT_OK) { return KswNsvmSessionFault(Session); }
     /* Save identities independently from later map reads or writeback diagnostics. */
@@ -143,8 +306,12 @@ unsigned int KswSvmNestedSessionEnter(KSW_NSVM_SESSION* Session,
         }
     }
     /* The first read found the identity; only a snapshot taken under the lease may execute. */
+    tick = KswSvmPerfBegin(Io);
+    /* Time the single post-lease executable snapshot. */
     status = KswSvmNestedReadOperandPage(&Io->Operand, OperandPa,
         (unsigned char*)&Session->Vmcb12, &Session->OperandResult);
+    /* Validation and owner operations remain separately visible in dispatch remainder. */
+    KswSvmPerfEnd(Io, KSW_HVM_PERF_OPERAND, tick);
     /* Changed translation or a failed capture retains the lease until a proven native abort. */
     if (status != KSW_NNPT_OK || Session->OperandResult.HostPa != Session->Lease.HostPa) { return KswNsvmSessionFault(Session); }
     /* Replacing untrusted controls with valid host pointers must not hide invalid guest input. */
@@ -159,18 +326,20 @@ unsigned int KswSvmNestedSessionEnter(KSW_NSVM_SESSION* Session,
     /* Architecturally invalid VMRUN returns to L1 with INVALID, not to the initial Windows caller. */
     if (status == KSW_NSVM_ENTRY_INVALID) {
         /* Save the real per-instruction continuation before returning the virtual exit. */
-        KswNsvmSessionSaveL1(Session, Current);
+        KswNsvmSessionSaveL1(Session, Io, Current);
         /* Preserve unexecuted guest state while applying INVALID outputs and EVENTINJ consumption. */
         KswSvmNestedInvalidExit(&Session->Vmcb12);
         /* A failed physical write cannot publish a completed virtual VMEXIT. */
-        status = KswSvmNestedWriteback(&Io->Operand, Session->OperandPa, Session->OperandHostPa,
-            &Session->Vmcb12, KSW_NSVM_SAVE_INVALID, 1, Io->Commit, &Session->OperandResult);
+        status = KswSvmPerfWriteback(Io, Session->OperandPa, Session->OperandHostPa,
+            &Session->Vmcb12, KSW_NSVM_SAVE_INVALID, &Session->OperandResult);
         /* Do not automatically retry a possibly partial write. */
         if (status != KSW_NNPT_OK) { return KswNsvmSessionFault(Session); }
         /* INVALID output is complete before another CPU may acquire this VMCB. */
         if (!KswSvmNestedOwnerRelease(Io->Owners, &Session->Lease)) { return KswNsvmSessionFault(Session); }
         /* Apply the architectural host-return effects using the current context. */
-        KswSvmNestedRestoreL1(Current, &Session->L1, Current);
+        KswNsvmSessionCommitHost(Session);
+        /* Apply the architectural host-return effects using the current context. */
+        KswSvmNestedRestoreL1(Current, KswSvmNestedHostImage(Session), Current);
         /* Virtual VMEXIT clears GIF even when the inner guest never executed. */
         Session->VirtualGif = 0;
         /* Count only successfully committed invalid-entry returns. */
@@ -178,32 +347,63 @@ unsigned int KswSvmNestedSessionEnter(KSW_NSVM_SESSION* Session,
         /* The next dispatcher action resumes L1 rather than admitting L2. */
         return KSW_NSVM_ACTION_INVALID;
     }
+    /* The execution lease now permits a permanent virtual-VMCB root to follow this CPU. */
+    if (Io->BindCache) { Io->BindCache(Io->Operand.Context, Io, &Session->Lease); }
+    /* Map identity excludes ignored low address bits and includes original intercept enablement. */
+    permissionKey[0] = Session->OperandHostPa;
+    permissionKey[1] = (unsigned)KswSvmRead64(&Session->Vmcb12, KSW_VMCB_MISC1) & KSW_NSVM_PERMISSION_FLAGS;
+    permissionKey[2] = KswSvmRead64(&Session->Vmcb12, KSW_VMCB_MSRPM) & ~4095ULL;
+    permissionKey[3] = KswSvmRead64(&Session->Vmcb12, KSW_VMCB_IOPM) & ~4095ULL;
+    /* Changed/dirty/unacknowledged pages still execute the original full capture and merge. */
+    reuseMaps = Session->Permissions.Ready && Session->PermissionsReusable;
+    for (mapIndex = 0; mapIndex < 4; ++mapIndex) { if (Session->PermissionKey[mapIndex] != permissionKey[mapIndex]) { reuseMaps = 0; } }
+    if (reuseMaps && !KswNsvmPermissionStable(Io, permissionKey)) { reuseMaps = 0; }
+    if (!reuseMaps) {
+        /* A failed capture never leaves a reusable proof of the preceding operand. */
+        Session->PermissionsReusable = 0; KswNsvmPermissionArm(Io, permissionKey);
     /* Capture callbacks borrow this descriptor only during the current entry attempt. */
     capture.Io = Io; capture.Session = Session;
+    /* Map capture and merge form one nonoverlapping leaf stage. */
+    tick = KswSvmPerfBegin(Io);
     /* Capture only enabled maps; low base bits follow AMD's ignored-bit semantics. */
     if (!KswSvmNestedCapturePermissions(&Session->Permissions,
         (unsigned int)KswSvmRead64(&Session->Vmcb12, KSW_VMCB_MISC1),
         KswSvmRead64(&Session->Vmcb12, KSW_VMCB_MSRPM),
         KswSvmRead64(&Session->Vmcb12, KSW_VMCB_IOPM), Io->Policy.PhysicalBits,
         KswNsvmSessionReadMap, &capture) || !KswSvmNestedPermissionView(&Session->Permissions, &inner)) {
+        /* Failed map reads must still be included in selected software work. */
+        KswSvmPerfEnd(Io, KSW_HVM_PERF_MAPS, tick);
         /* No merged permission output is executable after a partial capture. */
         return KswNsvmSessionFault(Session);
     }
     /* Both owners may request exits; neither can remove the other's restrictions. */
     if (!KswSvmNestedMergePermissions(&Io->OuterPermissions, &inner, Io->MergedMsr, Io->MergedIo)) {
+        /* Account for the rejected merge without authorizing partial maps. */
+        KswSvmPerfEnd(Io, KSW_HVM_PERF_MAPS, tick);
         /* An incoherent outer permission descriptor is an implementation failure. */
         return KswNsvmSessionFault(Session);
     }
+    /* A completed map stage ends before any NPT12 source validation starts. */
+    if (Session->PermissionsGeneration == ~0ULL) { return KswNsvmSessionFault(Session); }
+    /* A stable physical map address does not mean its newly merged bytes were unchanged. */
+    ++Session->PermissionsGeneration;
+    /* A completed map stage ends before any NPT12 source validation starts. */
+    KswSvmPerfEnd(Io, KSW_HVM_PERF_MAPS, tick);
+        /* New bytes are reusable only when the same source guard covered their completed capture. */
+        Session->PermissionsReusable = KswNsvmPermissionStable(Io, permissionKey);
+        for (mapIndex = 0; mapIndex < 4; ++mapIndex) { Session->PermissionKey[mapIndex] = permissionKey[mapIndex]; }
+    }
+    /* Source synchronization has its own timed leaf wrapper. */
     if (!KswNsvmSessionCache(Session, Io, Current)) { return KswNsvmSessionFault(Session); }
     /* Preserve the host continuation before replacing its automatic execution state. */
-    KswNsvmSessionSaveL1(Session, Current);
+    KswNsvmSessionSaveL1(Session, Io, Current);
     /* Build with real processor-local ASID and L0-owned map/NPT pointers only. */
-    status = KswSvmNestedBuildEntry(Current, &Session->L1, &Session->Vmcb12, &Io->Policy,
+    status = (Session->HostImage ? KswSvmNestedBuildStableEntry : KswSvmNestedBuildEntry)(Session->HostImage ? Io->StableL2 : Current, KswSvmNestedHostImage(Session), &Session->Vmcb12, &Io->Policy,
         Io->Shadow->Pages[0].Physical, Io->MsrPa, Io->IoPa, Io->Asid, &Session->Admission);
     /* Builder rejection leaves Current intact and cannot imply successful entry. */
     if (status != KSW_NSVM_ENTRY_OK) { return KswNsvmSessionFault(Session); }
     /* NPT12's cache interpretation belongs to L1 PAT, not L2's guest PAT. */
-    Io->Mmu->InnerPat = KswSvmRead64(&Session->L1, KSW_VMCB_PAT);
+    Io->Mmu->InnerPat = KswSvmRead64(KswSvmNestedHostImage(Session), KSW_VMCB_PAT);
     /* The composed walker never installs NCR3 directly into hardware. */
     Io->Mmu->InnerRoot = KswSvmRead64(&Session->Vmcb12, KSW_VMCB_NCR3);
     /* Virtual L1 capabilities bound every nested page-table walk. */
@@ -211,15 +411,19 @@ unsigned int KswSvmNestedSessionEnter(KSW_NSVM_SESSION* Session,
     /* This implementation advertises no page size beyond the trusted outer CPU. */
     Io->Mmu->InnerPage1Gb = Io->Operand.Page1Gb;
     /* NPT12 NX interpretation uses the virtual host EFER. */
-    Io->Mmu->InnerNx = (KswSvmRead64(&Session->L1, KSW_VMCB_EFER) & (1ULL << 11)) != 0;
+    Io->Mmu->InnerNx = (KswSvmRead64(KswSvmNestedHostImage(Session), KSW_VMCB_EFER) & (1ULL << 11)) != 0;
     /* Cache publication is tied to the current translation epoch. */
     Io->Mmu->Epoch = Io->Shadow->Epoch;
     /* Restore this VMCB's events even when L1 scheduled it on a different physical processor. */
     if (!KswSvmNestedOwnerRestore(Io->Owners, &Session->Lease, Io->Pending)) { return KswNsvmSessionFault(Session); }
     /* VMRUN sets guest GIF; the interrupt arbiter translates this logical state. */
+    KswNsvmSessionCommitHost(Session);
+    /* VMRUN sets guest GIF; the interrupt arbiter translates this logical state. */
     Session->VirtualGif = 1;
     /* Only now can the caller publish the inner owner before executing hardware. */
     Session->Phase = KSW_NSVM_SESSION_L2; ++Session->Entries;
+    /* Capture once per virtual VMRUN; internal L0 exits cannot repeat a consumed request. */
+    Session->PendingTlbControl = ((const unsigned char*)&Session->Vmcb12)[KSW_VMCB_TLB];
     /* This requests VMRUN; it is not evidence that hardware has executed the guest. */
     return KSW_NSVM_ACTION_ENTER;
 }
@@ -238,17 +442,19 @@ unsigned int KswSvmNestedSessionReflect(KSW_NSVM_SESSION* Session,
     /* Merge hardware outputs into the captured source, preserving all L1 control fields. */
     KswSvmNestedReflectExit(&Session->Vmcb12, Current, 1);
     /* Bind output to the same physical page even if a future outer owner supports remapping. */
-    if (KswSvmNestedWriteback(&Io->Operand, Session->OperandPa, Session->OperandHostPa,
-        &Session->Vmcb12, KSW_NSVM_SAVE_VMEXIT, 1, Io->Commit, &Session->OperandResult) != KSW_NNPT_OK) {
+    if (KswSvmPerfWriteback(Io, Session->OperandPa, Session->OperandHostPa,
+        &Session->Vmcb12, KSW_NSVM_SAVE_VMEXIT, &Session->OperandResult) != KSW_NNPT_OK) {
         /* A partial or rejected output keeps L2 resources owned for diagnosis. */
         return KswNsvmSessionFault(Session);
     }
     /* Persist unstarted guest-owned deliveries only after the complete architectural writeback. */
     if (!KswSvmNestedOwnerPark(Io->Owners, &Session->Lease, Io->Pending)) { return KswNsvmSessionFault(Session); }
+    /* Detach diagnostics before releasing the lease to another CPU; hardware is already in root. */
+    if (Io->UnbindCache) { Io->UnbindCache(Io->Operand.Context, (KSW_NSVM_SESSION_IO*)Io); }
     /* Publish physical output and parked events before releasing the unique VMCB execution owner. */
     if (!KswSvmNestedOwnerRelease(Io->Owners, &Session->Lease)) { return KswNsvmSessionFault(Session); }
     /* Current VMLOAD state/CR2/DR6 survive while L1's current VMRUN core state returns. */
-    KswSvmNestedRestoreL1(Current, &Session->L1, Current);
+    KswSvmNestedRestoreL1(Session->HostImage ? Session->HostImage : Current, KswSvmNestedHostImage(Session), Current);
     /* The virtual host resumes with GIF clear; the arbiter controls actual event delivery. */
     Session->VirtualGif = 0;
     /* Publish idle only after output and the current continuation are both complete. */

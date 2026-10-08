@@ -3,6 +3,7 @@
 #include "startup_internal.h"
 
 #include "../string/string.h"
+#include "../../../../shared/usermode/KswordArkServiceMode.h"
 
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -5660,6 +5661,15 @@ try {
                 FromWide(L"服务控制管理器定位器无效。"));
         }
 
+        if (ksword::ark::isKswordArkService(serviceName))
+        {
+            const auto profile = ksword::ark::queryServiceProfile();
+            if (!profile.scmManagementAllowed())
+                return MakeActionResult(ks::startup::StartupActionStatus::WriteFailed,
+                    false, false, ksword::ark::serviceProfileManagementError(profile),
+                    FromWide(ksword::ark::serviceProfileManagementMessage(profile)));
+        }
+
         SC_HANDLE scmHandle = ::OpenSCManagerW(nullptr, nullptr, SC_MANAGER_CONNECT);
         if (scmHandle == nullptr)
         {
@@ -5715,6 +5725,20 @@ try {
         const DWORD desiredStartType = enabled
             ? (entry.actionLocator.serviceIsDriver ? SERVICE_SYSTEM_START : SERVICE_AUTO_START)
             : SERVICE_DISABLED;
+        // Opening/querying SCM may race a transition to the PnP profile. No
+        // mutating SCM call follows unless the current profile is still legacy.
+        if (ksword::ark::isKswordArkService(serviceName))
+        {
+            const auto profile = ksword::ark::queryServiceProfile();
+            if (!profile.scmManagementAllowed())
+            {
+                ::CloseServiceHandle(serviceHandle);
+                ::CloseServiceHandle(scmHandle);
+                return MakeActionResult(ks::startup::StartupActionStatus::WriteFailed,
+                    false, false, ksword::ark::serviceProfileManagementError(profile),
+                    FromWide(ksword::ark::serviceProfileManagementMessage(profile)));
+            }
+        }
         if (currentStartType == desiredStartType)
         {
             ::CloseServiceHandle(serviceHandle);
@@ -5760,6 +5784,20 @@ try {
             const DWORD verificationError = observedError == ERROR_SUCCESS
                 ? ERROR_INVALID_DATA
                 : observedError;
+            // A rollback also changes service configuration; do not overwrite
+            // a PnP profile that became active during the verification query.
+            if (ksword::ark::isKswordArkService(serviceName))
+            {
+                const auto profile = ksword::ark::queryServiceProfile();
+                if (!profile.scmManagementAllowed())
+                {
+                    ::CloseServiceHandle(serviceHandle);
+                    ::CloseServiceHandle(scmHandle);
+                    return MakeActionResult(ks::startup::StartupActionStatus::RollbackFailed,
+                        false, true, ksword::ark::serviceProfileManagementError(profile),
+                        FromWide(L"服务启动类型验证失败，且无法恢复操作前配置。"));
+                }
+            }
             const bool rollbackSucceeded = ::ChangeServiceConfigW(
                 serviceHandle,
                 SERVICE_NO_CHANGE,
@@ -5790,6 +5828,18 @@ try {
             return failure;
         }
 
+        if (ksword::ark::isKswordArkService(serviceName))
+        {
+            const auto profile = ksword::ark::queryServiceProfile();
+            if (!profile.scmManagementAllowed())
+            {
+                ::CloseServiceHandle(serviceHandle);
+                ::CloseServiceHandle(scmHandle);
+                return MakeActionResult(ks::startup::StartupActionStatus::VerificationFailed,
+                    false, true, ksword::ark::serviceProfileManagementError(profile),
+                    FromWide(L"服务启动类型验证失败，且无法恢复操作前配置。"));
+            }
+        }
         ::CloseServiceHandle(serviceHandle);
         ::CloseServiceHandle(scmHandle);
         return MakeActionResult(
@@ -6439,6 +6489,14 @@ try {
         const ks::startup::StartupEntry& entry)
     {
         const std::wstring serviceName = ToWide(entry.actionLocator.serviceNameText);
+        if (ksword::ark::isKswordArkService(serviceName))
+        {
+            const auto profile = ksword::ark::queryServiceProfile();
+            if (!profile.scmManagementAllowed())
+                return MakeActionResult(ks::startup::StartupActionStatus::WriteFailed,
+                    false, false, ksword::ark::serviceProfileManagementError(profile),
+                    FromWide(ksword::ark::serviceProfileManagementMessage(profile)));
+        }
         if (serviceName.empty()
             || serviceName.find(L'\0') != std::wstring::npos
             || serviceName.find_first_of(L"\\/") != std::wstring::npos
@@ -6525,6 +6583,18 @@ try {
                 FromWide(L"服务或驱动配置已在枚举后变化；未删除陈旧目标。"));
         }
 
+        if (ksword::ark::isKswordArkService(serviceName))
+        {
+            const auto profile = ksword::ark::queryServiceProfile();
+            if (!profile.scmManagementAllowed())
+            {
+                ::CloseServiceHandle(serviceHandle);
+                ::CloseServiceHandle(scmHandle);
+                return MakeActionResult(ks::startup::StartupActionStatus::WriteFailed,
+                    false, false, ksword::ark::serviceProfileManagementError(profile),
+                    FromWide(ksword::ark::serviceProfileManagementMessage(profile)));
+            }
+        }
         const BOOL deleteOk = ::DeleteService(serviceHandle);
         const DWORD deleteError = deleteOk == FALSE ? ::GetLastError() : ERROR_SUCCESS;
         ::CloseServiceHandle(serviceHandle);

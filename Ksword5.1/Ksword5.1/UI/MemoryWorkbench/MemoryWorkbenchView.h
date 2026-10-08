@@ -576,6 +576,9 @@ namespace ks::ui
         // connectHexViewMenu：把 hexViewMenuButton_ 接上十六进制页的"视图"菜单（aboutToShow 重建）、
         // 行宽模式变化时刷新徽标与悬停说明、仅在十六进制子页（子页签第 0 页）显示。buildUi 之后调用一次。
         void connectHexViewMenu();
+        void connectRowCanvasSignals();
+        void openActiveFind();
+        void requestRowCanvasWindow(int tabIndex, std::uint64_t address, std::uint64_t length);
         // hexViewMenuButton_：子页签那一行右侧的"视图"菜单钮（自绘图标钮，徽标显示"自动"或当前行宽）。
         HexViewGlyphButton* hexViewMenuButton_ = nullptr;
 

@@ -12,6 +12,8 @@
 #include "../UI/AsyncUiDispatcher.h"
 
 #include <QWidget>
+#include <QVector>
+#include <QStringList>
 
 #include <atomic>      // std::atomic_bool：搜索线程运行状态控制。
 #include <deque>       // std::deque：搜索结果 FIFO 队列，避免头部消费搬移。
@@ -35,6 +37,15 @@ class QTreeWidget;
 class QTreeWidgetItem;
 class QVBoxLayout;
 class RegistryOptimizationPage;
+class RegistryValueEditorWidget;
+class QComboBox;
+class QCheckBox;
+class QTabBar;
+class QScrollArea;
+struct RegistryDocument;
+struct RegistryAccessContext;
+struct RegistryKeyListing;
+struct RegistryApplyResult;
 
 // ============================================================
 // RegistryDock
@@ -57,6 +68,11 @@ public:
     // - 作用：安全停止后台搜索线程与刷新计时器。
     ~RegistryDock() override;
 
+protected:
+    bool eventFilter(QObject* watched, QEvent* event) override;
+    void resizeEvent(QResizeEvent* event) override;
+    void changeEvent(QEvent* event) override;
+
 private:
     // SearchOptions：
     // - 作用：封装搜索时的匹配范围选项。
@@ -66,6 +82,28 @@ private:
         bool searchValueName = true;    // 是否匹配值名。
         bool searchValueData = true;    // 是否匹配值数据文本。
         bool caseSensitive = false;     // 是否大小写敏感。
+        bool recursive = true;
+        bool exactMatch = false;
+        int viewBits = 0;
+        int valueType = -1;
+        QByteArray binaryPattern;
+        int maximumDepth = 128;
+        quint64 generation = 0;
+    };
+
+    struct PendingValueChange
+    {
+        QString keyPath;
+        QString name;
+        DWORD beforeType = REG_NONE;
+        QByteArray beforeData;
+        bool beforeExists = false;
+        DWORD afterType = REG_NONE;
+        QByteArray afterData;
+        bool deleteValue = false;
+        int viewBits = 0;
+        bool useR0 = false;
+        QString result;
     };
 
     // PendingSearchRow：
@@ -86,6 +124,27 @@ private:
     void initializeUi();
     void initializeConnections();
     void initializeRootItems();
+    void initializeWorkbenchControls();
+    RegistryAccessContext accessContext() const;
+    RegistryAccessContext accessContextForPath(const QString& path) const;
+    void loadSelectedValue();
+    bool preserveEditorDraft();
+    bool stageEditorValue();
+    void discardEditorValue();
+    void updatePendingChanges();
+    void applyPendingChanges();
+    void restoreLastChanges();
+    void filterCurrentValues();
+    void appendValueRows(const std::shared_ptr<const RegistryKeyListing>& listing,
+        int offset, quint64 generation, const QString& selectedName);
+    void showNavigationMenu();
+    void addLocationTab(const QString& path);
+    void backupCurrentKey();
+    void restoreBackup();
+    void previewRegistryDocument(const RegistryDocument& document, const QString& title);
+    void showKeyPermissions();
+    void openOfflineHive();
+    void openRelatedItem();
 
     // ===================== 导航与刷新 =====================
     void navigateToPath(const QString& registryPath, bool recordHistory);
@@ -206,6 +265,8 @@ private:
         const SearchOptions& options,
         std::size_t* scannedKeyCount,
         std::size_t* hitCount);
+    void searchRegistryPath(const QString& path, bool useR0, const QString& keyword,
+        const SearchOptions& options, std::size_t* scanned, std::size_t* hits);
 
     // ===================== WinAPI 工具 =====================
     static bool parseRegistryPath(const QString& pathText, HKEY* rootKeyOut, QString* subPathOut);
@@ -285,5 +346,49 @@ private:
     int m_progressPid = 0;                       // 进度条任务 PID。
     std::size_t m_searchScannedKeys = 0;         // 搜索扫描键数量统计。
     std::size_t m_searchHitCount = 0;            // 搜索命中数量统计。
+    std::atomic_size_t m_searchSkipped{0};
+    std::atomic_size_t m_searchDropped{0};
+    bool m_lastSearchStopped = false;
+    quint64 m_searchGeneration = 0;
+    int m_activeLocationIndex = 0;
+
+    QTabBar* m_locationTabs = nullptr;
+    QLineEdit* m_filterEdit = nullptr;
+    QComboBox* m_viewCombo = nullptr;
+    QComboBox* m_searchScopeCombo = nullptr;
+    QComboBox* m_searchTypeCombo = nullptr;
+    QCheckBox* m_matchKeysCheck = nullptr;
+    QCheckBox* m_matchNamesCheck = nullptr;
+    QCheckBox* m_matchDataCheck = nullptr;
+    QCheckBox* m_matchCaseCheck = nullptr;
+    QCheckBox* m_matchExactCheck = nullptr;
+    RegistryValueEditorWidget* m_valueEditor = nullptr;
+    QScrollArea* m_detailScroll = nullptr;
+    QLabel* m_editorContextLabel = nullptr;
+    QLabel* m_editorSourceLabel = nullptr;
+    QLabel* m_editorStatusLabel = nullptr;
+    QPushButton* m_stageButton = nullptr;
+    QPushButton* m_discardButton = nullptr;
+    QPushButton* m_applyChangesButton = nullptr;
+    QTableWidget* m_changesTable = nullptr;
+    QStringList m_favoritePaths;
+    QString m_editorPath;
+    QString m_editorName;
+    QByteArray m_editorOriginalData;
+    DWORD m_editorOriginalType = REG_NONE;
+    bool m_editorReady = false;
+    bool m_valuesActive = false;
+    QPushButton* m_detailToggle = nullptr;
+    int m_editorViewBits = 0;
+    bool m_editorUseR0 = false;
+    quint64 m_editorGeneration = 0;
+    quint64 m_valueLoadGeneration = 0;
+    int m_viewBits = 0;
+    bool m_applyingChanges = false;
+    std::shared_ptr<std::atomic_bool> m_operationsClosed = std::make_shared<std::atomic_bool>(false);
+    QVector<PendingValueChange> m_pendingChanges;
+    QVector<PendingValueChange> m_lastChanges;
+    std::shared_ptr<RegistryApplyResult> m_lastDocumentResult;
+    std::shared_ptr<std::atomic_bool> m_documentCancel;
 };
 

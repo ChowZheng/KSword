@@ -163,7 +163,7 @@ CR3 原值上报，**不**反解 PID：KVA shadow、系统地址空间、内核�
 
 ## 入口
 
-- **界面**：虚拟化 (KVM) → **内存监视** 子页。添加 / 重新武装 / 移除 / 刷新 /
+- **界面**：虚拟化 → **内存监视** 子页。添加 / 重新武装 / 移除 / 刷新 /
   查看写入者反汇编 / 复制证据。
 - **CLI**（`tools/hvm_ctl`，探针工具，不随主程序发布）：
 
@@ -297,7 +297,7 @@ CR3 → 进程的 best-effort 归因（四态：Resolved / NotFound / Failed / U
 | DriverObject 页注释 | "MajorFunction 槽位与 DriverObject 必在同一页，所以监视整个对象等于监视了每一项" | `DRIVER_OBJECT` 是池分配、16 字节对齐，x64 上 `sizeof` 0x150 而数组在偏移 0x70；基址页内偏移超过 0xE90 时**尾部若干项落到下一页**，而一条监视只覆盖一页 |
 | `openTargetMemory` 注释 | "读不到再退回物理页" | 代码是一次三元选择，虚拟读失败就直接返回。恰好在最需要看当前内容的场景（VA 已不指向那一页）里一个字都读不出来 |
 | `InvalidateWatchesLocked` 的调用点注释 | "放在 rendezvous 之前，因为权限必须趁处理器还能被失效时恢复" | 该函数从来没有 INVEPT 过 |
-| `docs/CLI使用文档.md` | "主程序完整操作与 `hvm_ctl` 共用命令目录" | 那条通路（子页、`--ksword-hvm-command`、`KvmCommandPanel`）已经整条删除 |
+| `docs/CLI使用文档.md` | "主程序完整操作与 `hvm_ctl` 共用命令目录" | 那条通路（子页、`--ksword-hvm-command`、`HvmCommandPanel`）已经整条删除 |
 
 ### 没做的
 

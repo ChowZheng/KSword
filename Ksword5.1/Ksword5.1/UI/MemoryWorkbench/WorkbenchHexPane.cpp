@@ -362,6 +362,35 @@ namespace ks::ui
         return (canvas_ != nullptr) ? canvas_->caretAddress() : 0;
     }
 
+    void WorkbenchHexPane::requestBrowseWindow(std::uint64_t address, std::uint64_t length)
+    {
+        if (!canvas_ || !length) return;
+        const auto bounds = canvas_->addressSpaceRange();
+        if (!bounds || address < bounds->first || address > bounds->last) return;
+        const auto last = address + std::min<std::uint64_t>(length - 1, bounds->last - address);
+        canvas_->requestAddressRange(address, last);
+        lastVisibleFirst_ = address;
+        lastVisibleLast_ = last;
+        hasVisibleRange_ = true;
+        lastAnchor_ = address + (last - address) / 2;
+        if (baselineFeeder_)
+            baselineFeeder_->noteDirty(lastAnchor_, sourceRevisionProvider_ ? sourceRevisionProvider_() : 0ULL,
+                pageProvider_ ? pageProvider_->hasInFlightRequests() : false);
+    }
+
+    void WorkbenchHexPane::setExternalBrowseMode(bool enabled)
+    {
+        if (externalBrowseMode_ == enabled) return;
+        externalBrowseMode_ = enabled;
+        if (!canvas_) return;
+        canvas_->setViewportReadEnabled(!enabled);
+        if (!enabled)
+        {
+            canvas_->scrollToAddress(canvas_->caretAddress(), HexCanvas::ScrollAlign::Center);
+            onCanvasCaretMoved(canvas_->caretAddress());
+        }
+    }
+
     // selectionStart：选区闭区间的起点；无选区（无地址空间）时退回插入点（此时恒为 0）。
     std::uint64_t WorkbenchHexPane::selectionStart() const
     {
@@ -513,6 +542,7 @@ namespace ks::ui
     // "这段窗口现在该围绕哪里选取"的直觉）。
     void WorkbenchHexPane::onCanvasVisibleRangeChanged(quint64 first, quint64 last)
     {
+        if (externalBrowseMode_) return;
         lastVisibleFirst_ = first;
         lastVisibleLast_ = last;
         hasVisibleRange_ = true;
@@ -544,6 +574,7 @@ namespace ks::ui
     void WorkbenchHexPane::onCanvasCaretMoved(quint64 address)
     {
         emit insertionPointChanged(address);
+        if (externalBrowseMode_) return;
 
         // 同上：lastAnchor_ 无条件更新，不依赖 baselineFeeder_ 是否已注入。
         lastAnchor_ = address;

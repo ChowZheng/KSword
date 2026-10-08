@@ -116,7 +116,7 @@ private:
     void applyViewMode();
 
     // ===================== 列表刷新 ======================
-    void refreshWindowListAsync();
+    void refreshWindowListAsync(bool reportProgress = true);
     void rebuildWindowTreeFromSnapshot();
     bool passFilter(const WindowInfo& info) const;
     void updateStatusBar();

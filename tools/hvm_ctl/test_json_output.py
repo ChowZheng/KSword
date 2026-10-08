@@ -41,7 +41,16 @@ metrics = json.loads(subprocess.check_output([str(fixture), 'metrics']))
 for invalid in ('metrics-old', 'metrics-short'):
     rejected = subprocess.run([str(fixture), invalid], capture_output=True)
     assert rejected.returncode != 0, invalid
-assert metrics['version'] == 9 and metrics['backend'] == 2
+assert metrics['version'] == 10 and metrics['backend'] == 2
+perf = metrics['svmProcessors'][0]['perf']
+assert perf['valid'] == 1 and int(perf['sequence']) == 0x100000002
+assert int(perf['sampleMask']) == 63 and len(perf['levels']) == 2
+assert len(perf['levels'][0]) == 12 and len(perf['levels'][0][0]['details']) == 7
+assert int(perf['levels'][0][0]['samples']) == 0x100000001
+assert int(perf['levels'][0][0]['cycles']) == 0x200000002
+assert int(perf['levels'][0][0]['details'][0]) == 0x100000001
+assert int(perf['tlbIssued'][2]) == 0x100000003
+assert len(perf['fastMsr']) == 3 and int(perf['fastMsr'][2][1]) == 0x100000005
 cache = metrics['svmProcessors'][0]['nptCache']
 assert cache['valid'] == 1 and int(cache['sequence']) == 0x100000002
 assert int(cache['lookups']) == 0x100000010 and int(cache['hits']) == 0x10000000a

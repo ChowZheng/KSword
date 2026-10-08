@@ -7,6 +7,10 @@
 #define KSW_NSVM_SAVE_INVALID 2U
 #define KSW_NSVM_SAVE_VMSAVE 3U
 
+/* Return the next whitelisted aligned word at/after Offset, or 4096 when complete. */
+unsigned int KswSvmNestedWritebackNext(unsigned int Offset,
+    unsigned int Operation, unsigned int NestedPaging);
+
 /* Commit must validate/map the entire RAM page before writing any field.
    Same-VMCB concurrent use is the virtual VMM's synchronization responsibility.
    A failure after any write must report progress; it cannot be blindly retried. */

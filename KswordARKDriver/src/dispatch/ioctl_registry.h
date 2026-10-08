@@ -35,6 +35,9 @@ typedef struct _KSWORD_ARK_IOCTL_ENTRY
 #define KSWORD_ARK_IOCTL_FLAG_QUIET_COMPLETION 0x00000002UL
 // 仅用于扫描型 IOCTL：进程在快照后退出会返回 STATUS_INVALID_CID，dispatch 层不将其当作错误记录。
 #define KSWORD_ARK_IOCTL_FLAG_QUIET_INVALID_CID 0x00000004UL
+// Controller entries require an exclusively opened PnP controller FDO. They
+// cannot run on the primary control device or access its unrelated context.
+#define KSWORD_ARK_IOCTL_FLAG_CONTROLLER_ONLY 0x00000008UL
 #define KSWORD_ARK_IOCTL_CAPABILITY_NONE 0ULL
 
 _Must_inspect_result_

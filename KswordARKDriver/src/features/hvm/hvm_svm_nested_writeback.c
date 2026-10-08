@@ -1,6 +1,37 @@
 /* Copy only hardware-owned output fields; never install a host pointer in VMCB12. */
 #include "hvm_svm_nested_writeback.h"
 
+/* Enumerate only architectural output spans; the mask function remains authoritative. */
+unsigned int KswSvmNestedWritebackNext(unsigned int Offset,
+    unsigned int Operation, unsigned int NestedPaging)
+{
+    /* All interval endpoints are aligned and exclusive at the upper bound. */
+    static const unsigned short ranges[3][28] = {
+        {0x060,0x090,0x0a8,0x0b0,0x0c8,0x0e0,0x400,0x440,0x460,0x470,
+         0x480,0x490,0x4c8,0x4d8,0x548,0x580,0x5d8,0x600,0x640,0x648,0x668,0x670},
+        {0x070,0x090,0x0a8,0x0b0},
+        {0x440,0x460,0x470,0x480,0x490,0x4a0,0x600,0x640}
+    };
+    /* Fixed bounds avoid scanning the 512-word reserved image on each VMEXIT. */
+    static const unsigned counts[3] = {22,4,8};
+    /* The candidate is private until its mask is checked. */
+    unsigned index, candidate;
+    /* Invalid input cannot enumerate an output word. */
+    if ((Offset & 7U) || Offset >= 4096U || NestedPaging > 1U ||
+        Operation < KSW_NSVM_SAVE_VMEXIT || Operation > KSW_NSVM_SAVE_VMSAVE) { return 4096U; }
+    /* Each operation has at most eleven bounded output ranges. */
+    for (index = 0; index < counts[Operation - 1U]; index += 2U) {
+        /* Skip ranges that precede the caller's next requested position. */
+        if (Offset >= ranges[Operation - 1U][index + 1U]) { continue; }
+        /* Start at either this range's first word or the next word within it. */
+        candidate = Offset > ranges[Operation - 1U][index] ? Offset : ranges[Operation - 1U][index];
+        /* PAT is conditional on NP; other words retain the existing masks. */
+        if (KswSvmNestedWritebackMask(candidate, Operation, NestedPaging)) { return candidate; }
+    }
+    /* No selected word remains in this architectural operation. */
+    return 4096U;
+}
+
 /* All full-word ranges are aligned, with an exclusive upper bound. */
 KSW_SVM_U64 KswSvmNestedWritebackMask(unsigned int Offset,
     unsigned int Operation, unsigned int NestedPaging)

@@ -1,5 +1,6 @@
 #include "LogSurface.h"
 #include "../TitanEnginePlugin/ControlProtocol.h"
+#include "../X96dbgIntegration/NavigationClient.h"
 #include <Windows.h>
 #include <objbase.h>
 #include <algorithm>
@@ -15,7 +16,15 @@ namespace
     constexpr wchar_t kWindowClass[] = L"KSwordX96dbgLogSurface";
     constexpr UINT kStartMessage = WM_APP + 1;
     constexpr UINT_PTR kPollTimer = 1;
-    struct Arguments { std::wstring command; DWORD pid = 0, hostPid = 0; HWND parent = nullptr; bool valid = false; };
+    struct Arguments
+    {
+        std::wstring command, debugger;
+        DWORD pid = 0, hostPid = 0;
+        HWND parent = nullptr;
+        std::uint64_t createTime = 0, address = 0;
+        ksword::x64dbg_navigation::View view = ksword::x64dbg_navigation::View::Disassembly;
+        bool valid = false;
+    };
     HWND gWindow = nullptr;
     HANDLE gDebugger = nullptr, gHost = nullptr;
     std::wstring gLogPath, gSessionDirectory;
@@ -96,7 +105,7 @@ namespace
         Arguments args;
         if (argc < 3 || std::wstring(argv[1]) != L"--ksword-plugin") return args;
         args.command = argv[2];
-        if (args.command != L"tab" && args.command != L"attach" && args.command != L"check" && args.command != L"info") return args;
+        if (args.command != L"tab" && args.command != L"attach" && args.command != L"navigate" && args.command != L"check" && args.command != L"info") return args;
         for (int index = 3; index < argc; ++index)
         {
             const std::wstring option = argv[index];
@@ -104,6 +113,12 @@ namespace
             if (index + 1 == argc) return args;
             unsigned long long value = 0;
             if (option == L"--pid") { if (!number(argv[++index], MAXDWORD, value)) return args; args.pid = static_cast<DWORD>(value); }
+            else if (option == L"--create-time") { if (!number(argv[++index], UINT64_MAX, value)) return args; args.createTime = value; }
+            else if (option == L"--address")
+            { const auto argument = argv[++index]; if (std::wstring(argument) != L"0" && !number(argument, UINT64_MAX, value)) return args; args.address = value; }
+            else if (option == L"--view")
+            { const std::wstring view(argv[++index]); if (view != L"cpu" && view != L"dump") return args; args.view = view == L"dump" ? ksword::x64dbg_navigation::View::Dump : ksword::x64dbg_navigation::View::Disassembly; }
+            else if (option == L"--debugger") args.debugger = argv[++index];
             else if (option == L"--host-pid") { if (!number(argv[++index], MAXDWORD, value)) return args; args.hostPid = static_cast<DWORD>(value); }
             else if (option == L"--parent-hwnd") { if (!number(argv[++index], UINTPTR_MAX, value)) return args; args.parent = reinterpret_cast<HWND>(static_cast<std::uintptr_t>(value)); }
             else if (option == L"--target-kind") { if (std::wstring(argv[++index]) != L"process") return args; }
@@ -116,14 +131,16 @@ namespace
             args.valid = args.parent != nullptr && args.hostPid != 0 && IsWindow(args.parent) &&
                 GetWindowThreadProcessId(args.parent, &owner) != 0 && owner == args.hostPid && args.pid == 0;
         }
-        else args.valid = args.parent == nullptr && args.hostPid == 0 && (args.command == L"attach" ? args.pid != 0 : args.pid == 0);
+        else args.valid = args.parent == nullptr && args.hostPid == 0 && ((args.command == L"attach" || args.command == L"navigate") ? args.pid != 0 : args.pid == 0)
+            && (args.command != L"navigate" || args.createTime != 0)
+            && (args.command == L"navigate" || (args.createTime == 0 && args.address == 0 && args.debugger.empty()));
         return args;
     }
     bool amd64(const std::wstring& path, std::string& error)
     {
-        std::ifstream stream(path, std::ios::binary);
+        std::ifstream stream(path.c_str(), std::ios::binary);
         IMAGE_DOS_HEADER dos{}; DWORD signature = 0; IMAGE_FILE_HEADER header{};
-        if (!stream.read(reinterpret_cast<char*>(&dos), sizeof(dos)) || dos.e_magic != IMAGE_DOS_SIGNATURE || dos.e_lfanew < sizeof(dos))
+        if (!stream.read(reinterpret_cast<char*>(&dos), sizeof(dos)) || dos.e_magic != IMAGE_DOS_SIGNATURE || dos.e_lfanew < static_cast<LONG>(sizeof(dos)))
         { error = "Missing or invalid x64 PE: " + utf8(path); return false; }
         stream.seekg(dos.e_lfanew);
         if (!stream.read(reinterpret_cast<char*>(&signature), sizeof(signature)) || signature != IMAGE_NT_SIGNATURE ||
@@ -138,7 +155,7 @@ namespace
             if (!amd64(root + file, error)) return false;
         return true;
     }
-    bool session(std::string& error)
+    bool session(std::string& error, bool kswordEngine = true)
     {
         GUID id{};
         if (FAILED(CoCreateGuid(&id))) { error = "Cannot allocate a debugger session identity."; return false; }
@@ -154,26 +171,26 @@ namespace
         { error = failure("Cannot create isolated debugger user directory", GetLastError()); return false; }
         // Canonical PR #3974 uses the user directory INI before checked engine loading.
         // The narrow KSword core patch reserves DEBUG_ENGINE value 4.
-        std::ofstream ini(gSessionDirectory + L"\\x64dbg.ini", std::ios::binary | std::ios::trunc);
-        ini << "[Engine]\r\nDebugEngine=4\r\n"; ini.close();
+        std::ofstream ini((gSessionDirectory + L"\\x64dbg.ini").c_str(), std::ios::binary | std::ios::trunc);
+        ini << "[Engine]\r\nDebugEngine=" << (kswordEngine ? 4 : 0) << "\r\n[Events]\r\nSystemBreakpoint=1\r\n"; ini.close();
         if (!ini) { error = "Cannot write isolated debugger engine selection."; return false; }
         gLogPath = gSessionDirectory + L"\\backend.log";
-        std::ofstream empty(gLogPath, std::ios::binary | std::ios::trunc);
+        std::ofstream empty(gLogPath.c_str(), std::ios::binary | std::ios::trunc);
         if (!empty) { error = "Cannot create debugger session log: " + utf8(gLogPath); return false; }
         auto options = ksword::titan::control::defaults();
-        std::ifstream preferences(directory() + L"\\x96dbg-options.ini", std::ios::binary);
+        std::ifstream preferences((directory() + L"\\x96dbg-options.ini").c_str(), std::ios::binary);
         std::string packet;
         if (preferences && (!std::getline(preferences, packet) || !ksword::titan::control::preferences(packet, options)))
             empty << "Invalid saved x96dbg policy; using documented normal defaults.\n";
         empty.close();
         // Persist options, never HVM activation. The proxy applies this packet
         // outside DllMain and publishes an actual-state ACK before UI changes.
-        std::ofstream control(gLogPath + L".control", std::ios::binary | std::ios::trunc);
+        std::ofstream control((gLogPath + L".control").c_str(), std::ios::binary | std::ios::trunc);
         control << ksword::titan::control::request(gSessionId, 1, 0, options); control.close();
         if (!control) { error = "Cannot write initial debugger policy request."; return false; }
         return true;
     }
-    std::vector<wchar_t> environment()
+    std::vector<wchar_t> environment(bool freshAttach = false)
     {
         std::vector<std::wstring> entries;
         LPWCH inherited = GetEnvironmentStringsW();
@@ -181,7 +198,7 @@ namespace
         {
             for (const wchar_t* p = inherited; *p != 0; p += std::wcslen(p) + 1)
             {
-                if (_wcsnicmp(p, L"KSWORD_DEBUGGER_", 16) != 0) entries.emplace_back(p);
+                if (_wcsnicmp(p, L"KSWORD_DEBUGGER_", 16) != 0 && _wcsnicmp(p, L"KSWORD_NAVIGATION_", 18) != 0) entries.emplace_back(p);
             }
             FreeEnvironmentStringsW(inherited);
         }
@@ -190,20 +207,21 @@ namespace
         entries.push_back(L"KSWORD_DEBUGGER_CONTROL_FILE=" + gLogPath + L".control");
         entries.push_back(L"KSWORD_DEBUGGER_STATE_FILE=" + gLogPath + L".state");
         entries.push_back(L"KSWORD_DEBUGGER_SESSION_ID=" + sessionId);
+        if (freshAttach) entries.push_back(L"KSWORD_NAVIGATION_FRESH_ATTACH=1");
         std::sort(entries.begin(), entries.end(), [](const auto& a, const auto& b) { return _wcsicmp(a.c_str(), b.c_str()) < 0; });
         std::vector<wchar_t> block;
         for (const auto& entry : entries) { block.insert(block.end(), entry.begin(), entry.end()); block.push_back(0); }
         block.push_back(0); return block;
     }
-    bool launch(DWORD pid, DWORD& debuggerPid, std::string& error)
+    bool launch(DWORD pid, DWORD& debuggerPid, std::string& error, const std::wstring& selectedDebugger = L"", bool freshNavigation = false)
     {
-        if (!payload(error) || !session(error)) return false;
-        const std::wstring root = directory() + L"\\payload\\x64dbg";
-        const std::wstring exe = root + L"\\x64dbg.exe";
+        if ((selectedDebugger.empty() && !payload(error)) || !session(error, selectedDebugger.empty())) return false;
+        const std::wstring exe = selectedDebugger.empty() ? directory() + L"\\payload\\x64dbg\\x64dbg.exe" : selectedDebugger;
+        const std::wstring root = exe.substr(0, exe.find_last_of(L"\\/"));
         std::wstring command = L"\"" + exe + L"\" -userdir \"" + gSessionDirectory + L"\"";
         if (pid != 0) command += L" -p " + std::to_wstring(pid);
         std::vector<wchar_t> mutableCommand(command.begin(), command.end()); mutableCommand.push_back(0);
-        auto block = environment();
+        auto block = environment(freshNavigation);
         STARTUPINFOW startup{}; startup.cb = sizeof(startup);
         PROCESS_INFORMATION process{};
         if (!CreateProcessW(exe.c_str(), mutableCommand.data(), nullptr, nullptr, FALSE,
@@ -212,10 +230,114 @@ namespace
         CloseHandle(process.hThread); gDebugger = process.hProcess; debuggerPid = process.dwProcessId;
         return true;
     }
+    WORD machine(const std::wstring& path)
+    {
+        std::ifstream stream(path.c_str(), std::ios::binary);
+        IMAGE_DOS_HEADER dos{}; DWORD signature = 0; IMAGE_FILE_HEADER header{};
+        if (!stream.read(reinterpret_cast<char*>(&dos), sizeof(dos)) || dos.e_magic != IMAGE_DOS_SIGNATURE || dos.e_lfanew < static_cast<LONG>(sizeof(dos))) return 0;
+        stream.seekg(dos.e_lfanew);
+        if (!stream.read(reinterpret_cast<char*>(&signature), sizeof(signature)) || signature != IMAGE_NT_SIGNATURE
+            || !stream.read(reinterpret_cast<char*>(&header), sizeof(header))) return 0;
+        return header.Machine;
+    }
+    int navigation(const Arguments& args)
+    {
+        using namespace ksword::x64dbg_navigation;
+        const HANDLE target = OpenProcess(PROCESS_QUERY_INFORMATION | SYNCHRONIZE, FALSE, args.pid);
+        if (target == nullptr)
+        { emit("error", "\"code\":\"target_unavailable\",\"win32_error\":" + std::to_string(GetLastError())); return 2; }
+        auto fail = [&](const char* code, DWORD error)
+        { emit("error", "\"code\":\"" + std::string(code) + "\",\"win32_error\":" + std::to_string(error)); CloseHandle(target); return 2; };
+        if (creationTime(target) != args.createTime || WaitForSingleObject(target, 0) != WAIT_TIMEOUT)
+            return fail("target_changed", ERROR_INVALID_STATE);
+        // Cross-host repeated clicks serialize only their own target. We never
+        // close a debugger to make space or retry an uncertain attachment.
+        const std::wstring lockName = L"Local\\KSword.X64Dbg.Navigation." + std::to_wstring(args.pid) + L"." + std::to_wstring(args.createTime);
+        const HANDLE launchLock = CreateMutexW(nullptr, FALSE, lockName.c_str());
+        if (launchLock == nullptr) return fail("navigation_lock_failed", GetLastError());
+        const DWORD wait = WaitForSingleObject(launchLock, 15000);
+        if (wait != WAIT_OBJECT_0 && wait != WAIT_ABANDONED)
+        { CloseHandle(launchLock); return fail("navigation_busy", ERROR_BUSY); }
+        struct MutexLease { HANDLE value; ~MutexLease() { ReleaseMutex(value); CloseHandle(value); } } lease{launchLock};
+        Request request{};
+        request.operation = Operation::Navigate; request.targetPid = args.pid; request.targetCreateTime = args.createTime;
+        request.address = args.address; request.view = args.view; request.requestId = GetTickCount64() ^ (static_cast<std::uint64_t>(GetCurrentProcessId()) << 32);
+        if (request.requestId == 0) request.requestId = 1;
+        DWORD debuggerPid = 0; HANDLE debuggerIdentity = nullptr;
+        bool reused = findSession(request, debuggerPid, debuggerIdentity) == ERROR_SUCCESS;
+        if (!reused)
+        {
+            BOOL alreadyDebugged = FALSE;
+            if (!CheckRemoteDebuggerPresent(target, &alreadyDebugged)) return fail("debugger_owner_unknown", GetLastError());
+            if (alreadyDebugged) return fail("target_already_debugged_without_bridge", ERROR_BUSY);
+            BOOL wow64 = FALSE;
+            if (!IsWow64Process(target, &wow64)) return fail("target_architecture_unknown", GetLastError());
+            const WORD architecture = wow64 ? IMAGE_FILE_MACHINE_I386 : IMAGE_FILE_MACHINE_AMD64;
+            std::wstring executable = args.debugger;
+            if (executable.empty())
+            {
+                if (wow64) return fail("x32dbg_not_configured", ERROR_FILE_NOT_FOUND);
+                executable = directory() + L"\\payload\\x64dbg\\x64dbg.exe";
+            }
+            else if (machine(executable) != architecture)
+            {
+                const auto parent = executable.substr(0, executable.find_last_of(L"\\/"));
+                const auto outer = parent.substr(0, parent.find_last_of(L"\\/"));
+                const std::wstring name = wow64 ? L"x32dbg.exe" : L"x64dbg.exe";
+                const std::wstring folder = wow64 ? L"x32" : L"x64";
+                for (const auto& candidate : {parent + L"\\" + name, outer + L"\\" + folder + L"\\" + name})
+                    if (machine(candidate) == architecture) { executable = candidate; break; }
+            }
+            if (machine(executable) != architecture) return fail("debugger_architecture_mismatch", ERROR_BAD_EXE_FORMAT);
+            const auto root = executable.substr(0, executable.find_last_of(L"\\/"));
+            if (machine(root + L"\\plugins\\KSwordNavigation." + (wow64 ? L"dp32" : L"dp64")) != architecture)
+                return fail("navigation_bridge_missing", ERROR_MOD_NOT_FOUND);
+            if (creationTime(target) != args.createTime || WaitForSingleObject(target, 0) != WAIT_TIMEOUT)
+                return fail("target_changed", ERROR_INVALID_STATE);
+            std::string error;
+            // Bundled mode still performs its original checked payload and KSword
+            // engine selection; a selected standard installation stays native.
+            const std::wstring selected = args.debugger.empty() ? L"" : executable;
+            if (!launch(args.pid, debuggerPid, error, selected, true))
+            { emit("error", "\"code\":\"launch_failed\",\"message\":\"" + json(error) + "\""); CloseHandle(target); return 2; }
+            debuggerIdentity = gDebugger; gDebugger = nullptr;
+        }
+        struct Observer { HANDLE value; ~Observer() { CloseHandle(value); } } observer{debuggerIdentity};
+        DWORD error = ERROR_TIMEOUT;
+        Response response{};
+        const auto deadline = GetTickCount64() + 15000;
+        if (!reused)
+        {
+            do
+            {
+                if (WaitForSingleObject(target, 0) != WAIT_TIMEOUT || WaitForSingleObject(debuggerIdentity, 0) != WAIT_TIMEOUT)
+                { error = ERROR_INVALID_STATE; break; }
+                Request query = request; query.operation = Operation::Query;
+                Response state{};
+                const DWORD result = exchange(debuggerPid, debuggerIdentity, query, state, 500);
+                if (result == ERROR_SUCCESS && state.targetPid == args.pid && state.targetCreateTime == args.createTime
+                    && (state.flags & AttachReady) && !(state.flags & Running))
+                { error = ERROR_SUCCESS; break; }
+                // Poll only this newly created instance. Never send it another
+                // attach or a Run command after errors or missing ACKs.
+                Sleep(100);
+            } while (GetTickCount64() < deadline);
+        }
+        else error = ERROR_SUCCESS;
+        if (error == ERROR_SUCCESS) error = exchange(debuggerPid, debuggerIdentity, request, response);
+        if (error != ERROR_SUCCESS) return fail("navigation_not_confirmed", error);
+        if (response.targetPid != args.pid || response.targetCreateTime != args.createTime
+            || (args.address != 0 && response.actualAddress != args.address)) return fail("navigation_identity_mismatch", ERROR_INVALID_DATA);
+        emit("navigation_complete", "\"debugger_pid\":" + std::to_string(debuggerPid)
+            + ",\"target_pid\":" + std::to_string(response.targetPid) + ",\"create_time\":\"" + std::to_string(response.targetCreateTime)
+            + "\",\"address\":\"" + std::to_string(response.actualAddress) + "\",\"running\":"
+            + ((response.flags & Running) ? "true" : "false") + ",\"reused\":" + (reused ? "true" : "false"));
+        CloseHandle(target); return 0;
+    }
     void pollLog()
     {
         if (gLogPath.empty()) return;
-        std::ifstream stream(gLogPath, std::ios::binary);
+        std::ifstream stream(gLogPath.c_str(), std::ios::binary);
         if (!stream) return;
         stream.seekg(0, std::ios::end); const auto end = stream.tellg();
         if (end < 0) return;
@@ -303,8 +425,18 @@ namespace
 int wmain(int argc, wchar_t* argv[])
 {
     const auto args = parse(argc, argv);
-    if (!args.valid) { emit("error", "\"code\":\"invalid_arguments\",\"message\":\"Expected --ksword-plugin info|check|attach|tab with valid target/host arguments.\""); return 2; }
+    if (!args.valid) { emit("error", "\"code\":\"invalid_arguments\",\"message\":\"Expected --ksword-plugin info|check|attach|navigate|tab with valid target/host arguments.\""); return 2; }
     if (args.command == L"tab") return tab(args);
+    if (args.command == L"navigate") return navigation(args);
+    if (args.command == L"attach")
+    {
+        auto request = args;
+        const HANDLE identity = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, args.pid);
+        request.createTime = ksword::x64dbg_navigation::creationTime(identity);
+        if (identity != nullptr) CloseHandle(identity);
+        if (request.createTime == 0) { emit("error", "\"code\":\"target_unavailable\",\"win32_error\":" + std::to_string(ERROR_INVALID_STATE)); return 2; }
+        return navigation(request);
+    }
     std::string error;
     if (args.command == L"info" || args.command == L"check")
     {
@@ -313,8 +445,5 @@ int wmain(int argc, wchar_t* argv[])
             std::string(ready ? "true" : "false") + ",\"message\":\"" + json(error) + "\"");
         return args.command == L"info" || ready ? 0 : 2;
     }
-    DWORD pid = 0;
-    if (!launch(args.pid, pid, error)) { emit("error", "\"code\":\"launch_failed\",\"message\":\"" + json(error) + "\""); return 2; }
-    emit("launch_complete", "\"debugger_pid\":" + std::to_string(pid) + ",\"target_pid\":" + std::to_string(args.pid));
-    closeHandle(gDebugger); return 0;
+    return 2;
 }

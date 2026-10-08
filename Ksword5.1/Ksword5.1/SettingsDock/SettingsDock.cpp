@@ -1012,10 +1012,7 @@ void SettingsDock::initializeAppearanceTab()
         QStringLiteral("虚拟化按钮显示为"));
     hvmNameLayout->addWidget(hvmNameLabel, 0);
     m_hvmDisplayNameCombo = new QComboBox(privilegeGroupBox);
-    // 三个都是产品名或体系结构术语，不随界面语言变化，所以条目文本不绑词条。
-    m_hvmDisplayNameCombo->addItem(
-        QStringLiteral("KVM"),
-        static_cast<int>(ks::settings::HvmDisplayName::Kvm));
+    // 两个都是体系结构术语，不随界面语言变化，所以条目文本不绑词条。
     m_hvmDisplayNameCombo->addItem(
         QStringLiteral("HVM"),
         static_cast<int>(ks::settings::HvmDisplayName::Hvm));
@@ -1024,7 +1021,7 @@ void SettingsDock::initializeAppearanceTab()
         static_cast<int>(ks::settings::HvmDisplayName::RingMinusOne));
     // 整串写在一行：跨行拼接会被 i18n 审计当成多个独立源串，逐段都要词条。
     m_hvmDisplayNameCombo->setToolTip(
-        QStringLiteral("同一个能力的三种叫法：KVM 是产品内部名，HVM 是硬件术语，R-1 是按权限分层的称呼。只影响右上角按钮。"));
+        QStringLiteral("HVM 是硬件虚拟化名称，R-1 是按权限分层的称呼。只影响右上角按钮。"));
     hvmNameLayout->addWidget(m_hvmDisplayNameCombo, 1);
     privilegeLayout->addLayout(hvmNameLayout);
 

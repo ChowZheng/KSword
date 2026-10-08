@@ -15,6 +15,7 @@ Environment:
 --*/
 
 #include "ark/ark_driver.h"
+#include "ark/ark_storage_controller.h"
 #include "driver/KswordArkWindowBandIoctl.h"
 #include "io_queue.tmh"
 
@@ -147,6 +148,15 @@ Return Value:
 
     UNREFERENCED_PARAMETER(Length);
 
+    if (KswordARKStorageControllerIsDevice(device)) {
+        WdfRequestCompleteWithInformation(Request, STATUS_INVALID_DEVICE_REQUEST, 0U);
+        return;
+    }
+    if (!KswordARKDriverCoreEnterRequest()) {
+        WdfRequestCompleteWithInformation(Request, STATUS_DELETE_PENDING, 0U);
+        return;
+    }
+
     status = WdfRequestRetrieveOutputBuffer(
         Request,
         1,
@@ -155,6 +165,7 @@ Return Value:
     if (!NT_SUCCESS(status)) {
         TraceEvents(TRACE_LEVEL_ERROR, TRACE_QUEUE, "WdfRequestRetrieveOutputBuffer failed %!STATUS!", status);
         WdfRequestCompleteWithInformation(Request, status, 0);
+        KswordARKDriverCoreLeaveRequest();
         return;
     }
 
@@ -164,6 +175,7 @@ Return Value:
         outputBufferLength,
         &bytesWritten);
     WdfRequestCompleteWithInformation(Request, status, bytesWritten);
+    KswordARKDriverCoreLeaveRequest();
 }
 
 VOID

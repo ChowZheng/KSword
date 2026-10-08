@@ -156,7 +156,7 @@ Lab use only.
 
 **Driver / Kernel** — service management, DriverObject / DeviceObject / MajorFunction inspection, transactional dispatch-table editor, loader-list removal (reversible), integrity & cross-view checks, unloaded-driver / PiDDB evidence. Object namespace, SSDT/SSSDT, IAT/EAT/inline hooks, callbacks (notify, registry, object, filter, bugcheck, shutdown, FS, logon, NMI, …), IDT baselines, descriptor-table & IOCTL decoding, disassembly.
 
-**File / Storage** — dual-pane manager, hashes, signatures, PE/strings/hex, unlocker, NTFS recovery, minifilter & Section evidence, raw filesystem browser with deleted-entry analysis (read-only by default, write requires unlock), device tree and R0 device-stack audit.
+**File / Storage** — dual-pane manager, hashes, signatures, PE/strings/hex, unlocker, NTFS recovery, minifilter & Section evidence, raw filesystem browser with deleted-entry analysis (read-only by default, write requires unlock), device tree and R0 device-stack audit. The File sidebar also exposes [KSword Controller](docs/StorageController.md), integrated into the main `KswordARK.sys`, with session control, conditional writes, reread verification and rollback. The optional manual PnP controller profile uses the same `KswordARK` service; the ordinary load profile keeps its existing SCM workflow.
 
 **Monitor** — per-process ETW, syscall capture, WinAPI agent, WMI subscriptions, ETW session management, risk center. Task-Manager-style live charts.
 
@@ -172,7 +172,7 @@ Lab use only.
 
 **Kernel Knowledge** — 71 bilingual searchable articles, each linked to live R3/R0 evidence pages.
 
-**HVM / KVM Workspace** — guarded multiprocessor Intel VT-x/EPT residency, nested VMX dispatch with composed shadow EPT, EPT split views, EPTP-switching hooks, execution domains, R-1 memory/process actions and a guided hook wizard. AMD SVM/VMCB/NPT and nested SVM are implemented and exposed through a separate experimental path. Admission checks hardware, outer hypervisor, prepared resources, all-CPU self-tests and lifecycle state. Intel EPT extensions do not transfer to AMD; full inner-OS startup and broad AMD performance acceptance remain incomplete. Lab use only.
+**HVM Workspace** — guarded multiprocessor Intel VT-x/EPT residency, nested VMX dispatch with composed shadow EPT, EPT split views, EPTP-switching hooks, execution domains, R-1 memory/process actions and a guided hook wizard. AMD SVM/VMCB/NPT and nested SVM are implemented and exposed through a separate experimental path. Admission checks hardware, outer hypervisor, prepared resources, all-CPU self-tests and lifecycle state. Intel EPT extensions do not transfer to AMD; full inner-OS startup and broad AMD performance acceptance remain incomplete. Lab use only.
 
 <details>
 <summary>Where the HVM layer sits, and the scope of the recorded experiments</summary>
@@ -233,7 +233,7 @@ See also [docs/OpenArk功能对照与TODO.md](docs/OpenArk功能对照与TODO.md
 | **File** | Dual-pane manager. Hash/sig/PE/strings/hex. PE/ELF/Mach-O scanner and guarded file-byte editor. Unlocker. NTFS recovery. Minifilter/FileObject/Section evidence. Storage & BitLocker. |
 | **Driver** | Service CRUD. Loaded modules. DBWIN. DriverObj/DeviceObj/MajorFunction/FastIo. Transactional editors. Reversible loader-list removal. Integrity. Module cross-view. Unloaded/PiDDB evidence. |
 | **Kernel** | Object namespace. Atom table. SSDT/SSSDT. Inline/IAT/EAT hooks. CID cross-view. ALPC/IPC. DynData. Capability matrix. Loaded-image & IDT baselines. Descriptor/IOCTL decode. Disassembly. Callback inventory/monitor. Kernel Knowledge (71 articles). |
-| **KVM** | HVM admission, self-tests and residency. Nested VMX / experimental SVM, EPT views/hooks/domains, R-1 memory/process controls, SLAT/IOMMU evidence and diagnostics. |
+| **HVM** | HVM admission, self-tests and residency. Nested VMX / experimental SVM, EPT views/hooks/domains, R-1 memory/process controls, SLAT/IOMMU evidence and diagnostics. |
 | **Monitor** | Process ETW. Syscall capture. WinAPI agent. WMI subs. ETW provider/session mgmt. Risk center. |
 | **Hardware** | CPU/GPU/mem/disk/net charts. Process I/O & ETW file activity. SetupAPI/CfgMgr tree. R0 device audit. |
 | **Privileges** | Local accounts, groups, current process privileges. |
@@ -372,7 +372,7 @@ All headers under `shared/driver/`.
 
 [CLI使用文档](docs/CLI使用文档.md) · [功能技术文档](docs/功能技术文档.md) · [内核知识中心](docs/内核知识中心.md) · [IOCTL audit](docs/driver_ioctl_audit.md) · [OpenArk对照](docs/OpenArk功能对照与TODO.md) · [动态偏移接入](docs/动态偏移功能接入步骤.md) · [PDB/R0 audit prep](docs/pdb_r0_audit_prep/) · [插件系统](docs/插件系统规范.md) · [多语言规范](docs/多语言语言包规范.md)
 
-Virtualization (HVM): [嵌套虚拟化架构](docs/next/嵌套虚拟化架构.md) · [EPT切换后端设计](docs/next/EPT切换后端设计.md) · [嵌套下的跨核TLB失效](docs/next/嵌套下的跨核TLB失效.md) · [隐蔽Hook安全边界决策](docs/next/隐蔽Hook安全边界决策.md) · [自动化测试](docs/next/自动化测试.md) · [VM测试机搭建](docs/next/VM测试机搭建.md)
+Virtualization: [嵌套虚拟化架构](docs/next/嵌套虚拟化架构.md) · [EPT切换后端设计](docs/next/EPT切换后端设计.md) · [嵌套下的跨核TLB失效](docs/next/嵌套下的跨核TLB失效.md) · [隐蔽Hook安全边界决策](docs/next/隐蔽Hook安全边界决策.md) · [自动化测试](docs/next/自动化测试.md) · [VM测试机搭建](docs/next/VM测试机搭建.md)
 
 ## Notice
 

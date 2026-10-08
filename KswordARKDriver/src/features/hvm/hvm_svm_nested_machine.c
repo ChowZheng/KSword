@@ -135,6 +135,11 @@ unsigned KswSvmNestedMachineExit(KSW_NSVM_MACHINE* Machine)
     event = KswSvmRead64(execution->Current, KSW_VMCB_EXITINTINFO);
     /* An invalid real VMCB is an L0 construction failure; never fabricate a virtual INVALID here. */
     if (Machine->LastExit == KSW_SVM_EXIT_INVALID) { return KswNsvmMachineResult(Machine, KSW_NSVM_MACHINE_FAULT); }
+    /* STGI/CLGI may have changed GIF without exiting; hardware output is authoritative for that entry. */
+    if (Machine->Overlay.HardwareGif) {
+        /* Refresh before physical-event classification, queue selection or architectural reflection. */
+        execution->Gif = execution->GifRequested = (unsigned)((KswSvmRead64(execution->Current, KSW_VMCB_INTCTL) >> 9) & 1ULL);
+    }
     /* Injection observation is outermost and must be restored before original exception routing. */
     if (Machine->ArmedObservation) {
         /* Hardware must have executed with every secondary exception intercepted. */
@@ -216,8 +221,8 @@ unsigned KswSvmNestedMachineExit(KSW_NSVM_MACHINE* Machine)
     /* A direct L2 CR8 write affects the physical APIC and survives virtual VMEXIT. */
     if (inner && !wasMasked) {
         /* L1 host restoration must not rewind that shared physical APIC priority. */
-        KswSvmWrite64(&execution->Session->L1, KSW_VMCB_INTCTL,
-            (KswSvmRead64(&execution->Session->L1, KSW_VMCB_INTCTL) & ~15ULL) | tpr);
+        KswSvmWrite64(KswSvmNestedHostImage(execution->Session), KSW_VMCB_INTCTL,
+            (KswSvmRead64(KswSvmNestedHostImage(execution->Session), KSW_VMCB_INTCTL) & ~15ULL) | tpr);
     }
     /* Honor an original inner IRET intercept before allowing hardware to execute the instruction. */
     if (heldIret) {
@@ -258,6 +263,15 @@ unsigned KswSvmNestedMachineExit(KSW_NSVM_MACHINE* Machine)
     if (Machine->LastExit >= 0x60 && Machine->LastExit <= 0x63) {
         /* INTR/NMI raw state stays intact until this explicit platform path accepts it. */
         return KswNsvmMachineResult(Machine, KswNsvmMachinePhysical(Machine, stepExit || nmiWindowExit));
+    }
+    /* Private lifecycle controls are recognized only after raw event/overlay ownership is resolved. */
+    if (Machine->LastExit == KSW_SVM_EXIT_NPF && Machine->Io.ProtectionFault) {
+        /* Unowned faults keep the complete original nested MMU/exception path. */
+        action = Machine->Io.ProtectionFault(Machine->Io.Context, execution);
+        /* Only explicit READY/FAULT results consume an owned protection trap. */
+        if (action != KSW_NSVM_MACHINE_NOT_CONTROL) {
+            return KswNsvmMachineResult(Machine, action == KSW_NSVM_MACHINE_READY ? action : KSW_NSVM_MACHINE_FAULT);
+        }
     }
     /* Private lifecycle controls are recognized only after raw event/overlay ownership is resolved. */
     if (Machine->Io.PrivateControl) {
@@ -396,10 +410,13 @@ SelectCurrent:
     /* An injected physical NMI needs software blocking if an earlier unrelated IRET released the hardware mask. */
     if (pending && pending->Physical && ((pending->Event >> 8) & 7ULL) == 2) { Machine->NmiBlocked = 1; }
     /* CR8 writes while L1 GIF was closed affected V_TPR; synchronize them before reentry. */
-    tpr = (unsigned)(KswSvmRead64(inner ? &execution->Session->L1 : execution->Current, KSW_VMCB_INTCTL) & 15ULL);
+    tpr = (unsigned)(KswSvmRead64(inner ? KswSvmNestedHostImage(execution->Session) : execution->Current, KSW_VMCB_INTCTL) & 15ULL);
     /* Never truncate a failed callback or issue host APIs to update interrupt priority. */
     if (!Machine->Io.WriteTpr(Machine->Io.Context, tpr)) { return KswNsvmMachineResult(Machine, KSW_NSVM_MACHINE_FAULT); }
     /* Apply masks only after all previous failure paths have retained their original state. */
+    /* Physical Windows interrupt shielding requires intercepted CLGI/STGI, even without pending events. */
+    Machine->Overlay.HardwareGif = 0;
+    /* Every other path retains the original reversible physical masking overlay. */
     if (!KswSvmNestedInterruptPrepare(execution->Current, execution->Session, execution->Gif, &Machine->Overlay)) {
         /* No executable control overlay means no hardware entry is authorized. */
         return KswNsvmMachineResult(Machine, KSW_NSVM_MACHINE_FAULT);

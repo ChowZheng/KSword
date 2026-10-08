@@ -42,7 +42,7 @@ if not exist "%MOC%" mkdir "%MOC%"
 if not exist "%OUT%\shots" mkdir "%OUT%\shots"
 
 rem ---- moc：全部 Q_OBJECT 头 ----
-for %%H in (HexCanvas HexInspectorPanel HexInspectorRowView HexFindBar HexViewWidgets WorkbenchTarget WorkbenchPageProvider WorkbenchBaselineFeeder WorkbenchWriteController WorkbenchHexPane WorkbenchDisasmView WorkbenchTextView WorkbenchCompareView WorkbenchSessionBar WriteModeSwitch WorkbenchStatusBar WorkbenchStringWriteDialog AddressBookStore AddressBookModel AddressBookPanel Int3Controller Int3PatchPanel WorkbenchShared MemoryWorkbenchView WorkbenchDiagnosticsHost) do (
+for %%H in (MemoryRowCanvas HexCanvas HexInspectorPanel HexInspectorRowView HexFindBar HexViewWidgets WorkbenchTarget WorkbenchPageProvider WorkbenchBaselineFeeder WorkbenchWriteController WorkbenchHexPane WorkbenchDisasmView WorkbenchTextView WorkbenchCompareView WorkbenchSessionBar WriteModeSwitch WorkbenchStatusBar WorkbenchStringWriteDialog AddressBookStore AddressBookModel AddressBookPanel Int3Controller Int3PatchPanel WorkbenchShared MemoryWorkbenchView WorkbenchDiagnosticsHost) do (
   "%QT%\bin\moc.exe" "%UI%\%%H.h" -o "%MOC%\moc_%%H.cpp"
   if errorlevel 1 exit /b %errorlevel%
 )
@@ -88,7 +88,7 @@ cl %CLFLAGS% ^
   "%FIX%\wpJ6_tests.Identity.cpp" "%FIX%\wpJ6_tests.Embedded.cpp" "%FIX%\wpJ6_tests.Actions.cpp" "%FIX%\wpJ6_tests.Gate.cpp" "%FIX%\wpJ6_tests.Write.cpp" "%FIX%\wpJ6_tests.Nav.cpp" "%FIX%\wpJ6_tests.Visual.cpp" ^
   "%FIX%\wpJ6_tests.Review2A.cpp" "%FIX%\wpJ6_tests.Review2B.cpp" "%FIX%\wpJ6_tests.Review2C.cpp" "%FIX%\wpJ6_tests.Review2Fixes.cpp" "%FIX%\wpJ6_tests.Quit.cpp" "%FIX%\wpJ6_tests.Entry3b.cpp" "%FIX%\wpJ6_tests.Narrow.cpp" "%FIX%\wpJ6_tests.DarkLabels.cpp" "%FIX%\wpJ6_tests.Chrome.cpp" "%FIX%\wpJ6_tests.RowFit.cpp" "%FIX%\wpJ6_tests.DockFill.cpp" "%FIX%\wpJ6_tests.SubPages.cpp" ^
   "%WPI%\memwb_wpI_common.cpp" ^
-  "%UI%\MemoryWorkbenchView.cpp" "%UI%\MemoryWorkbenchView.Ui.cpp" "%UI%\MemoryWorkbenchView.Session.cpp" "%UI%\MemoryWorkbenchView.Nav.cpp" "%UI%\MemoryWorkbenchView.HexPrefs.cpp" "%UI%\MemoryWorkbenchView.SubPages.cpp" "%UI%\WorkbenchDiagnosticsHost.cpp" ^
+  "%UI%\MemoryWorkbenchView.cpp" "%UI%\MemoryWorkbenchView.Ui.cpp" "%UI%\MemoryWorkbenchView.Session.cpp" "%UI%\MemoryWorkbenchView.Nav.cpp" "%UI%\MemoryWorkbenchView.HexPrefs.cpp" "%UI%\MemoryWorkbenchView.SubPages.cpp" "%UI%\MemoryWorkbenchView.RowCanvas.cpp" "%UI%\WorkbenchDiagnosticsHost.cpp" ^
   "%UI%\MemoryWorkbenchView.PointerChains.cpp" "%APP%\MemoryDock\WorkbenchPointerChainAccess.cpp" ^
   "%UI%\WorkbenchShared.cpp" ^
   "%UI%\WorkbenchHexPane.cpp" "%UI%\WorkbenchHexPane.Panels.cpp" "%UI%\WorkbenchHexPane.ViewMenu.cpp" ^
@@ -103,19 +103,19 @@ if errorlevel 1 exit /b %errorlevel%
 cl %CLFLAGS% ^
   "%UI%\HexInspectorPanel.cpp" "%UI%\HexInspectorPanel.Rows.cpp" "%UI%\HexInspectorPanel.Edit.cpp" "%UI%\HexInspectorPanel.Menu.cpp" "%UI%\HexInspectorRowView.cpp" "%UI%\HexInspectorRowView.Paint.cpp" "%UI%\HexInspectorWidgets.cpp" ^
   "%UI%\HexFindBar.cpp" "%UI%\HexFindSearch.cpp" "%UI%\HexViewWidgets.cpp" "%UI%\HexViewWidgets.Text.cpp" "%UI%\HexViewFormat.cpp" ^
-  "%UI%\WorkbenchDisasmView.cpp" "%UI%\WorkbenchDisasmView.Edit.cpp" "%UI%\WorkbenchTextView.cpp" "%UI%\WorkbenchCompareView.cpp" ^
+  "%UI%\WorkbenchDisasmView.cpp" "%UI%\WorkbenchDisasmView.Edit.cpp" "%UI%\WorkbenchDisasmView.Canvas.cpp" "%UI%\MemoryRowCanvas.cpp" "%UI%\WorkbenchTextView.cpp" "%UI%\WorkbenchCompareView.cpp" ^
   "%UI%\WorkbenchSessionBar.cpp" "%UI%\WriteModeSwitch.cpp" "%UI%\WorkbenchStatusBar.cpp" "%UI%\WorkbenchConfirmations.cpp" "%UI%\WorkbenchStringWriteDialog.cpp" ^
   "%UI%\WorkbenchMessages.cpp" "%UI%\WorkbenchSettings.cpp" "%UI%\WorkbenchActions.cpp" ^
   "%UI%\AddressBookStore.cpp" "%UI%\AddressBookModel.cpp" "%UI%\AddressBookModel.StoreSync.cpp" "%UI%\AddressBookPanel.cpp" "%UI%\AddressBookPanel.RowActions.cpp" "%UI%\AddressBookPanel.Menu.cpp" ^
   "%UI%\Int3Controller.cpp" "%UI%\Int3PatchPanel.cpp" "%UI%\WorkbenchBookIntake.cpp" ^
-  "%APP%\UI\FlowLayout.cpp" "%APP%\UI\ThemeStatusRole.cpp" "%APP%\UI\GlobalUiBaseStyle.cpp" "%APP%\UI\ThemeControlGlyphs.cpp" ^
+  "%APP%\UI\X64DbgNavigation.cpp" "%APP%\UI\FlowLayout.cpp" "%APP%\UI\ThemeStatusRole.cpp" "%APP%\UI\GlobalUiBaseStyle.cpp" "%APP%\UI\ThemeControlGlyphs.cpp" ^
   /Fo"%OBJ%\\"
 if errorlevel 1 exit /b %errorlevel%
 
 cl %CLFLAGS% ^
   "%MOC%\moc_HexCanvas.cpp" "%MOC%\moc_HexInspectorPanel.cpp" "%MOC%\moc_HexInspectorRowView.cpp" "%MOC%\moc_HexFindBar.cpp" "%MOC%\moc_HexViewWidgets.cpp" ^
   "%MOC%\moc_WorkbenchTarget.cpp" "%MOC%\moc_WorkbenchPageProvider.cpp" "%MOC%\moc_WorkbenchBaselineFeeder.cpp" "%MOC%\moc_WorkbenchWriteController.cpp" "%MOC%\moc_WorkbenchHexPane.cpp" ^
-  "%MOC%\moc_WorkbenchDisasmView.cpp" "%MOC%\moc_WorkbenchTextView.cpp" "%MOC%\moc_WorkbenchCompareView.cpp" ^
+  "%MOC%\moc_MemoryRowCanvas.cpp" "%MOC%\moc_WorkbenchDisasmView.cpp" "%MOC%\moc_WorkbenchTextView.cpp" "%MOC%\moc_WorkbenchCompareView.cpp" ^
   "%MOC%\moc_WorkbenchSessionBar.cpp" "%MOC%\moc_WriteModeSwitch.cpp" "%MOC%\moc_WorkbenchStatusBar.cpp" "%MOC%\moc_WorkbenchStringWriteDialog.cpp" ^
   "%MOC%\moc_AddressBookStore.cpp" "%MOC%\moc_AddressBookModel.cpp" "%MOC%\moc_AddressBookPanel.cpp" "%MOC%\moc_Int3Controller.cpp" "%MOC%\moc_Int3PatchPanel.cpp" ^
   "%MOC%\moc_WorkbenchShared.cpp" "%MOC%\moc_MemoryWorkbenchView.cpp" "%MOC%\moc_WorkbenchDiagnosticsHost.cpp" "%MOC%\qrc_wpJ6_icons.cpp" ^
@@ -124,7 +124,7 @@ if errorlevel 1 exit /b %errorlevel%
 
 cl %CLFLAGS% ^
   "%CORE%\HexViewport.cpp" "%CORE%\HexViewport.Cache.cpp" "%CORE%\HexViewport.Selection.cpp" ^
-  "%CORE%\MemoryDiffOverlay.cpp" "%CORE%\MemoryDiffOverlay.Patches.cpp" "%CORE%\MemoryTargetSession.cpp" ^
+  "%CORE%\MemoryTextDecode.cpp" "%CORE%\MemoryDiffOverlay.cpp" "%CORE%\MemoryDiffOverlay.Patches.cpp" "%CORE%\MemoryTargetSession.cpp" ^
   "%CORE%\MemoryValueDecode.cpp" "%CORE%\MemoryAddressExpr.cpp" "%CORE%\MemoryByteSearch.cpp" ^
   "%CORE%\MemoryTargetTracker.cpp" "%CORE%\MemoryModuleDirectory.cpp" "%CORE%\MemoryProcessMatch.cpp" "%CORE%\SessionAddressResolver.cpp" ^
   "%CORE%\MemoryChannelGate.cpp" "%CORE%\MemoryPageReader.cpp" ^

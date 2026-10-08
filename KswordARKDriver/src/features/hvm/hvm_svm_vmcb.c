@@ -58,6 +58,8 @@ NTSTATUS KswordSvmBuildVmcb(KSW_SVM_CPU* Cpu)
 {
     /* Shared NPT remains immutable while any processor is resident. */
     KSW_SVM_STATE* state = Cpu->Runtime->BackendContext;
+    /* A new launch/self-test cannot inherit hardware clean proof from a previous residency. */
+    Cpu->HardwareCleanMask = 0;
     /* Save-area mapping is processor-private. */
     KSW_SVM_VMCB* v = Cpu->Guest;
     /* Decode the descriptors captured by assembly. */

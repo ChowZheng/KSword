@@ -440,7 +440,7 @@ namespace
         defaultSettings.privilegeButtonHvmVisible = true;
         // DDMA 指示灯与其它权限灯一致默认显示，可在外观设置里关掉。
         defaultSettings.privilegeButtonDdmaVisible = true;
-        defaultSettings.hvmDisplayName = ks::settings::HvmDisplayName::Kvm;
+        defaultSettings.hvmDisplayName = ks::settings::HvmDisplayName::Hvm;
         return defaultSettings;
     }
 }
@@ -490,9 +490,8 @@ QString ks::settings::hvmDisplayNameToJsonText(const HvmDisplayName displayName)
         return QStringLiteral("hvm");
     case HvmDisplayName::RingMinusOne:
         return QStringLiteral("ring_minus_one");
-    case HvmDisplayName::Kvm:
     default:
-        return QStringLiteral("kvm");
+        return QStringLiteral("hvm");
     }
 }
 
@@ -508,7 +507,7 @@ ks::settings::HvmDisplayName ks::settings::hvmDisplayNameFromJsonText(
     {
         return HvmDisplayName::RingMinusOne;
     }
-    return HvmDisplayName::Kvm;
+    return HvmDisplayName::Hvm;
 }
 
 QString ks::settings::hvmDisplayNameLabel(const HvmDisplayName displayName)
@@ -520,9 +519,8 @@ QString ks::settings::hvmDisplayNameLabel(const HvmDisplayName displayName)
     case HvmDisplayName::RingMinusOne:
         // 连字符而非减号：这是权限层级的通行写法，与 R0/R3 排在一起时也齐整。
         return QStringLiteral("R-1");
-    case HvmDisplayName::Kvm:
     default:
-        return QStringLiteral("KVM");
+        return QStringLiteral("HVM");
     }
 }
 
@@ -715,6 +713,11 @@ ks::settings::AppearanceSettings ks::settings::loadAppearanceSettings()
     loadedSettings.startupDefaultTabKey = startupDefaultTabKeyText.isEmpty()
         ? QStringLiteral("welcome")
         : startupDefaultTabKeyText;
+    // 兼容旧版保存的启动页键，随后按新键存档。
+    if (loadedSettings.startupDefaultTabKey == QStringLiteral("kvm"))
+    {
+        loadedSettings.startupDefaultTabKey = QStringLiteral("hvm");
+    }
 
     // launchMaximizedOnStartup 作用：读取“启动时最大化”开关，并兼容旧版 startup_full_screen 字段。
     if (rootObject.contains(QStringLiteral("startup_maximized")))

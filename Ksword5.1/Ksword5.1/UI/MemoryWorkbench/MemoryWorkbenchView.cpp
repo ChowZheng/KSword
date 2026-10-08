@@ -143,10 +143,14 @@ namespace ks::ui
                 return window;
             }
             auto& overlay = const_cast<WorkbenchHexPane*>(hexPane_)->overlay();
-            const auto current = overlay.Materialize(address, length);
-            window.ok = current.ok;
-            window.bytes = current.bytes;
-            window.validMask = current.validMask;
+            const auto* canvas = hexPane_->canvas();
+            const auto bounds = canvas ? canvas->addressSpaceRange() : std::nullopt;
+            if (!bounds || address < bounds->first || address > bounds->last) return window;
+            length = std::min<std::uint64_t>(length, 65536);
+            if (length && length - 1 > bounds->last - address) length = bounds->last - address + 1;
+            window.ok = true;
+            window.bytes.resize(length);
+            window.validMask.resize(length);
             window.baselineBytes.resize(length);
             window.baselineValidMask.resize(length);
             window.previousBytes.resize(length);
@@ -155,17 +159,20 @@ namespace ks::ui
             for (std::uint64_t i = 0; i < length; ++i)
             {
                 const std::uint64_t cell = address + i;
+                const auto visible = canvas->cellStateAt(cell);
+                window.bytes[i] = visible.hasValue ? visible.value : 0;
+                window.validMask[i] = visible.hasValue ? 1 : visible.byteState == HexCanvas::ByteState::Unreadable ? 0 : 2;
                 if (const auto baseline = overlay.BaselineByte(cell))
                 {
                     window.baselineBytes[i] = *baseline;
-                    window.baselineValidMask[i] = 1U;
+                    window.baselineValidMask[i] = 1;
                 }
                 if (const auto previous = overlay.PreviousByte(cell))
                 {
                     window.previousBytes[i] = *previous;
-                    window.previousValidMask[i] = 1U;
+                    window.previousValidMask[i] = 1;
                 }
-                window.changeKinds[i] = overlay.ChangeKind(cell);
+                window.changeKinds[i] = visible.change;
             }
             return window;
         }
@@ -1016,12 +1023,7 @@ namespace ks::ui
         }
         if (auto* s = CreateWorkbenchShortcut(WorkbenchActionId::Find, this))
         {
-            connect(s, &QShortcut::activated, this, [this]() {
-                if (hexPane_ != nullptr)
-                {
-                    hexPane_->openFind();
-                }
-            });
+            connect(s, &QShortcut::activated, this, &MemoryWorkbenchView::openActiveFind);
         }
         if (auto* s = CreateWorkbenchShortcut(WorkbenchActionId::OpenInDisasm, this))
         {

@@ -3,7 +3,7 @@
 #include "../UI/VisibleTableWidget.h"
 #include "../UI/DetailLayoutRegistry.h"
 /* 统一入口：这一页不需要知道 GPA、EPT 叶或 ruleId。 */
-#include "../UI/KvmWatchDialog.h"
+#include "../UI/HvmWatchDialog.h"
 
 #include <QAction>
 #include <QMenu>

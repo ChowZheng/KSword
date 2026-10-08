@@ -209,7 +209,10 @@ private:
     std::uint64_t m_qpcOrigin = 0;
     std::uint64_t m_filetimeOrigin = 0;
     std::uint64_t m_qpcFrequency = 1;
-    std::atomic<ULONG> m_stackEnableStatus{ ERROR_NOT_READY };
+    std::atomic<ULONG> m_stackEnableStatus{ ERROR_SUCCESS };
+    std::atomic<ULONG> m_startTraceStatus{ ERROR_SUCCESS };
+    std::atomic<ULONG> m_openTraceStatus{ ERROR_SUCCESS };
+    std::atomic<ULONG> m_processTraceStatus{ ERROR_SUCCESS };
     std::atomic<ULONG> m_sessionStopStatus{ ERROR_SUCCESS };
     std::atomic<std::uint64_t> m_etwEventsLost{ 0 };
     std::atomic<std::uint64_t> m_etwBuffersLost{ 0 };

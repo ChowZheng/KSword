@@ -12,6 +12,8 @@ its own surface and observer handles; closing the Tab does not stop or detach
 the debugger or its target.
 
 The process context action uses `--ksword-plugin attach -- --pid PID`.
+`attach` now uses the same identity-checked navigation coordinator as the memory
+workbench. It reuses a connected same-target session; it does not attach again.
 `info` and `check` perform no GUI launch. Native TitanEngine forwarding is
 allowed when the KSword driver is absent. An HVM selection is a request to the
 engine adapter, and all controls change only after a matching actual-state acknowledgement.
@@ -36,6 +38,34 @@ before changing options. Rejection retains the actual selection and options.
 Only successfully confirmed options are saved in `x96dbg-options.ini` beside the
 launcher. HVM activation is never saved: each new session starts off and applies
 the saved policy through the common backend, even when no driver is present.
+
+## Address navigation
+
+`--ksword-plugin navigate -- --pid PID --create-time TIME --address ADDRESS
+--view cpu|dump [--debugger PATH]` uses decimal PID, process creation time in
+Windows FILETIME units, and decimal virtual address. Address zero opens the
+current instruction. New instances pause at their attachment system breakpoint.
+The launcher waits for that pause, then for the bridge's actual selected address
+and target-identity acknowledgement. Timeouts never trigger another attach,
+Run, Pause, Detach, Stop, breakpoint insertion, or debugger termination.
+
+The `KSwordNavigation.dp64` plugin is included in `payload/x64dbg/plugins`.
+For a standard installation, build it with `tools/Build-X64DbgNavigation.ps1`
+and put it in that installation's `plugins` directory, then choose x64dbg.exe
+in KSword's `x64dbg settings` action. Build `-Platform Win32` for `.dp32`.
+The coordinator automatically selects the x32/x64 sibling for the target's
+architecture; a missing executable or bridge is reported explicitly. It never
+installs into or changes a standard installation automatically.
+
+Connected instances are discovered through a local, current-user-only named
+pipe keyed by debugger PID and creation time. The only wire operations are
+Query and Navigate. Matching target PID **and creation time** are required on
+both sides. Existing running/paused state, threads, breakpoints, engine selection
+and options are preserved. Busy instances with another target and unknown
+external debugger owners are left alone. A fresh standard installation launch
+uses a separate native user directory; the bundled launch still selects the
+KSword engine. Closing the launcher, KSword or a control Tab does not stop a
+debugger or its target. Kernel/physical addresses are not live x64dbg targets.
 
 ## Engine selection
 

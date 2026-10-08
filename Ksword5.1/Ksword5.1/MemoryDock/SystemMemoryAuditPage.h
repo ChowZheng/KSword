@@ -9,6 +9,7 @@
 // ============================================================
 
 #include "MemoryAccessBackend.h"
+#include "../../../shared/evidence/MemorySnapshotAccounting.h"
 
 #include <QHash>
 #include <QString>
@@ -19,9 +20,11 @@
 #include <atomic>
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <vector>
 
 class QCheckBox;
+class QComboBox;
 class QEvent;
 class QLabel;
 class QLineEdit;
@@ -35,6 +38,7 @@ class QTreeWidget;
 class PhysicalPageAttributionPage;
 class HyperVMemoryPage;
 class MemoryAttributionChart;
+namespace ksword::pfn { struct Scan; }
 
 class SystemMemoryAuditPage final : public QWidget
 {
@@ -105,14 +109,7 @@ private:
         QString description;
     };
 
-    enum class UserMemoryKind : std::uint8_t
-    {
-        Private,
-        Image,
-        MappedFile,
-        PagefileSection,
-        Unknown
-    };
+    using UserMemoryKind = ksword::memoryaudit::ResidentKind;
 
     struct UserResidencyRow
     {
@@ -120,6 +117,10 @@ private:
         QString processName;
         UserMemoryKind kind = UserMemoryKind::Unknown;
         QString backingPath;
+        bool backingPathQueryAttempted = false;
+        std::uint32_t backingPathStatus = 0;
+        bool backingRegionKnown = false;
+        std::uint32_t backingRegionStatus = 0;
         std::uint64_t residentReferenceBytes = 0;
         std::uint64_t privateResidentBytes = 0;
         std::uint64_t shareableResidentBytes = 0;
@@ -155,14 +156,17 @@ private:
         std::uint64_t pageSize = 4096;
 
         std::uint64_t installedPhysicalBytes = 0;
-        std::uint64_t hardwareReservedBytes = 0;
+        bool installedPhysicalValid = false;
+        std::uint32_t installedPhysicalStatus = 0;
+        bool usablePhysicalValid = false;
+        QString usablePhysicalSource;
+        ksword::memoryaudit::ReservedEstimate reserved;
         std::uint64_t totalPhysicalBytes = 0;
         std::uint64_t availableBytes = 0;
         std::uint64_t residentAvailableBytes = 0;
         std::uint64_t inUseBytes = 0;
-        std::uint64_t committedBytes = 0;
-        std::uint64_t commitLimitBytes = 0;
-        std::uint64_t peakCommitmentBytes = 0;
+        ksword::memoryaudit::SystemCommit commit;
+        bool sharedCommittedValid = false;
         std::uint64_t sharedCommittedBytes = 0;
 
         bool memoryListAvailable = false;
@@ -203,6 +207,7 @@ private:
 
         std::uint64_t identifiedResidentLowerBoundBytes = 0;
         std::uint64_t unattributedResidentBytes = 0;
+        std::uint64_t overAccountedResidentBytes = 0;
     };
 
     void initializeUi();
@@ -213,6 +218,8 @@ private:
     void applyThemedStyle();
     // updateSummaryTiles：把当前快照写进 6 格摘要卡片下行的数值文本。
     void updateSummaryTiles();
+    bool usePfnOverview() const;
+    void applyPfnOverview(const std::shared_ptr<ksword::pfn::Scan>& scan);
     void scheduleCurrentDetailViewRebuild();
     void rebuildCurrentDetailView();
     void applySnapshot(Snapshot snapshot, std::uint64_t ticket);
@@ -247,6 +254,10 @@ private:
     PhysicalPageAttributionPage* m_pfnPage = nullptr;
     HyperVMemoryPage* m_hyperVPage = nullptr;
     MemoryAttributionChart* m_snapshotChart = nullptr;
+    QComboBox* m_overviewSource = nullptr;
+    QLabel* m_overviewSample = nullptr;
+    std::shared_ptr<const ksword::pfn::Scan> m_pfnOverviewScan;
+    bool m_pfnOverviewAttemptFailed = false;
     QCheckBox* m_autoRefreshCheck = nullptr;
     QSpinBox* m_intervalSpin = nullptr;
     QLineEdit* m_filterEdit = nullptr;

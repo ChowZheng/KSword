@@ -2,6 +2,7 @@
 #include <QApplication>
 #include <QPointer>
 #include <QTest>
+#include <QScrollBar>
 #include <iostream>
 #include <cmath>
 #include <stdexcept>
@@ -33,6 +34,70 @@ static BOOL CALLBACK collectMonitorRects(HMONITOR, HDC, LPRECT bounds, LPARAM co
 
 static void runTests()
 {
+    {
+        ks::ui::InstallGlobalTableColumnAutoFit(qApp);
+        QTreeWidget columns;
+        columns.setAttribute(Qt::WA_ShowWithoutActivating);
+        columns.setColumnCount(13);
+        columns.setHeaderLabels({"Window title", "HWND", "API", "Class", "PID", "Process name",
+            "TID", "Size", "Visible", "Enabled", "Topmost", "State", "Alpha"});
+        ks::window::configureWindowListColumnSizing(&columns);
+        columns.setIconSize(QSize(20, 20));
+        for (int column = 0; column < columns.columnCount(); ++column)
+            columns.setColumnHidden(column, column != 0 && column != 1 && column != 5);
+        auto* group = new QTreeWidgetItem(&columns, {"Process group"});
+        QTreeWidgetItem* last = nullptr;
+        for (int row = 0; row < 64; ++row)
+        {
+            last = new QTreeWidgetItem(group);
+            last->setText(0, QString(180, QChar('W')));
+            last->setText(1, "0x10B66");
+            last->setText(5, "Short.exe");
+        }
+        const QString handle = "0xFFFFFFFF12345678";
+        const QString processName = "Ksword5.1-background-worker.exe";
+        QFont bold = columns.font();
+        bold.setBold(true);
+        bold.setPointSize(14);
+        last->setText(1, handle);
+        last->setFont(1, bold);
+        last->setText(5, processName);
+        last->setFont(5, bold);
+        QPixmap logo(20, 20);
+        logo.fill(QColor(40, 110, 220));
+        last->setIcon(5, QIcon(logo));
+        group->setExpanded(true);
+        columns.resize(1200, 360);
+        columns.show();
+        QTest::qWait(60);
+        const auto checkWidths = [&] {
+            require(columns.columnWidth(1) >= QFontMetrics(bold).horizontalAdvance(handle) + 4,
+                "HWNDs beyond the first 48 rows retain their full styled width");
+            require(columns.columnWidth(5) >= QFontMetrics(bold).horizontalAdvance(last->text(5)) + 24,
+                "Process names include actual font and icon space");
+            require(columns.header()->sectionResizeMode(1) == QHeaderView::ResizeToContents
+                && columns.header()->sectionResizeMode(5) == QHeaderView::ResizeToContents,
+                "Global auto-fit does not override window field sizing");
+        };
+        checkWidths();
+        require(columns.grab().save(QStringLiteral(".codex-build-logs/window-list-tests/window-list-columns.png")),
+            "Save default window list column preview");
+        last->setText(5, "Ksword5.1-background-worker-after-refresh.exe");
+        ks::ui::RequestTableColumnAutoFit(&columns);
+        QTest::qWait(60);
+        checkWidths();
+        for (int column = 0; column < columns.columnCount(); ++column) columns.setColumnHidden(column, false);
+        QTest::qWait(60);
+        checkWidths();
+        for (int column = 0; column < columns.columnCount(); ++column)
+            columns.setColumnHidden(column, column != 0 && column != 1 && column != 5);
+        columns.resize(320, 360);
+        QTest::qWait(60);
+        checkWidths();
+        require(columns.horizontalScrollBar()->maximum() > 0,
+            "Narrow window scrolls instead of truncating HWND and process name fields");
+    }
+
     // The single HWND has one backing scale even when selected windows belong
     // to differently scaled monitors. All coordinates must round-trip in pixels.
     const QPoint virtualOrigin(-320, -120);

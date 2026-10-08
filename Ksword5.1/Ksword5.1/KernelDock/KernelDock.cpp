@@ -580,8 +580,8 @@ void KernelDock::initializeUi()
             "kernel.main.tab.wdf_audit.tooltip",
             QStringLiteral("审计 KMDF 绑定函数地址、模块归属/执行节一致性与 WDF 回调，并受控编辑已验证的绑定表函数槽")));
 
-    // VT-x/EPT 页已移到顶层「虚拟化 (KVM)」Dock。
-    // 搬家的理由不是页面归属，而是它和标题栏 KVM 右键菜单原本各握一半能力：
+    // VT-x/EPT 页已移到顶层「虚拟化」Dock。
+    // 搬家的理由不是页面归属，而是它和标题栏 HVM 右键菜单原本各握一半能力：
     // 准备/释放资源在菜单里，PREPARE/SELF_TEST/EPT 规则在这一页里，两边零
     // 交叉引用，用户在任一侧都走不完一次完整的生命周期。
 

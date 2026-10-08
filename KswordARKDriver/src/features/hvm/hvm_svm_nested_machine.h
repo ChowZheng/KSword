@@ -30,6 +30,8 @@ typedef struct _KSW_NSVM_MACHINE_IO {
     int (*WriteTpr)(void* Context, unsigned Value);
     /* Called after control restoration; only the trusted L0 private hypercall ABI may return NATIVE. */
     unsigned (*PrivateControl)(void* Context, struct _KSW_NSVM_MACHINE* Machine);
+    /* An owned protection NPF is retried without fabricating an L1-owned fault or instruction advance. */
+    unsigned (*ProtectionFault)(void* Context, KSW_NSVM_EXECUTION* Execution);
     /* Callback context is processor-owned nonpageable storage. */
     void* Context;
 } KSW_NSVM_MACHINE_IO;
@@ -63,6 +65,8 @@ typedef struct _KSW_NSVM_MACHINE {
     unsigned LastAction, LastPhysicalAction, NmiCount;
     /* One initial TPR observation is needed before any guest CR8 execution. */
     unsigned Initialized;
+    /* Reserved policy field: transparent Windows physical-GIF shielding currently forces this off. */
+    unsigned HardwareGifAllowed;
 } KSW_NSVM_MACHINE;
 /* Call on the pinned CPU after binding trusted callbacks and before the first hardware entry. */
 unsigned KswSvmNestedMachineInitialize(KSW_NSVM_MACHINE* Machine);

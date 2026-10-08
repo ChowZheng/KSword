@@ -89,9 +89,9 @@ namespace wpH_test
         // openEditor：F2 进入行内编辑，返回编辑框指针（nullptr 表示没能进入编辑）。
         QLineEdit* openEditor(Rig& rig, const int row)
         {
-            rig.view.table()->setFocus();
-            rig.view.table()->setCurrentIndex(rig.view.model()->index(row, 2));
-            QTest::keyClick(rig.view.table(), Qt::Key_F2);
+            rig.view.canvas()->setFocus();
+            rig.view.canvas()->setSelectedRow(row);
+            QTest::keyClick(rig.view.canvas(), Qt::Key_F2);
             return qobject_cast<QLineEdit*>(QApplication::focusWidget());
         }
 
@@ -188,11 +188,11 @@ namespace wpH_test
             QCoreApplication::processEvents();
             // 编辑结束后，被推迟的那次刷新应当已经自动补上：isEditing 复位，且下一次 F2 可用。
             WPH_CHECK(!rig.view.isEditing());
-            rig.view.table()->setFocus();
-            rig.view.table()->setCurrentIndex(rig.view.model()->index(2, 2));
-            QTest::keyClick(rig.view.table(), Qt::Key_F2);
+            rig.view.canvas()->setFocus();
+            rig.view.canvas()->setSelectedRow(2);
+            QTest::keyClick(rig.view.canvas(), Qt::Key_F2);
             int visibleEditors = 0;
-            for (auto* lineEdit : rig.view.table()->viewport()->findChildren<QLineEdit*>())
+            for (auto* lineEdit : rig.view.canvas()->viewport()->findChildren<QLineEdit*>())
             {
                 visibleEditors += lineEdit->isVisible() ? 1 : 0;
             }
@@ -320,9 +320,9 @@ namespace wpH_test
                 if (auto* popup = QApplication::activePopupWidget()) { popup->close(); }
                 if (auto* modal = QApplication::activeModalWidget()) { modal->close(); }
             });
-            auto* table = rig.view.table();
-            table->setCurrentIndex(rig.view.model()->index(row, 0));
-            emit table->customContextMenuRequested(table->visualRect(rig.view.model()->index(row, 0)).center());
+            auto* canvas = rig.view.canvas();
+            canvas->setSelectedRow(row);
+            emit canvas->contextMenuRequested(canvas->contentRect(row).center());
             return drive;
         }
 
@@ -389,7 +389,7 @@ namespace wpH_test
             editor->selectAll();
             QTest::keyClicks(editor, QStringLiteral("push 0x1122334455667788"));
             QTest::keyClick(editor, Qt::Key_Return);
-            auto* errorLabel = rig.view.table()->viewport()->findChild<QLabel*>(QStringLiteral("ksMemwbDisasmInlineError"));
+            auto* errorLabel = rig.view.canvas()->viewport()->findChild<QLabel*>(QStringLiteral("ksMemwbDisasmInlineError"));
             WPH_CHECK(errorLabel != nullptr && errorLabel->isVisible());
             QTest::keyClick(editor, Qt::Key_Escape);
             QCoreApplication::processEvents();
@@ -457,9 +457,9 @@ namespace wpH_test
                 if (auto* popup = QApplication::activePopupWidget()) { popup->close(); }
                 if (auto* modal = QApplication::activeModalWidget()) { modal->close(); }
             });
-            auto* table = rig.view.table();
-            table->setCurrentIndex(rig.view.model()->index(1, 0));
-            emit table->customContextMenuRequested(table->visualRect(rig.view.model()->index(1, 0)).center());
+            auto* canvas = rig.view.canvas();
+            canvas->setSelectedRow(1);
+            emit canvas->contextMenuRequested(canvas->contentRect(1).center());
             QCoreApplication::processEvents();
             QTest::qWait(300);
             QCoreApplication::processEvents();
@@ -522,16 +522,16 @@ namespace wpH_test
             Rig rig(QByteArray::fromHex("554889E590"));
             rig.view.setEditable(false);
             WPH_CHECK(!rig.view.isEditable());
-            rig.view.table()->setFocus();
-            rig.view.table()->setCurrentIndex(rig.view.model()->index(1, 2));
-            QTest::keyClick(rig.view.table(), Qt::Key_F2);
+            rig.view.canvas()->setFocus();
+            rig.view.canvas()->setSelectedRow(1);
+            QTest::keyClick(rig.view.canvas(), Qt::Key_F2);
             WPH_CHECK_NOTE(!rig.view.isEditing(), QStringLiteral("只读模式下 F2 不应进入编辑"));
             // 双击必须先发一次 mouseClick 再发 mouseDClick——只发 mouseDClick 不会触发
             // Qt 的 doubleClicked 信号（上一波审核报告也踩过这个坑），否则这条断言会在
             // "doubleClicked 根本没发出来"的情况下被动过关，测不出真正的只读防护。
-            const QPoint center = rig.view.table()->visualRect(rig.view.model()->index(1, 2)).center();
-            QTest::mouseClick(rig.view.table()->viewport(), Qt::LeftButton, Qt::NoModifier, center);
-            QTest::mouseDClick(rig.view.table()->viewport(), Qt::LeftButton, Qt::NoModifier, center);
+            const QPoint center = rig.view.canvas()->contentRect(1).center();
+            QTest::mouseClick(rig.view.canvas()->viewport(), Qt::LeftButton, Qt::NoModifier, center);
+            QTest::mouseDClick(rig.view.canvas()->viewport(), Qt::LeftButton, Qt::NoModifier, center);
             WPH_CHECK_NOTE(!rig.view.isEditing(), QStringLiteral("只读模式下双击不应进入编辑"));
             rig.view.setEditable(true);
             WPH_CHECK(rig.view.isEditable());
@@ -543,10 +543,10 @@ namespace wpH_test
         void runSingleClickNoEditTests()
         {
             Rig rig(QByteArray::fromHex("554889E590"));
-            auto* table = rig.view.table();
+            auto* canvas = rig.view.canvas();
             const QModelIndex idx = rig.view.model()->index(1, 2);
-            table->setCurrentIndex(idx);
-            QTest::mouseClick(table->viewport(), Qt::LeftButton, Qt::NoModifier, table->visualRect(idx).center());
+            canvas->setSelectedRow(idx.row());
+            QTest::mouseClick(canvas->viewport(), Qt::LeftButton, Qt::NoModifier, canvas->contentRect(idx.row()).center());
             QTest::qWait(QApplication::doubleClickInterval() + 200);
             WPH_CHECK_NOTE(!rig.view.isEditing(), QStringLiteral("单击已选中行不应进入编辑（哪怕是延迟触发的 SelectedClicked）"));
         }
@@ -556,10 +556,10 @@ namespace wpH_test
         {
             // push 0x10 ; ret 0x08（都把立即数当操作数，但都不是跳转目标）。
             Rig rig(QByteArray::fromHex("6A10C20800"));
-            rig.view.table()->setFocus();
-            rig.view.table()->setCurrentIndex(rig.view.model()->index(0, 0));
+            rig.view.canvas()->setFocus();
+            rig.view.canvas()->setSelectedRow(0);
             const std::uint64_t before = rig.view.anchorAddress();
-            QTest::keyClick(rig.view.table(), Qt::Key_Return);
+            QTest::keyClick(rig.view.canvas(), Qt::Key_Return);
             WPH_CHECK_NOTE(rig.view.anchorAddress() == before, QStringLiteral("push imm 不应被当成跳转目标跟随"));
             WPH_CHECK_NOTE(rig.view.isEditing(), QStringLiteral("push imm 行 Enter 应该进入编辑"));
             if (rig.view.isEditing())
@@ -626,7 +626,7 @@ namespace wpH_test
             WPH_CHECK_NOTE(rig.view.anchorAddress() == 0, QStringLiteral("reset 后锚点应清零"));
             // 再跳一次不应触发"后退"到旧锚点（后退栈应该也被清空了）。
             rig.view.jumpTo(rig.base);
-            QTest::keyClick(rig.view.table(), Qt::Key_Backspace);
+            QTest::keyClick(rig.view.canvas(), Qt::Key_Backspace);
             WPH_CHECK_NOTE(rig.view.anchorAddress() == rig.base, QStringLiteral("reset 后后退栈应为空，Backspace 不应跳到旧地址"));
         }
 

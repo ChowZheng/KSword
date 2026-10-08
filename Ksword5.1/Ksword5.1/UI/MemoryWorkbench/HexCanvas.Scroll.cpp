@@ -261,7 +261,7 @@ namespace ks::ui
     // 作用：PlanFetch（预取前后各 2 页）-> 先 MarkInFlight -> 交给提供者。
     void HexCanvas::requestVisiblePages()
     {
-        if (!m_hasSpace || m_provider == nullptr)
+        if (!m_hasSpace || m_provider == nullptr || !m_viewportReadEnabled)
         {
             return;
         }
@@ -282,6 +282,37 @@ namespace ks::ui
         {
             m_provider->RequestPages(accepted, m_viewport.SourceRevision());
         }
+    }
+
+    std::optional<HexCanvas::AddressRange> HexCanvas::addressSpaceRange() const
+    {
+        if (!m_hasSpace) return std::nullopt;
+        return AddressRange{m_viewport.FirstAddress(), m_viewport.LastAddress()};
+    }
+
+    void HexCanvas::setViewportReadEnabled(bool enabled)
+    {
+        if (m_viewportReadEnabled == enabled) return;
+        m_viewportReadEnabled = enabled;
+        if (enabled) requestVisiblePages();
+    }
+
+    void HexCanvas::requestAddressRange(std::uint64_t first, std::uint64_t last)
+    {
+        if (!m_hasSpace || !m_provider || first > last) return;
+        first = std::max(first, m_viewport.FirstAddress());
+        last = std::min(last, m_viewport.LastAddress());
+        if (first > last) return;
+        // A view requests a bounded decode window, never an entire target address space.
+        last = first + std::min<std::uint64_t>(last - first, 65535);
+        const auto firstRow = m_viewport.RowOfAddress(first);
+        const auto lastRow = m_viewport.RowOfAddress(last);
+        if (!firstRow || !lastRow) return;
+        const auto plan = m_viewport.PlanFetch(*firstRow, *lastRow - *firstRow + 1, kPrefetchPages);
+        std::vector<HexFetchRange> accepted;
+        for (const auto& range : plan)
+            if (m_viewport.MarkInFlight(range) == PageResult::Accepted) accepted.push_back(range);
+        if (!accepted.empty()) m_provider->RequestPages(accepted, m_viewport.SourceRevision());
     }
 
     // 可见范围变化时发 visibleRangeChanged（去重）。

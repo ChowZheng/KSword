@@ -1,5 +1,7 @@
 #pragma once
 
+#include "../UI/TableColumnAutoFit.h"
+#include <QHeaderView>
 #include <QPainter>
 #include <QSet>
 #include <QMouseEvent>
@@ -17,6 +19,16 @@
 
 namespace ks::window
 {
+    inline void configureWindowListColumnSizing(QTreeWidget* tree)
+    {
+        // The shared fitter samples and compresses fields. Keep HWNDs and
+        // process names at their native delegate widths, including icons/fonts.
+        ks::ui::SetTableColumnAutoFitEnabled(tree, false);
+        tree->header()->setStretchLastSection(false);
+        tree->header()->setSectionResizeMode(QHeaderView::ResizeToContents);
+        tree->header()->setSectionResizeMode(0, QHeaderView::Stretch);
+    }
+
     inline QString windowIdentityKey(quint64 hwnd, quint64 pid, quint64 tid, quint64 created)
     {
         return QStringLiteral("%1/%2/%3/%4")

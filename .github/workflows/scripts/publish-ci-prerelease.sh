@@ -84,8 +84,7 @@ download_binary_body() {
 }
 
 # Wait for the independently triggered driver workflow for this exact push.
-# A user-mode CI success must not publish an automatic release while the R0
-# build is still running or after it has failed.
+# Wait for the R0 outcome before choosing a complete or diagnostic release.
 driver_run_id=''
 driver_deadline=$((SECONDS + driver_wait_timeout_seconds))
 while (( SECONDS < driver_deadline )); do
@@ -106,10 +105,6 @@ while (( SECONDS < driver_deadline )); do
   echo "Driver CI for $GITHUB_SHA: id=$driver_run_id status=$driver_status conclusion=$driver_conclusion"
 
   if [[ "$driver_status" == 'completed' ]]; then
-    if [[ "$driver_conclusion" != 'success' ]]; then
-      echo "Driver CI did not succeed; automatic release is blocked." >&2
-      exit 1
-    fi
     break
   fi
 
@@ -119,6 +114,12 @@ done
 if [[ -z "$driver_run_id" || "$driver_run_id" == '0' || "$driver_status" != 'completed' ]]; then
   echo "Timed out waiting for Driver CI to complete for $GITHUB_SHA." >&2
   exit 1
+fi
+
+ci_failed="$(python3 -c 'import json, os; print(any(job.get("result") not in ("success", "skipped") for job in json.loads(os.environ["CI_JOB_RESULTS"]).values()))')"
+if [[ "$ci_failed" == 'True' || "$driver_conclusion" != 'success' ]]; then
+  python3 tools/ci_failure_release.py --driver-run-id "$driver_run_id"
+  exit 0
 fi
 
 artifact_download_root="$RUNNER_TEMP/ksword-ci-artifacts"
@@ -488,10 +489,12 @@ mapfile -t automatic_releases < <(
 for stale_release in "${automatic_releases[@]:retained_release_count}"; do
   stale_tag="${stale_release#*$'\t'}"
   echo "Deleting stale automatic prerelease: $stale_tag"
-  gh release delete "$stale_tag" \
+  if ! gh release delete "$stale_tag" \
     --repo "$GITHUB_REPOSITORY" \
     --cleanup-tag \
-    --yes
+    --yes; then
+    echo "Release published; unable to delete stale automatic prerelease: $stale_tag" >&2
+  fi
 done
 
 {

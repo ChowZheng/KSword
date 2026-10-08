@@ -29,6 +29,12 @@ unsigned int KswSvmNestedBuildEntry(KSW_SVM_VMCB* Destination,
     const KSW_NSVM_ENTRY_POLICY* Policy, KSW_SVM_U64 RootPa,
     KSW_SVM_U64 MsrPa, KSW_SVM_U64 IoPa, unsigned int Asid,
     KSW_NSVM_ENTRY_RESULT* Result);
+/* Stable VMCB02 starts zeroed and refreshes only implemented control/save fields. */
+unsigned int KswSvmNestedBuildStableEntry(KSW_SVM_VMCB* Destination,
+    const KSW_SVM_VMCB* Outer, const KSW_SVM_VMCB* Inner,
+    const KSW_NSVM_ENTRY_POLICY* Policy, KSW_SVM_U64 RootPa,
+    KSW_SVM_U64 MsrPa, KSW_SVM_U64 IoPa, unsigned int Asid,
+    KSW_NSVM_ENTRY_RESULT* Result);
 /* Invalid entry writes only architecturally returned diagnostic fields. */
 void KswSvmNestedInvalidExit(KSW_SVM_VMCB* Inner);
 /* SavedL1 is owned and may be updated; all other GPRs remain with the calling CPU. */

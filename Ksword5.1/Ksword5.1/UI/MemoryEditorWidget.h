@@ -2,6 +2,7 @@
 
 #include "KernelDisassemblyDialog.h"
 #include "MemoryEditHistory.Core.h"
+#include "MemorySnapshotBytesProvider.h"
 #include <QWidget>
 
 class HexEditorWidget;
@@ -10,12 +11,15 @@ class QCheckBox;
 class QLabel;
 class QLineEdit;
 class QPlainTextEdit;
+class QMenu;
 class QPushButton;
 class QTabWidget;
 class QTableWidget;
 
 namespace ks::ui
 {
+    class WorkbenchDisasmView;
+    class WorkbenchTextView;
     struct MemoryEditBlock
     {
         std::uint64_t address = 0;
@@ -30,6 +34,7 @@ namespace ks::ui
         Q_OBJECT
     public:
         explicit MemoryEditorWidget(QWidget* parent = nullptr);
+        ~MemoryEditorWidget() override;
         HexEditorWidget* hexEditor() const;
         // A stable nonempty source identity enables comparison across actual
         // reads. Without one, only the current snapshot's edit baseline is used.
@@ -49,14 +54,19 @@ namespace ks::ui
         void refreshFromHexEditor();
         void jumpToAddress(std::uint64_t address);
         void showDisassemblyAt(std::uint64_t address);
-        QTableWidget* instructionTable() const;
+        WorkbenchDisasmView* disassemblyView() const;
+        WorkbenchTextView* textView() const;
         std::optional<DisassemblySelection> selectedInstruction() const;
+        // Only live process virtual-memory owners supply this context. Offline,
+        // physical and kernel evidence must not inherit a process navigation target.
+        void setProcessContext(std::uint32_t pid, std::uint64_t createTime100ns = 0);
         void undo();
         void redo();
 
     signals:
         void bytesChanged();
         void currentAddressChanged(std::uint64_t address);
+        void instructionContextMenuAboutToShow(QMenu* menu, std::uint64_t address, bool valid);
 
     protected:
         void changeEvent(QEvent* event) override;
@@ -72,8 +82,9 @@ namespace ks::ui
         void showAssemblyEditor();
         // 配置行内汇编编辑；单击/工具按钮只暂存单条完整指令，不写入真实内存。
         void initializeInlineAssemblyEditing();
-        void beginInlineAssemblyEdit(int row, int column = 2);
-        void showInstructionMenu(const QPoint& position);
+        void beginInlineAssemblyEdit();
+        void synchronizeSnapshotProvider();
+        void stageSnapshotBytes(std::uint64_t address, const QByteArray& bytes);
         void selectInstruction(std::uint64_t address);
         std::uint64_t selectedAddress() const;
         bool contains(std::uint64_t address) const;
@@ -81,7 +92,7 @@ namespace ks::ui
 
         HexEditorWidget* m_hex = nullptr;
         QTabWidget* m_tabs = nullptr;
-        QTableWidget* m_instructions = nullptr;
+        WorkbenchDisasmView* m_disassembly = nullptr;
         QTableWidget* m_comparison = nullptr;
         QComboBox* m_comparisonBaseline = nullptr;
         QCheckBox* m_onlyDifferences = nullptr;
@@ -89,8 +100,7 @@ namespace ks::ui
         QPushButton* m_previousComparison = nullptr;
         QPushButton* m_nextComparison = nullptr;
         QLabel* m_comparisonStatus = nullptr;
-        QPlainTextEdit* m_text = nullptr;
-        QComboBox* m_textEncoding = nullptr;
+        WorkbenchTextView* m_text = nullptr;
         QComboBox* m_architecture = nullptr;
         QLineEdit* m_decodeAddress = nullptr;
         QPushButton* m_assemble = nullptr;
@@ -102,6 +112,7 @@ namespace ks::ui
         QByteArray m_observed;
         QByteArray m_previousRead;
         QByteArray m_recentChanges;
+        MemorySnapshotBytesProvider m_bytesProvider;
         QString m_sourceIdentity;
         detail::MemoryEditHistory m_history;
         QVector<qsizetype> m_comparisonRows;
@@ -111,5 +122,7 @@ namespace ks::ui
         std::uint64_t m_snapshotRevision = 0;
         bool m_editable = false;
         bool m_syncing = false;
+        std::uint32_t m_processPid = 0;
+        std::uint64_t m_processCreateTime100ns = 0;
     };
 }

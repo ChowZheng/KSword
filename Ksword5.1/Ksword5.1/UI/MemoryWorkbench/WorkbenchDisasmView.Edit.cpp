@@ -5,6 +5,7 @@
 // 两条路径最终都只发 stageRequested 信号，本文件不直接写任何内存。
 
 #include "WorkbenchDisasmView.h"
+#include "MemoryRowCanvas.h"
 
 #include "HexCanvasFormat.h"
 
@@ -25,8 +26,6 @@
 #include <QPushButton>
 #include <QScreen>
 #include <QSpinBox>
-#include <QStyledItemDelegate>
-#include <QTableView>
 #include <QTimer>
 #include <QVariant>
 #include <QVBoxLayout>
@@ -38,10 +37,6 @@ namespace ks::ui
 {
     namespace
     {
-        // sizeDialogResponsively：按屏幕可用区域夹取对话框尺寸，避免在小屏/远程桌面被撑出工作区。
-        // 本组件自包含、不引入主程序的 UI_All.h 聚合头，因此不复用其
-        // applyResponsiveWindowGeometry，自己实现等价的最小版本。
-        // 入参：对话框、期望尺寸、最小尺寸、用于取屏幕的锚点控件；无传出。
         void sizeDialogResponsively(QDialog* dialog, const QSize& preferred, const QSize& minimum, QWidget* anchor)
         {
             const QScreen* screen = (anchor != nullptr && anchor->screen() != nullptr) ? anchor->screen() : QGuiApplication::primaryScreen();
@@ -53,160 +48,57 @@ namespace ks::ui
             dialog->resize(bounded);
         }
 
-        // DisasmEditDelegate：行内编辑委托，整条指令放进跨"指令/操作数"两列的单行编辑框。
-        // 创建/提交两件事都通过构造时传入的回调完成，回调由 WorkbenchDisasmView 绑定，
-        // 委托自身不持有任何与目标相关的状态，只负责"编辑框生命周期 + Enter/Esc 分支"。
-        class DisasmEditDelegate final : public QStyledItemDelegate
-        {
-        public:
-            using CreateEditorFn = std::function<QLineEdit*(QWidget*, const QModelIndex&)>;
-            // CommitFn：尝试编译并提交；成功返回空串，失败返回给用户看的原因（不关编辑框）。
-            using CommitFn = std::function<QString(QLineEdit*)>;
-
-            DisasmEditDelegate(QObject* parent, CreateEditorFn createEditor, CommitFn commit)
-                : QStyledItemDelegate(parent), m_createEditor(std::move(createEditor)), m_commit(std::move(commit))
-            {
-            }
-
-            QWidget* createEditor(QWidget* parent, const QStyleOptionViewItem&, const QModelIndex& index) const override
-            {
-                return m_createEditor(parent, index);
-            }
-
-            // setEditorData：留空——createEditor 已经按行上下文填好初始文本，默认实现会把它
-            // 按"指令/操作数"两列分别覆盖，破坏跨列的整条汇编文本。
-            void setEditorData(QWidget*, const QModelIndex&) const override
-            {
-            }
-
-            // updateEditorGeometry：几何跨"指令"到"操作数"列（到视口右缘），容纳完整汇编文本。
-            void updateEditorGeometry(QWidget* editor, const QStyleOptionViewItem& option, const QModelIndex&) const override
-            {
-                QRect geometry = option.rect;
-                const auto* table = qobject_cast<QTableView*>(parent());
-                if (table != nullptr)
-                {
-                    geometry.setRight(table->viewport()->width() - 1);
-                }
-                editor->setGeometry(geometry);
-            }
-
-            // setModelData：不通过模型写数据——提交结果只经 stageRequested 信号交给宿主，
-            // 模型本身只读展示，这里留空避免误触发模型变更。
-            void setModelData(QWidget*, QAbstractItemModel*, const QModelIndex&) const override
-            {
-            }
-
-        protected:
-            // eventFilter：拦截 Return/Enter（编译提交，失败不关）、Escape（取消）、
-            // FocusOut（视为取消，防止点击别处时静默提交半成品输入）。
-            bool eventFilter(QObject* editorObject, QEvent* event) override
-            {
-                auto* lineEdit = qobject_cast<QLineEdit*>(editorObject);
-                if (lineEdit == nullptr)
-                {
-                    return QStyledItemDelegate::eventFilter(editorObject, event);
-                }
-                if (event->type() == QEvent::KeyPress)
-                {
-                    const auto* keyEvent = static_cast<QKeyEvent*>(event);
-                    if (keyEvent->key() == Qt::Key_Return || keyEvent->key() == Qt::Key_Enter)
-                    {
-                        // stageRequested 可同步进入写确认的嵌套事件循环并销毁宿主。
-                        // 两个守卫保证返回后不再向已销毁的委托或编辑器发送收尾信号。
-                        const QPointer<DisasmEditDelegate> delegateGuard(this);
-                        const QPointer<QLineEdit> editorGuard(lineEdit);
-                        const auto commit = m_commit;
-                        const QString error = commit(lineEdit);
-                        if (!delegateGuard || !editorGuard)
-                        {
-                            return true;
-                        }
-                        if (!error.isEmpty())
-                        {
-                            // 编译失败：吞掉事件，编辑框保持打开，原因已经由回调显示在下方。
-                            return true;
-                        }
-                        emit commitData(lineEdit);
-                        if (delegateGuard && editorGuard)
-                        {
-                            emit closeEditor(lineEdit);
-                        }
-                        return true;
-                    }
-                    if (keyEvent->key() == Qt::Key_Escape)
-                    {
-                        emit closeEditor(lineEdit, QAbstractItemDelegate::RevertModelCache);
-                        return true;
-                    }
-                }
-                if (event->type() == QEvent::FocusOut)
-                {
-                    emit closeEditor(lineEdit, QAbstractItemDelegate::RevertModelCache);
-                    return true;
-                }
-                return QStyledItemDelegate::eventFilter(editorObject, event);
-            }
-
-        private:
-            CreateEditorFn m_createEditor; // 按行上下文创建并预填编辑框
-            CommitFn m_commit;              // 编译并提交，失败时返回原因
-        };
     }
 
-    // installEditDelegate：构造委托并装到表格上，构造函数里只调一次。
-    void WorkbenchDisasmView::installEditDelegate()
+    void WorkbenchDisasmView::beginSelectedInstructionEdit() { beginRowEdit(m_canvas->selectedRow()); }
+    void WorkbenchDisasmView::beginRowEdit(int index)
     {
-        const auto createEditor = [this](QWidget* parent, const QModelIndex& index) -> QLineEdit* {
-            hideInlineEditError();
-            // 可疑点 1：这里是唯一真正创建编辑器的地方——F2/Enter 的路径经 beginRowEdit 调
-            // m_table->edit(index) 最终也会走到这里，双击更是只能走这里（Qt 的
-            // DoubleClicked 编辑触发器直接调用委托，根本不经过 beginRowEdit）。只在
-            // beginRowEdit 里挡 m_editable 不够——那挡不住原生双击触发器，必须在这个唯一
-            // 的汇合点上再挡一次，这里才是只读模式真正生效的地方。
-            if (!m_editable || index.column() < 2 || m_model->isEndOfWindowRow(index.row()))
-            {
-                return nullptr;
-            }
-            const std::optional<DecodedRow> row = m_model->rowAt(index.row());
-            if (!row.has_value())
-            {
-                return nullptr;
-            }
-            auto* editor = new QLineEdit(parent);
-            editor->setObjectName(QStringLiteral("ksMemwbDisasmInlineEditor"));
-            editor->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
-            const QString originalSource = (row->mnemonic + QLatin1Char(' ') + row->operands).trimmed();
-            editor->setText(originalSource);
-            // 冻结上下文：提交时按这些属性重建地址/原字节/架构，不依赖委托外部的可变状态。
-            editor->setProperty("ksAddress", QVariant::fromValue<qulonglong>(row->address));
-            editor->setProperty("ksOldBytes", row->bytes);
-            editor->setProperty("ksX64", isX64());
-            editor->setProperty("ks_edit_context_revision", QVariant::fromValue<qulonglong>(m_editContextRevision));
-            // ksOriginalSource：D1——记住进入编辑时的原文，提交时如果一字未改，直接关闭
-            // 编辑框而不发任何信号（旧版 MemoryEditorWidget.InlineAssembly.cpp 有这一步，
-            // 新实现丢了它：Enter 进编辑、手滑再按一次 Enter，也会把原指令重新编译一遍，
-            // 等价但编码不同的机器码被当成"修改"暂存，立即写入模式下等于静默改写目标）。
-            editor->setProperty("ksOriginalSource", originalSource);
-            editor->selectAll();
-            // QAbstractItemView::state()/EditingState 是 protected，宿主/夹具都够不到，
-            // 这里自己记一份可查询的编辑中标志（isEditing）。
-            m_editingActive = true;
-            return editor;
-        };
-
-        const auto commit = [this](QLineEdit* editor) -> QString {
+        if (!m_editable || m_editingActive || !m_model->rowAt(index)) return;
+        const auto row = *m_model->rowAt(index);
+        if (!row.decoded || row.bytes.isEmpty()) return;
+        m_canvas->setSelectedRow(index);
+        auto* editor = new QLineEdit(m_canvas->viewport());
+        m_inlineEditor = editor;
+        editor->setObjectName(QStringLiteral("ksMemwbDisasmInlineEditor"));
+        editor->setFont(m_canvas->font());
+        const QString original = (row.mnemonic + QLatin1Char(' ') + row.operands).trimmed();
+        editor->setText(original);
+        editor->setProperty("ksOriginalSource", original);
+        editor->setProperty("ksAddress", QVariant::fromValue<qulonglong>(row.address));
+        editor->setProperty("ksOldBytes", row.bytes);
+        editor->setProperty("ksX64", isX64());
+        editor->setProperty("ks_edit_context_revision", QVariant::fromValue<qulonglong>(m_editContextRevision));
+        editor->setGeometry(m_canvas->contentRect(index));
+        editor->installEventFilter(this);
+        m_editingActive = true;
+        editor->show(); editor->setFocus(); editor->selectAll();
+        connect(editor, &QLineEdit::returnPressed, this, &WorkbenchDisasmView::commitInlineEdit);
+    }
+    void WorkbenchDisasmView::cancelInlineEdit()
+    {
+        QLineEdit* editor = m_inlineEditor;
+        m_inlineEditor = nullptr;
+        m_editingActive = false;
+        if (editor) { editor->removeEventFilter(this); editor->hide(); editor->deleteLater(); }
+        hideInlineEditError();
+        m_canvas->setFocus();
+        if (m_refreshPending) { m_refreshPending = false; rebuildRowsNow(); }
+    }
+    void WorkbenchDisasmView::commitInlineEdit()
+    {
+        QLineEdit* editor = m_inlineEditor;
+        if (!editor) return;
             const QString source = editor->text().trimmed();
             const QString originalSource = editor->property("ksOriginalSource").toString();
             if (source == originalSource)
             {
                 // D1：文本一字未改，直接关闭编辑框，不编译、不比较字节、不发信号。
                 hideInlineEditError();
-                return QString();
+                cancelInlineEdit(); return;
             }
             if (!m_assembleOne)
             {
-                return QStringLiteral("未设置汇编后端，无法编译。");
+                showInlineEditError(editor->geometry(), QStringLiteral("未设置汇编后端，无法编译。")); return;
             }
             const std::uint64_t address = editor->property("ksAddress").toULongLong();
             const QByteArray oldBytes = editor->property("ksOldBytes").toByteArray();
@@ -217,7 +109,7 @@ namespace ks::ui
             {
                 const QString error = QStringLiteral("数据已刷新，原指令不再位于当前视图，已取消本次汇编编辑。");
                 showInlineEditError(editor->geometry(), error);
-                return error;
+                return;
             }
             // 编辑期间实时重读可能已更新基线。逐字节复核原指令，防止按旧指令长度覆盖新代码。
             const WorkbenchByteWindow currentWindow = m_provider->FetchWindow(address, static_cast<std::uint64_t>(oldBytes.size()));
@@ -227,20 +119,20 @@ namespace ks::ui
             for (qsizetype i = 0; originalBytesMatch && i < oldBytes.size(); ++i)
             {
                 const std::size_t index = static_cast<std::size_t>(i);
-                originalBytesMatch = currentWindow.validMask[index] != 0
+                originalBytesMatch = currentWindow.validMask[index] == 1
                     && currentWindow.bytes[index] == static_cast<std::uint8_t>(oldBytes[i]);
             }
             if (!originalBytesMatch)
             {
                 const QString error = QStringLiteral("数据已刷新，原指令不再位于当前视图，已取消本次汇编编辑。");
                 showInlineEditError(editor->geometry(), error);
-                return error;
+                return;
             }
             const WorkbenchAssembleResult result = m_assembleOne(source, address, x64);
             if (!result.success)
             {
                 showInlineEditError(editor->geometry(), result.error);
-                return result.error;
+                return;
             }
             // 行内只接受一条完整指令：先复核未填充的机器码，不能把多条指令或尾部残片
             // 当成一条短指令补 NOP；右键汇编编辑仍使用自己的多行预览与边界校验。
@@ -258,14 +150,14 @@ namespace ks::ui
                 const QString error = ks::i18n::sourceText(QStringLiteral(
                     "行内编辑只接受一条完整指令；多行汇编请使用右键汇编编辑。"));
                 showInlineEditError(editor->geometry(), error);
-                return error;
+                return;
             }
             if (result.bytes.size() > oldBytes.size())
             {
                 const QString error = QStringLiteral("新指令为 %1 字节，超出原指令的 %2 字节；请使用右键"
                     "“汇编编辑”并明确调整覆盖长度。").arg(result.bytes.size()).arg(oldBytes.size());
                 showInlineEditError(editor->geometry(), error);
-                return error;
+                return;
             }
             // 较短的新指令用 NOP 补满原指令长度，保持后续指令的边界不变（不变式 10）。
             QByteArray payload = result.bytes;
@@ -273,81 +165,18 @@ namespace ks::ui
             hideInlineEditError();
             // D1 后半：文本变了，但编译后的字节跟原字节逐位相同（例如换了一种写法但编码
             // 一样），同样不算真正的修改，不发信号——否则宿主会把"没有变化"的补丁也暂存。
-            if (payload != oldBytes)
-            {
-                emit stageRequested(address, payload);
-            }
-            return QString();
-        };
+            cancelInlineEdit();
+            if (payload != oldBytes) emit stageRequested(address, payload);
 
-        auto* delegate = new DisasmEditDelegate(m_table, createEditor, commit);
-        // 编辑框关闭（提交成功、Escape、失焦）都会发这个信号，统一在这里清掉编辑中标志、
-        // 隐藏残留的错误提示（D7），并在刷新被推迟过的情况下（D2）补上这一次刷新。
-        // N2（第二轮审核）：这个 lambda 是在 setItemDelegate(delegate) 之前 connect 的，
-        // 比 QAbstractItemView 自己对同一个 closeEditor 信号挂的内部槛先执行——如果这里
-        // 同步调用 rebuildRowsNow()（会 beginResetModel/endResetModel），表格会在视图自己
-        // 的 closeEditor 处理（把键盘焦点还给表格）跑之前就被整表重建，编辑器已经被模型
-        // 重置注销掉，视图随后找不到登记过的编辑器，"把焦点还给表格"这一步被悄悄跳过——
-        // 表现为提交/取消编辑后键盘焦点落到了别处，F2/Enter/Backspace 全部失灵，必须再用
-        // 鼠标点一下表格才能恢复。改成 QTimer::singleShot(0, ...) 把真正的刷新推迟到下一次
-        // 事件循环，让视图先走完它自己那一份 closeEditor 收尾（焦点已经正确处理过），我们
-        // 的刷新再安全地重建模型，不会撞上视图内部还没走完的状态机。
-        connect(delegate, &QAbstractItemDelegate::closeEditor, this, [this]() {
-            m_editingActive = false;
-            hideInlineEditError();
-            if (m_refreshPending)
-            {
-                m_refreshPending = false;
-                QTimer::singleShot(0, this, [this]() { rebuildRows(); });
-            }
-        });
-        m_table->setItemDelegate(delegate);
     }
-
-    // cancelInlineEdit：见头文件声明处的契约说明（N3/N4）——只关闭编辑框本身，不处理
-    // "推迟的刷新"，调用方各自决定是否需要在调用之后补一次 rebuildRowsNow()。
-    void WorkbenchDisasmView::cancelInlineEdit()
+    void WorkbenchDisasmView::showInlineEditError(const QRect& rect, const QString& message)
     {
-        m_table->closePersistentEditor(m_table->currentIndex());
-        m_editingActive = false;
-        hideInlineEditError();
+        m_inlineError->setText(ks::i18n::displayText(message));
+        m_inlineError->setGeometry(rect.left(), std::min(rect.bottom()+2, std::max(0, m_canvas->viewport()->height()-m_inlineError->sizeHint().height())), rect.width(), m_inlineError->sizeHint().height());
+        m_inlineError->show(); m_inlineError->raise();
     }
+    void WorkbenchDisasmView::hideInlineEditError() { m_inlineError->hide(); }
 
-    // beginRowEdit：双击/F2/Enter 的统一入口，从"指令"列开始编辑（跨到"操作数"列）。
-    void WorkbenchDisasmView::beginRowEdit(const int row)
-    {
-        // 可疑点 1：只读模式下任何入口都不得进入编辑，哪怕调用方（eventFilter/双击槛）
-        // 漏查了 m_editable，这里是最终防线。
-        if (!m_editable || row < 0 || m_model->isEndOfWindowRow(row))
-        {
-            return;
-        }
-        const QModelIndex index = m_model->index(row, 2);
-        m_table->setCurrentIndex(index);
-        m_table->edit(index);
-    }
-
-    // showInlineEditError：把编译失败原因显示在编辑框正下方（不带"第 1 行"前缀）。
-    void WorkbenchDisasmView::showInlineEditError(const QRect& editorRect, const QString& message)
-    {
-        m_inlineError->setText(message);
-        const QRect viewportRect = m_table->viewport()->rect();
-        const int top = std::min(editorRect.bottom() + 2, viewportRect.bottom() - m_inlineError->sizeHint().height());
-        m_inlineError->setGeometry(editorRect.left(), std::max(0, top), editorRect.width(), m_inlineError->sizeHint().height());
-        m_inlineError->raise();
-        m_inlineError->show();
-    }
-
-    void WorkbenchDisasmView::hideInlineEditError()
-    {
-        m_inlineError->hide();
-    }
-
-    // showAssemblyPreviewDialog：右键"汇编编辑"。覆盖长度可调、可选 NOP 填充，
-    // 边界校验要求覆盖范围正好落在完整旧指令边界上，不留半条可执行的尾巴。
-    // D10：expectedRow 是菜单打开时冻结的快照；这里先按地址在当前模型里重新找一次，
-    // 核对字节是否仍一致——菜单是模态的，exec() 期间数据可能已经被 refreshView 刷新，
-    // 行号/行内容都可能变了，不能再用旧行号盲取。
     void WorkbenchDisasmView::showAssemblyPreviewDialog(const DecodedRow& expectedRow)
     {
         if (!m_editable || m_provider == nullptr || !m_decodeOne || !m_assembleOne)
@@ -380,7 +209,7 @@ namespace ks::ui
         // 可疑点 4：防御性 min 夹取，避免 validMask 与 bytes 长度不一致时越界读。
         const std::size_t effectiveLength = std::min(window.bytes.size(), window.validMask.size());
         std::size_t validLength = 0;
-        while (validLength < effectiveLength && window.validMask[validLength] != 0)
+        while (validLength < effectiveLength && window.validMask[validLength] == 1)
         {
             ++validLength;
         }
@@ -456,7 +285,7 @@ namespace ks::ui
         connect(span, &QSpinBox::valueChanged, dialog, invalidate);
         connect(pad, &QCheckBox::toggled, dialog, invalidate);
 
-        connect(compile, &QPushButton::clicked, dialog, [=, &payload]() {
+        connect(compile, &QPushButton::clicked, dialog, [=, &payload, this]() {
             invalidate();
             const WorkbenchAssembleResult result = m_assembleOne(source->toPlainText(), address, x64);
             if (!result.success)
@@ -527,7 +356,9 @@ namespace ks::ui
 
         sizeDialogResponsively(dialog, QSize(760, 620), QSize(480, 360), this);
         const QPointer<WorkbenchDisasmView> self(this);
+        const QPointer<QDialog> dialogGuard(dialog);
         const int result = dialog->exec();
+        if (dialogGuard) delete dialogGuard.data();
         if (!self)
         {
             // this 已经在 exec() 期间被销毁：dialog 作为它的子对象也已经/正在被销毁，
@@ -552,7 +383,7 @@ namespace ks::ui
             for (qsizetype i = 0; snapshotMatches && i < payload.size(); ++i)
             {
                 const std::size_t index = static_cast<std::size_t>(i);
-                snapshotMatches = currentWindow.validMask[index] != 0
+                snapshotMatches = currentWindow.validMask[index] == 1
                     && currentWindow.bytes[index] == static_cast<std::uint8_t>(snapshot[i]);
             }
         }
