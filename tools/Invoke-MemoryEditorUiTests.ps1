@@ -22,7 +22,7 @@ foreach ($testModule in @('', 'QtCore', 'QtGui', 'QtWidgets', 'QtTest')) {
 foreach ($testSdkPart in @('ucrt', 'shared', 'um')) {
     $testIncludeArgs += '/external:I' + (Join-Path $testSdkRoot ('Include\' + $testSdkVersion + '\' + $testSdkPart))
 }
-& $testCompiler /nologo /std:c++17 /Zc:__cplusplus /permissive- /utf-8 /EHsc /MD /W4 /WX /external:W0 `
+& $testCompiler /nologo /std:c++20 /Zc:__cplusplus /permissive- /utf-8 /EHsc /MD /W4 /WX /external:W0 `
     /DQT_WIDGETS_LIB /DQT_GUI_LIB /DQT_CORE_LIB /DQT_TESTLIB_LIB /DWIN32_LEAN_AND_MEAN /DNOMINMAX `
     /DUNICODE /D_UNICODE @testIncludeArgs /c $testSource ('/Fo' + $testObject)
 if ($LASTEXITCODE -ne 0) { throw 'Memory editor UI test compilation failed.' }

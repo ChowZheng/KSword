@@ -52,6 +52,10 @@ struct RegistryApplyResult
     bool canUndo = false;
     QString error;
     QVector<RegistryApplyReceipt> receipts;
+    // An undo retry must continue the original commit, never invert the receipts
+    // of a partially successful undo (which would redo already restored values).
+    bool undoAttempt = false;
+    QVector<RegistryApplyReceipt> pendingUndoReceipts;
 };
 
 // Small injectable boundary for file/codec and state-machine tests. Implementations

@@ -5,6 +5,7 @@
 #include "../UI/TableInteractionSupport.h"
 #include "../UI/VisibleTableWidget.h"
 #include "../UI/ThemeAccentIcon.h"
+#include "../UI/X64DbgNavigation.h"
 
 #include "../theme.h"
 #include "ProcessDetailWindow.h"
@@ -11194,6 +11195,14 @@ void ProcessDock::showTableContextMenu(const QPoint& localPosition)
                 "process.menu.batch_hint",
                 QStringLiteral("已选择 %1 个进程，支持批量动作")).arg(contextActionTargets.size()));
         batchHintAction->setEnabled(false);
+        contextMenu.addSeparator();
+    }
+
+    if (!hasBatchSelection && contextProcessRecord != nullptr && contextProcessRecord->creationTime100ns != 0)
+    {
+        ks::ui::x64dbg_navigation::AddAction(&contextMenu, this,
+            {contextProcessRecord->pid, contextProcessRecord->creationTime100ns, 0,
+                ks::ui::x64dbg_navigation::View::Disassembly});
         contextMenu.addSeparator();
     }
 

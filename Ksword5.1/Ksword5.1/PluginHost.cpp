@@ -34,6 +34,7 @@
 #include <QNetworkRequest>
 #include <QPlainTextEdit>
 #include <QProcess>
+#include "UI/X64DbgNavigation.h"
 #include <QProcessEnvironment>
 #include <QProgressBar>
 #include <QPointer>
@@ -2907,8 +2908,20 @@ void ks::plugin_host::populateTargetMenu(QMenu* menu, QWidget* owner, const Invo
         QAction* action = menu->addAction(descriptor.name);
         action->setToolTip(QStringLiteral("%1\nID：%2\n目标：%3")
             .arg(descriptor.description, descriptor.id, descriptor.targets.join(QStringLiteral(", "))));
-        QObject::connect(action, &QAction::triggered, owner, [owner, descriptor, context]() {
-            launchPlugin(owner, descriptor, context);
+        InvocationContext boundContext = context;
+        if (descriptor.id == QStringLiteral("x96dbg") && context.targetKind == TargetKind::Process
+            && boundContext.processCreateTime100ns == 0)
+            boundContext.processCreateTime100ns = ks::ui::x64dbg_navigation::ProcessCreateTime100ns(context.processId);
+        QObject::connect(action, &QAction::triggered, owner, [owner, descriptor, boundContext]() {
+            if (descriptor.id == QStringLiteral("x96dbg") && boundContext.targetKind == TargetKind::Process)
+            {
+                if (boundContext.processCreateTime100ns == 0) return;
+                ks::ui::x64dbg_navigation::Open(owner, {boundContext.processId, boundContext.processCreateTime100ns,
+                    boundContext.memoryAddress, boundContext.navigateMemoryDump
+                        ? ks::ui::x64dbg_navigation::View::Dump : ks::ui::x64dbg_navigation::View::Disassembly});
+                return;
+            }
+            launchPlugin(owner, descriptor, boundContext);
         });
         ++addedActions;
     }

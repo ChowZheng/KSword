@@ -928,6 +928,10 @@ void SystemMemoryAuditPage::initializeUi()
     m_detailTabs->addTab(poolPage, localized("Pool tags"));
     m_detailTabs->addTab(bigPoolPage, localized("Big Pool allocations"));
     m_pfnPage = new PhysicalPageAttributionPage(m_detailTabs);
+    m_pfnPage->openModuleDetails = [this](const QString& path) {
+        const auto handler = openModuleDetails;
+        if (handler) { handler(path); }
+    };
     m_detailTabs->addTab(m_pfnPage, localized("Physical page attribution"));
     m_hyperVPage = new HyperVMemoryPage(m_detailTabs);
     m_detailTabs->addTab(m_hyperVPage, localized("Hyper-V / host memory"));
@@ -1070,7 +1074,7 @@ void SystemMemoryAuditPage::applyPfnOverview(const std::shared_ptr<ksword::pfn::
 {
     // Preserve the last usable ledger after an unavailable rerun. Its own time
     // and coverage remain visible; never subtract it from a newer quick sample.
-    m_pfnOverviewAttemptFailed = !scan || !scan->accounting.expected || !scan->accounting.valid || !scan->accounting.reconciles();
+    m_pfnOverviewAttemptFailed = !scan || !scan->accounting.expected || scan->resourceFailure || !scan->accounting.valid || !scan->accounting.reconciles();
     if (!m_pfnOverviewAttemptFailed)
     {
         m_pfnOverviewScan = scan;

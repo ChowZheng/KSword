@@ -40,6 +40,14 @@ void mergeOwnerSnapshot(Owners& owners, Conflicts& conflicts, std::uint64_t key,
     else { found->second.seenBefore = true; }
 }
 
+// A handle retained from before PFN sampling prevents its process object
+// from being recycled. Both source endpoints and live handle checks are needed.
+inline bool ownerLifetimeVerified(bool seenBefore, bool seenAfter, bool held,
+    std::uint64_t createdBefore, std::uint64_t createdAfter)
+{
+    return seenBefore && seenAfter && held && createdBefore != 0 && createdBefore == createdAfter;
+}
+
 // Normalize overlapping/unsorted RAM extents before querying. Holes are never
 // queried or converted into hardware/hypervisor consumption.
 inline bool normalizeRanges(std::vector<Range>& ranges)

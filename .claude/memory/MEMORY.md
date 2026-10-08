@@ -40,6 +40,7 @@
 - [调试器共享后端与 x64dbg 适配](ksword-debugger-backend.md) — 原生会话借用、64 导出 ABI、真实 Windows 停止事件、HVM 执行断点、独立调试器与控制日志 Tab
 - [AMD SVM/NPT 实验与重启续接](ksword-hvm-amd-lab.md) — 待硬件验收实现、双启动脚本、VMware 克隆、构建证据与未完成的多核验证
 - [KswordARKLight 调查工作台骨架](ksword-arklight-investigation-workbench.md) — 跨进程驱动租约、二级页懒加载、EntityRef 路由、证据会话与独立测试/CI 门禁
+- [内核池分配分析](ksword-pool-allocation-analysis.md) — PoolTrace v2 真实布局、会话隔离、未知位置丢失配对、历史栈来源、共享 DbgHelp 锁与 Qt 6.9 窄窗
 - [剪贴板保护会话生命周期](ksword-clipboard-guard.md) — Agent 配置热更新、停止标记、管道整包读取与 Hook 就绪状态
 - [UAC 安全桌面助手生命周期](ksword-uacdesk-lifecycle.md) — 父进程阻塞等待与取消、ETW 清理、所有配置禁用文件/调试日志及验证边界
 - [驱动功能矩阵 CI](ksword-driver-functional-ci.md) — 185 IOCTL 全量处置门禁、危险操作模式排除、targetGuard 目标校验、PatchGuard 延迟崩溃的归因降级

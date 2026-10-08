@@ -3,6 +3,8 @@
 // 行内编辑委托与汇编预览对话框在 WorkbenchDisasmView.Edit.cpp（本文件只留转发声明）。
 
 #include "WorkbenchDisasmView.h"
+#include "MemoryRowCanvas.h"
+#include <QLineEdit>
 
 #include "HexCanvasFormat.h"
 #include "HexViewWidgets.h"
@@ -24,6 +26,7 @@
 #include <QMenu>
 #include <QPoint>
 #include <QPointer>
+#include <QPushButton>
 #include <QRegularExpression>
 #include <QScrollBar>
 #include <QSet>
@@ -92,6 +95,15 @@ namespace ks::ui
         QString formatHexDigitsUpper(const quint64 value, const int width)
         {
             return QString::number(value, 16).rightJustified(width, QChar('0')).toUpper();
+        }
+
+        QString decodedStatus(quint64 anchor, int count, bool x64, bool editable)
+        {
+            return (editable
+                ? QStringLiteral("从 0x%1 解码 %2 条指令（%3）。双击/F2/Enter 行内编辑，Backspace 返回跳转。")
+                : QStringLiteral("从 0x%1 解码 %2 条指令（%3，只读）。Backspace 返回跳转。"))
+                .arg(formatHexDigitsUpper(anchor, 16)).arg(count)
+                .arg(x64 ? QStringLiteral("x64") : QStringLiteral("x86"));
         }
 
         // rowChangeKind：一行覆盖的若干字节里，取"最该被看见"的那一种变化种类用于着色，
@@ -359,32 +371,38 @@ namespace ks::ui
             m_x64Override = true;
             m_x64OverrideValue = m_archSegmented->currentIndex() == 1;
             rebuildRows();
+            emit architectureChanged(isX64());
         });
         topBar->addWidget(m_archSegmented);
         topBar->addStretch(1);
         layout->addLayout(topBar);
 
-        // 表格：QTableView + 自带模型，取代旧 QTableWidget；字体用等宽字体便于对齐字节列。
+        m_findBar = new QWidget(this);
+        auto* findLayout = new QHBoxLayout(m_findBar);
+        findLayout->setContentsMargins(0, 0, 0, 0);
+        m_findEdit = new QLineEdit(m_findBar);
+        m_findEdit->setObjectName(QStringLiteral("ksMemwbDisasmFind"));
+        m_findEdit->setPlaceholderText(ks::i18n::sourceText(QStringLiteral("查找指令、操作数或 HEX")));
+        auto* findButton = new QPushButton(ks::i18n::sourceText(QStringLiteral("下一处")), m_findBar);
+        findLayout->addWidget(m_findEdit, 1);
+        findLayout->addWidget(findButton);
+        connect(m_findEdit, &QLineEdit::returnPressed, this, &WorkbenchDisasmView::findNext);
+        connect(findButton, &QPushButton::clicked, this, &WorkbenchDisasmView::findNext);
+        m_findEdit->installEventFilter(this);
+        m_findBar->hide();
+        layout->addWidget(m_findBar);
+
         m_model = new WorkbenchDisasmModel(this);
-        m_table = new QTableView(this);
-        m_table->setObjectName(QStringLiteral("ksMemwbDisasmTable"));
-        m_table->setModel(m_model);
-        m_table->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
-        m_table->setSelectionBehavior(QAbstractItemView::SelectRows);
-        m_table->setSelectionMode(QAbstractItemView::SingleSelection);
-        // 只允许双击触发编辑；F2/Enter 的分支逻辑（含跟随跳转）由 eventFilter 接管，
-        // 这正是修旧缺陷"单击即编辑易误触"的关键一步。
-        m_table->setEditTriggers(QAbstractItemView::DoubleClicked);
-        m_table->verticalHeader()->hide();
-        m_table->horizontalHeader()->setStretchLastSection(true);
-        m_table->setAlternatingRowColors(true);
-        // 右键菜单走 CustomContextMenu + 信号——与旧 MemoryEditorWidget 的指令表同一套经过
-        // 验证的坐标约定（customContextMenuRequested 给出的位置已经是视口坐标，可直接喂
-        // indexAt() 与 viewport()->mapToGlobal()），不复用默认策略避免坐标系猜测。
-        m_table->setContextMenuPolicy(Qt::CustomContextMenu);
-        connect(m_table, &QTableView::customContextMenuRequested, this, &WorkbenchDisasmView::showContextMenu);
-        m_table->installEventFilter(this);
-        layout->addWidget(m_table, 1);
+        m_canvas = new MemoryRowCanvas(this);
+        m_canvas->setObjectName(QStringLiteral("ksMemwbDisasmCanvas"));
+        m_canvas->setContentTitle(QStringLiteral("反汇编 + 操作数"));
+        m_canvas->setBranchGutterVisible(true);
+        m_canvas->installEventFilter(this);
+        connect(m_canvas, &MemoryRowCanvas::contextMenuRequested, this, &WorkbenchDisasmView::showContextMenu);
+        connect(m_canvas, &MemoryRowCanvas::selectionChanged, this, &WorkbenchDisasmView::selectionChanged);
+        connect(m_canvas, &MemoryRowCanvas::rowActivated, this, &WorkbenchDisasmView::beginRowEdit);
+        connect(m_canvas, &MemoryRowCanvas::requestMore, this, &WorkbenchDisasmView::browseMore);
+        layout->addWidget(m_canvas, 1);
 
         // 状态行：解码来源、行数、交互提示；越过显示宽度时交给 QLabel 自己省略。
         m_status = new QLabel(this);
@@ -399,7 +417,7 @@ namespace ks::ui
         // 天然跟随主题切换），但不在这里写死文字颜色——语义"错误色"不是 QPalette 能表达的
         // 角色，必须交给 ApplyStatusRole 对接的全局样式块（见下面的调用），否则跟旧写法
         // 一样是构造期烧死的 #RRGGBB，深浅主题切换后红框配色不会变。
-        m_inlineError = new QLabel(m_table->viewport());
+        m_inlineError = new QLabel(m_canvas->viewport());
         m_inlineError->setObjectName(QStringLiteral("ksMemwbDisasmInlineError"));
         m_inlineError->hide();
         m_inlineError->setWordWrap(true);
@@ -407,15 +425,6 @@ namespace ks::ui
             .arg(KswordTheme::SurfaceAltHex(), KswordTheme::BorderHex()));
         ApplyStatusRole(m_inlineError, StatusRole::Error);
 
-        connect(m_table, &QTableView::doubleClicked, this, [this](const QModelIndex& index) {
-            if (!m_model->isEndOfWindowRow(index.row()))
-            {
-                beginRowEdit(index.row());
-            }
-        });
-
-        // 行内编辑委托（双击/F2/Enter 进入，见 .Edit.cpp）；只装一次，随表格销毁。
-        installEditDelegate();
     }
 
     WorkbenchDisasmView::~WorkbenchDisasmView() = default;
@@ -427,6 +436,7 @@ namespace ks::ui
         // 否则在 64 位目标上手动切过架构后，再换到一个 32 位目标会被锁死显示成 64 位。
         if (provider != m_provider)
         {
+            m_canvas->cancelPendingNavigation();
             ++m_editContextRevision;
             m_x64Override = false;
             // N4（第二轮审核）：正在编辑的内容是针对"旧目标"冻结的地址/原字节（见
@@ -512,22 +522,33 @@ namespace ks::ui
             {
                 m_refreshPending = false;
                 rebuildRowsNow();
+                return;
             }
+        }
+        // Permission changes affect wording without re-reading or decoding.
+        // Keep unavailable/not-positioned statuses until a real row exists.
+        if (m_model->rowAt(0))
+        {
+            const int count = m_model->rowCount()
+                - (m_model->isEndOfWindowRow(m_model->rowCount() - 1) ? 1 : 0);
+            m_status->setText(decodedStatus(m_anchor, count, isX64(), m_editable));
         }
     }
 
     bool WorkbenchDisasmView::jumpTo(const std::uint64_t address)
     {
-        if (m_provider == nullptr)
+        if (m_provider == nullptr || (m_addressRange && (address < m_addressRange->first || address > m_addressRange->second)))
         {
             return false;
         }
+        m_canvas->cancelPendingNavigation();
         if (m_hasAnchor)
         {
             pushBackStack(m_anchor);
         }
         m_hasAnchor = true;
         m_anchor = address;
+        emit windowRequested(m_anchor, kDecodeWindowBytes + kLookaheadBytes);
         rebuildRows();
         return true;
     }
@@ -541,6 +562,7 @@ namespace ks::ui
     // 这里连锚点、后退栈都一起清，避免宿主换了目标又换回同一个 provider 时意外复原旧位置。
     void WorkbenchDisasmView::reset()
     {
+        m_canvas->cancelPendingNavigation();
         // 宿主换目标仍可能复用同一个 provider；reset 才是这条路径的身份失效边界。
         ++m_editContextRevision;
         // N4（第二轮审核）：与 setBytesProvider 同源的另一半——reset() 同样代表"放弃当前
@@ -554,6 +576,7 @@ namespace ks::ui
         m_anchor = 0;
         m_hasLastRebuiltAnchor = false;   // 新会话不继承旧会话的滚动位置
         m_backStack.clear();
+        m_browseHistory.clear();
         m_refreshPending = false;
         rebuildRows();
     }
@@ -563,9 +586,14 @@ namespace ks::ui
         return m_anchor;
     }
 
-    QTableView* WorkbenchDisasmView::table() const
+    MemoryRowCanvas* WorkbenchDisasmView::canvas() const
     {
-        return m_table;
+        return m_canvas;
+    }
+
+    std::optional<DecodedRow> WorkbenchDisasmView::selectedInstruction() const
+    {
+        return m_model->rowAt(m_canvas->selectedRow());
     }
 
     WorkbenchDisasmModel* WorkbenchDisasmView::model() const
@@ -656,41 +684,6 @@ namespace ks::ui
         //   都不展示其"看起来解码成功"的内容——直接拆成逐字节 db，只拆到窗口边界为止，
         //   之后的行（包括这条指令真正的后续字节）全部丢弃；
         // 这样窗口边界恰好落在指令中间时，永远展示"被截断的 db"而不是幻影指令。
-        QVector<DecodedRow> clipRowsToDisplayBoundary(
-            const QVector<DecodedRow>& rows, const std::uint64_t anchor, const std::uint64_t displayBoundary)
-        {
-            QVector<DecodedRow> result;
-            for (const DecodedRow& row : rows)
-            {
-                const std::uint64_t startOffset = row.address - anchor;
-                if (startOffset >= displayBoundary)
-                {
-                    break; // 整条都在窗口外，丢弃（后面的行只会更靠后，一并丢弃）。
-                }
-                const std::uint64_t endOffset = startOffset + static_cast<std::uint64_t>(row.bytes.size());
-                if (endOffset <= displayBoundary)
-                {
-                    result.push_back(row);
-                    continue;
-                }
-                // 跨越边界：逐字节拆成 db，只拆到 displayBoundary，之后的字节（包括这条指令
-                // 真正的剩余部分）不展示。
-                for (std::uint64_t i = startOffset; i < displayBoundary; ++i)
-                {
-                    DecodedRow dbRow;
-                    dbRow.address = anchor + i;
-                    dbRow.bytes = row.bytes.mid(static_cast<qsizetype>(i - startOffset), 1);
-                    dbRow.mnemonic = QStringLiteral("db");
-                    dbRow.operands = QStringLiteral("0x%1").arg(
-                        formatHexDigitsUpper(static_cast<std::uint8_t>(dbRow.bytes.at(0)), 2));
-                    dbRow.decoded = false;
-                    result.push_back(dbRow);
-                }
-                break;
-            }
-            return result;
-        }
-
         // applyTailGiveUp：D9 的第二种触发方式——有效数据本身（不是我们自己的显示上限）
         // 在某条指令中间就耗尽了（例如可读内存正好在这里结束）。resync 算法按"失败→db→
         // 从下一字节重试"处理残留字节时，残留字节有时会凑巧拼出一条合法的短指令（审核报告
@@ -737,38 +730,7 @@ namespace ks::ui
     // rebuildRowsNow：真正的刷新实现，从 provider 拉一次窗口、重同步解码，刷新模型与状态行。
     void WorkbenchDisasmView::rebuildRowsNow()
     {
-        // D2 后半：按地址记住当前选中行，刷新后按地址找回（行号可能因为内容变化而改变）。
-        std::optional<std::uint64_t> previousSelectedAddress;
-        int previousSelectedColumn = 0;
-        if (const QModelIndex current = m_table->currentIndex(); current.isValid())
-        {
-            previousSelectedColumn = current.column();
-            if (const std::optional<DecodedRow> row = m_model->rowAt(current.row()); row.has_value())
-            {
-                previousSelectedAddress = row->address;
-            }
-        }
-
-        // 同锚点刷新（数据晚到、实时刷新、暂存变化）要保持用户的纵向滚动位置：model reset 会让表格回到顶部，
-        // 而数据到达引起的自动刷新现在可能很频繁（宿主订阅了画布的 contentChanged）；锚点变了（跳转）才回到新位置。
         const bool keepScrollPosition = m_hasLastRebuiltAnchor && m_hasAnchor && m_lastRebuiltAnchor == m_anchor;
-        const int previousScrollValue = m_table->verticalScrollBar()->value();
-
-        const auto restoreSelection = [this, &previousSelectedAddress, previousSelectedColumn]() {
-            if (!previousSelectedAddress.has_value())
-            {
-                return;
-            }
-            for (int i = 0; i < m_model->rowCount(); ++i)
-            {
-                const std::optional<DecodedRow> row = m_model->rowAt(i);
-                if (row.has_value() && row->address == *previousSelectedAddress)
-                {
-                    m_table->setCurrentIndex(m_model->index(i, previousSelectedColumn));
-                    break;
-                }
-            }
-        };
 
         if (m_provider == nullptr || !m_hasAnchor)
         {
@@ -776,6 +738,7 @@ namespace ks::ui
             m_status->setText(m_provider == nullptr
                 ? QStringLiteral("尚未接入数据源。")
                 : QStringLiteral("尚未定位；在地址条输入地址或使用跳转到此处。"));
+            updateCanvas(keepScrollPosition);
             emit statusMessage(m_status->text());
             return;
         }
@@ -786,6 +749,7 @@ namespace ks::ui
         {
             m_model->setRows({}, {}, QStringLiteral("超出已读取窗口"));
             m_status->setText(QStringLiteral("0x%1 超出已读取窗口。").arg(formatHexDigitsUpper(m_anchor, 16)));
+            updateCanvas(keepScrollPosition);
             emit statusMessage(m_status->text());
             return;
         }
@@ -795,7 +759,7 @@ namespace ks::ui
         // 实现有误的 provider 导致越界读。
         const std::size_t effectiveLength = std::min(window.bytes.size(), window.validMask.size());
         std::size_t validPrefix = 0;
-        while (validPrefix < effectiveLength && window.validMask[validPrefix] != 0)
+        while (validPrefix < effectiveLength && window.validMask[validPrefix] == 1)
         {
             ++validPrefix;
         }
@@ -805,6 +769,7 @@ namespace ks::ui
         {
             m_model->setRows({}, {}, QStringLiteral("未设置解码后端"));
             m_status->setText(QStringLiteral("未设置解码后端，无法反汇编。"));
+            updateCanvas(keepScrollPosition);
             emit statusMessage(m_status->text());
             return;
         }
@@ -817,7 +782,8 @@ namespace ks::ui
         }
         // displayBoundary：真正要展示的字节数——有效字节与"显示窗口大小"的较小值。
         const std::uint64_t displayBoundary = std::min<std::uint64_t>(validPrefix, kDecodeWindowBytes);
-        const QVector<DecodedRow> rows = clipRowsToDisplayBoundary(rawRows, m_anchor, displayBoundary);
+        QVector<DecodedRow> rows;
+        for (const auto& row : rawRows) if (row.address - m_anchor < displayBoundary) rows.push_back(row);
         QVector<ksword::memwb::ByteChangeKind> rowKinds;
         rowKinds.reserve(rows.size());
         for (const DecodedRow& row : rows)
@@ -833,14 +799,9 @@ namespace ks::ui
         m_model->setRows(rows, rowKinds, note);
         // D4：数字部分单独大写再 .arg() 进模板，模板本身（含 Enter/Backspace/x64 等英文
         // 字面量）原样保留，不会被 toUpper() 误伤导致运行时翻译的模板匹配失效。
-        m_status->setText(QStringLiteral("从 0x%1 解码 %2 条指令（%3）。双击/F2/Enter 行内编辑，Backspace 返回跳转。")
-            .arg(formatHexDigitsUpper(m_anchor, 16)).arg(rows.size()).arg(isX64() ? QStringLiteral("x64") : QStringLiteral("x86")));
+        m_status->setText(decodedStatus(m_anchor, static_cast<int>(rows.size()), isX64(), m_editable));
         emit statusMessage(m_status->text());
-        restoreSelection();
-        // 滚动位置要在选中行恢复之后再定：setCurrentIndex 会为了让选中行可见而滚动。
-        // 同锚点刷新 -> 覆盖回用户原来的位置；换了锚点（真正的跳转/自动跟随）-> 回到顶部，让新锚点那一行出现在第一行
-        // （model reset 不会复位滚动值，不处理的话跳转之后看到的是新窗口里第 N 行，目标行在屏幕外）。
-        m_table->verticalScrollBar()->setValue(keepScrollPosition ? previousScrollValue : 0);
+        updateCanvas(keepScrollPosition);
         m_lastRebuiltAnchor = m_anchor;
         m_hasLastRebuiltAnchor = true;
     }
@@ -848,23 +809,47 @@ namespace ks::ui
     // eventFilter：装在表格与其视口上，统一处理 F2/Enter/Backspace 与右键菜单。
     bool WorkbenchDisasmView::eventFilter(QObject* watched, QEvent* event)
     {
-        if (watched == m_table && event->type() == QEvent::KeyPress)
+        if ((watched == m_canvas || watched == m_findEdit) && event->type() == QEvent::ShortcutOverride)
+        {
+            const auto* key = static_cast<QKeyEvent*>(event);
+            if ((key->key() == Qt::Key_F && key->modifiers() == Qt::ControlModifier) || key->key() == Qt::Key_F3)
+            { event->accept(); return true; }
+        }
+        if ((watched == m_canvas || watched == m_findEdit) && event->type() == QEvent::KeyPress)
+        {
+            const auto* key = static_cast<QKeyEvent*>(event);
+            if (key->key() == Qt::Key_F && key->modifiers() == Qt::ControlModifier)
+            { openFind(); return true; }
+            if (key->key() == Qt::Key_F3) { if (m_findEdit->text().isEmpty()) openFind(); else if (key->modifiers() & Qt::ShiftModifier) findPrevious(); else findNext(); return true; }
+            if (key->key() == Qt::Key_Escape && m_findBar->isVisible())
+            { m_findBar->hide(); m_canvas->setFocus(); return true; }
+        }
+        if (watched == m_inlineEditor)
+        {
+            if (event->type() == QEvent::KeyPress && (static_cast<QKeyEvent*>(event)->key() == Qt::Key_Return || static_cast<QKeyEvent*>(event)->key() == Qt::Key_Enter))
+            { commitInlineEdit(); return true; }
+            if (event->type() == QEvent::KeyPress && static_cast<QKeyEvent*>(event)->key() == Qt::Key_Escape)
+            { cancelInlineEdit(); return true; }
+            if (event->type() == QEvent::FocusOut)
+            { cancelInlineEdit(); return false; }
+        }
+        if (watched == m_canvas && event->type() == QEvent::KeyPress)
         {
             auto* keyEvent = static_cast<QKeyEvent*>(event);
-            const QModelIndex current = m_table->currentIndex();
+            const int current = m_canvas->selectedRow();
             const bool editing = m_editingActive;
             // F2 只在允许编辑时才进入编辑（可疑点 1）；beginRowEdit 内部也会再查一次
             // m_editable 作为第二道防线（双击路径走的是另一个入口，同样汇聚到那里）。
-            if (!editing && m_editable && keyEvent->key() == Qt::Key_F2 && current.isValid() && !m_model->isEndOfWindowRow(current.row()))
+            if (!editing && m_editable && keyEvent->key() == Qt::Key_F2 && current >= 0 && !m_model->isEndOfWindowRow(current))
             {
-                beginRowEdit(current.row());
+                beginRowEdit(current);
                 return true;
             }
             if (!editing && (keyEvent->key() == Qt::Key_Return || keyEvent->key() == Qt::Key_Enter)
-                && current.isValid() && !m_model->isEndOfWindowRow(current.row()))
+                && current >= 0 && !m_model->isEndOfWindowRow(current))
             {
                 // 跟随跳转不是编辑，只读模式下也允许；只有"进入编辑"这一分支受 m_editable 约束。
-                const std::optional<DecodedRow> row = m_model->rowAt(current.row());
+                const std::optional<DecodedRow> row = m_model->rowAt(current);
                 std::uint64_t target = 0;
                 if (row.has_value() && tryFollowOperand(*row, &target))
                 {
@@ -872,7 +857,7 @@ namespace ks::ui
                 }
                 else if (m_editable)
                 {
-                    beginRowEdit(current.row());
+                    beginRowEdit(current);
                 }
                 return true;
             }
@@ -888,18 +873,13 @@ namespace ks::ui
     // showContextMenu：复制地址/字节/整条指令、在十六进制视图中定位、汇编编辑（见 .Edit.cpp）。
     void WorkbenchDisasmView::showContextMenu(const QPoint& viewportPos)
     {
-        const QModelIndex index = m_table->indexAt(viewportPos);
-        if (!index.isValid() || m_model->isEndOfWindowRow(index.row()))
-        {
-            return;
-        }
-        m_table->setCurrentIndex(m_model->index(index.row(), 0));
-        const std::optional<DecodedRow> row = m_model->rowAt(index.row());
-        if (!row.has_value())
-        {
-            return;
-        }
+        const int index = m_canvas->rowAt(viewportPos);
+        if (index < 0 || m_model->isEndOfWindowRow(index)) return;
+        const std::optional<DecodedRow> row = m_model->rowAt(index);
+        if (!row) return;
         const DecodedRow rowData = *row;
+        bool selectionComplete = false;
+        const QByteArray selectionBytes = m_canvas->selectedBytes(&selectionComplete);
 
         // 可疑点 3（第二轮审核）：右键菜单改成堆分配 + WA_DeleteOnClose，不再用栈对象——
         // 栈上的 QMenu 以 this 为父对象，若 exec() 的嵌套事件循环期间 this（本控件）被
@@ -929,11 +909,15 @@ namespace ks::ui
         assemble->setEnabled(static_cast<bool>(m_assembleOne) && m_editable);
         QAction* copyAddress = menu->addAction(QIcon(QStringLiteral(":/Icon/codeeditor_copy.svg")), QStringLiteral("复制地址"));
         QAction* copyBytes = menu->addAction(QIcon(QStringLiteral(":/Icon/codeeditor_copy.svg")), QStringLiteral("复制原始字节"));
+        copyBytes->setEnabled(selectionComplete);
         QAction* copyInstruction = menu->addAction(QIcon(QStringLiteral(":/Icon/codeeditor_copy.svg")), QStringLiteral("复制整条指令"));
         QAction* locateHex = menu->addAction(QStringLiteral("在十六进制视图中定位"));
 
         const QPointer<WorkbenchDisasmView> self(this);
-        QAction* selected = menu->exec(m_table->viewport()->mapToGlobal(viewportPos));
+        const auto revision = m_editContextRevision;
+        emit contextMenuAboutToShow(menu, rowData.address, !rowData.bytes.isEmpty());
+        if (!self) return;
+        QAction* selected = menu->exec(m_canvas->viewport()->mapToGlobal(viewportPos));
         if (!self)
         {
             // this 已经在 exec() 期间被销毁：不能再访问 m_status、不能再 emit 本对象的信号；
@@ -946,13 +930,14 @@ namespace ks::ui
         // 不确定的内部时序（即使 WA_DeleteOnClose 碰巧也触发了一次，deleteLater 两次是
         // 安全的——对象销毁时 Qt 会把尚未派发的那一份事件一并清理，不会二次释放）。
         menu->deleteLater();
+        if (revision != m_editContextRevision) return;
         if (selected == copyAddress)
         {
             QGuiApplication::clipboard()->setText(hexcanvas_format::FormatAddress(rowData.address, 16));
         }
         else if (selected == copyBytes)
         {
-            QGuiApplication::clipboard()->setText(hexcanvas_format::FormatHexText(rowData.bytes));
+            if (selectionComplete) QGuiApplication::clipboard()->setText(hexcanvas_format::FormatHexText(selectionBytes));
         }
         else if (selected == copyInstruction)
         {

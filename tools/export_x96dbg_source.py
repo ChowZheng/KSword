@@ -26,7 +26,7 @@ def main() -> None:
     ]
     singles = [
         "LICENSE", "docs/ksword-x64dbg-backend.md", "docs/ksword-x64dbg-validation.md",
-        "tools/Build-X96dbgPayload.ps1", "tools/package_x96dbg_plugin.ps1",
+        "tools/Build-X96dbgPayload.ps1", "tools/Build-X64DbgNavigation.ps1", "tools/package_x96dbg_plugin.ps1",
         "tools/export_x96dbg_source.py", "docs/ksword-debugger-vm-validation.md",
         "docs/ksword-x64dbg-api-review.md", "docs/ksword-x64dbg-pr3974-validation.md",
     ]

@@ -12,6 +12,7 @@
 #include "../UI/UI_All.h"
 #include "../UI/TableInteractionSupport.h"
 #include "../ksword/log/log.h"
+#include "../ksword/dbghelp_serialization.h"
 
 #include <QAbstractItemView>
 #include <QApplication>
@@ -354,6 +355,9 @@ namespace
         (void)queryThreadBasicInfo(threadHandle, result.enrichedTarget, diagnosticLines);
         (void)readUserStackLimitsFromTeb(processHandle, result.enrichedTarget, diagnosticLines);
 
+        // Serialize the entire DbgHelp session before suspending the thread.
+        // Pool ETL and dump symbolization use the same process-wide lock.
+        const std::lock_guard<std::mutex> symbolsLock(ks::dbghelp::SerializationMutex());
         const bool symbolsReady = initializeSymbols(processHandle, diagnosticLines);
         DWORD suspendResult = ::SuspendThread(threadHandle);
         if (suspendResult == static_cast<DWORD>(-1))

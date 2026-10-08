@@ -1,247 +1,102 @@
-// WorkbenchTextView.cpp
-// 作用：WorkbenchTextView 的界面搭建与数据流，以及三种编码 + validMask 联动的解码实现
-// （DecodeTextChunkForTest，供夹具直接测试，不依赖界面）。
-
 #include "WorkbenchTextView.h"
-
-#include "HexCanvasFormat.h"
-#include "../CodeEditorWidget.h"
-
+#include "MemoryRowCanvas.h"
+#include "WorkbenchTextCodePages.h"
+#include "../FlowLayout.h"
+#include "../../Internationalization/LanguageManager.h"
 #include "../../theme.h"
-
+#include <QApplication>
+#include <QCheckBox>
+#include <QClipboard>
 #include <QComboBox>
-#include <QHBoxLayout>
+#include <QEvent>
+#include <QKeyEvent>
 #include <QLabel>
+#include <QLineEdit>
+#include <QMenu>
+#include <QPointer>
 #include <QSignalBlocker>
+#include <QToolButton>
 #include <QVBoxLayout>
-
 #include <algorithm>
+#include <limits>
 
 namespace ks::ui
 {
     namespace
     {
-        // kUnreadableGlyph：不可读字节（没有被 FetchWindow 读到）的占位字符，与 HexCanvasFormat
-        // 的乘号约定一致。
-        const QChar kUnreadableGlyph(hexcanvas_format::kUnreadableAsciiGlyph);
-
-        // kInvalidUtf8SequenceGlyph：D11——UTF-8 路径专用的第二个占位符，表示"这个位置的字节
-        // 确确实实被读到了，只是取值不构成合法的 UTF-8 序列"，用 U+FFFD（Unicode 官方的
-        // "替换字符"，本身语义就是"这里曾经有一个解码失败的字符"）跟 kUnreadableGlyph 区分，
-        // 不再像旧代码一样把"读到了但是乱码"和"压根没读到"画成同一个乘号——不变式 5/6 要求
-        // 这两类必须能分开看。只在本文件内部使用，不导出，不影响 ANSI/UTF-16 两条路径
-        // （它们本来就没有"合法性"这个维度，只有可读/不可读、可打印/不可打印两个维度）。
-        constexpr char16_t kInvalidUtf8SequenceGlyph = 0xFFFDU;
-
-        // formatHexDigitsUpper：D4——只把地址的十六进制数字部分转大写，不带 "0x" 前缀，
-        // 不对整条状态栏模板字符串调用 toUpper()（那样会把模板里的英文字面量也带着一起
-        // 转大写，破坏 LanguageManager 运行时翻译用的大小写敏感模板匹配）。与
-        // WorkbenchDisasmView.cpp 里的同名函数各自一份——两个 .cpp 是不同的编译单元，
-        // 这个小写死的纯函数不值得为了复用拉一个新的共享头文件。
-        QString formatHexDigitsUpper(const quint64 value, const int width)
+        using ksword::memwb::TextGlyph;
+        using ksword::memwb::TextGlyphKind;
+        QString EncodingName(const WorkbenchTextView::Encoding encoding)
         {
-            return QString::number(value, 16).rightJustified(width, QChar('0')).toUpper();
+            using Encoding = WorkbenchTextView::Encoding;
+            switch (encoding)
+            {
+            case Encoding::Ansi: return ks::i18n::sourceText(QStringLiteral("系统 ANSI"));
+            case Encoding::Utf8: return QStringLiteral("UTF-8");
+            case Encoding::Utf16LE: return QStringLiteral("UTF-16 LE");
+            case Encoding::Utf16BE: return QStringLiteral("UTF-16 BE");
+            case Encoding::Gbk: return QStringLiteral("GBK");
+            case Encoding::Gb18030: return QStringLiteral("GB18030");
+            case Encoding::Big5: return QStringLiteral("Big5");
+            case Encoding::Ascii: return QStringLiteral("ASCII");
+            case Encoding::Auto: return ks::i18n::sourceText(QStringLiteral("自动（BOM 优先）"));
+            }
+            return QStringLiteral("UTF-8");
         }
-
-        // isDisplayableChar：在 QChar::isPrint() 基础上再排除 Zl/Zp/Cf 三个 Unicode 类别。
-        // D11：isPrint() 认为 U+2028(行分隔符)/U+2029(段分隔符) 是"可打印"的，但
-        // CodeEditorWidget 把它们当成真正的换行处理，会把本该与十六进制页对齐的一整
-        // 逻辑行拆成两个视觉行；Cf（格式字符，例如零宽连接符）本身不占可见宽度，显示出来
-        // 既看不见也数不出字符，两者都退化成点号，与"看不出字符"的既有惯例一致。
-        bool isDisplayableChar(const QChar ch)
+        QString GlyphText(const TextGlyph& glyph, bool showControls = true)
         {
-            if (!ch.isPrint())
+            switch (glyph.kind)
             {
-                return false;
+            case TextGlyphKind::Bom: return showControls ? QStringLiteral("⟨BOM⟩") : QStringLiteral(" ");
+            case TextGlyphKind::Invalid: return QString(QChar(0xFFFDU));
+            case TextGlyphKind::Unreadable: return QString(QChar(0x00D7U));
+            case TextGlyphKind::Loading: return QString(QChar(0x00B7U));
+            case TextGlyphKind::Incomplete: return QString(QChar(0x2026U));
+            case TextGlyphKind::Character: break;
             }
-            switch (ch.category())
+            if (!showControls)
             {
-            case QChar::Separator_Line:
-            case QChar::Separator_Paragraph:
-            case QChar::Other_Format:
-                return false;
-            default:
-                return true;
+                const auto category = QChar::category(static_cast<char32_t>(glyph.scalar));
+                if (glyph.scalar == 9) return QStringLiteral("    ");
+                if (category == QChar::Other_Control || category == QChar::Other_Format
+                    || category == QChar::Separator_Line || category == QChar::Separator_Paragraph) return QStringLiteral(" ");
             }
+            if (glyph.scalar == 0) return QStringLiteral("\\0");
+            if (glyph.scalar == 9) return QStringLiteral("⇥");
+            if (glyph.scalar == 10) return QStringLiteral("↵");
+            if (glyph.scalar == 13) return QStringLiteral("␍");
+            const auto category = QChar::category(static_cast<char32_t>(glyph.scalar));
+            if (category == QChar::Other_Control || category == QChar::Other_Format
+                || category == QChar::Separator_Line || category == QChar::Separator_Paragraph)
+                return QStringLiteral("⟨U+%1⟩").arg(QString::number(glyph.scalar, 16).toUpper().rightJustified(4, QLatin1Char('0')));
+            const char32_t scalar = static_cast<char32_t>(glyph.scalar);
+            return QString::fromUcs4(&scalar, 1);
         }
-
-        // decodeAnsiChunk：按文件头注释实现——只有可见 ASCII（0x20..0x7E）原样显示，
-        // 其余字节（含 0x80..0xFF 的 Latin-1 扩展区）统一显示点号；不可读字节显示占位符。
-        // D11：旧代码用 QChar::isPrint() 判断，等价于按完整 Latin-1 解码，0xFF 会画出真实
-        // 字符 'ÿ'、GBK 字节序列会被硬解成几个无关的 Latin-1 字符，跟文件头注释写的
-        // "只认可见 ASCII"不符，且在中文系统上容易被误读成按 ACP/GBK 解码；改用
-        // hexcanvas_format::IsPrintableAscii 把范围钉死在 0x20..0x7E。
-        QString decodeAnsiChunk(const std::vector<std::uint8_t>& bytes, const std::vector<std::uint8_t>& validMask)
+        MemoryTokenRole GlyphRole(const TextGlyph& glyph)
         {
-            QString line;
-            line.reserve(static_cast<qsizetype>(bytes.size()));
-            for (std::size_t i = 0; i < bytes.size(); ++i)
-            {
-                if (validMask[i] == 0)
-                {
-                    line += kUnreadableGlyph;
-                    continue;
-                }
-                line += hexcanvas_format::IsPrintableAscii(bytes[i]) ? QChar(static_cast<char16_t>(bytes[i])) : QChar(QLatin1Char('.'));
-            }
-            return line;
+            if (glyph.kind == TextGlyphKind::Invalid) return MemoryTokenRole::Invalid;
+            return glyph.kind == TextGlyphKind::Character ? MemoryTokenRole::Plain : MemoryTokenRole::Comment;
         }
-
-        // decodeUtf16LeChunk：按小端 UTF-16 码元两两解码；任一字节不可读则该码元整体用占位符，
-        // 奇数尾字节单独处理（可读则点号，不可读则占位符），与旧 rebuildText 的 UTF-16 分支同惯例。
-        // oddLeadingByte：N7（第二轮审核）——见 WorkbenchTextView.h 文件头"三种编码"的说明；
-        // 为真时第一个字节是上一块被拆开的码元后半，按奇数尾字节同惯例单独处理一次，
-        // 再从下标 1 开始正常两两配对，避免错位往后面所有块传染。
-        QString decodeUtf16LeChunk(const std::vector<std::uint8_t>& bytes, const std::vector<std::uint8_t>& validMask, const bool oddLeadingByte)
+        QString RawGlyphText(const TextGlyph& glyph)
         {
-            QString line;
-            std::size_t i = 0;
-            if (oddLeadingByte && !bytes.empty())
-            {
-                line += validMask[0] == 0 ? kUnreadableGlyph : QChar(QLatin1Char('.'));
-                i = 1;
-            }
-            for (; i + 1 < bytes.size(); i += 2)
-            {
-                if (validMask[i] == 0 || validMask[i + 1] == 0)
-                {
-                    line += kUnreadableGlyph;
-                    continue;
-                }
-                const ushort value = static_cast<ushort>(bytes[i]) | (static_cast<ushort>(bytes[i + 1]) << 8);
-                const QChar ch(value);
-                line += isDisplayableChar(ch) ? ch : QChar(QLatin1Char('.'));
-            }
-            if (i < bytes.size())
-            {
-                line += validMask[i] == 0 ? kUnreadableGlyph : QChar(QLatin1Char('.'));
-            }
-            return line;
-        }
-
-        // decodeUtf8Chunk：手写的小型状态机，逐字符按 validMask 判断有效性（见头文件"三种编码"）。
-        // D11：区分两类失败——"这个位置压根没读到数据"用 kUnreadableGlyph；"数据确实读到了，
-        // 只是取值不构成合法 UTF-8"用 kInvalidUtf8SequenceGlyph；序列被这段字节的末尾截断
-        // （缺续体，不是续体非法）也归为"没读到"，因为真正的原因是窗口边界，不是编码错误。
-        // 非 BMP 码位（4 字节序列）是已知简化，显示为点号，不还原真实字符。
-        QString decodeUtf8Chunk(const std::vector<std::uint8_t>& bytes, const std::vector<std::uint8_t>& validMask)
-        {
-            QString line;
-            std::size_t i = 0;
-            while (i < bytes.size())
-            {
-                if (validMask[i] == 0)
-                {
-                    line += kUnreadableGlyph;
-                    ++i;
-                    continue;
-                }
-                const std::uint8_t lead = bytes[i];
-                int extra = 0;
-                std::uint32_t codePoint = 0;
-                if ((lead & 0x80U) == 0U)
-                {
-                    codePoint = lead;
-                    extra = 0;
-                }
-                else if ((lead & 0xE0U) == 0xC0U)
-                {
-                    codePoint = lead & 0x1FU;
-                    extra = 1;
-                }
-                else if ((lead & 0xF0U) == 0xE0U)
-                {
-                    codePoint = lead & 0x0FU;
-                    extra = 2;
-                }
-                else if ((lead & 0xF8U) == 0xF0U)
-                {
-                    codePoint = lead & 0x07U;
-                    extra = 3;
-                }
-                else
-                {
-                    // 既不是单字节也不是合法的多字节引导字节——这个字节本身已经确认可读
-                    // （上面刚判过 validMask），只是取值不合法：可读但非法，不是没读到。
-                    line += QChar(kInvalidUtf8SequenceGlyph);
-                    ++i;
-                    continue;
-                }
-                const bool truncatedByChunkEnd = i + static_cast<std::size_t>(extra) >= bytes.size();
-                bool sequenceOk = !truncatedByChunkEnd;
-                bool continuationUnreadable = false;
-                for (int k = 1; sequenceOk && k <= extra; ++k)
-                {
-                    const std::size_t index = i + static_cast<std::size_t>(k);
-                    if (validMask[index] == 0)
-                    {
-                        continuationUnreadable = true;
-                        sequenceOk = false;
-                        break;
-                    }
-                    if ((bytes[index] & 0xC0U) != 0x80U)
-                    {
-                        sequenceOk = false;
-                        break;
-                    }
-                    codePoint = (codePoint << 6U) | (bytes[index] & 0x3FU);
-                }
-                if (!sequenceOk)
-                {
-                    // 续体缺失（被这段字节的末尾截断）或续体字节本身没读到：都是数据缺口，
-                    // 不是编码错误，归为"不可读"；续体字节都在、都读到了，只是形态不对
-                    // （不是 10xxxxxx）：这才是"可读但非法 UTF-8"。
-                    line += (truncatedByChunkEnd || continuationUnreadable) ? kUnreadableGlyph : QChar(kInvalidUtf8SequenceGlyph);
-                    ++i;
-                    continue;
-                }
-                // 续体形态正确不等于合法 UTF-8：必须使用最短编码，且结果必须是
-                // Unicode scalar（排除代理项和超过 U+10FFFF 的值）。否则 C1 A1
-                // 会被误显示成普通 a，让非法字节伪装成正常文本。
-                const std::uint32_t minimumCodePoint = extra == 1 ? 0x80U
-                    : extra == 2 ? 0x800U : extra == 3 ? 0x10000U : 0U;
-                if (codePoint < minimumCodePoint || codePoint > 0x10FFFFU
-                    || (codePoint >= 0xD800U && codePoint <= 0xDFFFU))
-                {
-                    line += QChar(kInvalidUtf8SequenceGlyph);
-                    i += static_cast<std::size_t>(1 + extra);
-                    continue;
-                }
-                if (codePoint <= 0xFFFFU)
-                {
-                    const QChar ch(static_cast<ushort>(codePoint));
-                    line += isDisplayableChar(ch) ? ch : QChar(QLatin1Char('.'));
-                }
-                else
-                {
-                    // 非 BMP：已知简化，不合成代理对，只标记"有一个字符但不显示其内容"。
-                    line += QChar(QLatin1Char('.'));
-                }
-                i += static_cast<std::size_t>(1 + extra);
-            }
-            return line;
+            if (glyph.kind != TextGlyphKind::Character && glyph.kind != TextGlyphKind::Bom) return GlyphText(glyph);
+            const char32_t scalar = static_cast<char32_t>(glyph.scalar);
+            return QString::fromUcs4(&scalar, 1);
         }
     }
 
-    // DecodeTextChunkForTest：按编码分派到上面三个纯函数。oddLeadingByte 只影响 UTF-16LE
-    // 分支（见头文件说明，N7），ANSI/UTF-8 两条路径没有"码元边界"这个维度，忽略该参数。
-    QString DecodeTextChunkForTest(
-        const std::vector<std::uint8_t>& bytes,
-        const std::vector<std::uint8_t>& validMask,
-        const WorkbenchTextView::Encoding encoding,
+    QString DecodeTextChunkForTest(const std::vector<std::uint8_t>& bytes,
+        const std::vector<std::uint8_t>& validMask, const WorkbenchTextView::Encoding encoding,
         const bool oddLeadingByte)
     {
-        if (bytes.size() != validMask.size())
-        {
-            return QString();
-        }
-        switch (encoding)
-        {
-        case WorkbenchTextView::Encoding::Utf8: return decodeUtf8Chunk(bytes, validMask);
-        case WorkbenchTextView::Encoding::Utf16LE: return decodeUtf16LeChunk(bytes, validMask, oddLeadingByte);
-        case WorkbenchTextView::Encoding::Ansi:
-        default: return decodeAnsiChunk(bytes, validMask);
-        }
+        ksword::memwb::TextDecodeOptions options;
+        options.encoding = encoding;
+        options.oddLeadingByte = oddLeadingByte;
+        options.codePageDecoder = DecodeWorkbenchCodePage;
+        const auto result = ksword::memwb::DecodeMemoryText(bytes, validMask, options);
+        QString text;
+        for (const auto& glyph : result.glyphs) text += GlyphText(glyph);
+        return text;
     }
 
     WorkbenchTextView::WorkbenchTextView(QWidget* parent) : QWidget(parent)
@@ -249,185 +104,373 @@ namespace ks::ui
         auto* layout = new QVBoxLayout(this);
         layout->setContentsMargins(0, 0, 0, 0);
         layout->setSpacing(4);
-
-        auto* topBar = new QHBoxLayout;
-        topBar->setContentsMargins(4, 4, 4, 0);
-        auto* encodingLabel = new QLabel(QStringLiteral("编码："), this);
-        topBar->addWidget(encodingLabel);
-        m_encodingCombo = new QComboBox(this);
+        auto* bar = new QWidget(this);
+        auto* flow = new FlowLayout(bar, 4, 4, 4);
+        flow->addWidget(new QLabel(QStringLiteral("编码："), bar));
+        m_encodingCombo = new QComboBox(bar);
         m_encodingCombo->setObjectName(QStringLiteral("ksMemwbTextEncodingCombo"));
-        m_encodingCombo->addItem(QStringLiteral("ANSI"));
-        m_encodingCombo->addItem(QStringLiteral("UTF-8"));
-        m_encodingCombo->addItem(QStringLiteral("UTF-16 LE"));
-        m_encodingCombo->setToolTip(QStringLiteral("按选定编码把当前窗口的字节解码为文本；目标内容原样显示，不翻译"));
-        connect(m_encodingCombo, &QComboBox::currentIndexChanged, this, [this](const int index) {
-            setEncoding(static_cast<Encoding>(index));
-        });
-        topBar->addWidget(m_encodingCombo);
-        topBar->addStretch(1);
-        layout->addLayout(topBar);
-
-        m_editor = new CodeEditorWidget(this);
-        m_editor->setObjectName(QStringLiteral("ksMemwbTextEditor"));
-        m_editor->setReadOnly(true);
-        // 本页只展示解码文本，没有可解析的结构（JSON/属性树等），关闭结构视图切换入口。
-        m_editor->setStructuredReportViewEnabled(false);
-        layout->addWidget(m_editor, 1);
-
+        for (int value = 0; value <= static_cast<int>(Encoding::Auto); ++value)
+            m_encodingCombo->addItem(EncodingName(static_cast<Encoding>(value)), value);
+        m_encodingCombo->setToolTip(QStringLiteral("手动选择优先；自动模式识别窗口起点的 BOM，否则使用 UTF-8。编码切换不修改原始字节。"));
+        flow->addWidget(m_encodingCombo);
+        m_bytesToggle = new QCheckBox(QStringLiteral("显示字节"), bar);
+        m_bytesToggle->setChecked(true);
+        m_bytesToggle->setToolTip(QStringLiteral("收起左侧字节列，为右侧文本留出更多空间"));
+        flow->addWidget(m_bytesToggle);
+        m_wrapToggle = new QCheckBox(QStringLiteral("自动换行"), bar);
+        flow->addWidget(m_wrapToggle);
+        m_controlToggle = new QCheckBox(QStringLiteral("控制字符"), bar);
+        m_controlToggle->setChecked(true);
+        m_controlToggle->setToolTip(QStringLiteral("显示控制字符的标记；关闭后用空白显示，复制仍保留原始文本"));
+        flow->addWidget(m_controlToggle);
+        m_findEdit = new QLineEdit(bar);
+        m_findEdit->setObjectName(QStringLiteral("ksMemwbTextFind"));
+        m_findEdit->setPlaceholderText(QStringLiteral("查找文本"));
+        m_findEdit->setMaximumWidth(180);
+        m_findEdit->setToolTip(QStringLiteral("在当前已读取文本中查找；Enter 查找下一处，Ctrl+F 聚焦"));
+        flow->addWidget(m_findEdit);
+        auto* find = new QToolButton(bar);
+        find->setText(QStringLiteral("下一处"));
+        find->setToolTip(QStringLiteral("查找下一处文本，并选中对应的原始字节"));
+        flow->addWidget(find);
+        layout->addWidget(bar);
+        m_canvas = new MemoryRowCanvas(this);
+        m_canvas->setObjectName(QStringLiteral("ksMemwbTextCanvas"));
+        m_canvas->setTextPriority(true);
+        m_canvas->setContentTitle(QStringLiteral("文本"));
+        m_canvas->installEventFilter(this);
+        m_findEdit->installEventFilter(this);
+        layout->addWidget(m_canvas, 1);
+        connect(m_controlToggle, &QCheckBox::toggled, this, [this] { rebuildText(); });
         m_status = new QLabel(this);
         m_status->setObjectName(QStringLiteral("ksMemwbTextStatus"));
-        m_status->setText(QStringLiteral("尚未定位；跟随十六进制页的当前窗口。"));
+        m_status->setWordWrap(true);
         layout->addWidget(m_status);
+        connect(m_encodingCombo, &QComboBox::currentIndexChanged, this, [this](const int index) {
+            setEncoding(static_cast<Encoding>(m_encodingCombo->itemData(index).toInt()));
+        });
+        connect(m_bytesToggle, &QCheckBox::toggled, m_canvas, &MemoryRowCanvas::setBytesVisible);
+        connect(m_wrapToggle, &QCheckBox::toggled, m_canvas, &MemoryRowCanvas::setWrapContent);
+        connect(m_findEdit, &QLineEdit::returnPressed, this, &WorkbenchTextView::findNext);
+        connect(m_findEdit, &QLineEdit::textChanged, this, [this]() { m_findOffset = 0; });
+        connect(find, &QToolButton::clicked, this, &WorkbenchTextView::findNext);
+        connect(m_canvas, &MemoryRowCanvas::selectionChanged, this, &WorkbenchTextView::selectionChanged);
+        connect(m_canvas, &MemoryRowCanvas::requestMore, this, &WorkbenchTextView::browseMore);
+        connect(m_canvas, &MemoryRowCanvas::contextMenuRequested, this, &WorkbenchTextView::showContextMenu);
+        rebuildText();
     }
-
     void WorkbenchTextView::setBytesProvider(IWorkbenchBytesProvider* provider)
     {
+        if (m_provider != provider) { m_canvas->cancelPendingNavigation(); m_requestedAddress.reset(); m_requestOutstanding = false; m_browseBackStack.clear(); }
         m_provider = provider;
         rebuildText();
     }
-
     void WorkbenchTextView::setWindow(const std::uint64_t address, const std::uint64_t length)
     {
+        const bool browsing = m_requestedAddress.has_value() && *m_requestedAddress == address;
+        const bool sameAddress = m_hasWindow && address == m_address;
+        if (!sameAddress && !browsing)
+        {
+            m_canvas->cancelPendingNavigation();
+            m_browseBackStack.clear();
+            m_keepBrowseViewport = false;
+            m_decodeOrigin = address;
+            m_effectiveEncoding = m_encoding == Encoding::Auto ? Encoding::Utf8 : m_encoding;
+            m_bomDetected = false;
+        }
         m_address = address;
         m_length = std::min<std::uint64_t>(length, kMaxWindowBytes);
         m_hasWindow = true;
+        m_requestedAddress.reset();
+        m_requestOutstanding = false;
         rebuildText();
     }
-
-    // reset：回到"尚未定位"状态——窗口清零、hasWindow 置假，rebuildText 会显示占位文案并清空编辑器。
     void WorkbenchTextView::reset()
     {
-        m_address = 0;
-        m_length = 0;
-        m_hasWindow = false;
+        m_canvas->cancelPendingNavigation();
+        m_browseBackStack.clear();
+        m_address = 0; m_length = 0; m_decodeOrigin = 0;
+        m_hasWindow = false; m_requestOutstanding = false; m_bomDetected = false;
+        m_keepBrowseViewport = false;
+        m_requestedAddress.reset();
         rebuildText();
     }
-
     void WorkbenchTextView::setBytesPerRow(const int bytesPerRow)
     {
-        if (bytesPerRow < 1 || bytesPerRow == m_bytesPerRow)
-        {
-            return;
-        }
+        if (bytesPerRow < 1 || bytesPerRow > 4096 || bytesPerRow == m_bytesPerRow) return;
         m_bytesPerRow = bytesPerRow;
         rebuildText();
     }
-
-    int WorkbenchTextView::bytesPerRow() const
-    {
-        return m_bytesPerRow;
-    }
-
+    int WorkbenchTextView::bytesPerRow() const { return m_bytesPerRow; }
     void WorkbenchTextView::setEncoding(const Encoding encoding)
     {
-        if (encoding == m_encoding)
-        {
-            return;
-        }
+        if (static_cast<int>(encoding) < 0 || static_cast<int>(encoding) > static_cast<int>(Encoding::Auto) || encoding == m_encoding) return;
         m_encoding = encoding;
-        if (m_encodingCombo->currentIndex() != static_cast<int>(encoding))
-        {
-            const QSignalBlocker blocker(m_encodingCombo);
-            m_encodingCombo->setCurrentIndex(static_cast<int>(encoding));
-        }
+        m_effectiveEncoding = encoding == Encoding::Auto ? Encoding::Utf8 : encoding;
+        m_bomDetected = false;
+        m_decodeOrigin = m_address;
+        const QSignalBlocker blocker(m_encodingCombo);
+        m_encodingCombo->setCurrentIndex(m_encodingCombo->findData(static_cast<int>(encoding)));
         rebuildText();
     }
-
-    WorkbenchTextView::Encoding WorkbenchTextView::encoding() const
+    WorkbenchTextView::Encoding WorkbenchTextView::encoding() const { return m_encoding; }
+    WorkbenchTextView::Encoding WorkbenchTextView::effectiveEncoding() const { return m_effectiveEncoding; }
+    bool WorkbenchTextView::hasBom() const { return m_bomDetected; }
+    void WorkbenchTextView::setAddressBits(const int bits) { m_addressBits = bits > 32 ? 64 : 32; m_canvas->setAddressBits(m_addressBits); }
+    void WorkbenchTextView::setAddressBounds(const std::uint64_t first, const std::uint64_t last)
     {
-        return m_encoding;
+        if (first <= last) m_addressBounds = std::make_pair(first, last);
+        else m_addressBounds.reset();
+        m_requestOutstanding = false;
     }
-
-    void WorkbenchTextView::refreshView()
+    void WorkbenchTextView::setAddressRange(const std::uint64_t base, const std::uint64_t length)
     {
-        rebuildText();
+        if (length && length - 1 <= std::numeric_limits<std::uint64_t>::max() - base)
+            setAddressBounds(base, base + length - 1);
+        else clearAddressBounds();
     }
-
-    CodeEditorWidget* WorkbenchTextView::editor() const
+    void WorkbenchTextView::clearAddressBounds() { m_addressBounds.reset(); m_requestOutstanding = false; }
+    void WorkbenchTextView::setBytesVisible(const bool visible) { m_bytesToggle->setChecked(visible); }
+    bool WorkbenchTextView::bytesVisible() const { return m_canvas->bytesVisible(); }
+    void WorkbenchTextView::setWrapText(const bool wrap) { m_wrapToggle->setChecked(wrap); }
+    bool WorkbenchTextView::wrapText() const { return m_canvas->wrapContent(); }
+    void WorkbenchTextView::setControlCharactersVisible(bool visible) { m_controlToggle->setChecked(visible); }
+    bool WorkbenchTextView::controlCharactersVisible() const { return m_controlToggle->isChecked(); }
+    void WorkbenchTextView::refreshView() { rebuildText(); }
+    MemoryRowCanvas* WorkbenchTextView::canvas() const { return m_canvas; }
+    std::optional<std::pair<std::uint64_t, std::uint64_t>> WorkbenchTextView::selectedByteRange() const { return m_canvas->selectedRange(); }
+    QString WorkbenchTextView::renderedText() const { return m_renderedText; }
+    QString WorkbenchTextView::selectedDecodedText() const
     {
-        return m_editor;
+        QString text;
+        const auto range = m_canvas->selectedRange();
+        if (!range) return text;
+        for (const auto& span : m_searchSpans)
+            if (span.address <= range->second && span.address + span.byteLength - 1 >= range->first)
+                text += m_flatText.mid(span.start, span.length);
+        return text;
     }
+    std::uint64_t WorkbenchTextView::windowAddress() const { return m_address; }
+    std::uint64_t WorkbenchTextView::windowLength() const { return m_length; }
+    QSize WorkbenchTextView::minimumSizeHint() const { return QSize(1, 1); }
+    void WorkbenchTextView::setStatus(const QString& text) { m_status->setText(ks::i18n::sourceText(text)); }
 
-    // minimumSizeHint：见头文件声明处的注释——故意返回一个很小的固定值，不让
-    // m_editor 的尺寸偏好向上传播成宿主的硬性下限（与 WorkbenchHexPane::
-    // minimumSizeHint 同一处理方式）。
-    QSize WorkbenchTextView::minimumSizeHint() const
-    {
-        return QSize(1, 1);
-    }
-
-    // applyEditorText：见头文件。等值守卫只比较"上一次由本函数写入的文本"。
-    void WorkbenchTextView::applyEditorText(const QString& text)
-    {
-        if (m_editorTextWritten && text == m_lastEditorText)
-        {
-            return;
-        }
-        m_editor->setRawText(text);
-        m_lastEditorText = text;
-        m_editorTextWritten = true;
-    }
-
-    // rebuildText：拉一次窗口，按 bytesPerRow 切块独立解码，拼成多行文本写回编辑器。
     void WorkbenchTextView::rebuildText()
     {
         if (m_provider == nullptr || !m_hasWindow)
         {
-            applyEditorText(QString());
-            m_status->setText(m_provider == nullptr
-                ? QStringLiteral("尚未接入数据源。")
-                : QStringLiteral("尚未定位；跟随十六进制页的当前窗口。"));
+            m_renderedText.clear(); m_flatText.clear(); m_searchSpans.clear(); m_canvas->setRows({}, false);
+            setStatus(m_provider == nullptr ? QStringLiteral("尚未接入数据源。") : QStringLiteral("尚未定位；跟随十六进制页的当前窗口。"));
             return;
         }
-        const WorkbenchByteWindow window = m_provider->FetchWindow(m_address, m_length);
+        // The lookahead completes a scalar starting before the display cut.
+        const bool utf16 = m_effectiveEncoding == Encoding::Utf16LE || m_effectiveEncoding == Encoding::Utf16BE;
+        const bool utf8 = m_effectiveEncoding == Encoding::Utf8;
+        std::uint64_t back = m_address != m_decodeOrigin && (utf16 || utf8)
+            ? std::min<std::uint64_t>(m_address, utf16 ? 4U : 3U) : 0U;
+        if (m_addressBounds && m_address >= m_addressBounds->first) back = std::min(back, m_address - m_addressBounds->first);
+        else if (m_address >= m_decodeOrigin) back = std::min(back, m_address - m_decodeOrigin);
+        const std::uint64_t fetchAddress = m_address - back;
+        const std::uint64_t desiredLength = m_length + back + 4U;
+        const std::uint64_t distance = std::numeric_limits<std::uint64_t>::max() - fetchAddress;
+        const std::uint64_t fetchLength = desiredLength - 1 <= distance ? desiredLength : distance + 1;
+        const WorkbenchByteWindow window = m_provider->FetchWindow(fetchAddress, fetchLength);
         if (!window.ok || window.bytes.empty())
         {
-            applyEditorText(QString());
-            // D4：数字部分单独大写再 .arg() 进模板，不对整段模板调用 toUpper()。
-            m_status->setText(QStringLiteral("0x%1 超出已读取窗口。").arg(formatHexDigitsUpper(m_address, 16)));
+            m_requestOutstanding = false;
+            m_requestedAddress.reset();
+            m_renderedText.clear(); m_flatText.clear(); m_searchSpans.clear(); m_canvas->setRows({}, true);
+            setStatus(ks::i18n::sourceText(QStringLiteral("0x%1 超出已读取窗口。"))
+                .arg(QString::number(m_address, 16).toUpper().rightJustified(16, QLatin1Char('0'))));
             return;
         }
-        // 可疑点 4：防御性 min 夹取，避免一个实现有误的 provider 让 bytes 与 validMask
-        // 长度不一致时越界读。
-        const std::size_t effectiveLength = std::min(window.bytes.size(), window.validMask.size());
-        QString text;
-        text.reserve(static_cast<qsizetype>(effectiveLength));
-        // 可疑点 6：第一行按"绝对地址对齐到 bytesPerRow 的倍数"裁短，让后续每一行的换行
-        // 位置落在与十六进制页同一套绝对地址网格上；m_address 本身恰好对齐时第一行就是
-        // 满宽的一整行，不改变既有行为（夹具里现有的用例全部是整齐对齐的窗口起点）。
-        const auto alignment = static_cast<std::uint64_t>(m_bytesPerRow);
-        const std::uint64_t leadInBytes = m_address % alignment;
-        std::size_t firstChunkLength = static_cast<std::size_t>(leadInBytes == 0 ? alignment : alignment - leadInBytes);
-        firstChunkLength = std::min(firstChunkLength, effectiveLength);
-
-        using Offset = std::vector<std::uint8_t>::difference_type;
-        bool firstRow = true;
-        std::size_t offset = 0;
-        while (offset < effectiveLength)
+        const std::size_t available = std::min(window.bytes.size(), window.validMask.size());
+        const std::vector<std::uint8_t> bytes(window.bytes.begin(), window.bytes.begin() + static_cast<std::ptrdiff_t>(available));
+        const std::vector<std::uint8_t> states(window.validMask.begin(), window.validMask.begin() + static_cast<std::ptrdiff_t>(available));
+        if (m_requestOutstanding && back < states.size() && states[static_cast<std::size_t>(back)] != 2U)
         {
-            const std::size_t chunkLength = firstRow
-                ? firstChunkLength
-                : std::min(static_cast<std::size_t>(m_bytesPerRow), effectiveLength - offset);
-            const std::vector<std::uint8_t> chunkBytes(window.bytes.begin() + static_cast<Offset>(offset),
-                window.bytes.begin() + static_cast<Offset>(offset + chunkLength));
-            const std::vector<std::uint8_t> chunkMask(window.validMask.begin() + static_cast<Offset>(offset),
-                window.validMask.begin() + static_cast<Offset>(offset + chunkLength));
-            if (offset != 0)
-            {
-                text += QLatin1Char('\n');
-            }
-            // N7：这一块相对窗口起点的字节偏移（offset）若是奇数，说明它在真正的 UTF-16
-            // 码元网格上起点是奇数——窗口起点本身（offset==0）永远被当作码元网格的基准，
-            // 不属于这种情况；只有因为按 bytesPerRow 对齐裁出的首行长度是奇数时，第二行及
-            // 之后才会落在奇数偏移上（见头文件"三种编码"的 N7 说明）。
-            text += DecodeTextChunkForTest(chunkBytes, chunkMask, m_encoding, (offset % 2) != 0);
-            offset += chunkLength;
-            firstRow = false;
+            m_requestOutstanding = false;
+            m_requestedAddress.reset();
         }
-        // setRawText：目标内容原样显示，绝不经过语言包翻译（文件头说明）；内容没变就不重写（保留滚动位置）。
-        applyEditorText(text);
-        m_status->setText(QStringLiteral("0x%1 起 %2 字节，按 %3 行宽解码（%4）。")
-            .arg(formatHexDigitsUpper(m_address, 16)).arg(window.bytes.size()).arg(m_bytesPerRow)
-            .arg(m_encodingCombo->currentText()));
+        ksword::memwb::TextDecodeOptions options;
+        options.encoding = m_encoding == Encoding::Auto && m_address != m_decodeOrigin ? m_effectiveEncoding : m_encoding;
+        options.codePageDecoder = DecodeWorkbenchCodePage;
+        options.oddLeadingByte = ((fetchAddress - m_decodeOrigin) & 1U) != 0;
+        options.recognizeBom = fetchAddress == m_decodeOrigin;
+        const auto decoded = ksword::memwb::DecodeMemoryText(bytes, states, options);
+        m_effectiveEncoding = decoded.effectiveEncoding;
+        if (fetchAddress == m_decodeOrigin) m_bomDetected = decoded.bomDetected;
+        QVector<MemoryDisplayRow> rows;
+        QString rendered;
+        QString flat;
+        std::vector<SearchSpan> searchSpans;
+        const std::size_t displayStart = static_cast<std::size_t>(back);
+        const std::size_t displayLength = std::min<std::size_t>(available, static_cast<std::size_t>(m_length + back));
+        MemoryDisplayRow row;
+        std::size_t rowStart = 0;
+        std::size_t rowEnd = 0;
+        const auto finishRow = [&]() {
+            if (rowEnd <= rowStart) return;
+            row.address = fetchAddress + rowStart;
+            row.bytes = QByteArray(reinterpret_cast<const char*>(bytes.data() + rowStart), static_cast<qsizetype>(rowEnd - rowStart));
+            for (std::size_t offset = rowStart; offset < rowEnd; ++offset)
+            {
+                row.validMask.push_back(states[offset]);
+                row.changeKinds.push_back(offset < window.changeKinds.size() ? window.changeKinds[offset] : ksword::memwb::ByteChangeKind::Unchanged);
+            }
+            if (!rows.isEmpty()) rendered += QLatin1Char('\n');
+            for (const auto& token : row.tokens) rendered += token.text;
+            rows.push_back(std::move(row));
+            row = MemoryDisplayRow{};
+            rowStart = rowEnd;
+        };
+        for (const auto& glyph : decoded.glyphs)
+        {
+            if (glyph.offset + glyph.byteLength <= displayStart) continue;
+            if (glyph.offset >= displayLength) break;
+            if (rows.isEmpty() && row.tokens.isEmpty()) { rowStart = glyph.offset; rowEnd = rowStart; }
+            if (rowEnd > rowStart)
+            {
+                const std::uint64_t rowAddress = fetchAddress + rowStart;
+                const std::size_t rowBudget = static_cast<std::size_t>(m_bytesPerRow)
+                    - static_cast<std::size_t>(rowAddress % static_cast<std::uint64_t>(m_bytesPerRow));
+                if (glyph.offset >= rowStart + rowBudget) finishRow();
+            }
+            const QString text = GlyphText(glyph, m_controlToggle->isChecked());
+            const QString rawText = RawGlyphText(glyph);
+            row.tokens.push_back({text, fetchAddress + glyph.offset, glyph.byteLength, GlyphRole(glyph)});
+            searchSpans.push_back({flat.size(), rawText.size(), fetchAddress + glyph.offset, glyph.byteLength});
+            flat += rawText;
+            rowEnd = glyph.offset + glyph.byteLength;
+        }
+        finishRow();
+        const bool preserve = m_keepBrowseViewport || (!m_canvas->rows().isEmpty() && !rows.isEmpty()
+            && m_canvas->rows().front().address == rows.front().address);
+        m_renderedText = std::move(rendered);
+        m_flatText = std::move(flat);
+        m_searchSpans = std::move(searchSpans);
+        m_canvas->setRows(std::move(rows), preserve);
+        setStatus(ks::i18n::sourceText(QStringLiteral("0x%1 起 %2 字节（%3）；字符选择对应完整原始字节。"))
+            .arg(QString::number(m_address, 16).toUpper().rightJustified(16, QLatin1Char('0')))
+            .arg(displayLength >= displayStart ? displayLength - displayStart : 0).arg(EncodingName(m_effectiveEncoding)));
+    }
+
+    void WorkbenchTextView::browseMore(const int direction, const int lines)
+    {
+        if (!m_hasWindow || m_requestOutstanding || direction == 0) return;
+        const std::uint64_t delta = static_cast<std::uint64_t>(std::max(1, lines)) * static_cast<std::uint64_t>(m_bytesPerRow);
+        std::uint64_t next = direction < 0 ? m_address - std::min(m_address, delta)
+            : m_address + std::min(std::numeric_limits<std::uint64_t>::max() - m_address, delta);
+        const auto bounds = m_addressBounds.value_or(std::make_pair(std::uint64_t{0},
+            m_addressBits == 32 ? std::uint64_t{0xFFFFFFFFU} : std::numeric_limits<std::uint64_t>::max()));
+        next = std::clamp(next, bounds.first, bounds.second);
+        if (next == m_address) return;
+        if (direction > 0)
+        {
+            if (const auto visible = m_canvas->addressForVisualLine(std::max(1, lines)); visible && *visible > m_address)
+                next = *visible;
+            for (const auto& span : m_searchSpans)
+                if (span.address >= next) { next = span.address; break; }
+            for (int line = 0; line < std::max(1, lines); ++line)
+                if (const auto previous = m_canvas->addressForVisualLine(line); previous && *previous < next)
+                    if (m_browseBackStack.empty() || m_browseBackStack.back() != *previous) m_browseBackStack.push_back(*previous);
+            if (m_browseBackStack.size() > 128) m_browseBackStack.erase(m_browseBackStack.begin(), m_browseBackStack.end() - 128);
+        }
+        else
+        {
+            for (int line = 0; line < std::max(1, lines) && !m_browseBackStack.empty(); ++line)
+            {
+                const auto previous = m_browseBackStack.back();
+                m_browseBackStack.pop_back();
+                if (previous < m_address) next = previous;
+            }
+            if (m_effectiveEncoding == Encoding::Utf16LE || m_effectiveEncoding == Encoding::Utf16BE)
+                if (((next - m_decodeOrigin) & 1U) != 0 && next > bounds.first) --next;
+        }
+        next = std::clamp(next, bounds.first, bounds.second);
+        if (next == m_address) return;
+        m_requestOutstanding = true;
+        m_keepBrowseViewport = true;
+        m_requestedAddress = next;
+        m_address = next;
+        m_length = std::max<std::uint64_t>(m_length, 4096U);
+        // The workbench host only prepares shared pages; this view owns the
+        // browse anchor. Snapshot hosts may synchronously refeed setWindow.
+        const QPointer<WorkbenchTextView> self(this);
+        emit windowRequested(next, m_length);
+        if (self) rebuildText();
+    }
+    void WorkbenchTextView::openFind() { m_findEdit->setFocus(); m_findEdit->selectAll(); }
+    void WorkbenchTextView::findNext() { findMatch(false); }
+    void WorkbenchTextView::findPrevious() { findMatch(true); }
+    void WorkbenchTextView::findMatch(bool backwards)
+    {
+        const QString needle = m_findEdit->text();
+        if (needle.isEmpty()) return;
+        const auto from = m_findOffset > 0 ? m_findOffset - needle.size() - 1 : -1;
+        qsizetype found = backwards ? m_flatText.lastIndexOf(needle, from, Qt::CaseSensitive)
+            : m_flatText.indexOf(needle, m_findOffset, Qt::CaseSensitive);
+        if (found < 0) found = backwards ? m_flatText.lastIndexOf(needle, -1, Qt::CaseSensitive)
+            : m_flatText.indexOf(needle, 0, Qt::CaseSensitive);
+        if (found < 0) { setStatus(QStringLiteral("当前已读取文本中未找到匹配。")); return; }
+        const qsizetype end = found + needle.size();
+        std::optional<std::uint64_t> first;
+        std::uint64_t last = 0;
+        for (const auto& span : m_searchSpans)
+        {
+            if (span.start + span.length <= found || span.start >= end) continue;
+            if (!first.has_value()) first = span.address;
+            last = span.address + span.byteLength - 1;
+        }
+        if (first.has_value()) m_canvas->selectRange(*first, last);
+        m_findOffset = end;
+    }
+    bool WorkbenchTextView::eventFilter(QObject* watched, QEvent* event)
+    {
+        if ((watched == m_canvas || watched == m_findEdit) && event->type() == QEvent::ShortcutOverride)
+        {
+            const auto* key = static_cast<QKeyEvent*>(event);
+            if ((key->key() == Qt::Key_F && key->modifiers() == Qt::ControlModifier) || key->key() == Qt::Key_F3
+                || (watched == m_canvas && key->key() == Qt::Key_C && (key->modifiers() & Qt::ControlModifier)))
+            { event->accept(); return true; }
+        }
+        if ((watched == m_canvas || watched == m_findEdit) && event->type() == QEvent::KeyPress)
+        {
+            const auto* key = static_cast<QKeyEvent*>(event);
+            if (key->key() == Qt::Key_F && key->modifiers() == Qt::ControlModifier)
+            { openFind(); return true; }
+            if (key->key() == Qt::Key_F3) { if (key->modifiers() & Qt::ShiftModifier) findPrevious(); else findNext(); return true; }
+            if (watched == m_canvas && key->key() == Qt::Key_C && key->modifiers() == Qt::ControlModifier)
+            { QApplication::clipboard()->setText(selectedDecodedText()); return true; }
+        }
+        return QWidget::eventFilter(watched, event);
+    }
+    void WorkbenchTextView::showContextMenu(const QPoint& point)
+    {
+        const auto address = m_canvas->addressAt(point);
+        if (!address.has_value()) return;
+        if (!m_canvas->selectedRange().has_value()
+            || *address < m_canvas->selectedRange()->first || *address > m_canvas->selectedRange()->second)
+            m_canvas->selectRange(*address, *address, false);
+        const QString text = selectedDecodedText();
+        bool complete = false;
+        const QByteArray bytes = m_canvas->selectedBytes(&complete);
+        auto* menu = new QMenu(this);
+        menu->setStyleSheet(KswordTheme::ContextMenuStyle());
+        auto* copyText = menu->addAction(QStringLiteral("复制文本"));
+        auto* copyBytes = menu->addAction(QStringLiteral("复制原始字节"));
+        copyBytes->setEnabled(complete);
+        auto* copyAddress = menu->addAction(QStringLiteral("复制地址"));
+        auto* locate = menu->addAction(QStringLiteral("在十六进制视图中定位"));
+        const QPointer<WorkbenchTextView> self(this);
+        emit contextMenuAboutToShow(menu, *address, complete);
+        if (!self) return;
+        QAction* selected = menu->exec(m_canvas->viewport()->mapToGlobal(point));
+        if (!self) return;
+        menu->deleteLater();
+        if (selected == copyText) QApplication::clipboard()->setText(text);
+        else if (selected == copyBytes && complete) QApplication::clipboard()->setText(QString::fromLatin1(bytes.toHex(' ').toUpper()));
+        else if (selected == copyAddress) QApplication::clipboard()->setText(QStringLiteral("0x%1").arg(QString::number(*address, 16).toUpper()));
+        else if (selected == locate) emit requestHexLocate(*address);
     }
 }

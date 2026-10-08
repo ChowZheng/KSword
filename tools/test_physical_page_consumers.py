@@ -138,6 +138,14 @@ int main() {
         "the final allowed pool candidates retain their proof without exceeding the shared 256-page discovery cap");
     require(result->threads <= 64 && result->tableProcesses <= 64 && result->distinct < result->relations.size(),
         "bounded consumers and shared PFN references preserve distinct physical accounting");
+    for (unsigned stage = 1; stage <= 3; ++stage) {
+        prepare(0, 0); mock::tableLookupFailureAt = stage; maps = mapping(); result = run(maps);
+        require(result->tableStatus == static_cast<long>(0xC000000BUL) && result->failed > 0, "lookup failure survives successful transport and later witnesses");
+        prepare(0, 0); mock::tableWalkFailureAt = stage; maps = mapping(); result = run(maps);
+        require(result->tableStatus == static_cast<long>(0xC0000005UL) && result->failed > 0, "walk failure remains visible at each translation stage");
+        prepare(0, 0); mock::tableTransportFailureAt = stage; maps = mapping(); result = run(maps);
+        require(result->tableStatus == static_cast<long>(0xC0000022UL) && result->failed > 0, "transport failure remains visible at each translation stage");
+    }
     prepare(); maps = mapping(); result = run(maps, true);
     require(result->cancelled && result->relations.empty() && result->candidatePages == 0, "cancellation prevents consumer target work");
     prepare(); maps = mapping(); result = run(maps, false, 0);

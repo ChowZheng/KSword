@@ -90,15 +90,32 @@ void collectPhysicalConsumers(Mappings& maps, std::atomic_bool& cancel,
         distinct.insert(row.pfn);
         evidence->relations.push_back(row);
     };
+    bool tableFailureSeen = false;
+    auto tableFailure = [&](long status) {
+        if (!tableFailureSeen) { evidence->tableStatus = status < 0 ? status : consumerInvalidData; }
+        tableFailureSeen = true;
+    };
+    auto translationValid = [&](const auto& value) {
+        const long status = !value.io.ok ? value.io.ntStatus : (value.lookupStatus < 0 ? value.lookupStatus : value.walkStatus);
+        if (!value.io.ok || value.lookupStatus < 0 || value.walkStatus < 0) {
+            tableFailure(status); ++evidence->failed; return false;
+        }
+        return true;
+    };
     auto witness = [&](const Mapping& row, MappingWitnessProof& proof) {
         proof = {};
         std::vector<KSWORD_ARK_PFN_MAPPING> current;
-        evidence->tableStatus = pfns.mappings(row.pid, row.processCreateTime, {row.address}, current);
-        proof.mappingStatus = evidence->tableStatus;
+        const long status = pfns.mappings(row.pid, row.processCreateTime, {row.address}, current);
+        proof.mappingStatus = status;
         if (current.size() == 1) {
             proof.pfn = current[0].pfn; proof.entryStatus = current[0].status; proof.pageSize = current[0].pageSize;
         }
-        return evidence->tableStatus >= 0 && current.size() == 1 && current[0].status >= 0 && current[0].pfn == row.pfn;
+        if (status < 0 || current.size() != 1 || current[0].status < 0) {
+            tableFailure(status < 0 ? status : (current.size() == 1 ? current[0].status : consumerInvalidData));
+            return false;
+        }
+        if (!tableFailureSeen) { evidence->tableStatus = status; }
+        return current[0].pfn == row.pfn;
     };
     std::map<std::uint32_t, const Mapping*> targets;
     for (const auto& row : maps.rows) {
@@ -119,9 +136,10 @@ void collectPhysicalConsumers(Mappings& maps, std::atomic_bool& cancel,
             || !witness(row, initialWitness)) { ++evidence->failed; continue; }
         ++evidence->tableProcesses;
         const auto before = driver.translateVirtualAddress(row.pid, row.address);
-        if (!before.io.ok || before.lookupStatus < 0) { evidence->tableStatus = before.io.ntStatus; continue; }
+        if (!translationValid(before)) { continue; }
         const auto after = driver.translateVirtualAddress(row.pid, row.address);
-        if (!after.io.ok || after.lookupStatus < 0 || !witness(row, afterTranslationWitness)) { ++evidence->failed; continue; }
+        if (!translationValid(after)) { continue; }
+        if (!witness(row, afterTranslationWitness)) { ++evidence->failed; continue; }
         const std::array<std::uint64_t, 5> first{before.cr3PhysicalAddress, before.pml4ePhysicalAddress,
             before.pdptePhysicalAddress, before.pdePhysicalAddress, before.ptePhysicalAddress};
         const std::array<std::uint64_t, 5> second{after.cr3PhysicalAddress, after.pml4ePhysicalAddress,
@@ -143,7 +161,8 @@ void collectPhysicalConsumers(Mappings& maps, std::atomic_bool& cancel,
             const auto now = driver.translateVirtualAddress(row.pid, row.address);
             const std::array<std::uint64_t, 5> currentEntries{now.cr3PhysicalAddress, now.pml4ePhysicalAddress,
                 now.pdptePhysicalAddress, now.pdePhysicalAddress, now.ptePhysicalAddress};
-            bool sameTables = now.io.ok && now.lookupStatus >= 0;
+            if (!translationValid(now)) { continue; }
+            bool sameTables = true;
             for (std::size_t level = 0; level < currentEntries.size(); ++level) {
                 if (candidate.second & (1U << level)) {
                     sameTables &= currentEntries[level] && (currentEntries[level] >> 12) == candidate.first

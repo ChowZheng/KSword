@@ -73,7 +73,7 @@ struct Mappings {
     std::vector<Backing> backing;
     std::map<std::uint64_t, QString> observedFileNames;
     std::shared_ptr<ConsumerEvidence> consumers;
-    std::uint64_t tested = 0, failed = 0, distinct = 0, large = 0, locked = 0, multiplyMapped = 0;
+    std::uint64_t tested = 0, failed = 0, distinct = 0, large = 0, locked = 0, multiplyMapped = 0, identityConflicted = 0;
     std::uint64_t virtualPagesProbed = 0, changedMappings = 0, conflictingFileKeys = 0;
     std::uint32_t regionQueryFailures = 0, workingSetQueryFailures = 0;
     std::uint32_t processes = 0, inaccessible = 0, scannedProcesses = 0, workingSetProcesses = 0;

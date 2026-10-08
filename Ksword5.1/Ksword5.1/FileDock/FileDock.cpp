@@ -21,6 +21,7 @@
 #include "../theme.h"
 #include "../UI/CodeEditorWidget.h"
 #include "../UI/HexEditorWidget.h"
+#include "../UI/MemoryEditorWidget.h"
 #include "../UI/ReportStructuredView.h"
 #include "../UI/ThemeStatusRole.h"
 #include "../UI/TableColumnAutoFit.h"
@@ -130,6 +131,7 @@
 #define NOMINMAX
 #endif
 #include <Windows.h>
+#include <io.h>
 #include <Shellapi.h>
 #include <winioctl.h>
 #include <Wbemidl.h>
@@ -6027,10 +6029,12 @@ namespace
                     }
                     activateDeferredTab(m_tabWidget, tabIndex);
                 });
-            constexpr int usageTabIndex = 5;
-            if (m_initialTabKey == QStringLiteral("usage"))
+            const int initialTabIndex = m_initialTabKey == QStringLiteral("usage") ? 5
+                : m_initialTabKey == QStringLiteral("pe") ? 10
+                : m_initialTabKey == QStringLiteral("hex") ? 13 : -1;
+            if (initialTabIndex >= 0)
             {
-                m_tabWidget->setCurrentIndex(usageTabIndex);
+                m_tabWidget->setCurrentIndex(initialTabIndex);
             }
             else if (!m_tabNavigationButtons.isEmpty())
             {
@@ -12400,10 +12404,11 @@ namespace
             QByteArray bytes;
             qint64 baseOffset = 0;
             qint64 fileBytes = 0;
+            QString sourceIdentity;
             QString errorText;
         };
 
-        // 文件详情页自己的分页读取；不修改共用 HexEditorWidget。
+        // 文件详情页负责分页读取，共用快照视图只消费当前完整文件范围。
         static FileHexWindow readHexFileWindow(const QString& path, const qint64 targetOffset,
             const qint64 requestedWindowBytes)
         {
@@ -12414,14 +12419,38 @@ namespace
                 result.errorText = file.errorString();
                 return result;
             }
+            const QFileInfo originalInfo(file);
             result.fileBytes = file.size();
+            const qint64 originalModified = originalInfo.lastModified().toMSecsSinceEpoch();
+            const QString canonicalPath = originalInfo.canonicalFilePath();
+            const int fileDescriptor = file.handle();
+            const auto nativeHandleValue = fileDescriptor < 0 ? intptr_t{-1} : ::_get_osfhandle(fileDescriptor);
+            const HANDLE nativeHandle = reinterpret_cast<HANDLE>(nativeHandleValue);
+            BY_HANDLE_FILE_INFORMATION originalNativeInfo{};
+            const bool nativeIdentityAvailable = nativeHandle != INVALID_HANDLE_VALUE
+                && ::GetFileInformationByHandle(nativeHandle, &originalNativeInfo) != FALSE;
+            const auto combineFileParts = [](const DWORD high, const DWORD low)
+                { return (static_cast<quint64>(high) << 32U) | static_cast<quint64>(low); };
+            if (nativeIdentityAvailable)
+            {
+                result.sourceIdentity = QStringLiteral("file-id:")
+                    + QString::number(originalNativeInfo.dwVolumeSerialNumber, 16) + QLatin1Char(':')
+                    + QString::number(combineFileParts(originalNativeInfo.nFileIndexHigh, originalNativeInfo.nFileIndexLow), 16)
+                    + QLatin1Char(':') + QString::number(combineFileParts(originalNativeInfo.ftCreationTime.dwHighDateTime,
+                        originalNativeInfo.ftCreationTime.dwLowDateTime), 16);
+            }
+            else if (originalInfo.birthTime().isValid())
+            {
+                result.sourceIdentity = QStringLiteral("file:")
+                    + (canonicalPath.isEmpty() ? originalInfo.absoluteFilePath() : canonicalPath)
+                    + QStringLiteral("|created:") + QString::number(originalInfo.birthTime().toMSecsSinceEpoch());
+            }
             if (targetOffset < 0 || (result.fileBytes == 0 ? targetOffset != 0 : targetOffset >= result.fileBytes))
             {
                 result.errorText = ks::i18n::sourceText(QStringLiteral("偏移超出文件范围：%1（文件大小 %2 字节）"))
                     .arg(targetOffset).arg(result.fileBytes);
                 return result;
             }
-            if (result.fileBytes == 0) return result;
             const qint64 windowBytes = std::clamp<qint64>(requestedWindowBytes, 4096, 2 * 1024 * 1024);
             result.baseOffset = (targetOffset / windowBytes) * windowBytes;
             if (!file.seek(result.baseOffset))
@@ -12433,8 +12462,29 @@ namespace
             result.bytes = file.read(expectedBytes);
             if (file.error() != QFileDevice::NoError)
                 result.errorText = file.errorString();
-            else if (result.bytes.size() != expectedBytes || targetOffset - result.baseOffset >= result.bytes.size())
+            else if (result.bytes.size() != expectedBytes
+                || (result.fileBytes > 0 && targetOffset - result.baseOffset >= result.bytes.size()))
                 result.errorText = ks::i18n::sourceText(QStringLiteral("读取范围不完整，文件可能已发生变化，请重试。"));
+            else
+            {
+                const QFileInfo currentInfo(file);
+                bool metadataChanged = file.size() != result.fileBytes || currentInfo.size() != result.fileBytes
+                    || currentInfo.lastModified().toMSecsSinceEpoch() != originalModified;
+                if (nativeIdentityAvailable)
+                {
+                    BY_HANDLE_FILE_INFORMATION currentNativeInfo{};
+                    metadataChanged = metadataChanged || ::GetFileInformationByHandle(nativeHandle, &currentNativeInfo) == FALSE;
+                    if (!metadataChanged)
+                    {
+                        metadataChanged = combineFileParts(currentNativeInfo.nFileSizeHigh, currentNativeInfo.nFileSizeLow)
+                                != static_cast<quint64>(result.fileBytes)
+                            || currentNativeInfo.ftLastWriteTime.dwHighDateTime != originalNativeInfo.ftLastWriteTime.dwHighDateTime
+                            || currentNativeInfo.ftLastWriteTime.dwLowDateTime != originalNativeInfo.ftLastWriteTime.dwLowDateTime;
+                    }
+                }
+                if (metadataChanged)
+                    result.errorText = ks::i18n::sourceText(QStringLiteral("读取范围不完整，文件可能已发生变化，请重试。"));
+            }
             return result;
         }
 
@@ -12469,22 +12519,23 @@ namespace
             status->setTextFormat(Qt::PlainText);
             status->setWordWrap(true);
             layout->addWidget(status);
-            HexEditorWidget* hexEditor = new HexEditorWidget(page);
-            hexEditor->setEditable(false);
-            hexEditor->setBytesPerRow(16);
-            layout->addWidget(hexEditor, 1);
+            auto* editor = new ks::ui::MemoryEditorWidget(page);
+            editor->setAddressKind(ks::ui::SnapshotAddressKind::FileOffset);
+            editor->setEditable(false);
+            editor->hexEditor()->setBytesPerRow(16);
+            layout->addWidget(editor, 1);
             QLabel* hint = new QLabel(ks::i18n::sourceText(QStringLiteral(
-                "外部跳转覆盖整个文件，按需加载所选范围；查找仅针对当前已加载的数据。")), page);
+                "HEX、反汇编和文本共用当前文件范围。可按文件偏移加载任意范围；查找仅针对已加载的数据。反汇编地址为原始文件偏移，不进行 PE RVA / VA 映射。")), page);
             hint->setWordWrap(true);
             layout->addWidget(hint);
             struct Control { quint64 generation = 0; qint64 requestedOffset = 0; qint64 total = 0; qint64 base = 0; qint64 loaded = 0; };
             const auto control = std::make_shared<Control>();
             const QString path = m_filePath;
             const QPointer<QWidget> pageGuard(page);
-            const QPointer<HexEditorWidget> hexGuard(hexEditor);
+            const QPointer<ks::ui::MemoryEditorWidget> editorGuard(editor);
             const QPointer<QLabel> statusGuard(status);
             const QPointer<QPushButton> previousGuard(previous), nextGuard(next), lastGuard(last), findGuard(find);
-            const auto launch = [path, control, pageGuard, hexGuard, statusGuard, previousGuard, nextGuard,
+            const auto launch = [path, control, pageGuard, editorGuard, statusGuard, previousGuard, nextGuard,
                 lastGuard, findGuard, offsetEdit, windowSize](qint64 target)
                 {
                     const quint64 generation = ++control->generation;
@@ -12498,25 +12549,34 @@ namespace
                     statusGuard->setText(ks::i18n::sourceText(QStringLiteral("正在读取文件偏移 0x%1 附近的数据..."))
                         .arg(target, 0, 16));
                     auto* task = QRunnable::create([path, target, windowBytes, generation, control, pageGuard,
-                        hexGuard, statusGuard, previousGuard, nextGuard, lastGuard, findGuard]()
+                        editorGuard, statusGuard, previousGuard, nextGuard, lastGuard, findGuard]()
                         {
                             const FileHexWindow result = readHexFileWindow(path, target, windowBytes);
-                            if (pageGuard == nullptr) return;
-                            QMetaObject::invokeMethod(pageGuard.data(), [result, target, generation, control,
-                                hexGuard, statusGuard, previousGuard, nextGuard, lastGuard, findGuard]()
+                            // Queue through the application, then inspect page lifetime on
+                            // the UI thread; the page can close while the worker reads.
+                            QMetaObject::invokeMethod(qApp, [result, target, generation, control, pageGuard,
+                                editorGuard, statusGuard, previousGuard, nextGuard, lastGuard, findGuard]()
                                 {
-                                    if (hexGuard == nullptr || statusGuard == nullptr || generation != control->generation) return;
+                                    if (pageGuard == nullptr || editorGuard == nullptr || statusGuard == nullptr
+                                        || generation != control->generation) return;
                                     if (!result.errorText.isEmpty())
+                                    {
+                                        control->total = result.fileBytes;
+                                        control->base = control->loaded = 0;
+                                        editorGuard->clear();
+                                        if (editorGuard == nullptr || statusGuard == nullptr || generation != control->generation) return;
                                         statusGuard->setText(ks::i18n::sourceText(QStringLiteral("未跳转：%1"))
                                             .arg(result.errorText));
+                                    }
                                     else
                                     {
                                         control->total = result.fileBytes;
                                         control->base = result.baseOffset;
                                         control->loaded = result.bytes.size();
-                                        // 基址就是磁盘偏移，保留编辑器原有查找/选择/复制语义。
-                                        hexGuard->setByteArray(result.bytes, static_cast<std::uint64_t>(result.baseOffset));
-                                        if (!result.bytes.isEmpty()) hexGuard->jumpToAbsoluteAddress(static_cast<std::uint64_t>(target));
+                                        // 基址和解码锚点均为文件偏移，绝不附带进程地址上下文。
+                                        editorGuard->setSnapshot(result.bytes, static_cast<std::uint64_t>(result.baseOffset),
+                                            editorGuard->currentArchitecture(), static_cast<std::uint64_t>(target), result.sourceIdentity);
+                                        if (editorGuard == nullptr || statusGuard == nullptr || generation != control->generation) return;
                                         statusGuard->setText(result.bytes.isEmpty()
                                             ? ks::i18n::sourceText(QStringLiteral("文件为空。"))
                                             : ks::i18n::sourceText(QStringLiteral("文件范围 [0x%1, 0x%2)；已加载 %3 字节，文件共 %4 字节。"))
@@ -12559,7 +12619,7 @@ namespace
                 { launch(std::max<qint64>(0, control->base - windowSize->currentData().toLongLong())); });
             connect(next, &QPushButton::clicked, page, [control, launch]() { launch(control->base + control->loaded); });
             connect(last, &QPushButton::clicked, page, [control, launch]() { launch(std::max<qint64>(0, control->total - 1)); });
-            connect(find, &QPushButton::clicked, hexEditor, &HexEditorWidget::openFindPanel);
+            connect(find, &QPushButton::clicked, editor, &ks::ui::MemoryEditorWidget::openFindPanel);
             connect(windowSize, &QComboBox::currentIndexChanged, page, [control, launch](int) { launch(control->requestedOffset); });
             const QPointer<QTabWidget> tabs(m_tabWidget);
             const auto takePending = [tabs, launch]()
@@ -17162,7 +17222,7 @@ void FileDock::showPanelContextMenu(FilePanelWidgets& panel, const QPoint& local
     {
         if (!firstPath.isEmpty() && QFileInfo(firstPath).isFile())
         {
-            showFileDetailDialog(firstPath);
+            showFileDetailDialog(firstPath, selectedAction == hexAction ? QStringLiteral("hex") : QStringLiteral("pe"));
         }
         return;
     }

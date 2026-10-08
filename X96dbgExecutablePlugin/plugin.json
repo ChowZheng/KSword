@@ -2,7 +2,7 @@
   "ksword_plugin_api": "1",
   "id": "x96dbg",
   "name": "x96dbg（KSword 后端）",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Starts standalone 64-bit x64dbg with the canonical TitanEngine KSword adapter, selectable normal/stealth HVM policy, explicit fallback diagnostics, and persistent control/log Tab options.",
   "plugin_type": "hybrid",
   "runtime": "executable",
@@ -16,6 +16,7 @@
     "startup_timeout_ms": 10000
   },
   "commands": [
+    {"name": "navigate", "description": "Reuse the same identified target session or attach in a separate instance, then acknowledge the selected address without changing existing execution state.", "syntax": "--target-kind process --pid PID --create-time TIME --address ADDRESS --view cpu|dump [--debugger PATH]"},
     {"name": "attach", "description": "Start standalone x64dbg and attach to the selected process through the KSword engine adapter.", "syntax": "--target-kind process --pid PID [--path IMAGE_PATH] [--process-name NAME]"},
     {"name": "tab", "description": "Start standalone x64dbg with a KSword control/log Tab and acknowledged HVM selection."},
     {"name": "check", "description": "Validate the required x64 payload files without launching a debugger."},

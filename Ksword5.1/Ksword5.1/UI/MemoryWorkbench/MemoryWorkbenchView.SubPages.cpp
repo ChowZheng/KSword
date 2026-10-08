@@ -108,7 +108,7 @@ namespace ks::ui
         {
             return;
         }
-        hexPane_->canvas()->scrollToAddress(address, HexCanvas::ScrollAlign::Center);
+        hexPane_->requestBrowseWindow(address, 4096 + 15);
     }
 
     // positionSubPage：把某个子页定位到 address（不判断要不要跟随，调用方已决定）。
@@ -132,6 +132,7 @@ namespace ks::ui
             {
                 return;
             }
+            if (const auto bounds = hexPane_->canvas()->addressSpaceRange()) disasmView_->setAddressBounds(bounds->first, bounds->last);
             const SubPageFollowState& state = subPageFollow_[0];
             if (state.positioned && disasmView_->anchorAddress() == address)
             {
@@ -152,16 +153,12 @@ namespace ks::ui
             }
             const int rowBytes = std::max(1, hexPane_->canvas()->bytesPerRow());
             textView_->setBytesPerRow(rowBytes);
-            if (!covered)
-            {
-                // 目标还没被基线窗口覆盖：长度 0 让页面显示"超出已读取窗口"，数据到达后再刷新。
-                textView_->setWindow(address, 0);
-                return;
-            }
-            const std::uint64_t alignedStart = address - (address % static_cast<std::uint64_t>(rowBytes));
-            const std::uint64_t start = std::max(alignedStart, baseline);
-            const std::uint64_t windowEnd = baseline + baselineSize;
-            const std::uint64_t length = std::min<std::uint64_t>(windowEnd - start, kTextFollowBytes);
+            const auto bounds = hexPane_->canvas()->addressSpaceRange();
+            if (!bounds || address < bounds->first || address > bounds->last) { textView_->setWindow(address, 0); return; }
+            textView_->setAddressBounds(bounds->first, bounds->last);
+            const auto start = std::max(bounds->first, address - address % static_cast<std::uint64_t>(rowBytes));
+            const auto length = std::min<std::uint64_t>(4096, bounds->last - start) + 1;
+            textView_->setAddressBits(target_ ? target_->session().addressBits : 64);
             textView_->setWindow(start, length);
             return;
         }
@@ -219,7 +216,7 @@ namespace ks::ui
         else
         {
             // 文本页：窗口依赖基线窗口，按上次定位的地址重算；编辑器文本没变时 applyEditorText 不会重写，滚动位置保留。
-            positionSubPage(tabIndex, state.anchor);
+            textView_->refreshView();
         }
         state.dirty = false;
     }
@@ -322,6 +319,7 @@ namespace ks::ui
     // onSubTabChanged：子页签切换（分段按钮、快捷键、loadSettings 恢复上次子页都经 currentChanged）。
     void MemoryWorkbenchView::onSubTabChanged(const int tabIndex)
     {
+        if (hexPane_) hexPane_->setExternalBrowseMode(tabIndex == 1 || tabIndex == 2);
         if (IsFollowTab(tabIndex))
         {
             followSubPage(tabIndex, false);

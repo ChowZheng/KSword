@@ -521,6 +521,15 @@
     <ClCompile Include="MemoryDock\MemoryConsumerEvidencePage.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="MemoryDock\PoolTraceReader.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="MemoryDock\PoolAllocationAnalysisWidget.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\shared\evidence\PoolAllocationAnalysis.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="MemoryDock\PhysicalPageConsumers.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -1111,6 +1120,24 @@
     </ClCompile>
     <ClCompile Include="UI\MemoryWorkbench\WorkbenchDisasmView.cpp">
       <Filter>Source Files\MemoryWorkbench</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\MemoryWorkbench\MemoryRowCanvas.cpp">
+      <Filter>Source Files\MemoryWorkbench</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\MemoryWorkbench\WorkbenchDisasmView.Canvas.cpp">
+      <Filter>Source Files\MemoryWorkbench</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\MemoryWorkbench\MemoryWorkbenchView.RowCanvas.cpp">
+      <Filter>Source Files\MemoryWorkbench</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\MemorySnapshotBytesProvider.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\X64DbgNavigation.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\shared\evidence\memory_workbench\MemoryTextDecode.cpp">
+      <Filter>Source Files\MemoryWorkbench\Shared</Filter>
     </ClCompile>
     <ClCompile Include="UI\MemoryWorkbench\WorkbenchDisasmView.Edit.cpp">
       <Filter>Source Files\MemoryWorkbench</Filter>
@@ -1900,6 +1927,15 @@
     <ClInclude Include="MemoryDock\MemoryConsumerEvidencePage.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="MemoryDock\PoolTraceReader.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="MemoryDock\PoolAllocationAnalysisWidget.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\shared\evidence\PoolAllocationAnalysis.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="MemoryDock\PhysicalPageConsumers.h">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -2314,8 +2350,23 @@
     <QtMoc Include="UI\MemoryWorkbench\WorkbenchDisasmView.h">
       <Filter>Header Files\MemoryWorkbench</Filter>
     </QtMoc>
+    <QtMoc Include="UI\MemoryWorkbench\MemoryRowCanvas.h">
+      <Filter>Header Files\MemoryWorkbench</Filter>
+    </QtMoc>
     <ClInclude Include="UI\MemoryWorkbench\WorkbenchMessages.h">
       <Filter>Header Files\MemoryWorkbench</Filter>
+    </ClInclude>
+    <ClInclude Include="UI\MemorySnapshotBytesProvider.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="UI\MemoryWorkbench\WorkbenchTextCodePages.h">
+      <Filter>Header Files\MemoryWorkbench</Filter>
+    </ClInclude>
+    <ClInclude Include="UI\X64DbgNavigation.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\shared\evidence\memory_workbench\MemoryTextDecode.h">
+      <Filter>Header Files\MemoryWorkbench\Shared</Filter>
     </ClInclude>
     <ClInclude Include="UI\MemoryWorkbench\WorkbenchNavigation.h">
       <Filter>Header Files\MemoryWorkbench</Filter>

@@ -17,6 +17,7 @@
 // ============================================================
 
 #include "../../../Ksword5.1/Ksword5.1/UI/MemoryWorkbench/WorkbenchDisasmView.h"
+#include "../../../Ksword5.1/Ksword5.1/UI/MemoryWorkbench/MemoryRowCanvas.h"
 #include "../../../Ksword5.1/Ksword5.1/UI/MemoryWorkbench/WorkbenchTextView.h"
 #include "../../../Ksword5.1/Ksword5.1/UI/MemoryWorkbench/WorkbenchCompareView.h"
 #include "../../../shared/evidence/memory_workbench/MemoryDiffOverlay.h"

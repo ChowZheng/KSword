@@ -125,6 +125,10 @@ void MemoryDock::refreshDriverMemoryViewsFromSnapshot()
             QStringLiteral("driver_memory_%1_%2_%3_%4").arg(static_cast<int>(m_driverMemorySnapshotBackend))
                 .arg(m_driverMemorySnapshotPid).arg(m_driverMemorySnapshotIsPhysical ? 1 : 0)
                 .arg(m_driverMemorySnapshotDdmaGeneration));
+        const bool processVirtual = !m_driverMemorySnapshotIsPhysical
+            && m_driverMemorySnapshotBackend != ksword::memory_backend::MemoryAccessBackend::Ddma
+            && !ksword::memory_backend::isKernelVirtualAddress(m_driverMemoryBaseAddress);
+        m_driverMemoryEditor->setProcessContext(processVirtual ? toDwordPid(m_driverMemorySnapshotPid) : 0U);
     }
     else
     {
@@ -142,6 +146,10 @@ void MemoryDock::loadDriverMemoryEditorSnapshot()
         QStringLiteral("driver_memory_%1_%2_%3_%4").arg(static_cast<int>(m_driverMemorySnapshotBackend))
             .arg(m_driverMemorySnapshotPid).arg(m_driverMemorySnapshotIsPhysical ? 1 : 0)
             .arg(m_driverMemorySnapshotDdmaGeneration));
+    const bool processVirtual = !m_driverMemorySnapshotIsPhysical
+        && m_driverMemorySnapshotBackend != ksword::memory_backend::MemoryAccessBackend::Ddma
+        && !ksword::memory_backend::isKernelVirtualAddress(m_driverMemoryBaseAddress);
+    m_driverMemoryEditor->setProcessContext(processVirtual ? toDwordPid(m_driverMemorySnapshotPid) : 0U);
     m_driverMemoryEditor->setEditable(true);
 }
 

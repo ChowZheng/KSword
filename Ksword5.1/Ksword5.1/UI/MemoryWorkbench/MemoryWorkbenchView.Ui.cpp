@@ -386,6 +386,7 @@ namespace ks::ui
         connect(subTabSegmented_, &HexViewSegmented::currentIndexChanged, subTabStack_, &QStackedWidget::setCurrentIndex);
         connect(subTabStack_, &QStackedWidget::currentChanged, subTabSegmented_, &HexViewSegmented::setCurrentIndex);
         connectHexViewMenu();
+        connectRowCanvasSignals();
 
         connect(addressEdit_, &QLineEdit::returnPressed, this, &MemoryWorkbenchView::onAddressBarReturnPressed);
         connect(backButton_, &QToolButton::clicked, this, &MemoryWorkbenchView::onGoBackRequested);

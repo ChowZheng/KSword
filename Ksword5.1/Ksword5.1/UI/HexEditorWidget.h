@@ -131,6 +131,10 @@ public:
     // - 返回：true=成功定位，false=超范围或无数据（状态条会给出提示）。
     bool jumpToAbsoluteAddress(std::uint64_t absoluteAddress);
 
+    // Select a complete captured byte range (inclusive). The caret stays at
+    // first so switching views preserves the user's starting address.
+    bool selectAbsoluteRange(std::uint64_t first, std::uint64_t last);
+
     // openFindPanel：
     // - 作用：显示查找条并聚焦输入框。
     void openFindPanel();

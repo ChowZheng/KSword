@@ -16,6 +16,7 @@
 // ============================================================
 
 #include <QByteArray>
+#include <QFont>
 #include <QString>
 
 #include <array>
@@ -23,6 +24,8 @@
 
 namespace ks::ui::hexcanvas_format
 {
+    // All memory canvases share the same Latin monospace and CJK fallback.
+    QFont BuildFixedFont();
     // kAutoBytesPerRowCandidates：自适应行宽的候选集合，按"从大到小"排列。
     // 只能取 HexViewport 支持的 8/16/32/48/64；48 是 16 的倍数，行起点仍 16 对齐，因此可以参与自适应。
     // 想把某一档排除出自适应，从这里删掉一项即可（调用方遍历的就是这个数组）。

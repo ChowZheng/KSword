@@ -46,7 +46,9 @@ if not exist "%OBJ2%" mkdir "%OBJ2%"
 if not exist "%MOC%" mkdir "%MOC%"
 if not exist "%OUT%\shots" mkdir "%OUT%\shots"
 
-rem ---- moc：四个 Q_OBJECT 头 + CodeEditorWidget ----
+rem ---- moc：共享行画布、子页与 CodeEditorWidget ----
+"%QT%\bin\moc.exe" "%UI%\MemoryRowCanvas.h" -o "%MOC%\moc_MemoryRowCanvas.cpp"
+if errorlevel 1 exit /b %errorlevel%
 "%QT%\bin\moc.exe" "%UI%\WorkbenchDisasmView.h" -o "%MOC%\moc_WorkbenchDisasmView.cpp"
 if errorlevel 1 exit /b %errorlevel%
 "%QT%\bin\moc.exe" "%UI%\WorkbenchTextView.h" -o "%MOC%\moc_WorkbenchTextView.cpp"
@@ -79,10 +81,10 @@ cl /nologo /std:c++latest /Zc:__cplusplus /permissive- /utf-8 /EHsc /MD /W4 /WX 
   "%FIX%\wpH_main.cpp" "%FIX%\wpH_common.cpp" "%FIX%\wpH_tests.Disasm.cpp" "%FIX%\wpH_tests.Text.cpp" "%FIX%\wpH_tests.Compare.cpp" ^
   "%FIX%\wpH_tests.DisasmRegression.cpp" "%FIX%\wpH_tests.TextRegression.cpp" "%FIX%\wpH_tests.CompareRegression.cpp" ^
   "%FIX%\wpH_tests.DisasmRegression2.cpp" "%FIX%\wpH_tests.DisasmRegression3.cpp" "%FIX%\wpH_tests.TextRegression2.cpp" "%FIX%\wpH_tests.CompareRegression2.cpp" "%FIX%\wpH_tests.SExtra.cpp" ^
-  "%UI%\WorkbenchDisasmView.cpp" "%UI%\WorkbenchDisasmView.Edit.cpp" "%UI%\WorkbenchTextView.cpp" "%UI%\WorkbenchCompareView.cpp" ^
-  "%UI%\HexCanvasFormat.cpp" "%UI%\HexViewWidgets.cpp" "%UI%\HexViewWidgets.Text.cpp" "%UI%\HexViewFormat.cpp" ^
-  "%CORE%\MemoryDiffOverlay.cpp" "%CORE%\MemoryDiffOverlay.Patches.cpp" ^
-  "%MOC%\moc_WorkbenchDisasmView.cpp" "%MOC%\moc_WorkbenchTextView.cpp" "%MOC%\moc_WorkbenchCompareView.cpp" "%MOC%\moc_HexViewWidgets.cpp" "%MOC%\qrc_memwb_ui_icons.cpp" ^
+  "%UI%\WorkbenchDisasmView.cpp" "%UI%\WorkbenchDisasmView.Edit.cpp" "%UI%\WorkbenchDisasmView.Canvas.cpp" "%UI%\MemoryRowCanvas.cpp" "%UI%\WorkbenchTextView.cpp" "%UI%\WorkbenchCompareView.cpp" ^
+  "%APP%\UI\FlowLayout.cpp" "%UI%\HexCanvasFormat.cpp" "%UI%\HexViewWidgets.cpp" "%UI%\HexViewWidgets.Text.cpp" "%UI%\HexViewFormat.cpp" ^
+  "%CORE%\MemoryTextDecode.cpp" "%CORE%\MemoryDiffOverlay.cpp" "%CORE%\MemoryDiffOverlay.Patches.cpp" ^
+  "%MOC%\moc_MemoryRowCanvas.cpp" "%MOC%\moc_WorkbenchDisasmView.cpp" "%MOC%\moc_WorkbenchTextView.cpp" "%MOC%\moc_WorkbenchCompareView.cpp" "%MOC%\moc_HexViewWidgets.cpp" "%MOC%\qrc_memwb_ui_icons.cpp" ^
   /Fo"%OBJ%\\" /Fe"%OUT%\wpH_tests.exe" ^
   /link /OPT:REF /LIBPATH:"%QT%\lib" Qt6Core.lib Qt6Gui.lib Qt6Widgets.lib Qt6Test.lib Qt6Svg.lib user32.lib advapi32.lib ^
   "%OBJ2%\CodeEditorWidget.obj" "%OBJ2%\ReportStructuredView.obj" "%OBJ2%\LanguageManager.obj" "%OBJ2%\MemoryAssembly.obj" "%OBJ2%\MemoryAssembly.Core.obj" "%OBJ2%\ThemeStatusRole.obj" "%OBJ2%\moc_CodeEditorWidget.obj" "%OBJ2%\Zydis.obj"

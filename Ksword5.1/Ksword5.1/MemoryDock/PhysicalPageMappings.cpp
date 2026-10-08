@@ -38,7 +38,15 @@ using QueryRegion = BOOL(WINAPI*)(HANDLE, const VOID*, int, PVOID, SIZE_T, PSIZE
 
 bool allocationInfo(HANDLE process, std::uint64_t address, RegionInfo& info)
 {
-    static const auto query = reinterpret_cast<QueryRegion>(GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "QueryVirtualMemoryInformation"));
+    static const QueryRegion query = [] {
+        auto function = reinterpret_cast<QueryRegion>(GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "QueryVirtualMemoryInformation"));
+        if (!function) {
+            // Retain the API-set module for the static function's lifetime.
+            const auto module = LoadLibraryExW(L"api-ms-win-core-memory-l1-1-4.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
+            if (module) { function = reinterpret_cast<QueryRegion>(GetProcAddress(module, "QueryVirtualMemoryInformation")); }
+        }
+        return function;
+    }();
     SIZE_T returned = 0;
     info = {};
     if (!query || !query(process, reinterpret_cast<const VOID*>(address), 0, &info, sizeof(info), &returned)
@@ -630,7 +638,19 @@ std::shared_ptr<Mappings> collect(const std::shared_ptr<MappingJob>& job, unsign
         ++result->distinct;
         result->large += large ? 1 : 0;
         result->locked += locked ? 1 : 0;
-        result->multiplyMapped += end - i > 1 ? 1 : 0;
+        bool conflict = false, allKnown = true;
+        const Mapping* identity = nullptr;
+        for (std::size_t j = i; j < end; ++j) {
+            const auto& row = result->rows[j];
+            allKnown &= row.nativeIdentityKnown;
+            if (!row.nativeIdentityKnown) { continue; }
+            if (identity && (identity->nativeFrame != row.nativeFrame || identity->nativeBacking != row.nativeBacking)) { conflict = true; }
+            identity = &row;
+        }
+        result->identityConflicted += conflict ? 1 : 0;
+        // Sequential observations do not establish simultaneous sharing.
+        // Incompatible or unavailable native identities cannot establish aliases.
+        result->multiplyMapped += end - i > 1 && allKnown && !conflict ? 1 : 0;
         i = end;
     }
     return result;

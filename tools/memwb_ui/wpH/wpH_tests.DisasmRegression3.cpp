@@ -104,9 +104,9 @@ namespace wpH_test
         // openEditor3：F2 进入行内编辑，返回编辑框指针（nullptr 表示没能进入编辑）。
         QLineEdit* openEditor3(Rig3& rig, const int row)
         {
-            rig.view.table()->setFocus();
-            rig.view.table()->setCurrentIndex(rig.view.model()->index(row, 2));
-            QTest::keyClick(rig.view.table(), Qt::Key_F2);
+            rig.view.canvas()->setFocus();
+            rig.view.canvas()->setSelectedRow(row);
+            QTest::keyClick(rig.view.canvas(), Qt::Key_F2);
             return qobject_cast<QLineEdit*>(QApplication::focusWidget());
         }
 
@@ -194,7 +194,7 @@ namespace wpH_test
                 const QString context = QString::fromLatin1(testCase.name); // 各形状失败时的定位信息。
                 WPH_CHECK_NOTE(spy.count() == 0, context);
                 WPH_CHECK_NOTE(rig.view.isEditing() && editor != nullptr && editor->isVisible(), context);
-                auto* error = rig.view.table()->viewport()->findChild<QLabel*>(QStringLiteral("ksMemwbDisasmInlineError"));
+                auto* error = rig.view.canvas()->viewport()->findChild<QLabel*>(QStringLiteral("ksMemwbDisasmInlineError"));
                 WPH_CHECK_NOTE(error != nullptr && error->isVisible() && !error->text().isEmpty(), context);
                 if (editor != nullptr && editor->isVisible())
                 {
@@ -340,14 +340,16 @@ namespace wpH_test
         void runSelectionSurvivesRefreshTests()
         {
             Rig3 rig(QByteArray::fromHex("554889E590E900000000"));
-            rig.view.table()->setCurrentIndex(rig.view.model()->index(2, 2));
+            rig.view.canvas()->setSelectedRow(2);
             const auto addr = rig.view.model()->rowAt(2)->address;
             rig.view.refreshView();
             QCoreApplication::processEvents();
-            const QModelIndex current = rig.view.table()->currentIndex();
-            WPH_CHECK_NOTE(current.isValid() && rig.view.model()->rowAt(current.row())
-                    && rig.view.model()->rowAt(current.row())->address == addr && current.column() == 2,
-                QStringLiteral("刷新后应按地址恢复选中行（valid=%1）").arg(current.isValid()));
+            const auto current = rig.view.selectedInstruction();
+            const auto range = rig.view.canvas()->selectedRange();
+            WPH_CHECK_NOTE(current && range && current->address == addr
+                    && range->first == addr
+                    && range->second == addr + static_cast<std::uint64_t>(current->bytes.size() - 1),
+                QStringLiteral("刷新后应按地址恢复选中指令及其完整字节范围（valid=%1）").arg(current.has_value()));
         }
 
         // ---------------- T20（杀 rA20）：行内错误提示框跟随主题（真实像素） ----------------
@@ -363,7 +365,7 @@ namespace wpH_test
             editor->selectAll();
             QTest::keyClicks(editor, QStringLiteral("push 0x1122334455667788")); // 超长，必定编译失败并弹出错误框
             QTest::keyClick(editor, Qt::Key_Return);
-            auto* label = rig.view.table()->viewport()->findChild<QLabel*>(QStringLiteral("ksMemwbDisasmInlineError"));
+            auto* label = rig.view.canvas()->viewport()->findChild<QLabel*>(QStringLiteral("ksMemwbDisasmInlineError"));
             WPH_CHECK(label != nullptr && label->isVisible());
             if (label == nullptr || !label->isVisible())
             {
@@ -398,7 +400,7 @@ namespace wpH_test
             QTest::keyClick(editor, Qt::Key_Escape);
             QCoreApplication::processEvents();
             QTest::qWait(30); // N2 的修法把真正的刷新推迟到下一次事件循环，要等它跑完
-            WPH_CHECK_NOTE(QApplication::focusWidget() == rig.view.table(), QStringLiteral("推迟的刷新应用之后，键盘焦点必须回到表格"));
+            WPH_CHECK_NOTE(QApplication::focusWidget() == rig.view.canvas(), QStringLiteral("推迟的刷新应用之后，键盘焦点必须回到表格"));
         }
 
         // ---------------- T22（N2 修复）：宿主在 stageRequested 槛里同步刷新的常见写法 ----------------
@@ -420,7 +422,7 @@ namespace wpH_test
             QTest::keyClick(editor, Qt::Key_Return);
             QCoreApplication::processEvents();
             QTest::qWait(30);
-            WPH_CHECK_NOTE(QApplication::focusWidget() == rig.view.table(), QStringLiteral("宿主在 stageRequested 槛里同步刷新后，焦点必须回到表格"));
+            WPH_CHECK_NOTE(QApplication::focusWidget() == rig.view.canvas(), QStringLiteral("宿主在 stageRequested 槛里同步刷新后，焦点必须回到表格"));
         }
 
         // ---------------- T23（杀 rC25）：推迟的刷新必须真的在编辑结束后应用 ----------------
@@ -484,10 +486,10 @@ namespace wpH_test
             for (const char* h : hexes)
             {
                 Rig3 rig(QByteArray::fromHex(h) + QByteArray(16, '\x90'));
-                rig.view.table()->setFocus();
-                rig.view.table()->setCurrentIndex(rig.view.model()->index(0, 0));
+                rig.view.canvas()->setFocus();
+                rig.view.canvas()->setSelectedRow(0);
                 const auto before = rig.view.anchorAddress();
-                QTest::keyClick(rig.view.table(), Qt::Key_Return);
+                QTest::keyClick(rig.view.canvas(), Qt::Key_Return);
                 WPH_CHECK_NOTE(rig.view.anchorAddress() != before,
                     QStringLiteral("loop 族指令 %1 必须被 Enter 跟随（isEditing=%2）").arg(QString::fromLatin1(h)).arg(rig.view.isEditing()));
                 if (rig.view.isEditing() && QApplication::focusWidget())
@@ -504,10 +506,10 @@ namespace wpH_test
             for (const char* h : hexes)
             {
                 Rig3 rig(QByteArray::fromHex(h) + QByteArray(16, '\x90'));
-                rig.view.table()->setFocus();
-                rig.view.table()->setCurrentIndex(rig.view.model()->index(0, 0));
+                rig.view.canvas()->setFocus();
+                rig.view.canvas()->setSelectedRow(0);
                 const auto before = rig.view.anchorAddress();
-                QTest::keyClick(rig.view.table(), Qt::Key_Return);
+                QTest::keyClick(rig.view.canvas(), Qt::Key_Return);
                 WPH_CHECK_NOTE(rig.view.anchorAddress() != before,
                     QStringLiteral("标志位条件跳转 %1 必须被 Enter 跟随（isEditing=%2）").arg(QString::fromLatin1(h)).arg(rig.view.isEditing()));
                 if (rig.view.isEditing() && QApplication::focusWidget())
@@ -530,7 +532,7 @@ namespace wpH_test
             editor->selectAll();
             QTest::keyClicks(editor, QStringLiteral("push 0x1122334455667788")); // 超长，编译必定失败
             QTest::keyClick(editor, Qt::Key_Return);
-            auto* errorLabel = rig.view.table()->viewport()->findChild<QLabel*>(QStringLiteral("ksMemwbDisasmInlineError"));
+            auto* errorLabel = rig.view.canvas()->viewport()->findChild<QLabel*>(QStringLiteral("ksMemwbDisasmInlineError"));
             WPH_CHECK_NOTE(errorLabel != nullptr && errorLabel->isVisible(), QStringLiteral("编译失败应先弹出错误提示框"));
             rig.view.setEditable(false); // 这里会经 cancelInlineEdit() 关掉编辑框
             QCoreApplication::processEvents();
@@ -624,9 +626,9 @@ namespace wpH_test
                     menu->setActiveAction(assemblyAction);
                     QTest::keyClick(menu, Qt::Key_Return);
                 });
-                auto* table = rig.view.table();
-                table->setCurrentIndex(rig.view.model()->index(0, 0));
-                emit table->customContextMenuRequested(table->visualRect(rig.view.model()->index(0, 0)).center());
+                auto* canvas = rig.view.canvas();
+                canvas->setSelectedRow(0);
+                emit canvas->contextMenuRequested(canvas->contentRect(0).center());
                 watchdog.stop();
                 WPH_CHECK(droveDialog);
                 WPH_CHECK(spy.count() == (scenario == 0 ? 1 : 0));
@@ -665,10 +667,10 @@ namespace wpH_test
             QTimer::singleShot(2000, []() {
                 if (auto* p = QApplication::activePopupWidget()) { p->close(); }
             });
-            auto* table = rig.view.table();
-            table->setCurrentIndex(rig.view.model()->index(1, 0));
+            auto* canvas = rig.view.canvas();
+            canvas->setSelectedRow(1);
             QGuiApplication::clipboard()->clear();
-            emit table->customContextMenuRequested(table->visualRect(rig.view.model()->index(1, 0)).center());
+            emit canvas->contextMenuRequested(canvas->contentRect(1).center());
             WPH_CHECK(found);
             const auto row1 = rig.view.model()->rowAt(1);
             WPH_CHECK(row1.has_value());

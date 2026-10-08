@@ -74,7 +74,7 @@ def records(path, hasher=None, byte_progress=None):
             if hasher is not None:
                 hasher.update(line)
             record = json.loads(line, object_pairs_hook=unique_object)
-            if not isinstance(record, dict) or record.get('schema') != 'ksword.pfn.raw' or type(record.get('version')) is not int or record['version'] != 1:
+            if not isinstance(record, dict) or record.get('schema') != 'ksword.pfn.raw' or type(record.get('version')) is not int or record['version'] not in (1, 2):
                 raise ValueError(f'line {line_number} has an unsupported evidence schema')
             if record.get('kind') not in KINDS:
                 raise ValueError('unsupported record kind')
@@ -99,6 +99,89 @@ def normalized_ranges(value):
             raise ValueError('physical ranges are not normalized/disjoint')
         ranges.append((first, count))
     return ranges
+
+
+def query_ranges(value):
+    # Native endpoints need not be ordered; normalize exactly as the collector.
+    if not isinstance(value, list) or len(value) > 512:
+        raise ValueError('excessive or missing physical ranges')
+    rows = []
+    for raw in value:
+        first, count = integer(raw['firstPfn'], (1 << 40) - 1), integer(raw['pageCount'], 1 << 40)
+        if not count or first + count > 1 << 40:
+            raise ValueError('invalid native physical range')
+        rows.append((first, count))
+    result = []
+    for first, count in sorted(rows):
+        if result and first <= result[-1][0] + result[-1][1]:
+            previous, amount = result[-1]
+            result[-1] = (previous, max(previous + amount, first + count) - previous)
+        else:
+            result.append((first, count))
+    return result
+
+
+def validate_provider(record, operation, status, version):
+    failed = bool(status & 0x80000000)
+    native = record['nativeAttempts']
+    if not isinstance(native, list) or len(native) > 2:
+        raise ValueError('excessive native query provenance')
+    expected_class = 6 if operation in ('pages', 'identities') else (8 if operation.startswith('owners') else 17)
+    versions = []
+    for attempt in native:
+        if integer(attempt['informationClass']) != expected_class:
+            raise ValueError('native information class differs from operation')
+        versions.append(integer(attempt['abiVersion']))
+        value = integer(attempt['status'], (1 << 32) - 1)
+        if not boolean(attempt['invoked']) and value != 0xc00000bb:
+            raise ValueError('non-invoked native path claims a result')
+    allowed = ([2], [2, 1]) if expected_class == 17 else ([8],) if expected_class == 8 else ([], [1])
+    if versions not in allowed:
+        raise ValueError('native ABI version/order differs from operation')
+    driver = record['driver']
+    expected_op = {'pages': 2, 'identities': 4}.get(operation, 3 if expected_class == 8 else 1)
+    driver_op = integer(driver['operation'])
+    driver_status, transport = (integer(driver[key], (1 << 32) - 1) for key in ('status', 'transportStatus'))
+    available, invoked = boolean(driver['available']), boolean(driver['invoked'])
+    if driver_op not in (0, expected_op) or invoked and (not available or driver_op != expected_op):
+        raise ValueError('driver invocation/operation differs from operation')
+    if not driver_op and (invoked or available or driver_status or transport):
+        raise ValueError('unused driver path claims a result')
+    if driver_op and not invoked and (driver_status != 0xc00000bb or transport):
+        raise ValueError('non-invoked driver path claims a result')
+    if transport & 0x80000000 and driver_status != transport:
+        raise ValueError('driver transport error is hidden')
+    path = record['selectedPath']
+    if path == 'R3 Native':
+        if failed or not native or not native[-1]['invoked'] or integer(native[-1]['status']) != status or driver_op:
+            raise ValueError('selected native path contradicts its calls/status')
+    elif path == 'R0 fallback':
+        if failed or not invoked or transport & 0x80000000 or driver_status != status:
+            raise ValueError('selected driver path contradicts its calls/status')
+    elif path == 'Unavailable':
+        if not failed:
+            raise ValueError('unavailable operation claims success')
+        possibilities = {0xc000003e}
+        if native:
+            possibilities.add(integer(native[-1]['status']))
+        if driver_op:
+            possibilities.add(driver_status)
+        if status not in possibilities:
+            raise ValueError('final failure differs from observed providers')
+    else:
+        raise ValueError('unknown provider path')
+    if version == 2:
+        native_count, driver_count = (integer(record[key], 1) for key in ('nativeAccepted', 'driverAccepted'))
+        if native_count + driver_count > 1:
+            raise ValueError('one operation claims multiple accepted providers')
+        if native_count and (not native or not native[-1]['invoked'] or integer(native[-1]['status']) & 0x80000000):
+            raise ValueError('accepted native batch has no successful invocation')
+        if driver_count and (not invoked or transport & 0x80000000 or driver_status & 0x80000000):
+            raise ValueError('accepted driver batch has no successful invocation')
+        if path == 'R3 Native' and (native_count, driver_count) != (1, 0) or path == 'R0 fallback' and (native_count, driver_count) != (0, 1):
+            raise ValueError('accepted batch counters differ from selected path')
+        return native_count, driver_count
+    return int(path == 'R3 Native'), int(path == 'R0 fallback')
 
 
 def identity_kind(frame, backing, compression_keys):
@@ -158,6 +241,8 @@ def audit(path, lookup_pfn=None):
                 text(header['architecture'][key], 128)
         if footer is not None:
             raise ValueError('records follow the final footer')
+        if record['version'] != header['version']:
+            raise ValueError('mixed evidence policy versions')
         if record.get('domain') != header['domain'] or record.get('epoch') != header['epoch']:
             raise ValueError('mixed observation domain or epoch')
         if ordinal and record['kind'] == 'header':
@@ -171,6 +256,14 @@ def audit(path, lookup_pfn=None):
                 if phase == 'final':
                     if not key or key in final_owners:
                         raise ValueError('redacted or duplicate final owner key')
+                    if header['version'] == 2:
+                        held = boolean(owner['leaseHeld'])
+                        before, after = integer(owner['createTimeBefore']), integer(owner['createTimeAfter'])
+                        verified = bool(observation['pid'] and observation['name'] and observation['seenBefore']
+                                        and observation['seenAfter'] and held and before and before == after)
+                        if boolean(owner['lifetimeVerified']) != verified or not held and (before or after):
+                            raise ValueError('process lifetime claim contradicts its witnesses')
+                        observation.update(leaseHeld=held, createTimeBefore=before, createTimeAfter=after, lifetimeVerified=verified)
                     final_owners[key] = observation
                 elif key and key not in conflicts:
                     previous = endpoint_owners.get(key)
@@ -189,7 +282,9 @@ def audit(path, lookup_pfn=None):
             footer_offset = byte_progress['offset']
     if header is None or footer is None:
         raise ValueError('capture is incomplete: finalized header/footer required')
-    if final_owners != endpoint_owners:
+    endpoint_fields = ('pid', 'name', 'seenBefore', 'seenAfter')
+    retained_endpoints = {key: {field: owner[field] for field in endpoint_fields} for key, owner in final_owners.items()}
+    if retained_endpoints != endpoint_owners:
         raise ValueError('final owner observations differ from the native endpoints')
 
     def key_set(name):
@@ -202,9 +297,11 @@ def audit(path, lookup_pfn=None):
         return set(parsed)
 
     compression, resolved = key_set('compressionKeys'), key_set('ownerResolvedKeys')
+    if header['version'] == 2 and compression:
+        raise ValueError('compression requires an authoritative identity provider absent from this schema')
     for key in resolved:
         owner = final_owners.get(key)
-        if not owner or not owner['pid'] or not owner['name']:
+        if not owner or not owner['pid'] or not owner['name'] or header['version'] == 2 and not owner['lifetimeVerified']:
             raise ValueError('resolved key has no final named process observation')
     for key in compression:
         owner = final_owners.get(key)
@@ -229,6 +326,11 @@ def audit(path, lookup_pfn=None):
     retained_groups = set()
     overflow_pages = 0
     second_hash = hashlib.sha256()
+    endpoint_ranges = {}
+    native_accepted = driver_accepted = 0
+    abi_observed = False
+    endpoint_operations = set()
+    endpoint_statuses = {}
 
     def check_pending():
         if pending is not None and not pending_payload:
@@ -250,21 +352,24 @@ def audit(path, lookup_pfn=None):
             status = integer(record['status'], (1 << 32) - 1)
             text(record['started'], 128)
             text(record['finished'], 128)
-            if record['selectedPath'] not in ('R3 Native', 'R0 fallback', 'Unavailable'):
-                raise ValueError('unknown provider path')
-            native = record['nativeAttempts']
-            if not isinstance(native, list) or len(native) > 2:
-                raise ValueError('excessive native query provenance')
-            for attempt in native:
-                integer(attempt['informationClass'], (1 << 32) - 1)
-                integer(attempt['abiVersion'], (1 << 32) - 1)
-                integer(attempt['status'], (1 << 32) - 1)
-                boolean(attempt['invoked'])
-            driver = record['driver']
-            for key in ('operation', 'status', 'transportStatus'):
-                integer(driver[key], (1 << 32) - 1)
-            for key in ('available', 'invoked'):
-                boolean(driver[key])
+            accepted_native, accepted_driver = validate_provider(record, operation, status, header['version'])
+            native_accepted += accepted_native
+            driver_accepted += accepted_driver
+            if operation not in ('pages', 'identities'):
+                if operation in endpoint_operations or first or count != (16384 if operation.startswith('owners') else 0):
+                    raise ValueError('endpoint operation/request metadata is inconsistent')
+                required = {'ranges_before': set(), 'owners_before': {'ranges_before'},
+                            'owners_after': {'owners_before'}, 'ranges_after': {'owners_after'}}[operation]
+                if not required <= endpoint_operations or operation == 'ranges_before' and number != 1:
+                    raise ValueError('endpoint query order differs from the sampling interval')
+                if operation == 'owners_before' and ('owners_after' in endpoint_operations or 'ranges_after' in endpoint_operations):
+                    raise ValueError('owner baseline follows the recheck')
+                endpoint_operations.add(operation)
+                endpoint_statuses[operation] = status
+            elif 'owners_before' not in endpoint_operations or 'owners_after' in endpoint_operations or 'ranges_after' in endpoint_operations:
+                raise ValueError('PFN sampling is outside the owner endpoint interval')
+            elif not status & 0x80000000:
+                abi_observed = True
             if operation in ('pages', 'identities') and not 1 <= count <= 4096:
                 raise ValueError('PFN query count is outside the bounded native packet')
             pending = {'ordinal': number, 'operation': operation, 'count': count, 'first': first, 'status': status, 'start': start, 'end': end}
@@ -273,6 +378,8 @@ def audit(path, lookup_pfn=None):
             phase = record['phase']
             if kind == 'owners' and phase == 'final':
                 check_pending()
+                if expected and 'ranges_after' not in endpoint_operations:
+                    raise ValueError('final owner proof precedes the endpoint recheck')
                 continue
             if pending is None or pending['operation'] != f'{kind}_{phase}' or integer(record['queryOrdinal']) != pending['ordinal'] or integer(record['queryStatus'], (1 << 32) - 1) != pending['status']:
                 raise ValueError('endpoint payload differs from its query provenance')
@@ -282,15 +389,19 @@ def audit(path, lookup_pfn=None):
                 if endpoint_payload_count > 16384 or (pending['status'] & 0x80000000 and record['owners']):
                     raise ValueError('owner payload exceeds or contradicts its native query')
             else:
+                if phase in endpoint_ranges:
+                    raise ValueError('duplicate range-query endpoint')
                 rows = record['ranges']
-                if not isinstance(rows, list) or len(rows) > 512:
-                    raise ValueError('excessive range-query payload')
-                for row in rows:
-                    integer(row['firstPfn'], (1 << 40) - 1)
-                    integer(row['pageCount'], 1 << 40)
+                if pending['status'] & 0x80000000 and rows:
+                    raise ValueError('failed range query has a nonempty response')
+                endpoint_ranges[phase] = (not bool(pending['status'] & 0x80000000), query_ranges(rows))
         elif kind == 'identities':
             if pending is None or pending['operation'] not in ('pages', 'identities') or pending_payload or record.get('role') != 'query_attempt' or integer(record['queryOrdinal']) != pending['ordinal']:
                 raise ValueError('query-attempt payload has no unique PFN query')
+            for name, expected_value in (('firstPfn', pending['first']), ('pageCount', pending['count']),
+                                         ('startUs', pending['start']), ('endUs', pending['end'])):
+                if integer(record[name]) != expected_value:
+                    raise ValueError('query-attempt request/interval differs from provenance')
             count = integer(record['requestCount'], 4096)
             rows = record['identities']
             if count != pending['count'] or not isinstance(rows, list) or len(rows) != count:
@@ -334,6 +445,8 @@ def audit(path, lookup_pfn=None):
             if boolean(record['chunkComplete']) is not True or integer(record['chunkOrdinal']) != chunks:
                 raise ValueError('ledger chunk is unfinished or out of order')
             rows, count = record['identities'], integer(record['pageCount'], 4096)
+            if integer(record['requestCount'], 4096) != count or integer(record['status'], (1 << 32) - 1) != pending['status']:
+                raise ValueError('ledger request/status differs from its completed batch')
             if not count or not isinstance(rows, list) or len(rows) != count or range_index >= len(ranges):
                 raise ValueError('ledger chunk does not fit the physical range')
             first = integer(record['firstPfn'])
@@ -396,8 +509,9 @@ def audit(path, lookup_pfn=None):
     if integer(footer['groupedOverflowPages']) != overflow_pages:
         raise ValueError('retention overflow differs from the observed backing groups')
     retained_private = {key for use, key in retained_groups if use == 0 and key}
-    expected_compression = {key for key in retained_private if key in final_owners and final_owners[key]['name'].lower() == 'memcompression'}
-    expected_resolved = {key for key in retained_private if key in final_owners and final_owners[key]['pid'] and final_owners[key]['name']}
+    expected_compression = {key for key in retained_private if key in final_owners and final_owners[key]['name'].lower() == 'memcompression'} if header['version'] == 1 else set()
+    expected_resolved = {key for key in retained_private if key in final_owners and final_owners[key]['pid'] and final_owners[key]['name']
+                         and (header['version'] == 1 or final_owners[key]['lifetimeVerified'])}
     if compression != expected_compression or resolved != expected_resolved:
         raise ValueError('retained compression/consumer keys differ from group retention and endpoint evidence')
     if not boolean(footer['ledgerRawComplete']):
@@ -420,7 +534,29 @@ def audit(path, lookup_pfn=None):
     known_unresolved = sum(owner_unresolved[use][state] for use in range(15) for state in IN_USE)
     type_unknown = sum(counts[15][state] for state in IN_USE)
     claim_complete = boolean(footer['complete'])
-    cancelled, changed = boolean(footer['cancelled']), boolean(footer['rangesChanged'])
+    cancelled = boolean(footer['cancelled'])
+    before = endpoint_ranges.get('before')
+    after = endpoint_ranges.get('after')
+    if before is None or (ranges and (not before[0] or before[1] != ranges)) or not ranges and before[0] and before[1]:
+        raise ValueError('capture scope differs from the original range query')
+    if expected and after is None:
+        raise ValueError('capture has no range recheck')
+    changed = bool(expected and (not after[0] or after[1] != ranges))
+    if boolean(footer['rangesChanged']) != changed:
+        raise ValueError('range-change flag contradicts the actual endpoints')
+    if boolean(footer['nativeAbiObserved']) != abi_observed:
+        raise ValueError('observed ABI flag differs from successful PFN operations')
+    if header['version'] == 2:
+        if integer(footer['successfulNativeBatches']) != native_accepted or integer(footer['successfulDriverBatches']) != driver_accepted:
+            raise ValueError('successful provider counts differ from query provenance')
+        statuses = footer['statuses']
+        range_status = endpoint_statuses['ranges_before']
+        if not range_status & 0x80000000 and not ranges:
+            range_status = 0xc000003e  # Empty successful response is not a usable RAM scope.
+        for field, value in (('ranges', range_status), ('ownersBefore', endpoint_statuses.get('owners_before', 0)),
+                             ('ownersAfter', endpoint_statuses.get('owners_after', 0))):
+            if integer(statuses[field], (1 << 32) - 1) != value:
+                raise ValueError('endpoint status summary differs from query provenance')
     complete = expected > 0 and not cancelled and not changed and unreadable == 0 and unscanned == 0
     if claim_complete != complete:
         raise ValueError('complete flag contradicts observed coverage, cancellation or range changes')
@@ -436,7 +572,8 @@ def audit(path, lookup_pfn=None):
         'path': str(path.resolve()), 'sha256': first_hash.hexdigest(), 'domain': header['domain'], 'epoch': header['epoch'],
         'build': header['build'], 'architecture': header['architecture'], 'nativeAbi': header['nativeAbi'],
         'semanticsValidated': header['semanticsValidated'], 'semanticValidationSource': 'Capture claim; arithmetic replay does not validate Windows semantics',
-        'complete': complete, 'ledgerReplayed': True, 'expectedPages': str(expected), 'visitedPages': str(visited),
+        'complete': complete, 'ledgerReplayed': True, 'attributionPolicyValidated': header['version'] == 2,
+        'legacyPolicyWarning': 'Legacy name-only compression and endpoint-only consumer claims are arithmetic history, not verified attribution' if header['version'] == 1 else '', 'expectedPages': str(expected), 'visitedPages': str(visited),
         'queryAttemptPages': str(attempts), 'ledgerChunks': str(chunks), 'unknownInUseBytes': str(type_unknown * 4096),
         'knownUseOwnerUnresolvedBytes': str(known_unresolved * 4096), 'unreadableBytes': str(unreadable * 4096),
         'unscannedBytes': str(unscanned * 4096), 'categories': [[str(value) for value in row] for row in counts],
@@ -458,6 +595,8 @@ def criterion(samples):
         build = sample['build']
         if build.get('known') is not True or not integer(build.get('build', 0), (1 << 32) - 1) or sample['semanticsValidated'] is not True:
             blockers.append(f"{sample['epoch']}: Windows build semantics have not been validated")
+        if sample.get('attributionPolicyValidated') is not True:
+            blockers.append(f"{sample['epoch']}: legacy attribution policy has no lifetime/provider validation")
         if not sample['complete']:
             blockers.append(f"{sample['epoch']}: failed, unreadable, unscanned or changing capture")
         if int(sample['unknownInUseBytes']) > 64 * 1024 * 1024:

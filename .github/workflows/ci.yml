@@ -11,12 +11,7 @@ permissions:
   actions: read
   contents: read
 
-concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
-  # PR updates may discard superseded runs. Pushes to main must finish because
-  # a later metadata-only push can otherwise cancel the only affected build
-  # and then skip every project, leaving the resulting main HEAD unverified.
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+# Keep every run: commits and PR updates may build in parallel.
 
 jobs:
   changes:
@@ -59,7 +54,7 @@ jobs:
                 "/repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs" \
                 -f branch="$RUN_BRANCH" \
                 -f per_page=20 \
-                --jq "[.workflow_runs[] | select(.id != ${GITHUB_RUN_ID})][0] // {} | [(.id // 0), (.status // \"missing\"), (.conclusion // \"none\")] | @tsv"
+                --jq "[.workflow_runs[] | select(.id < ${GITHUB_RUN_ID})][0] // {} | [(.id // 0), (.status // \"missing\"), (.conclusion // \"none\")] | @tsv"
             } 2>&1)"; then
               IFS=$'\t' read -r previous_run_id previous_status previous_conclusion <<< "$previous_run"
             else
@@ -263,6 +258,9 @@ jobs:
       - name: Test QADS artifact validation
         run: python tools/test_verify_qads_runtime.py
 
+      - name: Test failed CI release reporting
+        run: python tools/test_ci_failure_release.py
+
       # 这道门禁原先挂在主程序 vcxproj 的 BeforeTargets="ClCompile" 上，靠"每次
       # 编译 GUI 都会顺带跑一遍"来生效。2026-09-19 主程序对 hvm_ctl 的依赖整条
       # 摘掉，那个目标也一起删了——于是它变成一个谁都不跑的脚本。接到这里来：
@@ -320,6 +318,20 @@ jobs:
           # Tests use only their own allocated pages and never load a driver.
           cmd /c "`"$vcvars`" >nul && pwsh -NoProfile -File tools\Invoke-MemoryPageReaderWin32Tests.ps1 -CppCompiler cl"
           if ($LASTEXITCODE -ne 0) { throw 'Page-reader scripted and native Windows regressions failed.' }
+
+      - name: Run offline pool allocation analysis regressions
+        shell: pwsh
+        run: |
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+          $vsPath = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath |
+            Select-Object -First 1
+          if (-not $vsPath) { throw 'Could not locate the x64 MSVC toolset.' }
+          $vcvars = Join-Path $vsPath 'VC\Auxiliary\Build\vcvars64.bat'
+          # Decode synthetic EVENT_RECORDs and pair offline allocations only.
+          # A UUID-named private provider supplies a synthetic ETL. No system
+          # logger, driver or actual system Pool capture is started.
+          cmd /c "`"$vcvars`" >nul && pwsh -NoProfile -File tools\Invoke-PoolAllocationAnalysisTests.ps1 -CppCompiler cl"
+          if ($LASTEXITCODE -ne 0) { throw 'Offline pool allocation analysis regressions failed.' }
 
       # --fail-on-risk is the point of this step.  Without it the auditor ran,
       # wrote a report nobody opened, and the HIGH findings it recorded sat
@@ -994,15 +1006,7 @@ jobs:
     if: >-
       always() &&
       github.event_name == 'push' &&
-      github.ref == 'refs/heads/main' &&
-      needs.changes.result == 'success' &&
-      (needs.source-integrity.result == 'success' || needs.source-integrity.result == 'skipped') &&
-      (needs.usermode-release.result == 'success' || needs.usermode-release.result == 'skipped') &&
-      (needs.ksword-setup.result == 'success' || needs.ksword-setup.result == 'skipped') &&
-      (needs.ksword-arklight.result == 'success' || needs.ksword-arklight.result == 'skipped') &&
-      (needs.ksword-ce-plugin.result == 'success' || needs.ksword-ce-plugin.result == 'skipped') &&
-      (needs.ksword-ce-launcher.result == 'success' || needs.ksword-ce-launcher.result == 'skipped') &&
-      (needs.ksword-x96dbg.result == 'success' || needs.ksword-x96dbg.result == 'skipped')
+      github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
@@ -1016,9 +1020,20 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          CI_JOB_RESULTS: ${{ toJSON(needs) }}
           CURRENT_USERMODE_REQUIRED: ${{ needs.changes.outputs.usermode }}
           CURRENT_SETUP_REQUIRED: ${{ needs.changes.outputs.setup }}
           CURRENT_ARKLIGHT_REQUIRED: ${{ needs.changes.outputs.arklight }}
           CURRENT_CE_PLUGIN_REQUIRED: ${{ needs.changes.outputs.ce_plugin }}
           CURRENT_CE_LAUNCHER_REQUIRED: ${{ needs.changes.outputs.ce_launcher }}
-        run: bash .github/workflows/scripts/publish-ci-prerelease.sh
+        run: |
+          # Preserve build failures while still publishing their diagnostics.
+          # Packaging/API failures also get a diagnostic release when possible.
+          set +e
+          bash .github/workflows/scripts/publish-ci-prerelease.sh 2>&1 | tee "$RUNNER_TEMP/ci-release-publish.log"
+          publish_status=${PIPESTATUS[0]}
+          set -e
+          if (( publish_status != 0 )); then
+            python3 tools/ci_failure_release.py --publication-error-log "$RUNNER_TEMP/ci-release-publish.log"
+            exit "$publish_status"
+          fi

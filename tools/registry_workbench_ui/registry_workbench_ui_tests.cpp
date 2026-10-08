@@ -8,6 +8,7 @@
 #include "Internationalization/LanguageManager.h"
 #include <QElapsedTimer>
 #include <QFontDatabase>
+#include <QShortcut>
 #include <QStyleFactory>
 #include <QThreadPool>
 #include <iostream>
@@ -161,6 +162,35 @@ namespace {
         check(dock.grab().save(output+QStringLiteral("/registry-workbench-en.png")),"English actual Dock screenshot saved");
         check(language.setLanguage(QStringLiteral("zh-CN"),&languageError),"Chinese pack restores");
     }
+    void exerciseSaveShortcut()
+    {
+        registry_ui::seed();
+        RegistryDock dock;dock.resize(1280,820);dock.show();
+        dock.navigateToPath(QStringLiteral("HKCU\\Console"),true);
+        check(select(dock,QStringLiteral("ColorTable12")),"Ctrl+S fixture target selected");
+        QShortcut* save=nullptr;
+        for(auto* shortcut:dock.findChildren<QShortcut*>())
+            if(shortcut->key()==QKeySequence(QStringLiteral("Ctrl+S"))) {save=shortcut;break;}
+        check(save!=nullptr,"real Ctrl+S shortcut located");
+        if(!save)return;
+        dock.deleteSearchResultValue(QStringLiteral("HKEY_CURRENT_USER\\Console"),QStringLiteral("ColorTable12"));
+        check(dock.m_pendingChanges.size()==1&&dock.m_pendingChanges[0].deleteValue,"Ctrl+S deletion staged");
+        QMetaObject::invokeMethod(save,"activated",Qt::DirectConnection);
+        check(until([&]{return !dock.m_applyingChanges;}),"Ctrl+S deletion apply finishes");
+        check(dock.m_pendingChanges.isEmpty()&&registry_ui::writes.load()==1
+            &&!registry_ui::get(QStringLiteral("HKCU\\Console"),QStringLiteral("ColorTable12")).exists,
+            "Ctrl+S applies deletion without overwriting its draft");
+        check(select(dock,QStringLiteral("Text")),"Ctrl+S invalid-input fixture selected");
+        auto* text=dock.m_valueEditor->findChild<QPlainTextEdit*>(QStringLiteral("registry_value_text"));
+        text->setPlainText(QStringLiteral("staged"));dock.m_stageButton->click();
+        check(select(dock,QStringLiteral("Qword")),"Ctrl+S selects separate numeric draft");
+        auto* hex=dock.m_valueEditor->findChild<QLineEdit*>(QStringLiteral("registry_value_hex_number"));
+        hex->setText(QStringLiteral("invalid"));
+        QMetaObject::invokeMethod(save,"activated",Qt::DirectConnection);
+        QApplication::processEvents();
+        check(registry_ui::writes.load()==1&&dock.m_pendingChanges.size()==1&&!dock.m_applyingChanges,
+            "Ctrl+S invalid editor input prevents applying another staged value");
+    }
     void exerciseClose()
     {
         registry_ui::seed();
@@ -199,7 +229,7 @@ int main(int argc,char**argv)
     check(ks::i18n::LanguageManager::instance().initialize(QStringLiteral("zh-CN"),&languageError),"language manager initializes");
     const QString output=argc>1?QString::fromLocal8Bit(argv[1]):QStringLiteral(".");QDir().mkpath(output);
     QSettings::setDefaultFormat(QSettings::IniFormat);QSettings::setPath(QSettings::IniFormat,QSettings::UserScope,output);
-    theme(false);exerciseDock(output);exerciseClose();
+    theme(false);exerciseDock(output);exerciseSaveShortcut();exerciseClose();
     std::cout<<"REGISTRY_WORKBENCH_UI_CHECKS="<<checks<<" FAILURES="<<failures<<std::endl;
     return failures?1:0;
 }

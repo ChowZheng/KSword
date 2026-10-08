@@ -386,6 +386,9 @@ void MemoryDock::loadMemoryViewerSnapshot(const bool editable, const bool preser
         QStringLiteral("memory_viewer_%1_%2_%3_%4").arg(m_viewerSnapshotPid)
             .arg(m_viewerSnapshotAttachmentGeneration).arg(static_cast<int>(m_viewerSnapshotBackend))
             .arg(ksword::memory_backend::ddmaSessionGeneration()));
+    const bool processVirtual = m_viewerSnapshotBackend != ksword::memory_backend::MemoryAccessBackend::Ddma
+        && !ksword::memory_backend::isKernelVirtualAddress(m_currentViewerAddress);
+    m_viewerMemoryEditor->setProcessContext(processVirtual ? toDwordPid(m_viewerSnapshotPid) : 0U);
     m_viewerMemoryEditor->setEditable(editable);
     updateMemoryViewerEditState();
 }

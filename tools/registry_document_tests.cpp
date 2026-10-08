@@ -117,6 +117,9 @@ public:
     }
     bool readValue(const QString& path, const QString& name, RegistryApplyValueState& state, QString& error) override
     {
+        if (!failReadOnce.isEmpty() && name == failReadOnce) {
+            failReadOnce.clear(); error = QStringLiteral("Mock transient read failure."); return false;
+        }
         state = {};
         bool present = false;
         keyExists(path, present, error);
@@ -132,6 +135,7 @@ public:
             cancelAfterRead->store(true);
         return true;
     }
+    QString failReadOnce;
     bool captureTree(const QString& path, RegistryDocument& tree, QString& error) override
     {
         tree = {};
@@ -269,6 +273,47 @@ void applyRegressions(const QString& journal)
     RegistryApplyValueState actual;
     require(backend.readValue(root, QStringLiteral("Number"), actual, error)
         && actual.type == 4 && actual.data == QByteArray::fromHex("01000000"), "committed undo restores original raw value");
+    require(undone.undoAttempt && !undone.canUndo && undone.pendingUndoReceipts.isEmpty(),
+        "completed undo cannot be offered as another undo that redoes values");
+
+    backend = initial();
+    require(RegistryDocumentApplyService::prepareWithBackend(changes, backend, plan, error)
+        && RegistryDocumentApplyService::applyWithBackend(plan, backend, result), "undo retry repeated-value setup");
+    std::atomic_bool undoCancel {false};
+    backend.cancelAfterWrite = &undoCancel;
+    require(!RegistryDocumentApplyService::undoWithBackend(result, backend, undone, &undoCancel)
+        && undone.undoAttempt && undone.canUndo && undone.pendingUndoReceipts.size() == 1,
+        "partial undo retains only original receipts still needing restoration");
+    undoCancel.store(false); backend.cancelAfterWrite = nullptr;
+    RegistryApplyResult retried;
+    require(RegistryDocumentApplyService::undoWithBackend(undone, backend, retried), "canceled partial undo retry resumes");
+    require(backend.readValue(root, QStringLiteral("Number"), actual, error)
+        && actual.type == 4 && actual.data == QByteArray::fromHex("01000000"), "undo retry follows original same-value history");
+
+    backend = initial();
+    RegistryDocument twoValues;
+    twoValues.viewBits = 32;
+    twoValues.values.append({root, QStringLiteral("Number"), 4, QByteArray::fromHex("02000000"), false});
+    twoValues.values.append({root, QStringLiteral("B"), 3, QByteArray("B1"), false});
+    require(RegistryDocumentApplyService::prepareWithBackend(twoValues, backend, plan, error)
+        && RegistryDocumentApplyService::applyWithBackend(plan, backend, result), "partial undo read-failure setup");
+    backend.failReadOnce = QStringLiteral("Number");
+    require(!RegistryDocumentApplyService::undoWithBackend(result, backend, undone)
+        && undone.canUndo && undone.pendingUndoReceipts.size() == 1, "transient failure permits only remaining undo retry");
+    const int beforeRetryWrites = backend.writes;
+    require(RegistryDocumentApplyService::undoWithBackend(undone, backend, retried)
+        && backend.writes == beforeRetryWrites + 1, "retry never rewrites the already restored value");
+    require(backend.readValue(root, QStringLiteral("B"), actual, error) && !actual.exists,
+        "already undone creation stays absent after retry");
+    require(backend.readValue(root, QStringLiteral("Number"), actual, error)
+        && actual.data == QByteArray::fromHex("01000000"), "remaining value reaches its original data");
+
+    backend = initial();
+    require(RegistryDocumentApplyService::prepareWithBackend(changes, backend, plan, error)
+        && RegistryDocumentApplyService::applyWithBackend(plan, backend, result), "uncertain undo setup");
+    backend.failWrite = backend.writes + 2;
+    require(!RegistryDocumentApplyService::undoWithBackend(result, backend, undone) && !undone.canUndo,
+        "failed mutating undo does not offer an unsafe retry");
 
     backend = initial();
     require(RegistryDocumentApplyService::prepareWithBackend(changes, backend, plan, error), "conflict prepare");
