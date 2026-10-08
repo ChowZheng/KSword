@@ -11,12 +11,7 @@ permissions:
   actions: read
   contents: read
 
-concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
-  # PR updates may discard superseded runs. Pushes to main must finish because
-  # a later metadata-only push can otherwise cancel the only affected build
-  # and then skip every project, leaving the resulting main HEAD unverified.
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+# Keep every run: commits and PR updates may build in parallel.
 
 jobs:
   changes:
@@ -59,7 +54,7 @@ jobs:
                 "/repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs" \
                 -f branch="$RUN_BRANCH" \
                 -f per_page=20 \
-                --jq "[.workflow_runs[] | select(.id != ${GITHUB_RUN_ID})][0] // {} | [(.id // 0), (.status // \"missing\"), (.conclusion // \"none\")] | @tsv"
+                --jq "[.workflow_runs[] | select(.id < ${GITHUB_RUN_ID})][0] // {} | [(.id // 0), (.status // \"missing\"), (.conclusion // \"none\")] | @tsv"
             } 2>&1)"; then
               IFS=$'\t' read -r previous_run_id previous_status previous_conclusion <<< "$previous_run"
             else
