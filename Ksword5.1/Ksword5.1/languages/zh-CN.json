@@ -3096,6 +3096,7 @@
     "memory.tab.breakpoints_bookmarks_legacy": "断点与书签（旧）",
     "memory.tab.driver_memory_rw_legacy": "驱动内存读写（旧）",
     "registry.tab.values": "值列表",
+    "registry.workbench.new_tab": "新标签",
     "registry.tab.search_results": "搜索结果",
     "registry.tab.editor": "注册表编辑",
     "registry.tab.optimization": "系统优化",

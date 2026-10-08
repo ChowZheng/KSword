@@ -3096,6 +3096,7 @@
     "memory.tab.breakpoints_bookmarks_legacy": "Breakpoints & bookmarks (legacy)",
     "memory.tab.driver_memory_rw_legacy": "Driver memory read/write (legacy)",
     "registry.tab.values": "Values",
+    "registry.workbench.new_tab": "New Tab",
     "registry.tab.search_results": "Search results",
     "registry.tab.editor": "Registry editor",
     "registry.tab.optimization": "System optimization",

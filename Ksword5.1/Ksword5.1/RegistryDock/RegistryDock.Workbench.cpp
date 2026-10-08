@@ -21,6 +21,7 @@
 #include <QDialogButtonBox>
 #include <QFileDialog>
 #include <QHeaderView>
+#include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMenu>
@@ -37,6 +38,7 @@
 #include <QTabWidget>
 #include <QTableWidget>
 #include <QThreadPool>
+#include <QToolButton>
 #include <QTreeWidget>
 #include <QTimer>
 #include <QVBoxLayout>
@@ -99,14 +101,35 @@ void RegistryDock::initializeWorkbenchControls()
         button->setMaximumWidth(QWIDGETSIZE_MAX);
         button->setText(button->toolTip());
     }
-    m_locationTabs = new QTabBar(m_registryEditorPage);
+    // 位置标签与新建入口共用一行；加号独立于可滚动标签，窄窗口也不会被挤出。
+    QWidget* locationTabRow = new QWidget(m_registryEditorPage); // 标签栏行的宿主。
+    auto* locationTabLayout = new QHBoxLayout(locationTabRow);   // 保留加号固定宽度的横向布局。
+    locationTabLayout->setContentsMargins(0, 0, 0, 0);
+    locationTabLayout->setSpacing(4);
+    m_locationTabs = new QTabBar(locationTabRow);
     m_locationTabs->setExpanding(false);
+    m_locationTabs->setUsesScrollButtons(true);
     m_locationTabs->setTabsClosable(true);
     m_locationTabs->setMovable(true);
     m_locationTabs->setProperty("ks_i18n_preserve_data_text", true);
     m_locationTabs->addTab(QStringLiteral("HKEY_CURRENT_USER"));
     m_locationTabs->setTabData(0, QStringLiteral("HKEY_CURRENT_USER"));
-    m_registryEditorLayout->insertWidget(0, m_locationTabs);
+    locationTabLayout->addWidget(m_locationTabs, 1);
+    // 点击沿用原有新标签流程，保留当前路径与尚未提交的编辑草稿。
+    auto* addTabButton = new QToolButton(locationTabRow); // 始终可见的 Tab 新建按钮。
+    addTabButton->setObjectName(QStringLiteral("registry_workbench_add_tab"));
+    addTabButton->setText(QStringLiteral("+"));
+    addTabButton->setAutoRaise(true);
+    KswordTheme::ApplyCompactIconButtonMetrics(addTabButton);
+    ks::i18n::LanguageManager::instance().bindToolTip(addTabButton,
+        QStringLiteral("registry.workbench.new_tab"), QStringLiteral("新标签"));
+    addTabButton->setAccessibleName(ks::i18n::sourceText(QStringLiteral("新标签")));
+    connect(addTabButton, &QToolButton::clicked, this, [this]()
+    {
+        addLocationTab(m_currentPath);
+    });
+    locationTabLayout->addWidget(addTabButton);
+    m_registryEditorLayout->insertWidget(0, locationTabRow);
     m_favoritePaths = QSettings().value(QStringLiteral("RegistryWorkbench/Favorites")).toStringList();
 
     QWidget* commands = new QWidget(m_registryEditorPage);
@@ -123,9 +146,6 @@ void RegistryDock::initializeWorkbenchControls()
     auto* navigation = new QPushButton(QStringLiteral("收藏 / 历史"), commands);
     commandLayout->addWidget(navigation);
     connect(navigation, &QPushButton::clicked, this, &RegistryDock::showNavigationMenu);
-    auto* newTab = new QPushButton(QStringLiteral("新标签"), commands);
-    commandLayout->addWidget(newTab);
-    connect(newTab, &QPushButton::clicked, this, [this]() { addLocationTab(m_currentPath); });
     auto* details = new QPushButton(QStringLiteral("详情"), commands);
     m_detailToggle = details;
     details->setCheckable(true);
