@@ -98,6 +98,11 @@ def main():
         if not args.baseline:
             protocol = subprocess.run([str(binary), "--protocol"], capture_output=True, check=True)
             assert protocol.stdout.decode().split() == [str(0x222014), str(0x222028)], protocol.stdout
+            overview = subprocess.run([str(binary), "help"], capture_output=True, check=True).stdout.decode()
+            family_help = subprocess.run([str(binary), "help", "driver"], capture_output=True, check=True).stdout.decode()
+            driver_line = next(line for line in overview.splitlines() if line.strip().startswith("driver "))
+            for subcommand in ["integrity", "detail", "device", "major", "fastio", "unloaded", "piddb"]:
+                assert subcommand in driver_line and "KswordCLI.exe driver " + subcommand in family_help
             unsupported = subprocess.run([str(binary), "capability", "query-driver-capabilities"], capture_output=True)
             assert b"preflight query" in unsupported.stderr and b"r0 ioctl-registry" in unsupported.stderr
             for command, option in [("process terminate", "--pid"), ("driver detail", "--driver"),

@@ -14,6 +14,8 @@ KswordCLI.exe <family> <subcommand> --help
 
 维护要求：每新增、删除或调整一个 `KswordCLI` 命令、别名或参数，必须同步更新 `KswordCLI.cpp` 内置 help 元数据和本文档。
 
+顶层 `help` 与 `help driver` 均列出 `integrity`、`detail`、`device`、`major`、`fastio`、`unloaded`、`piddb`；这些项由同一命令元数据生成。当前版本已包含此行为，回归测试同时核对两种帮助形式。
+
 ## 参数约定
 
 `r0` 和 Callback Monitor 的 `nt_status=n/a` 表示传输失败且没有返回 NTSTATUS；它不代表内核执行成功。响应解析器取得的实际非零 NTSTATUS 仍按十六进制显示。
