@@ -318,7 +318,7 @@ void RegistryDock::initializeWorkbenchControls()
     addShortcut(QKeySequence(QStringLiteral("F2")), [this]() { renameSelectedObject(); });
     addShortcut(QKeySequence(QStringLiteral("F5")), [this]() { refreshCurrentKey(true); });
     addShortcut(QKeySequence(QStringLiteral("Ctrl+T")), [this]() { addLocationTab(m_currentPath); });
-    addShortcut(QKeySequence(QStringLiteral("Ctrl+S")), [this]() { stageEditorValue(); applyPendingChanges(); });
+    addShortcut(QKeySequence(QStringLiteral("Ctrl+S")), [this]() { applyPendingChanges(); });
     updatePendingChanges();
 }
 

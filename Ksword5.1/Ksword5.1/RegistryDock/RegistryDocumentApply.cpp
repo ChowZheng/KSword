@@ -8,6 +8,7 @@
 #include <QSaveFile>
 #include <QSet>
 #include <algorithm>
+#include <cstring>
 #include <memory>
 #include <utility>
 
@@ -505,8 +506,10 @@ bool RegistryDocumentApplyService::undoWithBackend(const RegistryApplyResult& pr
         return failure(result.error, QStringLiteral("This committed change requires restoration from its original backup."));
     RegistryApplyPlan undo;
     undo.viewBits = previous.viewBits;
-    for (qsizetype i = previous.receipts.size(); i > 0; --i) {
-        const auto& receipt = previous.receipts.at(i - 1);
+    const auto& originals = previous.undoAttempt ? previous.pendingUndoReceipts : previous.receipts;
+    QVector<qsizetype> originalIndices;
+    for (qsizetype i = originals.size(); i > 0; --i) {
+        const auto& receipt = originals.at(i - 1);
         if (receipt.state != RegistryApplyReceipt::State::Success || !receipt.mutated)
             continue;
         RegistryApplyOperation op;
@@ -526,10 +529,25 @@ bool RegistryDocumentApplyService::undoWithBackend(const RegistryApplyResult& pr
             return failure(result.error, QStringLiteral("Automatic undo refuses committed subtree deletions."));
         }
         undo.operations.append(std::move(op));
+        originalIndices.append(i - 1);
     }
     if (undo.operations.isEmpty())
         return failure(result.error, QStringLiteral("There are no completed registry changes to undo."));
-    return applyWithBackend(undo, backend, result, canceledToken);
+    const bool ok = applyWithBackend(undo, backend, result, canceledToken);
+    result.undoAttempt = true;
+    bool uncertainMutation = result.receipts.size() != originalIndices.size();
+    for (qsizetype i = originalIndices.size(); i > 0; --i) {
+        const qsizetype inverseIndex = i - 1;
+        if (inverseIndex < result.receipts.size()) {
+            const auto& inverse = result.receipts.at(inverseIndex);
+            if (inverse.state == RegistryApplyReceipt::State::Success)
+                continue;
+            uncertainMutation = uncertainMutation || inverse.mutated;
+        }
+        result.pendingUndoReceipts.append(originals.at(originalIndices.at(inverseIndex)));
+    }
+    result.canUndo = !uncertainMutation && !result.pendingUndoReceipts.isEmpty();
+    return ok;
 }
 
 bool RegistryDocumentApplyService::saveOriginalBackup(const RegistryApplyPlan& plan,
@@ -664,6 +682,41 @@ bool apiError(QString& error, const QString& path, LSTATUS status)
     return failure(error, QStringLiteral("Registry operation failed at %1 (Win32 %2).").arg(path).arg(status));
 }
 
+class ApplyTransaction final
+{
+public:
+    ~ApplyTransaction()
+    {
+        // Closing the last uncommitted KTM handle rolls the transaction back.
+        if (handle != INVALID_HANDLE_VALUE) CloseHandle(handle);
+        if (m_module) FreeLibrary(m_module);
+    }
+    bool begin(const QString& path, QString& error)
+    {
+        m_module = LoadLibraryExW(L"KtmW32.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
+        if (!m_module) return apiError(error, path, GetLastError());
+        using Create = HANDLE (WINAPI*)(LPSECURITY_ATTRIBUTES, LPGUID, DWORD, DWORD, DWORD, DWORD, LPWSTR);
+        Create create = nullptr;
+        const FARPROC createAddress = GetProcAddress(m_module, "CreateTransaction");
+        const FARPROC commitAddress = GetProcAddress(m_module, "CommitTransaction");
+        static_assert(sizeof(create) == sizeof(createAddress));
+        static_assert(sizeof(m_commit) == sizeof(commitAddress));
+        std::memcpy(&create, &createAddress, sizeof(create));
+        std::memcpy(&m_commit, &commitAddress, sizeof(m_commit));
+        if (!create || !m_commit) return apiError(error, path, ERROR_PROC_NOT_FOUND);
+        handle = create(nullptr, nullptr, 0, 0, 0, 30000, nullptr);
+        return handle != INVALID_HANDLE_VALUE || apiError(error, path, GetLastError());
+    }
+    bool commit(const QString& path, QString& error)
+    {
+        return m_commit(handle) || apiError(error, path, GetLastError());
+    }
+    HANDLE handle = INVALID_HANDLE_VALUE;
+private:
+    HMODULE m_module = nullptr;
+    BOOL (WINAPI* m_commit)(HANDLE) = nullptr;
+};
+
 HKEY rootHandle(const QString& root)
 {
     if (root == QStringLiteral("HKEY_CLASSES_ROOT")) return HKEY_CLASSES_ROOT;
@@ -685,6 +738,31 @@ bool inspectLink(HKEY handle, const QString& path, QString& error)
     return true;
 }
 
+bool keyIdentity(HKEY handle, const QString& path, QString& identity, QString& error)
+{
+    using QueryKey = LONG (NTAPI*)(HANDLE, ULONG, PVOID, ULONG, PULONG);
+    QueryKey query = nullptr;
+    const FARPROC address = GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtQueryKey");
+    static_assert(sizeof(query) == sizeof(address));
+    std::memcpy(&query, &address, sizeof(query));
+    if (!query) return apiError(error, path, ERROR_PROC_NOT_FOUND);
+    ULONG required = 0;
+    // KeyNameInformation contains a byte count followed by the native UTF-16 name.
+    query(handle, 3, nullptr, 0, &required);
+    if (required < sizeof(ULONG) || required > 128 * 1024)
+        return apiError(error, path, ERROR_INVALID_DATA);
+    QByteArray buffer(static_cast<qsizetype>(required), Qt::Uninitialized);
+    ULONG returned = required;
+    if (query(handle, 3, buffer.data(), required, &returned) < 0)
+        return apiError(error, path, ERROR_INVALID_HANDLE);
+    ULONG bytes = 0;
+    std::memcpy(&bytes, buffer.constData(), sizeof(bytes));
+    if (returned < sizeof(bytes) || returned > required || !bytes || bytes > returned - sizeof(bytes) || bytes % 2)
+        return apiError(error, path, ERROR_INVALID_DATA);
+    identity = QString::fromWCharArray(reinterpret_cast<const wchar_t*>(buffer.constData() + sizeof(bytes)), bytes / 2);
+    return true;
+}
+
 class Win32ApplyBackend final : public RegistryApplyBackend
 {
 public:
@@ -696,7 +774,7 @@ public:
         ApplyKey key;
         LSTATUS status = ERROR_SUCCESS;
         if (!open(path, KEY_QUERY_VALUE, key, status, error)) {
-            if (status == ERROR_FILE_NOT_FOUND || status == ERROR_PATH_NOT_FOUND) {
+            if (status == ERROR_FILE_NOT_FOUND || status == ERROR_PATH_NOT_FOUND || status == ERROR_KEY_DELETED) {
                 exists = false;
                 error.clear();
                 return true;
@@ -714,8 +792,15 @@ public:
         LSTATUS status = ERROR_SUCCESS;
         if (!open(path, KEY_QUERY_VALUE, key, status, error))
             return false;
+        return readValueHandle(key.handle, path, name, value, error);
+    }
+
+    bool readValueHandle(HKEY handle, const QString& path, const QString& name,
+        RegistryApplyValueState& value, QString& error)
+    {
+        value = {};
         DWORD type = 0, size = 0;
-        status = RegQueryValueExW(key.handle, reinterpret_cast<LPCWSTR>(name.utf16()), nullptr, &type, nullptr, &size);
+        LSTATUS status = RegQueryValueExW(handle, reinterpret_cast<LPCWSTR>(name.utf16()), nullptr, &type, nullptr, &size);
         if (status == ERROR_FILE_NOT_FOUND)
             return true;
         if (status != ERROR_SUCCESS)
@@ -725,7 +810,7 @@ public:
                 return failure(error, QStringLiteral("Registry value exceeds the apply read budget."));
             QByteArray data(static_cast<qsizetype>(size), Qt::Uninitialized);
             DWORD actual = size;
-            status = RegQueryValueExW(key.handle, reinterpret_cast<LPCWSTR>(name.utf16()), nullptr,
+            status = RegQueryValueExW(handle, reinterpret_cast<LPCWSTR>(name.utf16()), nullptr,
                 &type, reinterpret_cast<BYTE*>(data.data()), &actual);
             if (status == ERROR_MORE_DATA) { size = actual; continue; }
             if (status == ERROR_FILE_NOT_FOUND)
@@ -817,17 +902,38 @@ public:
         }
         std::sort(paths.begin(), paths.end(), [](const QString& a, const QString& b) { return a.size() > b.size(); });
         QHash<QString, QVector<RegistryDocumentValue>> values;
+        QHash<QString, QByteArray> security;
+        for (const auto& key : expectedTree.keys) security.insert(folded(key.path), key.securityDescriptor);
         for (const auto& value : expectedTree.values)
             values[folded(value.keyPath)].append(value);
+        ApplyTransaction transaction;
+        if (!transaction.begin(path, error)) return false;
         // This list is fixed before the first write. Newly discovered children
-        // never extend it; their presence makes deletion of the parent fail.
+        // never extend it. All checks and deletions share one transaction; an
+        // outside writer either conflicts or aborts our commit, retaining its data.
         for (const auto& target : paths) {
             if (canceled(error))
                 return false;
             ApplyKey key, parent;
             LSTATUS status = ERROR_SUCCESS;
-            if (!open(target, KEY_QUERY_VALUE | DELETE, key, status, error))
+            const auto expectedSecurity = security.value(folded(target));
+            if (!openTransacted(target, KEY_QUERY_VALUE | DELETE | (expectedSecurity.isEmpty() ? 0 : READ_CONTROL),
+                transaction.handle, key, status, error))
                 return false;
+            if (!expectedSecurity.isEmpty()) {
+                constexpr SECURITY_INFORMATION parts = OWNER_SECURITY_INFORMATION | GROUP_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION;
+                DWORD bytes = 0;
+                status = RegGetKeySecurity(key.handle, parts, nullptr, &bytes);
+                if (status != ERROR_INSUFFICIENT_BUFFER || bytes > 1024 * 1024 || bytes == 0)
+                    return apiError(error, target, status == ERROR_INSUFFICIENT_BUFFER || status == ERROR_SUCCESS ? ERROR_INVALID_DATA : status);
+                QByteArray currentSecurity(static_cast<qsizetype>(bytes), Qt::Uninitialized);
+                status = RegGetKeySecurity(key.handle, parts,
+                    reinterpret_cast<PSECURITY_DESCRIPTOR>(currentSecurity.data()), &bytes);
+                if (status != ERROR_SUCCESS) return apiError(error, target, status);
+                if (bytes > static_cast<DWORD>(currentSecurity.size())) return apiError(error, target, ERROR_INVALID_DATA);
+                currentSecurity.resize(bytes);
+                if (currentSecurity != expectedSecurity) return apiError(error, target, ERROR_TRANSACTIONAL_CONFLICT);
+            }
             DWORD childCount = 0, valueCount = 0;
             status = RegQueryInfoKeyW(key.handle, nullptr, nullptr, nullptr, &childCount, nullptr,
                 nullptr, &valueCount, nullptr, nullptr, nullptr, nullptr);
@@ -838,26 +944,53 @@ public:
                 return failure(error, QStringLiteral("Registry deletion stopped because the key acquired a child or changed its values."));
             for (const auto& value : expectedValues) {
                 RegistryApplyValueState actual;
-                if (!readValue(target, value.name, actual, error))
+                if (!readValueHandle(key.handle, target, value.name, actual, error))
                     return false;
                 if (!sameValue({true, value.type, value.data}, actual))
                     return failure(error, QStringLiteral("Registry value changed immediately before tree deletion."));
             }
             const QString parentName = parentPath(target);
-            if (!open(parentName, KEY_QUERY_VALUE, parent, status, error))
+            if (!openTransacted(parentName, KEY_QUERY_VALUE, transaction.handle, parent, status, error))
                 return false;
             const QString leaf = target.mid(parentName.size() + 1);
+            ApplyKey candidate;
+            status = RegOpenKeyTransactedW(parent.handle, reinterpret_cast<LPCWSTR>(leaf.utf16()), 0,
+                KEY_QUERY_VALUE | DELETE | m_view, &candidate.handle, transaction.handle, nullptr);
+            if (status != ERROR_SUCCESS) return apiError(error, target, status);
+            // Bind the name used by deletion as well as the no-follow object that
+            // was checked. A rename/replacement/link race must not redirect the
+            // parent-relative delete to a different key with unbacked values.
+            QString expectedIdentity, candidateIdentity;
+            if (!keyIdentity(key.handle, target, expectedIdentity, error)
+                || !keyIdentity(candidate.handle, target, candidateIdentity, error)) return false;
+            if (expectedIdentity.compare(candidateIdentity, Qt::CaseInsensitive) != 0)
+                return apiError(error, target, ERROR_TRANSACTIONAL_CONFLICT);
             key.close();
             if (canceled(error))
                 return false;
-            status = RegDeleteKeyExW(parent.handle, reinterpret_cast<LPCWSTR>(leaf.utf16()), m_view, 0);
+            status = RegDeleteKeyTransactedW(parent.handle, reinterpret_cast<LPCWSTR>(leaf.utf16()),
+                m_view, 0, transaction.handle, nullptr);
             if (status != ERROR_SUCCESS)
                 return apiError(error, target, status);
         }
-        return true;
+        if (canceled(error)) return false;
+        return transaction.commit(path, error);
     }
 
 private:
+    bool openTransacted(const QString& path, REGSAM access, HANDLE transaction,
+        ApplyKey& key, LSTATUS& status, QString& error)
+    {
+        // First obtain a no-follow handle and inspect every path component. The
+        // transacted API reserves its options parameter, so bind the transaction
+        // to this exact handle through an empty subkey instead of traversing again.
+        ApplyKey exact;
+        if (!open(path, access, exact, status, error)) return false;
+        status = RegOpenKeyTransactedW(exact.handle, L"", 0,
+            access | KEY_QUERY_VALUE | m_view, &key.handle, transaction, nullptr);
+        return status == ERROR_SUCCESS || apiError(error, path, status);
+    }
+
     bool canceled(QString& error) const
     {
         if (!m_canceled || !m_canceled->load(std::memory_order_relaxed))

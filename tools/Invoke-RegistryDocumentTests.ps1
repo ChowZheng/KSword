@@ -1,7 +1,8 @@
 param(
     [string]$RepositoryRoot = (Split-Path -Parent $PSScriptRoot),
     [string]$QtRoot = '',
-    [string]$CppCompiler = 'g++'
+    [string]$CppCompiler = 'g++',
+    [switch]$RunIsolatedWin32
 )
 $ErrorActionPreference = 'Stop'
 $documentRepository = (Resolve-Path -LiteralPath $RepositoryRoot).Path
@@ -27,5 +28,22 @@ try {
     $env:PATH = (Join-Path $documentQt 'bin') + ';' + $documentOldPath
     & $documentExe $documentOutput
     if ($LASTEXITCODE -ne 0) { throw 'Registry document file/codec regressions failed.' }
+    $mockTransactionExe = Join-Path $documentOutput 'registry_document_transaction_tests.exe'
+    & $CppCompiler -std=c++17 -Wall -Wextra -Werror -O2 -DUNICODE -D_UNICODE @documentIncludes `
+        (Join-Path $documentRepository 'tools\registry_document_transaction_tests.cpp') `
+        ('-L' + (Join-Path $documentQt 'lib')) -lQt6Core -o $mockTransactionExe
+    if ($LASTEXITCODE -ne 0) { throw 'Mock registry transaction fixture build failed.' }
+    & $mockTransactionExe
+    if ($LASTEXITCODE -ne 0) { throw 'Mock registry transaction regressions failed.' }
+    if ($RunIsolatedWin32) {
+        $transactionExe = Join-Path $documentOutput 'registry_document_win32_tests.exe'
+        & $CppCompiler -std=c++17 -Wall -Wextra -Werror -O2 -DUNICODE -D_UNICODE @documentIncludes `
+            (Join-Path $documentRepository 'tools\registry_document_win32_tests.cpp') `
+            (Join-Path $documentRepository 'Ksword5.1\Ksword5.1\RegistryDock\RegistryDocument.cpp') `
+            ('-L' + (Join-Path $documentQt 'lib')) -lQt6Core -ladvapi32 -o $transactionExe
+        if ($LASTEXITCODE -ne 0) { throw 'Registry transaction fixture build failed.' }
+        & $transactionExe
+        if ($LASTEXITCODE -ne 0) { throw 'Isolated Win32 registry transaction regressions failed.' }
+    }
 }
 finally { $env:PATH = $documentOldPath }
