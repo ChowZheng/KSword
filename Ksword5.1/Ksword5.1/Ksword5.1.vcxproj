@@ -1509,4 +1509,39 @@
     <ClInclude Include="RegistryDock\RegistryDocumentApplyInternal.h" />
     <ClInclude Include="RegistryDock\RegistryAdvancedDialogs.h" />
   </ItemGroup>
+  <!-- Shared binary analysis and optional Ghidra runtime backend -->
+  <ItemGroup>
+    <ClCompile Include="ScannerDock\ScannerDock.Analysis.cpp">
+      <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
+    </ClCompile>
+    <ClCompile Include="UI\BinaryOverviewBar.cpp">
+      <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
+    </ClCompile>
+    <ClCompile Include="UI\MemoryEditorWidget.Pseudocode.cpp">
+      <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
+    </ClCompile>
+    <ClCompile Include="UI\Decompiler\GhidraDecompiler.cpp">
+      <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
+    </ClCompile>
+    <ClCompile Include="PluginHost.Ghidra.cpp">
+      <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
+    </ClCompile>
+    <ClCompile Include="..\..\GhidraRuntimePlugin\RuntimeProfile.cpp">
+      <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
+    </ClCompile>
+    <ClInclude Include="UI\BinaryOverviewBar.h" />
+    <ClInclude Include="ksword\scanner\binary_layout.h" />
+    <ClInclude Include="PluginHost.Ghidra.h" />
+    <ClInclude Include="..\..\GhidraRuntimePlugin\RuntimeProfile.h" />
+    <ClInclude Include="..\..\GhidraRuntimePlugin\RuntimeLicense.inc" />
+    <QtMoc Include="UI\Decompiler\GhidraDecompiler.h" />
+  </ItemGroup>
+  <Target Name="CopyKswordGhidraAdapterNotices" AfterTargets="Build">
+    <PropertyGroup>
+      <KswordGhidraNoticeSourceDir>$(MSBuildProjectDirectory)\..\..\third_party\ghidra_headless\</KswordGhidraNoticeSourceDir>
+      <KswordGhidraNoticeTargetDir>$(TargetDir)licenses\third_party\ghidra_headless\</KswordGhidraNoticeTargetDir>
+    </PropertyGroup>
+    <MakeDir Directories="$(KswordGhidraNoticeTargetDir)" />
+    <Copy SourceFiles="$(KswordGhidraNoticeSourceDir)LICENSE.txt;$(KswordGhidraNoticeSourceDir)NOTICE.md;$(KswordGhidraNoticeSourceDir)UPSTREAM-NOTICE.txt" DestinationFolder="$(KswordGhidraNoticeTargetDir)" SkipUnchangedFiles="true" />
+  </Target>
 </Project>

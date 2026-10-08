@@ -3291,4 +3291,43 @@
     <ClInclude Include="RegistryDock\RegistryDocumentApplyInternal.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="RegistryDock\RegistryAdvancedDialogs.h"><Filter>Header Files</Filter></ClInclude>
   </ItemGroup>
+  <!-- Shared binary analysis and optional Ghidra runtime backend -->
+  <ItemGroup>
+    <ClCompile Include="ScannerDock\ScannerDock.Analysis.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\BinaryOverviewBar.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\MemoryEditorWidget.Pseudocode.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\Decompiler\GhidraDecompiler.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="PluginHost.Ghidra.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\GhidraRuntimePlugin\RuntimeProfile.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClInclude Include="UI\BinaryOverviewBar.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="ksword\scanner\binary_layout.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="PluginHost.Ghidra.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\GhidraRuntimePlugin\RuntimeProfile.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\GhidraRuntimePlugin\RuntimeLicense.inc">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <QtMoc Include="UI\Decompiler\GhidraDecompiler.h">
+      <Filter>Header Files</Filter>
+    </QtMoc>
+  </ItemGroup>
 </Project>

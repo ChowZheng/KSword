@@ -58,5 +58,5 @@ namespace ks::plugin_host
     // showPluginManager：
     // - 打开非模态插件管理窗口；
     // - 管理本地插件，并从商城执行许可证确认、校验和一键安装。
-    void showPluginManager(QWidget* owner);
+    void showPluginManager(QWidget* owner, const QString& preselectedPluginId = QString());
 }

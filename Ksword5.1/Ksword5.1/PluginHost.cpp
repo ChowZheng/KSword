@@ -1,4 +1,5 @@
 #include "PluginHost.h"
+#include "PluginHost.Ghidra.h"
 #include "UI/CodeTextEdit.h"
 #include "UI/VisibleTableWidget.h"
 
@@ -146,7 +147,26 @@ namespace
         QString sha256;
         QString licenseName;
         QUrl licenseUrl;
+        bool nativeGhidra = false;
     };
+
+    MarketplacePlugin builtinGhidraRuntime()
+    {
+        MarketplacePlugin plugin;
+        const auto metadata = ks::plugin_host::ghidra_runtime::manifest();
+        const auto assets = ks::plugin_host::ghidra_runtime::assets();
+        plugin.id = QStringLiteral("ghidra");
+        plugin.installDirectory = plugin.id;
+        plugin.name = metadata.value(QStringLiteral("name")).toString();
+        plugin.version = metadata.value(QStringLiteral("version")).toString();
+        plugin.description = metadata.value(QStringLiteral("description")).toString();
+        plugin.targets = QStringList{QStringLiteral("decompiler")};
+        plugin.licenseName = QStringLiteral("Apache 2.0 / GPL v2 + Classpath Exception");
+        plugin.licenseUrl = QUrl(QStringLiteral("https://raw.githubusercontent.com/NationalSecurityAgency/ghidra/Ghidra_12.0.4_build/LICENSE"));
+        if (!assets.isEmpty()) { plugin.archiveUrl = assets.front().url; plugin.sha256 = assets.front().sha256; }
+        plugin.nativeGhidra = true;
+        return plugin;
+    }
 
     enum class MarketplaceUpdateState
     {
@@ -707,18 +727,38 @@ namespace
             !readRequiredString(object, "name", &descriptor.name, errorOut) ||
             !readRequiredString(object, "version", &descriptor.version, errorOut) ||
             !readRequiredString(object, "description", &descriptor.description, errorOut) ||
-            !readRequiredString(object, "runtime", &descriptor.runtime, errorOut) ||
-            !readRequiredString(object, "entrypoint", &entrypoint, errorOut) ||
-            !readRequiredString(object, "default_command", &descriptor.defaultCommand, errorOut))
+            !readRequiredString(object, "runtime", &descriptor.runtime, errorOut))
         {
             return false;
         }
         descriptor.pluginType = object.value(QStringLiteral("plugin_type")).toString(QStringLiteral("command")).trimmed().toLower();
+        if (descriptor.id == QStringLiteral("ghidra") && descriptor.pluginType != QStringLiteral("backend"))
+        {
+            *errorOut = QStringLiteral("Ghidra 插件只能声明 backend 类型。");
+            return false;
+        }
+        if (descriptor.pluginType == QStringLiteral("backend"))
+        {
+            // A managed runtime is visible to the manager but has no command,
+            // file/process/network target, native Tab, or entrypoint dispatch.
+            if (pluginId != QStringLiteral("ghidra") || descriptor.id != pluginId ||
+                !ks::plugin_host::ghidra_runtime::validateDirectory(pluginDirectory, errorOut))
+            {
+                if (errorOut->isEmpty()) *errorOut = QStringLiteral("Ghidra 后端插件清单或运行环境无效。");
+                return false;
+            }
+            descriptor.pluginDirectory = QDir(pluginDirectory).absolutePath();
+            descriptor.targets = QStringList{QStringLiteral("decompiler")};
+            *descriptorOut = descriptor;
+            return true;
+        }
+        if (!readRequiredString(object, "entrypoint", &entrypoint, errorOut) ||
+            !readRequiredString(object, "default_command", &descriptor.defaultCommand, errorOut)) return false;
         if (descriptor.pluginType != QStringLiteral("command") &&
             descriptor.pluginType != QStringLiteral("tab") &&
             descriptor.pluginType != QStringLiteral("hybrid"))
         {
-            *errorOut = QStringLiteral("plugin_type 只能是 command、tab 或 hybrid。");
+            *errorOut = QStringLiteral("plugin_type 只能是 command、tab、hybrid 或受支持的 backend。");
             return false;
         }
         if (descriptor.id != pluginId || !isValidPluginId(descriptor.id))
@@ -1520,6 +1560,7 @@ namespace
 
     void launchPlugin(QWidget* owner, const PluginDescriptor& descriptor, const ks::plugin_host::InvocationContext& context)
     {
+        if (descriptor.pluginType == QStringLiteral("backend")) return;
         QString contextError;
         if (!isUsableContext(context, &contextError))
         {
@@ -2036,8 +2077,9 @@ namespace
     class PluginManagerDialog final : public QDialog
     {
     public:
-        explicit PluginManagerDialog(QWidget* parent)
+        explicit PluginManagerDialog(QWidget* parent, const QString& preselectedId = QString())
             : QDialog(parent)
+            , m_preselectedPluginId(preselectedId)
         {
             setAttribute(Qt::WA_DeleteOnClose, true);
             setWindowTitle(QStringLiteral("插件管理"));
@@ -2072,6 +2114,7 @@ namespace
 
             m_networkManager = new QNetworkAccessManager(this);
             auto* tabWidget = new QTabWidget(this);
+            m_mainTabs = tabWidget;
             auto* localPage = new QWidget(tabWidget);
             auto* localLayout = new QVBoxLayout(localPage);
             localLayout->setContentsMargins(6, 6, 6, 6);
@@ -2252,20 +2295,27 @@ namespace
         {
             m_marketplaceTable->setRowCount(0);
             m_marketplacePlugins.clear();
+            // The built-in pinned runtime is available even when the external
+            // marketplace is offline, and a remote catalog cannot replace it.
+            m_marketplacePlugins.push_back(builtinGhidraRuntime());
+            populateMarketplaceTable();
+            selectMarketplaceEntry();
+            const auto generation = ++m_marketplaceGeneration;
             m_status->setText(QStringLiteral("正在从 KSwordDEV/Plugins 读取插件商城目录…"));
             QNetworkRequest request(QUrl(QString::fromLatin1(kMarketplaceCatalogUrl)));
             request.setHeader(QNetworkRequest::UserAgentHeader, QStringLiteral("KSword-PluginMarketplace/1"));
             request.setAttribute(QNetworkRequest::CacheLoadControlAttribute, QNetworkRequest::PreferNetwork);
             QNetworkReply* reply = m_networkManager->get(request);
-            connect(reply, &QNetworkReply::finished, this, [this, reply, checkForUpdates]() {
+            connect(reply, &QNetworkReply::finished, this, [this, reply, checkForUpdates, generation]() {
                 const QByteArray payload = reply->readAll();
                 const bool networkOk = reply->error() == QNetworkReply::NoError;
                 const QString networkError = networkOk ? QString() : networkReplyErrorText(reply);
                 reply->deleteLater();
+                if (generation != m_marketplaceGeneration) return;
                 if (!networkOk)
                 {
                     m_status->setText(QStringLiteral(
-                        "商城目录读取失败；详情已写入日志。"));
+                        "在线商城暂不可用；仍可安装内置 Ghidra 插件。"));
                     kLogEvent requestEvent;
                     warn << requestEvent
                         << "[PluginHost] marketplace catalog request failed, detail="
@@ -2295,6 +2345,7 @@ namespace
                 QStringList ignoredEntries;
                 for (const QJsonValue& value : root.value(QStringLiteral("plugins")).toArray())
                 {
+                    if (value.toObject().value(QStringLiteral("id")).toString() == QStringLiteral("ghidra")) continue;
                     MarketplacePlugin plugin;
                     QString errorText;
                     if (value.isObject() && parseMarketplacePlugin(value.toObject(), &plugin, &errorText))
@@ -2307,7 +2358,7 @@ namespace
                     }
                 }
                 populateMarketplaceTable();
-                if (!m_marketplacePlugins.isEmpty()) m_marketplaceTable->selectRow(0);
+                selectMarketplaceEntry();
                 const QList<MarketplacePlugin> updates = availableMarketplaceUpdates();
                 QString status = QStringLiteral("插件商城已从 KSwordDEV/Plugins 刷新：%1 个可下载插件，%2 个插件可更新。")
                     .arg(m_marketplacePlugins.size())
@@ -2404,6 +2455,22 @@ namespace
             }
         }
 
+        void selectMarketplaceEntry()
+        {
+            if (!m_preselectedPluginId.isEmpty())
+            {
+                for (int row = 0; row < m_marketplacePlugins.size(); ++row)
+                {
+                    if (m_marketplacePlugins[row].id != m_preselectedPluginId) continue;
+                    m_marketplaceTable->selectRow(row);
+                    m_mainTabs->setCurrentIndex(1);
+                    m_preselectedPluginId.clear();
+                    return;
+                }
+            }
+            if (m_marketplaceTable->currentRow() < 0 && !m_marketplacePlugins.isEmpty()) m_marketplaceTable->selectRow(0);
+        }
+
         bool hasMarketplaceLicenseAcceptanceRecord(const MarketplacePlugin& plugin) const
         {
             QSettings settings;
@@ -2470,6 +2537,14 @@ namespace
             const MarketplacePlugin& plugin,
             const std::function<void(bool, QByteArray, QString)>& completion)
         {
+            if (plugin.nativeGhidra)
+            {
+                const auto payload = ks::plugin_host::ghidra_runtime::licenseText();
+                QTimer::singleShot(0, this, [completion, payload]() {
+                    completion(!payload.isEmpty(), payload, QStringLiteral("Ghidra 运行环境许可证正文为空。"));
+                });
+                return;
+            }
             QNetworkRequest request(plugin.licenseUrl);
             request.setHeader(
                 QNetworkRequest::UserAgentHeader,
@@ -2607,6 +2682,11 @@ namespace
 
         void requestSelectedMarketplaceLicense()
         {
+            if (m_nativeInstaller || m_licenseRequestInProgress)
+            {
+                m_status->setText(QStringLiteral("Ghidra 插件安装正在进行，请等待或关闭窗口取消。"));
+                return;
+            }
             if (m_autoUpdateInProgress)
             {
                 m_status->setText(QStringLiteral("插件自动更新正在进行，请等待当前队列完成。"));
@@ -2619,6 +2699,7 @@ namespace
                 return;
             }
             const MarketplacePlugin plugin = m_marketplacePlugins.at(row);
+            m_licenseRequestInProgress = true;
             m_status->setText(QStringLiteral("正在读取 %1 的许可证；同意前不会下载或安装插件。").arg(plugin.name));
             requestMarketplaceLicensePayload(
                 plugin,
@@ -2626,6 +2707,7 @@ namespace
                     const bool success,
                     const QByteArray licensePayload,
                     const QString& errorMessage) {
+                    m_licenseRequestInProgress = false;
                     if (!success)
                     {
                         QMessageBox::warning(
@@ -2653,29 +2735,34 @@ namespace
             const MarketplacePlugin& plugin,
             const QByteArray& licensePayload)
         {
-            QDialog licenseDialog(this);
-            licenseDialog.setWindowTitle(QStringLiteral("许可证：%1").arg(plugin.name));
-            licenseDialog.resize(780, 620);
-            auto* layout = new QVBoxLayout(&licenseDialog);
+            auto* licenseDialog = new QDialog(this);
+            const QPointer<PluginManagerDialog> self(this);
+            const QPointer<QDialog> licenseGuard(licenseDialog);
+            licenseDialog->setWindowTitle(QStringLiteral("许可证：%1").arg(plugin.name));
+            licenseDialog->resize(780, 620);
+            auto* layout = new QVBoxLayout(licenseDialog);
             auto* label = new QLabel(QStringLiteral("安装 %1 前，请阅读并同意：%2。未同意不会发起插件 ZIP 下载。")
-                .arg(plugin.name, plugin.licenseName), &licenseDialog);
+                .arg(plugin.name, plugin.licenseName), licenseDialog);
             label->setWordWrap(true);
             layout->addWidget(label);
-            auto* text = new CodeTextEdit(&licenseDialog);
+            auto* text = new CodeTextEdit(licenseDialog);
             static_cast<CodeTextEdit*>(text)->setSyntaxLanguage(CodeTextEdit::SyntaxLanguage::PlainText);
             text->setReadOnly(true);
             text->setPlainText(QString::fromUtf8(licensePayload));
             layout->addWidget(text, 1);
-            auto* agree = new QCheckBox(QStringLiteral("我已阅读并同意上述插件许可证"), &licenseDialog);
+            auto* agree = new QCheckBox(QStringLiteral("我已阅读并同意上述插件许可证"), licenseDialog);
             layout->addWidget(agree);
-            auto* buttons = new QDialogButtonBox(QDialogButtonBox::Cancel, &licenseDialog);
+            auto* buttons = new QDialogButtonBox(QDialogButtonBox::Cancel, licenseDialog);
             QPushButton* acceptButton = buttons->addButton(QStringLiteral("同意并一键安装"), QDialogButtonBox::AcceptRole);
             acceptButton->setEnabled(false);
             layout->addWidget(buttons);
             connect(agree, &QCheckBox::toggled, acceptButton, &QPushButton::setEnabled);
-            connect(buttons, &QDialogButtonBox::accepted, &licenseDialog, &QDialog::accept);
-            connect(buttons, &QDialogButtonBox::rejected, &licenseDialog, &QDialog::reject);
-            if (licenseDialog.exec() != QDialog::Accepted)
+            connect(buttons, &QDialogButtonBox::accepted, licenseDialog, &QDialog::accept);
+            connect(buttons, &QDialogButtonBox::rejected, licenseDialog, &QDialog::reject);
+            const auto decision = licenseDialog->exec();
+            if (licenseGuard) licenseGuard->deleteLater();
+            if (!self) return;
+            if (decision != QDialog::Accepted)
             {
                 m_status->setText(QStringLiteral("未同意许可证，未下载或安装 %1。").arg(plugin.name));
                 return;
@@ -2692,6 +2779,7 @@ namespace
             const bool success,
             const QString& message)
         {
+            const QPointer<PluginManagerDialog> self(this);
             if (!success)
             {
                 m_status->setText(QStringLiteral("插件安装失败：%1").arg(message));
@@ -2701,6 +2789,7 @@ namespace
                     QMessageBox::warning(this, QStringLiteral("插件商城"), message);
                 }
             }
+            if (!self) return;
             if (completion)
             {
                 completion(success, message);
@@ -2715,6 +2804,11 @@ namespace
             const MarketplacePlugin& plugin,
             InstallCompletion completion = {})
         {
+            if (plugin.nativeGhidra)
+            {
+                installNativeGhidra(plugin, completion);
+                return;
+            }
             m_status->setText(QStringLiteral("正在下载 %1；将校验 SHA-256 后一键安装。").arg(plugin.name));
             updateInstallProgress(QStringLiteral("正在下载 %1").arg(plugin.name), 0);
             QNetworkRequest request(plugin.archiveUrl);
@@ -2749,6 +2843,61 @@ namespace
                 updateInstallProgress(QStringLiteral("SHA-256 校验通过"), 80);
                 installMarketplaceArchive(plugin, archiveBytes, completion);
             });
+        }
+
+        void installNativeGhidra(const MarketplacePlugin& plugin, const InstallCompletion& completion)
+        {
+            if (m_nativeInstaller)
+            {
+                completeMarketplaceInstall(completion, false, QStringLiteral("Ghidra 插件安装已在进行。"));
+                return;
+            }
+            auto* installer = new ks::plugin_host::GhidraRuntimeInstaller(this,
+                [](const QString& source) { return ks::i18n::sourceText(source); });
+            installer->setObjectName(QStringLiteral("ksword_ghidra_runtime_installer"));
+            m_nativeInstaller = installer;
+            const auto pluginRoot = resolvePluginInstallRoot();
+            installer->start(pluginRoot,
+                [this](const QString& stage, int percent) {
+                    updateInstallProgress(stage, percent);
+                    m_status->setText(stage);
+                },
+                [this, plugin, pluginRoot, completion, installer](bool success, const QString& stage, const QString& error) {
+                    m_nativeInstaller.clear();
+                    installer->deleteLater();
+                    if (!success)
+                    {
+                        completeMarketplaceInstall(completion, false, error);
+                        return;
+                    }
+                    QString installError;
+                    const bool promoted = promoteExtractedPlugin(plugin, pluginRoot, stage, &installError);
+                    // Stage is a generated sibling below this exact plugin root;
+                    // successful root-layout promotion has already renamed it.
+                    if (QFileInfo::exists(stage))
+                    {
+                        const auto canonicalRoot = QFileInfo(pluginRoot).canonicalFilePath();
+                        const auto canonicalStage = QFileInfo(stage).canonicalFilePath();
+                        if (!canonicalRoot.isEmpty() && canonicalStage.startsWith(canonicalRoot + QLatin1Char('/'), Qt::CaseInsensitive) &&
+                            QFileInfo(stage).fileName().startsWith(QStringLiteral(".ksword-plugin-stage-ghidra-")) && !QFileInfo(stage).isSymLink())
+                            QDir(canonicalStage).removeRecursively();
+                    }
+                    if (!promoted)
+                    {
+                        completeMarketplaceInstall(completion, false, installError);
+                        return;
+                    }
+                    refreshPlugins();
+                    populateMarketplaceTable();
+                    selectMarketplaceEntry();
+                    const auto message = QStringLiteral("Ghidra 插件已安装；通用字节组件的 C 伪代码页可直接使用。");
+                    m_status->setText(message);
+                    updateInstallProgress(QStringLiteral("Ghidra 插件安装完成"), 100);
+                    const QPointer<PluginManagerDialog> self(this);
+                    if (!completion) QMessageBox::information(this, QStringLiteral("插件商城"), message);
+                    if (!self) return;
+                    completeMarketplaceInstall(completion, true, message);
+                });
         }
 
         void installMarketplaceArchive(
@@ -2867,12 +3016,14 @@ namespace
         }
 
         QTableWidget* m_table = nullptr;
+        QTabWidget* m_mainTabs = nullptr;
         QTableWidget* m_marketplaceTable = nullptr;
         QLabel* m_status = nullptr;
         QProgressBar* m_installProgress = nullptr;
         QCheckBox* m_autoUpdateCheck = nullptr;
         QPushButton* m_openFolderButton = nullptr;
         QNetworkAccessManager* m_networkManager = nullptr;
+        QPointer<ks::plugin_host::GhidraRuntimeInstaller> m_nativeInstaller;
         QList<PluginDescriptor> m_plugins;
         QHash<QString, PluginDescriptor> m_installedPluginsById;
         QList<MarketplacePlugin> m_marketplacePlugins;
@@ -2882,6 +3033,9 @@ namespace
         int m_autoUpdateCompleted = 0;
         bool m_autoUpdateInProgress = false;
         QString m_pluginRoot;
+        QString m_preselectedPluginId;
+        quint64 m_marketplaceGeneration = 0;
+        bool m_licenseRequestInProgress = false;
     };
 }
 
@@ -2909,6 +3063,7 @@ void ks::plugin_host::populateTargetMenu(QMenu* menu, QWidget* owner, const Invo
     int addedActions = 0;
     for (const PluginDescriptor& descriptor : result.plugins)
     {
+        if (descriptor.pluginType == QStringLiteral("backend")) continue;
         if (!descriptor.targets.contains(target)) continue;
         QAction* action = menu->addAction(descriptor.name);
         action->setToolTip(QStringLiteral("%1\nID：%2\n目标：%3")
@@ -3177,9 +3332,9 @@ QWidget* ks::plugin_host::createTabPluginContainer(QWidget* parent)
 
     return container;
 }
-void ks::plugin_host::showPluginManager(QWidget* owner)
+void ks::plugin_host::showPluginManager(QWidget* owner, const QString& preselectedPluginId)
 {
-    auto* dialog = new PluginManagerDialog(owner);
+    auto* dialog = new PluginManagerDialog(owner, preselectedPluginId);
     dialog->show();
     dialog->raise();
     dialog->activateWindow();
