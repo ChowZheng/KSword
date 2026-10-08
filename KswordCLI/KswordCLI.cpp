@@ -1231,7 +1231,7 @@ namespace
         { L"dyn", L"apply-profile-v4", L"KswordCLI.exe dyn apply-profile-v4 --blob PATH", L"Apply a raw v4 DynData profile packet.", L"Required: --blob.", L"" },
         { L"dyn", L"apply-profile", L"KswordCLI.exe dyn apply-profile --blob PATH", L"Apply a raw legacy DynData profile packet.", L"Required: --blob.", L"" },
         { L"dyn", L"apply-profile-ex", L"KswordCLI.exe dyn apply-profile-ex --blob PATH", L"Apply a raw extended DynData profile packet.", L"Required: --blob.", L"" },
-        { L"capability", L"query-driver-capabilities", L"KswordCLI.exe capability query-driver-capabilities [--limit N]", L"Query unified driver feature capability rows.", L"Optional: --limit.", L"" },
+        { L"capability", L"query-driver-capabilities", L"KswordCLI.exe capability query-driver-capabilities [--limit N]", L"Query unified driver feature capability rows.", L"Optional: --limit.", L"If unsupported, inspect preflight query and r0 ioctl-registry; older drivers may reject the OS build before capability dispatch." },
         { L"thread", L"enum", L"KswordCLI.exe thread enum [--flags 0xN] [--pid PID] [--limit N]", L"Enumerate threads.", L"Optional: --flags, --pid, --limit.", L"" },
         { L"thread", L"crossview", L"KswordCLI.exe thread crossview [--flags 0xN] [--pid PID] [--start-tid TID] [--end-tid TID] [--max-nodes N] [--limit N]", L"Compare thread evidence across supported sources.", L"Optional: --flags, --pid, --start-tid, --end-tid, --max-nodes, --limit.", L"" },
         { L"thread", L"detail", L"KswordCLI.exe thread detail --tid TID [--pid PID] [--flags 0xN]", L"Query fixed R0 ETHREAD/KTHREAD runtime detail.", L"Required: --tid. Optional: --pid, --flags defaults to include-all.", L"Backed by IOCTL_KSWORD_ARK_QUERY_THREAD_DETAIL." },
@@ -6026,7 +6026,16 @@ namespace
         IoctlResult io{};
         std::vector<std::uint8_t> buffer(kSmallResponseBytes, 0U);
         const int rc = sendRawIoctl(L"IOCTL_KSWORD_ARK_QUERY_DRIVER_CAPABILITIES", IOCTL_KSWORD_ARK_QUERY_DRIVER_CAPABILITIES, nullptr, 0U, buffer, io);
-        if (rc != 0) return rc;
+        if (rc != 0)
+        {
+            if (isUnsupportedTransportError(io.win32Error))
+            {
+                std::wcerr << L"hint: run 'KswordCLI.exe preflight query' and 'KswordCLI.exe r0 ioctl-registry'. "
+                           << L"Older drivers may reject a newer OS build before capability dispatch; "
+                           << L"verify the loaded service image and use a matching current release.\n";
+            }
+            return rc;
+        }
         constexpr std::size_t headerSize = sizeof(KSWORD_ARK_QUERY_DRIVER_CAPABILITIES_RESPONSE) - sizeof(KSWORD_ARK_FEATURE_CAPABILITY_ENTRY);
         const auto* response = reinterpret_cast<const KSWORD_ARK_QUERY_DRIVER_CAPABILITIES_RESPONSE*>(buffer.data());
         std::size_t available = 0U;

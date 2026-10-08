@@ -41,6 +41,9 @@ static BOOL WINAPI testIoctl(HANDLE, DWORD, LPVOID, DWORD, LPVOID, DWORD, LPDWOR
 int commandArkDriverExtended(int, wchar_t*[]) { return 3; }
 int commandArkDriverCallbackMonitor(int, wchar_t*[]) { return 3; }
 int wmain(int argc, wchar_t* argv[]) {
+    if (argc > 1 && std::wstring(argv[1]) == L"--protocol") {
+        std::wcout << IOCTL_KSWORD_ARK_ENUM_PROCESS << L" " << IOCTL_KSWORD_ARK_QUERY_DRIVER_CAPABILITIES << L"\n"; return 0;
+    }
     if (argc > 1 && std::wstring(argv[1]) == L"--missing-device") { openError = ERROR_FILE_NOT_FOUND; ++argv; --argc; }
     if (argc > 1 && std::wstring(argv[1]) == L"--unsupported") { ++argv; --argc; }
     return productionMain(argc, argv);
@@ -69,6 +72,10 @@ def main():
                 assert result.returncode == 0, (command, result.returncode, result.stderr)
                 assert result.stdout.replace(b"\r\n", b"\n") == (b"" if command[-1] == "0" else b"fixture log!\n"), (command, result.stdout)
         if not args.baseline:
+            protocol = subprocess.run([str(binary), "--protocol"], capture_output=True, check=True)
+            assert protocol.stdout.decode().split() == [str(0x222014), str(0x222028)], protocol.stdout
+            unsupported = subprocess.run([str(binary), "capability", "query-driver-capabilities"], capture_output=True)
+            assert b"preflight query" in unsupported.stderr and b"r0 ioctl-registry" in unsupported.stderr
             print("CLI regression: log default/0/1/2/100 passed (real CRT UTF-8 redirection)")
 
 
