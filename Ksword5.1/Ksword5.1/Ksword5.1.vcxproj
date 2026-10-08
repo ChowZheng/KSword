@@ -434,6 +434,8 @@
     <ClCompile Include="OtherDock\WindowControlInspectionPage.cpp" />
     <ClCompile Include="PrivilegeDock\PrivilegeDock.cpp" />
     <ClCompile Include="PrivilegeDock\PrivilegeAccessPage.cpp" />
+    <ClCompile Include="PrivilegeDock\PrivilegeAccessBackend.cpp" />
+    <ClCompile Include="PrivilegeDock\PrivilegeAccessReport.cpp" />
     <ClCompile Include="PrivilegeDock\PrivilegeAccountPages.cpp" />
     <ClCompile Include="PrivilegeDock\PrivilegeSnapshotModel.cpp" />
     <ClCompile Include="PrivilegeDock\PrivilegeSnapshotPage.cpp" />
@@ -1014,6 +1016,7 @@
     <ClInclude Include="..\..\shared\window\DwmZOrderProtocol.h" />
     <ClInclude Include="..\..\shared\window\DwmRemoteLoader.h" />
     <ClInclude Include="PrivilegeDock\PrivilegeAccessPage.h" />
+    <ClInclude Include="PrivilegeDock\PrivilegeAccessBackend.h" />
     <ClInclude Include="PrivilegeDock\PrivilegeAccessSecurity.h" />
     <ClInclude Include="PrivilegeDock\PrivilegeAccountPages.h" />
     <ClInclude Include="PrivilegeDock\PrivilegeSnapshotModel.h" />
@@ -1433,6 +1436,7 @@
     <ClInclude Include="ArkDriverClient\ArkStorageControllerClient.h" />
     <ClCompile Include="MiscDock\DiskEditor\StorageControllerResearchDialog.cpp" />
     <ClInclude Include="MiscDock\DiskEditor\StorageControllerResearchDialog.h" />
+    <ClInclude Include="MiscDock\DiskEditor\StorageControllerResearchDialogLog.h" />
     <ClInclude Include="MiscDock\DiskEditor\StorageControllerInput.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
@@ -1491,12 +1495,14 @@
     <ClCompile Include="RegistryDock\RegistryWorkbenchAccess.cpp" />
     <ClCompile Include="RegistryDock\RegistryDocument.cpp" />
     <ClCompile Include="RegistryDock\RegistryDocumentApply.cpp" />
+    <ClCompile Include="RegistryDock\RegistryDocumentApply.Win32.cpp" />
     <ClCompile Include="RegistryDock\RegistryAdvancedDialogs.cpp" />
     <ClInclude Include="RegistryDock\RegistryValueCodec.h" />
     <QtMoc Include="RegistryDock\RegistryValueEditorWidget.h" />
     <ClInclude Include="RegistryDock\RegistryWorkbenchAccess.h" />
     <ClInclude Include="RegistryDock\RegistryDocument.h" />
     <ClInclude Include="RegistryDock\RegistryDocumentApply.h" />
+    <ClInclude Include="RegistryDock\RegistryDocumentApplyInternal.h" />
     <ClInclude Include="RegistryDock\RegistryAdvancedDialogs.h" />
   </ItemGroup>
 </Project>

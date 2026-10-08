@@ -49,6 +49,12 @@
     <ClCompile Include="PrivilegeDock\PrivilegeAccessPage.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="PrivilegeDock\PrivilegeAccessBackend.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="PrivilegeDock\PrivilegeAccessReport.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="PrivilegeDock\PrivilegeAccountPages.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -62,6 +68,9 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClInclude Include="PrivilegeDock\PrivilegeAccessPage.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="PrivilegeDock\PrivilegeAccessBackend.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="PrivilegeDock\PrivilegeAccessSecurity.h">
@@ -3238,6 +3247,9 @@
     <ClInclude Include="MiscDock\DiskEditor\StorageControllerResearchDialog.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="MiscDock\DiskEditor\StorageControllerResearchDialogLog.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="MiscDock\DiskEditor\StorageControllerInput.h">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -3257,12 +3269,14 @@
     <ClCompile Include="RegistryDock\RegistryWorkbenchAccess.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="RegistryDock\RegistryDocument.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="RegistryDock\RegistryDocumentApply.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="RegistryDock\RegistryDocumentApply.Win32.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="RegistryDock\RegistryAdvancedDialogs.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClInclude Include="RegistryDock\RegistryValueCodec.h"><Filter>Header Files</Filter></ClInclude>
     <QtMoc Include="RegistryDock\RegistryValueEditorWidget.h"><Filter>Header Files</Filter></QtMoc>
     <ClInclude Include="RegistryDock\RegistryWorkbenchAccess.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="RegistryDock\RegistryDocument.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="RegistryDock\RegistryDocumentApply.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="RegistryDock\RegistryDocumentApplyInternal.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="RegistryDock\RegistryAdvancedDialogs.h"><Filter>Header Files</Filter></ClInclude>
   </ItemGroup>
 </Project>

@@ -63,6 +63,14 @@ namespace
         return value.complete && value.exists == exists
             && (!exists || (value.type == type && value.data == data));
     }
+
+    // 输入待显示的菜单，设置当前主题的背景、文字、选中态与禁用态。
+    // 子菜单在创建后同样调用，避免依赖父容器或应用的默认菜单样式。
+    void applyWorkbenchMenuTheme(QMenu& menu)
+    {
+        menu.setStyleSheet(KswordTheme::ContextMenuStyle());
+        menu.setToolTipsVisible(true);
+    }
 }
 
 RegistryAccessContext RegistryDock::accessContext() const
@@ -127,6 +135,8 @@ void RegistryDock::initializeWorkbenchControls()
     commandLayout->addWidget(more);
     connect(more, &QPushButton::clicked, this, [this, more]() {
         QMenu menu(this);
+        applyWorkbenchMenuTheme(menu);
+        menu.setObjectName(QStringLiteral("registry_workbench_more_menu"));
         auto* backup = menu.addAction(QStringLiteral("备份完整子树"));
         auto* restore = menu.addAction(QStringLiteral("恢复原始备份"));
         menu.addSeparator();
@@ -701,6 +711,8 @@ void RegistryDock::addLocationTab(const QString& path)
 void RegistryDock::showNavigationMenu()
 {
     QMenu menu(this);
+    applyWorkbenchMenuTheme(menu);
+    menu.setObjectName(QStringLiteral("registry_workbench_navigation_menu"));
     QAction* toggle = menu.addAction(m_favoritePaths.contains(m_currentPath)
         ? QStringLiteral("移除当前收藏") : QStringLiteral("收藏当前键"));
     menu.addSeparator();
@@ -708,6 +720,8 @@ void RegistryDock::showNavigationMenu()
     { auto* action = menu.addAction(path); action->setData(path); }
     menu.addSeparator();
     auto* history = menu.addMenu(QStringLiteral("最近访问"));
+    applyWorkbenchMenuTheme(*history);
+    history->setObjectName(QStringLiteral("registry_workbench_history_menu"));
     const qsizetype count = static_cast<qsizetype>(m_navigationHistory.size());
     for (qsizetype i = count; i > qMax<qsizetype>(0, count - 20); --i)
     { const QString path = m_navigationHistory.at(static_cast<size_t>(i - 1)); auto* action = history->addAction(path); action->setData(path); }

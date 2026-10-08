@@ -31,7 +31,7 @@ namespace ks::plugin_host
         QString filePath;
         quint32 processId = 0;
         QString processName;
-        quint64 processCreateTime100ns = 0;
+        quint64 processCreateTime100ns = 0; // 进程记录捕获的原创建时间；零身份不能由插件菜单补授。
         quint64 memoryAddress = 0;
         bool navigateMemoryDump = false;
     };

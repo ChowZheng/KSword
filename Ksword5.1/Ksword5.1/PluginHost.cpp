@@ -2908,17 +2908,29 @@ void ks::plugin_host::populateTargetMenu(QMenu* menu, QWidget* owner, const Invo
         QAction* action = menu->addAction(descriptor.name);
         action->setToolTip(QStringLiteral("%1\nID：%2\n目标：%3")
             .arg(descriptor.description, descriptor.id, descriptor.targets.join(QStringLiteral(", "))));
-        InvocationContext boundContext = context;
-        if (descriptor.id == QStringLiteral("x96dbg") && context.targetKind == TargetKind::Process
-            && boundContext.processCreateTime100ns == 0)
-            boundContext.processCreateTime100ns = ks::ui::x64dbg_navigation::ProcessCreateTime100ns(context.processId);
+        const InvocationContext boundContext = context; // 冻结菜单来源的原进程记录，避免 PID 复用重新授权。
+        const bool debuggerProcessTarget = descriptor.id == QStringLiteral("x96dbg")
+            && context.targetKind == TargetKind::Process;
+        if (debuggerProcessTarget)
+        {
+            // 原记录没有创建时间时仅禁用导航；不从当前同号进程补齐旧目标的身份。
+            action->setEnabled(ks::ui::x64dbg_navigation::HasCapturedIdentity(
+                boundContext.processId, boundContext.processCreateTime100ns));
+        }
         QObject::connect(action, &QAction::triggered, owner, [owner, descriptor, boundContext]() {
             if (descriptor.id == QStringLiteral("x96dbg") && boundContext.targetKind == TargetKind::Process)
             {
-                if (boundContext.processCreateTime100ns == 0) return;
-                ks::ui::x64dbg_navigation::Open(owner, {boundContext.processId, boundContext.processCreateTime100ns,
-                    boundContext.memoryAddress, boundContext.navigateMemoryDump
-                        ? ks::ui::x64dbg_navigation::View::Dump : ks::ui::x64dbg_navigation::View::Disassembly});
+                if (!ks::ui::x64dbg_navigation::HasCapturedIdentity(
+                        boundContext.processId, boundContext.processCreateTime100ns))
+                {
+                    return;
+                }
+                ks::ui::x64dbg_navigation::Open(owner,
+                    {boundContext.processId, boundContext.processCreateTime100ns,
+                        boundContext.memoryAddress,
+                        boundContext.navigateMemoryDump
+                            ? ks::ui::x64dbg_navigation::View::Dump
+                            : ks::ui::x64dbg_navigation::View::Disassembly});
                 return;
             }
             launchPlugin(owner, descriptor, boundContext);

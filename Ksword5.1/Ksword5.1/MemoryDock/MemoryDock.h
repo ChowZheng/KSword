@@ -1348,6 +1348,7 @@ private:
     std::uint64_t m_currentViewerAddress = 0;          // Tab4 当前起始地址。
     QByteArray m_currentViewerPageBytes;               // Tab4 当前页原始字节缓存。
     std::uint32_t m_viewerSnapshotPid = 0;
+    std::uint64_t m_viewerSnapshotProcessCreateTime100ns = 0; // Tab4 读取前冻结的原进程导航身份。
     std::uint64_t m_viewerSnapshotAttachmentGeneration = 0;
     ksword::memory_backend::MemoryAccessBackend m_viewerSnapshotBackend =
         ksword::memory_backend::MemoryAccessBackend::UserMode;
@@ -1360,6 +1361,7 @@ private:
     std::uint64_t m_driverMemoryOffsetBase = 0;        // Tab6 本次读取使用的可选偏移基址。
     std::uint64_t m_driverMemoryCenterAddress = 0;     // Tab6 本次读取解析出的最终中心地址。
     std::uint32_t m_driverMemorySnapshotPid = 0;       // Tab6 快照对应的目标 PID，写回时固定使用。
+    std::uint64_t m_driverMemorySnapshotProcessCreateTime100ns = 0; // Tab6 读取时冻结的进程导航身份。
     QString m_driverMemorySnapshotProcessName;         // Tab6 快照对应的进程名，仅用于展示和确认。
     QByteArray m_driverMemoryOriginalBytes;            // Tab6 读取备份。
     QByteArray m_driverMemoryEditedBytes;              // Tab6 当前编辑缓存。

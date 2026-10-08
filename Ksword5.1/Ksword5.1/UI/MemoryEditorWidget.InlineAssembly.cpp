@@ -86,9 +86,10 @@ namespace ks::ui
             m_processCreateTime100ns = 0;
             return;
         }
-        const auto creation = pid != 0 && createTime100ns == 0
-            ? x64dbg_navigation::ProcessCreateTime100ns(pid) : createTime100ns;
-        m_processPid = pid != 0 && creation != 0 ? pid : 0;
-        m_processCreateTime100ns = m_processPid != 0 ? creation : 0;
+        // 只接受宿主在读取阶段保留的原身份，不能把当前同号进程授权给旧字节。
+        // 文件偏移的早退保持不变；物理/内核/缺身份快照仍不拥有进程导航目标。
+        const bool identified = x64dbg_navigation::HasCapturedIdentity(pid, createTime100ns);
+        m_processPid = identified ? pid : 0;
+        m_processCreateTime100ns = identified ? createTime100ns : 0;
     }
 }

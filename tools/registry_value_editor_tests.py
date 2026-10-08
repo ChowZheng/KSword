@@ -52,12 +52,15 @@ def main() -> int:
                 app / "UI" / "ThemeStatusRole.cpp",
                 app / "UI" / "UIBaseFunction.cpp",
                 app / "UI" / "ThemeControlGlyphs.cpp",
+                app / "UI" / "CodeEditorWidget.cpp",
+                app / "UI" / "ReportStructuredView.cpp",
                 app / "Internationalization" / "LanguageManager.cpp",
                 repo / "tools" / "registry_value_editor_tests.cpp"]
     moc_headers = [ui / name for name in (
         "HexCanvas.h", "HexInspectorPanel.h", "HexInspectorRowView.h", "HexView.h",
         "HexFindBar.h", "HexGotoBar.h", "HexViewWidgets.h")]
     moc_headers += [app / "UI" / "HexEditorWidget.h", app / "RegistryDock" / "RegistryValueEditorWidget.h"]
+    moc_headers += [app / "UI" / "CodeEditorWidget.h"]
     for header in moc_headers:
         generated = out / ("moc_" + header.stem + ".cpp")
         subprocess.run([str(qt / "bin" / "moc.exe"), str(header), "-o", str(generated)], env=env, check=True)
@@ -68,7 +71,7 @@ def main() -> int:
     sources.append(resource)
     flags = ["-std=c++23", "-O0", "-g0", "-Wall", "-Wextra", "-DWIN32_LEAN_AND_MEAN", "-DNOMINMAX",
              "-DUNICODE", "-D_UNICODE", "-DQT_CORE_LIB", "-DQT_GUI_LIB", "-DQT_WIDGETS_LIB"]
-    for module in ("", "QtCore", "QtGui", "QtWidgets"):
+    for module in ("", "QtCore", "QtGui", "QtWidgets", "QtSvg"):
         flags += ["-isystem", str(qt / "include" / module)]
     own_sources = {app / "RegistryDock" / "RegistryValueEditorWidget.cpp", app / "RegistryDock" / "RegistryValueCodec.cpp",
                    app / "RegistryDock" / "RegistryAdvancedDialogs.cpp"}
@@ -96,7 +99,7 @@ def main() -> int:
         for future in as_completed([pool.submit(compile_one, source) for source in sources]):
             objects.append(future.result())
     exe = out / "registry_value_editor_tests.exe"
-    subprocess.run([str(compiler), *map(str, objects), "-L" + str(qt / "lib"), "-lQt6Widgets", "-lQt6Gui", "-lQt6Core",
+    subprocess.run([str(compiler), *map(str, objects), "-L" + str(qt / "lib"), "-lQt6Widgets", "-lQt6Gui", "-lQt6Core", "-lQt6Svg",
                     "-ladvapi32", "-luser32", "-o", str(exe)], env=env, check=True)
     return subprocess.run([str(exe), str(out / "shots")], env=env).returncode
 

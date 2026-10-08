@@ -63,8 +63,8 @@ namespace ks::ui
         WorkbenchDisasmView* disassemblyView() const;
         WorkbenchTextView* textView() const;
         std::optional<DisassemblySelection> selectedInstruction() const;
-        // Only live process virtual-memory owners supply this context. Offline,
-        // physical and kernel evidence must not inherit a process navigation target.
+        // 只接受宿主读取时冻结的进程 VA 身份；缺创建时间时禁用导航，不按当前 PID 补授。
+        // 文件偏移、物理和内核证据不能继承进程导航目标，字节缓存和编辑通路不受影响。
         void setProcessContext(std::uint32_t pid, std::uint64_t createTime100ns = 0);
         void undo();
         void redo();
