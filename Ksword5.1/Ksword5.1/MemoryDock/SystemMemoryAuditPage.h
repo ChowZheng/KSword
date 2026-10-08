@@ -47,6 +47,7 @@ public:
 
     // refreshSnapshot：重新采集整机内存快照并刷新全部审计视图。
     void refreshSnapshot();
+    std::function<void(const QString&)> openModuleDetails;
 
     // setDdmaSessionProvider：
     // - 作用：注入 DDMA 会话读取入口，让本页的"DDMA 复核"按钮能拿到当前通道配置；

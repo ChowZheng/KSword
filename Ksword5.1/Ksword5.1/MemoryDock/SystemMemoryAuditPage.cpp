@@ -928,6 +928,10 @@ void SystemMemoryAuditPage::initializeUi()
     m_detailTabs->addTab(poolPage, localized("Pool tags"));
     m_detailTabs->addTab(bigPoolPage, localized("Big Pool allocations"));
     m_pfnPage = new PhysicalPageAttributionPage(m_detailTabs);
+    m_pfnPage->openModuleDetails = [this](const QString& path) {
+        const auto handler = openModuleDetails;
+        if (handler) { handler(path); }
+    };
     m_detailTabs->addTab(m_pfnPage, localized("Physical page attribution"));
     m_hyperVPage = new HyperVMemoryPage(m_detailTabs);
     m_detailTabs->addTab(m_hyperVPage, localized("Hyper-V / host memory"));

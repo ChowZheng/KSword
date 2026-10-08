@@ -468,6 +468,10 @@ void MemoryDock::initializeTabs()
 void MemoryDock::initializeSystemMemoryAuditTab()
 {
     m_systemMemoryAuditPage = new SystemMemoryAuditPage(m_tabWidget);
+    m_systemMemoryAuditPage->openModuleDetails = [this](const QString& path) {
+        const auto handler = openPoolModuleDetails;
+        if (handler) { handler(path); }
+    };
     m_tabWidget->addTab(m_systemMemoryAuditPage, QStringLiteral("系统内存审计"));
     ks::i18n::LanguageManager::instance().bindTab(
         m_tabWidget,

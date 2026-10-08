@@ -2,6 +2,7 @@
 #include <QWidget>
 #include <QJsonObject>
 #include <memory>
+#include <functional>
 #include "../../../shared/evidence/PoolTraceCapturePolicy.h"
 class QLabel;
 class QPushButton;
@@ -11,6 +12,8 @@ class QTableWidget;
 class QTimer;
 class QProcess;
 class QTemporaryDir;
+class QTabWidget;
+class PoolAllocationAnalysisWidget;
 
 // Separate consumer observations and prospective allocation history. Neither
 // data source is added to the PFN ledger or used to rename its residual.
@@ -19,6 +22,7 @@ public:
     explicit MemoryConsumerEvidencePage(QWidget* parent = nullptr);
     ~MemoryConsumerEvidencePage() override;
     QJsonObject evidence() const;
+    std::function<void(const QString&)> openModuleDetails;
 protected:
     void changeEvent(QEvent*) override;
 private:
@@ -42,6 +46,8 @@ private:
     QLabel* m_gpuStatus = nullptr;
     QTableWidget* m_gpuTable = nullptr;
     QPlainTextEdit* m_traceLog = nullptr;
+    QTabWidget* m_detailTabs = nullptr;
+    PoolAllocationAnalysisWidget* m_poolAnalysis = nullptr;
     QTimer* m_captureTimer = nullptr;
     QTimer* m_commandTimer = nullptr;
     QProcess* m_process = nullptr;

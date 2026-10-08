@@ -2,6 +2,7 @@
 
 // BaseModuleName 在这里：符号解析要反复把"完整路径"化简成"文件名"。
 #include "DumpSymbolIndex.h"
+#include "../ksword/dbghelp_serialization.h"
 
 #include <QDir>
 #include <QFile>
@@ -24,7 +25,7 @@ namespace ks::minidump
     {
         // g_dbgHelpMutex：DbgHelp 的会话状态是进程级的，同一时刻只允许一个会话。
         // 解析在线程池 worker 里跑，多次解析可能并发，这把锁是必需的。
-        std::mutex g_dbgHelpMutex;
+        std::mutex& g_dbgHelpMutex = ks::dbghelp::SerializationMutex();
 
         // kFakeProcess：SymInitialize 需要一个唯一句柄做会话标识。离线符号化没有
         // 真实进程可用，按 DbgHelp 的惯例传一个不与任何真实句柄冲突的常量即可。

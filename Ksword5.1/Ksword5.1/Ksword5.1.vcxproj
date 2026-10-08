@@ -327,6 +327,9 @@
     <ClCompile Include="MemoryDock\PhysicalPageMappings.cpp" />
     <ClCompile Include="MemoryDock\PhysicalPageAttributionPage.cpp" />
     <ClCompile Include="MemoryDock\MemoryConsumerEvidencePage.cpp" />
+    <ClCompile Include="MemoryDock\PoolTraceReader.cpp" />
+    <ClCompile Include="MemoryDock\PoolAllocationAnalysisWidget.cpp" />
+    <ClCompile Include="..\..\shared\evidence\PoolAllocationAnalysis.cpp" />
     <ClCompile Include="MemoryDock\PhysicalPageConsumers.cpp" />
     <ClCompile Include="..\..\shared\evidence\GpuMemoryEvidence.cpp" />
     <ClCompile Include="MemoryDock\MemoryAttributionChart.cpp" />
@@ -902,6 +905,9 @@
     <ClInclude Include="MemoryDock\PhysicalPageMappings.h" />
     <ClInclude Include="MemoryDock\PhysicalPageAttributionPage.h" />
     <ClInclude Include="MemoryDock\MemoryConsumerEvidencePage.h" />
+    <ClInclude Include="MemoryDock\PoolTraceReader.h" />
+    <ClInclude Include="MemoryDock\PoolAllocationAnalysisWidget.h" />
+    <ClInclude Include="..\..\shared\evidence\PoolAllocationAnalysis.h" />
     <ClInclude Include="MemoryDock\PhysicalPageConsumers.h" />
     <ClInclude Include="..\..\shared\evidence\GpuMemoryEvidence.h" />
     <ClInclude Include="..\..\shared\evidence\MemorySnapshotAccounting.h" />

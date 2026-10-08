@@ -24,6 +24,7 @@ public:
     void focusCategory(int use);
     // Invoked on the UI thread after an immutable scan result has been published.
     std::function<void(const std::shared_ptr<ksword::pfn::Scan>&)> snapshotReady;
+    std::function<void(const QString&)> openModuleDetails;
 protected:
     void changeEvent(QEvent*) override;
 private:
