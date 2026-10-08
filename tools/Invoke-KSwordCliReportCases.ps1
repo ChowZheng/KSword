@@ -28,7 +28,7 @@ $cases = @(
     'callback enum --limit 4', 'kernel callbacks --limit 2', 'callback runtime-state', 'callback monitor-status',
     'driver integrity --limit 4', 'driver unloaded --limit 4', 'driver piddb --limit 4',
     'driver device --limit 4', 'driver major --limit 4', 'driver fastio --limit 4',
-    'r0 object-types --limit 4', 'misc vbs', 'dyn status', 'capability query-driver-capabilities',
+    'r0 object-types --limit 4', 'r0 object-types --max-entries 4', 'misc vbs', 'dyn status', 'capability query-driver-capabilities',
     'preflight query --limit 32', 'r0 ioctl-registry --max-entries 512',
     'driver detail --name SkaProtect', 'driver detail', 'kernel object-summary', 'process terminate', 'process frobnicate'
 )

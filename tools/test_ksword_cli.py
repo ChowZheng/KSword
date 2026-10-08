@@ -7,6 +7,7 @@ import argparse
 from pathlib import Path
 import subprocess
 import tempfile
+import re
 
 ROOT = Path(__file__).resolve().parents[1]
 HARNESS = r'''
@@ -15,6 +16,17 @@ HARNESS = r'''
 #include <Windows.h>
 #include <cstring>
 #include <string>
+#include <type_traits>
+#include "TYPES_HEADER"
+namespace extendedFixture {
+/*EXTENDED_HELPERS*/
+struct Result { ksword::ark::IoResult io; bool unsupported = false; };
+static Result failure(DWORD error) {
+    Result result; result.io.win32Error = error;
+    if (error == ERROR_FILE_NOT_FOUND) result.io.message = "CreateFileW(KswordARK) failed";
+    return result;
+}
+}
 static unsigned reads = 0;
 static DWORD openError = 0, ioctlError = ERROR_NOT_SUPPORTED;
 static HANDLE WINAPI testOpen(LPCWSTR, DWORD, DWORD, LPSECURITY_ATTRIBUTES, DWORD, DWORD, HANDLE) {
@@ -38,9 +50,16 @@ static BOOL WINAPI testIoctl(HANDLE, DWORD, LPVOID, DWORD, LPVOID, DWORD, LPDWOR
 #define wmain productionMain
 #include "CLI_SOURCE"
 #undef wmain
-int commandArkDriverExtended(int, wchar_t*[]) { return 3; }
-int commandArkDriverCallbackMonitor(int, wchar_t*[]) { return 3; }
+int commandArkDriverExtended(int, wchar_t*[]) { return extendedFixture::finishResult(L"r0", extendedFixture::failure(openError ? openError : ioctlError)); }
+int commandArkDriverCallbackMonitor(int, wchar_t*[]) { return extendedFixture::finishResult(L"monitor-status", extendedFixture::failure(openError ? openError : ioctlError)); }
 int wmain(int argc, wchar_t* argv[]) {
+    if (argc > 1 && std::wstring(argv[1]) == L"--known-status") {
+        configureConsole();
+        extendedFixture::Result success; success.io.ok = true;
+        extendedFixture::printResultState(L"success", success);
+        auto failure = extendedFixture::failure(ERROR_ACCESS_DENIED); failure.io.ntStatus = static_cast<long>(0xc0000022);
+        extendedFixture::printResultState(L"failure", failure); return 0;
+    }
     if (argc > 1 && std::wstring(argv[1]) == L"--protocol") {
         std::wcout << IOCTL_KSWORD_ARK_ENUM_PROCESS << L" " << IOCTL_KSWORD_ARK_QUERY_DRIVER_CAPABILITIES << L"\n"; return 0;
     }
@@ -58,7 +77,12 @@ def main():
     with tempfile.TemporaryDirectory(prefix="ksword-cli-") as temp:
         directory = Path(temp)
         source = directory / "regression.cpp"
-        source.write_text(HARNESS.replace("CLI_SOURCE", (ROOT / "KswordCLI/KswordCLI.cpp").as_posix()), encoding="utf-8")
+        extended = (ROOT / "KswordCLI/ArkDriverExtended.cpp").read_text(encoding="utf-8-sig")
+        helpers = extended[extended.index("    std::wstring utf8ToWide"):extended.index("    void printBytes")]
+        finish = re.search(r"(?ms)^    template <typename Result>\n    int finishResult.*?^    }", extended).group(0)
+        harness = HARNESS.replace("CLI_SOURCE", (ROOT / "KswordCLI/KswordCLI.cpp").as_posix())
+        harness = harness.replace("TYPES_HEADER", (ROOT / "Ksword5.1/Ksword5.1/ArkDriverClient/ArkDriverTypes.h").as_posix())
+        source.write_text(harness.replace("/*EXTENDED_HELPERS*/", helpers + finish), encoding="utf-8")
         binary = directory / "regression.exe"
         subprocess.run(["cl", "/nologo", "/std:c++17", "/EHsc", "/utf-8", "/O2", str(source),
                         "/Fe:" + str(binary), "/link", "Iphlpapi.lib", "Ws2_32.lib", "Setupapi.lib"], cwd=temp, check=True)
@@ -92,6 +116,12 @@ def main():
                             "driver integrity --limit 4", "callback runtime-state", "misc vbs", "dyn status"]:
                 result = subprocess.run([str(binary), *command.split()], capture_output=True)
                 assert result.returncode == 5 and b"win32=50" in result.stderr, (command, result.returncode, result.stderr)
+            for command in ["callback monitor-status", "r0 object-types --max-entries 4"]:
+                result = subprocess.run([str(binary), *command.split()], capture_output=True)
+                assert result.returncode == 5 and b"nt_status=n/a" in result.stdout, result.stdout
+                assert b"nt_status=0x0" not in result.stdout
+            known = subprocess.run([str(binary), "--known-status"], capture_output=True, check=True)
+            assert b"nt_status=0x0" in known.stdout and b"nt_status=0xc0000022" in known.stdout, known.stdout
             for command in ["process enum", "kernel ipc", "callback runtime-state", "misc vbs"]:
                 result = subprocess.run([str(binary), "--missing-device", *command.split()], capture_output=True)
                 assert result.returncode == 2 and b"win32=2" in result.stderr, (command, result.returncode, result.stderr)

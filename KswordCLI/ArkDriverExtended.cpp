@@ -159,9 +159,12 @@ namespace
     {
         std::wcout << label << L": io_ok=" << (result.io.ok ? L"true" : L"false")
                    << L" bytes_returned=" << result.io.bytesReturned
-                   << L" win32_error=" << result.io.win32Error
-                   << L" nt_status=0x" << std::hex << static_cast<std::uint32_t>(result.io.ntStatus)
-                   << std::dec << L"\n";
+                   << L" win32_error=" << result.io.win32Error;
+        // A failed Win32 transport with the default zero has no returned
+        // NTSTATUS. Preserve nonzero statuses supplied by response parsers.
+        if (!result.io.ok && result.io.ntStatus == 0) std::wcout << L" nt_status=n/a";
+        else std::wcout << L" nt_status=0x" << std::hex << static_cast<std::uint32_t>(result.io.ntStatus) << std::dec;
+        std::wcout << L"\n";
         if constexpr (HasUnsupported<Result>::value)
         {
             std::wcout << L"unsupported=" << (result.unsupported ? L"true" : L"false") << L"\n";

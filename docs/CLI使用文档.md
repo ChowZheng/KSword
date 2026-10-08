@@ -16,6 +16,8 @@ KswordCLI.exe <family> <subcommand> --help
 
 ## 参数约定
 
+`r0` 和 Callback Monitor 的 `nt_status=n/a` 表示传输失败且没有返回 NTSTATUS；它不代表内核执行成功。响应解析器取得的实际非零 NTSTATUS 仍按十六进制显示。
+
 退出码沿用既有约定：`0` 成功，`1` 用法/参数错误，`2` 设备打开失败，`3` I/O 调用失败，`4` 响应格式错误，`5` 不支持或证据不可用。所有未支持的 IOCTL 传输错误（Win32 1/50/120/127）统一返回 `5`，包括固定响应、变长审计和 `r0`/Callback Monitor 命令。个别证据命令另以 `6` 表示扫描不完整，见该命令说明。
 
 若所有只读命令连同 `capability query-driver-capabilities` 都返回 `win32=50`，不能仅凭 IOCTL 名称判断驱动缺少实现。请运行 `preflight query` 和 `r0 ioctl-registry`，核对 `sc qc KswordARK` 的实际加载路径及配套版本。2026-10-01 的旧驱动会在 OS build 高于 26100 时拦截包括能力查询在内的请求；该上限已于 2026-10-03 移除，仍须使用匹配的内核 profile。
