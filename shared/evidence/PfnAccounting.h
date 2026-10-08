@@ -309,9 +309,9 @@ IdentityRetry retryUnavailable(std::uint64_t first, std::vector<Identity>& pages
 {
     IdentityRetry stats;
     std::vector<std::uint64_t> pfns;
-    std::vector<std::size_t> slots;
+    std::vector<std::size_t> pageIndices;
     for (std::size_t i = 0; i < pages.size(); ++i) {
-        if (pages[i].frame == ~0ULL) { pfns.push_back(first + i); slots.push_back(i); }
+        if (pages[i].frame == ~0ULL) { pfns.push_back(first + i); pageIndices.push_back(i); }
     }
     if (pfns.empty() || stopped()) { return stats; }
     std::vector<Identity> retried;
@@ -320,7 +320,7 @@ IdentityRetry retryUnavailable(std::uint64_t first, std::vector<Identity>& pages
     if (stats.status >= 0 && retried.size() != pfns.size()) { stats.status = static_cast<std::int32_t>(0xC000003EU); }
     if (stats.status >= 0) {
         for (std::size_t i = 0; i < retried.size(); ++i) {
-            if (retried[i].frame != ~0ULL) { pages[slots[i]] = retried[i]; ++stats.recoveredPages; }
+            if (retried[i].frame != ~0ULL) { pages[pageIndices[i]] = retried[i]; ++stats.recoveredPages; }
         }
     }
     return stats;

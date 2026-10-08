@@ -263,6 +263,9 @@ jobs:
       - name: Test QADS artifact validation
         run: python tools/test_verify_qads_runtime.py
 
+      - name: Test failed CI release reporting
+        run: python tools/test_ci_failure_release.py
+
       # 这道门禁原先挂在主程序 vcxproj 的 BeforeTargets="ClCompile" 上，靠"每次
       # 编译 GUI 都会顺带跑一遍"来生效。2026-09-19 主程序对 hvm_ctl 的依赖整条
       # 摘掉，那个目标也一起删了——于是它变成一个谁都不跑的脚本。接到这里来：
@@ -994,15 +997,7 @@ jobs:
     if: >-
       always() &&
       github.event_name == 'push' &&
-      github.ref == 'refs/heads/main' &&
-      needs.changes.result == 'success' &&
-      (needs.source-integrity.result == 'success' || needs.source-integrity.result == 'skipped') &&
-      (needs.usermode-release.result == 'success' || needs.usermode-release.result == 'skipped') &&
-      (needs.ksword-setup.result == 'success' || needs.ksword-setup.result == 'skipped') &&
-      (needs.ksword-arklight.result == 'success' || needs.ksword-arklight.result == 'skipped') &&
-      (needs.ksword-ce-plugin.result == 'success' || needs.ksword-ce-plugin.result == 'skipped') &&
-      (needs.ksword-ce-launcher.result == 'success' || needs.ksword-ce-launcher.result == 'skipped') &&
-      (needs.ksword-x96dbg.result == 'success' || needs.ksword-x96dbg.result == 'skipped')
+      github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
@@ -1016,9 +1011,19 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          CI_JOB_RESULTS: ${{ toJSON(needs) }}
           CURRENT_USERMODE_REQUIRED: ${{ needs.changes.outputs.usermode }}
           CURRENT_SETUP_REQUIRED: ${{ needs.changes.outputs.setup }}
           CURRENT_ARKLIGHT_REQUIRED: ${{ needs.changes.outputs.arklight }}
           CURRENT_CE_PLUGIN_REQUIRED: ${{ needs.changes.outputs.ce_plugin }}
           CURRENT_CE_LAUNCHER_REQUIRED: ${{ needs.changes.outputs.ce_launcher }}
-        run: bash .github/workflows/scripts/publish-ci-prerelease.sh
+        run: |
+          # Preserve build failures while still publishing their diagnostics.
+          # Packaging/API failures also get a diagnostic release when possible.
+          set +e
+          bash .github/workflows/scripts/publish-ci-prerelease.sh 2>&1 | tee "$RUNNER_TEMP/ci-release-publish.log"
+          publish_status=${PIPESTATUS[0]}
+          set -e
+          if (( publish_status != 0 )); then
+            python3 tools/ci_failure_release.py --publication-error-log "$RUNNER_TEMP/ci-release-publish.log"
+          fi

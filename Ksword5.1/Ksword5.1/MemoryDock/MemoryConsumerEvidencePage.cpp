@@ -22,6 +22,7 @@
 #include <QSaveFile>
 #include <QSpinBox>
 #include <QTimer>
+#include <QTimeZone>
 #include <QTemporaryDir>
 #include <QUuid>
 #include <QVBoxLayout>
@@ -34,9 +35,9 @@ QString L(const char* text) { return ks::i18n::packedSourceText(QString::fromUtf
 QString utc(std::uint64_t value)
 {
     constexpr std::uint64_t unixEpoch = 116444736000000000ULL;
-    return value >= unixEpoch ? QDateTime::fromMSecsSinceEpoch(static_cast<qint64>((value - unixEpoch) / 10000), Qt::UTC).toString(Qt::ISODateWithMs) : L("Unavailable");
+    return value >= unixEpoch ? QDateTime::fromMSecsSinceEpoch(static_cast<qint64>((value - unixEpoch) / 10000), QTimeZone::UTC).toString(Qt::ISODateWithMs) : L("Unavailable");
 }
-QString metric(ksword::gpu_memory::Metric value)
+QString gpuMetricText(ksword::gpu_memory::Metric value)
 {
     using M = ksword::gpu_memory::Metric;
     switch (value) {
@@ -180,7 +181,7 @@ void MemoryConsumerEvidencePage::rebuildGpu()
     m_gpuTable->setSortingEnabled(false); m_gpuTable->setRowCount(0);
     for (const auto& counter : m_gpuResult->snapshot.counters) {
         const int row = m_gpuTable->rowCount(); m_gpuTable->insertRow(row);
-        m_gpuTable->setItem(row, 0, new QTableWidgetItem(metric(counter.metric)));
+        m_gpuTable->setItem(row, 0, new QTableWidgetItem(gpuMetricText(counter.metric)));
         m_gpuTable->setItem(row, 1, new QTableWidgetItem(QString::fromStdWString(counter.instance)));
         const bool process = ksword::gpu_memory::processMetric(counter.metric);
         m_gpuTable->setItem(row, 2, new QTableWidgetItem(counter.pid ? QString::number(counter.pid) : (process ? L("Unresolved") : L("Not applicable"))));
