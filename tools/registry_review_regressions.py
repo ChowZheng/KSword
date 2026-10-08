@@ -75,7 +75,8 @@ def main():
     subprocess.run([qt / "bin" / "moc.exe", app / "UI" / "CodeEditorWidget.h", "-o", moc], env=env, check=True)
     # Compile the actual advanced dialogs, too, to check their use of the production editor API.
     cl(["/c", app / "RegistryDock" / "RegistryAdvancedDialogs.cpp", "/Fo" + str(output / "registry-review-advanced.obj")])
-    ui = build("registry-review-ui", [generated, app / "UI" / "CodeEditorWidget.cpp", app / "UI" / "ReportStructuredView.cpp",
+    ui = build("registry-review-ui", [generated, app / "UI" / "CodeEditorWidget.cpp",
+        app / "UI" / "CodeTextEdit.cpp", app / "UI" / "CodeEditorFileSession.cpp", app / "UI" / "ReportStructuredView.cpp",
         app / "Internationalization" / "LanguageManager.cpp", moc],
         ["Qt6Core.lib", "Qt6Gui.lib", "Qt6Widgets.lib", "Qt6Svg.lib", "user32.lib", "advapi32.lib", "shell32.lib"])
     subprocess.run([ui], cwd=repo, env=env, check=True)

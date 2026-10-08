@@ -1,4 +1,5 @@
 #include "MemoryEditorWidget.h"
+#include "CodeTextEdit.h"
 #include "MemoryAssembly.h"
 #include "HexEditorWidget.h"
 #include "MemoryWorkbench/WorkbenchDisasmView.h"
@@ -829,16 +830,15 @@ namespace ks::ui
         auto* hint = new QLabel(trText(QStringLiteral("每行一条 Intel 指令。数字默认十六进制，十进制用 0d 前缀；支持局部标签。覆盖长度须包含完整指令；编译不会写入真实内存。")), dialog);
         hint->setWordWrap(true);
         layout->addWidget(hint);
-        auto* source = new QPlainTextEdit(dialog);
+        auto* source = new CodeTextEdit(dialog);
         source->setObjectName(QStringLiteral("memory_assembly_source"));
-        source->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
         source->setPlainText(first.decoded ? first.mnemonic + QLatin1Char(' ') + first.operands
             : QStringLiteral("db ") + byteText(first.bytes));
         layout->addWidget(source, 1);
-        auto* preview = new QPlainTextEdit(dialog);
+        auto* preview = new CodeTextEdit(dialog);
+        static_cast<CodeTextEdit*>(preview)->setSyntaxLanguage(CodeTextEdit::SyntaxLanguage::PlainText);
         preview->setObjectName(QStringLiteral("memory_assembly_preview"));
         preview->setReadOnly(true);
-        preview->setFont(source->font());
         layout->addWidget(preview, 1);
         auto* status = new QLabel(dialog);
         status->setWordWrap(true);

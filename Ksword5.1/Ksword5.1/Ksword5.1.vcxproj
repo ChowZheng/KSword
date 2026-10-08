@@ -492,6 +492,8 @@
     <ClCompile Include="StartupDock\StartupDock.Services.cpp" />
     <ClCompile Include="StartupDock\StartupDock.Tasks.cpp" />
     <ClCompile Include="UI\CodeEditorWidget.cpp" />
+    <ClCompile Include="UI\CodeTextEdit.cpp" />
+    <ClCompile Include="UI\CodeEditorFileSession.cpp" />
     <ClCompile Include="UI\EmbeddedRowDelegate.cpp" />
     <ClCompile Include="UI\DetailLayoutHost.cpp" />
     <ClCompile Include="UI\DetailLayoutRegistry.cpp" />
@@ -870,6 +872,8 @@
     <ClInclude Include="UI\HvmWatchPanel.h" />
     <ClInclude Include="UI\HvmWatchEventDialog.h" />
     <ClInclude Include="UI\EmbeddedRowDelegate.h" />
+    <ClInclude Include="UI\CodeTextEdit.h" />
+    <ClInclude Include="UI\CodeEditorFileSession.h" />
     <ClInclude Include="UI\DetailLayoutHost.h" />
     <ClInclude Include="UI\DetailLayoutRegistry.h" />
     <ClInclude Include="UI\ReportStructuredView.h" />

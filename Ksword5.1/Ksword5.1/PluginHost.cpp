@@ -1,4 +1,5 @@
 #include "PluginHost.h"
+#include "UI/CodeTextEdit.h"
 #include "UI/VisibleTableWidget.h"
 
 #include "theme.h"
@@ -1183,13 +1184,15 @@ namespace
             }
             else
             {
-                m_plainOutput = new QPlainTextEdit(m_tabs);
+                m_plainOutput = new CodeTextEdit(m_tabs);
+                static_cast<CodeTextEdit*>(m_plainOutput)->setSyntaxLanguage(CodeTextEdit::SyntaxLanguage::PlainText);
                 m_plainOutput->setReadOnly(true);
                 m_plainOutput->setMaximumBlockCount(2000);
                 m_tabs->addTab(m_plainOutput, QStringLiteral("插件输出"));
             }
 
-            m_diagnostics = new QPlainTextEdit(m_tabs);
+            m_diagnostics = new CodeTextEdit(m_tabs);
+            static_cast<CodeTextEdit*>(m_diagnostics)->setSyntaxLanguage(CodeTextEdit::SyntaxLanguage::PlainText);
             m_diagnostics->setReadOnly(true);
             m_diagnostics->setMaximumBlockCount(2000);
             m_diagnostics->setPlaceholderText(QStringLiteral("插件错误和协议诊断会显示在这里。"));
@@ -1571,7 +1574,8 @@ namespace
             m_surface->installEventFilter(this);
             rootLayout->addWidget(m_surface, 1);
 
-            m_diagnostics = new QPlainTextEdit(this);
+            m_diagnostics = new CodeTextEdit(this);
+            static_cast<CodeTextEdit*>(m_diagnostics)->setSyntaxLanguage(CodeTextEdit::SyntaxLanguage::PlainText);
             m_diagnostics->setReadOnly(true);
             m_diagnostics->setMaximumHeight(180);
             m_diagnostics->document()->setMaximumBlockCount(2000);
@@ -2657,7 +2661,8 @@ namespace
                 .arg(plugin.name, plugin.licenseName), &licenseDialog);
             label->setWordWrap(true);
             layout->addWidget(label);
-            auto* text = new QPlainTextEdit(&licenseDialog);
+            auto* text = new CodeTextEdit(&licenseDialog);
+            static_cast<CodeTextEdit*>(text)->setSyntaxLanguage(CodeTextEdit::SyntaxLanguage::PlainText);
             text->setReadOnly(true);
             text->setPlainText(QString::fromUtf8(licensePayload));
             layout->addWidget(text, 1);

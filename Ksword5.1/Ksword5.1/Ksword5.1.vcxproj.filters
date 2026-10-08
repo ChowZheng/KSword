@@ -1328,6 +1328,12 @@
     <ClCompile Include="UI\CodeEditorWidget.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="UI\CodeTextEdit.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\CodeEditorFileSession.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="UI\EmbeddedRowDelegate.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -2653,6 +2659,12 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="UI\EmbeddedRowDelegate.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="UI\CodeTextEdit.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="UI\CodeEditorFileSession.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="UI\DetailLayoutRegistry.h">

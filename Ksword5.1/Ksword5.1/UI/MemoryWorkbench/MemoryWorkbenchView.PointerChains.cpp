@@ -16,6 +16,7 @@
 #include <QLineEdit>
 #include <QMessageBox>
 #include <QPlainTextEdit>
+#include "../CodeTextEdit.h"
 #include <QStackedWidget>
 #include <QThreadPool>
 #include <QVBoxLayout>
@@ -170,7 +171,9 @@ namespace ks::ui
         layout->addWidget(hint);
         if (const auto found = pointerTraces_.find(id); found != pointerTraces_.end())
         {
-            auto* trace = new QPlainTextEdit(QString::fromUtf8(found->second.c_str()), dialog);
+            auto* trace = new CodeTextEdit(dialog);
+            trace->setSyntaxLanguage(CodeTextEdit::SyntaxLanguage::PlainText);
+            trace->setPlainText(QString::fromUtf8(found->second.c_str()));
             trace->setReadOnly(true);
             layout->addWidget(trace);
         }

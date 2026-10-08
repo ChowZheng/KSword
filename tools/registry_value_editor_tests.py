@@ -53,6 +53,8 @@ def main() -> int:
                 app / "UI" / "UIBaseFunction.cpp",
                 app / "UI" / "ThemeControlGlyphs.cpp",
                 app / "UI" / "CodeEditorWidget.cpp",
+                app / "UI" / "CodeTextEdit.cpp",
+                app / "UI" / "CodeEditorFileSession.cpp",
                 app / "UI" / "ReportStructuredView.cpp",
                 app / "Internationalization" / "LanguageManager.cpp",
                 repo / "tools" / "registry_value_editor_tests.cpp"]
@@ -75,11 +77,16 @@ def main() -> int:
         flags += ["-isystem", str(qt / "include" / module)]
     own_sources = {app / "RegistryDock" / "RegistryValueEditorWidget.cpp", app / "RegistryDock" / "RegistryValueCodec.cpp",
                    app / "RegistryDock" / "RegistryAdvancedDialogs.cpp"}
+    editor_sources = {app / "UI" / name for name in
+                      ("CodeEditorWidget.cpp", "CodeTextEdit.cpp", "CodeEditorFileSession.cpp", "ReportStructuredView.cpp")}
+    editor_header_time = max((app / "UI" / name).stat().st_mtime for name in
+                             ("CodeEditorWidget.h", "CodeTextEdit.h", "CodeEditorFileSession.h"))
 
     def compile_one(source: Path) -> Path:
         # File stems are unique in this fixture; mocs have their own prefix.
         obj = out / (source.stem + ".o")
-        if source not in own_sources and obj.exists() and obj.stat().st_mtime > source.stat().st_mtime:
+        newest_input = max(source.stat().st_mtime, editor_header_time) if source in editor_sources else source.stat().st_mtime
+        if source not in own_sources and obj.exists() and obj.stat().st_mtime > newest_input:
             return obj
         command = [str(compiler), *flags]
         if source in own_sources:

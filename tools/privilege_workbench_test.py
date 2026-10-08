@@ -37,6 +37,7 @@ def main() -> None:
          'PrivilegeSnapshotPage.cpp', 'PrivilegeSnapshotModel.cpp')]
     files += [source / name for name in ('Internationalization/LanguageManager.cpp',
         'UI/ThemeStatusRole.cpp', 'UI/ThemeControlGlyphs.cpp', 'UI/CodeEditorWidget.cpp',
+        'UI/CodeTextEdit.cpp', 'UI/CodeEditorFileSession.cpp',
         'UI/ReportStructuredView.cpp', 'ksword/process/process_run_as.cpp',
         'MiscDock/DiskEditor/StorageControllerResearchDialog.cpp',
         'ArkDriverClient/ArkStorageControllerClient.cpp')]
@@ -74,7 +75,8 @@ def main() -> None:
     headers = list((source / 'PrivilegeDock').glob('PrivilegeAccess*.h'))
     headers += list((source / 'MiscDock/DiskEditor').glob('StorageControllerResearchDialog*.h'))
     headers += [root / 'tools/privilege_access_page_tests.h',
-        root / 'tools/privilege_token_pages_tests.h', source / 'UI/CodeEditorWidget.h']
+        root / 'tools/privilege_token_pages_tests.h', source / 'UI/CodeEditorWidget.h',
+        source / 'UI/CodeTextEdit.h', source / 'UI/CodeEditorFileSession.h']
     latest_header = max(header.stat().st_mtime for header in headers)
     objects = []
     for file in files:
@@ -82,7 +84,7 @@ def main() -> None:
         if (not arguments.incremental or file.name in arguments.force_source
                 or not obj.exists() or obj.stat().st_mtime < max(file.stat().st_mtime, latest_header)):
             compile_flags = list(flags)
-            if msvc and file.name in ('CodeEditorWidget.cpp', 'ReportStructuredView.cpp',
+            if msvc and file.name in ('CodeEditorWidget.cpp', 'CodeTextEdit.cpp', 'CodeEditorFileSession.cpp', 'ReportStructuredView.cpp',
                                       'LanguageManager.cpp', 'ThemeControlGlyphs.cpp', 'PrivilegeSnapshotPage.cpp'):
                 # 既有公共组件沿用生产 /W3；本次拆分与页面保持 /W4 /WX。
                 compile_flags = [flag for flag in compile_flags if flag not in ('/W4', '/WX')]

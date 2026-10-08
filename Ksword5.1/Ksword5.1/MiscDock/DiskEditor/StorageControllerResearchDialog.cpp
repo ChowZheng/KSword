@@ -15,6 +15,7 @@
 #include <QLineEdit>
 #include <QMessageBox>
 #include <QPlainTextEdit>
+#include "../../UI/CodeTextEdit.h"
 #include <QPushButton>
 #include <QPointer>
 #include <QScrollArea>
@@ -141,7 +142,8 @@ namespace ks::misc
         rangeLayout->addRow(QStringLiteral("字节偏移"), m_offsetEdit);
         rangeLayout->addRow(QStringLiteral("字节长度"), m_lengthEdit);
         transferLayout->addLayout(rangeLayout);
-        m_hexEdit = new QPlainTextEdit(transferGroup);
+        m_hexEdit = new CodeTextEdit(transferGroup);
+        static_cast<CodeTextEdit*>(m_hexEdit)->setSyntaxLanguage(CodeTextEdit::SyntaxLanguage::PlainText);
         m_hexEdit->setPlaceholderText(
             QStringLiteral("读取结果或待写入 HEX，例如：00 11 22 FF"));
         m_hexEdit->setMaximumBlockCount(8192);
