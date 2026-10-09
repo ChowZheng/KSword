@@ -1,6 +1,9 @@
-// 使用生产 MemoryEditorWidget 和 Qt 鼠标/键盘事件验证行内暂存，绝不访问真实内存。
-#include "../Ksword5.1/Ksword5.1/UI/MemoryEditorWidget.h"
-#include "../Ksword5.1/Ksword5.1/UI/HexEditorWidget.h"
+// 使用生产 SnapshotWorkbenchWidget 和 Qt 鼠标/键盘事件验证行内暂存，绝不访问真实内存。
+#include "../Ksword5.1/Ksword5.1/UI/MemoryWorkbench/SnapshotWorkbenchWidget.h"
+#include "../Ksword5.1/Ksword5.1/UI/MemoryWorkbench/HexView.h"
+#include "../Ksword5.1/Ksword5.1/UI/MemoryWorkbench/WorkbenchCompareView.h"
+#include "workbench_pseudocode_contract_tests.h"
+#include "workbench_integration_regression_tests.h"
 #include "../Ksword5.1/Ksword5.1/UI/CodeTextEdit.h"
 #include <QApplication>
 #include "../Ksword5.1/Ksword5.1/UI/MemoryWorkbench/WorkbenchDisasmView.h"
@@ -29,6 +32,7 @@
 #include <QPointer>
 #include <QPushButton>
 #include <QRegularExpression>
+#include <QSettings>
 #include <QTableWidget>
 #include <QTabBar>
 #include <QTabWidget>
@@ -305,7 +309,7 @@ namespace
     void checkPeFileAddressMapping()
     {
         using namespace ks::ui;
-        MemoryEditorWidget owner;
+        SnapshotWorkbenchWidget owner;
         owner.setAddressKind(SnapshotAddressKind::FileOffset);
         const auto snapshot = std::make_shared<const std::vector<std::uint8_t>>(0x1000, 0x90);
         constexpr std::uint64_t imageBase = 0x140000000ULL;
@@ -410,7 +414,7 @@ namespace
             {0x200, 0x200, 0x1000, 0x100, QStringLiteral(".text"), true},
             {0x400, 0x200, 0x3000, 0x100, QStringLiteral(".other"), true},
             {0, 0, 0x2000, 0x100, QStringLiteral(".bss"), false}};
-        MemoryEditorWidget owner;
+        SnapshotWorkbenchWidget owner;
         owner.resize(1100, 650);
         owner.setAddressKind(SnapshotAddressKind::FileOffset);
         owner.setEditable(false);
@@ -435,7 +439,7 @@ namespace
         view->canvas()->setSelectedRow(0);
         QTest::keyClick(view->canvas(), Qt::Key_Return);
         flushEvents();
-        require(view->anchorAddress() == 0x400 && owner.hexEditor()->selectedAbsoluteAddress() == 0x400
+        require(view->anchorAddress() == 0x400 && owner.hexEditor()->caretAddress() == 0x400
             && owner.selectedInstruction() && owner.selectedInstruction()->address == 0x400
             && owner.selectedInstruction()->originalBytes == QByteArray::fromHex("c3"),
             "Enter follows a PE call across differently mapped sections to its actual captured target bytes");
@@ -448,7 +452,7 @@ namespace
             view->canvas()->setSelectedRow(0);
             QTest::keyClick(view->canvas(), Qt::Key_Return);
             flushEvents();
-            require(view->anchorAddress() == 0x200 && owner.hexEditor()->selectedAbsoluteAddress() == 0x200,
+            require(view->anchorAddress() == 0x200 && owner.hexEditor()->caretAddress() == 0x200,
                 "PE calls to zero-fill or unmapped virtual ranges cannot jump to fabricated file offsets");
         }
         load(QByteArray::fromHex("488b05f91f0000c3"));
@@ -499,7 +503,7 @@ namespace
         FixtureEnvironment delay("KSWORD_GHIDRA_FIXTURE_DELAY", "0");
         constexpr std::uint64_t base = 0x140001000ULL;
         const auto original = QByteArray::fromHex("b82a000000c3");
-        MemoryEditorWidget owner;
+        SnapshotWorkbenchWidget owner;
         owner.resize(1100, 650);
         owner.setSnapshot(original, base, DisassemblyArchitecture::X64, base, QStringLiteral("C-source-one"));
         owner.show();
@@ -512,10 +516,12 @@ namespace
             && locateHex && locateDisassembly, "C is a fifth read-only page on the actual shared byte editor");
         auto* installPlugin = owner.findChild<QPushButton*>(QStringLiteral("memory_install_ghidra_plugin"));
         require(installPlugin != nullptr, "shared C exposes the managed plugin installation action");
+#ifndef KSWORD_EDITOR_PRODUCTION_OBJECT_TESTS
         fixture::lastManagedPlugin.clear();
         installPlugin->click();
         require(fixture::lastManagedPlugin == QStringLiteral("ghidra"),
             "shared C opens native plugin management with the Ghidra backend preselected");
+#endif
         configured->setText(root);
         QVector<DecompilerResult> results;
         QObject::connect(owner.decompiler(), &GhidraDecompiler::finished, &owner,
@@ -526,6 +532,19 @@ namespace
         require(waitFor([&]() { return !owner.decompiler()->isRunning(); })
             && code->toPlainText().contains(QStringLiteral("return 42;")),
             "validated headless C renders in the shared component");
+        // Scanner 同窗命中只移动地址，不重读字节；直接点 C 按钮必须分析新的 B。
+        auto* decompileButton = owner.findChild<QPushButton*>(QStringLiteral("memory_decompile_function"));
+        require(decompileButton != nullptr, "C function button is available on the shared page");
+        owner.jumpToAddress(base);
+        decompileButton->click();
+        require(waitFor([&]() { return !owner.decompiler()->isRunning(); }) && !results.isEmpty()
+            && results.last().success && results.last().functionAddress == base,
+            "same-window Scanner navigation changes the actual C process request from A to B");
+        owner.hexEditor()->jumpToAddress(base + 5);
+        decompileButton->click();
+        require(waitFor([&]() { return !owner.decompiler()->isRunning(); }) && results.last().success
+            && results.last().functionAddress == base + 5,
+            "native HEX caret motion also synchronizes the actual C analysis request");
         flushEvents();
         if (!previewDirectory.isEmpty())
             require(owner.grab().save(previewDirectory + QStringLiteral("/shared-pseudocode-fixture.png")),
@@ -554,10 +573,10 @@ namespace
         require(locateHex->isEnabled() && locateDisassembly->isEnabled(),
             "mapped C statements enable both shared byte and disassembly jumps");
         std::uint64_t observedAddress = 0;
-        QObject::connect(&owner, &MemoryEditorWidget::currentAddressChanged, &owner,
+        QObject::connect(&owner, &SnapshotWorkbenchWidget::currentAddressChanged, &owner,
             [&](std::uint64_t address) { observedAddress = address; });
         locateHex->click();
-        require(tabs->currentIndex() == 0 && owner.hexEditor()->selectedAbsoluteAddress() == base + 5
+        require(tabs->currentIndex() == 0 && owner.hexEditor()->caretAddress() == base + 5
             && observedAddress == base + 5, "C statement navigation preserves the full address and notifies its host");
         tabs->setCurrentIndex(4);
         locateDisassembly->click();
@@ -566,7 +585,7 @@ namespace
             && owner.selectedInstruction()->address == base + 5,
             "C statement navigation selects the matching real instruction");
         owner.setEditable(true);
-        require(owner.hexEditor()->setByteAtAbsoluteAddress(base + 1, 43, true),
+        require(owner.hexEditor()->setByteQuiet(base + 1, 43),
             "the staged-byte test updates a valid shared cache byte");
         owner.refreshFromHexEditor();
         require(code->toPlainText().isEmpty() && owner.hasChanges(),
@@ -604,7 +623,7 @@ namespace
             "PE pseudocode passes the mapped VA to the backend while the shared editor displays file offsets");
         code->setTextCursor(QTextCursor(code->document()->findBlockByNumber(2)));
         locateHex->click();
-        require(tabs->currentIndex() == 0 && owner.hexEditor()->selectedAbsoluteAddress() == 0x200
+        require(tabs->currentIndex() == 0 && owner.hexEditor()->caretAddress() == 0x200
             && owner.data() == original && !owner.hasChanges(),
             "PE C navigation converts its instruction VA back to the exact read-only file offset");
         owner.setFileAnalysisContext(pe, 0x140000000ULL,
@@ -618,19 +637,53 @@ namespace
         owner.setCapturedAddressRange(0, 0x400);
         quint64 requestedAddress = 0, requestedLength = 0;
         unsigned requests = 0;
-        QObject::connect(&owner, &MemoryEditorWidget::windowRequested, &owner,
-            [&](quint64 address, quint64 length) { requestedAddress = address; requestedLength = length; ++requests; });
+        bool capturedRequestsBounded = true; // 所有预取和定位均不得超出冻结文件范围。
+        QObject::connect(&owner, &SnapshotWorkbenchWidget::windowRequested, &owner,
+            [&](quint64 address, quint64 length) {
+                requestedAddress = address;
+                requestedLength = length;
+                capturedRequestsBounded = capturedRequestsBounded && address < 0x400 && length > 0
+                    && length <= 0x400 - address;
+                ++requests;
+            });
         owner.jumpToAddress(0x3f0);
         require(requests == 1 && requestedAddress == 0x3f0 && requestedLength == 0x10
             && owner.data() == original, "off-window analysis navigation requests only the available captured file tail");
         owner.jumpToAddress(0x400);
         require(requests == 1, "captured-range navigation never requests a byte past the file tail");
+        // C 页映射后的地址可落在同一文件的其它捕获窗口，不扩大允许范围。
+        auto* sharedC = owner.findChild<WorkbenchPseudocodeView*>();
+        const auto beforeHexNavigation = requests;
+        sharedC->requestHexLocate(0x3e0);
+        require(requests > beforeHexNavigation && requestedAddress == 0x3e0 && requestedLength == 0x20
+            && tabs->currentIndex() == 0, "C HEX navigation requests a bounded off-window captured tail");
+        const auto beforeAssemblyNavigation = requests;
+        sharedC->requestDisasmLocate(0x3e8);
+        // 首次装配反汇编可先预取当前窗口；最终定位必须仍是指定的合法尾部。
+        require(requests > beforeAssemblyNavigation && requestedAddress == 0x3e8 && requestedLength == 0x18
+            && tabs->currentIndex() == 1, "C assembly navigation requests a bounded off-window captured tail");
+        const auto beforePseudocodeNavigation = requests;
+        owner.showPseudocodeAt(0x3f0);
+        require(requests == beforePseudocodeNavigation + 1 && requestedAddress == 0x3f0 && requestedLength == 0x10
+            && tabs->currentIndex() == 4 && !owner.decompiler()->isRunning(),
+            "off-window C activation waits for captured bytes before starting analysis");
+        const auto completedNavigationRequests = requests;
+        sharedC->requestHexLocate(0x400);
+        sharedC->requestDisasmLocate(0x400);
+        owner.showPseudocodeAt(0x400);
+        require(requests == completedNavigationRequests && capturedRequestsBounded,
+            "all C navigation paths reject addresses beyond the captured tail");
         owner.clear();
         owner.jumpToAddress(0x3f0);
-        require(requests == 1 && code->toPlainText().isEmpty(),
+        require(requests == completedNavigationRequests && code->toPlainText().isEmpty(),
             "clear removes old captured-range callbacks and C evidence");
+        owner.setSnapshot(original, 0x200);
+        owner.setCapturedAddressRange(0, 0x400);
+        owner.setSnapshot(original, 0x200, DisassemblyArchitecture::X64, 0x200, QStringLiteral("new-capture"));
+        owner.jumpToAddress(0x3f0);
+        require(requests == completedNavigationRequests, "source replacement removes the prior source captured range");
 
-        QPointer<MemoryEditorWidget> retiring = new MemoryEditorWidget;
+        QPointer<SnapshotWorkbenchWidget> retiring = new SnapshotWorkbenchWidget;
         retiring->setSnapshot(original, base);
         retiring->findChild<QLineEdit*>(QStringLiteral("memory_decompiler_directory"))->setText(root);
         qputenv("KSWORD_GHIDRA_FIXTURE_DELAY", "500");
@@ -640,15 +693,15 @@ namespace
         flushEvents();
         require(retiring.isNull(), "destroying a shared editor safely cancels pending headless analysis");
 
-        QPointer<MemoryEditorWidget> deleteOnAddress = new MemoryEditorWidget;
+        QPointer<SnapshotWorkbenchWidget> deleteOnAddress = new SnapshotWorkbenchWidget;
         deleteOnAddress->setSnapshot(original, base);
-        QObject::connect(deleteOnAddress, &MemoryEditorWidget::currentAddressChanged, qApp,
+        QObject::connect(deleteOnAddress, &SnapshotWorkbenchWidget::currentAddressChanged, qApp,
             [deleteOnAddress](quint64) { delete deleteOnAddress.data(); });
         deleteOnAddress->showPseudocodeAt(base);
         require(deleteOnAddress.isNull(),
             "pseudocode activation permits its host to destroy the editor during an address notification");
         flushEvents();
-        QPointer<MemoryEditorWidget> deleteOnRunning = new MemoryEditorWidget;
+        QPointer<SnapshotWorkbenchWidget> deleteOnRunning = new SnapshotWorkbenchWidget;
         deleteOnRunning->setSnapshot(original, base);
         deleteOnRunning->findChild<QLineEdit*>(QStringLiteral("memory_decompiler_directory"))->setText(root);
         QObject::connect(deleteOnRunning->decompiler(), &GhidraDecompiler::runningChanged, qApp,
@@ -659,7 +712,7 @@ namespace
         flushEvents();
 
         qputenv("KSWORD_GHIDRA_FIXTURE_DELAY", "0");
-        QPointer<MemoryEditorWidget> deleteOnCodeClear = new MemoryEditorWidget;
+        QPointer<SnapshotWorkbenchWidget> deleteOnCodeClear = new SnapshotWorkbenchWidget;
         deleteOnCodeClear->setSnapshot(original, base);
         deleteOnCodeClear->findChild<QLineEdit*>(QStringLiteral("memory_decompiler_directory"))->setText(root);
         deleteOnCodeClear->showPseudocodeAt(base);
@@ -674,7 +727,7 @@ namespace
             "snapshot replacement survives owner destruction from clearing old C text");
         flushEvents();
 
-        MemoryEditorWidget replacedDuringResult;
+        SnapshotWorkbenchWidget replacedDuringResult;
         replacedDuringResult.setSnapshot(original, base, DisassemblyArchitecture::X64,
             base, QStringLiteral("C-result-before-replacement"));
         replacedDuringResult.findChild<QLineEdit*>(QStringLiteral("memory_decompiler_directory"))->setText(root);
@@ -695,7 +748,7 @@ namespace
             && replacementStatus->toolTip().isEmpty(),
             "a callback that replaces the source cannot publish the old function status or diagnostics afterwards");
 
-        MemoryEditorWidget restartedDuringInvalidation;
+        SnapshotWorkbenchWidget restartedDuringInvalidation;
         restartedDuringInvalidation.setSnapshot(original, base);
         restartedDuringInvalidation.findChild<QLineEdit*>(QStringLiteral("memory_decompiler_directory"))->setText(root);
         restartedDuringInvalidation.showPseudocodeAt(base);
@@ -719,7 +772,7 @@ namespace
     }
 
     // Exercise the production row canvas, including its selection/edit distinction.
-    QLineEdit* clickEditor(ks::ui::MemoryEditorWidget& widget)
+    QLineEdit* clickEditor(ks::ui::SnapshotWorkbenchWidget& widget)
     {
         auto* view = widget.disassemblyView();
         auto* canvas = view->canvas();
@@ -743,7 +796,7 @@ namespace
     }
 
     // submit 输入整条指令并按 Enter；只允许改变编辑器缓存。
-    void submit(ks::ui::MemoryEditorWidget& widget, const char* instruction)
+    void submit(ks::ui::SnapshotWorkbenchWidget& widget, const char* instruction)
     {
         auto* editor = clickEditor(widget);
         editor->setText(QString::fromLatin1(instruction));
@@ -759,7 +812,7 @@ namespace
         const QByteArray bytes = QByteArray::fromHex("b801000000c3");
         for (int scenario = 0; scenario < 5; ++scenario)
         {
-            QPointer<ks::ui::MemoryEditorWidget> owner = new ks::ui::MemoryEditorWidget;
+            QPointer<ks::ui::SnapshotWorkbenchWidget> owner = new ks::ui::SnapshotWorkbenchWidget;
             owner->resize(1100, 650);
             owner->setSnapshot(bytes, modalBase);
             owner->setEditable(true);
@@ -845,7 +898,7 @@ namespace
     void checkSnapshotTextBounds()
     {
         using namespace ks::ui;
-        MemoryEditorWidget owner;
+        SnapshotWorkbenchWidget owner;
         constexpr std::uint64_t snapshotBase = 0x2000;
         owner.setSnapshot(QByteArray(128, 'A'), snapshotBase,
             DisassemblyArchitecture::X64, snapshotBase + 8);
@@ -906,7 +959,7 @@ namespace
         return bytes;
     }
 
-    void saveFilePreview(ks::ui::MemoryEditorWidget& owner, const QString& name)
+    void saveFilePreview(ks::ui::SnapshotWorkbenchWidget& owner, const QString& name)
     {
         if (previewDirectory.isEmpty()) return;
         for (const auto& size : {QSize(1100, 650), QSize(700, 480)})
@@ -928,7 +981,7 @@ namespace
         using namespace ks::ui;
         constexpr std::uint64_t fileOffset = 0x100002000ULL;
         const auto bytes = QByteArray::fromHex("b801000000c3");
-        MemoryEditorWidget owner;
+        SnapshotWorkbenchWidget owner;
         require(owner.addressKind() == SnapshotAddressKind::MemoryAddress,
             "existing snapshot owners default to memory addresses");
         owner.setAddressKind(SnapshotAddressKind::FileOffset);
@@ -980,7 +1033,7 @@ namespace
         saveFilePreview(owner, QStringLiteral("file-disassembly"));
         canvas->setSelectedRow(1);
         const auto selectedInstruction = owner.selectedInstruction();
-        require(owner.hexEditor()->selectedAbsoluteAddress() == fileOffset + 5
+        require(owner.hexEditor()->caretAddress() == fileOffset + 5
             && selectedInstruction && selectedInstruction->address == fileOffset + 5,
             "instruction selection synchronizes the absolute file offset to hex");
         owner.showDisassemblyAt(fileOffset + 5);
@@ -1057,44 +1110,29 @@ namespace
         require(hexCanvas != nullptr, "file hex uses the production canvas");
         hexCanvas->setCaretAddress(fileOffset);
         QTest::keyClicks(hexCanvas, "90");
-        QApplication::clipboard()->setText(QStringLiteral("90"));
-        QTest::keyClick(hexCanvas, Qt::Key_V, Qt::ControlModifier);
         owner.undo();
         owner.redo();
         flushEvents();
         require(owner.data() == bytes && !owner.hasChanges(),
-            "read-only file keyboard paste undo and redo cannot stage bytes");
+            "read-only file keyboard undo and redo cannot stage bytes");
 
         tabs->setCurrentIndex(3);
-        auto* comparison = owner.findChild<QTableWidget*>(QStringLiteral("memory_comparison_table"));
-        require(comparison != nullptr && comparison->horizontalHeaderItem(0)->text() == QStringLiteral("文件偏移"),
-            "file comparison names its coordinate column as file offset");
-        QCheckBox* onlyDifferences = nullptr;
-        for (auto* check : owner.findChildren<QCheckBox*>())
-            if (check->text() == QStringLiteral("仅显示差异")) onlyDifferences = check;
-        require(onlyDifferences != nullptr, "comparison difference filter is available");
-        onlyDifferences->setChecked(false);
-        flushEvents();
-        require(comparison->rowCount() == 1
-            && comparison->item(0, 0)->text().toULongLong(nullptr, 16) == fileOffset
-            && QByteArray::fromHex(comparison->item(0, 1)->text().toLatin1()) == bytes
-            && QByteArray::fromHex(comparison->item(0, 2)->text().toLatin1()) == bytes,
-            "file comparison renders the same exact snapshot and full-width coordinate");
-        QComboBox* baseline = nullptr;
-        for (auto* combo : owner.findChildren<QComboBox*>())
-            if (combo->count() == 2 && combo->itemText(0) == QStringLiteral("读取基线")) baseline = combo;
-        require(baseline != nullptr, "comparison baseline selector is available");
+        auto* comparisonPage = owner.findChild<WorkbenchCompareView*>();
+        auto* comparison = comparisonPage ? comparisonPage->model() : nullptr;
+        require(comparison && comparison->headerData(0, Qt::Horizontal, Qt::DisplayRole).toString() == QStringLiteral("文件偏移"),
+            "file comparison names its actual coordinate column as file offset");
+        require(comparison->rowCount() == 0, "an unchanged snapshot has no pending diff rows");
         const auto reread = QByteArray::fromHex("b802000000c3");
         owner.setSnapshot(reread, fileOffset, DisassemblyArchitecture::X86,
             fileOffset, QStringLiteral("fixture-file-one"));
-        baseline->setCurrentIndex(1);
-        onlyDifferences->setChecked(true);
+        comparisonPage->setMode(WorkbenchCompareView::Mode::ExternalChange);
         flushEvents();
         require(comparison->rowCount() == 1
-            && QByteArray::fromHex(comparison->item(0, 1)->text().toLatin1()) == bytes
-            && QByteArray::fromHex(comparison->item(0, 2)->text().toLatin1()) == reread
+            && comparison->index(0, 0).data(Qt::UserRole).toULongLong() == fileOffset
+            && QByteArray::fromHex(comparison->index(0, 1).data().toString().toLatin1()) == bytes
+            && QByteArray::fromHex(comparison->index(0, 2).data().toString().toLatin1()) == reread
             && !owner.hasChanges(),
-            "actual same-file rereads compare their bytes without manufacturing pending edits");
+            "actual same-file rereads compare exact bytes in the formal shared virtual model");
         owner.setSnapshot(reread, fileOffset, DisassemblyArchitecture::X86,
             fileOffset, QStringLiteral("fixture-file-two"));
         flushEvents();
@@ -1138,7 +1176,7 @@ namespace
         using namespace ks::ui;
         const auto bytes = QByteArray::fromHex("b801000000c3");
         const auto reread = QByteArray::fromHex("b802000000c3");
-        MemoryEditorWidget owner;
+        SnapshotWorkbenchWidget owner;
         owner.setAddressKind(SnapshotAddressKind::FileOffset);
         owner.setEditable(false);
         owner.setSnapshot(bytes, 0, DisassemblyArchitecture::X86, 0, QStringLiteral("file-origin-fixture"));
@@ -1169,7 +1207,7 @@ namespace
     void checkCapturedDisassemblyEndNote()
     {
         using namespace ks::ui;
-        MemoryEditorWidget owner;
+        SnapshotWorkbenchWidget owner;
         constexpr std::uint64_t offset = 0x100002000ULL;
         owner.setAddressKind(SnapshotAddressKind::FileOffset);
         owner.setSnapshot(QByteArray(5000, static_cast<char>(0x90)), offset, DisassemblyArchitecture::X86);
@@ -1201,10 +1239,11 @@ namespace
         const auto hasProcessNavigation = [](const QMenu& menu) {
             const auto actions = menu.actions();
             return std::any_of(actions.cbegin(), actions.cend(), [](const QAction* action) {
-                return action->text() == QStringLiteral("x64dbg fixture");
+                // 生产菜单和便携桩均带稳定的工具名，不依赖桩专用文案。
+                return action->text().contains(QStringLiteral("x64dbg"), Qt::CaseInsensitive);
             });
         };
-        MemoryEditorWidget owner;
+        SnapshotWorkbenchWidget owner;
         constexpr std::uint64_t offset = 0x2000;
         const auto bytes = QByteArray::fromHex("90c3");
         owner.setSnapshot(bytes, offset, DisassemblyArchitecture::X64,
@@ -1230,9 +1269,9 @@ namespace
         emit owner.disassemblyView()->contextMenuAboutToShow(&newMemoryMenu, offset, true);
         require(!hasProcessNavigation(newMemoryMenu), "returning to memory mode cannot resurrect an old process target");
 
-        QPointer<MemoryEditorWidget> retiring = new MemoryEditorWidget;
+        QPointer<SnapshotWorkbenchWidget> retiring = new SnapshotWorkbenchWidget;
         retiring->setSnapshot(bytes, offset);
-        QObject::connect(retiring, &MemoryEditorWidget::bytesChanged, retiring,
+        QObject::connect(retiring, &SnapshotWorkbenchWidget::bytesChanged, retiring,
             [retiring]() { delete retiring.data(); });
         retiring->setAddressKind(SnapshotAddressKind::FileOffset);
         require(retiring.isNull(), "coordinate change remains safe when clearing destroys its owner");
@@ -1252,7 +1291,15 @@ int main(int argc, char** argv)
         require(QDir().mkpath(previewDirectory), "preview output directory is available");
     }
     if (argc > 2) protocolLauncher = QString::fromLocal8Bit(argv[2]);
-    ks::ui::MemoryEditorWidget widget; // 生产编辑器，快照完全由测试提供。
+    // 测试偏好只写到截图输出下的 INI，隔离用户注册表和正式应用设置。
+    QCoreApplication::setOrganizationName(QStringLiteral("KSwordTests"));
+    QCoreApplication::setApplicationName(QStringLiteral("UnifiedSnapshotUi"));
+    QSettings::setDefaultFormat(QSettings::IniFormat);
+    const auto preferencesRoot = previewDirectory.isEmpty() ? QDir::currentPath() : previewDirectory;
+    QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, preferencesRoot);
+    QSettings::setPath(QSettings::IniFormat, QSettings::SystemScope, preferencesRoot);
+    ks::ui::SnapshotWorkbenchWidget widget; // 生产编辑器，快照完全由测试提供。
+    RunWorkbenchIntegrationRegressionTests(require);
     constexpr std::uint64_t base = 0x1000;
     const auto original = QByteArray::fromHex("b801000000c3"); // mov eax,1; ret。
     widget.resize(1100, 650);
@@ -1346,7 +1393,7 @@ int main(int argc, char** argv)
     // A selected instruction maps to its complete range in the HEX facade.
     std::uint64_t selectionStart = 99, selectionEnd = 99;
     bool selected = false;
-    const auto selectionConnection = QObject::connect(widget.hexEditor(), &HexEditorWidget::selectionChanged, &widget,
+    const auto selectionConnection = QObject::connect(widget.hexEditor(), &ks::ui::HexView::selectionChanged, &widget,
         [&](std::uint64_t first, std::uint64_t last, bool valid) {
             selectionStart = first; selectionEnd = last; selected = valid;
         });
@@ -1397,5 +1444,6 @@ int main(int argc, char** argv)
         std::cerr << "Checking shared C view\n";
         checkPseudocodeSharedView();
     }
+    RunWorkbenchPseudocodeContractTests(require);
     std::cout << "PASS: " << checks << " memory editor Qt checks\n";
 }

@@ -23,7 +23,6 @@ class QAbstractItemView;
 class QAbstractItemDelegate;
 class QDialog;
 class QEvent;
-class QPlainTextEdit;
 class QSplitter;
 class QToolButton;
 class QTreeWidgetItem;
@@ -72,7 +71,7 @@ namespace ks::ui
         struct EmbeddedEntry
         {
             QPersistentModelIndex sourceIndex;
-            QPointer<QPlainTextEdit> textEditor;
+            QPointer<CodeEditorWidget> textEditor;
             QTreeWidgetItem* treeSourceItem = nullptr;
             int originalRowHeight = -1;
             int detailHeight = 128;
@@ -98,7 +97,7 @@ namespace ks::ui
         // handleDetailChanged：同步原详情文本到当前行内视图或独立窗口。
         void handleDetailChanged(const QString& detailText);
 
-        // toggleEmbeddedDetail：为当前源行显示或移除视图层只读 QPlainTextEdit 详情。
+        // toggleEmbeddedDetail：为当前源行显示或移除统一只读报告详情。
         void toggleEmbeddedDetail(const QPersistentModelIndex& sourceIndex);
 
         // insertTableEmbeddedDetail / insertTreeEmbeddedDetail：

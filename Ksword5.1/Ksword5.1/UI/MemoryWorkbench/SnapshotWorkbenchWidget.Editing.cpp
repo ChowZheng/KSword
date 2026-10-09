@@ -1,10 +1,11 @@
-#include "MemoryEditorWidget.h"
-#include "MemoryAssembly.h"
-#include "HexEditorWidget.h"
-#include "X64DbgNavigation.h"
-#include "Decompiler/GhidraDecompiler.h"
-#include "MemoryWorkbench/WorkbenchTextView.h"
-#include "MemoryWorkbench/MemoryRowCanvas.h"
+#include "SnapshotWorkbenchWidget.h"
+#include "WorkbenchCompareView.h"
+#include "../MemoryAssembly.h"
+#include "HexView.h"
+#include "../X64DbgNavigation.h"
+#include "../Decompiler/GhidraDecompiler.h"
+#include "WorkbenchTextView.h"
+#include "MemoryRowCanvas.h"
 
 #include <QCheckBox>
 #include <QComboBox>
@@ -13,17 +14,18 @@
 
 namespace ks::ui
 {
-    MemoryEditorWidget::~MemoryEditorWidget()
+    SnapshotWorkbenchWidget::~SnapshotWorkbenchWidget()
     {
-        m_pseudocodeContextRevision = 0;
-        if (m_decompiler) m_decompiler->cancel();
+        // 外部进程和各页先放开非拥有的数据源，随后才销毁快照成员。
+        m_pseudocodePage->setBytesProvider(nullptr);
+        m_comparison->setBytesProvider(nullptr);
         // QObject deletes the child views after C++ members. Release their
         // non-owning provider reference while that member still exists.
         m_disassembly->setBytesProvider(nullptr);
         m_text->setBytesProvider(nullptr);
     }
 
-    void MemoryEditorWidget::initializeInlineAssemblyEditing()
+    void SnapshotWorkbenchWidget::initializeInlineAssemblyEditing()
     {
         m_disassembly->setBytesProvider(&m_bytesProvider);
         m_disassembly->setDecodeBackend([this](const std::uint8_t* bytes, std::size_t available,
@@ -86,7 +88,7 @@ namespace ks::ui
             [this](quint64 address, const QByteArray& bytes) { stageSnapshotBytes(address, bytes); });
     }
 
-    void MemoryEditorWidget::synchronizeSnapshotProvider()
+    void SnapshotWorkbenchWidget::synchronizeSnapshotProvider()
     {
         const int addressBits = m_addressKind == SnapshotAddressKind::FileOffset
             || architecture() == DisassemblyArchitecture::X64 ? 64 : 32;
@@ -102,7 +104,7 @@ namespace ks::ui
         }
     }
 
-    void MemoryEditorWidget::stageSnapshotBytes(std::uint64_t address, const QByteArray& bytes)
+    void SnapshotWorkbenchWidget::stageSnapshotBytes(std::uint64_t address, const QByteArray& bytes)
     {
         if (!m_editable || bytes.isEmpty() || !contains(address)) return;
         auto changed = data();
@@ -112,22 +114,22 @@ namespace ks::ui
         // This transaction touches only the shared cache; the host's apply action
         // retains its existing write-before-compare and final-readback gate.
         changed.replace(offset, bytes.size(), bytes);
-        const QPointer<MemoryEditorWidget> self(this);
-        m_hex->setByteArray(changed, m_base);
+        const QPointer<SnapshotWorkbenchWidget> self(this);
+        m_hex->setBuffer(m_base, changed);
         if (!self) return;
         refreshFromHexEditor();
         if (!self) return;
         m_syncing = true;
-        m_hex->selectAbsoluteRange(address, address + static_cast<std::uint64_t>(bytes.size() - 1));
+        selectByteRange(address, address + static_cast<std::uint64_t>(bytes.size() - 1));
         m_syncing = false;
     }
 
-    void MemoryEditorWidget::beginInlineAssemblyEdit()
+    void SnapshotWorkbenchWidget::beginInlineAssemblyEdit()
     {
         if (m_editable) m_disassembly->beginSelectedInstructionEdit();
     }
 
-    void MemoryEditorWidget::setProcessContext(std::uint32_t pid, std::uint64_t createTime100ns)
+    void SnapshotWorkbenchWidget::setProcessContext(std::uint32_t pid, std::uint64_t createTime100ns)
     {
         if (m_addressKind == SnapshotAddressKind::FileOffset)
         {

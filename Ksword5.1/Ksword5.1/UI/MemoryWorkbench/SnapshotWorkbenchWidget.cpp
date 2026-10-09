@@ -1,17 +1,18 @@
-#include "MemoryEditorWidget.h"
-#include "CodeTextEdit.h"
-#include "MemoryAssembly.h"
-#include "HexEditorWidget.h"
-#include "MemoryWorkbench/WorkbenchDisasmView.h"
-#include "MemoryWorkbench/WorkbenchTextView.h"
-#include "MemoryWorkbench/MemoryRowCanvas.h"
-#include "X64DbgNavigation.h"
-#include "Decompiler/GhidraDecompiler.h"
-#include "TableHeaderSortingSupport.h"
-#include "VisibleTableWidget.h"
-#include "UI_All.h"
-#include "../Internationalization/LanguageManager.h"
-#include "../theme.h"
+#include "SnapshotWorkbenchWidget.h"
+#include "../CodeTextEdit.h"
+#include "../MemoryAssembly.h"
+#include "HexView.h"
+#include "WorkbenchDisasmView.h"
+#include "WorkbenchTextView.h"
+#include "WorkbenchCompareView.h"
+#include "AssemblyPreviewDialog.h"
+#include "HexCanvas.h"
+#include "MemoryRowCanvas.h"
+#include "../X64DbgNavigation.h"
+#include "../Decompiler/GhidraDecompiler.h"
+#include "../UI_All.h"
+#include "../../Internationalization/LanguageManager.h"
+#include "../../theme.h"
 
 #include <QApplication>
 #include <QCheckBox>
@@ -42,8 +43,6 @@ namespace ks::ui
 {
     namespace
     {
-        constexpr int kRowOffsetRole = Qt::UserRole + 41;
-        constexpr qsizetype kComparisonPageRows = 256;
 
         QString trText(const QString& source)
         {
@@ -60,23 +59,10 @@ namespace ks::ui
             return QString::fromLatin1(bytes.toHex(' ').toUpper());
         }
 
-        QString asciiText(const QByteArray& bytes)
-        {
-            QString text;
-            text.reserve(bytes.size());
-            for (unsigned char byte : bytes)
-                text += byte >= 32 && byte < 127 ? QChar(static_cast<char>(byte)) : QChar('.');
-            return text;
-        }
 
-        QColor changeColor(const QPalette& palette, bool pending)
-        {
-            return KswordTheme::BlendColors(palette.color(QPalette::Base),
-                KswordTheme::AccentColor(pending ? KswordTheme::AccentRole::Orange : KswordTheme::AccentRole::Cyan), 95);
-        }
     }
 
-    MemoryEditorWidget::MemoryEditorWidget(QWidget* parent) : QWidget(parent)
+    SnapshotWorkbenchWidget::SnapshotWorkbenchWidget(QWidget* parent) : QWidget(parent)
     {
         setObjectName(QStringLiteral("memory_snapshot_editor"));
         auto* layout = new QVBoxLayout(this);
@@ -112,9 +98,9 @@ namespace ks::ui
         layout->addLayout(stateRow);
 
         m_tabs = new QTabWidget(this);
-        m_hex = new HexEditorWidget(m_tabs);
+        m_hex = new HexView(m_tabs);
         m_hex->setBytesPerRow(16);
-        m_hex->setHexOnlyView(true);
+        m_hex->setStatusBarVisible(false);
         m_tabs->addTab(m_hex, trText(QStringLiteral("十六进制")));
         auto* codePage = new QWidget(m_tabs);
         auto* codeLayout = new QVBoxLayout(codePage);
@@ -139,143 +125,47 @@ namespace ks::ui
         m_text->setObjectName(QStringLiteral("memory_text_canvas"));
         m_text->setBytesProvider(&m_bytesProvider);
         m_tabs->addTab(m_text, trText(QStringLiteral("文本")));
-        auto* comparisonPage = new QWidget(m_tabs);
-        auto* comparisonLayout = new QVBoxLayout(comparisonPage);
-        comparisonLayout->setContentsMargins(0, 0, 0, 0);
-        auto* comparisonTools = new QHBoxLayout;
-        comparisonTools->addWidget(new QLabel(trText(QStringLiteral("对比基线")), comparisonPage));
-        m_comparisonBaseline = new QComboBox(comparisonPage);
-        m_comparisonBaseline->addItems({trText(QStringLiteral("读取基线")), trText(QStringLiteral("上次读取"))});
-        m_onlyDifferences = new QCheckBox(trText(QStringLiteral("仅显示差异")), comparisonPage);
-        m_onlyDifferences->setChecked(true);
-        m_previousComparison = new QPushButton(trText(QStringLiteral("上一页")), comparisonPage);
-        m_nextComparison = new QPushButton(trText(QStringLiteral("下一页")), comparisonPage);
-        comparisonTools->addWidget(m_comparisonBaseline);
-        comparisonTools->addWidget(m_onlyDifferences);
-        comparisonTools->addStretch();
-        comparisonTools->addWidget(m_previousComparison);
-        comparisonTools->addWidget(m_nextComparison);
-        comparisonLayout->addLayout(comparisonTools);
-        m_comparisonStatus = new QLabel(comparisonPage);
-        m_comparisonStatus->setWordWrap(true);
-        comparisonLayout->addWidget(m_comparisonStatus);
-        m_comparison = new VisibleTableWidget(comparisonPage);
-        m_comparison->setObjectName(QStringLiteral("memory_comparison_table"));
-        m_comparison->setColumnCount(6);
-        m_comparison->setHorizontalHeaderLabels({trText(QStringLiteral("地址")), trText(QStringLiteral("基线字节")),
-            trText(QStringLiteral("当前字节")), trText(QStringLiteral("基线文本")),
-            trText(QStringLiteral("当前文本")), trText(QStringLiteral("变化字节数"))});
-        m_comparison->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
-        m_comparison->setSelectionBehavior(QAbstractItemView::SelectRows);
-        m_comparison->setSelectionMode(QAbstractItemView::SingleSelection);
-        m_comparison->setEditTriggers(QAbstractItemView::NoEditTriggers);
-        m_comparison->setAlternatingRowColors(true);
-        m_comparison->verticalHeader()->hide();
-        m_comparison->horizontalHeader()->setStretchLastSection(true);
-        m_comparison->setSortingEnabled(false);
-        SetTableHeaderClickSortingEnabled(m_comparison, false);
-        m_comparison->setContextMenuPolicy(Qt::CustomContextMenu);
-        comparisonLayout->addWidget(m_comparison, 1);
-        m_tabs->addTab(comparisonPage, trText(QStringLiteral("对比")));
+        // 比较页复用正式虚拟模型，不再维护旧的分页 QTableWidget 副本。
+        m_comparison = new WorkbenchCompareView(m_tabs);
+        m_comparison->setBytesProvider(&m_bytesProvider);
+        m_tabs->addTab(m_comparison, trText(QStringLiteral("对比")));
         layout->addWidget(m_tabs, 1);
         initializePseudocodeView();
 
-        connect(m_undo, &QPushButton::clicked, this, &MemoryEditorWidget::undo);
-        connect(m_redo, &QPushButton::clicked, this, &MemoryEditorWidget::redo);
+        connect(m_undo, &QPushButton::clicked, this, &SnapshotWorkbenchWidget::undo);
+        connect(m_redo, &QPushButton::clicked, this, &SnapshotWorkbenchWidget::redo);
         auto* undoShortcut = new QShortcut(QKeySequence::Undo, this);
         undoShortcut->setContext(Qt::WidgetWithChildrenShortcut);
-        connect(undoShortcut, &QShortcut::activated, this, &MemoryEditorWidget::undo);
+        connect(undoShortcut, &QShortcut::activated, this, &SnapshotWorkbenchWidget::undo);
         for (const auto& key : {QKeySequence(Qt::CTRL | Qt::Key_Y), QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_Z)})
         {
             auto* shortcut = new QShortcut(key, this);
             shortcut->setContext(Qt::WidgetWithChildrenShortcut);
-            connect(shortcut, &QShortcut::activated, this, &MemoryEditorWidget::redo);
+            connect(shortcut, &QShortcut::activated, this, &SnapshotWorkbenchWidget::redo);
         }
         connect(m_highlightChanges, &QCheckBox::toggled, this, [this]() {
             updateHighlights();
             if (m_tabs->currentIndex() == 1) rebuildDisassembly();
             if (m_tabs->currentIndex() == 2) rebuildText();
-            if (m_tabs->currentIndex() == 3) renderComparisonPage();
+            if (m_tabs->currentIndex() == 3) rebuildComparison();
         });
-        connect(m_comparisonBaseline, &QComboBox::currentIndexChanged, this, [this]() {
-            m_comparisonPage = 0;
-            rebuildComparison();
-        });
-        connect(m_onlyDifferences, &QCheckBox::toggled, this, [this]() {
-            m_comparisonPage = 0;
-            rebuildComparison();
-        });
-        connect(m_previousComparison, &QPushButton::clicked, this, [this]() {
-            if (m_comparisonPage > 0) --m_comparisonPage;
-            renderComparisonPage();
-        });
-        connect(m_nextComparison, &QPushButton::clicked, this, [this]() {
-            if ((m_comparisonPage + 1) * kComparisonPageRows < m_comparisonRows.size()) ++m_comparisonPage;
-            renderComparisonPage();
-        });
-        connect(m_comparison, &QTableWidget::cellDoubleClicked, this, [this](int row) {
-            const auto* cell = m_comparison->item(row, 0);
-            if (!cell) return;
-            const auto offset = cell->data(kRowOffsetRole).toULongLong();
+        connect(m_comparison, &WorkbenchCompareView::requestHexLocate, this, [this](quint64 address) {
+            if (!contains(address)) return;
             m_tabs->setCurrentIndex(0);
-            jumpToAddress(m_base + offset);
+            jumpToAddress(address);
         });
-        connect(m_comparison, &QTableWidget::currentCellChanged, this, [this](int row) {
-            const auto* cell = m_comparison->item(row, 0);
-            if (m_syncing || !cell) return;
-            const auto address = m_base + cell->data(kRowOffsetRole).toULongLong();
-            m_syncing = true;
-            m_hex->jumpToAbsoluteAddress(address);
-            m_syncing = false;
-            emit currentAddressChanged(address);
-        });
-        connect(m_comparison, &QTableWidget::customContextMenuRequested, this, [this](const QPoint& position) {
-            const auto index = m_comparison->indexAt(position);
-            if (!index.isValid()) return;
-            m_comparison->setCurrentCell(index.row(), 0);
-            const auto* addressItem = m_comparison->item(index.row(), 0);
-            const auto* beforeItem = m_comparison->item(index.row(), 1);
-            const auto* afterItem = m_comparison->item(index.row(), 2);
-            if (!addressItem || !beforeItem || !afterItem) return;
-            const auto address = m_base + addressItem->data(kRowOffsetRole).toULongLong();
-            const auto before = beforeItem->text();
-            const auto after = afterItem->text();
-            const auto revision = m_snapshotRevision;
-            // 菜单进入嵌套事件循环，父编辑器可能先被销毁；堆对象与双守卫避免释放栈对象。
-            const QPointer<MemoryEditorWidget> self(this);
-            QPointer<QMenu> menu = new QMenu(this);
-            menu->setStyleSheet(KswordTheme::ContextMenuStyle());
-            auto* copyAddress = menu->addAction(trText(QStringLiteral("复制地址")));
-            auto* copyBefore = menu->addAction(trText(QStringLiteral("复制基线字节")));
-            auto* copyAfter = menu->addAction(trText(QStringLiteral("复制当前字节")));
-            auto* locate = menu->addAction(trText(QStringLiteral("在十六进制视图中定位")));
-            auto* selected = menu->exec(m_comparison->viewport()->mapToGlobal(position));
-            if (!self || !menu)
-            {
-                return;
-            }
-            // 动作指针随菜单销毁；先冻结选择，再立即释放菜单，后续不引用动作或菜单。
-            const bool copyAddressSelected = selected == copyAddress;
-            const bool copyBeforeSelected = selected == copyBefore;
-            const bool copyAfterSelected = selected == copyAfter;
-            const bool locateSelected = selected == locate;
-            delete menu.data();
-            if (copyAddressSelected) QApplication::clipboard()->setText(addressText(address));
-            if (copyBeforeSelected) QApplication::clipboard()->setText(before);
-            if (copyAfterSelected) QApplication::clipboard()->setText(after);
-            if (self && locateSelected && revision == m_snapshotRevision && contains(address))
-            {
-                m_tabs->setCurrentIndex(0);
-                jumpToAddress(address);
-            }
-        });
-
-        connect(m_hex, &HexEditorWidget::byteEdited, this, [this]() { refreshFromHexEditor(); });
-        connect(m_hex, &HexEditorWidget::currentAddressChanged, this, [this](std::uint64_t address) {
+        connect(m_hex, &HexView::byteEdited, this, [this]() { refreshFromHexEditor(); });
+        connect(m_hex, &HexView::caretMoved, this, [this](std::uint64_t address) {
             if (!m_syncing)
+            {
+                // 光标变化也是分析位置变化；同一窗口缓存命中不依赖 contentChanged 补同步。
+                const QPointer<SnapshotWorkbenchWidget> alive(this);
+                synchronizePseudocodeContext();
+                if (!alive) return;
                 emit currentAddressChanged(address);
+            }
         });
-        connect(m_hex, &HexEditorWidget::aboutToShowContextMenu, this,
+        connect(m_hex, &HexView::aboutToShowContextMenu, this,
             [this](QMenu* menu, std::uint64_t address, bool valid) {
                 if (!valid) return;
                 if (m_processPid != 0)
@@ -306,7 +196,7 @@ namespace ks::ui
         connect(m_tabs, &QTabWidget::currentChanged, this, [this](int index) {
             if (index == 1)
             {
-                const auto address = m_hex->selectedAbsoluteAddress();
+                const auto address = m_hex->bufferSize() ? m_hex->caretAddress() : m_base;
                 if (contains(address)) m_anchor = address;
                 m_decodeAddress->setText(addressText(m_anchor));
                 rebuildDisassembly();
@@ -314,11 +204,12 @@ namespace ks::ui
             }
             if (index == 2) rebuildText();
             if (index == 3) rebuildComparison();
+            if (index == 4) synchronizePseudocodeContext();
         });
         connect(m_architecture, &QComboBox::currentIndexChanged, this, [this]() {
             // 即使之后切回原架构，也不复活切换前已经排队或打开预览的汇编请求。
             ++m_snapshotRevision;
-            const QPointer<MemoryEditorWidget> alive(this);
+            const QPointer<SnapshotWorkbenchWidget> alive(this);
             invalidatePseudocode();
             if (!alive) return;
             synchronizeSnapshotProvider();
@@ -346,8 +237,12 @@ namespace ks::ui
         const auto synchronizeSelection = [this](quint64 first, quint64 last) {
             if (m_syncing || !contains(first)) return;
             m_syncing = true;
-            m_hex->selectAbsoluteRange(first, last);
+            selectByteRange(first, last);
             m_syncing = false;
+            // 反汇编/文本选区移动后冻结新的位置，隐藏的 C 页也不能保留旧按钮上下文。
+            const QPointer<SnapshotWorkbenchWidget> alive(this);
+            synchronizePseudocodeContext();
+            if (!alive) return;
             emit currentAddressChanged(first);
         };
         connect(m_disassembly, &WorkbenchDisasmView::selectionChanged, this,
@@ -408,17 +303,18 @@ namespace ks::ui
         updateState();
     }
 
-    HexEditorWidget* MemoryEditorWidget::hexEditor() const { return m_hex; }
-    void MemoryEditorWidget::setAddressKind(SnapshotAddressKind kind)
+    HexView* SnapshotWorkbenchWidget::hexEditor() const { return m_hex; }
+    void SnapshotWorkbenchWidget::setAddressKind(SnapshotAddressKind kind)
     {
         if (m_addressKind == kind) return;
         m_addressKind = kind;
         // Do not carry process navigation, read comparisons or staged edits
         // across coordinate domains, even when numeric offsets happen to match.
-        const QPointer<MemoryEditorWidget> self(this);
+        const QPointer<SnapshotWorkbenchWidget> self(this);
         clear();
         if (!self || m_addressKind != kind) return;
         const bool file = kind == SnapshotAddressKind::FileOffset;
+        m_comparison->setFileOffsetCoordinates(file);
         m_decodeLabel->setText(file ? trText(QStringLiteral("反汇编起点（文件偏移）"))
             : trText(QStringLiteral("反汇编起点")));
         m_decodeAddress->setToolTip(file
@@ -427,28 +323,30 @@ namespace ks::ui
         m_architecture->setToolTip(file
             ? trText(QStringLiteral("按所选 x86/x64 指令集解码原始文件字节；文件偏移不等于 PE 虚拟地址。"))
             : trText(QStringLiteral("指令架构；可手动切换，物理地址和 CR3 无法自动判断目标位数。")));
-        m_comparison->horizontalHeaderItem(0)->setText(file
-            ? trText(QStringLiteral("文件偏移")) : trText(QStringLiteral("地址")));
+
     }
-    QByteArray MemoryEditorWidget::data() const { return m_hex->data(); }
-    QByteArray MemoryEditorWidget::originalBytes() const { return m_original; }
-    std::uint64_t MemoryEditorWidget::baseAddress() const { return m_base; }
-    DisassemblyArchitecture MemoryEditorWidget::currentArchitecture() const { return architecture(); }
-    bool MemoryEditorWidget::hasChanges() const { return data() != m_original; }
-    bool MemoryEditorWidget::contains(std::uint64_t address) const
+    QByteArray SnapshotWorkbenchWidget::data() const { return m_hex->buffer(); }
+    QByteArray SnapshotWorkbenchWidget::originalBytes() const { return m_original; }
+    std::uint64_t SnapshotWorkbenchWidget::baseAddress() const { return m_base; }
+    DisassemblyArchitecture SnapshotWorkbenchWidget::currentArchitecture() const { return architecture(); }
+    bool SnapshotWorkbenchWidget::hasChanges() const { return data() != m_original; }
+    bool SnapshotWorkbenchWidget::contains(std::uint64_t address) const
     {
-        return address >= m_base && address - m_base < static_cast<std::uint64_t>(m_hex->regionSize());
+        return address >= m_base && address - m_base < static_cast<std::uint64_t>(m_hex->bufferSize());
     }
-    DisassemblyArchitecture MemoryEditorWidget::architecture() const
+    DisassemblyArchitecture SnapshotWorkbenchWidget::architecture() const
     {
         return m_architecture->currentIndex() == 0 ? DisassemblyArchitecture::X86 : DisassemblyArchitecture::X64;
     }
 
-    void MemoryEditorWidget::setSnapshot(const QByteArray& bytes, std::uint64_t base,
+    void SnapshotWorkbenchWidget::setSnapshot(const QByteArray& bytes, std::uint64_t base,
         DisassemblyArchitecture arch, std::uint64_t anchor, const QString& sourceIdentity)
     {
-        const QPointer<MemoryEditorWidget> alive(this);
-        const auto previousRevision = m_snapshotRevision;
+        const QPointer<SnapshotWorkbenchWidget> alive(this);
+        // 换源意图先领代次，再使所有比较索引失效；reset 的观察者可重入换源或销毁宿主。
+        const auto previousRevision = ++m_snapshotRevision;
+        m_comparison->reset();
+        if (!alive || previousRevision != m_snapshotRevision) return;
         invalidatePseudocode(true);
         if (!alive || previousRevision != m_snapshotRevision) return;
         // Invalid wrapping ranges are never exposed as writable snapshots.
@@ -476,15 +374,15 @@ namespace ks::ui
         m_sourceIdentity = sourceIdentity;
         m_history.reset();
         m_observed = bytes;
-        m_comparisonPage = 0;
         m_base = base;
-        ++m_snapshotRevision;
         m_original = bytes;
         m_disassembly->reset();
+        if (!alive || previousRevision != m_snapshotRevision) return;
         m_text->reset();
-        const QPointer<MemoryEditorWidget> self(this);
-        m_hex->setByteArray(bytes, base);
-        if (!self) return;
+        if (!alive || previousRevision != m_snapshotRevision) return;
+        const QPointer<SnapshotWorkbenchWidget> self(this);
+        m_hex->setBuffer(base, bytes);
+        if (!self || previousRevision != m_snapshotRevision) return;
         m_anchor = contains(anchor) ? anchor : base;
         {
             // 后续 bytesChanged 可同步销毁编辑器；信号屏蔽器不能跨越该通知存活。
@@ -494,17 +392,17 @@ namespace ks::ui
         synchronizeSnapshotProvider();
         m_decodeAddress->setText(addressText(m_anchor));
         jumpToAddress(m_anchor);
-        if (!self) return;
+        if (!self || previousRevision != m_snapshotRevision) return;
         refreshFromHexEditor();
     }
 
-    void MemoryEditorWidget::setEditable(bool editable)
+    void SnapshotWorkbenchWidget::setEditable(bool editable)
     {
         // 权限暂停/恢复使之前的编辑上下文失效；重复下发相同状态不干扰正常操作。
         if (m_editable != editable)
         {
             ++m_snapshotRevision;
-            const QPointer<MemoryEditorWidget> alive(this);
+            const QPointer<SnapshotWorkbenchWidget> alive(this);
             invalidatePseudocode();
             if (!alive) return;
         }
@@ -512,7 +410,7 @@ namespace ks::ui
         updateState();
     }
 
-    QVector<MemoryEditBlock> MemoryEditorWidget::diffBlocks() const
+    QVector<MemoryEditBlock> SnapshotWorkbenchWidget::diffBlocks() const
     {
         QVector<MemoryEditBlock> blocks;
         const auto bytes = data();
@@ -528,9 +426,9 @@ namespace ks::ui
         return blocks;
     }
 
-    void MemoryEditorWidget::acceptChanges()
+    void SnapshotWorkbenchWidget::acceptChanges()
     {
-        const QPointer<MemoryEditorWidget> alive(this);
+        const QPointer<SnapshotWorkbenchWidget> alive(this);
         const auto revision = m_snapshotRevision;
         invalidatePseudocode();
         if (!alive || revision != m_snapshotRevision) return;
@@ -547,9 +445,9 @@ namespace ks::ui
         else m_recentChanges.clear();
         refreshFromHexEditor();
     }
-    void MemoryEditorWidget::discardChanges()
+    void SnapshotWorkbenchWidget::discardChanges()
     {
-        const QPointer<MemoryEditorWidget> alive(this);
+        const QPointer<SnapshotWorkbenchWidget> alive(this);
         const auto revision = m_snapshotRevision;
         invalidatePseudocode();
         if (!alive || revision != m_snapshotRevision) return;
@@ -558,34 +456,36 @@ namespace ks::ui
         ++m_snapshotRevision;
         m_history.reset();
         m_observed = m_original;
-        m_hex->setByteArray(m_original, m_base);
+        m_hex->setBuffer(m_base, m_original);
         jumpToAddress(address);
         refreshFromHexEditor();
     }
-    void MemoryEditorWidget::clear()
+    void SnapshotWorkbenchWidget::clear()
     {
-        const QPointer<MemoryEditorWidget> alive(this);
-        const auto revision = m_snapshotRevision;
+        const QPointer<SnapshotWorkbenchWidget> alive(this);
+        const auto revision = ++m_snapshotRevision; // 清空意图也要取消所有旧行和在途来源动作。
+        m_comparison->reset();
+        if (!alive || revision != m_snapshotRevision) return;
         invalidatePseudocode(true);
         if (!alive || revision != m_snapshotRevision) return;
-        ++m_snapshotRevision;
         m_original.clear();
         m_observed.clear();
         m_previousRead.clear();
         m_recentChanges.clear();
         m_sourceIdentity.clear();
         m_history.reset();
-        m_comparisonRows.clear();
-        m_comparisonPage = 0;
         m_base = m_anchor = 0;
-        m_hex->clearData();
+        m_hex->clearBuffer();
+        if (!alive || revision != m_snapshotRevision) return;
         m_disassembly->reset();
+        if (!alive || revision != m_snapshotRevision) return;
         m_text->reset();
+        if (!alive || revision != m_snapshotRevision) return;
         m_processPid = 0;
         m_processCreateTime100ns = 0;
         refreshFromHexEditor();
     }
-    void MemoryEditorWidget::refreshFromHexEditor()
+    void SnapshotWorkbenchWidget::refreshFromHexEditor()
     {
         const auto bytes = data();
         if (bytes != m_observed)
@@ -598,7 +498,7 @@ namespace ks::ui
             else m_history.reset();
             m_observed = bytes;
             ++m_snapshotRevision;
-            const QPointer<MemoryEditorWidget> alive(this);
+            const QPointer<SnapshotWorkbenchWidget> alive(this);
             invalidatePseudocode();
             if (!alive) return;
         }
@@ -611,17 +511,30 @@ namespace ks::ui
         emit bytesChanged();
     }
 
-    void MemoryEditorWidget::updateHighlights()
+    void SnapshotWorkbenchWidget::updateHighlights()
     {
         synchronizeSnapshotProvider();
         if (m_highlightChanges->isChecked())
-            m_hex->setChangeReferences(m_original, m_previousRead);
-        else m_hex->clearChangeHighlights();
+        {
+            // 原生画布已维护编辑叠加层，重复同一参照不能每字节重装整个快照。
+            if (!m_hex->hasReference() || m_lastReferenceOriginal != m_original || m_lastReferencePrevious != m_previousRead)
+            {
+                m_hex->setReference(m_original, m_previousRead);
+                m_lastReferenceOriginal = m_original;
+                m_lastReferencePrevious = m_previousRead;
+            }
+        }
+        else if (m_hex->hasReference())
+        {
+            m_hex->clearReference();
+            m_lastReferenceOriginal.clear();
+            m_lastReferencePrevious.clear();
+        }
     }
 
-    void MemoryEditorWidget::undo() { applyHistory(false); }
-    void MemoryEditorWidget::redo() { applyHistory(true); }
-    void MemoryEditorWidget::applyHistory(bool forward)
+    void SnapshotWorkbenchWidget::undo() { applyHistory(false); }
+    void SnapshotWorkbenchWidget::redo() { applyHistory(true); }
+    void SnapshotWorkbenchWidget::applyHistory(bool forward)
     {
         if (!m_editable || data().isEmpty() || (forward ? !m_history.canRedo() : !m_history.canUndo())) return;
         const auto bytes = data();
@@ -639,26 +552,26 @@ namespace ks::ui
         const QByteArray restored(reinterpret_cast<const char*>(result->data()), static_cast<qsizetype>(result->size()));
         m_observed = restored;
         ++m_snapshotRevision;
-        const QPointer<MemoryEditorWidget> alive(this);
+        const QPointer<SnapshotWorkbenchWidget> alive(this);
         invalidatePseudocode();
         if (!alive) return;
-        m_hex->setByteArray(restored, m_base);
+        m_hex->setBuffer(m_base, restored);
         jumpToAddress(address);
         refreshFromHexEditor();
     }
-    void MemoryEditorWidget::changeEvent(QEvent* event)
+    void SnapshotWorkbenchWidget::changeEvent(QEvent* event)
     {
         QWidget::changeEvent(event);
         if (m_tabs != nullptr && (event->type() == QEvent::PaletteChange || event->type() == QEvent::ApplicationPaletteChange))
         {
             if (m_tabs->currentIndex() == 1) rebuildDisassembly();
             if (m_tabs->currentIndex() == 2) rebuildText();
-            if (m_tabs->currentIndex() == 3) renderComparisonPage();
+            if (m_tabs->currentIndex() == 3) rebuildComparison();
         }
     }
-    void MemoryEditorWidget::updateState()
+    void SnapshotWorkbenchWidget::updateState()
     {
-        const bool loaded = m_hex->regionSize() != 0;
+        const bool loaded = m_hex->bufferSize() != 0;
         m_hex->setEditable(m_editable && loaded);
         m_disassembly->setEditable(m_editable && loaded);
         m_assemble->setEnabled(m_editable && loaded);
@@ -668,13 +581,13 @@ namespace ks::ui
         const bool fileReadOnly = m_addressKind == SnapshotAddressKind::FileOffset && !m_editable;
         for (auto* button : {m_assemble, m_undo, m_redo}) button->setVisible(!fileReadOnly);
         m_status->setText(fileReadOnly
-            ? (loaded ? trText(QStringLiteral("已加载 %1 字节（只读）。")).arg(m_hex->regionSize())
+            ? (loaded ? trText(QStringLiteral("已加载 %1 字节（只读）。")).arg(m_hex->bufferSize())
                 : trText(QStringLiteral("加载文件范围后可查看十六进制、反汇编和文本。")))
             : loaded
-            ? trText(QStringLiteral("%1 字节 | %2 处差异待应用")).arg(m_hex->regionSize()).arg(diffBlocks().size())
+            ? trText(QStringLiteral("%1 字节 | %2 处差异待应用")).arg(m_hex->bufferSize()).arg(diffBlocks().size())
             : trText(QStringLiteral("读取内存后可查看指令和编辑缓存。")));
     }
-    std::uint64_t MemoryEditorWidget::selectedAddress() const
+    std::uint64_t SnapshotWorkbenchWidget::selectedAddress() const
     {
         if (m_tabs->currentIndex() == 1)
         {
@@ -686,13 +599,15 @@ namespace ks::ui
             const auto range = m_text->canvas()->selectedRange();
             if (range) return range->first;
         }
-        return m_hex->selectedAbsoluteAddress();
+        return m_hex->bufferSize() ? m_hex->caretAddress() : m_base;
     }
-    void MemoryEditorWidget::jumpToAddress(std::uint64_t address)
+    void SnapshotWorkbenchWidget::jumpToAddress(std::uint64_t address)
     {
         if (!contains(address)) { requestCapturedWindow(address, 65536); return; }
+        const QPointer<SnapshotWorkbenchWidget> alive(this);
         m_syncing = true;
-        m_hex->jumpToAbsoluteAddress(address);
+        m_hex->jumpToAddress(address);
+        if (!alive) return;
         m_syncing = false;
         if (m_tabs->currentIndex() == 2) rebuildText();
         if (m_tabs->currentIndex() == 1)
@@ -702,11 +617,14 @@ namespace ks::ui
             rebuildDisassembly();
             selectInstruction(address);
         }
+        // 外层 Scanner 地址条在同窗内只调用此入口；必须同步实际按钮将消费的位置。
+        synchronizePseudocodeContext();
+        if (!alive) return;
         emit currentAddressChanged(address);
     }
-    void MemoryEditorWidget::showDisassemblyAt(std::uint64_t address)
+    void SnapshotWorkbenchWidget::showDisassemblyAt(std::uint64_t address)
     {
-        const QPointer<MemoryEditorWidget> alive(this);
+        const QPointer<SnapshotWorkbenchWidget> alive(this);
         const auto revision = m_snapshotRevision;
         if (!contains(address))
         {
@@ -717,20 +635,21 @@ namespace ks::ui
         m_tabs->setCurrentIndex(1);
         if (alive && revision == m_snapshotRevision) jumpToAddress(address);
     }
-    void MemoryEditorWidget::openFindPanel()
+    void SnapshotWorkbenchWidget::openFindPanel()
     {
-        if (m_tabs->currentIndex() == 1) m_disassembly->openFind();
+        if (m_tabs->currentIndex() == 4) m_pseudocodePage->openFindPanel();
+        else if (m_tabs->currentIndex() == 1) m_disassembly->openFind();
         else if (m_tabs->currentIndex() == 2) m_text->openFind();
         else
         {
-            const QPointer<MemoryEditorWidget> self(this);
+            const QPointer<SnapshotWorkbenchWidget> self(this);
             m_tabs->setCurrentIndex(0);
-            if (self) m_hex->openFindPanel();
+            if (self) m_hex->openFind();
         }
     }
-    WorkbenchDisasmView* MemoryEditorWidget::disassemblyView() const { return m_disassembly; }
-    WorkbenchTextView* MemoryEditorWidget::textView() const { return m_text; }
-    std::optional<DisassemblySelection> MemoryEditorWidget::selectedInstruction() const
+    WorkbenchDisasmView* SnapshotWorkbenchWidget::disassemblyView() const { return m_disassembly; }
+    WorkbenchTextView* SnapshotWorkbenchWidget::textView() const { return m_text; }
+    std::optional<DisassemblySelection> SnapshotWorkbenchWidget::selectedInstruction() const
     {
         const auto row = m_disassembly->selectedInstruction();
         if (!row || row->bytes.isEmpty() || !contains(row->address)) return std::nullopt;
@@ -740,7 +659,7 @@ namespace ks::ui
             return std::nullopt;
         return DisassemblySelection{row->address, static_cast<std::uint32_t>(offset), row->bytes};
     }
-    void MemoryEditorWidget::selectInstruction(std::uint64_t address)
+    void SnapshotWorkbenchWidget::selectInstruction(std::uint64_t address)
     {
         const auto& rows = m_disassembly->canvas()->rows();
         for (int row = 0; row < rows.size(); ++row)
@@ -754,7 +673,7 @@ namespace ks::ui
             }
         }
     }
-    void MemoryEditorWidget::rebuildDisassembly()
+    void SnapshotWorkbenchWidget::rebuildDisassembly()
     {
         const auto selection = selectedAddress();
         if (!contains(m_anchor)) m_anchor = m_base;
@@ -769,10 +688,10 @@ namespace ks::ui
         selectInstruction(contains(selection) ? selection : m_anchor);
         m_syncing = false;
     }
-    void MemoryEditorWidget::rebuildText()
+    void SnapshotWorkbenchWidget::rebuildText()
     {
         synchronizeSnapshotProvider();
-        const auto address = m_hex->selectedAbsoluteAddress();
+        const auto address = m_hex->bufferSize() ? m_hex->caretAddress() : m_base;
         m_text->setBytesPerRow(m_hex->bytesPerRow());
         const auto start = contains(address) ? address : m_base;
         const auto offset = start - m_base;
@@ -787,198 +706,71 @@ namespace ks::ui
         if (contains(address)) m_text->canvas()->scrollToAddress(address);
     }
 
-    void MemoryEditorWidget::rebuildComparison()
+    void SnapshotWorkbenchWidget::rebuildComparison()
     {
-        m_comparisonRows.clear();
-        const auto bytes = data();
-        const auto& baseline = m_comparisonBaseline->currentIndex() == 1 ? m_previousRead : m_original;
-        if (baseline.size() == bytes.size())
-        {
-            for (qsizetype offset = 0; offset < bytes.size(); offset += 16)
-                if (!m_onlyDifferences->isChecked() || bytes.mid(offset, 16) != baseline.mid(offset, 16))
-                    m_comparisonRows.append(offset);
-        }
-        m_comparisonPage = std::min(m_comparisonPage, std::max<qsizetype>(0, (m_comparisonRows.size() - 1) / kComparisonPageRows));
-        renderComparisonPage();
+        // 比较完整捕获范围，公共页按小块读取再建虚拟摘要，不能把 1 MiB 读上限当总范围。
+        synchronizeSnapshotProvider();
+        const auto size = static_cast<std::uint64_t>(data().size());
+        if (!size) { m_comparison->reset(); return; }
+        m_comparison->setWindow(m_base, size);
     }
 
-    void MemoryEditorWidget::renderComparisonPage()
-    {
-        const auto bytes = data();
-        const auto& baseline = m_comparisonBaseline->currentIndex() == 1 ? m_previousRead : m_original;
-        const auto first = m_comparisonPage * kComparisonPageRows;
-        const auto last = std::min(first + kComparisonPageRows, m_comparisonRows.size());
-        const QSignalBlocker blocker(m_comparison);
-        m_comparison->setRowCount(static_cast<int>(std::max<qsizetype>(0, last - first)));
-        qsizetype changedBytes = 0;
-        if (baseline.size() == bytes.size())
-            for (qsizetype i = 0; i < bytes.size(); ++i) changedBytes += bytes.at(i) != baseline.at(i);
-        m_comparisonStatus->setText(baseline.size() != bytes.size()
-            ? trText(QStringLiteral("没有上次相同目标和范围的读取可供对比。"))
-            : trText(QStringLiteral("%1 字节变化；显示第 %2–%3 / %4 行。双击可定位字节。"))
-                .arg(changedBytes).arg(last > first ? first + 1 : 0).arg(last).arg(m_comparisonRows.size()));
-        m_previousComparison->setEnabled(first > 0);
-        m_nextComparison->setEnabled(last < m_comparisonRows.size());
-        for (qsizetype index = first; index < last; ++index)
-        {
-            const auto offset = m_comparisonRows.at(index);
-            const auto oldLine = baseline.mid(offset, 16);
-            const auto newLine = bytes.mid(offset, 16);
-            int count = 0;
-            QString detail;
-            for (qsizetype i = 0; i < newLine.size(); ++i)
-            {
-                if (oldLine.at(i) == newLine.at(i)) continue;
-                ++count;
-                detail += addressText(m_base + static_cast<std::uint64_t>(offset + i))
-                    + QStringLiteral("  ") + byteText(oldLine.mid(i, 1)) + QStringLiteral(" → ")
-                    + byteText(newLine.mid(i, 1)) + QLatin1Char('\n');
-            }
-            const QStringList fields{addressText(m_base + static_cast<std::uint64_t>(offset)), byteText(oldLine),
-                byteText(newLine), asciiText(oldLine), asciiText(newLine), QString::number(count)};
-            for (int column = 0; column < fields.size(); ++column)
-            {
-                auto* item = new QTableWidgetItem(fields.at(column));
-                item->setData(kRowOffsetRole, QVariant::fromValue<qulonglong>(offset));
-                item->setToolTip(detail);
-                if (count != 0 && m_highlightChanges->isChecked())
-                {
-                    QFont font = item->font(); font.setBold(true); item->setFont(font);
-                    item->setBackground(changeColor(palette(), m_comparisonBaseline->currentIndex() == 0));
-                }
-                m_comparison->setItem(static_cast<int>(index - first), column, item);
-            }
-        }
-        m_comparison->resizeColumnsToContents();
-    }
-    void MemoryEditorWidget::showAssemblyEditor()
+    // 共享预览只生成冻结载荷；此宿主仍只改缓存，真实写回由外层页面确认并提交。
+    void SnapshotWorkbenchWidget::showAssemblyEditor()
     {
         const auto address = selectedAddress();
         if (!m_editable || !contains(address)) return;
-        const auto snapshot = data();
+        const auto snapshot = data(); // 完整原缓存用于模态返回后的整体复核。
         const auto snapshotBase = m_base;
         const auto snapshotRevision = m_snapshotRevision;
         const auto assemblyArchitecture = architecture();
         const auto offset = static_cast<qsizetype>(address - m_base);
-        const auto decoded = InstructionDecoder::decode(snapshot.mid(offset, 15), address, assemblyArchitecture, 1);
-        if (decoded.rows.isEmpty()) return;
-        const auto first = decoded.rows.first();
-        // 父窗口在 exec 期间销毁时，Qt 会删除所有子对象，不能让它 delete 一个栈上对话框。
-        const QPointer<MemoryEditorWidget> self(this);
-        QPointer<QDialog> dialog = new QDialog(this);
-        dialog->setAttribute(Qt::WA_DeleteOnClose);
-        dialog->setObjectName(QStringLiteral("memory_assembly_dialog"));
-        dialog->setStyleSheet(KswordTheme::OpaqueDialogStyle(dialog->objectName()));
-        dialog->setWindowTitle(trText(QStringLiteral("汇编编辑")));
-        auto* layout = new QVBoxLayout(dialog);
-        auto* form = new QFormLayout;
-        form->addRow(trText(QStringLiteral("起始地址")), new QLabel(addressText(address), dialog));
-        form->addRow(trText(QStringLiteral("指令架构")), new QLabel(
-            assemblyArchitecture == DisassemblyArchitecture::X64 ? QStringLiteral("x64") : QStringLiteral("x86"), dialog));
-        auto* span = new QSpinBox(dialog);
-        span->setRange(1, static_cast<int>(std::min<qsizetype>(snapshot.size() - offset, 65536)));
-        span->setValue(static_cast<int>(first.bytes.size()));
-        form->addRow(trText(QStringLiteral("覆盖长度（字节）")), span);
-        auto* pad = new QCheckBox(trText(QStringLiteral("用 NOP 填充剩余覆盖空间")), dialog);
-        pad->setChecked(true);
-        form->addRow(pad);
-        layout->addLayout(form);
-        auto* hint = new QLabel(trText(QStringLiteral("每行一条 Intel 指令。数字默认十六进制，十进制用 0d 前缀；支持局部标签。覆盖长度须包含完整指令；编译不会写入真实内存。")), dialog);
-        hint->setWordWrap(true);
-        layout->addWidget(hint);
-        auto* source = new CodeTextEdit(dialog);
-        source->setObjectName(QStringLiteral("memory_assembly_source"));
-        source->setPlainText(first.decoded ? first.mnemonic + QLatin1Char(' ') + first.operands
-            : QStringLiteral("db ") + byteText(first.bytes));
-        layout->addWidget(source, 1);
-        auto* preview = new CodeTextEdit(dialog);
-        static_cast<CodeTextEdit*>(preview)->setSyntaxLanguage(CodeTextEdit::SyntaxLanguage::PlainText);
-        preview->setObjectName(QStringLiteral("memory_assembly_preview"));
-        preview->setReadOnly(true);
-        layout->addWidget(preview, 1);
-        auto* status = new QLabel(dialog);
-        status->setWordWrap(true);
-        layout->addWidget(status);
-        auto* buttons = new QDialogButtonBox(QDialogButtonBox::Cancel, dialog);
-        auto* compile = buttons->addButton(trText(QStringLiteral("编译并预览")), QDialogButtonBox::ActionRole);
-        auto* stage = buttons->addButton(trText(QStringLiteral("填入缓存")), QDialogButtonBox::AcceptRole);
-        stage->setEnabled(false);
-        layout->addWidget(buttons);
-        QByteArray payload;
-        const auto invalidate = [&]() { payload.clear(); stage->setEnabled(false); preview->clear(); status->clear(); };
-        connect(source, &QPlainTextEdit::textChanged, dialog.data(), invalidate);
-        connect(span, &QSpinBox::valueChanged, dialog.data(), invalidate);
-        connect(pad, &QCheckBox::toggled, dialog.data(), invalidate);
-        connect(compile, &QPushButton::clicked, dialog.data(), [&]() {
-            invalidate();
-            const auto result = InstructionAssembler::assemble(source->toPlainText(), address, assemblyArchitecture);
-            if (!result.success)
-            {
-                status->setText(trText(QStringLiteral("第 %1 行：%2")).arg(result.errorLine).arg(result.error));
-                return;
-            }
-            if (result.bytes.isEmpty() || result.bytes.size() > span->value())
-            {
-                status->setText(trText(QStringLiteral("机器码为 %1 字节，超出覆盖长度 %2；请明确扩大覆盖范围后重新预览。"))
-                    .arg(result.bytes.size()).arg(span->value()));
-                return;
-            }
-            // Boundaries are measured in the same architecture, at the actual VA.
-            // No tail of an old instruction is silently left executable.
-            const auto oldRows = InstructionDecoder::decode(snapshot.mid(offset, span->value() + 15), address, assemblyArchitecture, 65536);
-            qsizetype boundary = 0;
-            for (const auto& row : oldRows.rows)
-            {
-                if (!row.decoded)
-                {
-                    status->setText(trText(QStringLiteral("覆盖范围包含无法解码的字节；请调整范围或使用十六进制编辑。")));
-                    return;
-                }
-                boundary += row.bytes.size();
-                if (boundary >= span->value()) break;
-            }
-            if (boundary != span->value())
-            {
-                status->setText(trText(QStringLiteral("覆盖长度截断了原指令，请选择完整指令边界（下一边界为 %1 字节）。")).arg(boundary));
-                return;
-            }
-            if (!pad->isChecked() && result.bytes.size() != span->value())
-            {
-                status->setText(trText(QStringLiteral("关闭 NOP 填充时，机器码长度必须等于覆盖长度。")));
-                return;
-            }
-            payload = result.bytes;
-            payload.append(QByteArray(span->value() - payload.size(), static_cast<char>(0x90)));
-            QString text = trText(QStringLiteral("原始：%1\n替换：%2\n"))
-                .arg(byteText(snapshot.mid(offset, span->value()))).arg(byteText(payload));
-            const auto newRows = InstructionDecoder::decode(payload, address, assemblyArchitecture);
-            for (const auto& row : newRows.rows)
-                text += addressText(row.address) + QStringLiteral("  ") + byteText(row.bytes)
-                    + QStringLiteral("  ") + row.mnemonic + QLatin1Char(' ') + row.operands + QLatin1Char('\n');
-            preview->setPlainText(text);
-            status->setText(trText(QStringLiteral("预览完成：%1 字节；填入缓存后，使用页面的应用差异按钮写回。" )).arg(payload.size()));
-            stage->setEnabled(true);
-        });
-        connect(buttons, &QDialogButtonBox::accepted, dialog.data(), &QDialog::accept);
-        connect(buttons, &QDialogButtonBox::rejected, dialog.data(), &QDialog::reject);
-        applyResponsiveWindowGeometry(dialog, this, QSize(760, 620), QSize(480, 360));
-        const int result = dialog->exec();
-        // 先销毁尚存的弹窗，断开捕获 payload 等局部变量的回调，再允许本函数返回。
-        // WA_DeleteOnClose 已销毁或父对象同步删除时，QPointer 为 null，无需再次释放。
-        if (dialog)
-        {
-            delete dialog.data();
-        }
-        if (!self || result != QDialog::Accepted || payload.isEmpty()) return;
-        // 嵌套事件循环可能更换目标/架构、暂停权限或刷新字节；旧快照的预览必须整体失效。
+        const auto decode = [](const std::uint8_t* bytes, std::size_t length,
+            std::uint64_t at, bool x64) -> std::optional<DecodedRow> {
+            const QByteArray input(reinterpret_cast<const char*>(bytes),
+                static_cast<qsizetype>(std::min<std::size_t>(length, 15)));
+            const auto decoded = InstructionDecoder::decode(input, at,
+                x64 ? DisassemblyArchitecture::X64 : DisassemblyArchitecture::X86, 1);
+            if (decoded.rows.isEmpty()) return std::nullopt;
+            const auto& row = decoded.rows.first();
+            return DecodedRow{row.address, row.bytes, row.mnemonic, row.operands, row.decoded};
+        };
+        const auto* beginning = reinterpret_cast<const std::uint8_t*>(snapshot.constData()) + offset;
+        const auto first = decode(beginning, static_cast<std::size_t>(snapshot.size() - offset),
+            address, assemblyArchitecture == DisassemblyArchitecture::X64);
+        if (!first || first->bytes.isEmpty()) return;
+
+        // 只冻结最大覆盖范围和一条指令余量；两套宿主明确保留自己的 65536/256 限额。
+        AssemblyPreviewInput input;
+        input.address = address;
+        input.x64 = assemblyArchitecture == DisassemblyArchitecture::X64;
+        input.snapshot = snapshot.mid(offset, 65536 + 15);
+        input.initialSource = first->decoded ? (first->mnemonic + QLatin1Char(' ') + first->operands).trimmed()
+            : QStringLiteral("db ") + byteText(first->bytes);
+        input.initialSpan = static_cast<int>(first->bytes.size());
+        input.maximumSpan = 65536;
+        input.dialogName = QStringLiteral("memory_assembly_dialog");
+        input.sourceName = QStringLiteral("memory_assembly_source");
+        input.previewName = QStringLiteral("memory_assembly_preview");
+        input.stageCaption = QStringLiteral("填入缓存");
+        input.hint = QStringLiteral("每行一条 Intel 指令。数字默认十六进制，十进制用 0d 前缀；支持局部标签。覆盖长度须包含完整指令；编译不会写入真实内存。");
+        input.completion = QStringLiteral("预览完成：%1 字节；填入缓存后，使用页面的应用差异按钮写回。");
+        const QPointer<SnapshotWorkbenchWidget> self(this);
+        const auto payload = RunAssemblyPreviewDialog(this, input,
+            [](const QString& source, std::uint64_t at, bool x64) {
+                const auto result = InstructionAssembler::assemble(source, at,
+                    x64 ? DisassemblyArchitecture::X64 : DisassemblyArchitecture::X86);
+                return WorkbenchAssembleResult{result.success, result.bytes, result.error, result.errorLine};
+            }, decode);
+        if (!self || payload.isEmpty()) return;
+        // 嵌套事件循环允许换源/架构/权限和刷新；共享外壳不能代替宿主的身份复核。
         if (!m_editable || m_base != snapshotBase || m_snapshotRevision != snapshotRevision
             || architecture() != assemblyArchitecture || data() != snapshot) return;
         QByteArray changed = snapshot;
         changed.replace(offset, payload.size(), payload);
-        m_hex->setByteArray(changed, m_base);
+        m_hex->setBuffer(m_base, changed);
         if (!self) return;
         jumpToAddress(address);
-        if (!self) return;
-        refreshFromHexEditor();
+        if (self) refreshFromHexEditor();
     }
 }

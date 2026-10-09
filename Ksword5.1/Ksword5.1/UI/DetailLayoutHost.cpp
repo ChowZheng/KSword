@@ -1,5 +1,4 @@
-#include "DetailLayoutHost.h"
-#include "CodeTextEdit.h"
+﻿#include "DetailLayoutHost.h"
 
 #include "CodeEditorWidget.h"
 #include "EmbeddedRowDelegate.h"
@@ -15,7 +14,6 @@
 #include <QHeaderView>
 #include <QHBoxLayout>
 #include <QIcon>
-#include <QPlainTextEdit>
 #include <QScreen>
 #include <QSplitter>
 #include <QTableWidget>
@@ -97,18 +95,21 @@ namespace
         return nullptr;
     }
 
-    // createReadOnlyInlineEditor：创建方案三使用的普通只读文本框。
-    QPlainTextEdit* createReadOnlyInlineEditor(QWidget* parentWidget, const QString& detailText)
+    // Report mirrors share the same shell; raw sources stay in raw mode.
+    void setMirrorText(CodeEditorWidget* target, CodeEditorWidget* source, const QString& text)
     {
-        QPlainTextEdit* textEditor = new CodeTextEdit(parentWidget);
-        static_cast<CodeTextEdit*>(textEditor)->setSyntaxLanguage(CodeTextEdit::SyntaxLanguage::PlainText);
+        if (source != nullptr && source->isReportText()) target->setReportText(text);
+        else target->setRawText(text);
+    }
+
+    CodeEditorWidget* createReadOnlyInlineEditor(
+        QWidget* parentWidget, CodeEditorWidget* source, const QString& detailText)
+    {
+        auto* textEditor = new CodeEditorWidget(parentWidget);
         textEditor->setReadOnly(true);
-        textEditor->setPlainText(detailText);
-        textEditor->setLineWrapMode(QPlainTextEdit::WidgetWidth);
-        // 编辑器直接覆盖在视图 viewport 中，由源行高度决定几何，不能把自身最小高度
-        // 传播给整张表格或树。
+        setMirrorText(textEditor, source, detailText);
+        // The source row owns the geometry; never propagate a report minimum.
         textEditor->setMinimumSize(0, 0);
-        textEditor->setContextMenuPolicy(Qt::DefaultContextMenu);
         return textEditor;
     }
 
@@ -529,7 +530,7 @@ void ks::ui::DetailLayoutHost::handleDetailChanged(const QString& detailText)
 {
     if (m_scheme == ks::settings::DetailDisplayScheme::Floating && !m_floatingEditor.isNull())
     {
-        m_floatingEditor->setRawText(detailText);
+        setMirrorText(m_floatingEditor.data(), m_detailEditor.data(), detailText);
     }
 
     if (m_scheme != ks::settings::DetailDisplayScheme::Embedded || m_tableView.isNull())
@@ -547,7 +548,7 @@ void ks::ui::DetailLayoutHost::handleDetailChanged(const QString& detailText)
         if (!entry.textEditor.isNull() && entry.sourceIndex.isValid() &&
             currentIndex.isValid() && entry.sourceIndex == currentIndex)
         {
-            entry.textEditor->setPlainText(detailText);
+            setMirrorText(entry.textEditor.data(), m_detailEditor.data(), detailText);
         }
     }
 }
@@ -594,7 +595,7 @@ void ks::ui::DetailLayoutHost::insertTableEmbeddedDetail(
 
     // 先安装包装 delegate 并登记原始高度，再增大行高，避免一次重绘中把源文本画入详情区。
     installEmbeddedRowDelegate();
-    QPlainTextEdit* textEditor = createReadOnlyInlineEditor(tableWidget->viewport(), detailText);
+    CodeEditorWidget* textEditor = createReadOnlyInlineEditor(tableWidget->viewport(), m_detailEditor.data(), detailText);
     EmbeddedEntry entry;
     entry.sourceIndex = sourceIndex;
     entry.textEditor = textEditor;
@@ -627,7 +628,7 @@ void ks::ui::DetailLayoutHost::insertTreeEmbeddedDetail(
 
     // 树节点同样先登记裁剪高度，再改变 size hint，保证首次重绘也使用原始行高。
     installEmbeddedRowDelegate();
-    QPlainTextEdit* textEditor = createReadOnlyInlineEditor(treeWidget->viewport(), detailText);
+    CodeEditorWidget* textEditor = createReadOnlyInlineEditor(treeWidget->viewport(), m_detailEditor.data(), detailText);
     EmbeddedEntry entry;
     entry.sourceIndex = sourceIndex;
     entry.textEditor = textEditor;
@@ -1047,7 +1048,7 @@ void ks::ui::DetailLayoutHost::showFloatingWindow()
         windowLayout->setContentsMargins(8, 8, 8, 8);
         CodeEditorWidget* floatingEditor = new CodeEditorWidget(detailWindow);
         floatingEditor->setReadOnly(true);
-        floatingEditor->setRawText(m_detailEditor->text());
+        setMirrorText(floatingEditor, m_detailEditor.data(), m_detailEditor->text());
         windowLayout->addWidget(floatingEditor, 1);
 
         QScreen* targetScreen = m_ownerWidget->screen();
@@ -1073,7 +1074,7 @@ void ks::ui::DetailLayoutHost::showFloatingWindow()
     }
     else if (!m_floatingEditor.isNull())
     {
-        m_floatingEditor->setRawText(m_detailEditor->text());
+        setMirrorText(m_floatingEditor.data(), m_detailEditor.data(), m_detailEditor->text());
     }
 
     // 窗口已显示时只刷新文本，不能因表格选择变化再次抢走焦点。
