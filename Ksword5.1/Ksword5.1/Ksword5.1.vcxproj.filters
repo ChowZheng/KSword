@@ -1349,6 +1349,12 @@
     <ClCompile Include="UI\DetailLayoutHost.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="UI\DetailLayoutHost.Binding.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\DetailLayoutHost.Compatibility.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="UI\DetailLayoutRegistry.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
