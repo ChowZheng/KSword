@@ -657,6 +657,7 @@
     <ClCompile Include="UI\TableInteractionSupport.cpp" />
     <ClCompile Include="UI\ResultTableHost.cpp" />
     <ClCompile Include="UI\UiCommitCoordinator.cpp" />
+    <ClCompile Include="UI\AsyncOperation.cpp" />
     <ClCompile Include="UI\WindowPickerButton.cpp" />
     <ClCompile Include="UI\TableSearchSupport.cpp" />
     <ClCompile Include="UI\TextSearchReplaceSupport.cpp" />
@@ -862,6 +863,7 @@
     <ClInclude Include="ksword\string\string.h" />
     <ClInclude Include="theme.h" />
     <ClInclude Include="UI\AsyncUiDispatcher.h" />
+    <ClInclude Include="UI\AsyncOperation.h" />
     <ClInclude Include="UI\FlatTableModel.h" />
     <ClInclude Include="UI\DockTabInteraction.h" />
     <ClInclude Include="UI\FlowLayout.h" />

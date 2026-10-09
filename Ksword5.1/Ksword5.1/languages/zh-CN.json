@@ -6614,6 +6614,12 @@
     "notification.copy.log_template": "%1\n%2\n%3\n文件：%4\n函数：%5\nGUID：%6"
   },
   "source_translations": {
+    "AsyncOperation.h": "AsyncOperation.h",
+    "AsyncUiDispatcher.h": "AsyncUiDispatcher.h",
+    "● 句柄详情刷新失败。": "● 句柄详情刷新失败。",
+    "● 模块刷新失败。": "● 模块刷新失败。",
+    "句柄详情查询已结束": "句柄详情查询已结束",
+    "模块刷新已结束": "模块刷新已结束",
     "ResultTableHost.h": "ResultTableHost.h",
     "UiCommitCoordinator.h": "UiCommitCoordinator.h",
     "TaskSnapshotFeed.h": "TaskSnapshotFeed.h",

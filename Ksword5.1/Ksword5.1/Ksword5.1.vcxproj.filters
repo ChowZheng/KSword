@@ -1505,6 +1505,9 @@
     <ClCompile Include="UI\UiCommitCoordinator.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="UI\AsyncOperation.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="UI\WindowPickerButton.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -2644,6 +2647,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="UI\AsyncUiDispatcher.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="UI\AsyncOperation.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="UI\FlatTableModel.h">
