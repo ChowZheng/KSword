@@ -188,6 +188,8 @@
     <ClCompile Include="句柄\HandleFilterConfig.cpp" />
     <ClCompile Include="句柄\HandleObjectTypeWorker.cpp" />
     <ClCompile Include="..\..\shared\ui\KsPainterChart.cpp" />
+    <ClCompile Include="..\..\shared\ui\MetricHistory.cpp" />
+    <ClCompile Include="..\..\shared\ui\MetricChartBinding.cpp" />
     <ClCompile Include="HardwareDock\HardwareDock.cpp" />
     <ClCompile Include="HardwareDock\DiskMonitorPage.cpp" />
     <ClCompile Include="HardwareDock\DiskMonitorStorageLeaseCoordinator.cpp" />
@@ -1002,6 +1004,8 @@
     <ClInclude Include="MonitorDock\DirectKernelCallMonitorWidget.h" />
     <ClInclude Include="MonitorDock\KernelCallbackMonitorWidget.h" />
     <ClInclude Include="..\..\shared\ui\KsPainterChart.h" />
+    <ClInclude Include="..\..\shared\ui\MetricHistory.h" />
+    <ClInclude Include="..\..\shared\ui\MetricChartBinding.h" />
     <ClInclude Include="MonitorDock\MonitorPanelWidget.h" />
     <ClInclude Include="MonitorDock\MonitorTextViewer.h" />
     <ClInclude Include="MonitorDock\ProcessTraceMonitorWidget.h" />
