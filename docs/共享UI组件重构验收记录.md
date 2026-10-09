@@ -44,12 +44,14 @@
 | 主程序 HostX64 Release/x64 | BUILD_RESULT=SUCCESS，EXIT_CODE=0，23,792,640 bytes | `output/component_main_build_final.log`；`.codex-build-logs/ksword-build-check-20261008-214659.raw.log` |
 | HUD HostX64 Release/x64 | Build 成功，452,608 bytes | `output/component_hud_build_final.log` |
 
-两个标准 Release 产物已读回：
+下列哈希对应本轮成功验收构建时的标准 Release 产物读回：
 
 - `Ksword5.1/x64/Release/Ksword5.1.exe`：`171C7D75FE2770E35FA17D6DE24FF8FDE5DEAD9AA703B18FB91F21495FEA490A`。
 - `Ksword5.1/x64/Release/KswordHUD.exe`：`C7BB7E381EB5CBB372746C0DB933670DF64B40D71D66CB4126E6782677453910`。
 
 保留的中间失败日志 `output/component_main_build_final_fail.log` 记录并行 HexCanvas.Layout.cpp 缺少 QPointer 包含导致的编译失败；该并行源补齐后，最终完整构建成功。本轮没有收编 Ghidra、HexCanvas 或其它并行功能修改。旧主题回归的括号着色与按钮背景假设已按迁移后的真实词法/ExtraSelections/QSS 契约更新，保留文本、光标、滚动、modified、undo、对比度、SVG 身份和精确像素还原断言。
+
+提交后再次读回，共享 Release 主程序的哈希已更新为 `99E8638F1FC77203738EAC7C56315713D74AF70CD8D9457D281E87E0E624FF20`，不同于上述验收快照；HUD 哈希未变。本轮验收固定引用成功构建日志及当时的产物哈希，不将后续共享目录产物混作该次构建。
 
 ## 保留边界
 
