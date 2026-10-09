@@ -104,6 +104,7 @@
 #include "UI/ThemeControlGlyphs.h"
 #include "UI/DockThemeIcons.h"
 #include "UI/SmoothScrollSupport.h"
+#include "UI/ThemeBinding.h"
 #include "UI/ThemeColorRemap.h"
 #include "UI/ThemedMessageBox.h"
 #include "theme.h"
@@ -12333,6 +12334,8 @@ void MainWindow::applyAppearanceSettings(
         // 主题色固化在自己的 styleSheet 里，而控件自身样式表优先级高于全局 QSS。
         // 这里按快照统一重写存量样式表，把它们一并拉回当前主题。
         // 必须排在各面板主动重建之后，避免刚重建好的新色又被扫描一遍做无用功。
+        // 明确登记的控件按角色重新求值；存量控件继续使用旧色值补偿，不猜测已登记样式。
+        ks::ui::RefreshWidgetThemeBindings();
         themeColorRemapResult = ks::ui::RemapStaleThemeColors(staleThemeColorSnapshot);
         if (themeColorRemapResult.rewrittenWidgetCount > 0
             || themeColorRemapResult.rewrittenPaletteWidgetCount > 0

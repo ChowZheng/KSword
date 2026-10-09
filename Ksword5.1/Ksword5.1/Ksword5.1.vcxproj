@@ -655,6 +655,7 @@
     <ClCompile Include="UI\TableHeaderSortingSupport.cpp" />
     <ClCompile Include="UI\IntegrityRiskPresentation.cpp" />
     <ClCompile Include="UI\TableInteractionSupport.cpp" />
+    <ClCompile Include="UI\ThemeBinding.cpp" />
     <ClCompile Include="UI\ResultTableHost.cpp" />
     <ClCompile Include="UI\UiCommitCoordinator.cpp" />
     <ClCompile Include="UI\AsyncOperation.cpp" />
@@ -888,6 +889,7 @@
     <ClInclude Include="UI\TableHeaderSortingSupport.h" />
     <ClInclude Include="UI\IntegrityRiskPresentation.h" />
     <ClInclude Include="UI\TableInteractionSupport.h" />
+    <ClInclude Include="UI\ThemeBinding.h" />
     <ClInclude Include="UI\ResultTableHost.h" />
     <ClInclude Include="UI\UiCommitCoordinator.h" />
     <ClInclude Include="UI\TableSearchSupport.h" />

@@ -1499,6 +1499,9 @@
     <ClCompile Include="UI\TableInteractionSupport.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="UI\ThemeBinding.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="UI\ResultTableHost.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -2689,6 +2692,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="UI\TableInteractionSupport.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="UI\ThemeBinding.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="UI\ResultTableHost.h">
