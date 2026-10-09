@@ -204,6 +204,7 @@
     <ClCompile Include="Framework\NotificationCardManager.cpp" />
     <ClCompile Include="Framework\DestructiveActionConfirmation.cpp" />
     <ClCompile Include="Framework\Progress.cpp" />
+    <ClCompile Include="Framework\TaskSnapshotFeed.cpp" />
     <ClCompile Include="Framework\ProgressDockWidget.cpp" />
     <ClCompile Include="Framework\CustomTitleBar.cpp" />
     <ClCompile Include="Framework\StartupSplash.cpp" />
@@ -783,6 +784,7 @@
     <ClInclude Include="Framework\DestructiveActionConfirmation.h" />
     <ClInclude Include="Framework\PrivilegeElevationPrompt.h" />
     <ClInclude Include="Framework\ProgressDockWidget.h" />
+    <ClInclude Include="Framework\TaskSnapshotFeed.h" />
     <ClInclude Include="Framework\StartupSplash.h" />
     <ClInclude Include="KernelDock\KernelDockAtomWorker.h" />
     <ClInclude Include="KernelDock\KernelKnowledgeCatalog.h" />

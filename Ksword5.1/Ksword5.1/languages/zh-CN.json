@@ -2244,6 +2244,12 @@
     "file.detail.value.no": "否",
     "file.detail.value.yes": "是",
     "progress.empty": "当前没有进行中的任务。",
+    "progress.state.running": "进行中",
+    "progress.state.waiting": "等待选择",
+    "progress.state.completed": "已结束（结果未指定）",
+    "progress.state.success": "已完成",
+    "progress.state.failure": "失败",
+    "progress.state.canceled": "已取消",
     "progress.task.step": "步骤：%1",
     "progress.task.title": "%1  (PID:%2)",
     "welcome.contributors": "<b>贡献者：</b>%1",
@@ -6608,6 +6614,10 @@
     "notification.copy.log_template": "%1\n%2\n%3\n文件：%4\n函数：%5\nGUID：%6"
   },
   "source_translations": {
+    "TaskSnapshotFeed.h": "TaskSnapshotFeed.h",
+    "已结束（结果未指定）": "已结束（结果未指定）",
+    "等待选择": "等待选择",
+    "进行中": "进行中",
     "@xmlns": "@xmlns",
     "@xmlns:": "@xmlns:",
     "HexView": "HexView",

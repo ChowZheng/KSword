@@ -1529,6 +1529,9 @@
     <ClCompile Include="Framework\Progress.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="Framework\TaskSnapshotFeed.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="Framework\ProgressDockWidget.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -2704,6 +2707,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="Framework\ProgressDockWidget.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Framework\TaskSnapshotFeed.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="Framework\StartupSplash.h">
