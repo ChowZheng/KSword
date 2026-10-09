@@ -392,6 +392,8 @@
     <ClCompile Include="MonitorDock\ProcessTraceMonitorWidget.Export.cpp" />
     <ClCompile Include="MonitorDock\ProcessTraceMonitorWidget.Runtime.cpp" />
     <ClCompile Include="MonitorDock\ProcessTraceTimelineWidget.cpp" />
+    <ClCompile Include="MonitorDock\ProcessTraceTimelineWidget.Render.cpp" />
+    <ClCompile Include="MonitorDock\EventTimelineModel.cpp" />
     <ClCompile Include="MonitorDock\MonitorDock.ArkRiskCenter.cpp" />
     <ClCompile Include="NetworkDock\NetworkDock.cpp" />
     <ClCompile Include="NetworkDock\NetworkDock.UiBuild.cpp" />
@@ -1005,6 +1007,7 @@
     <ClInclude Include="MonitorDock\ProcessTraceMonitorWidget.h" />
     <ClInclude Include="MonitorDock\ProcessTraceTimelineWidget.h" />
     <QtMoc Include="NetworkDock\NetworkDock.h" />
+    <ClInclude Include="MonitorDock\EventTimelineModel.h" />
     <ClInclude Include="NetworkDock\NetworkDock.InternalCommon.h" />
     <ClInclude Include="NetworkDock\NetworkDock.InternalHelpers.h" />
     <QtMoc Include="NetworkDock\NetworkFirewallPage.h" />

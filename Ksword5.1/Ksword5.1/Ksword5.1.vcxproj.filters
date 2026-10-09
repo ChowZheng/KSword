@@ -656,6 +656,12 @@
     <ClCompile Include="MonitorDock\ProcessTraceTimelineWidget.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="MonitorDock\ProcessTraceTimelineWidget.Render.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="MonitorDock\EventTimelineModel.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="MonitorDock\MonitorDock.ArkRiskCenter.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -3031,6 +3037,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="MonitorDock\ProcessTraceTimelineWidget.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="MonitorDock\EventTimelineModel.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="MonitorDock\WinAPIDock.h">

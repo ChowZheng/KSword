@@ -1611,6 +1611,7 @@
     "x64dbg.navigation.settings": "x64dbg 设置…"
   },
   "context_translations": {
+    "timeline.bucket.summary": "%1 · %2 个事件 · %3–%4 (100ns)",
     "privilege.workbench.access.stage.cancelled": "已取消",
     "privilege.workbench.access.stage.process": "打开目标进程",
     "privilege.workbench.access.stage.process_identity": "核验进程创建时间与存活状态",
@@ -6614,6 +6615,13 @@
     "notification.copy.log_template": "%1\n%2\n%3\n文件：%4\n函数：%5\nGUID：%6"
   },
   "source_translations": {
+    "EventTimelineModel.h": "EventTimelineModel.h",
+    "TCP 发送": "TCP 发送",
+    "TCP 接收": "TCP 接收",
+    "UDP 发送": "UDP 发送",
+    "UDP 接收": "UDP 接收",
+    "%1 · %2 个事件 · %3–%4 (100ns)": "%1 · %2 个事件 · %3–%4 (100ns)",
+    "Kernel-Network": "Kernel-Network",
     "ThemeBinding.h": "ThemeBinding.h",
     "AsyncOperation.h": "AsyncOperation.h",
     "AsyncUiDispatcher.h": "AsyncUiDispatcher.h",
