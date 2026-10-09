@@ -1499,6 +1499,12 @@
     <ClCompile Include="UI\TableInteractionSupport.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="UI\ResultTableHost.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\UiCommitCoordinator.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="UI\WindowPickerButton.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -2677,6 +2683,12 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="UI\TableInteractionSupport.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="UI\ResultTableHost.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="UI\UiCommitCoordinator.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="UI\TableSearchSupport.h">

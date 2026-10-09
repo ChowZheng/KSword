@@ -6614,6 +6614,8 @@
     "notification.copy.log_template": "%1\n%2\n%3\n文件：%4\n函数：%5\nGUID：%6"
   },
   "source_translations": {
+    "ResultTableHost.h": "ResultTableHost.h",
+    "UiCommitCoordinator.h": "UiCommitCoordinator.h",
     "TaskSnapshotFeed.h": "TaskSnapshotFeed.h",
     "已结束（结果未指定）": "已结束（结果未指定）",
     "等待选择": "等待选择",
