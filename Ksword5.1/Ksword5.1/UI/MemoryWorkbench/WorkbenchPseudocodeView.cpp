@@ -4,6 +4,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QPointer>
+#include <QTimer>
 #include <algorithm>
 #include <cstring>
 #include <limits>
@@ -54,6 +55,10 @@ namespace ks::ui
                 source = QStringLiteral("正在读取反编译范围；字节就绪后继续分析。");
             else if (code == QStringLiteral("snapshot_unreadable"))
                 source = QStringLiteral("分析范围包含未读取或不可读字节；请重新读取或缩小选区后再反编译。");
+            else if (code == QStringLiteral("non_code_address"))
+                source = QStringLiteral("当前位置在 PE 头部，或映像将该范围声明为非执行区；请在代码节选择已知函数起点。");
+            else if (code == QStringLiteral("invalid_instruction_data"))
+                source = QStringLiteral("反编译遇到无效或不完整指令，未接受该伪代码结果；请核对地址、架构和完整函数范围。");
             else return ks::i18n::sourceText(QStringLiteral("反编译失败（%1）；请检查后端目录和运行日志。")).arg(code);
             return ks::i18n::sourceText(source);
         }
@@ -71,6 +76,8 @@ namespace ks::ui
     WorkbenchPseudocodeView::~WorkbenchPseudocodeView()
     {
         provider_ = nullptr;
+        progressActive_ = false;
+        if (progressTimer_) progressTimer_->stop(); // 析构不再触发子控件显示/进度信号。
         disconnect(decompiler_, nullptr, this, nullptr);
         decompiler_->cancel();
     }
@@ -242,6 +249,8 @@ namespace ks::ui
         const auto epoch = ++epoch_;
         hasRequest_ = false;
         waitingForBytes_ = false;
+        stopProgress();
+        if (!self || epoch != epoch_) return;
         lineAddresses_.clear();
         lineValid_.clear();
         if (decompiler_) decompiler_->cancel();
@@ -289,6 +298,8 @@ namespace ks::ui
     {
         if (decompiler_->isRunning()) return;
         const QPointer<WorkbenchPseudocodeView> self(this);
+        const bool continuedWaiting = waitingForBytes_ && progressElapsed_.isValid();
+        const QElapsedTimer continuedClock = progressElapsed_; // 续读同一请求保持其真实等待耗时。
         const auto epoch = epoch_ + 1;
         invalidate();
         if (!self || epoch_ != epoch) return;
@@ -298,6 +309,8 @@ namespace ks::ui
         {
             setStatus(ErrorText(reason));
             waitingForBytes_ = reason == QStringLiteral("bytes_loading");
+            if (waitingForBytes_) beginProgress(continuedWaiting ? &continuedClock : nullptr);
+            if (!self || epoch_ != epoch) return;
             updateState();
             if (waitingForBytes_) emit windowRequested(context_.baseAddress, context_.length);
             return;
@@ -305,6 +318,8 @@ namespace ks::ui
         request_ = request;
         requestContext_ = context_;
         hasRequest_ = true;
+        beginProgress(continuedWaiting ? &continuedClock : nullptr);
+        if (!self || epoch_ != epoch) return;
         refreshDecompilerRuntime();
         setStatus(request.inputKind == DecompilerInputKind::PortableExecutable
             ? ks::i18n::sourceText(QStringLiteral("正在反编译 PE 函数：文件偏移 %1 → VA %2…"))
@@ -326,6 +341,8 @@ namespace ks::ui
         }
         const QPointer<WorkbenchPseudocodeView> self(this);
         const auto epoch = epoch_;
+        stopProgress();
+        if (!self || epoch_ != epoch) return;
         lineAddresses_ = result.lineAddresses;
         lineValid_ = result.lineAddressValid;
         if (!setCode(result.success ? result.code : QString())) return;
@@ -335,7 +352,7 @@ namespace ks::ui
             auto message = ks::i18n::sourceText(QStringLiteral("%1 | 函数地址 %2 | 分析位置 %3；伪代码由当前字节快照推断。"))
                 .arg(result.functionName, AddressText(result.functionAddress), AddressText(requestContext_.selectedAddress));
             if (result.boundaryInferred)
-                message += QLatin1Char('\n') + ks::i18n::sourceText(QStringLiteral("RAW 候选函数：起点按选中地址推断；请从已知函数起点分析。"));
+                message += QLatin1Char('\n') + ks::i18n::sourceText(QStringLiteral("RAW 候选函数：函数起点和范围由分析推断；请优先从已知函数起点分析。"));
             setStatus(message);
         }
         else

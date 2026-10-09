@@ -6799,7 +6799,7 @@
     "lineAddresses": "lineAddresses",
     "selectedAddress": "selectedAddress",
     "snapshotSha256": "snapshotSha256",
-    "RAW 候选函数：起点按选中地址推断；请从已知函数起点分析。": "RAW candidate function: the selected address is used as an inferred entry; analyze from a known function entry.",
+    "RAW 候选函数：函数起点和范围由分析推断；请优先从已知函数起点分析。": "RAW candidate function: its entry and extent are inferred by analysis; prefer a known function entry.",
     "切换置顶状态后点击“应用修改”生效。": "Change the topmost state, then click Apply changes.",
     "调整后点击“应用修改”生效；透明度会自动启用分层窗口。": "Adjust the value, then click Apply changes. Layered window style is enabled automatically for opacity changes.",
     "部分窗口设置未能应用：Style=%1, ExStyle=%2, 置顶=%3, Alpha=%4。": "Some window settings could not be applied: Style=%1, ExStyle=%2, Topmost=%3, Alpha=%4.",
@@ -38731,6 +38731,21 @@
     "R0 registry protocol cannot safely delete registry trees. Select a Win32 32-bit or 64-bit view explicitly.": "R0 registry protocol cannot safely delete registry trees. Select a Win32 32-bit or 64-bit view explicitly.",
     "This registry backend does not support atomic tree deletion.": "This registry backend does not support atomic tree deletion.",
     "Registry key rename cannot traverse symbolic links.": "Registry key rename cannot traverse symbolic links.",
-    "R0 registry protocol cannot bind key rename to a captured instance. Select a Win32 32-bit or 64-bit view explicitly.": "R0 registry protocol cannot bind key rename to a captured instance. Select a Win32 32-bit or 64-bit view explicitly."
+    "R0 registry protocol cannot bind key rename to a captured instance. Select a Win32 32-bit or 64-bit view explicitly.": "R0 registry protocol cannot bind key rename to a captured instance. Select a Win32 32-bit or 64-bit view explicitly.",
+    "读取和准备快照": "Reading and preparing the snapshot",
+    "启动分析引擎": "Starting the analysis engine",
+    "导入捕获字节": "Importing captured bytes",
+    "分析控制流": "Analyzing control flow",
+    "定位函数边界": "Locating function boundaries",
+    "生成 C 伪代码": "Generating C pseudocode",
+    "整理分析结果": "Preparing analysis results",
+    "%1（%2/%3）· 已用 %4 秒": "%1 (%2/%3) · %4 seconds elapsed",
+    "%1 · 已用 %2 秒": "%1 · %2 seconds elapsed",
+    "当前位置在 PE 头部，或映像将该范围声明为非执行区；请在代码节选择已知函数起点。": "The address is in PE headers or a range declared non-executable by the image; select a known function entry in a code section.",
+    "反编译遇到无效或不完整指令，未接受该伪代码结果；请核对地址、架构和完整函数范围。": "Decompilation encountered invalid or incomplete instructions and the pseudocode was rejected; check the address, architecture, and complete function range.",
+    "正在取消反编译…": "Cancelling decompilation…",
+    "Bad instruction - Truncating control flow": "Bad instruction - Truncating control flow",
+    "Control flow encountered bad instruction data": "Control flow encountered bad instruction data",
+    "IMPORTING: file:": "IMPORTING: file:"
   }
 }

@@ -292,8 +292,12 @@ namespace ks::ui
             }
             if (module.state == WorkbenchTarget::PrimaryModuleState::Ready)
             {
-                // 十六进制也落到模块基址：让三个子页与十六进制在同一位置，数据才读得到。
-                if (hexPane_->jumpTo(module.record.base))
+                // 尚未导航时首次挑模块也采用首行打开政策；先开文本/C 再回 HEX
+                // 不应继承从地址 0 就近跳转造成的“模块起点在末行”。
+                const bool jumped = hexPane_->jumpTo(
+                    module.record.base, 1, HexCanvas::ScrollAlign::Top);
+                if (!self) return;
+                if (jumped)
                 {
                     raw = module.record.base;
                     address = module.record.base;

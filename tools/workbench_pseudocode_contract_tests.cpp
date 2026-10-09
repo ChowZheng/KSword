@@ -1,11 +1,16 @@
 #include "workbench_pseudocode_contract_tests.h"
 #include "../Ksword5.1/Ksword5.1/UI/MemoryWorkbench/WorkbenchPseudocodeView.h"
 #include "../Ksword5.1/Ksword5.1/UI/CodeTextEdit.h"
+#include "../Ksword5.1/Ksword5.1/Internationalization/LanguageManager.h"
 #include <QApplication>
 #include <QDir>
+#include <QElapsedTimer>
+#include <QEvent>
 #include <QLineEdit>
+#include <QLabel>
 #include <QPointer>
 #include <QPushButton>
+#include <QProgressBar>
 #include <QTest>
 #include <QToolButton>
 #include <algorithm>
@@ -45,6 +50,61 @@ namespace
     void DrainBackend(ks::ui::WorkbenchPseudocodeView& page)
     {
         for (int i = 0; page.decompiler()->isRunning() && i < 100; ++i) QTest::qWait(2);
+        QApplication::processEvents();
+    }
+
+    // WaitFor：等待真实 queued Qt 回调，禁止用固定延时假定后端阶段已派发。
+    bool WaitFor(const std::function<bool()>& completed, const int timeoutMs = 1000)
+    {
+        QElapsedTimer deadline; // 本测试允许的单调等待预算。
+        deadline.start();
+        while (!completed() && deadline.elapsed() < timeoutMs)
+        {
+            QTest::qWait(2);
+        }
+        return completed();
+    }
+
+    // ProgressEventProbe：只在实际 Show/Hide 边界执行一次动作；删除 watched 后
+    // 必须吞掉本次事件，不能让 QObject 继续向已经销毁的对象派发事件。
+    class ProgressEventProbe final : public QObject
+    {
+    public:
+        ProgressEventProbe(const QEvent::Type eventType, std::function<void()> action)
+            : type_(eventType), action_(std::move(action))
+        {
+        }
+
+        int calls() const noexcept { return calls_; }
+
+    protected:
+        bool eventFilter(QObject* watched, QEvent* incoming) override
+        {
+            if (!armed_ || incoming->type() != type_) return false;
+            armed_ = false;
+            ++calls_;
+            const QPointer<QObject> alive(watched); // 回调可以销毁整个所属 C 页面。
+            action_();
+            return alive.isNull();
+        }
+
+    private:
+        QEvent::Type type_;                 // 只观察指定的真实控件事件。
+        std::function<void()> action_;     // 一次换源、重入或销毁动作。
+        bool armed_ = true;                // 重入派发不得重复执行同一个动作。
+        int calls_ = 0;                    // 防止事件未触发也被判为通过。
+    };
+
+    // PrepareProgressPage：真实 C 页面与真实后端，固定失败目录避免创建分析进程。
+    void PrepareProgressPage(ks::ui::WorkbenchPseudocodeView& page, MaskedProvider& provider,
+        const ks::ui::WorkbenchPseudocodeContext& context)
+    {
+        page.setBytesProvider(&provider);
+        page.setContext(context);
+        page.findChild<QLineEdit*>(QStringLiteral("memory_decompiler_directory"))->setText(
+            QDir::current().filePath(QStringLiteral(".codex-build-logs/not-a-ghidra-runtime")));
+        page.resize(850, 480);
+        page.show();
         QApplication::processEvents();
     }
 }
@@ -92,10 +152,24 @@ void RunWorkbenchPseudocodeContractTests(const std::function<void(bool, const ch
     page.refreshView();
     page.refreshView();
     require(starts == 0 && requested == 1, "C loading waits without repeated I/O requests or decoding pending bytes");
+    // 用户可见的等待读取也是分析流程，必须有活动指示而不是只有不可变化的状态句。
+    auto* activity = page.findChild<QProgressBar*>(QStringLiteral("memory_pseudocode_progress"));
+    require(activity != nullptr, "C analysis has an observable progress control");
+    require(activity && !activity->isHidden() && activity->minimum() == 0 && activity->maximum() == 0,
+        "C waiting bytes shows indeterminate activity without inventing a percentage");
+    auto* progressLabel = page.findChild<QLabel*>(QStringLiteral("memory_pseudocode_progress_label"));
+    const QString initialProgress = progressLabel ? progressLabel->text() : QString();
+    // 250ms 阶段定时器会有调度误差，等待真实整秒变化，不能假定1100ms时已过下一tick。
+    const bool elapsedUpdated = WaitFor([&]() {
+        return progressLabel && progressLabel->text() != initialProgress;
+    }, 2500);
+    require(elapsedUpdated && requested == 1,
+        "C waiting progress updates elapsed time without starting extra reads");
     provider.mask[5] = 1;
     page.refreshView();
     DrainBackend(page);
     require(starts == 1 && !page.decompiler()->isRunning(), "C pending analysis resumes exactly once after every byte is valid");
+    require(activity && activity->isHidden(), "C failed startup stops its progress activity");
 
     // 合成结果只用于检查 UI 接收票据，真实 Ghidra JSON/进程由既有后端夹具验证。
     DecompilerResult result;
@@ -184,6 +258,52 @@ void RunWorkbenchPseudocodeContractTests(const std::function<void(bool, const ch
     require(page.findChild<QWidget*>(QStringLiteral("code_editor_find_panel")) != nullptr,
         "C view reuses the project editor find UI");
 
+    // 活动进度使用真实 C 页状态机；阶段、无效单位、结束后迟到通知都不可伪造结果。
+    WorkbenchPseudocodeView progressPage;
+    context.baseAddress = provider.base;
+    context.selectedAddress = provider.base;
+    context.addressBits = 64;
+    context.addressKind = SnapshotAddressKind::MemoryAddress;
+    context.maximumWindowBytes = 0;
+    progressPage.setBytesProvider(&provider);
+    progressPage.setContext(context);
+    progressPage.findChild<QLineEdit*>(QStringLiteral("memory_decompiler_directory"))->setText(
+        QDir::current().filePath(QStringLiteral(".codex-build-logs/not-a-ghidra-runtime")));
+    progressPage.startDecompilation(); // 配置失败被排到下一事件轮，本轮仍有有效运行票据。
+    auto* phaseBar = progressPage.findChild<QProgressBar*>(QStringLiteral("memory_pseudocode_progress"));
+    auto* phaseLabel = progressPage.findChild<QLabel*>(QStringLiteral("memory_pseudocode_progress_label"));
+    emit progressPage.decompiler()->progressChanged({DecompilerStage::Analyzing, -1, -1});
+    const QString analyzing = phaseLabel ? phaseLabel->text() : QString();
+    require(phaseBar && !phaseBar->isHidden() && phaseBar->maximum() == 0,
+        "C runtime analysis remains indeterminate when no genuine total exists");
+    emit progressPage.decompiler()->progressChanged({DecompilerStage::Rendering, 9, 4});
+    require(phaseLabel && phaseLabel->text() == analyzing,
+        "C invalid progress units cannot advance a phase or fabricate completion");
+    emit progressPage.decompiler()->progressChanged({DecompilerStage::Rendering, 2, 4});
+    require(phaseBar && phaseBar->maximum() == 4 && phaseBar->value() == 2,
+        "C rendering shows its real completed line count");
+    const QString rendering = phaseLabel ? phaseLabel->text() : QString();
+    emit progressPage.decompiler()->progressChanged({DecompilerStage::Analyzing, -1, -1});
+    emit progressPage.decompiler()->progressChanged({DecompilerStage::Rendering, 1, 4});
+    require(phaseLabel && phaseLabel->text() == rendering && phaseBar->value() == 2,
+        "C delayed progress cannot move backwards within or between phases");
+    progressPage.findChild<QPushButton*>(QStringLiteral("memory_decompile_cancel"))->click();
+    emit progressPage.decompiler()->progressChanged({DecompilerStage::Rendering, 4, 4});
+    require(phaseBar && phaseBar->isHidden(), "C cancellation ignores late progress and stops the activity");
+    DrainBackend(progressPage);
+
+    // 外部进度观察者关闭宿主后，不应留下耗时定时器或让后端继续写入旧页面。
+    QPointer<WorkbenchPseudocodeView> closeOnProgress = new WorkbenchPseudocodeView;
+    closeOnProgress->setBytesProvider(&provider);
+    closeOnProgress->setContext(context);
+    closeOnProgress->findChild<QLineEdit*>(QStringLiteral("memory_decompiler_directory"))->setText(
+        QDir::current().filePath(QStringLiteral(".codex-build-logs/not-a-ghidra-runtime")));
+    QObject::connect(closeOnProgress->decompiler(), &GhidraDecompiler::progressChanged, qApp,
+        [closeOnProgress](const DecompilerProgress&) { delete closeOnProgress.data(); });
+    closeOnProgress->startDecompilation();
+    require(WaitFor([&]() { return closeOnProgress.isNull(); }),
+        "C page may close when the queued real backend launch publishes progress");
+
     // 等待读页回调可以关闭页面；refreshView 必须在回调返回后停止访问销毁对象。
     provider.mask[5] = 2;
     QPointer<WorkbenchPseudocodeView> retiring = new WorkbenchPseudocodeView;
@@ -194,4 +314,163 @@ void RunWorkbenchPseudocodeContractTests(const std::function<void(bool, const ch
         [retiring](quint64, quint64) { delete retiring.data(); });
     retiring->startDecompilation();
     require(retiring.isNull(), "C page permits its host to close it from the pending-window callback");
+
+    RunWorkbenchPseudocodeProgressReentryTests(require);
+}
+
+// RunWorkbenchPseudocodeProgressReentryTests：实际 Qt 事件/信号的独立探针。
+// caseName 为空执行全部；独立 runner 可逐进程运行单个销毁探针定位原生崩溃。
+void RunWorkbenchPseudocodeProgressReentryTests(
+    const std::function<void(bool, const char*)>& require, const QString& caseName)
+{
+    using namespace ks::ui;
+    MaskedProvider provider; // 合成字节；任何测试都不接触进程、驱动或剪贴板。
+    WorkbenchPseudocodeContext context;
+    context.sourceIdentity = QStringLiteral("synthetic-progress-reentry-source");
+    context.revision = 1;
+    context.baseAddress = provider.base;
+    context.selectedAddress = provider.base;
+    context.length = provider.bytes.size();
+    const auto selected = [&caseName](const char* name) {
+        return caseName.isEmpty() || caseName == QString::fromLatin1(name);
+    };
+
+    // Show 回调改变来源但不销毁页面：旧 beginProgress 不可重新显示活动条。
+    if (selected("show-context"))
+    {
+        provider.mask[5] = 2;
+        WorkbenchPseudocodeView page;
+        PrepareProgressPage(page, provider, context);
+        auto* bar = page.findChild<QProgressBar*>(QStringLiteral("memory_pseudocode_progress"));
+        auto* label = page.findChild<QLabel*>(QStringLiteral("memory_pseudocode_progress_label"));
+        unsigned requests = 0; // 换源后的旧请求也不能重新发起读取。
+        QObject::connect(&page, &WorkbenchPseudocodeView::windowRequested, &page,
+            [&](quint64, quint64) { ++requests; });
+        ProgressEventProbe probe(QEvent::Show, [&]() {
+            auto changed = context;
+            ++changed.revision;
+            page.setContext(changed);
+        });
+        label->installEventFilter(&probe);
+        page.startDecompilation();
+        require(probe.calls() == 1 && bar->isHidden() && label->isHidden() && requests == 0,
+            "C progress Show source change cannot revive old activity or an old byte request");
+    }
+
+    // Show 回调直接销毁页面：显示 setter 返回后的真实事件仍允许该生命周期动作。
+    if (selected("show-delete"))
+    {
+        provider.mask[5] = 2;
+        QPointer<WorkbenchPseudocodeView> page = new WorkbenchPseudocodeView;
+        PrepareProgressPage(*page, provider, context);
+        auto* label = page->findChild<QLabel*>(QStringLiteral("memory_pseudocode_progress_label"));
+        ProgressEventProbe probe(QEvent::Show, [page]() { delete page.data(); });
+        label->installEventFilter(&probe);
+        page->startDecompilation();
+        require(probe.calls() == 1 && page.isNull(),
+            "C progress Show observer may destroy the page after its native visibility update returns");
+    }
+
+    // Hide 回调销毁整个页面：取消必须在原生 hide 返回后停止访问该页面。
+    if (selected("hide-delete"))
+    {
+        provider.mask[5] = 2;
+        QPointer<WorkbenchPseudocodeView> page = new WorkbenchPseudocodeView;
+        PrepareProgressPage(*page, provider, context);
+        page->startDecompilation();
+        auto* bar = page->findChild<QProgressBar*>(QStringLiteral("memory_pseudocode_progress"));
+        ProgressEventProbe probe(QEvent::Hide, [page]() { delete page.data(); });
+        bar->installEventFilter(&probe);
+        page->findChild<QPushButton*>(QStringLiteral("memory_decompile_cancel"))->click();
+        require(probe.calls() == 1 && page.isNull(),
+            "C waiting cancellation may destroy the page from its real progress Hide event");
+    }
+
+    // Hide 回调换源并开始新请求：旧取消不能隐藏新标签或覆盖新请求的状态。
+    if (selected("hide-new-request"))
+    {
+        provider.mask[5] = 2;
+        WorkbenchPseudocodeView page;
+        PrepareProgressPage(page, provider, context);
+        unsigned requests = 0; // 新旧各只有一个宿主读取请求。
+        QObject::connect(&page, &WorkbenchPseudocodeView::windowRequested, &page,
+            [&](quint64, quint64) { ++requests; });
+        page.startDecompilation();
+        auto* bar = page.findChild<QProgressBar*>(QStringLiteral("memory_pseudocode_progress"));
+        auto* label = page.findChild<QLabel*>(QStringLiteral("memory_pseudocode_progress_label"));
+        ProgressEventProbe probe(QEvent::Hide, [&]() {
+            auto changed = context;
+            ++changed.revision;
+            page.setContext(changed);
+            page.startDecompilation();
+        });
+        bar->installEventFilter(&probe);
+        page.findChild<QPushButton*>(QStringLiteral("memory_decompile_cancel"))->click();
+        const auto* status = page.findChild<QLabel*>(QStringLiteral("memory_pseudocode_status"));
+        require(probe.calls() == 1 && requests == 2 && !bar->isHidden() && !label->isHidden()
+            && status->text() == ks::i18n::sourceText(QStringLiteral("正在读取反编译范围；字节就绪后继续分析。")),
+            "C progress Hide reentry retains the newer pending request and its visible progress label");
+    }
+
+    // Qt valueChanged 回调销毁页面；探针针对原生控件调用栈，而非私有方法模拟。
+    if (selected("value-delete"))
+    {
+        provider.mask[5] = 1;
+        QPointer<WorkbenchPseudocodeView> page = new WorkbenchPseudocodeView;
+        PrepareProgressPage(*page, provider, context);
+        page->startDecompilation();
+        auto* bar = page->findChild<QProgressBar*>(QStringLiteral("memory_pseudocode_progress"));
+        unsigned calls = 0; // 确认真实有界进度信号已派发。
+        QObject::connect(bar, &QProgressBar::valueChanged, qApp, [&, page](int value) {
+            if (value != 2) return;
+            ++calls;
+            delete page.data();
+        });
+        emit page->decompiler()->progressChanged({DecompilerStage::Rendering, 2, 4});
+        require(calls == 1 && page.isNull(),
+            "C real progress valueChanged may destroy the page without resuming its native update stack");
+    }
+
+    // valueChanged 改来源：旧刷新不可在新来源上继续绘制旧阶段或接收旧结果。
+    if (selected("value-context"))
+    {
+        provider.mask[5] = 1;
+        WorkbenchPseudocodeView page;
+        PrepareProgressPage(page, provider, context);
+        page.startDecompilation();
+        auto* bar = page.findChild<QProgressBar*>(QStringLiteral("memory_pseudocode_progress"));
+        auto* label = page.findChild<QLabel*>(QStringLiteral("memory_pseudocode_progress_label"));
+        unsigned calls = 0; // 一次实际 valueChanged 换源。
+        QObject::connect(bar, &QProgressBar::valueChanged, &page, [&](int value) {
+            if (value != 2) return;
+            ++calls;
+            auto changed = context;
+            ++changed.revision;
+            page.setContext(changed);
+        });
+        emit page.decompiler()->progressChanged({DecompilerStage::Rendering, 2, 4});
+        emit page.decompiler()->progressChanged({DecompilerStage::Rendering, 4, 4});
+        require(calls == 1 && bar->isHidden() && label->isHidden(),
+            "C real progress valueChanged source change suppresses the old update and late phase");
+        DrainBackend(page);
+    }
+
+    // 使用后端真实 running 状态；无效路径的 queued launch 仍未创建分析进程。
+    if (selected("cancel-running"))
+    {
+        provider.mask[5] = 1;
+        WorkbenchPseudocodeView page;
+        PrepareProgressPage(page, provider, context);
+        page.startDecompilation();
+        require(page.decompiler()->isRunning(), "C queued backend request is truly running before cancellation");
+        auto* bar = page.findChild<QProgressBar*>(QStringLiteral("memory_pseudocode_progress"));
+        auto* label = page.findChild<QLabel*>(QStringLiteral("memory_pseudocode_progress_label"));
+        page.findChild<QPushButton*>(QStringLiteral("memory_decompile_cancel"))->click();
+        emit page.decompiler()->progressChanged({DecompilerStage::Rendering, 4, 4});
+        require(bar->isHidden() && label->isHidden(),
+            "C cancellation immediately stops activity and rejects phases before asynchronous completion");
+        DrainBackend(page);
+        require(!page.decompiler()->isRunning() && bar->isHidden(),
+            "C cancelled queued launch completes once without reviving its progress");
+    }
 }

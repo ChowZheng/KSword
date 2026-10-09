@@ -5,6 +5,7 @@
 #include "../Decompiler/GhidraDecompiler.h"
 #include <QWidget>
 #include <QVector>
+#include <QElapsedTimer>
 #include <memory>
 #include <optional>
 
@@ -13,6 +14,8 @@ class CodeTextEdit;
 class QLineEdit;
 class QLabel;
 class QPushButton;
+class QProgressBar;
+class QTimer;
 
 namespace ks::ui
 {
@@ -90,6 +93,13 @@ namespace ks::ui
         bool requestStillCurrent() const;
         void setStatus(const QString& source);
         bool setCode(const QString& code);
+        // 一次显式分析含读页等待；续读可保留原耗时，不把未知工作量画成百分比。
+        void beginProgress(const QElapsedTimer* continued = nullptr);
+        void stopProgress();
+        // 只接受当前票据的真实后端阶段，刷新不读取目标或改动正文。
+        void handleProgress(const DecompilerProgress& progress);
+        void refreshProgress();
+        bool setProgressVisible(QWidget* widget, bool visible);
 
         IWorkbenchBytesProvider* provider_ = nullptr; // 宿主拥有的共同数据源。
         WorkbenchPseudocodeContext context_;          // 当前冻结分析上下文。
@@ -117,5 +127,12 @@ namespace ks::ui
         QPushButton* cancel_ = nullptr;               // 取消当前运行/等待读取。
         QPushButton* locateHex_ = nullptr;            // 对当前 C 行定位十六进制。
         QPushButton* locateDisasm_ = nullptr;         // 对当前 C 行定位反汇编。
+        QProgressBar* progress_ = nullptr;            // 有界真实工作量或不定活动条。
+        QLabel* progressLabel_ = nullptr;             // 本次阶段及实际耗时。
+        QTimer* progressTimer_ = nullptr;             // 只在有限分析期间更新耗时。
+        QElapsedTimer progressElapsed_;               // 单调时钟，不受系统时间调整影响。
+        DecompilerProgress progressState_;             // 当前阶段与实际完成量。
+        std::uint64_t progressEpoch_ = 0;              // 进度所属的来源票据。
+        bool progressActive_ = false;                 // 完成/取消/换源后忽略迟到进度。
     };
 }

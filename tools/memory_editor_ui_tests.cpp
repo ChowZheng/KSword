@@ -145,7 +145,7 @@ namespace
             "headless analysis leaves caller captured bytes unchanged");
 
         for (const auto* rejected : {"wrong-sha", "wrong-address", "wrong-schema", "malformed",
-            "failure", "long-code", "nonzero", "outside-line", "empty-function"})
+            "failure", "long-code", "nonzero", "outside-line", "empty-function", "bad-instruction"})
         {
             results.clear();
             qputenv("KSWORD_GHIDRA_FIXTURE_MODE", rejected);
@@ -154,7 +154,36 @@ namespace
             require(!results.back().success && results.back().code.isEmpty()
                 && !results.back().error.isEmpty() && !backend.isRunning(),
                 "invalid or mismatched evidence cannot publish C pseudocode");
+            if (QByteArray(rejected) == "bad-instruction")
+                require(results.back().error == QStringLiteral("invalid_instruction_data"),
+                    "generated bad-instruction warning has a specific failure instead of successful C");
         }
+
+        // 实际 stdout 可混入旧令牌和错误阶段；只接受本次请求的有效单调阶段。
+        QVector<DecompilerProgress> progress;
+        const auto progressConnection = QObject::connect(&backend, &GhidraDecompiler::progressChanged,
+            &backend, [&](const DecompilerProgress& event) { progress.push_back(event); });
+        results.clear();
+        qputenv("KSWORD_GHIDRA_FIXTURE_MODE", "progress-spoof");
+        require(backend.start(request) && waitFor([&]() { return !results.isEmpty(); }),
+            "spoofed progress is exercised through an actual asynchronous producer process");
+        require(results.back().success && progress.size() == 8,
+            "stale-token unknown-stage invalid-count and backward progress are all ignored");
+        require(progress.front().stage == DecompilerStage::PreparingSnapshot
+            && progress.back().stage == DecompilerStage::Rendering
+            && progress.back().completedUnits == 4 && progress.back().totalUnits == 4,
+            "valid progress retains actual completed and total output lines");
+        require(std::is_sorted(progress.cbegin(), progress.cend(), [](const auto& left, const auto& right) {
+            return static_cast<int>(left.stage) < static_cast<int>(right.stage);
+        }), "accepted backend progress never moves to an earlier stage");
+        QObject::disconnect(progressConnection);
+        results.clear();
+        qputenv("KSWORD_GHIDRA_FIXTURE_MODE", "warning-string");
+        require(backend.start(request) && waitFor([&]() { return !results.isEmpty(); }),
+            "ordinary diagnostic wording is exercised as a program string literal");
+        require(results.back().success && results.back().code.contains(QStringLiteral("return"))
+            && results.back().code.contains(QStringLiteral("Control flow encountered bad instruction data")),
+            "ordinary string literal wording cannot be misclassified as a generated warning");
 
         results.clear();
         qputenv("KSWORD_GHIDRA_FIXTURE_MODE", "success");
@@ -195,6 +224,20 @@ namespace
         require(retiring.isNull(), "destroying the backend stops its child process safely");
 
         qputenv("KSWORD_GHIDRA_FIXTURE_DELAY", "0");
+        const auto cancelledLaunchRecord = directory.filePath(QStringLiteral("progress-cancelled-launch.txt"));
+        FixtureEnvironment progressLaunchRecord("KSWORD_GHIDRA_FIXTURE_LAUNCH_RECORD", cancelledLaunchRecord.toLocal8Bit());
+        QPointer<GhidraDecompiler> deleteOnProgress = new GhidraDecompiler;
+        DecompilerStage deletionStage = DecompilerStage::Rendering;
+        deleteOnProgress->setGhidraDirectory(root);
+        QObject::connect(deleteOnProgress, &GhidraDecompiler::progressChanged, &backend,
+            [&](const DecompilerProgress& event) {
+                deletionStage = event.stage;
+                delete deleteOnProgress.data();
+            });
+        require(deleteOnProgress->start(request) && waitFor([&]() { return deleteOnProgress.isNull(); }),
+            "queued backend progress can synchronously retire its owner before launching Java");
+        require(deletionStage == DecompilerStage::PreparingSnapshot && !QFileInfo::exists(cancelledLaunchRecord),
+            "retirement really occurs during snapshot preparation without any launcher execution");
         QPointer<GhidraDecompiler> deleteOnStart = new GhidraDecompiler;
         deleteOnStart->setGhidraDirectory(root);
         QObject::connect(deleteOnStart, &GhidraDecompiler::runningChanged, qApp,
@@ -388,6 +431,7 @@ namespace
         write(0x188 + 12, 0x1000, 4);
         write(0x188 + 16, 0x200, 4);
         write(0x188 + 20, 0x200, 4);
+        write(0x188 + 36, 0x60000020, 4); // .text 是明确声明为可执行、可读的代码节。
         const auto code = QByteArray::fromHex("b82a000000c3");
         std::copy(code.cbegin(), code.cend(), bytes->begin() + 0x200);
         return bytes;
@@ -936,6 +980,32 @@ namespace
         require(text->canvas()->rows().isEmpty(), "empty snapshot cannot browse stale captured bytes");
     }
 
+    // 快照 HEX 的首行取实际捕获基址，高位地址不扩展成包含不可读前缀的空间。
+    void checkSnapshotHexInitialPosition()
+    {
+        using namespace ks::ui;
+        constexpr std::uint64_t snapshotBase = 0x7FFE6E5B0000ULL;
+        const QByteArray bytes(4096, 'X'); // 可读人工快照，不访问真实进程。
+        SnapshotWorkbenchWidget owner;
+        owner.resize(1100, 650);
+        owner.setSnapshot(bytes, snapshotBase, DisassemblyArchitecture::X64);
+        owner.show();
+        flushEvents();
+        auto* canvas = owner.hexEditor()->findChild<HexCanvas*>();
+        require(canvas != nullptr, "high-address snapshot uses the shared HEX canvas");
+        require(canvas->firstVisibleRow() == 0 && canvas->caretAddress() == snapshotBase,
+            "high-address snapshot opens at its first captured row");
+        auto visible = canvas->visibleAddressRange();
+        require(visible && visible->first == snapshotBase && visible->last < snapshotBase + bytes.size(),
+            "initial snapshot viewport contains only its actual captured range");
+        require(owner.data() == bytes, "initial HEX positioning preserves captured evidence");
+        owner.resize(700, 480);
+        flushEvents();
+        visible = canvas->visibleAddressRange();
+        require(canvas->firstVisibleRow() == 0 && visible && visible->first == snapshotBase,
+            "first resize preserves the high-address snapshot top row");
+    }
+
     void checkKernelModalParentLifetime()
     {
         QPointer<ks::ui::KernelDisassemblyDialog> owner = new ks::ui::KernelDisassemblyDialog;
@@ -1424,6 +1494,7 @@ int main(int argc, char** argv)
     checkModalLifetimeAndStaleRequests();
     std::cerr << "Checking snapshot text bounds\n";
     checkSnapshotTextBounds();
+    checkSnapshotHexInitialPosition();
     std::cerr << "Checking kernel modal lifetime\n";
     checkKernelModalParentLifetime();
     std::cerr << "Checking file snapshots\n";
