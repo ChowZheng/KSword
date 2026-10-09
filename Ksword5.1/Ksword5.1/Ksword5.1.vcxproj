@@ -1012,8 +1012,8 @@
     <ClInclude Include="MonitorDock\MonitorTextViewer.h" />
     <ClInclude Include="MonitorDock\ProcessTraceMonitorWidget.h" />
     <ClInclude Include="MonitorDock\ProcessTraceTimelineWidget.h" />
-    <QtMoc Include="NetworkDock\NetworkDock.h" />
     <ClInclude Include="MonitorDock\EventTimelineModel.h" />
+    <QtMoc Include="NetworkDock\NetworkDock.h" />
     <ClInclude Include="NetworkDock\NetworkDock.InternalCommon.h" />
     <ClInclude Include="NetworkDock\NetworkDock.InternalHelpers.h" />
     <QtMoc Include="NetworkDock\NetworkFirewallPage.h" />

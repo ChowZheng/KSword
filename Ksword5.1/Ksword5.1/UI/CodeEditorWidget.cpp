@@ -288,7 +288,13 @@ namespace
             colorPainter.end();
             icon.addPixmap(coloredPixmap, mode, state);
         };
-        const QColor surface = button ? button->palette().color(QPalette::Base) : KswordTheme::SurfaceColor();
+        // Normal 按钮透明；可见底色来自父面板，不能用 QSS 改写的按钮 Base。
+        const QWidget* parentSurface = button != nullptr ? button->parentWidget() : nullptr;
+        const QPalette::ColorRole surfaceRole = parentSurface != nullptr
+            && parentSurface->objectName() == QStringLiteral("code_editor_find_panel")
+            ? QPalette::AlternateBase : QPalette::Base;
+        const QColor surface = parentSurface != nullptr
+            ? parentSurface->palette().color(surfaceRole) : KswordTheme::SurfaceColor();
         const QColor checkedBackground = KswordTheme::PrimaryAccentColor();
         const QColor pressedBackground = KswordTheme::AccentColor(KswordTheme::AccentRole::Blue, -14, -40);
         const bool pressed = button != nullptr && button->isDown();
@@ -307,6 +313,43 @@ namespace
             addColoredPixmap(KswordTheme::ControlGlyphColor(surface, true), QIcon::Disabled, state);
         }
         return icon;
+    }
+
+    // 排队读取最终调色板：Qt 的按下/释放和 QSS polish 可能先经过瞬时背景。
+    void queueToolbarGlyphRefresh(QToolButton* button)
+    {
+        const QPointer<QToolButton> guardedButton(button); // 动态属性通知也可同步销毁按钮。
+        if (guardedButton.isNull() || guardedButton->property("ksword_editor_glyph_refresh_pending").toBool())
+        {
+            return;
+        }
+        guardedButton->setProperty("ksword_editor_glyph_refresh_pending", true);
+        if (guardedButton.isNull())
+        {
+            return;
+        }
+        QTimer::singleShot(0, guardedButton.data(), [guardedButton]()
+        {
+            if (guardedButton.isNull())
+            {
+                return;
+            }
+            guardedButton->setProperty("ksword_editor_glyph_refresh_pending", false);
+            if (guardedButton.isNull())
+            {
+                return;
+            }
+            const QString path = guardedButton->property("ksword_editor_icon_path").toString();
+            if (!path.isEmpty())
+            {
+                guardedButton->setProperty("ksword_editor_glyph_down", guardedButton->isDown());
+                if (guardedButton.isNull())
+                {
+                    return;
+                }
+                guardedButton->setIcon(buildToolbarSvgIcon(path, guardedButton.data()));
+            }
+        });
     }
 
     // FileDecodeResult：
@@ -1453,12 +1496,6 @@ void CodeEditorWidget::applyThemeStyle()
         if (button != nullptr)
         {
             if (button->styleSheet() != toolStyle) button->setStyleSheet(toolStyle);
-            const QString iconPath = button->property("ksword_editor_icon_path").toString();
-            if (!iconPath.isEmpty())
-            {
-                button->setProperty("ksword_editor_glyph_down", button->isDown());
-                button->setIcon(buildToolbarSvgIcon(iconPath, button));
-            }
         }
     }
 
@@ -1481,6 +1518,21 @@ void CodeEditorWidget::applyThemeStyle()
     m_findPanel->setStyleSheet(QStringLiteral(
         "QWidget#code_editor_find_panel { background:palette(alternate-base); border-bottom:1px solid palette(mid); }"));
     m_languageCombo->setStyleSheet(buildFloatingSwitchStyle());
+    // 父/子样式全部安装后再读按钮背景，避免缓存上一阶段的对比色。
+    for (QToolButton* button : buttonList)
+    {
+        if (button == nullptr)
+        {
+            continue;
+        }
+        button->ensurePolished();
+        const QString iconPath = button->property("ksword_editor_icon_path").toString();
+        if (!iconPath.isEmpty())
+        {
+            button->setProperty("ksword_editor_glyph_down", button->isDown());
+            button->setIcon(buildToolbarSvgIcon(iconPath, button));
+        }
+    }
     updateFindHighlights();
 }
 
@@ -1559,6 +1611,40 @@ QString CodeEditorWidget::copyTextForCurrentView() const
 
 bool CodeEditorWidget::eventFilter(QObject* watchedObject, QEvent* eventObject)
 {
+    const QPointer<CodeEditorWidget> self(this); // 新的属性刷新步骤可能同步关闭宿主。
+    // 释放/失焦取消按下后即使按钮隐藏也补刷，不能只等可见控件的 Paint。
+    if (!m_destroying && eventObject != nullptr
+        && (eventObject->type() == QEvent::PaletteChange || eventObject->type() == QEvent::StyleChange
+            || eventObject->type() == QEvent::MouseButtonRelease || eventObject->type() == QEvent::FocusOut))
+    {
+        if (auto* button = qobject_cast<QToolButton*>(watchedObject))
+        {
+            if (!button->property("ksword_editor_icon_path").toString().isEmpty())
+            {
+                queueToolbarGlyphRefresh(button);
+                if (self.isNull())
+                {
+                    return true;
+                }
+            }
+        }
+        else if (watchedObject == m_toolbarWidget
+            && (eventObject->type() == QEvent::PaletteChange || eventObject->type() == QEvent::StyleChange))
+        {
+            // 透明按钮的实际父表面变化也要补刷，不能只依赖按钮自身的 Base。
+            for (QToolButton* toolbarButton : m_toolbarWidget->findChildren<QToolButton*>(QString(), Qt::FindDirectChildrenOnly))
+            {
+                if (!toolbarButton->property("ksword_editor_icon_path").toString().isEmpty())
+                {
+                    queueToolbarGlyphRefresh(toolbarButton);
+                    if (self.isNull())
+                    {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
     // setDown(false)、失焦等取消路径未必发released；绘制前只在down改变时修正Normal图标。
     if (!m_destroying && eventObject != nullptr && eventObject->type() == QEvent::Paint)
     {
