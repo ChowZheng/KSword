@@ -2510,9 +2510,18 @@ LRESULT KernelPage::HandleMessage(HWND hwnd, const UINT msg, const WPARAM wParam
             }
         }
         break;
-    case WM_CTLCOLORSTATIC:
-        ::SetBkMode(reinterpret_cast<HDC>(wParam), TRANSPARENT);
-        return reinterpret_cast<LRESULT>(::GetSysColorBrush(COLOR_WINDOW));
+    case WM_CTLCOLORSTATIC: {
+        // Read-only EDIT controls report through this message too; leaving them
+        // transparent smears text while scrolling, so theme STATIC labels only.
+        // This page paints with system colors, so keep the system brushes.
+        const LRESULT labelBrush = Ksword::Ui::PaintLabelBackground(
+            reinterpret_cast<HDC>(wParam), reinterpret_cast<HWND>(lParam),
+            ::GetSysColorBrush(COLOR_WINDOW), ::GetSysColor(COLOR_WINDOWTEXT));
+        if (labelBrush != 0) {
+            return labelBrush;
+        }
+        break;
+    }
     case WM_PAINT:
     {
         PAINTSTRUCT paint{};

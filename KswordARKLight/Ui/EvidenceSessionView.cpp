@@ -409,10 +409,17 @@ LRESULT CALLBACK EvidenceSessionViewProc(HWND hwnd, UINT message, WPARAM wParam,
         SetWindowFontRecursive(hwnd);
         ::InvalidateRect(hwnd, nullptr, TRUE);
         return 0;
-    case WM_CTLCOLORSTATIC:
-        ::SetBkMode(reinterpret_cast<HDC>(wParam), TRANSPARENT);
-        ::SetTextColor(reinterpret_cast<HDC>(wParam), AppTheme().textColor);
-        return reinterpret_cast<LRESULT>(AppTheme().windowBrush());
+    case WM_CTLCOLORSTATIC: {
+        // The evidence preview is a read-only multi-line EDIT: it reports through
+        // this message, and a transparent background smears its text on scroll.
+        HDC dc = reinterpret_cast<HDC>(wParam);
+        const LRESULT labelBrush = PaintLabelBackground(dc,
+            reinterpret_cast<HWND>(lParam), AppTheme().windowBrush(), AppTheme().textColor);
+        if (labelBrush != 0) {
+            return labelBrush;
+        }
+        break;
+    }
     case WM_CTLCOLOREDIT:
         ::SetBkMode(reinterpret_cast<HDC>(wParam), OPAQUE);
         ::SetBkColor(reinterpret_cast<HDC>(wParam), AppTheme().panelColor);

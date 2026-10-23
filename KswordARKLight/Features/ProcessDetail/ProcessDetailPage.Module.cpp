@@ -516,7 +516,18 @@ LRESULT CALLBACK ModuleDetailWindowProc(HWND hwnd, UINT message, WPARAM wParam, 
     case WM_CLOSE:
         ::DestroyWindow(hwnd);
         return 0;
-    case WM_CTLCOLORSTATIC:
+    case WM_CTLCOLORSTATIC: {
+        // Read-only EDIT controls report through this message too; leaving them
+        // transparent smears text while scrolling, so theme STATIC labels only.
+        HDC dc = reinterpret_cast<HDC>(wParam);
+        const LRESULT labelBrush = Ksword::Ui::PaintLabelBackground(dc,
+            reinterpret_cast<HWND>(lParam), Ksword::Ui::AppTheme().windowBrush(),
+            Ksword::Ui::AppTheme().textColor);
+        if (labelBrush != 0) {
+            return labelBrush;
+        }
+        break;
+    }
     case WM_CTLCOLORBTN:
         ::SetBkMode(reinterpret_cast<HDC>(wParam), TRANSPARENT);
         ::SetTextColor(reinterpret_cast<HDC>(wParam), Ksword::Ui::AppTheme().textColor);

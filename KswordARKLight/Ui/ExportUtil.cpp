@@ -116,6 +116,12 @@ SaveTextFileResult WriteExportFile(const std::array<wchar_t, MAX_PATH>& path,
 }
 
 std::vector<char> ToUtf8WithBom(const std::wstring& text, std::wstring* errorOut) {
+    // Empty input must never produce the BOM alone: a 3-byte BOM-only file reads
+    // as a successful export even though nothing was written. Callers that need
+    // "empty means nothing to export" rely on this returning no bytes at all.
+    if (text.empty()) {
+        return {};
+    }
     const int count = text.empty()
         ? 0
         : ::WideCharToMultiByte(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), nullptr, 0, nullptr, nullptr);
@@ -157,6 +163,12 @@ SaveTextFileResult WriteUtf8TextToDestination(const TextExportDestination& desti
     const std::wstring& text, const std::wstring& evidenceSource,
     const std::wstring& evidenceFormat, std::wstring* errorOut) {
     if (errorOut) errorOut->clear();
+    // Distinguish "nothing to export" from a conversion failure so the page can
+    // tell the user why the export produced no file.
+    if (text.empty()) {
+        if (errorOut) *errorOut = L"没有可导出的内容。";
+        return SaveTextFileResult::Failed;
+    }
     std::wstring conversionError;
     const auto bytes = ToUtf8WithBom(text, &conversionError);
     if (bytes.empty()) {

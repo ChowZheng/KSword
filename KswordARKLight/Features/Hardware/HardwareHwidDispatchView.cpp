@@ -719,10 +719,17 @@ bool RegisterHwidDispatchClass() {
             }
             break;
         case WM_CTLCOLORSTATIC: {
+            // Read-only EDIT controls report through this message too; leaving
+            // them transparent smears text while scrolling, so theme STATIC
+            // labels only.
             HDC dc = reinterpret_cast<HDC>(wParam);
-            ::SetBkMode(dc, TRANSPARENT);
-            ::SetTextColor(dc, Ksword::Ui::AppTheme().textColor);
-            return reinterpret_cast<LRESULT>(Ksword::Ui::AppTheme().windowBrush());
+            const LRESULT labelBrush = Ksword::Ui::PaintLabelBackground(dc,
+                reinterpret_cast<HWND>(lParam), Ksword::Ui::AppTheme().windowBrush(),
+                Ksword::Ui::AppTheme().textColor);
+            if (labelBrush != 0) {
+                return labelBrush;
+            }
+            break;
         }
         case WM_ERASEBKGND:
             return 1;

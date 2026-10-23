@@ -36,6 +36,26 @@ void SetWindowFontRecursive(HWND root);
 // processing draws background and border; no value is returned.
 void PaintPanel(HDC dc, const RECT& rect);
 
+// PaintLabelBackground themes a STATIC label that sits on a custom-painted
+// surface. Read-only multi-line EDIT controls report through
+// WM_CTLCOLORSTATIC as well, and forcing a transparent background on them
+// smears the text as soon as the user scrolls, so this helper accepts a plain
+// STATIC only. Inputs are the WM_CTLCOLORSTATIC DC, the child HWND, the
+// background brush and the label color; output is the brush to return from the
+// message handler, or 0 when the caller must fall through to DefWindowProc.
+inline LRESULT PaintLabelBackground(HDC dc, HWND child, HBRUSH background, COLORREF textColor) {
+    wchar_t className[16] = {};
+    if (!dc || !child || ::GetClassNameW(child, className, 16) == 0) {
+        return 0;
+    }
+    if (::lstrcmpiW(className, L"Static") != 0) {
+        return 0;
+    }
+    ::SetBkMode(dc, TRANSPARENT);
+    ::SetTextColor(dc, textColor);
+    return reinterpret_cast<LRESULT>(background);
+}
+
 // DrawTextLine draws one clipped text line. Inputs are a DC, text, rect, color,
 // font and alignment flags; processing selects the font temporarily; no return.
 void DrawTextLine(HDC dc, const std::wstring& text, RECT rect, COLORREF color, HFONT font, UINT format);
