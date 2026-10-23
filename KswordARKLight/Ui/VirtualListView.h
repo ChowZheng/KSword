@@ -76,12 +76,21 @@ public:
 
 private:
     const VirtualListRow* rowAtVisibleIndex(int visibleIndex) const noexcept;
+    // captureViewportAnchor records the row currently at the top of the viewport
+    // before a mutation replaces the visible set. Without it the control keeps a
+    // visible row *number*, which after filtering or sorting points at a
+    // different record and makes the table jump.
+    void captureViewportAnchor();
+    void rebuildVisibleIndexes();
     void updateItemCount();
 
 private:
     HWND hwnd_ = nullptr;
     std::shared_ptr<const std::vector<VirtualListRow>> rows_;
     std::vector<std::size_t> visibleIndexes_;
+    std::wstring viewportAnchorKey_;
+    std::size_t viewportAnchorRow_ = 0;
+    bool hasViewportAnchor_ = false;
 };
 
 } // namespace Ksword::Ui

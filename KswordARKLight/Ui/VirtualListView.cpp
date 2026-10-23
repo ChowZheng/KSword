@@ -37,13 +37,15 @@ bool VirtualListView::addColumns(const std::vector<ListViewColumn>& columns) {
 }
 
 void VirtualListView::setRows(std::vector<VirtualListRow> rows) {
+    captureViewportAnchor();
     rows_ = std::make_shared<const std::vector<VirtualListRow>>(std::move(rows));
-    resetVisibleIndexes();
+    rebuildVisibleIndexes();
 }
 
 void VirtualListView::setSharedRows(std::shared_ptr<const std::vector<VirtualListRow>> rows) {
+    captureViewportAnchor();
     rows_ = std::move(rows);
-    resetVisibleIndexes();
+    rebuildVisibleIndexes();
 }
 
 const std::vector<VirtualListRow>& VirtualListView::rows() const noexcept {
@@ -56,6 +58,7 @@ const std::vector<std::size_t>& VirtualListView::visibleIndexes() const noexcept
 }
 
 void VirtualListView::setVisibleIndexes(std::vector<std::size_t> indexes) {
+    captureViewportAnchor();
     const std::size_t rowCount = rows_ ? rows_->size() : 0;
     indexes.erase(std::remove_if(indexes.begin(), indexes.end(), [rowCount](const std::size_t index) { return index >= rowCount; }), indexes.end());
     visibleIndexes_ = std::move(indexes);
@@ -63,11 +66,33 @@ void VirtualListView::setVisibleIndexes(std::vector<std::size_t> indexes) {
 }
 
 void VirtualListView::resetVisibleIndexes() {
+    captureViewportAnchor();
+    rebuildVisibleIndexes();
+}
+
+void VirtualListView::rebuildVisibleIndexes() {
     visibleIndexes_.resize(rows_ ? rows_->size() : 0);
     for (std::size_t index = 0; index < visibleIndexes_.size(); ++index) {
         visibleIndexes_[index] = index;
     }
     updateItemCount();
+}
+
+void VirtualListView::captureViewportAnchor() {
+    hasViewportAnchor_ = false;
+    viewportAnchorKey_.clear();
+    viewportAnchorRow_ = 0;
+    if (!hwnd_ || visibleIndexes_.empty()) {
+        return;
+    }
+    const int topVisible = ListView_GetTopIndex(hwnd_);
+    const VirtualListRow* row = rowAtVisibleIndex(topVisible);
+    if (!row) {
+        return;
+    }
+    viewportAnchorKey_ = row->stableKey;
+    viewportAnchorRow_ = visibleIndexes_[static_cast<std::size_t>(topVisible)];
+    hasViewportAnchor_ = true;
 }
 
 bool VirtualListView::IsValidFilterRegex(const std::wstring& query) {
@@ -187,10 +212,33 @@ void VirtualListView::updateItemCount() {
     if (!hwnd_) {
         return;
     }
-    const int topIndex = ListView_GetTopIndex(hwnd_);
     ListView_SetItemCountEx(hwnd_, static_cast<int>(visibleIndexes_.size()), LVSICF_NOINVALIDATEALL | LVSICF_NOSCROLL);
-    if (topIndex >= 0 && static_cast<std::size_t>(topIndex) < visibleIndexes_.size()) {
-        ListView_EnsureVisible(hwnd_, topIndex, FALSE);
+    // Restore the viewport by identity. Keeping the old top row *number* is what
+    // made filtering and sorting jump to an unrelated record: the visible set is
+    // reordered, so position 0 no longer means the same row.
+    if (hasViewportAnchor_) {
+        int target = -1;
+        const auto& snapshot = rows();
+        if (!viewportAnchorKey_.empty()) {
+            for (std::size_t position = 0; position < visibleIndexes_.size(); ++position) {
+                const std::size_t rowIndex = visibleIndexes_[position];
+                if (rowIndex < snapshot.size() && snapshot[rowIndex].stableKey == viewportAnchorKey_) {
+                    target = static_cast<int>(position);
+                    break;
+                }
+            }
+        }
+        if (target < 0) {
+            for (std::size_t position = 0; position < visibleIndexes_.size(); ++position) {
+                if (visibleIndexes_[position] == viewportAnchorRow_) {
+                    target = static_cast<int>(position);
+                    break;
+                }
+            }
+        }
+        // The anchor row itself may be filtered out; then the list starts at the
+        // beginning, which is the only predictable position left.
+        ListView_EnsureVisible(hwnd_, target < 0 ? 0 : target, FALSE);
     }
     ::InvalidateRect(hwnd_, nullptr, FALSE);
 }

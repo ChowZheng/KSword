@@ -16,6 +16,7 @@ constexpr COLORREF kOverlayTransparentColor = RGB(255, 0, 255);
 constexpr int kTabHeight = 22;
 constexpr int kTabMinWidth = 52;
 constexpr int kTabMaxWidth = 120;
+constexpr int kOverflowWidth = 34;
 constexpr int kSplitterSize = 4;
 constexpr int kDragThreshold = 6;
 constexpr int kFloatingWidth = 540;
@@ -166,6 +167,117 @@ int TabWidthForTitle(HDC dc, const std::wstring& title) {
     return MinInt(kTabMaxWidth, MaxInt(kTabMinWidth, static_cast<int>(size.cx) + 12));
 }
 
+// CollectVisibleTabs filters one leaf's dock list down to the tabs that can be
+// shown. Inputs are the leaf's dock indices and the dock table; outputs are
+// parallel index/title lists in tab order.
+void CollectVisibleTabs(const std::vector<int>& leafDocks, const std::vector<std::unique_ptr<DockWidget>>& docks,
+    std::vector<int>& outDocks, std::vector<const std::wstring*>& outTitles) {
+    outDocks.clear();
+    outTitles.clear();
+    const int dockCount = static_cast<int>(docks.size());
+    for (const int dockIndex : leafDocks) {
+        if (dockIndex < 0 || dockIndex >= dockCount || !docks[dockIndex] || !docks[dockIndex]->visible()) {
+            continue;
+        }
+        outDocks.push_back(dockIndex);
+        outTitles.push_back(&docks[dockIndex]->title());
+    }
+}
+
+// TabStripMetrics is the single layout result shared by painting and hit
+// testing, so both always agree on tab positions and the overflow indicator.
+struct TabStripMetrics {
+    int visibleCount = 0;
+    int hiddenCount = 0;
+    int usedRight = 0;
+    int indicatorLeft = 0;
+    // tabWidths holds the width of each visible tab, left to right. It is part of
+    // the layout result so callers never recompute widths themselves.
+    std::vector<int> tabWidths;
+};
+
+// MeasureTabStrip lays out one leaf's tab strip. Inputs are a DC, the tab strip
+// bounds and parallel dock index/title lists; processing fits as many tabs as
+// remain fully visible and reserves a fixed slice at the right edge for the
+// "+N" indicator once tabs no longer fit; output describes the visible tabs and
+// the indicator bounds.
+TabStripMetrics MeasureTabStrip(HDC dc, const RECT& tabs, const std::vector<int>& dockIndices,
+    const std::vector<const std::wstring*>& titles) {
+    TabStripMetrics metrics;
+    metrics.indicatorLeft = tabs.right;
+    metrics.usedRight = tabs.left;
+    const int count = MinInt(static_cast<int>(dockIndices.size()), static_cast<int>(titles.size()));
+    if (!dc || count <= 0) {
+        return metrics;
+    }
+
+    std::vector<int> naturalWidths;
+    naturalWidths.reserve(count);
+    int totalWidth = 0;
+    for (int i = 0; i < count; ++i) {
+        const int width = titles[i] ? TabWidthForTitle(dc, *titles[i]) : kTabMinWidth;
+        naturalWidths.push_back(width);
+        totalWidth += width;
+    }
+
+    if (tabs.left + totalWidth <= tabs.right) {
+        metrics.visibleCount = count;
+        metrics.usedRight = tabs.left + totalWidth;
+        metrics.tabWidths = std::move(naturalWidths);
+        return metrics;
+    }
+
+    // Tabs do not all fit: keep a slice for "+N" and only place tabs that fit
+    // completely to its left. Narrow strips shrink the reserved slice so at
+    // least one tab still has room.
+    const int reserved = MinInt(kOverflowWidth, MaxInt(0, Width(tabs) / 2));
+    const int limit = tabs.right - reserved;
+    int x = tabs.left;
+    for (int i = 0; i < count; ++i) {
+        if (x + naturalWidths[i] > limit) {
+            break;
+        }
+        metrics.tabWidths.push_back(naturalWidths[i]);
+        x += naturalWidths[i];
+    }
+    if (metrics.tabWidths.empty()) {
+        // Even the first tab is wider than the space left of the indicator. Show
+        // it truncated instead of showing no tab at all.
+        const int room = limit - tabs.left;
+        if (room > 0) {
+            metrics.tabWidths.push_back(MinInt(naturalWidths[0], room));
+        }
+        x = tabs.left + (metrics.tabWidths.empty() ? 0 : metrics.tabWidths[0]);
+    }
+
+    metrics.visibleCount = static_cast<int>(metrics.tabWidths.size());
+    metrics.hiddenCount = count - metrics.visibleCount;
+    metrics.usedRight = x;
+    if (metrics.hiddenCount > 0) {
+        metrics.indicatorLeft = MaxInt(x, limit);
+    } else {
+        metrics.indicatorLeft = tabs.right;
+    }
+    return metrics;
+}
+
+// TabStripDcAcquire borrows the host DC with the UI font selected so tab widths
+// can be measured. Inputs are the host window and an out parameter receiving the
+// previous font; output is the DC, released by TabStripDcRelease.
+HDC TabStripDcAcquire(HWND hwnd, HGDIOBJ& oldFont) {
+    HDC dc = ::GetDC(hwnd);
+    oldFont = ::SelectObject(dc, Ksword::Ui::SystemUIFont());
+    return dc;
+}
+
+// TabStripDcRelease restores and releases a DC borrowed from TabStripDcAcquire.
+void TabStripDcRelease(HWND hwnd, HDC dc, HGDIOBJ oldFont) {
+    if (oldFont) {
+        ::SelectObject(dc, oldFont);
+    }
+    ::ReleaseDC(hwnd, dc);
+}
+
 // DrawFrame draws a one-pixel rectangle frame. Inputs are DC, rect and color; no
 // value is returned.
 void DrawFrame(HDC dc, const RECT& rc, COLORREF color) {
@@ -215,9 +327,11 @@ struct DockManager::FloatingDock {
 };
 
 // TabHit identifies a clicked tab. It records leaf, dock index, ordinal and tab
-// geometry in host client coordinates.
+// geometry in host client coordinates. When overflow is set the click landed on
+// the "+N" indicator: valid is true, dockIndex is -1 and rect is the indicator.
 struct DockManager::TabHit {
     bool valid = false;
+    bool overflow = false;
     int leafId = 0;
     int dockIndex = -1;
     int ordinal = -1;
@@ -484,6 +598,10 @@ LRESULT DockManager::handleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
         return 0;
     case WM_LBUTTONDOWN: {
         TabHit hit = hitTestTab(GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
+        if (hit.overflow) {
+            // The "+N" indicator opens its menu on button up and is never dragged.
+            return 0;
+        }
         if (hit.valid) {
             POINT pt{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
             ::ClientToScreen(hwnd, &pt);
@@ -500,7 +618,7 @@ LRESULT DockManager::handleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
             return 0;
         }
         TabHit hit = hitTestTab(GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
-        const int nextHot = hit.valid ? hit.dockIndex : -1;
+        const int nextHot = hit.valid && !hit.overflow ? hit.dockIndex : -1;
         if (nextHot != hotTabDock_) {
             hotTabDock_ = nextHot;
             ::InvalidateRect(hwnd_, nullptr, FALSE);
@@ -516,6 +634,38 @@ LRESULT DockManager::handleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
         }
         break;
     case WM_LBUTTONUP: {
+        if (!capturedTab_) {
+            TabHit hit = hitTestTab(GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
+            if (hit.valid && hit.overflow) {
+                DockNode* leaf = findLeafById(root_.get(), hit.leafId);
+                if (leaf && leaf->leaf) {
+                    std::vector<int> tabDocks;
+                    std::vector<const std::wstring*> tabTitles;
+                    CollectVisibleTabs(leaf->docks, docks_, tabDocks, tabTitles);
+                    HGDIOBJ oldFont = nullptr;
+                    HDC dc = TabStripDcAcquire(hwnd, oldFont);
+                    const TabStripMetrics metrics = MeasureTabStrip(dc, leaf->tabRect, tabDocks, tabTitles);
+                    TabStripDcRelease(hwnd, dc, oldFont);
+                    const int hidden = metrics.hiddenCount;
+                    if (hidden > 0 && metrics.visibleCount + hidden <= static_cast<int>(tabDocks.size())) {
+                        HMENU menu = ::CreatePopupMenu();
+                        for (int i = 0; i < hidden; ++i) {
+                            const std::wstring& title = *tabTitles[metrics.visibleCount + i];
+                            ::AppendMenuW(menu, MF_STRING, static_cast<UINT_PTR>(1 + i), title.c_str());
+                        }
+                        POINT pt{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+                        ::ClientToScreen(hwnd, &pt);
+                        const int cmd = ::TrackPopupMenu(menu, TPM_RETURNCMD | TPM_LEFTBUTTON | TPM_LEFTALIGN,
+                            pt.x, pt.y, 0, hwnd, nullptr);
+                        ::DestroyMenu(menu);
+                        if (cmd >= 1 && cmd <= hidden) {
+                            activateDock(tabDocks[metrics.visibleCount + cmd - 1]);
+                        }
+                    }
+                }
+                return 0;
+            }
+        }
         POINT pt{};
         ::GetCursorPos(&pt);
         finishTabDrag(pt);
@@ -528,7 +678,7 @@ LRESULT DockManager::handleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
         return 0;
     case WM_RBUTTONUP: {
         TabHit hit = hitTestTab(GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
-        if (hit.valid) {
+        if (hit.valid && !hit.overflow) {
             // The menu acts on the tab under the cursor, but the work area still
             // shows the previously active page. Activate the hit tab first so the
             // page behind the menu is the one the command will affect.
@@ -655,14 +805,14 @@ void DockManager::paintLeaf(HDC dc, const DockNode* leaf) const {
     RECT tabs = leaf->tabRect;
     ::FillRect(dc, &tabs, Ksword::Ui::AppTheme().panelBrush());
     HGDIOBJ oldFont = ::SelectObject(dc, Ksword::Ui::SystemUIFont());
+    std::vector<int> tabDocks;
+    std::vector<const std::wstring*> tabTitles;
+    CollectVisibleTabs(leaf->docks, docks_, tabDocks, tabTitles);
+    const TabStripMetrics metrics = MeasureTabStrip(dc, tabs, tabDocks, tabTitles);
     int x = tabs.left;
-    for (int ordinal = 0; ordinal < static_cast<int>(leaf->docks.size()); ++ordinal) {
-        const int dockIndex = leaf->docks[ordinal];
-        if (dockIndex < 0 || dockIndex >= static_cast<int>(docks_.size()) || !docks_[dockIndex]->visible()) {
-            continue;
-        }
-        int tabWidth = TabWidthForTitle(dc, docks_[dockIndex]->title());
-        tabWidth = MinInt(tabWidth, MaxInt(kTabMinWidth, tabs.right - x));
+    for (int visible = 0; visible < metrics.visibleCount; ++visible) {
+        const int dockIndex = tabDocks[visible];
+        const int tabWidth = metrics.tabWidths[visible];
         RECT tab{ x, tabs.top, x + tabWidth, tabs.bottom };
         const bool active = dockIndex == leaf->activeDock;
         const bool hot = dockIndex == hotTabDock_;
@@ -679,9 +829,24 @@ void DockManager::paintLeaf(HDC dc, const DockNode* leaf) const {
             DT_SINGLELINE | DT_CENTER | DT_VCENTER);
         DrawFrame(dc, tab, Ksword::Ui::AppTheme().borderColor);
         x += tabWidth;
-        if (x >= tabs.right) {
-            break;
+    }
+    if (metrics.hiddenCount > 0 && metrics.indicatorLeft < tabs.right) {
+        // When the active page lives behind the indicator, mark it so the pane
+        // content can still be traced back to a tab.
+        bool activeHidden = false;
+        for (int hidden = metrics.visibleCount; hidden < static_cast<int>(tabDocks.size()); ++hidden) {
+            if (tabDocks[hidden] == leaf->activeDock) {
+                activeHidden = true;
+                break;
+            }
         }
+        RECT indicator{ metrics.indicatorLeft, tabs.top, tabs.right, tabs.bottom };
+        ::FillRect(dc, &indicator, activeHidden ? Ksword::Ui::AppTheme().accentBrush()
+                                               : Ksword::Ui::AppTheme().panelBrush());
+        Ksword::Ui::DrawTextLine(dc, L"+" + std::to_wstring(metrics.hiddenCount), indicator,
+            activeHidden ? RGB(255, 255, 255) : Ksword::Ui::AppTheme().textColor, Ksword::Ui::SystemUIFont(),
+            DT_SINGLELINE | DT_CENTER | DT_VCENTER);
+        DrawFrame(dc, indicator, Ksword::Ui::AppTheme().borderColor);
     }
     ::SelectObject(dc, oldFont);
     DrawFrame(dc, leaf->rect, Ksword::Ui::AppTheme().borderColor);
@@ -978,32 +1143,38 @@ DockManager::TabHit DockManager::hitTestTab(int x, int y) const {
     if (!leaf || !leaf->leaf || !Contains(leaf->tabRect, pt)) {
         return result;
     }
-    HDC dc = ::GetDC(hwnd_);
-    HGDIOBJ oldFont = ::SelectObject(dc, Ksword::Ui::SystemUIFont());
+    std::vector<int> tabDocks;
+    std::vector<const std::wstring*> tabTitles;
+    CollectVisibleTabs(leaf->docks, docks_, tabDocks, tabTitles);
+    HGDIOBJ oldFont = nullptr;
+    HDC dc = TabStripDcAcquire(hwnd_, oldFont);
+    const TabStripMetrics metrics = MeasureTabStrip(dc, leaf->tabRect, tabDocks, tabTitles);
+    TabStripDcRelease(hwnd_, dc, oldFont);
+
     int left = leaf->tabRect.left;
-    for (int ordinal = 0; ordinal < static_cast<int>(leaf->docks.size()); ++ordinal) {
-        const int dockIndex = leaf->docks[ordinal];
-        if (dockIndex < 0 || dockIndex >= static_cast<int>(docks_.size())) {
-            continue;
-        }
-        int tabWidth = TabWidthForTitle(dc, docks_[dockIndex]->title());
-        tabWidth = MinInt(tabWidth, MaxInt(kTabMinWidth, leaf->tabRect.right - left));
-        RECT tab{ left, leaf->tabRect.top, left + tabWidth, leaf->tabRect.bottom };
+    for (int visible = 0; visible < metrics.visibleCount; ++visible) {
+        RECT tab{ left, leaf->tabRect.top, left + metrics.tabWidths[visible], leaf->tabRect.bottom };
         if (Contains(tab, pt)) {
             result.valid = true;
             result.leafId = leaf->leafId;
-            result.dockIndex = dockIndex;
-            result.ordinal = ordinal;
+            result.dockIndex = tabDocks[visible];
+            result.ordinal = visible;
             result.rect = tab;
-            break;
+            return result;
         }
-        left += tabWidth;
-        if (left >= leaf->tabRect.right) {
-            break;
+        left += metrics.tabWidths[visible];
+    }
+    if (metrics.hiddenCount > 0 && metrics.indicatorLeft < leaf->tabRect.right) {
+        RECT indicator{ metrics.indicatorLeft, leaf->tabRect.top, leaf->tabRect.right, leaf->tabRect.bottom };
+        if (Contains(indicator, pt)) {
+            result.valid = true;
+            result.overflow = true;
+            result.leafId = leaf->leafId;
+            result.dockIndex = -1;
+            result.ordinal = -1;
+            result.rect = indicator;
         }
     }
-    ::SelectObject(dc, oldFont);
-    ::ReleaseDC(hwnd_, dc);
     return result;
 }
 
