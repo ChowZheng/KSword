@@ -1291,14 +1291,18 @@ void RefreshWindows(WindowViewState* state) {
             if (snapshot->mode == WindowViewMode::WindowList) {
                 state->statusText = state->model.rows().empty() ? L"Windows: 0" : L"Windows: " + std::to_wstring(state->model.rows().size());
             } else if (snapshot->mode == WindowViewMode::Win32kGuiAudit) {
-                state->statusText = L"Win32K GUI 审计快照已刷新。";
+                state->statusText = state->auditRows.empty()
+                    ? L"未获取到 Win32K GUI 审计记录。"
+                    : L"Win32K GUI 审计已刷新：" + std::to_wstring(state->auditRows.size()) + L" 行。";
             } else if (snapshot->mode == WindowViewMode::Win32kMessageHookAudit) {
                 state->statusText = L"Win32K 消息 Hook 审计快照已刷新：" + std::to_wstring(state->auditRows.size()) + L" 行。";
             } else if (snapshot->mode == WindowViewMode::Win32kTimerAudit) {
                 state->statusText = L"Win32K 定时器只读证据快照已刷新：" + std::to_wstring(state->auditRows.size()) +
                     L" 行；首行保留返回计数、完整性和布局来源。";
             } else {
-                state->statusText = L"GPU / Display / Watchdog 审计快照已刷新。";
+                state->statusText = state->auditRows.empty()
+                    ? L"未获取到 GPU / Display / Watchdog 审计记录。"
+                    : L"GPU / Display / Watchdog 审计已刷新：" + std::to_wstring(state->auditRows.size()) + L" 行。";
             }
             PopulateList(state);
             WindowTools::UpdateWindowHierarchyReportView(state->hierarchyReportView,

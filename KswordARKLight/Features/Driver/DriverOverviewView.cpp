@@ -585,6 +585,14 @@ void PopulateOverviewList(DriverOverviewViewState& state) {
         BuildOverviewVirtualRows(state.snapshotRows));
     ++state.snapshotGeneration;
     state.virtualList.setRows(*state.filterRows);
+    // An empty snapshot must not look identical to a paused load: reuse the
+    // existing overlay so the zero-row result carries its own message. The
+    // spinner is off because nothing is pending any more.
+    if (!state.filterRows || state.filterRows->empty()) {
+        Ksword::Ui::SetLoadingOverlay(state.loadingOverlay, true, L"未获取到可展示的驱动对象记录。", false);
+    } else {
+        Ksword::Ui::SetLoadingOverlay(state.loadingOverlay, false);
+    }
     RequestOverviewFilter(state, state.filterBar ? Ksword::Ui::GetFilterBarText(state.filterBar) : state.filterQuery);
 }
 

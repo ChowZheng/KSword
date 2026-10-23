@@ -309,7 +309,21 @@ void BeginNetworkRefresh(NetworkViewState& state) {
             state.model.replacePages(std::move(*pages));
             ++state.modelGeneration;
             RenderAllAuditPages(state);
-            SetAuditStatusForAll(state, L"Network R0 与 R3 审计快照已刷新。");
+            // Each audit tab keeps its own row count so an empty tab reads as
+            // "no records" instead of a finished-but-silent refresh.
+            for (int auditIndex = 0; auditIndex < kAuditTabCount; ++auditIndex) {
+                NetworkAuditPageState* page = AuditPageFor(state, auditIndex);
+                if (!page) {
+                    continue;
+                }
+                const NetworkAuditPage* audit = state.model.pageAt(auditIndex);
+                const std::size_t rowCount = audit ? audit->rows.size() : 0;
+                if (rowCount == 0) {
+                    SetStatus(*page, L"未获取到 Network 审计记录。");
+                } else {
+                    SetStatus(*page, L"Network 审计已刷新：" + std::to_wstring(rowCount) + L" 项。");
+                }
+            }
         });
 }
 

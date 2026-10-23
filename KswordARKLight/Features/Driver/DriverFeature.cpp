@@ -158,7 +158,18 @@ void RefreshFeatureModel(DriverFeaturePageState& state) {
             state.model.setObjectRows(std::move(snapshot->objectRows));
             RefreshDriverOverviewView(state.overviewView);
             RefreshDriverObjectView(state.objectView);
-            SetStatus(state, snapshot->diagnosticText.empty() ? L"驱动数据已刷新。" : snapshot->diagnosticText);
+            // The refresh status keeps the per-tab counts so a zero-row
+            // snapshot is distinguishable from a successful non-empty one.
+            const std::size_t overviewCount = state.model.overviewRows().size();
+            const std::size_t objectCount = state.model.objectRows().size();
+            if (!snapshot->diagnosticText.empty()) {
+                SetStatus(state, snapshot->diagnosticText);
+            } else if (overviewCount == 0 && objectCount == 0) {
+                SetStatus(state, L"未获取到驱动数据。");
+            } else {
+                SetStatus(state, L"驱动数据已刷新：概览 " + std::to_wstring(overviewCount) +
+                    L" 项、对象 " + std::to_wstring(objectCount) + L" 项。");
+            }
         });
 }
 
