@@ -78,13 +78,16 @@ void SetWindowFontRecursive(HWND root) {
 
 void PaintPanel(HDC dc, const RECT& rect) {
     ::FillRect(dc, &rect, AppTheme().panelBrush());
-    HPEN pen = ::CreatePen(PS_SOLID, 1, AppTheme().borderColor);
-    HGDIOBJ oldPen = ::SelectObject(dc, pen);
+    // The frame pen is cached on the theme: creating and deleting it per panel
+    // per frame produced a GDI object churn on every repaint.
+    HPEN pen = AppTheme().borderPen();
+    HGDIOBJ oldPen = pen ? ::SelectObject(dc, pen) : nullptr;
     HGDIOBJ oldBrush = ::SelectObject(dc, ::GetStockObject(HOLLOW_BRUSH));
     ::Rectangle(dc, rect.left, rect.top, rect.right, rect.bottom);
     ::SelectObject(dc, oldBrush);
-    ::SelectObject(dc, oldPen);
-    ::DeleteObject(pen);
+    if (oldPen) {
+        ::SelectObject(dc, oldPen);
+    }
 }
 
 void DrawTextLine(HDC dc, const std::wstring& text, RECT rect, COLORREF color, HFONT font, UINT format) {

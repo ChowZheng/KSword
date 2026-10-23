@@ -23,6 +23,9 @@ public:
     HBRUSH windowBrush() const;
     HBRUSH panelBrush() const;
     HBRUSH accentBrush() const;
+    // One-pixel border pen shared by every panel frame; creating it per paint
+    // cost a GDI object per panel per frame.
+    HPEN borderPen() const;
 
     COLORREF windowColor = RGB(246, 247, 249);
     COLORREF panelColor = RGB(255, 255, 255);
@@ -36,6 +39,7 @@ private:
     HBRUSH windowBrush_;
     HBRUSH panelBrush_;
     HBRUSH accentBrush_;
+    HPEN borderPen_;
 };
 
 // AppTheme returns the singleton palette. There is no input; output is the theme
