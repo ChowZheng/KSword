@@ -6,6 +6,7 @@
 #include "../../Ui/AsyncTask.h"
 #include "../../Ui/Controls.h"
 #include "../../Ui/FilterBar.h"
+#include "../../Ui/LazyTreeView.h"
 #include "../../Ui/LoadingOverlay.h"
 #include "../../Ui/Theme.h"
 
@@ -78,7 +79,7 @@ struct HardwareViewState {
     HWND hwnd = nullptr;
     HWND refreshButton = nullptr;
     HWND filterBar = nullptr;
-    HWND tree = nullptr;
+    Ksword::Ui::LazyTreeView tree;
     HWND detail = nullptr;
     HWND loadingOverlay = nullptr;
     HardwareModel model;
@@ -211,21 +212,15 @@ std::wstring DeviceAuditSummaryText(const ksword::ark::DeviceAuditResult& result
 // Input is the hardware page state; output is -1 when no valid tree item is
 // selected.
 int SelectedDeviceIndex(HardwareViewState* state) {
-    if (!state || !state->tree) {
+    if (!state) {
         return -1;
     }
-
-    HTREEITEM selected = TreeView_GetSelection(state->tree);
+    // 树项不再携带 lParam：模型索引由控件按 HTREEITEM 记录，这里只做一次查表。
+    const HTREEITEM selected = state->tree.selected();
     if (!selected) {
         return -1;
     }
-    TVITEMW item{};
-    item.mask = TVIF_PARAM;
-    item.hItem = selected;
-    if (!TreeView_GetItem(state->tree, &item)) {
-        return -1;
-    }
-    return static_cast<int>(item.lParam);
+    return static_cast<int>(state->tree.userDataOf(selected));
 }
 
 std::wstring SelectedInstanceId(const HardwareViewState& state) {
@@ -246,46 +241,42 @@ bool HasVisibleChildren(const HardwareViewState& state, const HardwareDeviceNode
     });
 }
 
-// InsertTreeNode inserts one device node. When includeDescendants is false the
-// item exposes its child affordance but defers child materialization until the
-// user expands it. The complete filtered ancestor closure stays in the model.
-HTREEITEM InsertTreeNode(HardwareViewState* state, int index, HTREEITEM parent, const bool includeDescendants) {
-    const HardwareDeviceNode* node = state ? state->model.deviceAt(index) : nullptr;
-    if (!node || !IsVisibleDevice(*state, index)) {
-        return nullptr;
-    }
-
-    TVINSERTSTRUCTW insert{};
-    insert.hParent = parent;
-    insert.hInsertAfter = TVI_LAST;
-    insert.item.mask = TVIF_TEXT | TVIF_PARAM | TVIF_CHILDREN;
-    const std::wstring title = CompactDeviceName(*node);
-    insert.item.pszText = const_cast<LPWSTR>(title.c_str());
-    insert.item.lParam = static_cast<LPARAM>(index);
-    insert.item.cChildren = HasVisibleChildren(*state, *node) ? 1 : 0;
-    HTREEITEM item = TreeView_InsertItem(state->tree, &insert);
-    if (includeDescendants) {
-        for (const int childIndex : node->childIndices) {
-            InsertTreeNode(state, childIndex, item, true);
-        }
-    }
-    return item;
+// DeviceTreeKey 是树节点的稳定身份，就是模型里的设备索引。同一份快照内唯一，
+// 而快照一换整棵树就重建，所以不需要跨快照稳定。
+std::wstring DeviceTreeKey(const int index) {
+    return std::to_wstring(index);
 }
 
-// PopulateTreeItemChildren materializes one expanded branch at most once.
-// Inputs are a tree item and its stable model index; processing only inserts
-// direct children so a large device inventory does not block initial rendering.
-void PopulateTreeItemChildren(HardwareViewState* state, HTREEITEM parent, const int index) {
-    if (!state || !parent || TreeView_GetChild(state->tree, parent) != nullptr) {
-        return;
+// MakeDeviceRow 把一个可见设备节点翻译成树行。key 是索引，hasChildren 只用来
+// 决定展开箭头，因此无子分支不会被插一个多余的空子项。
+bool MakeDeviceRow(const HardwareViewState& state, const int index, Ksword::Ui::TreeRow& row) {
+    const HardwareDeviceNode* node = state.model.deviceAt(index);
+    if (!node || !IsVisibleDevice(state, index)) {
+        return false;
     }
-    const HardwareDeviceNode* node = state->model.deviceAt(index);
+    row.text = CompactDeviceName(*node);
+    row.key = DeviceTreeKey(index);
+    row.userData = static_cast<LPARAM>(index);
+    row.hasChildren = HasVisibleChildren(state, *node);
+    return true;
+}
+
+// ChildRowsOf 是树的同步子节点来源：设备模型早就在内存里，不需要后台往返。
+// 控件会在展开的那一刻调用它，并把返回的行分批插进来。
+std::vector<Ksword::Ui::TreeRow> ChildRowsOf(const HardwareViewState& state, const int index) {
+    std::vector<Ksword::Ui::TreeRow> rows;
+    const HardwareDeviceNode* node = state.model.deviceAt(index);
     if (!node) {
-        return;
+        return rows;
     }
+    rows.reserve(node->childIndices.size());
     for (const int childIndex : node->childIndices) {
-        InsertTreeNode(state, childIndex, parent, false);
+        Ksword::Ui::TreeRow row;
+        if (MakeDeviceRow(state, childIndex, row)) {
+            rows.push_back(std::move(row));
+        }
     }
+    return rows;
 }
 
 void AddDetailSnapshotToList(HardwareViewState* state, const HardwareDetailSnapshot& snapshot) {
@@ -362,12 +353,12 @@ void ShowDetail(HardwareViewState* state, int index) {
 // SelectFirstRoot selects the first available device after refresh. Input is the
 // module state; processing updates the tree selection and detail pane; no return.
 void SelectFirstRoot(HardwareViewState* state) {
-    if (!state || !state->tree) {
+    if (!state || !state->tree.hwnd()) {
         return;
     }
-    HTREEITEM first = TreeView_GetRoot(state->tree);
+    const HTREEITEM first = TreeView_GetRoot(state->tree.hwnd());
     if (first) {
-        TreeView_SelectItem(state->tree, first);
+        state->tree.selectByKey(state->tree.keyOf(first));
     } else {
         ShowDetail(state, -1);
     }
@@ -377,20 +368,30 @@ void SelectFirstRoot(HardwareViewState* state) {
 // Both query modes materialize only expanded branches. A non-empty search opens
 // roots while descendants remain available through the existing lazy expansion.
 void PopulateTree(HardwareViewState* state) {
-    if (!state || !state->tree) {
+    if (!state || !state->tree.hwnd()) {
         return;
     }
-    const bool filtered = !state->filterQuery.empty();
-    ::SendMessageW(state->tree, WM_SETREDRAW, FALSE, 0);
-    TreeView_DeleteAllItems(state->tree);
+    std::vector<Ksword::Ui::TreeRow> roots;
+    roots.reserve(state->model.rootIndices().size());
     for (const int rootIndex : state->model.rootIndices()) {
-        HTREEITEM root = InsertTreeNode(state, rootIndex, TVI_ROOT, false);
-        if (root && filtered) {
-            TreeView_Expand(state->tree, root, TVE_EXPAND);
+        Ksword::Ui::TreeRow row;
+        if (MakeDeviceRow(*state, rootIndex, row)) {
+            roots.push_back(std::move(row));
         }
     }
-    ::SendMessageW(state->tree, WM_SETREDRAW, TRUE, 0);
-    ::InvalidateRect(state->tree, nullptr, FALSE);
+    // 重绘抑制、占位子节点、批量插入都在控件里，页面只给根节点。
+    state->tree.setRoots(std::move(roots));
+    if (!state->filterQuery.empty()) {
+        // 筛选状态下不该让用户逐层点开：直接把根展开，子节点由同步来源现取，
+        // 而且每次展开仍然受控件的分批上限约束。
+        const HWND treeHwnd = state->tree.hwnd();
+        HTREEITEM root = TreeView_GetRoot(treeHwnd);
+        while (root) {
+            const HTREEITEM next = TreeView_GetNextSibling(treeHwnd, root);
+            TreeView_Expand(treeHwnd, root, TVE_EXPAND);
+            root = next;
+        }
+    }
     SelectFirstRoot(state);
 }
 
@@ -429,29 +430,11 @@ bool MatchesDevice(const HardwareDeviceNode& node, const std::wstring& query, co
         matches(node.classLowerFilters);
 }
 
-HTREEITEM FindTreeItemByDeviceIndex(HWND tree, HTREEITEM item, int deviceIndex) {
-    while (item) {
-        TVITEMW tvItem{};
-        tvItem.mask = TVIF_PARAM;
-        tvItem.hItem = item;
-        if (TreeView_GetItem(tree, &tvItem) && static_cast<int>(tvItem.lParam) == deviceIndex) {
-            return item;
-        }
-        if (HTREEITEM child = TreeView_GetChild(tree, item)) {
-            if (HTREEITEM found = FindTreeItemByDeviceIndex(tree, child, deviceIndex)) {
-                return found;
-            }
-        }
-        item = TreeView_GetNextSibling(tree, item);
-    }
-    return nullptr;
-}
-
 // EnsureTreeItemVisible restores a stable selection after a tree rebuild. It
 // materializes only the selected node's ancestor chain for an unfiltered tree,
 // preserving the lazy-loading benefit while avoiding selection jumps.
 HTREEITEM EnsureTreeItemVisible(HardwareViewState& state, const int deviceIndex) {
-    if (!state.tree || !IsVisibleDevice(state, deviceIndex)) {
+    if (!state.tree.hwnd() || !IsVisibleDevice(state, deviceIndex)) {
         return nullptr;
     }
     std::vector<int> lineage;
@@ -469,14 +452,15 @@ HTREEITEM EnsureTreeItemVisible(HardwareViewState& state, const int deviceIndex)
         return nullptr;
     }
     std::reverse(lineage.begin(), lineage.end());
-    HTREEITEM item = FindTreeItemByDeviceIndex(state.tree, TreeView_GetRoot(state.tree), lineage.front());
+    HTREEITEM item = state.tree.findItem(DeviceTreeKey(lineage.front()));
     if (!item) {
         return nullptr;
     }
     for (std::size_t index = 1; index < lineage.size(); ++index) {
-        PopulateTreeItemChildren(&state, item, lineage[index - 1]);
-        TreeView_Expand(state.tree, item, TVE_EXPAND);
-        item = FindTreeItemByDeviceIndex(state.tree, TreeView_GetChild(state.tree, item), lineage[index]);
+        // 展开父节点会把它的子节点现取进来，然后按 key 直接命中；不再是每层一次
+        // TVM_GETITEM 的全子节点文本扫描。
+        TreeView_Expand(state.tree.hwnd(), item, TVE_EXPAND);
+        item = state.tree.findItem(DeviceTreeKey(lineage[index]));
         if (!item) {
             return nullptr;
         }
@@ -499,8 +483,8 @@ void ApplyHardwareFilter(HardwareViewState& state, HardwareFilterResult result) 
         const auto& devices = state.model.devices();
         for (const HardwareDeviceNode& node : devices) {
             if (node.instanceId == result.selectedInstanceId) {
-                if (const HTREEITEM item = EnsureTreeItemVisible(state, node.index)) {
-                    TreeView_SelectItem(state.tree, item);
+                if (EnsureTreeItemVisible(state, node.index)) {
+                    state.tree.selectByKey(DeviceTreeKey(node.index));
                 }
                 break;
             }
@@ -610,17 +594,17 @@ void BeginDeviceRefresh(HardwareViewState& state) {
 // selection and offers only refresh/copy operations; no device configuration is
 // changed and no value is returned.
 void ShowDeviceContextMenu(HardwareViewState* state, POINT screenPoint) {
-    if (!state || !state->tree) {
+    if (!state || !state->tree.hwnd()) {
         return;
     }
 
     POINT clientPoint = screenPoint;
-    ::ScreenToClient(state->tree, &clientPoint);
+    ::ScreenToClient(state->tree.hwnd(), &clientPoint);
     TVHITTESTINFO hit{};
     hit.pt = clientPoint;
-    HTREEITEM hitItem = TreeView_HitTest(state->tree, &hit);
+    HTREEITEM hitItem = TreeView_HitTest(state->tree.hwnd(), &hit);
     if (hitItem != nullptr) {
-        TreeView_SelectItem(state->tree, hitItem);
+        state->tree.selectByKey(state->tree.keyOf(hitItem));
     }
 
     const int index = SelectedDeviceIndex(state);
@@ -713,7 +697,7 @@ void LayoutView(HardwareViewState* state) {
     ::MoveWindow(state->filterBar, kGap, 35, std::max(80, width - kGap * 2), 24, TRUE);
     const int top = kHeaderHeight + kGap;
     const int treeWidth = width > kTreeWidth + 260 ? kTreeWidth : width / 2;
-    ::MoveWindow(state->tree, kGap, top, treeWidth - kGap, height - top - kGap, TRUE);
+    ::MoveWindow(state->tree.hwnd(), kGap, top, treeWidth - kGap, height - top - kGap, TRUE);
     ::MoveWindow(state->detail, treeWidth + kGap, top, width - treeWidth - (kGap * 2), height - top - kGap, TRUE);
     ::MoveWindow(state->loadingOverlay, kGap, top, std::max(80, width - kGap * 2), std::max(80, height - top - kGap), TRUE);
 }
@@ -724,17 +708,18 @@ void LayoutView(HardwareViewState* state) {
 bool CreateChildControls(HardwareViewState* state, HWND hwnd) {
     state->refreshButton = Ksword::Ui::CreateButton(hwnd, kRefreshButtonId, L"刷新", 0, 0, 80, 24);
     state->filterBar = Ksword::Ui::CreateFilterBar(hwnd, kFilterBarId, L"筛选名称、类、实例、驱动、硬件 ID 和审计证据", 0, 0, 200, 24);
-    state->tree = ::CreateWindowExW(WS_EX_CLIENTEDGE, WC_TREEVIEWW, L"",
-        WS_CHILD | WS_VISIBLE | WS_TABSTOP | TVS_HASBUTTONS | TVS_HASLINES | TVS_LINESATROOT | TVS_SHOWSELALWAYS,
-        0, 0, 100, 100, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kTreeId)), ::GetModuleHandleW(nullptr), nullptr);
+    // 设备模型是内存里的投影，展开时直接同步取子节点，不走后台往返。
+    state->tree.setChildSource([state](HTREEITEM, const std::wstring& key) {
+        return ChildRowsOf(*state, static_cast<int>(std::wcstol(key.c_str(), nullptr, 10)));
+    });
+    const bool treeReady = state->tree.create(hwnd, kTreeId, 0, 0, 100, 100);
     state->detail = ::CreateWindowExW(WS_EX_CLIENTEDGE, WC_LISTVIEWW, L"",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | LVS_REPORT | LVS_SHOWSELALWAYS | LVS_SINGLESEL,
         0, 0, 100, 100, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kDetailId)), ::GetModuleHandleW(nullptr), nullptr);
     state->loadingOverlay = Ksword::Ui::CreateLoadingOverlay(hwnd, kLoadingOverlayId, { 0, 0, 1, 1 });
-    if (!state->refreshButton || !state->filterBar || !state->tree || !state->detail || !state->loadingOverlay) {
+    if (!state->refreshButton || !state->filterBar || !treeReady || !state->detail || !state->loadingOverlay) {
         return false;
     }
-    ::SendMessageW(state->tree, WM_SETFONT, reinterpret_cast<WPARAM>(Ksword::Ui::SystemUIFont()), TRUE);
     ::SendMessageW(state->detail, WM_SETFONT, reinterpret_cast<WPARAM>(Ksword::Ui::SystemUIFont()), TRUE);
     ListView_SetExtendedListViewStyle(state->detail, LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER | LVS_EX_GRIDLINES | LVS_EX_LABELTIP);
     AddListColumn(state->detail, 0, L"属性", 180);
@@ -798,16 +783,18 @@ bool RegisterHardwareViewClass() {
             break;
         case WM_NOTIFY: {
             auto* notify = reinterpret_cast<NMHDR*>(lParam);
-            if (state && notify && notify->idFrom == kTreeId && notify->code == TVN_ITEMEXPANDINGW) {
-                const auto* expanding = reinterpret_cast<const NMTREEVIEWW*>(lParam);
-                if (expanding && expanding->action == TVE_EXPAND) {
-                    PopulateTreeItemChildren(state, expanding->itemNew.hItem, static_cast<int>(expanding->itemNew.lParam));
+            if (state && notify) {
+                // 展开、删除、合成行的选中都由控件消费；页面只处理真实选中。
+                LRESULT treeResult = 0;
+                if (state->tree.handleNotify(*notify, treeResult)) {
+                    return treeResult;
                 }
-                return 0;
             }
             if (state && notify && notify->idFrom == kTreeId && notify->code == TVN_SELCHANGEDW) {
-                auto* change = reinterpret_cast<NMTREEVIEWW*>(lParam);
-                ShowDetail(state, static_cast<int>(change->itemNew.lParam));
+                const auto* change = reinterpret_cast<const NMTREEVIEWW*>(lParam);
+                if (change && !state->tree.silentSelection() && !state->tree.isNotice(change->itemNew.hItem)) {
+                    ShowDetail(state, static_cast<int>(state->tree.userDataOf(change->itemNew.hItem)));
+                }
                 return 0;
             }
             if (state && notify && notify->idFrom == kTreeId && notify->code == NM_RCLICK) {
@@ -825,11 +812,11 @@ bool RegisterHardwareViewClass() {
             break;
         }
         case WM_CONTEXTMENU:
-            if (state && reinterpret_cast<HWND>(wParam) == state->tree) {
+            if (state && reinterpret_cast<HWND>(wParam) == state->tree.hwnd()) {
                 POINT pt{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
                 if (pt.x == -1 && pt.y == -1) {
                     RECT rc{};
-                    ::GetWindowRect(state->tree, &rc);
+                    ::GetWindowRect(state->tree.hwnd(), &rc);
                     pt.x = rc.left + 24;
                     pt.y = rc.top + 24;
                 }

@@ -176,7 +176,7 @@ void BuildRows(HotkeyViewState& state) {
         rows.push_back(std::move(row));
     }
     auto shared = std::make_shared<std::vector<Ksword::Ui::VirtualListRow>>(std::move(rows));
-    state.hotkeyList.setRows(*shared);
+    state.hotkeyList.setSharedRows(shared);
     state.filterRows = std::move(shared);
     ++state.displayGeneration;
 }

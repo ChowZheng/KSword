@@ -687,7 +687,7 @@ void HandlePage::PopulateList() {
     if (!state_->filterRows) {
         return;
     }
-    state_->handleList.setRows(*state_->filterRows);
+    state_->handleList.setSharedRows(state_->filterRows);
     RequestFilter(filterBar_ ? Ksword::Ui::GetFilterBarText(filterBar_) : state_->filterQuery, selectedStableKey, topStableKey);
 }
 

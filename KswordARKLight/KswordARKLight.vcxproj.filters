@@ -549,6 +549,9 @@
     <ClCompile Include="Ui\Theme.cpp">
       <Filter>Ui</Filter>
     </ClCompile>
+    <ClCompile Include="Ui\LazyTreeView.cpp">
+      <Filter>Ui</Filter>
+    </ClCompile>
     <ClCompile Include="Ui\TreeViewUtil.cpp">
       <Filter>Ui</Filter>
     </ClCompile>
@@ -1224,6 +1227,9 @@
       <Filter>Ui</Filter>
     </ClInclude>
     <ClInclude Include="Ui\Theme.h">
+      <Filter>Ui</Filter>
+    </ClInclude>
+    <ClInclude Include="Ui\LazyTreeView.h">
       <Filter>Ui</Filter>
     </ClInclude>
     <ClInclude Include="Ui\TreeViewUtil.h">

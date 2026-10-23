@@ -532,7 +532,7 @@ void PopulateAuditList(MiscAuditViewState& state) {
     }
     state.filterRows = std::make_shared<const std::vector<Ksword::Ui::VirtualListRow>>(BuildAuditVirtualRows(state.rows));
     ++state.snapshotGeneration;
-    state.virtualList.setRows(*state.filterRows);
+    state.virtualList.setSharedRows(state.filterRows);
     RequestAuditFilter(state, state.filterBar ? Ksword::Ui::GetFilterBarText(state.filterBar) : state.filterQuery);
 }
 

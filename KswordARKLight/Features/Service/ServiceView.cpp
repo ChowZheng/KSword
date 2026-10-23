@@ -427,7 +427,7 @@ void BuildRows(ServiceViewState& state) {
         rows.push_back(std::move(row));
     }
     auto filterRows = std::make_shared<std::vector<Ksword::Ui::VirtualListRow>>(std::move(rows));
-    state.serviceList.setRows(*filterRows);
+    state.serviceList.setSharedRows(filterRows);
     state.filterRows = std::move(filterRows);
     ++state.displayGeneration;
     // A fresh enumeration or re-sort changes the row snapshot. Any optional

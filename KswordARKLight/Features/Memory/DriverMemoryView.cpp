@@ -326,7 +326,7 @@ void RebuildMemoryHistory(DriverMemoryViewState& state) {
         row.stableKey += L"|" + entry.status;
         rows->push_back(std::move(row));
     }
-    state.historyList.setRows(*rows);
+    state.historyList.setSharedRows(rows);
     state.historyFilterRows = std::move(rows);
     ++state.historyGeneration;
     RequestMemoryHistoryFilter(state, state.historyFilter ? Ksword::Ui::GetFilterBarText(state.historyFilter) : state.historyFilterQuery);

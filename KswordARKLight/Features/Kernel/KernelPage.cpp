@@ -3163,10 +3163,11 @@ void KernelPage::Layout() {
         ::MoveWindow(refreshButton_, toolbarX, toolbarTop + 2, 34, buttonHeight, TRUE);
         toolbarX += 40;
         const int statusWidth = std::min(360, std::max(120, width / 3));
-        const int filterWidth = std::max(120, width - toolbarX - statusWidth - 6);
+        const int filterWidth = std::max(96, width - toolbarX - statusWidth - 6);
         ::MoveWindow(filterEdit_, toolbarX, toolbarTop + 3, filterWidth, 22, TRUE);
         toolbarX += filterWidth + 6;
-        ::MoveWindow(statusText_, toolbarX, toolbarTop + 4, std::max(0, width - toolbarX), 22, TRUE);
+        // 工具栏行右侧剩余宽度会被算成 0，状态文字整条消失；辅助函数给它一个可读下限。
+        Ksword::Ui::PlaceStatusLabel(statusText_, toolbarX, toolbarTop, width);
 
         const int panelTop = contentTop + infoHeight;
         const int availableHeight = std::max(0, height - panelTop);
@@ -3196,7 +3197,7 @@ void KernelPage::Layout() {
 
         const int toolbarTop = contentTop;
         ::MoveWindow(refreshButton_, 0, toolbarTop + 2, 34, buttonHeight, TRUE);
-        ::MoveWindow(statusText_, 40, toolbarTop + 4, std::max(0, width - 40), 22, TRUE);
+        Ksword::Ui::PlaceStatusLabel(statusText_, 40, toolbarTop, width);
 
         const int panelTop = contentTop + infoHeight;
         const int availableHeight = std::max(0, height - panelTop);
@@ -3240,10 +3241,11 @@ void KernelPage::Layout() {
             ::MoveWindow(refreshButton_, toolbarX, toolbarTop + 2, 34, buttonHeight, TRUE);
             toolbarX += 40;
             const int statusWidth = std::min(360, std::max(150, width / 3));
-            const int filterWidth = std::max(160, std::max(0, width - toolbarX - statusWidth - 6));
+            const int filterWidth = std::max(96, std::max(0, width - toolbarX - statusWidth - 6));
             ::MoveWindow(filterEdit_, toolbarX, toolbarTop + 3, filterWidth, 22, TRUE);
             toolbarX += filterWidth + 6;
-            ::MoveWindow(statusText_, toolbarX, toolbarTop + 4, std::max(0, width - toolbarX), 22, TRUE);
+            // 工具栏行右侧剩余宽度会被算成 0，状态文字整条消失；辅助函数给它一个可读下限。
+        Ksword::Ui::PlaceStatusLabel(statusText_, toolbarX, toolbarTop, width);
 
             const int objectTop = contentTop + infoHeight;
             const int availableHeight = std::max(0, height - objectTop);
@@ -3300,7 +3302,8 @@ void KernelPage::Layout() {
             toolbarX += depthEditWidth + 6;
             ::MoveWindow(refreshButton_, toolbarX, toolbarTop + 2, refreshWidth, buttonHeight, TRUE);
             toolbarX += refreshWidth + 6;
-            ::MoveWindow(statusText_, toolbarX, toolbarTop + 4, std::max(0, width - toolbarX), 22, TRUE);
+            // 工具栏行右侧剩余宽度会被算成 0，状态文字整条消失；辅助函数给它一个可读下限。
+        Ksword::Ui::PlaceStatusLabel(statusText_, toolbarX, toolbarTop, width);
 
             const int objectTop = contentTop + infoHeight;
             const int availableHeight = std::max(0, height - objectTop);
@@ -3343,10 +3346,11 @@ void KernelPage::Layout() {
             ::MoveWindow(copyDiagnosticButton_, toolbarX, toolbarTop + 2, 34, buttonHeight, TRUE);
             toolbarX += 38;
             const int statusWidth = std::min(360, std::max(180, width / 3));
-            const int filterWidth = std::max(140, std::max(0, width - toolbarX - statusWidth - 6));
+            const int filterWidth = std::max(96, std::max(0, width - toolbarX - statusWidth - 6));
             ::MoveWindow(filterEdit_, toolbarX, toolbarTop + 3, filterWidth, 22, TRUE);
             toolbarX += filterWidth + 6;
-            ::MoveWindow(statusText_, toolbarX, toolbarTop + 4, std::max(0, width - toolbarX), 22, TRUE);
+            // 工具栏行右侧剩余宽度会被算成 0，状态文字整条消失；辅助函数给它一个可读下限。
+        Ksword::Ui::PlaceStatusLabel(statusText_, toolbarX, toolbarTop, width);
 
             const int objectTop = contentTop + 28;
             const int objectDetailHeight = std::min(150, std::max(96, height / 4));
@@ -3393,7 +3397,8 @@ void KernelPage::Layout() {
             toolbarX += filterWidth + 6;
             ::MoveWindow(moduleFilterEdit_, toolbarX, toolbarTop + 3, filterWidth, 22, TRUE);
             toolbarX += filterWidth + 6;
-            ::MoveWindow(statusText_, toolbarX, toolbarTop + 4, std::max(0, width - toolbarX), 22, TRUE);
+            // 工具栏行右侧剩余宽度会被算成 0，状态文字整条消失；辅助函数给它一个可读下限。
+        Ksword::Ui::PlaceStatusLabel(statusText_, toolbarX, toolbarTop, width);
 
             const int noteTop = toolbarTop + 28;
             ::MoveWindow(symbolicLinkNoteText_, 0, noteTop + 2, width, 22, TRUE);
@@ -3438,10 +3443,11 @@ void KernelPage::Layout() {
             ::MoveWindow(baseNamedTypeCombo_, toolbarX, toolbarTop + 2, typeWidth, 240, TRUE);
             toolbarX += typeWidth + 6;
             const int statusWidth = std::min(360, std::max(150, width / 3));
-            const int keywordWidth = std::max(120, std::max(0, width - toolbarX - statusWidth - 6));
+            const int keywordWidth = std::max(96, std::max(0, width - toolbarX - statusWidth - 6));
             ::MoveWindow(filterEdit_, toolbarX, toolbarTop + 3, keywordWidth, 22, TRUE);
             toolbarX += keywordWidth + 6;
-            ::MoveWindow(statusText_, toolbarX, toolbarTop + 4, std::max(0, width - toolbarX), 22, TRUE);
+            // 工具栏行右侧剩余宽度会被算成 0，状态文字整条消失；辅助函数给它一个可读下限。
+        Ksword::Ui::PlaceStatusLabel(statusText_, toolbarX, toolbarTop, width);
 
             const int objectTop = contentTop + 28;
             ::MoveWindow(resultList_, 0, objectTop, width, std::max(0, height - objectTop), TRUE);
@@ -3477,7 +3483,8 @@ void KernelPage::Layout() {
             toolbarX += 60;
             ::MoveWindow(copyDiagnosticButton_, toolbarX, toolbarTop + 2, 76, buttonHeight, TRUE);
             toolbarX += 82;
-            ::MoveWindow(statusText_, toolbarX, toolbarTop + 4, std::max(0, width - toolbarX), 22, TRUE);
+            // 工具栏行右侧剩余宽度会被算成 0，状态文字整条消失；辅助函数给它一个可读下限。
+        Ksword::Ui::PlaceStatusLabel(statusText_, toolbarX, toolbarTop, width);
 
             const int filterTop = toolbarTop + 28;
             int filterX = 0;
@@ -3532,10 +3539,11 @@ void KernelPage::Layout() {
             ::MoveWindow(refreshButton_, toolbarX, toolbarTop + 2, 34, buttonHeight, TRUE);
             toolbarX += 38;
             const int statusWidth = std::min(320, std::max(150, width / 3));
-            const int filterWidth = std::max(120, std::max(0, width - toolbarX - statusWidth - 6));
+            const int filterWidth = std::max(96, std::max(0, width - toolbarX - statusWidth - 6));
             ::MoveWindow(filterEdit_, toolbarX, toolbarTop + 3, filterWidth, 22, TRUE);
             toolbarX += filterWidth + 6;
-            ::MoveWindow(statusText_, toolbarX, toolbarTop + 4, std::max(0, width - toolbarX), 22, TRUE);
+            // 工具栏行右侧剩余宽度会被算成 0，状态文字整条消失；辅助函数给它一个可读下限。
+        Ksword::Ui::PlaceStatusLabel(statusText_, toolbarX, toolbarTop, width);
 
             const int objectTop = contentTop + 28;
             ::MoveWindow(resultList_, 0, objectTop, width, std::max(0, height - objectTop), TRUE);
@@ -3598,7 +3606,8 @@ void KernelPage::Layout() {
             ::MoveWindow(copyDiagnosticButton_, toolbarX, toolbarTop + 2, actionWidthObject, buttonHeight, TRUE);
             toolbarX += actionWidthObject + 4;
         }
-        ::MoveWindow(statusText_, toolbarX, toolbarTop + 4, std::max(0, width - toolbarX), 22, TRUE);
+        // 工具栏行右侧剩余宽度会被算成 0，状态文字整条消失；辅助函数给它一个可读下限。
+        Ksword::Ui::PlaceStatusLabel(statusText_, toolbarX, toolbarTop, width);
 
         const int objectTop = contentTop + infoHeight;
         const int objectDetailHeight = std::min(160, std::max(96, height / 5));
@@ -3661,7 +3670,7 @@ void KernelPage::Layout() {
             toolbarX += filterWidth + 4;
         } else {
             const int statusWidth = std::min(420, std::max(160, width / 3));
-            const int filterWidth = std::max(180, std::max(0, width - toolbarX - statusWidth - 8));
+            const int filterWidth = std::max(96, std::max(0, width - toolbarX - statusWidth - 8));
             ::MoveWindow(filterEdit_, toolbarX, toolbarTop + 3, filterWidth, 22, TRUE);
             toolbarX += filterWidth + 4;
         }
@@ -3669,7 +3678,8 @@ void KernelPage::Layout() {
             ::MoveWindow(includeCombo_, toolbarX, toolbarTop + 2, 170, 240, TRUE);
             toolbarX += 174;
         }
-        ::MoveWindow(statusText_, toolbarX, toolbarTop + 4, std::max(0, width - toolbarX), 22, TRUE);
+        // 工具栏行右侧剩余宽度会被算成 0，状态文字整条消失；辅助函数给它一个可读下限。
+        Ksword::Ui::PlaceStatusLabel(statusText_, toolbarX, toolbarTop, width);
         const int hookTop = contentTop + infoHeight;
         moveResultDetailSplitter(hookTop, 88, 88);
         return;
@@ -3700,10 +3710,11 @@ void KernelPage::Layout() {
         toolbarX += 88;
         ::MoveWindow(filterLabel_, toolbarX, toolbarTop + 5, 0, 20, TRUE);
         const int statusWidth = std::min(420, std::max(160, width / 3));
-        const int diagnosticFilterWidth = std::max(180, std::max(0, width - toolbarX - statusWidth - 8));
+        const int diagnosticFilterWidth = std::max(96, std::max(0, width - toolbarX - statusWidth - 8));
         ::MoveWindow(filterEdit_, toolbarX, toolbarTop + 3, diagnosticFilterWidth, 22, TRUE);
         toolbarX += diagnosticFilterWidth + 8;
-        ::MoveWindow(statusText_, toolbarX, toolbarTop + 4, std::max(0, width - toolbarX), 22, TRUE);
+        // 工具栏行右侧剩余宽度会被算成 0，状态文字整条消失；辅助函数给它一个可读下限。
+        Ksword::Ui::PlaceStatusLabel(statusText_, toolbarX, toolbarTop, width);
 
         const int panelTop = contentTop + infoHeight;
         const int availableHeight = std::max(0, height - panelTop);
@@ -3743,7 +3754,8 @@ void KernelPage::Layout() {
         const int callbackFilterWidth = std::max(220, std::min(width / 2, std::max(0, width - toolbarX - 320)));
         ::MoveWindow(filterEdit_, toolbarX, toolbarTop + 3, callbackFilterWidth, 22, TRUE);
         toolbarX += callbackFilterWidth + 6;
-        ::MoveWindow(statusText_, toolbarX, toolbarTop + 4, std::max(0, width - toolbarX), 22, TRUE);
+        // 工具栏行右侧剩余宽度会被算成 0，状态文字整条消失；辅助函数给它一个可读下限。
+        Ksword::Ui::PlaceStatusLabel(statusText_, toolbarX, toolbarTop, width);
 
         const int panelTop = contentTop + infoHeight;
         moveResultDetailSplitter(panelTop, 120, 96);
@@ -3802,7 +3814,8 @@ void KernelPage::Layout() {
             ::MoveWindow(moduleFilterEdit_, toolbarX, toolbarTop + 3, moduleWidth, 22, TRUE);
             toolbarX += moduleWidth + 6;
         }
-        ::MoveWindow(statusText_, toolbarX, toolbarTop + 4, std::max(0, width - toolbarX), 22, TRUE);
+        // 工具栏行右侧剩余宽度会被算成 0，状态文字整条消失；辅助函数给它一个可读下限。
+        Ksword::Ui::PlaceStatusLabel(statusText_, toolbarX, toolbarTop, width);
 
         const int panelTop = contentTop + infoHeight;
         moveResultDetailSplitter(panelTop, 120, 96);
@@ -3836,7 +3849,8 @@ void KernelPage::Layout() {
         const int filterWidth = std::max(220, std::min(width / 2, std::max(0, width - toolbarX - 300)));
         ::MoveWindow(filterEdit_, toolbarX, toolbarTop + 3, filterWidth, 22, TRUE);
         toolbarX += filterWidth + 6;
-        ::MoveWindow(statusText_, toolbarX, toolbarTop + 4, std::max(0, width - toolbarX), 22, TRUE);
+        // 工具栏行右侧剩余宽度会被算成 0，状态文字整条消失；辅助函数给它一个可读下限。
+        Ksword::Ui::PlaceStatusLabel(statusText_, toolbarX, toolbarTop, width);
 
         const int panelTop = contentTop + infoHeight;
         moveResultDetailSplitter(panelTop, 120, 96);
@@ -3873,7 +3887,8 @@ void KernelPage::Layout() {
         const int filterWidth = std::max(220, std::min(width / 2, std::max(0, width - toolbarX - 320)));
         ::MoveWindow(filterEdit_, toolbarX, toolbarTop + 3, filterWidth, 22, TRUE);
         toolbarX += filterWidth + 6;
-        ::MoveWindow(statusText_, toolbarX, toolbarTop + 4, std::max(0, width - toolbarX), 22, TRUE);
+        // 工具栏行右侧剩余宽度会被算成 0，状态文字整条消失；辅助函数给它一个可读下限。
+        Ksword::Ui::PlaceStatusLabel(statusText_, toolbarX, toolbarTop, width);
 
         const int panelTop = contentTop + infoHeight;
         moveResultDetailSplitter(panelTop, 120, 96);
@@ -3952,7 +3967,8 @@ void KernelPage::Layout() {
                 std::max(0, remainingAfterTools - targetStatusWidth)));
         ::MoveWindow(filterEdit_, toolbarX, toolbarTop + 3, filterWidth, 22, TRUE);
         toolbarX += filterWidth + 6;
-        ::MoveWindow(statusText_, toolbarX, toolbarTop + 4, std::max(0, width - toolbarX), 22, TRUE);
+        // 工具栏行右侧剩余宽度会被算成 0，状态文字整条消失；辅助函数给它一个可读下限。
+        Ksword::Ui::PlaceStatusLabel(statusText_, toolbarX, toolbarTop, width);
 
         const int panelTop = contentTop + infoHeight;
         moveResultDetailSplitter(panelTop, 120, 96);

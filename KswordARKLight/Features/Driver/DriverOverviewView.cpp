@@ -584,7 +584,7 @@ void PopulateOverviewList(DriverOverviewViewState& state) {
     state.filterRows = std::make_shared<const std::vector<Ksword::Ui::VirtualListRow>>(
         BuildOverviewVirtualRows(state.snapshotRows));
     ++state.snapshotGeneration;
-    state.virtualList.setRows(*state.filterRows);
+    state.virtualList.setSharedRows(state.filterRows);
     // An empty snapshot must not look identical to a paused load: reuse the
     // existing overlay so the zero-row result carries its own message. The
     // spinner is off because nothing is pending any more.

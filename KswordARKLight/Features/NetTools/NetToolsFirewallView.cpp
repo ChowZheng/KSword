@@ -293,7 +293,7 @@ void BuildRows(FirewallViewState& state) {
         rows.push_back(std::move(row));
     }
     auto filterRows = std::make_shared<std::vector<Ksword::Ui::VirtualListRow>>(std::move(rows));
-    state.ruleList.setRows(*filterRows);
+    state.ruleList.setSharedRows(filterRows);
     state.filterRows = std::move(filterRows);
     ++state.displayGeneration;
 }

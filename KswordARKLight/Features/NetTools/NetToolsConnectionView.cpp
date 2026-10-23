@@ -302,7 +302,7 @@ void BuildRows(ConnectionViewState& state) {
     // call; holding the lock hides that intermediate unfiltered frame.
     {
         Ksword::Ui::ScopedListViewRedrawLock listRedraw(state.connectionList.hwnd());
-        state.connectionList.setRows(*filterRows);
+        state.connectionList.setSharedRows(filterRows);
     }
     state.filterRows = std::move(filterRows);
     ++state.displayGeneration;

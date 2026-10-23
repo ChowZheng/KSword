@@ -289,7 +289,7 @@ void BuildRows(ContextMenuViewState& state) {
         rows.push_back(std::move(row));
     }
     auto filterRows = std::make_shared<std::vector<Ksword::Ui::VirtualListRow>>(std::move(rows));
-    state.list.setRows(*filterRows);
+    state.list.setSharedRows(filterRows);
     state.filterRows = std::move(filterRows);
     ++state.displayGeneration;
 }

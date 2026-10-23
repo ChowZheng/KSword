@@ -217,7 +217,7 @@ void BuildRows(CaptureViewState& state) {
         rows.push_back(std::move(row));
     }
     auto shared = std::make_shared<std::vector<Ksword::Ui::VirtualListRow>>(std::move(rows));
-    state.windowList.setRows(*shared);
+    state.windowList.setSharedRows(shared);
     state.filterRows = std::move(shared);
     ++state.displayGeneration;
 }

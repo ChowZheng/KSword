@@ -40,6 +40,22 @@ enum class ButtonRole {
 HWND CreateButton(HWND parent, int id, const std::wstring& text, int x, int y, int w, int h,
     ButtonRole role = ButtonRole::Default);
 
+// kMinStatusLabelWidth is the narrowest a one-line status label can be and still
+// read as text.
+inline constexpr int kMinStatusLabelWidth = 88;
+
+// PlaceStatusLabel puts a one-line status label on whatever is left of a toolbar
+// row. Inputs are the label, its left edge, the row's top edge, the page width
+// and the label height; processing hides the label when the remainder cannot show
+// a readable phrase and otherwise moves and shows it; no value is returned.
+//
+// The pattern this replaces is MoveWindow(label, x, y, std::max(0, width - x), h).
+// Once the window is narrower than x that arithmetic yields 0, the label becomes a
+// zero-width window and the status silently disappears — which reads as a broken
+// page rather than a narrow one. Hiding is the honest version of the same state,
+// and it is reversible: the next wide layout pass shows the label again.
+void PlaceStatusLabel(HWND label, int left, int rowTop, int width, int height = 22);
+
 // DrawThemedButton paints one owner-draw button created with a non-default
 // ButtonRole. Input is the WM_DRAWITEM payload; it returns nothing and is safe
 // to call for any item (unknown roles fall back to the default surface).

@@ -280,7 +280,7 @@ void BuildRows(PrivilegeViewState& state) {
         rows.push_back(std::move(row));
     }
     auto filterRows = std::make_shared<std::vector<Ksword::Ui::VirtualListRow>>(std::move(rows));
-    state.privilegeList.setRows(*filterRows);
+    state.privilegeList.setSharedRows(filterRows);
     state.filterRows = std::move(filterRows);
     ++state.displayGeneration;
 }

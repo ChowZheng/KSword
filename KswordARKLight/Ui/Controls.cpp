@@ -74,6 +74,23 @@ HWND CreateButton(HWND parent, int id, const std::wstring& text, int x, int y, i
     return hwnd;
 }
 
+void PlaceStatusLabel(HWND label, const int left, const int rowTop, const int width, const int height) {
+    if (!label) {
+        return;
+    }
+    const int available = width - left;
+    if (available < kMinStatusLabelWidth) {
+        // A label narrower than this shows two characters and an ellipsis at
+        // best. Hide it: a hidden status is a state the layout can recover from
+        // on the next wide resize, a zero-width one is indistinguishable from a
+        // broken page.
+        ::ShowWindow(label, SW_HIDE);
+        return;
+    }
+    ::ShowWindow(label, SW_SHOW);
+    ::MoveWindow(label, left, rowTop + 4, available, height, TRUE);
+}
+
 void DrawThemedButton(const DRAWITEMSTRUCT& item) {
     if (!item.hDC) {
         return;
