@@ -146,6 +146,11 @@
     <ClCompile Include="Features\Kernel\KernelObjectTypeMatrixFeature.cpp" />
     <ClCompile Include="Features\Kernel\KernelPage.cpp" />
     <ClCompile Include="Features\Kernel\KernelPageLayout.cpp" />
+    <ClCompile Include="Features\Kernel\KernelProjectionBuilderCore.cpp" />
+    <ClCompile Include="Features\Kernel\KernelProjectionBuilderDiagnostics.cpp" />
+    <ClCompile Include="Features\Kernel\KernelProjectionBuilderEvidence.cpp" />
+    <ClCompile Include="Features\Kernel\KernelProjectionBuilderHooks.cpp" />
+    <ClCompile Include="Features\Kernel\KernelProjectionBuilderNamespace.cpp" />
     <ClCompile Include="Features\Kernel\KernelR0ExtendedFeature.cpp" />
     <ClCompile Include="Features\Kernel\KernelShadowSsdtFeature.cpp" />
     <ClCompile Include="Features\Kernel\KernelSsdtFeature.cpp" />
@@ -350,8 +355,8 @@
     <ClInclude Include="Features\Kernel\KernelObjectNamespaceFeature.h" />
     <ClInclude Include="Features\Kernel\KernelObjectTypeMatrixFeature.h" />
     <ClInclude Include="Features\Kernel\KernelDynamicProjection.h" />
+    <ClInclude Include="Features\Kernel\KernelProjectionBuilder.h" />
     <ClInclude Include="Features\Kernel\KernelProjectionValues.h" />
-    <ClInclude Include="Features\Kernel\KernelProjectionValues.inl" />
     <ClInclude Include="Features\Kernel\KernelPage.h" />
     <ClInclude Include="Features\Kernel\KernelPageLayout.h" />
     <ClInclude Include="Features\Kernel\KernelR0ExtendedFeature.h" />

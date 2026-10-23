@@ -5,6 +5,7 @@
 #include "KernelColumnVisibility.h"
 #include "KernelPageLayout.h"
 #include "KernelValueSupport.h"
+#include "KernelProjectionBuilder.h"
 #include "../../Ui/Controls.h"
 #include "../../Ui/BackgroundWork.h"
 #include "../../Ui/EntityNavigation.h"
@@ -205,12 +206,6 @@ constexpr int kCallbackFileMonitorPathColumn = 3;
 constexpr int kCallbackFileMonitorPathStateColumn = 10;
 constexpr wchar_t kInlineHookForceRequiredStatusText[] = L"6";
 constexpr int kKernelSplitterThickness = 5;
-constexpr const wchar_t* kDeviceDriverFixedDirectories[] = {
-    L"\\Device",
-    L"\\Driver",
-    L"\\FileSystem",
-    L"\\FileSystem\\Filters",
-};
 
 // IsR0EvidenceFeature identifies the large snapshot pages that share the
 // generic R0 evidence projection. These pages use one debounced background
@@ -943,8 +938,6 @@ struct KernelProjectionReleaseGuard {
     ~KernelProjectionReleaseGuard(){RetireKernelTreeValues(value);}
 };
 } // namespace
-
-#include "KernelProjectionValues.inl"
 
 namespace {
 bool KernelUsesValueProjection(const KernelFeatureId featureId) {

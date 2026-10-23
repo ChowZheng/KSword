@@ -79,7 +79,7 @@ struct NamedMask {
     const wchar_t* title;
 };
 
-constexpr NamedMask kDynCapabilityMasks[] = {
+inline constexpr NamedMask kDynCapabilityMasks[] = {
     { KSW_CAP_DYN_NTOS_ACTIVE, L"KSW_CAP_DYN_NTOS_ACTIVE", L"ntoskrnl profile 已激活" },
     { KSW_CAP_DYN_LXCORE_ACTIVE, L"KSW_CAP_DYN_LXCORE_ACTIVE", L"lxcore profile 已激活" },
     { KSW_CAP_OBJECT_TYPE_FIELDS, L"KSW_CAP_OBJECT_TYPE_FIELDS", L"对象类型字段" },
@@ -103,7 +103,7 @@ constexpr NamedMask kDynCapabilityMasks[] = {
     { KSW_CAP_KERNEL_GLOBALS, L"KSW_CAP_KERNEL_GLOBALS", L"内核全局 RVA" },
 };
 
-constexpr NamedMask kSecurityPolicyMasks[] = {
+inline constexpr NamedMask kSecurityPolicyMasks[] = {
     { KSWORD_ARK_SECURITY_POLICY_FLAG_ACTIVE, L"POLICY_ACTIVE", L"安全策略启用" },
     { KSWORD_ARK_SECURITY_POLICY_ALLOW_MUTATING_ACTIONS, L"ALLOW_MUTATING_ACTIONS", L"允许进程修改动作" },
     { KSWORD_ARK_SECURITY_POLICY_ALLOW_CALLBACK_CONTROL, L"ALLOW_CALLBACK_CONTROL", L"允许回调控制" },
@@ -212,7 +212,7 @@ void AppendReportLine(std::wostringstream& report, const wchar_t* label, const s
 bool ParseUnsigned64Value(const std::wstring& text, std::uint64_t& valueOut);
 
 // IsKernelMemoryHiddenColumn 与 IsIntegrityHiddenColumn 仍然由
-// KernelProjectionValues.inl 的宽度计算使用：那里给证据列算 0 宽度。表格是否
+// KernelProjectionBuilder 的宽度计算使用：那里给证据列算 0 宽度。表格是否
 // 真的建这一列已由 KernelColumnVisibility.h 统一决定，这两个函数现在只管宽度。
 bool IsKernelMemoryHiddenColumn(const std::wstring& name);
 
@@ -222,5 +222,15 @@ bool IsIntegrityHiddenColumn(const std::wstring& name);
 // node payload stored behind TVITEM::lParam; output joins kind/type/path so the
 // tree can locate an existing node after a rebuild.
 std::wstring KernelTreeNodeKey(const KernelObjectNamespaceTreeNodeState& state);
+
+// kDeviceDriverFixedDirectories holds the object-manager directories the driver
+// page always lists, even when the live enumeration returns nothing. Shared by
+// the projection builder's object-namespace reshaping.
+inline constexpr const wchar_t* kDeviceDriverFixedDirectories[] = {
+    L"\\Device",
+    L"\\Driver",
+    L"\\FileSystem",
+    L"\\FileSystem\\Filters",
+};
 
 } // namespace Ksword::Features::Kernel

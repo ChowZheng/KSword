@@ -284,6 +284,21 @@
     <ClCompile Include="Features\Kernel\KernelPageLayout.cpp">
       <Filter>Features\Kernel</Filter>
     </ClCompile>
+    <ClCompile Include="Features\Kernel\KernelProjectionBuilderCore.cpp">
+      <Filter>Features\Kernel</Filter>
+    </ClCompile>
+    <ClCompile Include="Features\Kernel\KernelProjectionBuilderDiagnostics.cpp">
+      <Filter>Features\Kernel</Filter>
+    </ClCompile>
+    <ClCompile Include="Features\Kernel\KernelProjectionBuilderEvidence.cpp">
+      <Filter>Features\Kernel</Filter>
+    </ClCompile>
+    <ClCompile Include="Features\Kernel\KernelProjectionBuilderHooks.cpp">
+      <Filter>Features\Kernel</Filter>
+    </ClCompile>
+    <ClCompile Include="Features\Kernel\KernelProjectionBuilderNamespace.cpp">
+      <Filter>Features\Kernel</Filter>
+    </ClCompile>
     <ClCompile Include="Features\Kernel\KernelR0ExtendedFeature.cpp">
       <Filter>Features\Kernel</Filter>
     </ClCompile>
@@ -875,10 +890,10 @@
     <ClInclude Include="Features\Kernel\KernelDynamicProjection.h">
       <Filter>Features\Kernel</Filter>
     </ClInclude>
-    <ClInclude Include="Features\Kernel\KernelProjectionValues.h">
+    <ClInclude Include="Features\Kernel\KernelProjectionBuilder.h">
       <Filter>Features\Kernel</Filter>
     </ClInclude>
-    <ClInclude Include="Features\Kernel\KernelProjectionValues.inl">
+    <ClInclude Include="Features\Kernel\KernelProjectionValues.h">
       <Filter>Features\Kernel</Filter>
     </ClInclude>
     <ClInclude Include="Features\Kernel\KernelPage.h">
