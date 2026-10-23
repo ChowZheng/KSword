@@ -1247,7 +1247,7 @@ namespace
         { L"callback", L"answer-event", L"KswordCLI.exe callback answer-event --event-guid GUID --decision N --source-session-id N [--answered-at UTC100NS]", L"Answer one pending callback event.", L"Required: --event-guid, --decision, --source-session-id. Optional: --answered-at.", L"" },
         { L"callback", L"cancel-pending", L"KswordCLI.exe callback cancel-pending", L"Cancel all pending callback decisions.", L"No options.", L"" },
         { L"callback", L"remove", L"KswordCLI.exe callback remove --class N --callback VA [--flags 0xN] --confirm", L"Remove a callback through an address-based public API path.", L"Required: --class, --callback, --confirm. Object, Registry, and ETW classes are not supported by this legacy command.", L"" },
-        { L"callback", L"remove-ex", L"KswordCLI.exe callback remove-ex --class N --callback VA [--registration VA] [--raw-storage VA] [--generation N] [--identity-hash N] [--source N] [--operation-mask 0xN] [--object-type-mask 0xN] [--trust-flags 0xN] [--remove-behavior N] [--flags 0xN]", L"Remove an external callback with extended row identity.", L"Object removal requires every identity field copied from one verified V3 enumeration row plus revalidation flags. Registry and ETW removal are disabled.", L"" },
+        { L"callback", L"remove-ex", L"KswordCLI.exe callback remove-ex --class N --callback VA [--registration VA] [--raw-storage VA] [--generation N] [--identity-hash N] [--source N] [--operation-mask 0xN] [--object-type-mask 0xN] [--trust-flags 0xN] [--remove-behavior N] [--flags 0xN] --confirm", L"Remove an external callback with extended row identity.", L"Required: --class, --callback, --confirm. Object removal requires every identity field copied from one verified V3 enumeration row plus revalidation flags. Registry and ETW removal are disabled.", L"" },
         { L"callback", L"set-minifilter-bypass-pids", L"KswordCLI.exe callback set-minifilter-bypass-pids --pids PID[,PID...] [--flags 0xN]", L"Set minifilter bypass PID list.", L"Required: --pids. Optional: --flags.", L"" },
         { L"callback", L"query-minifilter-bypass-pids", L"KswordCLI.exe callback query-minifilter-bypass-pids", L"Query minifilter bypass PID list.", L"No options.", L"" },
         { L"callback", L"enum", L"KswordCLI.exe callback enum [--flags 0xN] [--max-entries N] [--limit N]", L"Enumerate callback inventory.", L"Optional: --flags, --max-entries, --limit.", L"" },
@@ -6033,6 +6033,7 @@ namespace
         }
         if (sub == L"remove-ex")
         {
+            requireConfirmOption(args, "callback remove-ex requires --confirm");
             KSWORD_ARK_REMOVE_EXTERNAL_CALLBACK_EX_REQUEST request{};
             KSWORD_ARK_REMOVE_EXTERNAL_CALLBACK_EX_RESPONSE response{};
             request.size = sizeof(request);
