@@ -52,7 +52,14 @@ constexpr int kCommandEditHeight = 22;
 constexpr int kCommandEditMenuGap = 8;
 constexpr int kNavigationPaletteWidth = 560;
 constexpr int kNavigationPaletteHeight = 440;
-constexpr int kStatusHeight = 18;
+// 22px is the shared page-level status height; the shell status line and its
+// separator now use the same value so the closing footer and the normal footer
+// do not disagree about where the work area ends.
+constexpr int kStatusHeight = 22;
+// Smallest window that still shows the menu bar, the command box, one module
+// tab group and the closing buttons without pages collapsing to zero height.
+constexpr int kMinimumWindowWidth = 720;
+constexpr int kMinimumWindowHeight = 480;
 constexpr int kWindowMenuDockBaseId = 42000;
 constexpr int kProcessModuleCommandId = 40001;
 constexpr int kMemoryModuleCommandId = 40002;
@@ -424,6 +431,19 @@ LRESULT CALLBACK MainWindow::NavigationPaletteProc(HWND hwnd, UINT msg, WPARAM w
 
 LRESULT MainWindow::handleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
+    case WM_GETMINMAXINFO: {
+        // Nothing else stops the window from shrinking past usability: page
+        // headers clamp to zero height, the dock tab strip pushes tabs out of
+        // reach and the status line covers the first parameter row. The floor
+        // below still fits the command box, one module tab per visible group and
+        // the closing buttons, so every page keeps a usable work area.
+        auto* info = reinterpret_cast<MINMAXINFO*>(lParam);
+        if (info) {
+            info->ptMinTrackSize.x = kMinimumWindowWidth;
+            info->ptMinTrackSize.y = kMinimumWindowHeight;
+        }
+        return 0;
+    }
     case WM_CREATE:
         driverTask_ = std::make_unique<Ksword::Ui::AsyncSnapshotTask<DriverControlResult>>(hwnd, kMsgDriverCompleted);
         evidenceExportTask_ = std::make_unique<Ksword::Ui::AsyncSnapshotTask<EvidenceExportOutcome>>(hwnd, kMsgEvidenceExportCompleted);

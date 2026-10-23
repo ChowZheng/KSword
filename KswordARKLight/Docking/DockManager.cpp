@@ -15,7 +15,7 @@ constexpr wchar_t kOverlayClass[] = L"KswordARKLight.DockOverlay";
 constexpr COLORREF kOverlayTransparentColor = RGB(255, 0, 255);
 constexpr int kTabHeight = 22;
 constexpr int kTabMinWidth = 52;
-constexpr int kTabMaxWidth = 140;
+constexpr int kTabMaxWidth = 120;
 constexpr int kSplitterSize = 4;
 constexpr int kDragThreshold = 6;
 constexpr int kFloatingWidth = 540;
@@ -529,6 +529,12 @@ LRESULT DockManager::handleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
     case WM_RBUTTONUP: {
         TabHit hit = hitTestTab(GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
         if (hit.valid) {
+            // The menu acts on the tab under the cursor, but the work area still
+            // shows the previously active page. Activate the hit tab first so the
+            // page behind the menu is the one the command will affect.
+            if (hit.dockIndex != activeIndex_) {
+                activateDock(hit.dockIndex);
+            }
             HMENU menu = ::CreatePopupMenu();
             ::AppendMenuW(menu, MF_STRING, 1, L"浮动");
             ::AppendMenuW(menu, MF_STRING, 2, L"关闭");
