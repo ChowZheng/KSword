@@ -611,6 +611,14 @@ LRESULT CALLBACK UsbTopologyViewProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
                 if (state->nodeList.handleNotify(*header, result)) {
                     return result;
                 }
+                if (header->hwndFrom == state->nodeList.hwnd() && header->code == LVN_COLUMNCLICK) {
+                    const auto* clicked = reinterpret_cast<const NMLISTVIEW*>(lParam);
+                    const Ksword::Ui::SortSpec next =
+                        Ksword::Ui::NextSortSpec(state->nodeList.sortSpec(), clicked ? clicked->iSubItem : -1);
+                    state->nodeList.applySort(next);
+                    Ksword::Ui::ShowSortIndicator(state->nodeList.hwnd(), next);
+                    return 0;
+                }
                 if (header->hwndFrom == state->nodeList.hwnd() && header->code == LVN_ITEMCHANGED) {
                     const auto* changed = reinterpret_cast<const NMLISTVIEW*>(lParam);
                     if (changed && (changed->uNewState & LVIS_SELECTED) != 0) {

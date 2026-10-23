@@ -1366,6 +1366,11 @@ void UpdateViewModeFromCombo(WindowViewState* state) {
         // switch starts from the defaults instead of inheriting the other mode's
         // user-sized layout.
         state->columnsUserSized = false;
+        // Same reason for the sort: column 3 is Class in the window list but
+        // 状态 in the audit list, so an inherited sort would order the new view
+        // by an unrelated field.
+        state->virtualList.applySort(Ksword::Ui::SortSpec{});
+        Ksword::Ui::ShowSortIndicator(state->windowList, Ksword::Ui::SortSpec{});
     }
     RefreshWindows(state);
 }
@@ -1997,6 +2002,19 @@ bool RegisterWindowViewClass() {
             if (state && notify && state->windowList && notify->code == HDN_ENDDRAG &&
                 notify->hwndFrom == ListView_GetHeader(state->windowList)) {
                 state->columnsUserSized = true;
+                return 0;
+            }
+            if (state && notify && notify->idFrom == kWindowListId &&
+                notify->code == LVN_COLUMNCLICK) {
+                auto* clicked = reinterpret_cast<NMLISTVIEW*>(lParam);
+                // The click cycle is unsorted -> ascending -> descending ->
+                // unsorted. The sort lives in VirtualListView, so it survives the
+                // periodic refresh and any filter change instead of being thrown
+                // away with the next snapshot.
+                const Ksword::Ui::SortSpec next =
+                    Ksword::Ui::NextSortSpec(state->virtualList.sortSpec(), clicked->iSubItem);
+                state->virtualList.applySort(next);
+                Ksword::Ui::ShowSortIndicator(state->windowList, next);
                 return 0;
             }
             if (state && notify && notify->idFrom == kWindowListId && notify->code == LVN_ITEMCHANGED) {

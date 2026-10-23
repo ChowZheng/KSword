@@ -190,4 +190,52 @@ std::wstring RowCapNotice(const RowCapResult& result) {
         std::to_wstring(result.total) + L" 条，其余未载入列表";
 }
 
+// Cell comparison deliberately lives in Ui/NumericSortKey (CompareCellsNumericAware),
+// which already recovers the ordering value from rendered text including "4.0 MiB"
+// sized columns and codes followed by explanatory text. Keeping a second, weaker
+// number parser here would have made the two sort paths disagree.
+
+SortSpec NextSortSpec(const SortSpec current, const int clickedColumn) {
+    if (clickedColumn < 0) {
+        return current;
+    }
+    if (current.column == clickedColumn) {
+        if (current.direction == SortDirection::Ascending) {
+            return SortSpec{ clickedColumn, SortDirection::Descending };
+        }
+        if (current.direction == SortDirection::Descending) {
+            // Third click drops back to the order the data arrived in.
+            return SortSpec{};
+        }
+    }
+    return SortSpec{ clickedColumn, SortDirection::Ascending };
+}
+
+void ShowSortIndicator(HWND listView, const SortSpec& spec) {
+    if (!listView) {
+        return;
+    }
+    HWND header = ListView_GetHeader(listView);
+    if (!header) {
+        return;
+    }
+    const int columnCount = Header_GetItemCount(header);
+    for (int column = 0; column < columnCount; ++column) {
+        HDITEMW item{};
+        item.mask = HDI_FORMAT;
+        if (!Header_GetItem(header, column, &item)) {
+            continue;
+        }
+        const int cleared = item.fmt & ~(HDF_SORTUP | HDF_SORTDOWN);
+        int updated = cleared;
+        if (spec.active() && column == spec.column) {
+            updated |= spec.descending() ? HDF_SORTDOWN : HDF_SORTUP;
+        }
+        if (updated != item.fmt) {
+            item.fmt = updated;
+            Header_SetItem(header, column, &item);
+        }
+    }
+}
+
 } // namespace Ksword::Ui

@@ -608,6 +608,16 @@ LRESULT CALLBACK PrivilegeViewProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
                 if (state->privilegeList.handleNotify(*header, result)) {
                     return result;
                 }
+                if (header->hwndFrom == state->privilegeList.hwnd() && header->code == LVN_COLUMNCLICK) {
+                    const auto* clicked = reinterpret_cast<const NMLISTVIEW*>(lParam);
+                    if (clicked) {
+                        const Ksword::Ui::SortSpec next =
+                            Ksword::Ui::NextSortSpec(state->privilegeList.sortSpec(), clicked->iSubItem);
+                        state->privilegeList.applySort(next);
+                        Ksword::Ui::ShowSortIndicator(state->privilegeList.hwnd(), next);
+                    }
+                    return 0;
+                }
                 if (header->hwndFrom == state->privilegeList.hwnd() && header->code == LVN_ITEMCHANGED) {
                     const auto* changed = reinterpret_cast<const NMLISTVIEW*>(lParam);
                     if (changed && (changed->uNewState & LVIS_SELECTED) != 0) {

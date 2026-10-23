@@ -766,6 +766,17 @@ LRESULT CALLBACK ConnectionViewProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                 if (state->connectionList.handleNotify(*header, result)) {
                     return result;
                 }
+                // The click cycle is unsorted -> ascending -> descending ->
+                // unsorted. The sort lives in VirtualListView, so the periodic
+                // refresh replays it instead of dropping it with the snapshot.
+                if (header->hwndFrom == state->connectionList.hwnd() && header->code == LVN_COLUMNCLICK) {
+                    auto* clicked = reinterpret_cast<NMLISTVIEW*>(lParam);
+                    const Ksword::Ui::SortSpec next =
+                        Ksword::Ui::NextSortSpec(state->connectionList.sortSpec(), clicked->iSubItem);
+                    state->connectionList.applySort(next);
+                    Ksword::Ui::ShowSortIndicator(state->connectionList.hwnd(), next);
+                    return 0;
+                }
                 if (header->hwndFrom == state->connectionList.hwnd() && header->code == LVN_ITEMCHANGED) {
                     const auto* changed = reinterpret_cast<const NMLISTVIEW*>(lParam);
                     if (changed && (changed->uNewState & LVIS_SELECTED) != 0) {

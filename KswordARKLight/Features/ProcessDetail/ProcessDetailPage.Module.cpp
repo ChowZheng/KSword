@@ -164,20 +164,14 @@ bool OpenFolderAndSelectPath(HWND owner, const std::wstring& path) {
 }
 
 void UpdateSortIndicator(HWND list, int sortColumn, bool descending) {
-    HWND header = list ? ListView_GetHeader(list) : nullptr;
-    const int count = header ? Header_GetItemCount(header) : 0;
-    for (int index = 0; index < count; ++index) {
-        HDITEMW item{};
-        item.mask = HDI_FORMAT;
-        if (!Header_GetItem(header, index, &item)) {
-            continue;
-        }
-        item.fmt &= ~(HDF_SORTUP | HDF_SORTDOWN);
-        if (index == sortColumn) {
-            item.fmt |= descending ? HDF_SORTDOWN : HDF_SORTUP;
-        }
-        Header_SetItem(header, index, &item);
-    }
+    // The arrow drawing moved to Ui::ShowSortIndicator so the module table and
+    // every page that adopts column sorting share one implementation. A negative
+    // column means "no sort", which clears the arrows on every column.
+    Ksword::Ui::ShowSortIndicator(
+        list,
+        Ksword::Ui::SortSpec{
+            sortColumn,
+            descending ? Ksword::Ui::SortDirection::Descending : Ksword::Ui::SortDirection::Ascending });
 }
 
 COLORREF SignatureColor(const std::wstring& text) {

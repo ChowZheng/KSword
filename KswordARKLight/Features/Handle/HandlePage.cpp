@@ -1064,6 +1064,18 @@ LRESULT HandlePage::HandleMessage(HWND hwnd, UINT message, WPARAM wParam, LPARAM
                 return result;
             }
         }
+        if (header && header->hwndFrom == handleList_ && header->code == LVN_COLUMNCLICK) {
+            if (state_) {
+                const auto* clicked = reinterpret_cast<const NMLISTVIEW*>(lParam);
+                if (clicked) {
+                    const Ksword::Ui::SortSpec next =
+                        Ksword::Ui::NextSortSpec(state_->handleList.sortSpec(), clicked->iSubItem);
+                    state_->handleList.applySort(next);
+                    Ksword::Ui::ShowSortIndicator(state_->handleList.hwnd(), next);
+                }
+            }
+            return 0;
+        }
         if (header && header->hwndFrom == handleList_ &&
             (header->code == NM_DBLCLK || header->code == LVN_ITEMCHANGED)) {
             if (header->code == NM_DBLCLK) {

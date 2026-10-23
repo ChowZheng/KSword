@@ -115,4 +115,35 @@ RowCapResult ReplaceListViewRowsCapped(
 // is empty when nothing was truncated.
 std::wstring RowCapNotice(const RowCapResult& result);
 
+// SortDirection is the three-state column sort the tables cycle through. None
+// means "natural order as loaded", which is reachable by clicking a third time
+// so the user can get back to the original layout without a reset control.
+enum class SortDirection { None, Ascending, Descending };
+
+// SortSpec identifies the active sort. Input is a column index plus direction
+// produced by NextSortSpec; there is no owned resource. column is -1 when no
+// sort is active.
+struct SortSpec {
+    int column = -1;
+    SortDirection direction = SortDirection::None;
+
+    bool active() const noexcept {
+        return column >= 0 && direction != SortDirection::None;
+    }
+    bool descending() const noexcept {
+        return direction == SortDirection::Descending;
+    }
+};
+
+// NextSortSpec advances the click cycle for one column: unsorted -> ascending ->
+// descending -> unsorted. Inputs are the current spec and the clicked column;
+// clicking a different column restarts at ascending; output is the new spec.
+SortSpec NextSortSpec(SortSpec current, int clickedColumn);
+
+// ShowSortIndicator paints the arrow on the sorted header column. Inputs are a
+// report ListView and the active spec; processing clears HDF_SORTUP/DOWN from
+// every column and sets the one that matches; no value is returned. Requires
+// Common Controls v6, which the shell already links.
+void ShowSortIndicator(HWND listView, const SortSpec& spec);
+
 } // namespace Ksword::Ui

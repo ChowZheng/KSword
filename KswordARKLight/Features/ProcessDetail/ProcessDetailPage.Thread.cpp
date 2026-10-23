@@ -50,6 +50,9 @@ struct ThreadLayoutState {
     HWND filter = nullptr;
     HWND list = nullptr;
     HWND output = nullptr;
+    // virtualList points at the page-owned thread table so the subclass can sort
+    // it without routing through ProcessDetailPage::HandlePageNotify.
+    Ksword::Ui::VirtualListView* virtualList = nullptr;
 };
 
 struct ThreadAffinityMenuState {
@@ -261,6 +264,17 @@ LRESULT CALLBACK ThreadLayoutSubclassProc(
         LayoutThreadControls(hwnd, *state);
         return 0;
     }
+    if (message == WM_NOTIFY && state->virtualList) {
+        const auto* header = reinterpret_cast<const NMHDR*>(lParam);
+        if (header && header->hwndFrom == state->list && header->code == LVN_COLUMNCLICK) {
+            const auto* clicked = reinterpret_cast<const NMLISTVIEW*>(lParam);
+            const Ksword::Ui::SortSpec next =
+                Ksword::Ui::NextSortSpec(state->virtualList->sortSpec(), clicked ? clicked->iSubItem : -1);
+            state->virtualList->applySort(next);
+            Ksword::Ui::ShowSortIndicator(state->list, next);
+            return 0;
+        }
+    }
     if (message == WM_NCDESTROY) {
         ::KillTimer(hwnd, kThreadLayoutTimerId);
         ::RemoveWindowSubclass(hwnd, ThreadLayoutSubclassProc, subclassId);
@@ -443,7 +457,8 @@ bool ProcessDetailPage::CreateThreadTab() {
         status,
         filter,
         list,
-        output
+        output,
+        &threadVirtualList_
     };
     if (!page || !::SetWindowSubclass(
             page,

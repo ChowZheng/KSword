@@ -811,6 +811,14 @@ bool RegisterStartupViewClass() {
                 if (state->entryList.handleNotify(*notify, result)) {
                     return result;
                 }
+                if (notify->code == LVN_COLUMNCLICK) {
+                    const auto* clicked = reinterpret_cast<const NMLISTVIEW*>(lParam);
+                    const Ksword::Ui::SortSpec next =
+                        Ksword::Ui::NextSortSpec(state->entryList.sortSpec(), clicked->iSubItem);
+                    state->entryList.applySort(next);
+                    Ksword::Ui::ShowSortIndicator(state->entryList.hwnd(), next);
+                    return 0;
+                }
                 if (notify->code == LVN_ITEMCHANGED) {
                     const auto* changed = reinterpret_cast<const NMLISTVIEW*>(notify);
                     if ((changed->uNewState & LVIS_SELECTED) != 0) {

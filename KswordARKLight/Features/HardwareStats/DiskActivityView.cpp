@@ -487,6 +487,14 @@ LRESULT CALLBACK DiskActivityViewProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
                 if (state->diskList.handleNotify(*header, result)) {
                     return result;
                 }
+                if (header->hwndFrom == state->diskList.hwnd() && header->code == LVN_COLUMNCLICK) {
+                    const auto* clicked = reinterpret_cast<const NMLISTVIEW*>(lParam);
+                    const Ksword::Ui::SortSpec next =
+                        Ksword::Ui::NextSortSpec(state->diskList.sortSpec(), clicked ? clicked->iSubItem : -1);
+                    state->diskList.applySort(next);
+                    Ksword::Ui::ShowSortIndicator(state->diskList.hwnd(), next);
+                    return 0;
+                }
                 if (header->hwndFrom == state->diskList.hwnd() && header->code == NM_RCLICK) {
                     POINT point{};
                     ::GetCursorPos(&point);

@@ -500,6 +500,14 @@ LRESULT CALLBACK ViewProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
             if (header && header->hwndFrom == state->list.hwnd()) {
                 LRESULT result = 0;
                 if (state->list.handleNotify(*header, result)) return result;
+                if (header->code == LVN_COLUMNCLICK) {
+                    const auto* clicked = reinterpret_cast<const NMLISTVIEW*>(lParam);
+                    const Ksword::Ui::SortSpec next =
+                        Ksword::Ui::NextSortSpec(state->list.sortSpec(), clicked->iSubItem);
+                    state->list.applySort(next);
+                    Ksword::Ui::ShowSortIndicator(state->list.hwnd(), next);
+                    return 0;
+                }
                 if (header->code == LVN_ITEMCHANGED || header->code == NM_CLICK) {
                     UpdateDetail(*state);
                     return 0;

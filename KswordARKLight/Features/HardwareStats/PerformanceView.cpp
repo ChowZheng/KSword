@@ -494,6 +494,14 @@ LRESULT CALLBACK PerformanceViewProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
                 if (state->metricList.handleNotify(*header, result)) {
                     return result;
                 }
+                if (header->hwndFrom == state->metricList.hwnd() && header->code == LVN_COLUMNCLICK) {
+                    const auto* clicked = reinterpret_cast<const NMLISTVIEW*>(lParam);
+                    const Ksword::Ui::SortSpec next =
+                        Ksword::Ui::NextSortSpec(state->metricList.sortSpec(), clicked ? clicked->iSubItem : -1);
+                    state->metricList.applySort(next);
+                    Ksword::Ui::ShowSortIndicator(state->metricList.hwnd(), next);
+                    return 0;
+                }
                 if (header->hwndFrom == state->metricList.hwnd() && header->code == NM_RCLICK) {
                     POINT point{};
                     ::GetCursorPos(&point);

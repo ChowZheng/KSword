@@ -1490,6 +1490,14 @@ LRESULT CALLBACK DriverMemoryViewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPA
             if (state->historyList.handleNotify(*notify, result)) {
                 return result;
             }
+            if (notify->code == LVN_COLUMNCLICK) {
+                const auto* clicked = reinterpret_cast<const NMLISTVIEW*>(lParam);
+                const Ksword::Ui::SortSpec next =
+                    Ksword::Ui::NextSortSpec(state->historyList.sortSpec(), clicked->iSubItem);
+                state->historyList.applySort(next);
+                Ksword::Ui::ShowSortIndicator(state->historyList.hwnd(), next);
+                return 0;
+            }
         }
         break;
     }

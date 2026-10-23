@@ -657,6 +657,14 @@ bool RegisterDriverOverviewClass() {
                 if (header && state->virtualList.handleNotify(*header, virtualResult)) {
                     return virtualResult;
                 }
+                if (header && header->hwndFrom == state->listView && header->code == LVN_COLUMNCLICK) {
+                    const auto* clicked = reinterpret_cast<const NMLISTVIEW*>(lParam);
+                    const Ksword::Ui::SortSpec next =
+                        Ksword::Ui::NextSortSpec(state->virtualList.sortSpec(), clicked->iSubItem);
+                    state->virtualList.applySort(next);
+                    Ksword::Ui::ShowSortIndicator(state->virtualList.hwnd(), next);
+                    return 0;
+                }
                 if (header && header->hwndFrom == state->listView && header->code == NM_RCLICK) {
                     POINT pt{};
                     ::GetCursorPos(&pt);

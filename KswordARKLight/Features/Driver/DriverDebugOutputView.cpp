@@ -7,6 +7,7 @@
 #include "../../Ui/Controls.h"
 #include "../../Ui/FilterBar.h"
 #include "../../Ui/ListViewUtil.h"
+#include "../../Ui/NumericSortKey.h"
 #include "../../Ui/Theme.h"
 #include "../../Ui/VirtualListView.h"
 
@@ -102,6 +103,7 @@ struct DriverDebugOutputViewState {
     Ksword::Ui::VirtualListView virtualList;
     std::deque<std::shared_ptr<const DebugRecordRow>> records;
     std::vector<std::shared_ptr<const DebugRecordRow>> visibleRows;
+    Ksword::Ui::SortSpec sortSpec;
     std::uint64_t filteredThrough = 0;
     std::uint64_t filterSession = 0;
     std::uint64_t appliedFilterGeneration = 0;
@@ -257,6 +259,20 @@ void CommitVisibleRows(DriverDebugOutputViewState& state, const std::wstring& se
         return;
     }
     state.projectionDirty = false;
+    if (state.sortSpec.active()) {
+        const std::size_t column = static_cast<std::size_t>(state.sortSpec.column);
+        const bool descending = state.sortSpec.descending();
+        const auto cellAt = [column](const std::shared_ptr<const DebugRecordRow>& row) -> const std::wstring& {
+            static const std::wstring empty;
+            return column < row->cells.size() ? row->cells[column] : empty;
+        };
+        std::stable_sort(state.visibleRows.begin(), state.visibleRows.end(),
+            [&cellAt, descending](const std::shared_ptr<const DebugRecordRow>& left,
+                const std::shared_ptr<const DebugRecordRow>& right) {
+                const int order = Ksword::Ui::CompareCellsNumericAware(cellAt(left), cellAt(right));
+                return descending ? order > 0 : order < 0;
+            });
+    }
     ListView_SetItemCountEx(state.listView, static_cast<int>(state.visibleRows.size()),
         LVSICF_NOINVALIDATEALL | LVSICF_NOSCROLL);
     ListView_SetItemState(state.listView, -1, 0, LVIS_SELECTED | LVIS_FOCUSED);
@@ -705,6 +721,16 @@ bool RegisterViewClass() {
         case WM_NOTIFY:
             if (state) {
                 const auto* header = reinterpret_cast<const NMHDR*>(lParam);
+                if (header && header->hwndFrom == state->listView && header->code == LVN_COLUMNCLICK) {
+                    const auto* clicked = reinterpret_cast<const NMLISTVIEW*>(lParam);
+                    state->sortSpec = Ksword::Ui::NextSortSpec(state->sortSpec, clicked->iSubItem);
+                    Ksword::Ui::ShowSortIndicator(state->virtualList.hwnd(), state->sortSpec);
+                    const std::wstring selectedKey =
+                        StableKeyAt(*state, ListView_GetNextItem(state->listView, -1, LVNI_SELECTED));
+                    const std::wstring topKey = StableKeyAt(*state, ListView_GetTopIndex(state->listView));
+                    CommitVisibleRows(*state, selectedKey, topKey);
+                    return 0;
+                }
                 if (header && header->hwndFrom == state->listView && header->code == LVN_GETDISPINFOW) {
                     auto* info = reinterpret_cast<NMLVDISPINFOW*>(lParam);
                     if ((info->item.mask & LVIF_TEXT) && info->item.iItem >= 0 && info->item.iSubItem >= 0 &&

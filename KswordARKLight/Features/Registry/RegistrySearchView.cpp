@@ -622,6 +622,16 @@ LRESULT CALLBACK RegistrySearchViewProc(HWND hwnd, UINT message, WPARAM wParam, 
                 if (state->list.handleNotify(*header, result)) {
                     return result;
                 }
+                if (header->code == LVN_COLUMNCLICK) {
+                    const auto* clicked = reinterpret_cast<const NMLISTVIEW*>(lParam);
+                    if (clicked) {
+                        const Ksword::Ui::SortSpec next =
+                            Ksword::Ui::NextSortSpec(state->list.sortSpec(), clicked->iSubItem);
+                        state->list.applySort(next);
+                        Ksword::Ui::ShowSortIndicator(state->list.hwnd(), next);
+                    }
+                    return 0;
+                }
                 if (header->code == NM_CLICK || header->code == NM_RCLICK || header->code == NM_DBLCLK) {
                     const auto* activate = reinterpret_cast<const NMITEMACTIVATE*>(lParam);
                     if (activate && activate->iItem >= 0) {

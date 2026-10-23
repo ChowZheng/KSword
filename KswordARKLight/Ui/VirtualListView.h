@@ -52,6 +52,17 @@ public:
     void setVisibleIndexes(std::vector<std::size_t> indexes);
     void resetVisibleIndexes();
 
+    // applySort orders the visible set by one column. Input is the spec produced
+    // by NextSortSpec (column < 0 clears the sort); processing sorts the visible
+    // index list in place, keeps the top row and the selected row attached to
+    // their records, and remembers the spec so later refreshes and filter
+    // changes are re-sorted the same way; no value is returned.
+    //
+    // Sorting is opt-in per page: a page that never calls applySort keeps the
+    // exact ordering it installs today.
+    void applySort(const SortSpec& spec);
+    SortSpec sortSpec() const noexcept;
+
     // FilterRowIndexes is data-only and can be called from a worker thread.
     // The query is matched case-insensitively against every cell and stable key.
     //
@@ -83,6 +94,14 @@ private:
     void captureViewportAnchor();
     void rebuildVisibleIndexes();
     void updateItemCount();
+    // sortVisibleIndexes reorders visibleIndexes_ in place. It runs after every
+    // rebuild so an active sort survives a snapshot refresh or a filter change,
+    // and it is a no-op while no sort is installed.
+    void sortVisibleIndexes();
+    // restoreSelectionToBackingRow re-selects the position that now holds the
+    // given backing row. A sort permutes positions, so carrying the selection by
+    // position is what makes the highlight follow the record instead of the slot.
+    void restoreSelectionToBackingRow(std::size_t backingRow, int previousPosition);
 
 private:
     HWND hwnd_ = nullptr;
@@ -91,6 +110,7 @@ private:
     std::wstring viewportAnchorKey_;
     std::size_t viewportAnchorRow_ = 0;
     bool hasViewportAnchor_ = false;
+    SortSpec sortSpec_;
 };
 
 } // namespace Ksword::Ui

@@ -645,6 +645,14 @@ LRESULT CALLBACK HierarchyViewProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
                 if (state->windowList.handleNotify(*header, result)) {
                     return result;
                 }
+                if (header->hwndFrom == state->windowList.hwnd() && header->code == LVN_COLUMNCLICK) {
+                    const auto* clicked = reinterpret_cast<const NMLISTVIEW*>(lParam);
+                    const Ksword::Ui::SortSpec next =
+                        Ksword::Ui::NextSortSpec(state->windowList.sortSpec(), clicked->iSubItem);
+                    state->windowList.applySort(next);
+                    Ksword::Ui::ShowSortIndicator(state->windowList.hwnd(), next);
+                    return 0;
+                }
                 if (header->hwndFrom == state->windowList.hwnd() && header->code == LVN_ITEMCHANGED) {
                     const auto* changed = reinterpret_cast<const NMLISTVIEW*>(lParam);
                     if (changed && (changed->uNewState & LVIS_SELECTED) != 0) {

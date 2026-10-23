@@ -4536,6 +4536,15 @@ bool KernelPage::RestoreFeatureViewCache(const KernelFeatureId featureId) {
     ClearResultGridOnly();
     EnsureResultColumnsForCurrentFeature();
     SyncResultListVirtualRows();
+    // Restoring a cached projection also restores its sort, so the arrow has to
+    // follow; a -1 column clears it. This runs after the columns are recreated
+    // because ClearResultGridOnly discards the header items that carry the arrow.
+    Ksword::Ui::ShowSortIndicator(
+        resultList_,
+        Ksword::Ui::SortSpec{
+            sortColumn_,
+            sortAscending_ ? Ksword::Ui::SortDirection::Ascending
+                           : Ksword::Ui::SortDirection::Descending });
     RestoreReportListRows(propertyList_, cache.propertyRows);
     RestoreReportListRows(summaryList_, cache.summaryRows);
     if (featureId == KernelFeatureId::ObjectNamespaceOverview || featureId == KernelFeatureId::ObjectDirectoryRecursive) {
@@ -5394,6 +5403,7 @@ void KernelPage::RenderDescriptor(const KernelFeatureDescriptor& descriptor) {
     currentRawRows_ = EmptyKernelRawRows();
     sortColumn_ = -1;
     sortAscending_ = true;
+    Ksword::Ui::ShowSortIndicator(resultList_, Ksword::Ui::SortSpec{});
     ClearResultTable();
     ::SetWindowTextW(detailEdit_, EmptyDetailTextForFeature(descriptor.id));
     if (IsObjectNamespaceFeature(descriptor.id)) {
@@ -5485,6 +5495,7 @@ void KernelPage::RenderResult(const KernelOperationResult& result, KernelDynamic
     currentRawRows_ = EmptyKernelRawRows();
     sortColumn_ = -1;
     sortAscending_ = true;
+    Ksword::Ui::ShowSortIndicator(resultList_, Ksword::Ui::SortSpec{});
 
     if (prepared) {
         currentColumns_ = std::move(prepared->columns);
@@ -5874,6 +5885,7 @@ void KernelPage::ApplyCachedValueProjection(std::shared_ptr<KernelValueProjectio
     currentColumns_=std::move(projection->columns);currentRows_=std::move(projection->rows);
     currentRowIndents_=std::move(projection->indents);currentProjectionWidths_=std::move(projection->widths);
     if(newSource){sortColumn_=-1;sortAscending_=true;pendingSorts_.erase(descriptor->id);}
+    if(newSource) Ksword::Ui::ShowSortIndicator(resultList_, Ksword::Ui::SortSpec{});
     if(pending!=pendingProjectionSources_.end() && pending->second==source) pendingProjectionSources_.erase(pending);
     applyingCachedProjection_=true;
     Ksword::Ui::ScopedListViewRedrawLock resultLock(resultList_);
@@ -6486,6 +6498,16 @@ void KernelPage::RequestResultSort(const int columnIndex, const bool ascending) 
             pendingSorts_.erase(result->featureId);
             Ksword::Ui::ScopedListViewRedrawLock resultListLock(resultList_);
             SyncResultListVirtualRows();
+            // The applied result is the only place the visible order is known to
+            // match the request, so the arrow is updated here rather than when the
+            // click arrives: a superseded request is discarded above and must not
+            // move the arrow.
+            Ksword::Ui::ShowSortIndicator(
+                resultList_,
+                Ksword::Ui::SortSpec{
+                    result->column,
+                    result->ascending ? Ksword::Ui::SortDirection::Ascending
+                                      : Ksword::Ui::SortDirection::Descending });
             ListView_SetItemState(resultList_, -1, 0, LVIS_SELECTED | LVIS_FOCUSED);
             if (newSelected >= 0) ListView_SetItemState(resultList_, newSelected,
                 LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);

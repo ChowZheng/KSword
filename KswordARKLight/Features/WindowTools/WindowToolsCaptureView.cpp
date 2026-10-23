@@ -575,6 +575,17 @@ LRESULT CALLBACK CaptureViewProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
                 if (state->windowList.handleNotify(*header, result)) {
                     return result;
                 }
+                // The click cycle is unsorted -> ascending -> descending ->
+                // unsorted. The sort lives in VirtualListView, so the periodic
+                // refresh replays it instead of dropping it with the snapshot.
+                if (header->hwndFrom == state->windowList.hwnd() && header->code == LVN_COLUMNCLICK) {
+                    auto* clicked = reinterpret_cast<NMLISTVIEW*>(lParam);
+                    const Ksword::Ui::SortSpec next =
+                        Ksword::Ui::NextSortSpec(state->windowList.sortSpec(), clicked->iSubItem);
+                    state->windowList.applySort(next);
+                    Ksword::Ui::ShowSortIndicator(state->windowList.hwnd(), next);
+                    return 0;
+                }
                 if (header->hwndFrom == state->windowList.hwnd() && header->code == LVN_ITEMCHANGED) {
                     const auto* changed = reinterpret_cast<const NMLISTVIEW*>(lParam);
                     if (changed && (changed->uNewState & LVIS_SELECTED) != 0) {

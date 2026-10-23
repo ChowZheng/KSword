@@ -1437,6 +1437,16 @@ LRESULT CALLBACK RegistryViewProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                     return result;
                 }
             }
+            if (header && header->hwndFrom == state->list.hwnd() && header->code == LVN_COLUMNCLICK) {
+                const auto* clicked = reinterpret_cast<const NMLISTVIEW*>(lParam);
+                if (clicked) {
+                    const Ksword::Ui::SortSpec next =
+                        Ksword::Ui::NextSortSpec(state->list.sortSpec(), clicked->iSubItem);
+                    state->list.applySort(next);
+                    Ksword::Ui::ShowSortIndicator(state->list.hwnd(), next);
+                }
+                return 0;
+            }
             if (header && header->hwndFrom == state->list.hwnd() && header->code == LVN_ITEMCHANGED) {
                 const auto* changed = reinterpret_cast<const NMLISTVIEW*>(lParam);
                 if ((changed->uNewState & LVIS_SELECTED) != 0) {

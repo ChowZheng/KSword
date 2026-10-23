@@ -1104,6 +1104,16 @@ LRESULT CALLBACK ServiceViewProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
                 if (state->serviceList.handleNotify(*header, result)) {
                     return result;
                 }
+                if (header->hwndFrom == state->serviceList.hwnd() && header->code == LVN_COLUMNCLICK) {
+                    const auto* clicked = reinterpret_cast<const NMLISTVIEW*>(lParam);
+                    if (clicked) {
+                        const Ksword::Ui::SortSpec next =
+                            Ksword::Ui::NextSortSpec(state->serviceList.sortSpec(), clicked->iSubItem);
+                        state->serviceList.applySort(next);
+                        Ksword::Ui::ShowSortIndicator(state->serviceList.hwnd(), next);
+                    }
+                    return 0;
+                }
                 if (header->hwndFrom == state->serviceList.hwnd() && header->code == LVN_ITEMCHANGED) {
                     const auto* changed = reinterpret_cast<const NMLISTVIEW*>(lParam);
                     if (changed && (changed->uNewState & LVIS_SELECTED) != 0) {

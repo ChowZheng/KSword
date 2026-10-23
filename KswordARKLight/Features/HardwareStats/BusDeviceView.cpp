@@ -623,6 +623,14 @@ LRESULT CALLBACK BusDeviceViewProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
                 if (state->busList.handleNotify(*header, result)) {
                     return result;
                 }
+                if (header->hwndFrom == state->busList.hwnd() && header->code == LVN_COLUMNCLICK) {
+                    const auto* clicked = reinterpret_cast<const NMLISTVIEW*>(lParam);
+                    const Ksword::Ui::SortSpec next =
+                        Ksword::Ui::NextSortSpec(state->busList.sortSpec(), clicked ? clicked->iSubItem : -1);
+                    state->busList.applySort(next);
+                    Ksword::Ui::ShowSortIndicator(state->busList.hwnd(), next);
+                    return 0;
+                }
                 if (header->hwndFrom == state->busList.hwnd() && header->code == LVN_ITEMCHANGED) {
                     const auto* changed = reinterpret_cast<const NMLISTVIEW*>(lParam);
                     if (changed && (changed->uNewState & LVIS_SELECTED) != 0) {

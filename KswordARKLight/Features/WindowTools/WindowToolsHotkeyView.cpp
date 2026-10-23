@@ -480,6 +480,16 @@ LRESULT CALLBACK HotkeyViewProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 if (state->hotkeyList.handleNotify(*header, result)) {
                     return result;
                 }
+                if (header->hwndFrom == state->hotkeyList.hwnd() && header->code == LVN_COLUMNCLICK) {
+                    const auto* clicked = reinterpret_cast<const NMLISTVIEW*>(lParam);
+                    if (clicked) {
+                        const Ksword::Ui::SortSpec next =
+                            Ksword::Ui::NextSortSpec(state->hotkeyList.sortSpec(), clicked->iSubItem);
+                        state->hotkeyList.applySort(next);
+                        Ksword::Ui::ShowSortIndicator(state->hotkeyList.hwnd(), next);
+                    }
+                    return 0;
+                }
                 if (header->hwndFrom == state->hotkeyList.hwnd() && header->code == NM_RCLICK) {
                     POINT point{};
                     ::GetCursorPos(&point);

@@ -582,6 +582,17 @@ LRESULT CALLBACK FileHolderViewProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                 if (state->list.handleNotify(*header, result)) {
                     return result;
                 }
+                // The click cycle is unsorted -> ascending -> descending ->
+                // unsorted. The sort lives in VirtualListView, so the periodic
+                // refresh replays it instead of dropping it with the snapshot.
+                if (header->hwndFrom == state->list.hwnd() && header->code == LVN_COLUMNCLICK) {
+                    auto* clicked = reinterpret_cast<NMLISTVIEW*>(lParam);
+                    const Ksword::Ui::SortSpec next =
+                        Ksword::Ui::NextSortSpec(state->list.sortSpec(), clicked->iSubItem);
+                    state->list.applySort(next);
+                    Ksword::Ui::ShowSortIndicator(state->list.hwnd(), next);
+                    return 0;
+                }
                 if (header->hwndFrom == state->list.hwnd() && header->code == NM_RCLICK) {
                     POINT point{};
                     ::GetCursorPos(&point);
