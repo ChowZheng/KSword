@@ -296,6 +296,9 @@
     <ClCompile Include="Features\Kernel\KernelSymbolicLinkFeature.cpp">
       <Filter>Features\Kernel</Filter>
     </ClCompile>
+    <ClCompile Include="Features\Kernel\KernelValueSupport.cpp">
+      <Filter>Features\Kernel</Filter>
+    </ClCompile>
     <ClCompile Include="Features\Memory\DriverMemoryClient.cpp">
       <Filter>Features\Memory</Filter>
     </ClCompile>
@@ -894,6 +897,9 @@
       <Filter>Features\Kernel</Filter>
     </ClInclude>
     <ClInclude Include="Features\Kernel\KernelSymbolicLinkFeature.h">
+      <Filter>Features\Kernel</Filter>
+    </ClInclude>
+    <ClInclude Include="Features\Kernel\KernelValueSupport.h">
       <Filter>Features\Kernel</Filter>
     </ClInclude>
     <ClInclude Include="Features\Memory\DriverMemoryClient.h">

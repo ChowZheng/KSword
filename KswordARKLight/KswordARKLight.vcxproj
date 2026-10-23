@@ -150,6 +150,7 @@
     <ClCompile Include="Features\Kernel\KernelShadowSsdtFeature.cpp" />
     <ClCompile Include="Features\Kernel\KernelSsdtFeature.cpp" />
     <ClCompile Include="Features\Kernel\KernelSymbolicLinkFeature.cpp" />
+    <ClCompile Include="Features\Kernel\KernelValueSupport.cpp" />
     <ClCompile Include="Features\Memory\DriverMemoryClient.cpp" />
     <ClCompile Include="Features\Memory\DriverMemoryModel.cpp" />
     <ClCompile Include="Features\Memory\DriverMemoryView.cpp" />
@@ -357,6 +358,7 @@
     <ClInclude Include="Features\Kernel\KernelShadowSsdtFeature.h" />
     <ClInclude Include="Features\Kernel\KernelSsdtFeature.h" />
     <ClInclude Include="Features\Kernel\KernelSymbolicLinkFeature.h" />
+    <ClInclude Include="Features\Kernel\KernelValueSupport.h" />
     <ClInclude Include="Features\Memory\DriverMemoryClient.h" />
     <ClInclude Include="Features\Memory\DriverMemoryModel.h" />
     <ClInclude Include="Features\Memory\DriverMemoryView.h" />

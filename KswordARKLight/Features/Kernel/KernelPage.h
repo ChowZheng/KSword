@@ -18,7 +18,19 @@
 
 namespace Ksword::Features::Kernel {
 
-struct KernelObjectNamespaceTreeNodeState;
+// KernelObjectNamespaceTreeNodeState is the per-TreeView node payload used by
+// the Win32 object namespace port. Inputs are copied from the current table
+// cache when the tree is rebuilt; processing stores this object behind
+// TVITEM::lParam; return behavior is pointer-based selection with ownership kept
+// by KernelPage::objectNamespaceTreeNodeStorage_.
+struct KernelObjectNamespaceTreeNodeState {
+    int rowIndex = -1;
+    std::wstring nodeKind;
+    std::wstring nodeName;
+    std::wstring nodeType;
+    std::wstring nodePath;
+    std::wstring nodeDescription;
+};
 
 // KernelR0EvidenceSnapshot is the immutable result of a client-side R0
 // evidence projection. Worker tasks own this value completely before the UI
