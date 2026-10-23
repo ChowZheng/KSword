@@ -56,13 +56,73 @@ HWND CreateText(HWND parent, int id, const std::wstring& text, int x, int y, int
     return hwnd;
 }
 
-HWND CreateButton(HWND parent, int id, const std::wstring& text, int x, int y, int w, int h) {
-    HWND hwnd = ::CreateWindowExW(0, L"BUTTON", text.c_str(), WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+HWND CreateButton(HWND parent, int id, const std::wstring& text, int x, int y, int w, int h,
+    const ButtonRole role) {
+    // Default keeps the native button. The other two roles must control the
+    // surface, so they switch the control to owner-draw and remember the role on
+    // the window itself; the message handler then just forwards WM_DRAWITEM.
+    const DWORD style = WS_CHILD | WS_VISIBLE | WS_TABSTOP |
+        (role == ButtonRole::Default ? BS_PUSHBUTTON : (BS_OWNERDRAW | BS_NOTIFY));
+    HWND hwnd = ::CreateWindowExW(0, L"BUTTON", text.c_str(), style,
         x, y, w, h, parent, reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)), ::GetModuleHandleW(nullptr), nullptr);
     if (hwnd) {
         ::SendMessageW(hwnd, WM_SETFONT, reinterpret_cast<WPARAM>(SystemUIFont()), TRUE);
+        if (role != ButtonRole::Default) {
+            ::SetWindowLongPtrW(hwnd, GWLP_USERDATA, static_cast<LONG_PTR>(role));
+        }
     }
     return hwnd;
+}
+
+void DrawThemedButton(const DRAWITEMSTRUCT& item) {
+    if (!item.hDC) {
+        return;
+    }
+    const auto role = static_cast<ButtonRole>(::GetWindowLongPtrW(item.hwndItem, GWLP_USERDATA));
+    const bool pressed = (item.itemState & ODS_SELECTED) != 0;
+    const bool disabled = (item.itemState & ODS_DISABLED) != 0;
+
+    COLORREF surface = AppTheme().panelColor;
+    COLORREF text = AppTheme().textColor;
+    if (role == ButtonRole::Danger) {
+        surface = pressed ? AppTheme().dangerPressedColor : AppTheme().dangerColor;
+        text = AppTheme().dangerTextColor;
+    } else if (role == ButtonRole::Primary) {
+        surface = pressed ? AppTheme().accentDarkColor : AppTheme().accentColor;
+        text = AppTheme().dangerTextColor;
+    } else if (pressed) {
+        surface = RGB(228, 232, 238);
+    }
+    if (disabled) {
+        surface = RGB(238, 240, 243);
+        text = AppTheme().mutedTextColor;
+    }
+
+    RECT rect = item.rcItem;
+    HBRUSH fill = ::CreateSolidBrush(surface);
+    ::FillRect(item.hDC, &rect, fill);
+    ::DeleteObject(fill);
+    // The border keeps a white-on-white Default button readable and separates the
+    // Danger/Primary block from the panel behind it.
+    HBRUSH border = ::CreateSolidBrush(role == ButtonRole::Default ? AppTheme().borderColor : surface);
+    ::FrameRect(item.hDC, &rect, border);
+    ::DeleteObject(border);
+
+    wchar_t caption[128] = {};
+    ::GetWindowTextW(item.hwndItem, caption, 128);
+    ::SetBkMode(item.hDC, TRANSPARENT);
+    ::SetTextColor(item.hDC, text);
+    HGDIOBJ oldFont = ::SelectObject(item.hDC, SystemUIFont());
+    RECT textRect = rect;
+    ::InflateRect(&textRect, -4, 0);
+    ::DrawTextW(item.hDC, caption, -1, &textRect, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+    ::SelectObject(item.hDC, oldFont);
+
+    if ((item.itemState & ODS_FOCUS) != 0) {
+        RECT focus = rect;
+        ::InflateRect(&focus, -3, -3);
+        ::DrawFocusRect(item.hDC, &focus);
+    }
 }
 
 void SetWindowFontRecursive(HWND root) {

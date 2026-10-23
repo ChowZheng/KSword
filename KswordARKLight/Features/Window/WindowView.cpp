@@ -241,6 +241,15 @@ struct WindowViewState {
     std::wstring statusText;
     std::wstring filterQuery;
     bool filterUseRegex = false;
+    // selectedStableKey keeps the identity of the selected display row, so a
+    // sort or refresh re-selects the same window instead of the same row number.
+    // restoringSelection marks the programmatic re-selection so LVN_ITEMCHANGED
+    // does not start a second detail query for the same row.
+    std::wstring selectedStableKey;
+    bool restoringSelection = false;
+    // columnsUserSized is set when the user drags a column divider; subsequent
+    // refreshes then keep updating titles without resetting the chosen widths.
+    bool columnsUserSized = false;
     std::uint64_t snapshotGeneration = 0;
     int contextColumn = 0;
     Ksword::Ui::VirtualListView virtualList;
@@ -353,6 +362,16 @@ void SetColumn(HWND list, int index, const wchar_t* title, int width) {
     column.mask = LVCF_TEXT | LVCF_WIDTH;
     column.pszText = const_cast<LPWSTR>(title);
     column.cx = width;
+    ListView_SetColumn(list, index, &column);
+}
+
+// SetColumnTitle updates only a report-view column title. Inputs are list HWND,
+// column index and title; it is used once the user has sized the columns so a
+// refresh cannot undo the width they chose.
+void SetColumnTitle(HWND list, int index, const wchar_t* title) {
+    LVCOLUMNW column{};
+    column.mask = LVCF_TEXT;
+    column.pszText = const_cast<LPWSTR>(title);
     ListView_SetColumn(list, index, &column);
 }
 
@@ -550,6 +569,88 @@ int SelectedModelIndex(WindowViewState* state) {
         return -1;
     }
     return static_cast<int>(rows[source].itemData);
+}
+
+// StableKeyAtDisplayRow returns the stable display key of one visible row.
+// Inputs are page state and a ListView item index; output is empty when the
+// index no longer maps onto the retained snapshot.
+std::wstring StableKeyAtDisplayRow(const WindowViewState* state, const int displayIndex) {
+    if (!state || displayIndex < 0) {
+        return {};
+    }
+    const auto& visible = state->virtualList.visibleIndexes();
+    const auto& rows = state->virtualList.rows();
+    if (static_cast<std::size_t>(displayIndex) >= visible.size()) {
+        return {};
+    }
+    const std::size_t source = visible[static_cast<std::size_t>(displayIndex)];
+    return source < rows.size() ? rows[source].stableKey : std::wstring{};
+}
+
+// RememberSelectedWindow records the stable key of the selected row. Input is
+// page state; the key survives a rebuild that renumbers every display index, so
+// a later sort or refresh can select the same window again.
+void RememberSelectedWindow(WindowViewState* state) {
+    if (!state || !state->windowList) {
+        return;
+    }
+    state->selectedStableKey = StableKeyAtDisplayRow(state, ListView_GetNextItem(state->windowList, -1, LVNI_SELECTED));
+}
+
+// FindDisplayRowByStableKey maps one stable key back to a ListView item index
+// under the currently installed visible indexes; output is -1 when the object
+// is absent from the retained snapshot.
+int FindDisplayRowByStableKey(const WindowViewState* state, const std::wstring& stableKey) {
+    if (!state || stableKey.empty()) {
+        return -1;
+    }
+    const auto& visible = state->virtualList.visibleIndexes();
+    const auto& rows = state->virtualList.rows();
+    for (std::size_t display = 0U; display < visible.size(); ++display) {
+        const std::size_t source = visible[display];
+        if (source < rows.size() && rows[source].stableKey == stableKey) {
+            return static_cast<int>(display);
+        }
+    }
+    return -1;
+}
+
+// RestoreSelectedWindow re-selects the remembered window after PopulateList or
+// a completed filter replaced the display indexes. The programmatic selection
+// is announced through restoringSelection so LVN_ITEMCHANGED does not launch a
+// duplicate detail query; output is true when the selected item index moved and
+// the caller still owes exactly one detail refresh.
+bool RestoreSelectedWindow(WindowViewState* state) {
+    if (!state || !state->windowList || state->selectedStableKey.empty()) {
+        return false;
+    }
+    const int previous = ListView_GetNextItem(state->windowList, -1, LVNI_SELECTED);
+    int target = FindDisplayRowByStableKey(state, state->selectedStableKey);
+    const bool rememberedRowFound = target >= 0;
+    if (!rememberedRowFound && state->virtualList.rowCount() > 0U) {
+        // The remembered window left the snapshot; keep the page usable by
+        // selecting the first row instead of blanking the detail pane.
+        target = 0;
+    }
+    if (target < 0) {
+        return false;
+    }
+    if (rememberedRowFound && target == previous &&
+        (ListView_GetItemState(state->windowList, target, LVIS_SELECTED) & LVIS_SELECTED) != 0) {
+        // The same item is still selected, so nothing has to move and the detail
+        // pane keeps the row it already describes.
+        RememberSelectedWindow(state);
+        return false;
+    }
+    state->restoringSelection = true;
+    ListView_SetItemState(state->windowList, -1, 0, LVIS_SELECTED | LVIS_FOCUSED);
+    ListView_SetItemState(state->windowList, target, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
+    ListView_EnsureVisible(state->windowList, target, FALSE);
+    state->restoringSelection = false;
+    RememberSelectedWindow(state);
+    // A fallback to the first row always re-derives the detail pane, because the
+    // identity the pane was describing is no longer part of the snapshot.
+    return !rememberedRowFound || target != previous;
 }
 
 // Win32kHookScopeText renders the protocol-level thread/global scope while
@@ -868,6 +969,17 @@ void ConfigureWindowColumns(WindowViewState* state) {
     if (!state || !state->windowList) {
         return;
     }
+    // A user-sized layout keeps its widths; only the titles are refreshed so a
+    // background refresh never snaps the dividers back. Columns are created once
+    // in CreateChildControls and are never removed, so titles stay consistent.
+    if (state->columnsUserSized) {
+        SetColumnTitle(state->windowList, 0, L"进程 / PID");
+        SetColumnTitle(state->windowList, 1, L"HWND");
+        SetColumnTitle(state->windowList, 2, L"Title");
+        SetColumnTitle(state->windowList, 3, L"Class");
+        SetColumnTitle(state->windowList, 4, L"State");
+        return;
+    }
     SetColumn(state->windowList, 0, L"进程 / PID", 190);
     SetColumn(state->windowList, 1, L"HWND", 120);
     SetColumn(state->windowList, 2, L"Title", 300);
@@ -879,6 +991,14 @@ void ConfigureWindowColumns(WindowViewState* state) {
 // page state; output is visible column metadata only.
 void ConfigureAuditColumns(WindowViewState* state) {
     if (!state || !state->windowList) {
+        return;
+    }
+    if (state->columnsUserSized) {
+        SetColumnTitle(state->windowList, 0, L"类别");
+        SetColumnTitle(state->windowList, 1, L"数据源");
+        SetColumnTitle(state->windowList, 2, L"入口 / 对象");
+        SetColumnTitle(state->windowList, 3, L"状态");
+        SetColumnTitle(state->windowList, 4, L"说明");
         return;
     }
     SetColumn(state->windowList, 0, L"类别", 150);
@@ -1070,8 +1190,14 @@ void RequestWindowFilter(WindowViewState* state, std::wstring query) {
                 return;
             }
             state->virtualList.setVisibleIndexes(std::move(result->visibleIndexes));
+            // Installing a filtered visible set renumbers the display indexes as
+            // well, so the highlight is re-anchored on the same stable key.
+            const bool selectionMoved = RestoreSelectedWindow(state);
             if (!state->filterQuery.empty()) {
                 state->statusText = L"窗口筛选结果：" + std::to_wstring(state->virtualList.rowCount()) + L" 项。";
+            }
+            if (selectionMoved) {
+                ShowDetail(state, SelectedModelIndex(state));
             }
         });
 }
@@ -1094,7 +1220,15 @@ void PopulateList(WindowViewState* state) {
         }
         state->virtualList.setSharedRows(state->filterRows);
     }
+    // The rebuilt rows renumber every index, so the previously selected window
+    // is resolved back through its stable key instead of keeping the old item
+    // number, which would leave the highlight and the detail pane on two
+    // different windows. Only a moved selection pays for one extra detail query.
+    const bool selectionMoved = RestoreSelectedWindow(state);
     RequestWindowFilter(state, state->filterBar ? Ksword::Ui::GetFilterBarText(state->filterBar) : state->filterQuery);
+    if (selectionMoved) {
+        ShowDetail(state, SelectedModelIndex(state));
+    }
 }
 
 // RefreshWindows performs the R3 EnumWindows and optional R0 audit snapshot on
@@ -1181,6 +1315,7 @@ void UpdateViewModeFromCombo(WindowViewState* state) {
     if (!state || !state->auditModeCombo) {
         return;
     }
+    const WindowViewMode previousMode = state->viewMode;
     const LRESULT selected = ::SendMessageW(state->auditModeCombo, CB_GETCURSEL, 0, 0);
     if (selected == 1) {
         state->viewMode = WindowViewMode::Win32kGuiAudit;
@@ -1225,6 +1360,12 @@ void UpdateViewModeFromCombo(WindowViewState* state) {
     }
     if (state->viewMode != WindowViewMode::WindowList) {
         WindowTools::UpdateWindowHierarchyReportView(state->hierarchyReportView, nullptr);
+    }
+    if (state->viewMode != previousMode) {
+        // Each mode has its own column meanings and default widths, so a mode
+        // switch starts from the defaults instead of inheriting the other mode's
+        // user-sized layout.
+        state->columnsUserSized = false;
     }
     RefreshWindows(state);
 }
@@ -1850,9 +1991,23 @@ bool RegisterWindowViewClass() {
                     return result;
                 }
             }
+            // The ListView forwards its header notifications to the parent. Once
+            // the user has dragged a column divider the width becomes theirs, so
+            // later refreshes only update titles instead of resetting the layout.
+            if (state && notify && state->windowList && notify->code == HDN_ENDDRAG &&
+                notify->hwndFrom == ListView_GetHeader(state->windowList)) {
+                state->columnsUserSized = true;
+                return 0;
+            }
             if (state && notify && notify->idFrom == kWindowListId && notify->code == LVN_ITEMCHANGED) {
                 auto* changed = reinterpret_cast<NMLISTVIEW*>(lParam);
                 if ((changed->uNewState & LVIS_SELECTED) != 0) {
+                    // Restoring the selection after a rebuild already recalculated
+                    // the detail pane once; re-entering here would duplicate it.
+                    if (state->restoringSelection) {
+                        return 0;
+                    }
+                    RememberSelectedWindow(state);
                     if (state->viewMode == WindowViewMode::WindowList) {
                         ShowDetail(state, SelectedModelIndex(state));
                     } else {

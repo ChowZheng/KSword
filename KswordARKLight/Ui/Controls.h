@@ -24,9 +24,26 @@ void RefreshSystemUIFont();
 // are parent, id, text and geometry; processing creates the HWND; output is HWND.
 HWND CreateText(HWND parent, int id, const std::wstring& text, int x, int y, int w, int h);
 
+// ButtonRole separates ordinary actions from the primary action and from
+// destructive ones. Only the two non-default roles switch the control to
+// owner-draw, so the 200+ existing CreateButton call sites keep the native
+// button and nothing else changes.
+enum class ButtonRole {
+    Default,
+    Primary,
+    Danger
+};
+
 // CreateButton creates a compact child push button using the Windows UI message
-// font. Inputs are parent, id, text and geometry; output is the HWND.
-HWND CreateButton(HWND parent, int id, const std::wstring& text, int x, int y, int w, int h);
+// font. Inputs are parent, id, text, geometry and an optional role; output is
+// the HWND. Non-default roles paint through DrawThemedButton.
+HWND CreateButton(HWND parent, int id, const std::wstring& text, int x, int y, int w, int h,
+    ButtonRole role = ButtonRole::Default);
+
+// DrawThemedButton paints one owner-draw button created with a non-default
+// ButtonRole. Input is the WM_DRAWITEM payload; it returns nothing and is safe
+// to call for any item (unknown roles fall back to the default surface).
+void DrawThemedButton(const DRAWITEMSTRUCT& item);
 
 // SetWindowFontRecursive applies the Windows UI message font to a window
 // subtree. Input is a root HWND; processing sends WM_SETFONT; no return.

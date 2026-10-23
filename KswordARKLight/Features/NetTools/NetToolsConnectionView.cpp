@@ -618,7 +618,8 @@ bool CreateChildControls(ConnectionViewState& state) {
     HWND hwnd = state.hwnd;
     state.refreshButton = Ksword::Ui::CreateButton(hwnd, kRefreshButtonId, L"刷新", 0, 0, 0, 0);
     state.exportButton = Ksword::Ui::CreateButton(hwnd, kExportButtonId, L"导出 TSV", 0, 0, 0, 0);
-    state.closeButton = Ksword::Ui::CreateButton(hwnd, kCloseButtonId, L"结束连接", 0, 0, 0, 0);
+    state.closeButton = Ksword::Ui::CreateButton(hwnd, kCloseButtonId, L"结束连接", 0, 0, 0, 0,
+        Ksword::Ui::ButtonRole::Danger);
 
     state.protocolCombo = ::CreateWindowExW(0, WC_COMBOBOXW, L"",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL | CBS_DROPDOWNLIST | CBS_HASSTRINGS,
@@ -781,6 +782,14 @@ LRESULT CALLBACK ConnectionViewProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
             }
         }
         break;
+    case WM_DRAWITEM: {
+        const auto* item = reinterpret_cast<const DRAWITEMSTRUCT*>(lParam);
+        if (item) {
+            Ksword::Ui::DrawThemedButton(*item);
+            return TRUE;
+        }
+        break;
+    }
     case WM_ERASEBKGND:
         return 1;
     case WM_PAINT:

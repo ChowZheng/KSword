@@ -2,7 +2,7 @@
 
 namespace Ksword::Ui {
 
-Theme::Theme() : windowBrush_(nullptr), panelBrush_(nullptr), accentBrush_(nullptr), borderPen_(nullptr) {}
+Theme::Theme() : windowBrush_(nullptr), panelBrush_(nullptr), accentBrush_(nullptr), dangerBrush_(nullptr), borderPen_(nullptr) {}
 
 Theme::~Theme() {
     shutdown();
@@ -17,6 +17,9 @@ void Theme::ensure() {
     }
     if (!accentBrush_) {
         accentBrush_ = ::CreateSolidBrush(accentColor);
+    }
+    if (!dangerBrush_) {
+        dangerBrush_ = ::CreateSolidBrush(dangerColor);
     }
     if (!borderPen_) {
         borderPen_ = ::CreatePen(PS_SOLID, 1, borderColor);
@@ -36,6 +39,10 @@ void Theme::shutdown() {
         ::DeleteObject(accentBrush_);
         accentBrush_ = nullptr;
     }
+    if (dangerBrush_) {
+        ::DeleteObject(dangerBrush_);
+        dangerBrush_ = nullptr;
+    }
     if (borderPen_) {
         ::DeleteObject(borderPen_);
         borderPen_ = nullptr;
@@ -45,6 +52,8 @@ void Theme::shutdown() {
 HBRUSH Theme::windowBrush() const { return windowBrush_; }
 HBRUSH Theme::panelBrush() const { return panelBrush_; }
 HBRUSH Theme::accentBrush() const { return accentBrush_; }
+
+HBRUSH Theme::dangerBrush() const { return dangerBrush_; }
 
 HPEN Theme::borderPen() const { return borderPen_; }
 

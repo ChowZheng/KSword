@@ -821,7 +821,8 @@ void ShowAuditContextMenu(MiscAuditViewState& state, POINT screenPoint) {
 bool CreateAuditChildControls(MiscAuditViewState& state, HWND hwnd) {
     state.refreshButton = Ksword::Ui::CreateButton(hwnd, kRefreshButtonId, L"Refresh", 0, 0, 80, 24);
     state.copyButton = Ksword::Ui::CreateButton(hwnd, kCopyButtonId, L"Copy TSV", 0, 0, 100, 24);
-    state.bugcheckUploadButton = Ksword::Ui::CreateButton(hwnd, kBugcheckUploadButtonId, L"上传内置位图", 0, 0, 120, 24);
+    state.bugcheckUploadButton = Ksword::Ui::CreateButton(hwnd, kBugcheckUploadButtonId, L"上传内置位图", 0, 0, 120, 24,
+        Ksword::Ui::ButtonRole::Danger);
     state.filterBar = Ksword::Ui::CreateFilterBar(hwnd, kFilterBarId,
         L"筛选类别、项目、状态、来源、风险和详情", 0, 0, 0, 0);
     if (!state.refreshButton || !state.copyButton || !state.bugcheckUploadButton || !state.filterBar ||
@@ -942,6 +943,14 @@ bool RegisterAuditViewClass() {
             ::SetBkMode(dc, TRANSPARENT);
             ::SetTextColor(dc, Ksword::Ui::AppTheme().textColor);
             return reinterpret_cast<LRESULT>(Ksword::Ui::AppTheme().panelBrush());
+        }
+        case WM_DRAWITEM: {
+            const auto* item = reinterpret_cast<const DRAWITEMSTRUCT*>(lParam);
+            if (item) {
+                Ksword::Ui::DrawThemedButton(*item);
+                return TRUE;
+            }
+            break;
         }
         case WM_PAINT: {
             PAINTSTRUCT ps{};

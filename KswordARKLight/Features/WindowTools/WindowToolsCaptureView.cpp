@@ -472,7 +472,8 @@ bool CreateChildControls(CaptureViewState& state) {
     HWND hwnd = state.hwnd;
     state.refreshButton = Ksword::Ui::CreateButton(hwnd, kRefreshButtonId, L"刷新", 0, 0, 0, 0);
     state.exportButton = Ksword::Ui::CreateButton(hwnd, kExportButtonId, L"导出 TSV", 0, 0, 0, 0);
-    state.applyButton = Ksword::Ui::CreateButton(hwnd, kApplyButtonId, L"应用到选中窗口", 0, 0, 0, 0);
+    state.applyButton = Ksword::Ui::CreateButton(hwnd, kApplyButtonId, L"应用到选中窗口", 0, 0, 0, 0,
+        Ksword::Ui::ButtonRole::Danger);
     state.filterBar = Ksword::Ui::CreateFilterBar(hwnd, kFilterBarId, L"筛选句柄、标题、类名、进程与保护状态", 0, 0, 0, 0);
     state.affinityCombo = ::CreateWindowExW(0, WC_COMBOBOXW, L"",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL | CBS_DROPDOWNLIST | CBS_HASSTRINGS,
@@ -595,6 +596,14 @@ LRESULT CALLBACK CaptureViewProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         ::SetBkMode(dc, TRANSPARENT);
         ::SetTextColor(dc, Ksword::Ui::AppTheme().textColor);
         return reinterpret_cast<LRESULT>(Ksword::Ui::AppTheme().windowBrush());
+    }
+    case WM_DRAWITEM: {
+        const auto* item = reinterpret_cast<const DRAWITEMSTRUCT*>(lParam);
+        if (item) {
+            Ksword::Ui::DrawThemedButton(*item);
+            return TRUE;
+        }
+        break;
     }
     case WM_ERASEBKGND:
         return 1;
