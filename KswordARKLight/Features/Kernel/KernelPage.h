@@ -248,6 +248,12 @@ private:
     void ClearResultTable();
     void ClearResultGridOnly();
     void AddResultTableColumn(int index, const std::wstring& title, int width);
+    // 表格只建 IsKernelTableColumn 认可的列。映射表记住第 n 个表头槽位对应
+    // currentColumns_ 的哪一个下标，详情/复制/导出仍然按数据下标走全量。
+    void AppendResultTableColumn(int dataColumn, int width);
+    int DataColumnForSubItem(int subItem) const;
+    int SubItemForDataColumn(int dataColumn) const;
+    std::vector<int> resultColumnData_;
     void AddResultTableRow(const std::vector<std::wstring>& cells);
     void AddResultTableRow(const std::vector<std::wstring>& cells, int indent);
     int CurrentPrimaryIndex() const;
