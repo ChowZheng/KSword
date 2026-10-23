@@ -1653,24 +1653,23 @@ void MainWindow::beginDriverTask(const bool toggle) {
 void MainWindow::stopDriverOnExit() {
     const auto lifetime = driverLifetime_;
     driverExitCleanup_ = Ksword::Ui::RunBackgroundRetirement([lifetime] {
-        lifetime->finalSucceeded = false;
         try {
             std::unique_lock lock(lifetime->mutex);
             lifetime->idle.wait(lock, [&] { return lifetime->pending.load(std::memory_order_acquire) == 0; });
             if (!lifetime->finalReleaseChecked) {
-                lifetime->finalStopRequired = lifetime->lease.releaseRequestsStop();
-                lifetime->finalReleaseChecked = true;
-            }
-            lifetime->finalSucceeded = true;
-            if (lifetime->finalStopRequired) {
-                lifetime->finalStatus = Ksword::Core::QueryDriverStatus();
-                if (lifetime->finalStatus.serviceRunning || lifetime->finalStatus.controlDeviceOpen) {
-                    lifetime->finalStatus = Ksword::Core::StopDriverService();
-                }
-                lifetime->finalSucceeded = !lifetime->finalStatus.serviceRunning && !lifetime->finalStatus.controlDeviceOpen;
+                // The lease reports three outcomes: the driver was stopped, no
+                // stop was needed, or the release did not complete. Only a
+                // completed release is remembered, so a failed one stays
+                // retryable and the next attempt runs it again. The lease also
+                // performs the driver stop itself, so the outcome already
+                // reflects whether the driver is really gone.
+                lifetime->finalRelease = lifetime->lease.releaseRequestsStop();
+                lifetime->finalReleaseChecked = lifetime->finalRelease.ok();
             }
         } catch (...) {
-            lifetime->finalSucceeded = false;
+            lifetime->finalRelease = Ksword::Core::DriverLeaseRelease{};
+            lifetime->finalRelease.error = L"释放驱动租约时发生异常。";
+            lifetime->finalReleaseChecked = false;
             ::OutputDebugStringW(L"[KswordARKLight] Final driver cleanup attempt raised an exception.\r\n");
         }
         // The attempt is complete even on a real SCM failure. The visible
@@ -1749,7 +1748,12 @@ void MainWindow::pollClosing() {
         }
     } else if (driverExitCleanup_ && driverExitCleanup_->complete()) {
         bool success = false;
-        { std::lock_guard lock(driverLifetime_->mutex); success = driverLifetime_->finalSucceeded; }
+        std::wstring failure;
+        {
+            std::lock_guard lock(driverLifetime_->mutex);
+            success = driverLifetime_->finalRelease.ok();
+            failure = driverLifetime_->finalRelease.error;
+        }
         if (closeCancelRequested_) { restoreAfterCancelledClose(); return; }
         if (success) {
             // ShellExecuteEx/UIAccess may pump modal/COM messages. No timer,
@@ -1780,8 +1784,13 @@ void MainWindow::pollClosing() {
             ::DestroyWindow(hwnd_);
             return;
         }
+        // The release did not complete. The driver may still be loaded, so the
+        // exit waits for an explicit Retry or Cancel instead of destroying the
+        // window and leaving the driver behind.
         ::EnableWindow(closeRetryButton_, TRUE);
-        setClosingStatus(L"驱动停止失败；可重试或取消退出。 / Driver stop failed; Retry or Cancel.");
+        setClosingStatus(failure.empty()
+            ? L"驱动仍在运行，请重试或取消退出。"
+            : failure + L"，请重试或取消退出。");
         return;
     }
     if (::GetTickCount64() - closeStartedMs_ >= kCloseBudgetMs) {
@@ -1846,9 +1855,19 @@ void MainWindow::restoreAfterCancelledClose() {
     closingStatus_.clear();
     layout();
     if (releasedDriver) {
-        // The previous final lease has been released. Register a fresh one on
-        // the background query before admitting later driver toggle actions.
-        driverLifetime_ = std::make_shared<DriverControlLifetime>();
+        // The previous final lease was released. This session keeps running,
+        // so the same lease object is registered again on the background query
+        // before later driver toggle actions are admitted. The lease entry is
+        // keyed by process identity, so re-registering the same lease keeps one
+        // shared registry entry for this process. The lease object itself is
+        // reused on purpose: replacing it would destroy the released lease and
+        // its teardown would unload a driver the running session still needs.
+        {
+            std::lock_guard lock(driverLifetime_->mutex);
+            driverLifetime_->finalReleaseChecked = false;
+            driverLifetime_->finalRelease = Ksword::Core::DriverLeaseRelease{};
+            driverLifetime_->finalRelease.outcome = Ksword::Core::DriverLeaseReleaseOutcome::NotNeeded;
+        }
         driverExitCleanup_.reset();
         beginDriverTask(false);
     }

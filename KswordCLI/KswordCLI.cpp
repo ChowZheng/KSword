@@ -1181,7 +1181,7 @@ namespace
 
     constexpr CommandHelp kCommandHelps[] = {
         { L"log", L"", L"KswordCLI.exe log [--max-frames N]", L"Read up to N log frames from the shared log device.", L"--max-frames defaults to 64.", L"No subcommand is used for the log family. Output is UTF-8; legacy log bytes use the system ANSI code page." },
-        { L"process", L"terminate", L"KswordCLI.exe process terminate --pid PID [--exit-status NTSTATUS]", L"Terminate one process through the driver.", L"Required: --pid. Optional: --exit-status defaults to 0xC000013A.", L"" },
+        { L"process", L"terminate", L"KswordCLI.exe process terminate --pid PID [--exit-status NTSTATUS] --confirm", L"Terminate one process through the driver.", L"Required: --pid, --confirm. Optional: --exit-status defaults to 0xC000013A.", L"" },
         { L"process", L"suspend", L"KswordCLI.exe process suspend --pid PID", L"Suspend one process.", L"Required: --pid.", L"" },
         { L"process", L"resume", L"KswordCLI.exe process resume --pid PID", L"Resume one suspended process.", L"Required: --pid.", L"Pairs with process suspend; the driver prefers PsResumeProcess and falls back to Zw/NtResumeProcess." },
         { L"process", L"set-ppl", L"KswordCLI.exe process set-ppl --pid PID --level LEVEL", L"Set the process protection level byte.", L"Required: --pid, --level.", L"" },
@@ -1197,9 +1197,9 @@ namespace
         { L"process", L"runtime-fields", L"KswordCLI.exe process runtime-fields --pid PID --items id:offset:size[:flags][,id:offset:size[:flags]...] [--flags 0xN] [--hexdump] [--limit N]", L"Sample bounded EPROCESS runtime fields by checked offsets.", L"Required: --pid, --items. Optional: --flags, --hexdump, --limit.", L"Backed by IOCTL_KSWORD_ARK_QUERY_PROCESS_RUNTIME_FIELDS; each item is bounded by KSWORD_ARK_RUNTIME_FIELD_SAMPLE_MAX_VALUE_BYTES." },
         { L"memory", L"query-va", L"KswordCLI.exe memory query-va --pid PID --address VA [--flags 0xN]", L"Query virtual memory metadata for one address.", L"Required: --pid, --address. Optional: --flags.", L"" },
         { L"memory", L"read-va", L"KswordCLI.exe memory read-va --pid PID --address VA --bytes N [--flags 0xN] [--hexdump]", L"Read virtual memory bytes.", L"Required: --pid, --address, --bytes. Optional: --flags, --hexdump.", L"With the kernel-address read flag, --pid may be omitted." },
-        { L"memory", L"write-va", L"KswordCLI.exe memory write-va --pid PID --address VA (--hex HEX | --data-file PATH) [--flags 0xN]", L"Write virtual memory bytes.", L"Required: --pid, --address, and exactly one payload option. Optional: --flags.", L"With the kernel-address write flag, --pid may be omitted." },
+        { L"memory", L"write-va", L"KswordCLI.exe memory write-va --pid PID --address VA (--hex HEX | --data-file PATH) [--flags 0xN] --confirm", L"Write virtual memory bytes.", L"Required: --pid, --address, --confirm, and exactly one payload option. Optional: --flags.", L"With the kernel-address write flag, --pid may be omitted." },
         { L"memory", L"read-phys", L"KswordCLI.exe memory read-phys --address PA --bytes N [--hexdump]", L"Read physical memory bytes.", L"Required: --address, --bytes. Optional: --hexdump.", L"" },
-        { L"memory", L"write-phys", L"KswordCLI.exe memory write-phys --address PA (--hex HEX | --data-file PATH) [--flags 0xN]", L"Write physical memory bytes.", L"Required: --address and exactly one payload option. Optional: --flags.", L"" },
+        { L"memory", L"write-phys", L"KswordCLI.exe memory write-phys --address PA (--hex HEX | --data-file PATH) [--flags 0xN] --confirm", L"Write physical memory bytes.", L"Required: --address, --confirm, and exactly one payload option. Optional: --flags.", L"" },
         { L"memory", L"translate-va", L"KswordCLI.exe memory translate-va --pid PID --address VA [--flags 0xN]", L"Translate a virtual address to page-table evidence.", L"Required: --pid, --address. Optional: --flags.", L"" },
         { L"memory", L"query-pte", L"KswordCLI.exe memory query-pte --pid PID --address VA [--flags 0xN]", L"Query page-table entries for one virtual address.", L"Required: --pid, --address. Optional: --flags.", L"" },
         { L"memory", L"scan-kexec", L"KswordCLI.exe memory scan-kexec [--flags 0xN] [--max-entries N] [--start VA] [--end VA] [--limit N]", L"Scan executable kernel memory evidence.", L"Optional: --flags, --max-entries, --start, --end, --limit.", L"" },
@@ -1209,7 +1209,7 @@ namespace
         { L"memory", L"scan-evidence", L"KswordCLI.exe memory scan-evidence [--flags 0xN] [--max-rows N] [--start VA] [--end VA] [--max-bytes N] [--max-bigpool-rows N] [--sample-bytes N] [--limit N]", L"Scan kernel memory evidence rows.", L"Optional: --flags, --max-rows, --start, --end, --max-bytes, --max-bigpool-rows, --sample-bytes, --limit.", L"" },
         { L"memory", L"change-mapped-protection", L"KswordCLI.exe memory change-mapped-protection --address VA [--protection 0xN] [--flags 0xN]", L"MDL-based page protection change (HVCI research).", L"Required: --address. Optional: --protection (default PAGE_READWRITE=0x04), --flags (0x1=write test).", L"Exit 1 if a required/requested stage fails or remains pending; exit 4 for an incompatible response." },
         { L"memory", L"change-image-protection", L"KswordCLI.exe memory change-image-protection --address VA [--operation N] [--flags 0xN] [--func-addr VA]", L"MmChangeImageProtection on kernel image page (HVCI research).", L"Required: --address. Optional: --operation (1=RX, 2=READONLY_NX, default 2), --flags (0x1=write test, 0x2=restore), --func-addr (manual MmChangeImageProtection VA).", L"Exit 1 if a required/requested stage fails or remains pending; exit 4 for an incompatible response." },
-        { L"file", L"delete-path", L"KswordCLI.exe file delete-path --path PATH [--flags 0xN]", L"Delete one path through the driver.", L"Required: --path. Optional: --flags.", L"" },
+        { L"file", L"delete-path", L"KswordCLI.exe file delete-path --path PATH [--flags 0xN] --confirm", L"Delete one path through the driver.", L"Required: --path, --confirm. Optional: --flags.", L"" },
         { L"file", L"query-info", L"KswordCLI.exe file query-info --path PATH [--flags 0xN]", L"Query file object and basic file metadata.", L"Required: --path. Optional: --flags.", L"" },
         { L"file", L"set-integrity", L"KswordCLI.exe file set-integrity --path PATH (--rid RID | --level untrusted|low|medium|medium-plus|high|system) [--directory] [--flags 0xN] [--confirm]", L"Set a file or directory mandatory integrity label through R0.", L"Required: --path and one integrity selector. Optional: --directory, --flags, --confirm adds UI-confirmed protocol bit.", L"Win32/UNC paths are normalized to the driver NT path convention before IOCTL_KSWORD_ARK_SET_FILE_INTEGRITY." },
         { L"file", L"fileobject", L"KswordCLI.exe file fileobject --path PATH [--flags 0xN]", L"Alias for file query-info.", L"Required: --path. Optional: --flags.", L"Prints an alias banner before query-info output." },
@@ -1229,7 +1229,7 @@ namespace
         { L"kernel", L"patch-inline-hook", L"KswordCLI.exe kernel patch-inline-hook --mode MODE --function VA (--expected-hex HEX | --expected-file PATH) [--restore-hex HEX | --restore-file PATH] [--flags 0xN]", L"Patch or restore an inline hook using bounded byte evidence.", L"Required: --mode, --function, and expected payload. Optional: restore payload, --flags.", L"Hex and file payload forms are mutually exclusive per payload." },
         { L"kernel", L"query-driver-object", L"KswordCLI.exe kernel query-driver-object --driver NAME [--flags 0xN] [--max-devices N] [--max-attached N] [--limit N]", L"Query one DriverObject and device chain.", L"Required: --driver. Optional: --flags, --max-devices, --max-attached, --limit.", L"" },
         { L"kernel", L"query-driver-integrity", L"KswordCLI.exe kernel query-driver-integrity [--driver NAME] [--module-base VA] [--flags 0xN] [--max-rows N] [--max-idt-vectors N] [--max-devices N] [--max-attached N] [--limit N]", L"Query driver integrity evidence rows.", L"Optional: --driver, --module-base, --flags, --max-rows, --max-idt-vectors, --max-devices, --max-attached, --limit.", L"" },
-        { L"kernel", L"force-unload-driver", L"KswordCLI.exe kernel force-unload-driver --driver NAME [--module-base VA] [--timeout-ms N] [--flags 0xN]", L"Force an unload path for one driver.", L"Required: --driver. Optional: --module-base, --timeout-ms, --flags.", L"Exit 0 requires UNLOADED; routine-called/cleanup-only returns 6 and queries DriverObject presence. Print requested/effective flags and preflight evidence; detailed step statuses are in driver log." },
+        { L"kernel", L"force-unload-driver", L"KswordCLI.exe kernel force-unload-driver --driver NAME [--module-base VA] [--timeout-ms N] [--flags 0xN] --confirm", L"Force an unload path for one driver.", L"Required: --driver, --confirm. Optional: --module-base, --timeout-ms, --flags.", L"Exit 0 requires UNLOADED; routine-called/cleanup-only returns 6 and queries DriverObject presence. Print requested/effective flags and preflight evidence; detailed step statuses are in driver log." },
         { L"kernel", L"query-cpu", L"KswordCLI.exe kernel query-cpu", L"Query CPU hardware summary.", L"No options.", L"" },
         { L"kernel", L"query-phys-layout", L"KswordCLI.exe kernel query-phys-layout", L"Query physical memory layout summary.", L"No options.", L"" },
         { L"kernel", L"cid", L"KswordCLI.exe kernel cid [--flags 0xN] [--max-entries N] [--max-visits N] [--start-cid CID] [--end-cid CID] [--limit N]", L"Enumerate CID table evidence.", L"Optional: --flags, --max-entries, --max-visits, --start-cid, --end-cid, --limit.", L"" },
@@ -1246,7 +1246,7 @@ namespace
         { L"callback", L"wait-event", L"KswordCLI.exe callback wait-event [--waiter-tag N]", L"Wait for one callback event packet.", L"Optional: --waiter-tag.", L"" },
         { L"callback", L"answer-event", L"KswordCLI.exe callback answer-event --event-guid GUID --decision N --source-session-id N [--answered-at UTC100NS]", L"Answer one pending callback event.", L"Required: --event-guid, --decision, --source-session-id. Optional: --answered-at.", L"" },
         { L"callback", L"cancel-pending", L"KswordCLI.exe callback cancel-pending", L"Cancel all pending callback decisions.", L"No options.", L"" },
-        { L"callback", L"remove", L"KswordCLI.exe callback remove --class N --callback VA [--flags 0xN]", L"Remove a callback through an address-based public API path.", L"Required: --class, --callback. Object, Registry, and ETW classes are not supported by this legacy command.", L"" },
+        { L"callback", L"remove", L"KswordCLI.exe callback remove --class N --callback VA [--flags 0xN] --confirm", L"Remove a callback through an address-based public API path.", L"Required: --class, --callback, --confirm. Object, Registry, and ETW classes are not supported by this legacy command.", L"" },
         { L"callback", L"remove-ex", L"KswordCLI.exe callback remove-ex --class N --callback VA [--registration VA] [--raw-storage VA] [--generation N] [--identity-hash N] [--source N] [--operation-mask 0xN] [--object-type-mask 0xN] [--trust-flags 0xN] [--remove-behavior N] [--flags 0xN]", L"Remove an external callback with extended row identity.", L"Object removal requires every identity field copied from one verified V3 enumeration row plus revalidation flags. Registry and ETW removal are disabled.", L"" },
         { L"callback", L"set-minifilter-bypass-pids", L"KswordCLI.exe callback set-minifilter-bypass-pids --pids PID[,PID...] [--flags 0xN]", L"Set minifilter bypass PID list.", L"Required: --pids. Optional: --flags.", L"" },
         { L"callback", L"query-minifilter-bypass-pids", L"KswordCLI.exe callback query-minifilter-bypass-pids", L"Query minifilter bypass PID list.", L"No options.", L"" },
@@ -2628,6 +2628,7 @@ namespace
             KSWORD_ARK_TERMINATE_PROCESS_REQUEST request{};
             request.processId = requireOptionU32(args, L"--pid");
             request.exitStatus = static_cast<long>(getOptionU32(args, L"--exit-status", 0xC000013AUL));
+            requireConfirmOption(args, "process terminate requires --confirm");
             return runNoOutputIoctl(L"IOCTL_KSWORD_ARK_TERMINATE_PROCESS", IOCTL_KSWORD_ARK_TERMINATE_PROCESS, &request, sizeof(request));
         }
         if (sub == L"suspend")
@@ -2988,12 +2989,14 @@ namespace
         }
         if (sub == L"write-va")
         {
+            requireConfirmOption(args, "memory write-va requires --confirm");
             const std::vector<std::uint8_t> bytes = loadBytesFromHexOrFile(args, L"--hex", L"--data-file", KSWORD_ARK_MEMORY_WRITE_MAX_BYTES, true);
             if (bytes.empty()) { std::wcerr << L"error: write-va payload is empty\n"; return 1; }
             constexpr std::size_t headerSize = offsetof(KSWORD_ARK_WRITE_VIRTUAL_MEMORY_REQUEST, data);
             std::vector<std::uint8_t> input(headerSize + bytes.size(), 0U);
             auto* request = reinterpret_cast<KSWORD_ARK_WRITE_VIRTUAL_MEMORY_REQUEST*>(input.data());
-            request->flags = getOptionU32(args, L"--flags", KSWORD_ARK_MEMORY_WRITE_FLAG_UI_CONFIRMED);
+            request->flags = getOptionU32(args, L"--flags", 0U);
+            if (getOptionBool(args, L"--confirm")) request->flags |= KSWORD_ARK_MEMORY_WRITE_FLAG_UI_CONFIRMED;
             request->processId = ((request->flags & KSWORD_ARK_MEMORY_WRITE_FLAG_KERNEL_ADDRESS) != 0UL)
                 ? getOptionU32(args, L"--pid", 0U)
                 : requireOptionU32(args, L"--pid");
@@ -3046,12 +3049,14 @@ namespace
         }
         if (sub == L"write-phys")
         {
+            requireConfirmOption(args, "memory write-phys requires --confirm");
             const std::vector<std::uint8_t> bytes = loadBytesFromHexOrFile(args, L"--hex", L"--data-file", KSWORD_ARK_MEMORY_PHYSICAL_WRITE_MAX_BYTES, true);
             if (bytes.empty()) { std::wcerr << L"error: write-phys payload is empty\n"; return 1; }
             constexpr std::size_t headerSize = sizeof(KSWORD_ARK_WRITE_PHYSICAL_MEMORY_REQUEST) - sizeof(((KSWORD_ARK_WRITE_PHYSICAL_MEMORY_REQUEST*)nullptr)->data);
             std::vector<std::uint8_t> input(headerSize + bytes.size(), 0U);
             auto* request = reinterpret_cast<KSWORD_ARK_WRITE_PHYSICAL_MEMORY_REQUEST*>(input.data());
-            request->flags = getOptionU32(args, L"--flags", KSWORD_ARK_PHYSICAL_WRITE_FLAG_UI_CONFIRMED);
+            request->flags = getOptionU32(args, L"--flags", 0U);
+            if (getOptionBool(args, L"--confirm")) request->flags |= KSWORD_ARK_PHYSICAL_WRITE_FLAG_UI_CONFIRMED;
             request->physicalAddress = requireOptionU64(args, L"--address");
             request->bytesToWrite = static_cast<unsigned long>(bytes.size());
             std::copy(bytes.begin(), bytes.end(), request->data);
@@ -4987,6 +4992,7 @@ namespace
 
         if (sub == L"delete-path")
         {
+            requireConfirmOption(args, "file delete-path requires --confirm");
             KSWORD_ARK_DELETE_PATH_REQUEST request{};
             request.flags = getOptionU32(args, L"--flags", 0U);
             const std::wstring& pathText = requireOptionText(args, L"--path");
@@ -5538,6 +5544,7 @@ namespace
 
         if (sub == L"force-unload-driver")
         {
+            requireConfirmOption(args, "kernel force-unload-driver requires --confirm");
             KSWORD_ARK_FORCE_UNLOAD_DRIVER_REQUEST request{};
             KSWORD_ARK_FORCE_UNLOAD_DRIVER_RESPONSE response{};
             request.version = KSWORD_ARK_FORCE_UNLOAD_DRIVER_PROTOCOL_VERSION;
@@ -6005,6 +6012,7 @@ namespace
         }
         if (sub == L"remove")
         {
+            requireConfirmOption(args, "callback remove requires --confirm");
             KSWORD_ARK_REMOVE_EXTERNAL_CALLBACK_REQUEST request{};
             KSWORD_ARK_REMOVE_EXTERNAL_CALLBACK_RESPONSE response{};
             request.size = sizeof(request);

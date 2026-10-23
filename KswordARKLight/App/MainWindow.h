@@ -185,10 +185,14 @@ private:
         std::mutex mutex;
         std::condition_variable idle;
         std::atomic_size_t pending{0};
+        // finalReleaseChecked is set only after a release really completed, so
+        // a failed release stays retryable and the next attempt runs it again.
         bool finalReleaseChecked = false;
-        bool finalStopRequired = false;
-        bool finalSucceeded = true;
-        Ksword::Core::DriverRuntimeStatus finalStatus;
+        // finalRelease carries the three-state outcome of the last release
+        // attempt: the driver was stopped, no stop was needed, or the release
+        // failed and the error explains why. It is the only source of truth
+        // for the exit decision.
+        Ksword::Core::DriverLeaseRelease finalRelease;
     };
     struct DriverControlResult {
         Ksword::Core::DriverRuntimeStatus status;

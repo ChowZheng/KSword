@@ -106,7 +106,20 @@ SharedLeaseState* State(void* shared) noexcept {
 
 DriverLease::~DriverLease() {
     if (!released_) {
-        (void)releaseRequestsStop();
+        // The owner never completed the release. The shared registry entry must
+        // not outlive this process, and a Light-owned driver that this process
+        // was the last live lease of must not survive it. The result cannot be
+        // reported to a user from a destructor, so it goes to the debugger.
+        try {
+            const DriverLeaseRelease release = releaseRequestsStop();
+            if (!release.ok()) {
+                ::OutputDebugStringW(L"[KswordARKLight] Driver lease release failed during teardown: ");
+                ::OutputDebugStringW(release.error.c_str());
+                ::OutputDebugStringW(L"\r\n");
+            }
+        } catch (...) {
+            ::OutputDebugStringW(L"[KswordARKLight] Driver lease release raised an exception during teardown.\r\n");
+        }
     }
     closeHandles();
 }
@@ -115,33 +128,42 @@ bool DriverLease::acquire() {
     if (registered_) {
         return true;
     }
-    released_ = false;
     processId_ = ::GetCurrentProcessId();
     processCreationTime100ns_ = ProcessCreationTime(::GetCurrentProcess());
     if (processCreationTime100ns_ == 0) {
         return false;
     }
 
-    mutex_ = ::CreateMutexW(nullptr, FALSE, kLeaseMutexName);
+    // The lease object can be reused after a completed release, for example
+    // when an exit was cancelled and the session continued. The existing
+    // handles stay open so the named shared state is never dropped, and the
+    // registry entry of this process is registered again in it.
     if (!mutex_) {
-        closeHandles();
-        return false;
+        mutex_ = ::CreateMutexW(nullptr, FALSE, kLeaseMutexName);
+        if (!mutex_) {
+            closeHandles();
+            return false;
+        }
     }
-    mapping_ = ::CreateFileMappingW(
-        INVALID_HANDLE_VALUE,
-        nullptr,
-        PAGE_READWRITE,
-        0,
-        static_cast<DWORD>(sizeof(SharedLeaseState)),
-        kLeaseMappingName);
     if (!mapping_) {
-        closeHandles();
-        return false;
+        mapping_ = ::CreateFileMappingW(
+            INVALID_HANDLE_VALUE,
+            nullptr,
+            PAGE_READWRITE,
+            0,
+            static_cast<DWORD>(sizeof(SharedLeaseState)),
+            kLeaseMappingName);
+        if (!mapping_) {
+            closeHandles();
+            return false;
+        }
     }
-    shared_ = ::MapViewOfFile(mapping_, FILE_MAP_READ | FILE_MAP_WRITE, 0, 0, sizeof(SharedLeaseState));
     if (!shared_) {
-        closeHandles();
-        return false;
+        shared_ = ::MapViewOfFile(mapping_, FILE_MAP_READ | FILE_MAP_WRITE, 0, 0, sizeof(SharedLeaseState));
+        if (!shared_) {
+            closeHandles();
+            return false;
+        }
     }
 
     bool acquired = false;
@@ -168,6 +190,13 @@ bool DriverLease::acquire() {
         closeHandles();
         return false;
     }
+    // A successful registration starts a fresh ownership cycle. Any stop
+    // obligation of an earlier cycle is dropped here, because that cycle's
+    // registry entry is gone and the new entry is re-evaluated against the
+    // shared state when this cycle is released.
+    stopRequired_ = false;
+    stopCompleted_ = false;
+    released_ = false;
     registered_ = true;
     return true;
 }
@@ -200,20 +229,31 @@ void DriverLease::observeExplicitStop() {
     }
 }
 
-bool DriverLease::releaseRequestsStop() {
-    if (released_) {
-        return false;
-    }
-    released_ = true;
-    if (!registered_ || !shared_) {
-        registered_ = false;
-        return false;
+DriverLeaseRelease DriverLease::releaseRequestsStop() {
+    DriverLeaseRelease result;
+    result.outcome = DriverLeaseReleaseOutcome::Failed;
+
+    // A previous attempt may have removed the registry entry but still owe a
+    // driver stop. That obligation survives here so a retry finishes it.
+    const bool stopPending = stopRequired_ && !stopCompleted_;
+    if (!registered_ && !stopPending) {
+        // Nothing was ever registered, or an earlier attempt already released
+        // the lease. There is no registry entry and no driver stop to make.
+        released_ = true;
+        result.outcome = DriverLeaseReleaseOutcome::NotNeeded;
+        return result;
     }
 
-    bool shouldStop = false;
-    {
-        MutexGuard guard(mutex_);
-        if (guard.locked()) {
+    if (registered_) {
+        bool shouldStop = false;
+        {
+            MutexGuard guard(mutex_);
+            if (!guard.locked()) {
+                // The registry was not touched, so the release stays pending
+                // and the next attempt can retry it.
+                result.error = L"释放驱动租约失败：等待租约互斥体超时（5 秒）";
+                return result;
+            }
             SharedLeaseState& state = *State(shared_);
             InitializeIfNeeded(state);
             for (LeaseEntry& entry : state.leases) {
@@ -223,13 +263,54 @@ bool DriverLease::releaseRequestsStop() {
             }
             const std::size_t remaining = CompactLiveLeases(state);
             shouldStop = DriverLeasePolicy::ShouldStopOnLastRelease(state.driverOwnedByLight != 0U, remaining);
-            if (shouldStop) {
-                state.driverOwnedByLight = 0U;
+        }
+        // The registry really no longer lists this process. The ownership flag
+        // is cleared only after a confirmed stop, so a failed stop stays
+        // visible to the next attempt.
+        registered_ = false;
+        stopRequired_ = stopRequired_ || shouldStop;
+    }
+
+    bool stopRequested = false;
+    if (stopRequired_ && !stopCompleted_) {
+        if (!ksword::ark::queryServiceProfile().scmManagementAllowed()) {
+            // This profile does not allow SCM control, so there is no stop to
+            // perform here and nothing failed.
+            stopCompleted_ = true;
+        } else {
+            DriverRuntimeStatus status = QueryDriverStatus();
+            if (status.serviceRunning || status.controlDeviceOpen) {
+                status = StopDriverService();
+                stopRequested = true;
+            }
+            result.status = status;
+            if (status.serviceRunning || status.controlDeviceOpen) {
+                // The driver is still loaded. The stop obligation stays open so
+                // the caller can retry it.
+                result.error = L"驱动仍在运行：停止驱动服务失败";
+                return result;
+            }
+            stopCompleted_ = true;
+            {
+                MutexGuard guard(mutex_);
+                if (guard.locked() && shared_) {
+                    SharedLeaseState& state = *State(shared_);
+                    InitializeIfNeeded(state);
+                    // Another live lease may have joined while the stop was in
+                    // flight. Its own release owns the stop then, so the shared
+                    // ownership flag stays set and is not stolen here.
+                    if (CompactLiveLeases(state) == 0) {
+                        state.driverOwnedByLight = 0U;
+                    }
+                }
             }
         }
     }
-    registered_ = false;
-    return shouldStop && ksword::ark::queryServiceProfile().scmManagementAllowed();
+
+    released_ = true;
+    result.outcome = stopRequested ? DriverLeaseReleaseOutcome::Stopped
+                                   : DriverLeaseReleaseOutcome::NotNeeded;
+    return result;
 }
 
 void DriverLease::closeHandles() noexcept {
