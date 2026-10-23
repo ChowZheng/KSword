@@ -967,7 +967,8 @@ bool RegisterAuditViewClass() {
             ::GetClientRect(hwnd, &rc);
             ::FillRect(dc, &rc, Ksword::Ui::AppTheme().panelBrush());
             const int textLeft = state && state->pageId == MiscAuditPageId::Bugcheck ? kGap + 344 : kGap + 210;
-            RECT textRc{ textLeft, 7, rc.right - kGap, kHeaderHeight };
+            // 与工具按钮同一行（y 6..30），不要吃到 y=34 的筛选框。
+            RECT textRc{ textLeft, kGap, rc.right - kGap, kGap + 24 };
             const std::wstring text = state ? (state->title + L" - " + state->statusText) : L"Misc audit";
             Ksword::Ui::DrawTextLine(dc, text, textRc, Ksword::Ui::AppTheme().mutedTextColor, Ksword::Ui::SystemUIFont(), DT_SINGLELINE | DT_LEFT | DT_VCENTER);
             ::EndPaint(hwnd, &ps);

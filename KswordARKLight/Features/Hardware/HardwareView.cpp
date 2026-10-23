@@ -859,7 +859,8 @@ bool RegisterHardwareViewClass() {
             RECT rc{};
             ::GetClientRect(hwnd, &rc);
             ::FillRect(dc, &rc, Ksword::Ui::AppTheme().panelBrush());
-            RECT textRc{ 104, 7, rc.right - kGap, kHeaderHeight };
+            // 状态文字和刷新按钮同一行；原来的 y 下界给到 kHeaderHeight，正好被 y=35 的筛选框盖住。
+            RECT textRc{ 104, kGap, rc.right - kGap, kGap + 24 };
             const std::wstring title = state ? state->statusText : L"Device manager";
             Ksword::Ui::DrawTextLine(dc, title, textRc, Ksword::Ui::AppTheme().mutedTextColor,
                 Ksword::Ui::SystemUIFont(), DT_SINGLELINE | DT_LEFT | DT_VCENTER);

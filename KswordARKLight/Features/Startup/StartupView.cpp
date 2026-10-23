@@ -855,7 +855,10 @@ bool RegisterStartupViewClass() {
             RECT rc{};
             ::GetClientRect(hwnd, &rc);
             ::FillRect(dc, &rc, Ksword::Ui::AppTheme().panelBrush());
-            RECT textRc{ 430, 7, rc.right - kGap, 31 };
+            // 第一行按钮：kGap 起、步进 84、宽 78，最后一个「打开」宽 94，
+            // 右边界 = 6 + 84*4 + 94 = 436。这里原来从 430 起画，首字符被按钮
+            // 压掉 6px，改成 442 留 6px 间距。
+            RECT textRc{ 442, 7, rc.right - kGap, 31 };
             Ksword::Ui::DrawTextLine(dc, state ? state->statusText : L"启动项", textRc, Ksword::Ui::AppTheme().mutedTextColor,
                 Ksword::Ui::SystemUIFont(), DT_SINGLELINE | DT_LEFT | DT_VCENTER | DT_END_ELLIPSIS);
             ::EndPaint(hwnd, &ps);

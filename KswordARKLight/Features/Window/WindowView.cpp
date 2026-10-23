@@ -2075,7 +2075,9 @@ bool RegisterWindowViewClass() {
             ::GetClientRect(hwnd, &rc);
             ::FillRect(dc, &rc, Ksword::Ui::AppTheme().panelBrush());
             const int leftWidth = (std::max)(1, (Width(rc) - kGap * 3) * 2 / 3);
-            RECT textRc{ 510, 7, kGap + leftWidth, kHeaderHeight };
+            // 第一行控件（下拉框 + 刷新/导出）结束于 x=510，状态文字接在同一行；
+            // 原来 p 到 kHeaderHeight 会被 y=66 的筛选框压住半行。
+            RECT textRc{ 510, kGap, kGap + leftWidth, kGap + 24 };
             const std::wstring title = state ? state->statusText : L"Windows";
             Ksword::Ui::DrawTextLine(dc, title, textRc, Ksword::Ui::AppTheme().mutedTextColor,
                 Ksword::Ui::SystemUIFont(), DT_SINGLELINE | DT_LEFT | DT_VCENTER);

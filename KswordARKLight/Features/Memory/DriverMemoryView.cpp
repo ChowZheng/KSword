@@ -467,7 +467,9 @@ void LayoutChildren(DriverMemoryViewState& state, const RECT& rc) {
     const int historyHeight = 112;
     const int hexHeight = std::max(64, height - hexTop - statusHeight - historyHeight - (margin * 2) - (gap * 3));
     const int contentWidth = std::max(100, width - margin * 2);
-    ::MoveWindow(state.historyFilter, margin, filterTop, contentWidth, editHeight, TRUE);
+    // 标签「操作历史筛选」画在 x 12..92，筛选框让开这段，从 100 起。
+    const int historyLabelWidth = 88;
+    ::MoveWindow(state.historyFilter, margin + historyLabelWidth, filterTop, std::max(100, contentWidth - historyLabelWidth), editHeight, TRUE);
     ::MoveWindow(state.hexEdit, margin, hexTop, contentWidth, hexHeight, TRUE);
     ::MoveWindow(state.statusEdit, margin, hexTop + hexHeight + gap, contentWidth, statusHeight, TRUE);
     const int historyTop = hexTop + hexHeight + gap + statusHeight + gap;
@@ -490,11 +492,15 @@ void PaintLabels(HWND hwnd, HDC dc) {
     RECT pid{ 12, 38, 70, 62 };
     RECT address{ 200, 38, 272, 62 };
     RECT length{ 472, 38, 544, 62 };
-    RECT filter{ 12, 96, rc.right - 12, 118 };
+    // 历史筛选框和它的标签同一行：标签在左、框在右。
+    // 行高关系：输入行 38 -> 按钮行 70 -> 筛选行 102（38+24+8 与 70+24+8）。
+    // 这里原来把标签画在 y 96..118，而筛选框在 y 102..126，标签整行落在框里，
+    // 两段文字叠在一起。
+    RECT filter{ 12, 102, 92, 126 };
     Ksword::Ui::DrawTextLine(dc, L"PID", pid, muted, Ksword::Ui::SystemUIFont(), DT_LEFT | DT_VCENTER | DT_SINGLELINE);
     Ksword::Ui::DrawTextLine(dc, L"地址 HEX", address, muted, Ksword::Ui::SystemUIFont(), DT_LEFT | DT_VCENTER | DT_SINGLELINE);
     Ksword::Ui::DrawTextLine(dc, L"长度 字节", length, muted, Ksword::Ui::SystemUIFont(), DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-    Ksword::Ui::DrawTextLine(dc, L"操作历史筛选（匹配全部列和状态）", filter, muted, Ksword::Ui::SystemUIFont(), DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    Ksword::Ui::DrawTextLine(dc, L"操作历史筛选", filter, muted, Ksword::Ui::SystemUIFont(), DT_LEFT | DT_VCENTER | DT_SINGLELINE);
     const DriverMemoryViewState* state = StateFromWindow(hwnd);
     const std::wstring snapshotText = state && state->snapshots.current()
         ? L"读取快照 " + std::to_wstring(state->snapshots.currentPosition()) + L"/" + std::to_wstring(state->snapshots.size()) + L"（右键检视/导出；差异写回已冻结目标）"
