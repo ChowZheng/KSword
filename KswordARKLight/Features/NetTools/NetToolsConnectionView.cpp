@@ -298,7 +298,12 @@ void BuildRows(ConnectionViewState& state) {
         rows.push_back(std::move(row));
     }
     auto filterRows = std::make_shared<std::vector<Ksword::Ui::VirtualListRow>>(std::move(rows));
-    state.connectionList.setRows(*filterRows);
+    // The visible set is reset to the full range and re-filtered right after this
+    // call; holding the lock hides that intermediate unfiltered frame.
+    {
+        Ksword::Ui::ScopedListViewRedrawLock listRedraw(state.connectionList.hwnd());
+        state.connectionList.setRows(*filterRows);
+    }
     state.filterRows = std::move(filterRows);
     ++state.displayGeneration;
 }

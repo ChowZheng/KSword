@@ -1082,12 +1082,18 @@ void PopulateList(WindowViewState* state) {
     if (!state || !state->windowList || !state->filterRows) {
         return;
     }
-    if (state->viewMode != WindowViewMode::WindowList) {
-        ConfigureAuditColumns(state);
-    } else {
-        ConfigureWindowColumns(state);
+    // Column reconfiguration and snapshot replacement each repaint the control,
+    // so without the lock the user sees an intermediate frame with the new rows
+    // and the old columns. The filter request below runs after the lock is gone.
+    {
+        Ksword::Ui::ScopedListViewRedrawLock listRedraw(state->virtualList.hwnd());
+        if (state->viewMode != WindowViewMode::WindowList) {
+            ConfigureAuditColumns(state);
+        } else {
+            ConfigureWindowColumns(state);
+        }
+        state->virtualList.setSharedRows(state->filterRows);
     }
-    state->virtualList.setSharedRows(state->filterRows);
     RequestWindowFilter(state, state->filterBar ? Ksword::Ui::GetFilterBarText(state->filterBar) : state->filterQuery);
 }
 

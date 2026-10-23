@@ -740,8 +740,13 @@ void PopulateList(RegistryViewState& state) {
         };
         rows->push_back(std::move(displayRow));
     }
-    state.list.setRows(*rows);
-    state.list.setVisibleIndexes({});
+    // Holding the redraw lock keeps the control from painting the freshly loaded
+    // rows with the previous filter's visible set before the filter request lands.
+    {
+        Ksword::Ui::ScopedListViewRedrawLock listRedraw(state.list.hwnd());
+        state.list.setRows(*rows);
+        state.list.setVisibleIndexes({});
+    }
     state.filterRows = std::move(rows);
     ++state.displayGeneration;
     RequestValueFilter(state,
