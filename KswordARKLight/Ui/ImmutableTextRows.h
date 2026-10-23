@@ -61,6 +61,18 @@ public:
     void push_back(Row&& row) { detach(); rows_->push_back(std::make_shared<const Row>(std::move(row))); }
     Snapshot snapshot() const noexcept { return rows_; }
 
+    // adopt takes over an already frozen row vector instead of rebuilding it row
+    // by row: every RowRef aliases one element of the shared vector, so no cell
+    // text is copied. The adopted vector also becomes the contiguous snapshot,
+    // which keeps a later operator const Values& / contiguousSnapshot() read
+    // free. The caller must not mutate the vector after hand-off.
+    void adopt(std::shared_ptr<const Values> values) {
+        if(!values){clear();return;}
+        auto refs=std::make_shared<Refs>();refs->reserve(values->size());
+        for(const auto& row:*values) refs->push_back(RowRef(values,&row));
+        rows_=std::move(refs);flat_=std::move(values);
+    }
+
     static ImmutableTextRows reorder(const Snapshot& source, const std::vector<std::size_t>& order) {
         ImmutableTextRows value;
         value.rows_=std::make_shared<Refs>();

@@ -1729,7 +1729,7 @@ LRESULT KernelPage::HandleMessage(HWND hwnd, const UINT msg, const WPARAM wParam
                 (!currentRawColumns_.empty() || pendingProjectionSources_.contains(descriptor->id))) {
                 if(KernelUsesValueProjection(descriptor->id)){RequestCachedValueProjection(descriptor->id);return 0;}
                 currentColumns_ = currentRawColumns_;
-                currentRows_ = *currentRawRows_;
+                currentRows_.adopt(currentRawRows_);
                 RebuildObjectNamespaceListFromCache(descriptor->id);
                 ConfigureVisibleLayout();
                 InvalidateCurrentFeatureViewCache();
@@ -1744,7 +1744,7 @@ LRESULT KernelPage::HandleMessage(HWND hwnd, const UINT msg, const WPARAM wParam
                 (!currentRawColumns_.empty() || pendingProjectionSources_.contains(descriptor->id))) {
                 if(KernelUsesValueProjection(descriptor->id)){RequestCachedValueProjection(descriptor->id);return 0;}
                 currentColumns_ = currentRawColumns_;
-                currentRows_ = *currentRawRows_;
+                currentRows_.adopt(currentRawRows_);
                 RebuildObjectNamespaceListFromCache(descriptor->id);
                 ConfigureVisibleLayout();
                 InvalidateCurrentFeatureViewCache();
@@ -1758,7 +1758,7 @@ LRESULT KernelPage::HandleMessage(HWND hwnd, const UINT msg, const WPARAM wParam
                 (!currentRawColumns_.empty() || pendingProjectionSources_.contains(descriptor->id))) {
                 if(KernelUsesValueProjection(descriptor->id)){RequestCachedValueProjection(descriptor->id);return 0;}
                 currentColumns_ = currentRawColumns_;
-                currentRows_ = *currentRawRows_;
+                currentRows_.adopt(currentRawRows_);
                 if (descriptor->id == KernelFeatureId::KernelExecutableMemory ||
                     descriptor->id == KernelFeatureId::KernelMemoryEvidence) {
                     RebuildKernelMemoryScanListFromCache(descriptor->id);
@@ -6199,7 +6199,7 @@ void KernelPage::ApplyCachedFilter(const KernelFeatureId featureId) {
     }
     if(KernelUsesValueProjection(featureId)) { RequestCachedValueProjection(featureId); return; }
     currentColumns_ = currentRawColumns_;
-    currentRows_ = *currentRawRows_;
+    currentRows_.adopt(currentRawRows_);
     if (IsObjectNamespaceFeature(descriptor->id)) {
         RebuildObjectNamespaceListFromCache(descriptor->id);
     } else if (descriptor->id == KernelFeatureId::AtomTable) {

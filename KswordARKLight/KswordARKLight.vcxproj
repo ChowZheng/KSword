@@ -239,6 +239,7 @@
     <ClCompile Include="Ui\TabUtil.cpp" />
     <ClCompile Include="Ui\TextFindSupport.cpp" />
     <ClCompile Include="Ui\Theme.cpp" />
+    <ClCompile Include="Ui\Dpi.cpp" />
     <ClCompile Include="Ui\LazyTreeView.cpp" />
     <ClCompile Include="Ui\TreeViewUtil.cpp" />
     <ClCompile Include="Ui\VirtualListView.cpp" />
@@ -468,6 +469,7 @@
     <ClInclude Include="Ui\TabUtil.h" />
     <ClInclude Include="Ui\TextFindSupport.h" />
     <ClInclude Include="Ui\Theme.h" />
+    <ClInclude Include="Ui\Dpi.h" />
     <ClInclude Include="Ui\LazyTreeView.h" />
     <ClInclude Include="Ui\TreeViewUtil.h" />
     <ClInclude Include="Ui\VirtualListView.h" />

@@ -15,6 +15,7 @@
 #include "../Features/Window/WindowFeature.h"
 #include "../Ui/Controls.h"
 #include "../Ui/AsyncTask.h"
+#include "../Ui/Dpi.h"
 #include "../Ui/EntityNavigation.h"
 #include "../Ui/EvidenceSession.h"
 #include "../Ui/EvidenceSessionView.h"
@@ -47,19 +48,31 @@ constexpr int kEvidenceJsonRawMenuId = 1101;
 constexpr int kEvidenceTsvPrivacyMenuId = 1102;
 constexpr int kEvidenceDiffMenuId = 1103;
 constexpr int kEvidenceClearMenuId = 1104;
-constexpr int kCommandEditWidth = 320;
-constexpr int kCommandEditHeight = 22;
-constexpr int kCommandEditMenuGap = 8;
-constexpr int kNavigationPaletteWidth = 560;
-constexpr int kNavigationPaletteHeight = 440;
-// 22px is the shared page-level status height; the shell status line and its
-// separator now use the same value so the closing footer and the normal footer
-// do not disagree about where the work area ends.
-constexpr int kStatusHeight = 22;
+// 外壳层的尺寸一律以 96 DPI 的 DIP 书写，取值时再按当前 DPI 换算成像素。
+// 保留 Dips 常量、另给访问函数，是为了让"逻辑尺寸"和"物理尺寸"在代码里一眼
+// 分得开：写死像素在 Per-Monitor V2 下会直接错位。
+constexpr int kCommandEditWidthDips = 320;
+constexpr int kCommandEditHeightDips = 22;
+constexpr int kCommandEditMenuGapDips = 8;
+constexpr int kNavigationPaletteWidthDips = 560;
+constexpr int kNavigationPaletteHeightDips = 440;
+// The shared page-level status height; the shell status line and its separator
+// now use the same value so the closing footer and the normal footer do not
+// disagree about where the work area ends.
+constexpr int kStatusHeightDips = 22;
 // Smallest window that still shows the menu bar, the command box, one module
 // tab group and the closing buttons without pages collapsing to zero height.
-constexpr int kMinimumWindowWidth = 720;
-constexpr int kMinimumWindowHeight = 480;
+constexpr int kMinimumWindowWidthDips = 720;
+constexpr int kMinimumWindowHeightDips = 480;
+
+inline int CommandEditWidth() { return Ksword::Ui::Scale(kCommandEditWidthDips); }
+inline int CommandEditHeight() { return Ksword::Ui::Scale(kCommandEditHeightDips); }
+inline int CommandEditMenuGap() { return Ksword::Ui::Scale(kCommandEditMenuGapDips); }
+inline int NavigationPaletteWidth() { return Ksword::Ui::Scale(kNavigationPaletteWidthDips); }
+inline int NavigationPaletteHeight() { return Ksword::Ui::Scale(kNavigationPaletteHeightDips); }
+inline int StatusHeight() { return Ksword::Ui::Scale(kStatusHeightDips); }
+inline int MinimumWindowWidth() { return Ksword::Ui::Scale(kMinimumWindowWidthDips); }
+inline int MinimumWindowHeight() { return Ksword::Ui::Scale(kMinimumWindowHeightDips); }
 constexpr int kWindowMenuDockBaseId = 42000;
 constexpr int kProcessModuleCommandId = 40001;
 constexpr int kMemoryModuleCommandId = 40002;
@@ -439,8 +452,33 @@ LRESULT MainWindow::handleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
         // the closing buttons, so every page keeps a usable work area.
         auto* info = reinterpret_cast<MINMAXINFO*>(lParam);
         if (info) {
-            info->ptMinTrackSize.x = kMinimumWindowWidth;
-            info->ptMinTrackSize.y = kMinimumWindowHeight;
+            info->ptMinTrackSize.x = MinimumWindowWidth();
+            info->ptMinTrackSize.y = MinimumWindowHeight();
+        }
+        return 0;
+    }
+    case WM_DPICHANGED: {
+        // Per-Monitor V2: the frame gets this when it lands on a monitor with a
+        // different scale. Publish the new DPI first, because every layout that
+        // runs below resolves against it, then take the size the system suggests.
+        // Child pages need no message of their own: the resize reaches them as
+        // WM_SIZE and their layout pass rescales with everything else.
+        const UINT dpi = HIWORD(wParam);
+        const RECT* suggested = reinterpret_cast<const RECT*>(lParam);
+        const bool changed = dpi != 0 && dpi != Ksword::Ui::CurrentDpi();
+        Ksword::Ui::SetCurrentDpi(dpi);
+        if (changed) {
+            Ksword::Ui::RefreshSystemUIFont();
+            Ksword::Ui::SetWindowFontRecursive(hwnd);
+        }
+        if (suggested) {
+            ::SetWindowPos(hwnd, nullptr, suggested->left, suggested->top,
+                suggested->right - suggested->left, suggested->bottom - suggested->top,
+                SWP_NOZORDER | SWP_NOACTIVATE);
+        }
+        if (changed) {
+            layout();
+            ::InvalidateRect(hwnd, nullptr, TRUE);
         }
         return 0;
     }
@@ -651,7 +689,7 @@ void MainWindow::createCommandInput() {
     // replacing the existing HMENU-based shell.
     commandEdit_ = ::CreateWindowExW(WS_EX_TOOLWINDOW, L"EDIT", L"",
         WS_POPUP | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL,
-        0, 0, kCommandEditWidth, kCommandEditHeight,
+        0, 0, CommandEditWidth(), CommandEditHeight(),
         hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kCommandEditId)), instance_, nullptr);
     if (!commandEdit_) {
         return;
@@ -721,7 +759,7 @@ void MainWindow::showNavigationPalette() {
     if (!navigationPalette_ || !::IsWindow(navigationPalette_)) {
         HWND palette = ::CreateWindowExW(WS_EX_TOOLWINDOW, WC_LISTBOXW, L"",
             WS_POPUP | WS_BORDER | WS_VSCROLL | LBS_NOTIFY | LBS_NOINTEGRALHEIGHT,
-            0, 0, kNavigationPaletteWidth, kNavigationPaletteHeight,
+            0, 0, NavigationPaletteWidth(), NavigationPaletteHeight(),
             hwnd_, nullptr, instance_, nullptr);
         if (!palette) {
             if (statusText_) {
@@ -758,8 +796,8 @@ void MainWindow::showNavigationPalette() {
     const int workTop = static_cast<int>(work.top);
     const int workRight = static_cast<int>(work.right);
     const int workBottom = static_cast<int>(work.bottom);
-    const int width = (std::min)(kNavigationPaletteWidth, (std::max)(1, workRight - workLeft - 16));
-    const int height = (std::min)(kNavigationPaletteHeight, (std::max)(1, workBottom - workTop - 16));
+    const int width = (std::min)(NavigationPaletteWidth(), (std::max)(1, workRight - workLeft - 16));
+    const int height = (std::min)(NavigationPaletteHeight(), (std::max)(1, workBottom - workTop - 16));
     int x = static_cast<int>(anchor.left);
     int y = static_cast<int>(anchor.bottom) + 3;
     if (x + width > workRight) {
@@ -836,7 +874,7 @@ void MainWindow::activateNavigationPaletteSelection() {
 }
 
 void MainWindow::createChildControls() {
-    statusText_ = Ksword::Ui::CreateText(hwnd_, kStatusTextId, L"Ready", 0, 0, 900, kStatusHeight);
+    statusText_ = Ksword::Ui::CreateText(hwnd_, kStatusTextId, L"Ready", 0, 0, 900, StatusHeight());
     closeRetryButton_ = Ksword::Ui::CreateButton(hwnd_, kCloseRetryId, L"重试 / Retry", 0, 0, 90, 26);
     closeCancelButton_ = Ksword::Ui::CreateButton(hwnd_, kCloseCancelId, L"取消退出 / Cancel", 0, 0, 130, 26);
     ::ShowWindow(closeRetryButton_, SW_HIDE);
@@ -1117,14 +1155,14 @@ void MainWindow::positionCommandInput() {
     }
 
     const int menuHeight = topmostRect.bottom - topmostRect.top;
-    const int editHeight = (menuHeight > 6) ? (menuHeight - 4) : kCommandEditHeight;
-    int x = topmostRect.left - kCommandEditMenuGap - kCommandEditWidth;
+    const int editHeight = (menuHeight > 6) ? (menuHeight - 4) : CommandEditHeight();
+    int x = topmostRect.left - CommandEditMenuGap() - CommandEditWidth();
     const int minX = windowRect.left + 160;
     if (x < minX) {
         x = minX;
     }
     const int y = topmostRect.top + ((menuHeight - editHeight) / 2);
-    ::SetWindowPos(commandEdit_, HWND_TOP, x, y, kCommandEditWidth, editHeight,
+    ::SetWindowPos(commandEdit_, HWND_TOP, x, y, CommandEditWidth(), editHeight,
         SWP_NOACTIVATE | SWP_SHOWWINDOW);
 }
 
@@ -1494,15 +1532,16 @@ void MainWindow::layout() {
 
     const bool closing = closePhase_ != ClosePhase::Open;
     const bool narrowClosing = closing && width < 600;
-    const int footerHeight = closing ? (narrowClosing ? 66 : 40) : kStatusHeight;
+    const int footerHeight = closing ? (narrowClosing ? 66 : 40) : StatusHeight();
     ::MoveWindow(statusText_, closing ? 6 : 0, height - footerHeight + (closing ? (narrowClosing ? 4 : 10) : 0),
-        std::max(0, width - (closing ? (narrowClosing ? 12 : 250) : 0)), kStatusHeight, TRUE);
+        std::max(0, width - (closing ? (narrowClosing ? 12 : 250) : 0)), StatusHeight(), TRUE);
     if (closing) {
         const int buttonY = height - 33;
         const int retryWidth = std::min(90, std::max(0, (width - 18) * 2 / 5));
         const int cancelWidth = std::min(136, std::max(0, width - 18 - retryWidth));
-        ::MoveWindow(closeRetryButton_, std::max(6, width - retryWidth - cancelWidth - 12), buttonY, retryWidth, 26, TRUE);
-        ::MoveWindow(closeCancelButton_, std::max(6, width - cancelWidth - 6), buttonY, cancelWidth, 26, TRUE);
+        const int closeButtonHeight = Ksword::Ui::Scale(26);
+        ::MoveWindow(closeRetryButton_, std::max(6, width - retryWidth - cancelWidth - 12), buttonY, retryWidth, closeButtonHeight, TRUE);
+        ::MoveWindow(closeCancelButton_, std::max(6, width - cancelWidth - 6), buttonY, cancelWidth, closeButtonHeight, TRUE);
     }
 
     RECT dockBounds{
@@ -1880,8 +1919,8 @@ void MainWindow::paint(HDC dc) {
 
     HPEN border = ::CreatePen(PS_SOLID, 1, Ksword::Ui::AppTheme().borderColor);
     HGDIOBJ oldPen = ::SelectObject(dc, border);
-    ::MoveToEx(dc, 0, rc.bottom - kStatusHeight, nullptr);
-    ::LineTo(dc, rc.right, rc.bottom - kStatusHeight);
+    ::MoveToEx(dc, 0, rc.bottom - StatusHeight(), nullptr);
+    ::LineTo(dc, rc.right, rc.bottom - StatusHeight());
     ::SelectObject(dc, oldPen);
     ::DeleteObject(border);
 }

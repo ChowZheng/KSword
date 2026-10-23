@@ -1,5 +1,6 @@
 #include "Controls.h"
 
+#include "Dpi.h"
 #include "Theme.h"
 
 #include <commctrl.h>
@@ -8,15 +9,40 @@ namespace Ksword::Ui {
 namespace {
 HFONT gSystemUIFont = nullptr;
 
-// CreateSystemUIFont queries the active Windows non-client message font. Input is
-// none; processing asks SystemParametersInfoW for NONCLIENTMETRICS; output is a
-// newly created HFONT or DEFAULT_GUI_FONT fallback if the API fails.
+using SystemParametersInfoForDpiFn = BOOL(WINAPI*)(UINT, UINT, PVOID, UINT, UINT);
+
+// ResolveSystemParametersInfoForDpi looks the API up lazily: it exists from
+// Windows 10 1607, and importing it statically would stop the binary from loading
+// on older builds.
+SystemParametersInfoForDpiFn ResolveSystemParametersInfoForDpi() {
+    static SystemParametersInfoForDpiFn cached = []() -> SystemParametersInfoForDpiFn {
+        const HMODULE user32 = ::GetModuleHandleW(L"user32.dll");
+        if (!user32) {
+            return nullptr;
+        }
+        return reinterpret_cast<SystemParametersInfoForDpiFn>(
+            reinterpret_cast<void*>(::GetProcAddress(user32, "SystemParametersInfoForDpi")));
+    }();
+    return cached;
+}
+
+// CreateSystemUIFont queries the non-client message font at the DPI the layout is
+// currently authored against. SystemParametersInfoW answers for the *system* DPI,
+// which is wrong under Per-Monitor V2 on a differently scaled monitor: the layout
+// would rescale while the text would not, and every fixed-height row would clip.
+// Output is a newly created HFONT or the DEFAULT_GUI_FONT fallback.
 HFONT CreateSystemUIFont() {
     NONCLIENTMETRICSW metrics{};
     metrics.cbSize = sizeof(metrics);
-    if (::SystemParametersInfoW(SPI_GETNONCLIENTMETRICS, metrics.cbSize, &metrics, 0)) {
-        HFONT font = ::CreateFontIndirectW(&metrics.lfMessageFont);
-        if (font) {
+    bool queried = false;
+    if (const SystemParametersInfoForDpiFn forDpi = ResolveSystemParametersInfoForDpi()) {
+        queried = forDpi(SPI_GETNONCLIENTMETRICS, metrics.cbSize, &metrics, 0, CurrentDpi()) != FALSE;
+    }
+    if (!queried) {
+        queried = ::SystemParametersInfoW(SPI_GETNONCLIENTMETRICS, metrics.cbSize, &metrics, 0) != FALSE;
+    }
+    if (queried) {
+        if (HFONT font = ::CreateFontIndirectW(&metrics.lfMessageFont)) {
             return font;
         }
     }

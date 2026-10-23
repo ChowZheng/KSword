@@ -1,6 +1,7 @@
 #include "DockManager.h"
 
 #include "../Ui/Controls.h"
+#include "../Ui/Dpi.h"
 #include "../Ui/Theme.h"
 
 #include <sstream>
@@ -13,14 +14,25 @@ constexpr wchar_t kDockManagerClass[] = L"KswordARKLight.DockManager";
 constexpr wchar_t kFloatingClass[] = L"KswordARKLight.DockFloating";
 constexpr wchar_t kOverlayClass[] = L"KswordARKLight.DockOverlay";
 constexpr COLORREF kOverlayTransparentColor = RGB(255, 0, 255);
-constexpr int kTabHeight = 22;
-constexpr int kTabMinWidth = 52;
-constexpr int kTabMaxWidth = 120;
-constexpr int kOverflowWidth = 34;
-constexpr int kSplitterSize = 4;
-constexpr int kDragThreshold = 6;
-constexpr int kFloatingWidth = 540;
-constexpr int kFloatingHeight = 380;
+// 停靠区的尺寸以 96 DPI 的 DIP 书写，取值时才换算成像素。
+constexpr int kTabHeightDips = 22;
+constexpr int kTabMinWidthDips = 52;
+constexpr int kTabMaxWidthDips = 120;
+constexpr int kOverflowWidthDips = 34;
+constexpr int kSplitterSizeDips = 4;
+constexpr int kDragThresholdDips = 6;
+constexpr int kFloatingWidthDips = 540;
+constexpr int kFloatingHeightDips = 380;
+constexpr int kTabLabelPaddingDips = 12;
+
+inline int TabHeight() { return Ksword::Ui::Scale(kTabHeightDips); }
+inline int TabMinWidth() { return Ksword::Ui::Scale(kTabMinWidthDips); }
+inline int TabMaxWidth() { return Ksword::Ui::Scale(kTabMaxWidthDips); }
+inline int OverflowWidth() { return Ksword::Ui::Scale(kOverflowWidthDips); }
+inline int SplitterSize() { return Ksword::Ui::Scale(kSplitterSizeDips); }
+inline int DragThreshold() { return Ksword::Ui::Scale(kDragThresholdDips); }
+inline int FloatingWidth() { return Ksword::Ui::Scale(kFloatingWidthDips); }
+inline int FloatingHeight() { return Ksword::Ui::Scale(kFloatingHeightDips); }
 constexpr UINT_PTR kTabDragTimerId = 1;
 constexpr UINT kTabDragTimerMs = 16;
 
@@ -164,7 +176,7 @@ bool IncomingFirst(DockManager::DropKind kind) {
 int TabWidthForTitle(HDC dc, const std::wstring& title) {
     SIZE size{};
     ::GetTextExtentPoint32W(dc, title.c_str(), static_cast<int>(title.size()), &size);
-    return MinInt(kTabMaxWidth, MaxInt(kTabMinWidth, static_cast<int>(size.cx) + 12));
+    return MinInt(TabMaxWidth(), MaxInt(TabMinWidth(), static_cast<int>(size.cx) + Ksword::Ui::Scale(kTabLabelPaddingDips)));
 }
 
 // CollectVisibleTabs filters one leaf's dock list down to the tabs that can be
@@ -215,7 +227,7 @@ TabStripMetrics MeasureTabStrip(HDC dc, const RECT& tabs, const std::vector<int>
     naturalWidths.reserve(count);
     int totalWidth = 0;
     for (int i = 0; i < count; ++i) {
-        const int width = titles[i] ? TabWidthForTitle(dc, *titles[i]) : kTabMinWidth;
+        const int width = titles[i] ? TabWidthForTitle(dc, *titles[i]) : TabMinWidth();
         naturalWidths.push_back(width);
         totalWidth += width;
     }
@@ -229,8 +241,8 @@ TabStripMetrics MeasureTabStrip(HDC dc, const RECT& tabs, const std::vector<int>
 
     // Tabs do not all fit: keep a slice for "+N" and only place tabs that fit
     // completely to its left. Narrow strips shrink the reserved slice instead of
-    // squeezing tabs below kTabMinWidth.
-    const int reserved = MinInt(kOverflowWidth, MaxInt(0, Width(tabs) / 2));
+    // squeezing tabs below TabMinWidth().
+    const int reserved = MinInt(OverflowWidth(), MaxInt(0, Width(tabs) / 2));
     const int limit = tabs.right - reserved;
     int x = tabs.left;
     for (int i = 0; i < count; ++i) {
@@ -242,10 +254,10 @@ TabStripMetrics MeasureTabStrip(HDC dc, const RECT& tabs, const std::vector<int>
     }
     if (metrics.tabWidths.empty()) {
         // Only keep the first tab when it still has room for its label; a tab
-        // squeezed below kTabMinWidth would be an unreadable block, so in that
+        // squeezed below TabMinWidth() would be an unreadable block, so in that
         // case the whole strip is handed over to the "+N" indicator.
         const int room = limit - tabs.left;
-        if (room >= kTabMinWidth) {
+        if (room >= TabMinWidth()) {
             metrics.tabWidths.push_back(MinInt(naturalWidths[0], room));
         }
         x = tabs.left + (metrics.tabWidths.empty() ? 0 : metrics.tabWidths[0]);
@@ -967,19 +979,19 @@ void DockManager::layoutNode(DockNode* node, const RECT& rect) {
     }
     node->rect = rect;
     if (node->leaf) {
-        node->tabRect = { rect.left, rect.top, rect.right, MinInt(rect.bottom, rect.top + kTabHeight) };
+        node->tabRect = { rect.left, rect.top, rect.right, MinInt(rect.bottom, rect.top + TabHeight()) };
         return;
     }
     if (node->horizontal) {
         const int splitX = rect.left + static_cast<int>(Width(rect) * node->ratio);
-        RECT first{ rect.left, rect.top, splitX - kSplitterSize / 2, rect.bottom };
-        RECT second{ splitX + kSplitterSize / 2, rect.top, rect.right, rect.bottom };
+        RECT first{ rect.left, rect.top, splitX - SplitterSize() / 2, rect.bottom };
+        RECT second{ splitX + SplitterSize() / 2, rect.top, rect.right, rect.bottom };
         layoutNode(node->first.get(), first);
         layoutNode(node->second.get(), second);
     } else {
         const int splitY = rect.top + static_cast<int>(Height(rect) * node->ratio);
-        RECT first{ rect.left, rect.top, rect.right, splitY - kSplitterSize / 2 };
-        RECT second{ rect.left, splitY + kSplitterSize / 2, rect.right, rect.bottom };
+        RECT first{ rect.left, rect.top, rect.right, splitY - SplitterSize() / 2 };
+        RECT second{ rect.left, splitY + SplitterSize() / 2, rect.right, rect.bottom };
         layoutNode(node->first.get(), first);
         layoutNode(node->second.get(), second);
     }
@@ -994,7 +1006,7 @@ void DockManager::layoutLeafChildren(const DockNode* node) {
         layoutLeafChildren(node->second.get());
         return;
     }
-    RECT content{ node->rect.left, node->rect.top + kTabHeight, node->rect.right, node->rect.bottom };
+    RECT content{ node->rect.left, node->rect.top + TabHeight(), node->rect.right, node->rect.bottom };
     for (int dockIndex : node->docks) {
         if (dockIndex < 0 || dockIndex >= static_cast<int>(docks_.size())) {
             continue;
@@ -1299,7 +1311,7 @@ void DockManager::updateTabDrag(POINT screenPoint) {
     }
     const int dx = screenPoint.x - dragStartScreen_.x;
     const int dy = screenPoint.y - dragStartScreen_.y;
-    if (!draggingTab_ && (dx * dx + dy * dy) >= kDragThreshold * kDragThreshold) {
+    if (!draggingTab_ && (dx * dx + dy * dy) >= DragThreshold() * DragThreshold()) {
         draggingTab_ = true;
         ignoreCaptureLoss_ = true;
         floatDock(dragDockIndex_, screenPoint, true);
@@ -1376,7 +1388,7 @@ void DockManager::floatDock(int dockIndex, POINT screenPoint, bool noActivate) {
     floating->dockIndex = dockIndex;
     HWND host = ::CreateWindowExW(WS_EX_TOOLWINDOW, kFloatingClass, docks_[dockIndex]->title().c_str(),
         WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN | WS_CLIPSIBLINGS,
-        screenPoint.x - offset.x, screenPoint.y - offset.y, kFloatingWidth, kFloatingHeight,
+        screenPoint.x - offset.x, screenPoint.y - offset.y, FloatingWidth(), FloatingHeight(),
         parent_, nullptr, ::GetModuleHandleW(nullptr), floating.get());
     if (!host) {
         appendDockToLeaf(firstLeaf(), dockIndex);
@@ -1394,7 +1406,7 @@ void DockManager::floatDock(int dockIndex, POINT screenPoint, bool noActivate) {
     floatingDocks_.push_back(std::move(floating));
     ::ShowWindow(host, noActivate ? SW_SHOWNOACTIVATE : SW_SHOW);
     ::SetWindowPos(host, noActivate ? HWND_TOPMOST : HWND_TOP, screenPoint.x - offset.x,
-        screenPoint.y - offset.y, kFloatingWidth, kFloatingHeight,
+        screenPoint.y - offset.y, FloatingWidth(), FloatingHeight(),
         SWP_NOOWNERZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW);
     layoutChildren();
     ::InvalidateRect(hwnd_, nullptr, FALSE);
