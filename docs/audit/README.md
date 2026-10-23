@@ -11,7 +11,9 @@
 | `qt-hardware-map.md` | 硬件 Dock 16 个顶层页及其列名 | `HardwareDock/` + `zHwPages` |
 | `qt-kernel-columns-A.md` | object / io / atom / misc 组逐页列名 | 各 `*Tab.cpp` 的 `setHorizontalHeaderLabels` |
 | `qt-kernel-columns-B.md` | audit / hal / wdf / slat / timers / workers / cid / ipc 组逐页列名 | 同上 |
+| `arklight-hardware-columns-diff.md` | ARKLight 硬件页现有列 vs Qt 真值的逐页差异 | `Features/Hardware*` 的 `InsertColumn` |
 | `status-overlap.md` | 状态文字被控件遮挡的清单与边界阈值 | 逐文件读布局常量 + 矩形求交 |
+| `boundary-overlap-verify.md` | 矮窗口下详情/编辑列压状态行的核实与改法 | 同上，带算式复核 |
 
 ## 更正记录
 
@@ -54,3 +56,20 @@ Qt 有几处把裸标识符直接当表头显示给用户，属于 Qt 侧缺陷�
 - 统一审计：Qt 跑真实扫描并聚合风险行，Light 的 `HookAuditSummary` 只汇总审计入口可用性
 
 前 5 条是加字段就能补的；后 2 条要改数据层，不是列的问题。
+
+## 硬件列对齐的结论（详见 `arklight-hardware-columns-diff.md`）
+
+硬件这一侧和内核不一样：内核的列大多能靠「补 canonical + 别名」补上，硬件这
+几页的差距**基本是数据层缺口，不是表头问题**，所以本轮只改了挂载结构，没强行
+补列：
+
+| 页面 | Qt | ARKLight | 结论 |
+|---|---|---|---|
+| 处理器 | 逐逻辑处理器 7 列（利用率/频率/温度/电压） | 单行 CPUID 快照 4 列 | 不是同一张表。要真对齐得接 per-CPU 性能计数器，属功能开发 |
+| 磁盘活动 | 3 张表共 28 列（进程级读/写 B/s、I/O 优先级、响应时间） | 单表 10 列 | Qt 有进程级 I/O 归属，Light 没有这层数据 |
+| 设备管理 | 6 列 QTreeWidget | 无表头的 Win32 TreeView | **可补**：给 TreeView 加列头即可，是纯 UI 活 |
+| 底层硬件检查 | 24 列，含 CR0/CR4/EFER/MSR_LSTAR/SYSENTER_EIP/IDTR/GDTR 等 | 8 列 | 行由 `AppendDriverIntegrityRows` 产出，那些寄存器字段协议里根本没有 |
+| i8042prt 审计 | 12 列 | 动态列（按行 key 生成） | 可给定固定列序，但要先确认每个 key 都有值 |
+| 性能监控 | 左列表 + QStackedWidget 详情 | 单表 | 结构不同，未动 |
+
+「设备管理补列头」是这份清单里唯一纯 UI、风险低、收益明确的项，留着待办。

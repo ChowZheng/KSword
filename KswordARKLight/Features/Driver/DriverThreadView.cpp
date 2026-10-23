@@ -411,12 +411,22 @@ void Layout(ViewState& state) {
     ::MoveWindow(state.terminate, 202, gap, 62, toolHeight, TRUE);
     ::MoveWindow(state.filter, 272, gap, std::max(80, width - 279), toolHeight, TRUE);
     const int tableTop = 39;
-    const int detailHeight = std::clamp(height / 3, 110, 220);
-    const int tableHeight = std::max(50, height - tableTop - detailHeight - 32);
+    // 详情区高度按「状态行以上的剩余空间」来分，不再用 max(50, ...) 硬夹列表高度。
+    // 原来 tableHeight = max(50, height - tableTop - detailHeight - 32)，窗口矮到
+    // detailHeight 被 clamp 下限 110 顶住时，列表仍占 50，详情底边就压到状态行上
+    // （客户区 ≤ 225 开始重叠）。这里改成：先给状态行留位，剩余空间先满足列表
+    // 最小高度，剩下的才给详情，详情可以被压缩到 0 也不会盖住状态行。
+    constexpr int statusHeight = 18;
+    constexpr int listMinimum = 60;
+    const int statusTop = height - 20;
+    const int available = std::max(0, statusTop - 2 - (tableTop + gap));
+    const int detailHeight = std::min(std::clamp(height / 3, 110, 220),
+        std::max(0, available - listMinimum));
+    const int tableHeight = std::max(0, available - detailHeight);
     ::MoveWindow(state.list.hwnd(), gap, tableTop, std::max(50, width - 2 * gap), tableHeight, TRUE);
     ::MoveWindow(state.detail, gap, tableTop + tableHeight + gap,
         std::max(50, width - 2 * gap), detailHeight, TRUE);
-    ::MoveWindow(state.status, gap, height - 20, std::max(50, width - 2 * gap), 18, TRUE);
+    ::MoveWindow(state.status, gap, statusTop, std::max(50, width - 2 * gap), statusHeight, TRUE);
 }
 
 bool CreateChildren(ViewState& state) {

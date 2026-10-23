@@ -614,12 +614,20 @@ void Layout(State& state) {
         ::MoveWindow(state.categories[static_cast<std::size_t>(index)], 8 + index * 100, 42, 96, 24, TRUE);
     }
     ::MoveWindow(state.filter, 8, 72, (std::max)(100, width - 16), 26, TRUE);
-    const int detailHeight = 116;
-    const int listHeight = (std::max)(80, height - 110 - detailHeight - 32);
+    // 详情区底边必须给状态行让位。原来 listHeight = max(80, height-238)，
+    // 列表被 80 顶住时详情底边固定在 112+80+116=308，客户区 ≤ 333 就压住状态行。
+    // 这里先算状态行以上、以详情顶边基址 112 起算的可用高度，再在
+    // 「列表至少 40 / 详情最多 116」之间分配，详情可被压缩但不会盖住状态行。
+    constexpr int detailPreferred = 116;
+    constexpr int listMinimum = 40;
+    const int statusTop = height - 26;
+    const int available = (std::max)(0, statusTop - 2 - 112);
+    const int detailHeight = (std::max)(0, (std::min)(detailPreferred, available - listMinimum));
+    const int listHeight = (std::max)(0, available - detailHeight);
     ::MoveWindow(state.list, 8, 106, (std::max)(100, width - 16), listHeight, TRUE);
     ::MoveWindow(state.detail, 8, 112 + listHeight,
         (std::max)(100, width - 16), detailHeight, TRUE);
-    ::MoveWindow(state.status, 8, height - 26, (std::max)(100, width - 16), 20, TRUE);
+    ::MoveWindow(state.status, 8, statusTop, (std::max)(100, width - 16), 20, TRUE);
 }
 
 bool CreateControls(State& state) {

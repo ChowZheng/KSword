@@ -926,7 +926,12 @@ void LayoutChildren(RegistryViewState& state) {
     ::MoveWindow(state.treeFilterBar, treeLeft, filterTop, treeWidth, toolbarHeight, TRUE);
     ::MoveWindow(state.valueFilterBar, listLeft, filterTop, listWidth, toolbarHeight, TRUE);
     const int contentTop = filterTop + toolbarHeight + gap;
-    const int listHeight = std::max(120, height - contentTop - 92);
+    // 状态文字画在 height-22..height-2，内容区不能越过它。
+    // 原来 listHeight 用 max(120, height-contentTop-92) 硬夹，客户区 ≤ 207 时
+    // 列表和目录树就压到状态行上。
+    const int statusTop = height - 22;
+    const int contentLimit = std::max(0, statusTop - gap - contentTop);
+    const int listHeight = std::max(0, std::min(std::max(120, height - contentTop - 92), contentLimit));
     ::MoveWindow(state.tree, treeLeft, contentTop, treeWidth, listHeight, TRUE);
     ::MoveWindow(state.list.hwnd(), listLeft, contentTop, listWidth, listHeight, TRUE);
     if (state.loadingOverlay) {
@@ -938,16 +943,27 @@ void LayoutChildren(RegistryViewState& state) {
     editY += 24 + gap;
     ::MoveWindow(state.typeCombo, editorLeft, editY, editorWidth, 220, TRUE);
     editY += 24 + gap;
-    ::MoveWindow(state.dataEdit, editorLeft, editY, editorWidth, std::max(90, listHeight - 24 - gap - actionRowHeight * 2), TRUE);
-    editY += std::max(90, listHeight - 24 - gap - actionRowHeight * 2) + gap;
-    ::MoveWindow(state.readButton, editorLeft, editY, 58, actionRowHeight, TRUE);
-    ::MoveWindow(state.writeButton, editorLeft + 58 + gap, editY, 58, actionRowHeight, TRUE);
-    ::MoveWindow(state.createKeyButton, editorLeft + (58 + gap) * 2, editY, 70, actionRowHeight, TRUE);
-    editY += actionRowHeight + gap;
-    ::MoveWindow(state.deleteButton, editorLeft, editY, 58, actionRowHeight, TRUE);
-    ::MoveWindow(state.renameButton, editorLeft + 58 + gap, editY, 70, actionRowHeight, TRUE);
+    // 编辑列固定行（名称 24 + 类型 24 + 两排按钮 2*24 + 三处间距）合计 114px，
+    // 数据框吃掉剩下的高度。原来的 max(90, ...) 下限会在矮窗口下把两排按钮
+    // 顶到状态行上（客户区 ≤ 297 开始重叠），改成按剩余空间收缩。
+    const int dataEditTop = editY;
+    const int dataEditHeight = std::max(0, std::min(
+        std::max(90, listHeight - 24 - gap - actionRowHeight * 2),
+        contentLimit - 24 - gap - 24 - gap - gap - actionRowHeight * 2));
+    ::MoveWindow(state.dataEdit, editorLeft, dataEditTop, editorWidth, dataEditHeight, TRUE);
 
-    ::MoveWindow(state.statusText, margin, height - 22, width - margin * 2, 20, TRUE);
+    // 两排操作按钮贴着状态行上沿摆，绝不越过它。空间够时用自然位置（与原布局
+    // 逐像素一致），不够时整体上移；此时数据框已被压到很小，不会互相遮挡。
+    const int actionBlockHeight = actionRowHeight * 2 + gap;
+    const int actionTop = std::min(dataEditTop + dataEditHeight + gap,
+        std::max(contentTop, statusTop - gap - actionBlockHeight));
+    ::MoveWindow(state.readButton, editorLeft, actionTop, 58, actionRowHeight, TRUE);
+    ::MoveWindow(state.writeButton, editorLeft + 58 + gap, actionTop, 58, actionRowHeight, TRUE);
+    ::MoveWindow(state.createKeyButton, editorLeft + (58 + gap) * 2, actionTop, 70, actionRowHeight, TRUE);
+    ::MoveWindow(state.deleteButton, editorLeft, actionTop + actionRowHeight + gap, 58, actionRowHeight, TRUE);
+    ::MoveWindow(state.renameButton, editorLeft + 58 + gap, actionTop + actionRowHeight + gap, 70, actionRowHeight, TRUE);
+
+    ::MoveWindow(state.statusText, margin, statusTop, width - margin * 2, 20, TRUE);
 }
 
 RegistryOperationSnapshot ExecuteRegistryOperation(const RegistryOperationRequest& request) {
