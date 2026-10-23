@@ -2,6 +2,8 @@
 
 #include "Controls.h"
 
+#include <algorithm>
+
 namespace Ksword::Ui {
 
 ScopedWindowRedrawLock::ScopedWindowRedrawLock(HWND hwnd, bool invalidateOnExit) noexcept
@@ -152,6 +154,40 @@ void ClearListViewRows(HWND listView) {
         ScopedListViewRedrawLock redrawLock(listView);
         ListView_DeleteAllItems(listView);
     }
+}
+
+RowCapResult ReplaceListViewRowsCapped(
+    HWND listView,
+    const std::vector<std::vector<std::wstring>>& rows,
+    const std::size_t maxRows) {
+    // The cap applies only to what enters the control. Callers keep the full
+    // data set, so index-based lookups and exports are unaffected by this
+    // helper. No synthetic "more rows" item is inserted because it would show
+    // up as a selectable/copyable/exportable record.
+    RowCapResult result;
+    result.total = rows.size();
+    result.shown = std::min(rows.size(), maxRows);
+    if (!listView) {
+        result.shown = 0;
+        return result;
+    }
+
+    ScopedListViewRedrawLock redrawLock(listView);
+    ListView_DeleteAllItems(listView);
+    for (std::size_t index = 0; index < result.shown; ++index) {
+        InsertListViewTextRow(listView, rows[index]);
+    }
+    return result;
+}
+
+std::wstring RowCapNotice(const RowCapResult& result) {
+    // The caller decides how to join this text with existing status content, so
+    // no prefix punctuation is added here.
+    if (!result.truncated()) {
+        return {};
+    }
+    return L"已显示前 " + std::to_wstring(result.shown) + L" / 共 " +
+        std::to_wstring(result.total) + L" 条，其余未载入列表";
 }
 
 } // namespace Ksword::Ui

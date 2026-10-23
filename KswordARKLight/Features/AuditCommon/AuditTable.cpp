@@ -132,16 +132,17 @@ bool SetAuditTableColumns(HWND listView, const std::vector<AuditTableColumn>& co
     return Ksword::Ui::AddListViewColumns(listView, uiColumns);
 }
 
-void ReplaceAuditTableRows(HWND listView, const std::vector<std::vector<std::wstring>>& rows) {
+Ksword::Ui::RowCapResult ReplaceAuditTableRows(
+    HWND listView,
+    const std::vector<std::vector<std::wstring>>& rows) {
+    // Columns are preserved; only the row payload is replaced. The helper caps
+    // what enters the control at kMaxDisplayRows and reports the counts so a
+    // caller with status text can surface the truncation hint.
     if (!listView) {
-        return;
+        return Ksword::Ui::RowCapResult{ rows.size(), 0 };
     }
 
-    Ksword::Ui::ScopedListViewRedrawLock redrawLock(listView);
-    ListView_DeleteAllItems(listView);
-    for (const std::vector<std::wstring>& row : rows) {
-        Ksword::Ui::InsertListViewTextRow(listView, row);
-    }
+    return Ksword::Ui::ReplaceListViewRowsCapped(listView, rows);
 }
 
 std::wstring GetAuditTableCellText(HWND listView, const int row, const int column) {

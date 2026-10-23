@@ -382,7 +382,15 @@ void ApplyResponseToUi(HwidDispatchViewState& state, const ksword::ark::HwidDisp
             Hex64(entry.currentDispatchAddress)
         });
     }
-    Ksword::Features::AuditCommon::ReplaceAuditTableRows(state.statusTable, rows);
+    const Ksword::Ui::RowCapResult cap =
+        Ksword::Features::AuditCommon::ReplaceAuditTableRows(state.statusTable, rows);
+    // The status line above was written as a whole, so the truncation hint is
+    // appended right after it instead of being folded into that assignment.
+    const std::wstring capNotice = Ksword::Ui::RowCapNotice(cap);
+    if (state.statusText && !capNotice.empty()) {
+        const std::wstring currentStatus = TextFromWindow(state.statusText);
+        ::SetWindowTextW(state.statusText, (currentStatus + L"  " + capNotice).c_str());
+    }
     AppendLog(state, Utf8ToWide(result.io.message));
 }
 

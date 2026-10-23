@@ -39,8 +39,17 @@ bool SetAuditTableColumns(HWND listView, const std::vector<AuditTableColumn>& co
 
 // ReplaceAuditTableRows replaces all rows in one table. Inputs are a ListView
 // and rows of already-rendered strings; processing preserves the current column
-// set and inserts rows under a redraw lock; no value is returned.
-void ReplaceAuditTableRows(HWND listView, const std::vector<std::vector<std::wstring>>& rows);
+// set and inserts rows under a redraw lock, capped at Ui::kMaxDisplayRows;
+// output carries the total/shown counts so the caller can report truncation.
+//
+// Constraint: callers are expected to surface RowCapResult to the user. When the
+// cap is hit the ListView only holds the first maxRows rows, so any export that
+// reads back list rows (for example BuildAuditTableTsv) also loses the withheld
+// rows. The 5000 limit is far above the real size of audit tables; if a table
+// ever exceeds it, the export source must be changed to the original data.
+Ksword::Ui::RowCapResult ReplaceAuditTableRows(
+    HWND listView,
+    const std::vector<std::vector<std::wstring>>& rows);
 
 // GetAuditTableCellText reads one visible table cell. Inputs are ListView HWND,
 // row index and column index; processing asks the common control for text with a

@@ -228,8 +228,8 @@ TabStripMetrics MeasureTabStrip(HDC dc, const RECT& tabs, const std::vector<int>
     }
 
     // Tabs do not all fit: keep a slice for "+N" and only place tabs that fit
-    // completely to its left. Narrow strips shrink the reserved slice so at
-    // least one tab still has room.
+    // completely to its left. Narrow strips shrink the reserved slice instead of
+    // squeezing tabs below kTabMinWidth.
     const int reserved = MinInt(kOverflowWidth, MaxInt(0, Width(tabs) / 2));
     const int limit = tabs.right - reserved;
     int x = tabs.left;
@@ -241,10 +241,11 @@ TabStripMetrics MeasureTabStrip(HDC dc, const RECT& tabs, const std::vector<int>
         x += naturalWidths[i];
     }
     if (metrics.tabWidths.empty()) {
-        // Even the first tab is wider than the space left of the indicator. Show
-        // it truncated instead of showing no tab at all.
+        // Only keep the first tab when it still has room for its label; a tab
+        // squeezed below kTabMinWidth would be an unreadable block, so in that
+        // case the whole strip is handed over to the "+N" indicator.
         const int room = limit - tabs.left;
-        if (room > 0) {
+        if (room >= kTabMinWidth) {
             metrics.tabWidths.push_back(MinInt(naturalWidths[0], room));
         }
         x = tabs.left + (metrics.tabWidths.empty() ? 0 : metrics.tabWidths[0]);
@@ -254,11 +255,22 @@ TabStripMetrics MeasureTabStrip(HDC dc, const RECT& tabs, const std::vector<int>
     metrics.hiddenCount = count - metrics.visibleCount;
     metrics.usedRight = x;
     if (metrics.hiddenCount > 0) {
-        metrics.indicatorLeft = MaxInt(x, limit);
+        // Without a visible tab the indicator owns the whole strip, which also
+        // keeps the tab area hit-testable on very narrow panes.
+        metrics.indicatorLeft = metrics.visibleCount > 0 ? MaxInt(x, limit) : tabs.left;
     } else {
         metrics.indicatorLeft = tabs.right;
     }
     return metrics;
+}
+
+// OverflowLabel formats the hidden-tab counter. Input is the hidden count; output
+// is the indicator text, capped so it still reads inside the narrow indicator.
+std::wstring OverflowLabel(int hiddenCount) {
+    if (hiddenCount >= 100) {
+        return L"99+";
+    }
+    return L"+" + std::to_wstring(hiddenCount);
 }
 
 // TabStripDcAcquire borrows the host DC with the UI font selected so tab widths
@@ -843,7 +855,7 @@ void DockManager::paintLeaf(HDC dc, const DockNode* leaf) const {
         RECT indicator{ metrics.indicatorLeft, tabs.top, tabs.right, tabs.bottom };
         ::FillRect(dc, &indicator, activeHidden ? Ksword::Ui::AppTheme().accentBrush()
                                                : Ksword::Ui::AppTheme().panelBrush());
-        Ksword::Ui::DrawTextLine(dc, L"+" + std::to_wstring(metrics.hiddenCount), indicator,
+        Ksword::Ui::DrawTextLine(dc, OverflowLabel(metrics.hiddenCount), indicator,
             activeHidden ? RGB(255, 255, 255) : Ksword::Ui::AppTheme().textColor, Ksword::Ui::SystemUIFont(),
             DT_SINGLELINE | DT_CENTER | DT_VCENTER);
         DrawFrame(dc, indicator, Ksword::Ui::AppTheme().borderColor);

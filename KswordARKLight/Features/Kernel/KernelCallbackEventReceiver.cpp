@@ -187,7 +187,23 @@ bool CallbackEventReceiver::Start() {
         state->active.store(true, std::memory_order_release);
         state->workerRunning.store(true, std::memory_order_release);
     }
-    std::thread([state, generation] { RunReceiver(state, generation); }).detach();
+    try {
+        std::thread([state, generation] { RunReceiver(state, generation); }).detach();
+    } catch (...) {
+        // Thread creation can fail (handle/commit exhaustion). RunReceiver never
+        // ran, so nothing else will reset these flags: leaving workerRunning set
+        // would make stopping() report "worker still exiting" forever and every
+        // later Start() would be rejected. Roll the admission back so the caller
+        // observes a plain false from the existing bool contract and can retry.
+        // No handle is opened before the thread starts; drop any stale one so the
+        // failure path cannot keep half-initialized driver state.
+        ::OutputDebugStringW(L"[KswordARKLight] Callback receiver worker thread creation failed; start aborted.\r\n");
+        std::scoped_lock lock(state->mutex);
+        state->active.store(false, std::memory_order_release);
+        state->workerRunning.store(false, std::memory_order_release);
+        state->handle.reset();
+        return false;
+    }
     return true;
 }
 

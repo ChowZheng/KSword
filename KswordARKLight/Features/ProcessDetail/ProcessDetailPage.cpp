@@ -1061,6 +1061,27 @@ void ProcessDetailPage::AddListRow(
     if (!list || values.empty()) {
         return;
     }
+    // Display cap only: the backing entry vectors stay complete, so context-menu
+    // copies and detail lookups keep using full indices. Rows beyond the cap are
+    // dropped instead of being renumbered.
+    if (row >= static_cast<int>(Ksword::Ui::kMaxDisplayRows)) {
+        HWND page = ::GetParent(list);
+        const int listId = ::GetDlgCtrlID(list);
+        const int statusId = listId == HotkeyList ? HotkeyStatus
+            : (listId == KeyboardList ? KeyboardStatus : 0);
+        HWND status = page && statusId ? ::GetDlgItem(page, statusId) : nullptr;
+        if (status) {
+            // Status text is refreshed before each rebuild, so appending the hint
+            // again is idempotent and does not need extra state.
+            const std::wstring notice =
+                L"已达显示上限 " + std::to_wstring(Ksword::Ui::kMaxDisplayRows) + L" 行";
+            const std::wstring current = ReadWindowText(status);
+            if (current.find(notice) == std::wstring::npos) {
+                ::SetWindowTextW(status, (current.empty() ? notice : current + L" | " + notice).c_str());
+            }
+        }
+        return;
+    }
     LVITEMW item{};
     item.mask = LVIF_TEXT | LVIF_PARAM;
     item.iItem = row;

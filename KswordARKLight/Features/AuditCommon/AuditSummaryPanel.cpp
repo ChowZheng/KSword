@@ -30,6 +30,8 @@ void SetAuditSummaryItems(HWND panel, const std::vector<AuditSummaryItem>& items
             item.detail.empty() ? statusInfo.detail : item.detail,
         });
     }
+    // The summary panel has no status line of its own, so a truncated result is
+    // intentionally not reported here; the count is only the panel projection.
     ReplaceAuditTableRows(panel, rows);
 }
 

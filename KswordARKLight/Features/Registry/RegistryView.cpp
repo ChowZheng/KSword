@@ -507,6 +507,34 @@ void ReplaceTreeNodeChildren(RegistryViewState& state, HTREEITEM item, const Reg
     SetStatus(state, snapshot.statusText.empty() ? L"已加载注册表子键。" : snapshot.statusText);
 }
 
+bool ReleaseTreeChildrenRequest(RegistryViewState& state, const std::wstring& path) {
+    // Input is the path of a tree-children request whose result will be dropped.
+    // Processing releases the loading flags that request owns, because
+    // EnsureTreeChildrenLoaded refuses to issue a new query while
+    // childrenLoading is set; a leaked flag makes the node permanently
+    // un-expandable. Output is true only when this request still owns
+    // treeLoadingPath, i.e. it is the expansion the user is currently waiting
+    // for: a request superseded by faster node switching has already handed the
+    // path to the newer node and stays silent so newer status text survives.
+    if (path.empty()) {
+        return false;
+    }
+    if (state.tree) {
+        if (const HTREEITEM item = FindTreeItemByPath(state.tree, TreeView_GetRoot(state.tree), path)) {
+            if (RegistryTreeNodeData* nodeData = TreeItemData(state.tree, item)) {
+                if (!nodeData->placeholder) {
+                    nodeData->childrenLoading = false;
+                }
+            }
+        }
+    }
+    if (state.treeLoadingPath != path) {
+        return false;
+    }
+    state.treeLoadingPath.clear();
+    return true;
+}
+
 void EnsureTreeChildrenLoaded(RegistryViewState& state, HTREEITEM item) {
     // The direct-child registry query belongs to an independent snapshot task.
     // Tree expansion therefore shows feedback immediately and never blocks a
@@ -556,17 +584,23 @@ void EnsureTreeChildrenLoaded(RegistryViewState& state, HTREEITEM item) {
             }
             return snapshot;
         },
-        [&state](std::uint64_t, std::optional<RegistryTreeChildrenSnapshot>&& snapshot, std::exception_ptr error) {
+        [&state, path](std::uint64_t, std::optional<RegistryTreeChildrenSnapshot>&& snapshot, std::exception_ptr error) {
             if (error || !snapshot.has_value()) {
-                state.treeLoadingPath.clear();
+                ReleaseTreeChildrenRequest(state, path);
                 SetStatus(state, L"注册表树节点加载异常结束。已保留现有节点。");
                 return;
             }
             if (snapshot->mode != state.mode) {
+                if (ReleaseTreeChildrenRequest(state, path)) {
+                    SetStatus(state, L"注册表树节点加载结果已过期，请重新展开该节点。");
+                }
                 return;
             }
             const HTREEITEM item = FindTreeItemByPath(state.tree, TreeView_GetRoot(state.tree), snapshot->path);
             if (!item) {
+                if (ReleaseTreeChildrenRequest(state, path)) {
+                    SetStatus(state, L"注册表树节点加载结果已过期，请重新展开该节点。");
+                }
                 return;
             }
             state.treeLoadingPath.clear();
