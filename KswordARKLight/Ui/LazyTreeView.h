@@ -94,6 +94,14 @@ public:
     void setChildSource(ChildSource source);
 
     // reset drops every record and empties the tree.
+    //
+    // TreeView has no owner-data mode, so TVM_DELETEITEM(TVI_ROOT) erases an
+    // arbitrarily large expanded subtree inside one message. reset() therefore
+    // drops the record maps first -- the TVN_DELETEITEMW storm that follows then
+    // costs an empty lookup per node instead of a hash erase -- and then removes
+    // one root subtree per timer tick. A tree small enough to erase outright is
+    // still cleared synchronously. setRoots() called while a sharded clear is
+    // running defers its roots until the clear finishes.
     void reset();
 
     // setRoots replaces the root level (registry hives, drive letters). Roots
@@ -178,6 +186,21 @@ private:
     void eraseRecord(HTREEITEM item);
     void setChildrenFlag(HTREEITEM item, bool hasChildren);
 
+    // Sharded clear. kInlineClearItems is the point below which one
+    // TVM_DELETEITEM(TVI_ROOT) is cheaper than scheduling ticks at all.
+    static constexpr UINT kInlineClearItems = 400;
+    static constexpr UINT_PTR kClearTimerId = 0x4B53;
+    static constexpr UINT kClearIntervalMs = 1;
+
+    void installClearSubclass();
+    void discardAllRecords();
+    void clearImmediately();
+    void stepShardedClear();
+    void flushShardedClear();
+    void applyDeferredRoots();
+    static LRESULT CALLBACK clearSubclassProc(
+        HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam, UINT_PTR id, DWORD_PTR refData);
+
 private:
     HWND hwnd_ = nullptr;
     std::unordered_map<HTREEITEM, std::unique_ptr<Node>> nodes_;
@@ -188,6 +211,12 @@ private:
     ChildSource childSource_;
     int updateDepth_ = 0;
     bool silent_ = false;
+    // clearing_ is true between the first sharded delete and the last root
+    // disappearing; deferredRoots_ holds a setRoots() that arrived meanwhile.
+    bool clearing_ = false;
+    bool subclassed_ = false;
+    std::vector<TreeRow> deferredRoots_;
+    bool hasDeferredRoots_ = false;
 };
 
 } // namespace Ksword::Ui

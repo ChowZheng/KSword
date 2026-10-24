@@ -24,7 +24,14 @@ std::wstring MoreRowKey(const std::wstring& parentKey)
 LazyTreeView::~LazyTreeView()
 {
     // The HWND belongs to the page's window tree and is destroyed by it. Only
-    // the records are ours to release.
+    // the records and the timer we armed are ours to release.
+    if (hwnd_) {
+        ::KillTimer(hwnd_, kClearTimerId);
+        if (subclassed_) {
+            ::RemoveWindowSubclass(hwnd_, &LazyTreeView::clearSubclassProc, kClearTimerId);
+            subclassed_ = false;
+        }
+    }
     nodes_.clear();
     itemByKey_.clear();
 }
@@ -42,6 +49,38 @@ bool LazyTreeView::create(HWND parent, int id, int x, int y, int width, int heig
 void LazyTreeView::attach(HWND treeView) noexcept
 {
     hwnd_ = treeView;
+    installClearSubclass();
+}
+
+void LazyTreeView::installClearSubclass()
+{
+    if (!hwnd_ || subclassed_) {
+        return;
+    }
+    // The subclass exists only so the sharded clear can own a WM_TIMER. A plain
+    // tree control never forwards WM_TIMER to its parent, and asking every page
+    // to route one more message would spread this concern across both callers.
+    subclassed_ = ::SetWindowSubclass(hwnd_, &LazyTreeView::clearSubclassProc,
+        kClearTimerId, reinterpret_cast<DWORD_PTR>(this)) != FALSE;
+}
+
+LRESULT CALLBACK LazyTreeView::clearSubclassProc(
+    HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam, UINT_PTR id, DWORD_PTR refData)
+{
+    auto* view = reinterpret_cast<LazyTreeView*>(refData);
+    if (view && message == WM_TIMER && wParam == kClearTimerId) {
+        view->stepShardedClear();
+        return 0;
+    }
+    if (view && message == WM_NCDESTROY) {
+        // The HWND is going away: stop referencing it so a later call cannot
+        // send to a recycled handle.
+        view->subclassed_ = false;
+        view->clearing_ = false;
+        view->hwnd_ = nullptr;
+        ::RemoveWindowSubclass(hwnd, &LazyTreeView::clearSubclassProc, id);
+    }
+    return ::DefSubclassProc(hwnd, message, wParam, lParam);
 }
 
 void LazyTreeView::setExpansionCallback(ExpansionCallback callback)
@@ -269,21 +308,124 @@ void LazyTreeView::removeChildren(HTREEITEM parent)
     endUpdate();
 }
 
-void LazyTreeView::reset()
+void LazyTreeView::discardAllRecords()
 {
-    if (hwnd_) {
-        beginUpdate();
-        ClearTreeView(hwnd_);
-        endUpdate();
-    }
+    // Dropping the maps up front is what makes the delete notifications cheap:
+    // every TVN_DELETEITEMW that arrives afterwards finds no record and returns.
     nodes_.clear();
     itemByKey_.clear();
+}
+
+void LazyTreeView::clearImmediately()
+{
+    clearing_ = false;
+    ::KillTimer(hwnd_, kClearTimerId);
+    beginUpdate();
+    ClearTreeView(hwnd_);
+    endUpdate();
+    applyDeferredRoots();
+}
+
+void LazyTreeView::stepShardedClear()
+{
+    if (!hwnd_) {
+        clearing_ = false;
+        return;
+    }
+    const HTREEITEM root = TreeView_GetRoot(hwnd_);
+    if (!root) {
+        clearing_ = false;
+        ::KillTimer(hwnd_, kClearTimerId);
+        endUpdate();
+        applyDeferredRoots();
+        return;
+    }
+    // One root subtree per tick. Recursion still happens inside TVM_DELETEITEM,
+    // but it is now bounded by a single root instead of the whole tree, and the
+    // redraw lock stays held across ticks so nothing repaints in between.
+    TreeView_DeleteItem(hwnd_, root);
+    if (!TreeView_GetRoot(hwnd_)) {
+        clearing_ = false;
+        ::KillTimer(hwnd_, kClearTimerId);
+        endUpdate();
+        applyDeferredRoots();
+        return;
+    }
+    ::SetTimer(hwnd_, kClearTimerId, kClearIntervalMs, nullptr);
+}
+
+void LazyTreeView::flushShardedClear()
+{
+    if (!clearing_) {
+        return;
+    }
+    clearing_ = false;
+    ::KillTimer(hwnd_, kClearTimerId);
+    ClearTreeView(hwnd_);
+    endUpdate();
+}
+
+void LazyTreeView::applyDeferredRoots()
+{
+    if (!hasDeferredRoots_) {
+        return;
+    }
+    hasDeferredRoots_ = false;
+    std::vector<TreeRow> roots = std::move(deferredRoots_);
+    deferredRoots_.clear();
+    if (!hwnd_ || roots.empty()) {
+        return;
+    }
+    beginUpdate();
+    for (const TreeRow& row : roots) {
+        insertOne(nullptr, row);
+    }
+    endUpdate();
+}
+
+void LazyTreeView::reset()
+{
+    discardAllRecords();
+    if (!hwnd_) {
+        clearing_ = false;
+        return;
+    }
+    installClearSubclass();
+    if (clearing_) {
+        // A drain is already armed. Taking the redraw lock a second time here
+        // would leave updateDepth_ permanently above zero, so the ticks that are
+        // already scheduled are left to finish the job.
+        return;
+    }
+    if (TreeView_GetCount(hwnd_) <= kInlineClearItems) {
+        clearImmediately();
+        return;
+    }
+    if (!subclassed_) {
+        // Without the subclass there is no WM_TIMER owner, so a sharded clear
+        // would never drain and every later setRoots would stay deferred. Fall
+        // back to the single-shot delete instead of stalling the tree forever.
+        clearImmediately();
+        return;
+    }
+    clearing_ = true;
+    // Hold the redraw lock for the whole drain: re-arming it per tick would
+    // repaint a half-empty tree once per millisecond.
+    beginUpdate();
+    stepShardedClear();
 }
 
 void LazyTreeView::setRoots(std::vector<TreeRow> roots)
 {
     reset();
     if (!hwnd_ || roots.empty()) {
+        return;
+    }
+    if (clearing_) {
+        // The previous tree is still draining. Deferring keeps the new roots
+        // from being erased by the ticks that are already scheduled.
+        deferredRoots_ = std::move(roots);
+        hasDeferredRoots_ = true;
         return;
     }
     beginUpdate();
@@ -324,6 +466,12 @@ void LazyTreeView::installChildren(HTREEITEM parent, Node& node, std::vector<Tre
 
 void LazyTreeView::setChildren(HTREEITEM parent, std::vector<TreeRow> children, bool truncatedByBackend)
 {
+    if (clearing_) {
+        // The parent's record was discarded when the drain started, so this load
+        // targets a node from the previous tree. Dropping it is the correct
+        // outcome; the page installs new roots once the clear finishes.
+        return;
+    }
     Node* node = nodeOf(parent);
     if (!node) {
         return;

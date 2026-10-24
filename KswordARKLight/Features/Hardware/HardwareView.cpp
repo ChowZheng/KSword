@@ -42,6 +42,13 @@ constexpr UINT kMenuCopyDetailVisible = 62005;
 constexpr UINT kMsgRefreshCompleted = WM_APP + 585;
 constexpr UINT kMsgFilterCompleted = WM_APP + 586;
 constexpr UINT kMsgDetailCompleted = WM_APP + 587;
+// One keystroke used to commit an enumeration: every EN_CHANGE fired a filter
+// request, so typing "PCI" ran three passes and rebuilt the tree three times.
+constexpr UINT_PTR kFilterTimerId = 62010;
+constexpr UINT kFilterDebounceMs = 250;
+// Upper bound on roots auto-expanded by one filtered rebuild. Roots are cheap to
+// leave collapsed, and the control's batch cap only bounds a single parent.
+constexpr int kMaxAutoExpandRoots = 20;
 
 struct HardwareDetailSnapshot {
     int deviceIndex = -1;
@@ -384,12 +391,18 @@ void PopulateTree(HardwareViewState* state) {
     if (!state->filterQuery.empty()) {
         // 筛选状态下不该让用户逐层点开：直接把根展开，子节点由同步来源现取，
         // 而且每次展开仍然受控件的分批上限约束。
+        //
+        // 但分批上限是「单个父节点」的，这条路径是「多个父节点各插一批、全挤在
+        // 同一条消息里」，kBatchSize 覆盖不到。所以这里再限一个自动展开的根数：
+        // 剩下的根保持折叠，用户点开时才付代价。
         const HWND treeHwnd = state->tree.hwnd();
+        int expanded = 0;
         HTREEITEM root = TreeView_GetRoot(treeHwnd);
-        while (root) {
+        while (root && expanded < kMaxAutoExpandRoots) {
             const HTREEITEM next = TreeView_GetNextSibling(treeHwnd, root);
             TreeView_Expand(treeHwnd, root, TVE_EXPAND);
             root = next;
+            ++expanded;
         }
     }
     SelectFirstRoot(state);
@@ -756,9 +769,20 @@ bool RegisterHardwareViewClass() {
         case WM_SIZE:
             LayoutView(state);
             return 0;
+        case WM_TIMER:
+            if (state && wParam == kFilterTimerId) {
+                ::KillTimer(hwnd, kFilterTimerId);
+                RequestHardwareFilter(*state, Ksword::Ui::GetFilterBarText(state->filterBar),
+                    SelectedInstanceId(*state));
+                return 0;
+            }
+            break;
         case WM_COMMAND:
             if (state && LOWORD(wParam) == kFilterBarId && HIWORD(wParam) == EN_CHANGE) {
-                RequestHardwareFilter(*state, Ksword::Ui::GetFilterBarText(state->filterBar), SelectedInstanceId(*state));
+                // Restart the debounce window; the query text is read when it
+                // expires, so intermediate keystrokes cost nothing.
+                ::KillTimer(hwnd, kFilterTimerId);
+                ::SetTimer(hwnd, kFilterTimerId, kFilterDebounceMs, nullptr);
                 return 0;
             }
             if (state && LOWORD(wParam) == kRefreshButtonId) {
