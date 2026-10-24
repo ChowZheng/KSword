@@ -10,6 +10,7 @@
 #include "../../Ui/ExportUtil.h"
 #include "../../Ui/FilterBar.h"
 #include "../../Ui/LoadingOverlay.h"
+#include "../../Ui/TableCompareActions.h"
 #include "../../Ui/Theme.h"
 #include "../../Ui/VirtualListView.h"
 
@@ -43,6 +44,14 @@ constexpr int kLoadingOverlayId = 63009;
 constexpr const wchar_t* kStartupColumnTitles[6] = {
     L"名称", L"类型", L"范围", L"状态", L"命令", L"位置"
 };
+
+// StartupColumnTitles 是 kStartupColumnTitles 的 vector 形态，给导出和快照比对用。
+// 两张表头必须来自同一个数组：快照只存显示文本，列序一分叉就比错列。
+const std::vector<std::wstring>& StartupColumnTitles() {
+    static const std::vector<std::wstring> titles(
+        std::begin(kStartupColumnTitles), std::end(kStartupColumnTitles));
+    return titles;
+}
 
 constexpr UINT kStartupMenuEnable = 63601;
 constexpr UINT kStartupMenuDisable = 63602;
@@ -103,6 +112,9 @@ struct StartupViewState {
     StartupModel model;
     std::shared_ptr<const std::vector<Ksword::Ui::VirtualListRow>> filterRows;
     std::wstring statusText = L"正在等待启动项快照…";
+    // 启动项是持久化配置，两次扫描之间可能被安装程序或用户改动。列表只呈现
+    // 当前清单，比对才能指出这次多出/消失了哪一条自启动项。
+    Ksword::Ui::TableSnapshotEngine snapshotEngine;
     std::wstring filterQuery;
     bool filterUseRegex = false;
     std::uint64_t displayGeneration = 0;
@@ -488,7 +500,7 @@ void CopyCurrentDetail(StartupViewState& state) {
 // what makes a machine "persistently configured", so the saved copy is meant to
 // be diffed against a later scan; a header row is what makes that readable.
 void ExportEntryList(StartupViewState& state, const Ksword::Ui::ExportRowScope scope) {
-    const std::vector<std::wstring> titles(std::begin(kStartupColumnTitles), std::end(kStartupColumnTitles));
+    const std::vector<std::wstring>& titles = StartupColumnTitles();
     Ksword::Ui::ExportRowCount count{};
     std::wstring error;
     const Ksword::Ui::SaveTextFileResult result = Ksword::Ui::ExportVirtualListTsvWithDialog(
@@ -744,6 +756,8 @@ void ShowStartupContextMenu(StartupViewState& state, POINT screenPoint) {
         ::AppendMenuW(exportMenu, MF_STRING | (hasEntry ? 0U : MF_GRAYED), kStartupMenuExportDetail, L"导出详细信息…");
         ::AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(exportMenu), L"导出");
     }
+    ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    Ksword::Ui::AppendTableCompareMenuItems(menu, state.snapshotEngine);
     const UINT command = ::TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, screenPoint.x, screenPoint.y, 0, state.hwnd, nullptr);
     ::DestroyMenu(menu);
     switch (command) {
@@ -772,7 +786,12 @@ void ShowStartupContextMenu(StartupViewState& state, POINT screenPoint) {
     case kStartupMenuExportDetail:
         ExportCurrentDetail(state);
         break;
-    default: break;
+    default:
+        if (Ksword::Ui::HandleTableCompareCommand(state.snapshotEngine, command,
+                state.entryList, StartupColumnTitles(), state.statusText, L"启动项")) {
+            ::InvalidateRect(state.hwnd, nullptr, TRUE);
+        }
+        break;
     }
 }
 
