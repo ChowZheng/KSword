@@ -667,6 +667,7 @@ bool ProcessDetailPage::CreateModuleTab() {
     AddListColumn(list, 4, L"运行状态", 90);
     AddListColumn(list, 5, L"ThreadID", 180);
     listColumnCounts_[list] = 6;
+    listExportLabels_[list] = L"modules";
     if (moduleFilterRows_) {
         moduleVirtualList_.setSharedRows(moduleFilterRows_);
         moduleVirtualList_.setVisibleIndexes(moduleVisibleIndexes_);

@@ -1280,6 +1280,11 @@ void ProcessDetailPage::CopyListAll(HWND list) {
     CopyText(hwnd_, BuildListTsv(list));
 }
 
+std::wstring ProcessDetailPage::ListExportLabel(HWND list) const {
+    const auto found = listExportLabels_.find(list);
+    return found != listExportLabels_.end() && !found->second.empty() ? found->second : std::wstring(L"table");
+}
+
 void ProcessDetailPage::ExportListTsv(HWND list, const wchar_t* label) {
     // The table is read straight off the control, so an in-flight refresh that
     // empties it must not produce an empty file.
@@ -1324,7 +1329,8 @@ bool ProcessDetailPage::ShowListOnlyContextMenu(HWND list, POINT screenPoint, co
     if (command == kCopyAllCommand) {
         CopyListAll(list);
     } else if (command == kExportTsvCommand) {
-        ExportListTsv(list, label);
+        const std::wstring exportLabel = label && *label ? std::wstring(label) : ListExportLabel(list);
+        ExportListTsv(list, exportLabel.c_str());
     }
     return true;
 }
@@ -1344,7 +1350,8 @@ bool ProcessDetailPage::HandleGenericContextMenu(HWND source, POINT screenPoint)
         ListView_SetItemState(source, hitRow, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
     }
     if (SelectedListRow(source) < 0) {
-        return ShowListOnlyContextMenu(source, screenPoint, L"table");
+        const std::wstring label = ListExportLabel(source);
+        return ShowListOnlyContextMenu(source, screenPoint, label.c_str());
     }
 
     if (source == Control(TabIndex::Threads, ThreadList)) {
@@ -1366,7 +1373,10 @@ bool ProcessDetailPage::HandleGenericContextMenu(HWND source, POINT screenPoint)
     if (command == kCopyCellCommand) { CopyListCell(source); }
     if (command == kCopyRowCommand) { CopyListRow(source); }
     if (command == kCopyAllCommand) { CopyListAll(source); }
-    if (command == kExportTsvCommand) { ExportListTsv(source, L"table"); }
+    if (command == kExportTsvCommand) {
+        const std::wstring label = ListExportLabel(source);
+        ExportListTsv(source, label.c_str());
+    }
     return true;
 }
 

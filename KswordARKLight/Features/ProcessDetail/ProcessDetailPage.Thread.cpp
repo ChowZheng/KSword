@@ -445,6 +445,7 @@ bool ProcessDetailPage::CreateThreadTab() {
     AddListColumn(list, 8, L"R0栈边界", 260);
     AddListColumn(list, 9, L"R0详情", 360);
     listColumnCounts_[list] = 10;
+    listExportLabels_[list] = L"threads";
     if (threadFilterRows_) {
         threadVirtualList_.setSharedRows(threadFilterRows_);
         threadVirtualList_.setVisibleIndexes(threadVisibleIndexes_);

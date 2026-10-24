@@ -398,6 +398,10 @@ private:
     // investigation data — modules and threads disappear when the process exits
     // — so none of them should be clipboard-only.
     void ExportListTsv(HWND list, const wchar_t* label);
+    // ListExportLabel names the table behind one report list, so exporting the
+    // thread table and the hook table does not produce two files called
+    // process_1234_table.tsv. Falls back to "table" for an unknown list.
+    std::wstring ListExportLabel(HWND list) const;
     // ShowListOnlyContextMenu is the menu for a populated table with nothing
     // selected: the row actions have no target, but copying and exporting the
     // whole table still do.
@@ -484,6 +488,7 @@ private:
     TabIndex currentTab_ = TabIndex::Count;
     std::array<PageState, static_cast<std::size_t>(TabIndex::Count)> pages_{};
     std::unordered_map<HWND, int> listColumnCounts_;
+    std::unordered_map<HWND, std::wstring> listExportLabels_;
     std::unordered_map<HWND, int> listContextColumns_;
     ProcessDetailSnapshot snapshot_{};
     std::unique_ptr<Ksword::Ui::AsyncSnapshotTask<ProcessDetailSnapshot>> snapshotTask_;
