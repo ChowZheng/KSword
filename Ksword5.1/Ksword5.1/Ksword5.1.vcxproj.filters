@@ -189,6 +189,12 @@
     <ResourceCompile Include="AppIcon.rc">
       <Filter>Resource Files</Filter>
     </ResourceCompile>
+    <None Include="Resource\Logo\KswordLogo.png">
+      <Filter>Resource Files</Filter>
+    </None>
+    <None Include="Resource\Splash\StartupLandscape.png">
+      <Filter>Resource Files</Filter>
+    </None>
     <QtRcc Include="Ksword5.qrc">
       <Filter>Resource Files</Filter>
     </QtRcc>

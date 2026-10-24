@@ -1445,6 +1445,8 @@
     <None Include="ArkDriverClient\ArkRuntimeDynDataCatalog.inc" />
     <None Include="languages\en-US.json" />
     <None Include="languages\zh-CN.json" />
+    <None Include="Resource\Logo\KswordLogo.png" />
+    <None Include="Resource\Splash\StartupLandscape.png" />
   </ItemGroup>
   <Target Name="AuditKswordLanguagePacks" BeforeTargets="ClCompile" Condition="'$(KswordSkipI18nAudit)'!='true'">
     <PropertyGroup>
@@ -1471,6 +1473,19 @@
     <MakeDir Directories="$(TargetDir)languages\" Condition="'@(KswordLanguagePack)' != ''" />
     <Copy SourceFiles="@(KswordLanguagePack)" DestinationFolder="$(TargetDir)languages\" SkipUnchangedFiles="true" Condition="'@(KswordLanguagePack)' != ''" />
     <Warning Condition="'@(KswordLanguagePack)' == ''" Text="No KSword language packs were found under $(MSBuildProjectDirectory)\languages." />
+  </Target>
+  <Target Name="CopyKswordSplashAssets" AfterTargets="Build">
+    <PropertyGroup>
+      <KswordSplashArt>$(MSBuildProjectDirectory)\Resource\Splash\StartupLandscape.png</KswordSplashArt>
+      <KswordSplashLogo>$(MSBuildProjectDirectory)\Resource\Logo\KswordLogo.png</KswordSplashLogo>
+      <KswordSplashTargetDir>$(TargetDir)Style\</KswordSplashTargetDir>
+    </PropertyGroup>
+    <Error Condition="!Exists('$(KswordSplashArt)')" Text="KSword splash artwork was not found: $(KswordSplashArt)" />
+    <Error Condition="!Exists('$(KswordSplashLogo)')" Text="KSword splash logo was not found: $(KswordSplashLogo)" />
+    <MakeDir Directories="$(KswordSplashTargetDir)" />
+    <Copy SourceFiles="$(KswordSplashArt);$(KswordSplashLogo)"
+          DestinationFiles="$(KswordSplashTargetDir)StartupLandscape.png;$(KswordSplashTargetDir)KswordLogo.png"
+          SkipUnchangedFiles="true" />
   </Target>
   <!-- Qt Advanced Docking System 必须与 MSVC/Qt 运行时保持同一 ABI，并放在 exe 同目录，避免 PATH 捡到 MinGW 同名 DLL。 -->
   <Target Name="CopyQtAdvancedDockingRuntime" AfterTargets="Build">

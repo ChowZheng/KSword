@@ -19,11 +19,11 @@ public:
     kStartupSplash(const kStartupSplash&) = delete;
     kStartupSplash& operator=(const kStartupSplash&) = delete;
 
-    // If unset, loads Style\KswordHome_2.png next to the host executable.
-    // Set before show(); fits to 640 logical pixels wide, preserving the aspect
-    // ratio. At 200% DPI, renders directly at 1280 physical pixels wide.
+    // If unset, loads the bundled Style\StartupLandscape.png next to the host executable.
+    // Set before show(); only the right artwork panel changes.
     void setBackgroundImagePath(const std::wstring& path);
-    void setFooterText(const std::wstring& email, const std::wstring& buildDate,
+    void setLegalText(const std::wstring& copyright, const std::wstring& license,
+        const std::wstring& thirdParty, const std::wstring& website,
         const std::wstring& repository);
     void setProgressMode(SplashProgressMode mode);
     // RGB value in 0xRRGGBB form. Defaults to Ksword's #43A0FF.

@@ -78,6 +78,8 @@ KSword 主程序位于 `Ksword5.1/Ksword5.1`（Qt 6.9.3 Widgets + Qt Advanced Do
 
 ## 启动单实例与权限切换
 
+- 2026-10-23 当前启动页使用 900×600 逻辑画布，左侧白底信息栏、右侧圆角原创画面。主工程 CopyKswordSplashAssets 将 Resource/Splash/StartupLandscape.png 与 Resource/Logo/KswordLogo.png 复制到 exe 同目录的 Style/；画面缺失时 show=false，Logo 缺失则画回退标志。法律文案、网址和实时状态由 GDI+ 绘制，不烘焙进图。窗口按 GetDpiForWindow 和监视器工作区 90% 宽、88% 高共同限制大小，直接从源图采样到目标物理像素。独立线程、调用方桌面、确定/不定进度、缓存和 UpdateLayeredWindow 机制仍沿用。发行包从旧包搭建时还需覆盖这两项 Style 素材，步骤见仓库根 AGENTS.md。下方 2026-10-11 段落记录旧版 640 宽图片方案，不再描述当前默认资源。
+
 - 2026-10-11 原生启动页以独立 Win32 UI 线程播放伸缩不定进度条，仍使用 `Framework/StartupSplash` 的 `kSplash` 接口。背景仅从 exe 同目录的 `Style/KswordHome_2.png` 读取，缺失时 `show=false`，暂不回退嵌入资源。图片按 640 逻辑像素宽度等比绘制，200% 为 1280 物理像素（用户已确认采用标准倍率），不能先生成 640px 中间位图再放大；底部文本和进度条按图片实际高度定位；用户确认右移24逻辑像素后，又要求状态字更小且整体远离分割线；最终状态字号上限12逻辑像素（先23→18→16，用户要求恢复旧字体后回到原12）；与替换前相同的Microsoft YaHei UI常规体，移除新增的AntiAliasGridFit文字渲染设置，使用GDI+默认渲染，状态布局顶点为画布高度减60、文本框高24，较原高度减83下移23，更靠近进度条，右侧状态/进度区域起点260、宽354，较首次右移结果再右移16，保留26逻辑像素右边距；底轨、不定滑块和百分比填充均按半条高绘制圆角（8高/4半径，短填充按宽度收小半径）。线程在创建窗口前绑定调用方 `GetThreadDesktop` 并设置自身 Per-Monitor DPI awareness，以保留 SOS 私有桌面和 QApplication 创建前的真实 DPI；窗口创建后通过 `GetDpiForWindow` 取缩放，不能依赖 DPI-unaware 进程的 `GetDpiForMonitor`。`hide` 停止动画定时器；启动状态及编译日期在主线程先完成双语解析；左下角三行统一14逻辑像素常规体，无邮箱下划线，统一20逻辑像素行高绘制；颜色随后改为区域背景自适应。`.codex-build-logs/startup-splash/splash_fixture.cpp` 在不切换输入桌面的私有桌面调用生产实现，42 项检查通过，覆盖 exe 相对路径、非 16:9/正方形图、96/144/192 DPI、阻塞调用方时动画刷新、重复显隐及图片缺失；192 DPI 为夹具注入，不等于实机修改缩放验收。
 
 - 同次完整 Release/x64 构建最终通过（`BUILD_RESULT=SUCCESS`、`EXIT_CODE=0`、主程序产物更新），日志 `.codex-build-logs/ksword-build-check-20261011-171913.raw.log`，双语审计28665条通过。初次构建在既有 GPU 表格/平滑滚动的裸 `QOpenGLWidget` 包含上报 C1083；两处改用 `QtOpenGLWidgets/QOpenGLWidget` 明确模块路径后通过，未修改 Qt SDK 或滚动行为。未启动生产主程序加载驱动，完整 GUI 由用户运行验收。
