@@ -12,6 +12,7 @@
 #include "../../Ui/FilterBar.h"
 #include "../../Ui/ListViewUtil.h"
 #include "../../Ui/LoadingOverlay.h"
+#include "../../Ui/TableCompareActions.h"
 #include "../../Ui/Theme.h"
 #include "../../Ui/VirtualListView.h"
 
@@ -91,6 +92,16 @@ struct ServiceActionTaskResult final {
     bool refreshRequired = false;
 };
 
+// ServiceColumnTitles is the caption list shared by the header, the TSV export
+// and the snapshot capture. Snapshots only keep display text, so a capture taken
+// with a different caption list would compare columns that are not the same.
+const std::vector<std::wstring>& ServiceColumnTitles() {
+    static const std::vector<std::wstring> titles{
+        L"服务名", L"显示名", L"状态", L"启动类型", L"PID", L"账户", L"风险"
+    };
+    return titles;
+}
+
 struct ServiceViewState final {
     HWND hwnd = nullptr;
     HWND refreshButton = nullptr;
@@ -108,6 +119,10 @@ struct ServiceViewState final {
     ServiceModel model;
     std::shared_ptr<const std::vector<Ksword::Ui::VirtualListRow>> filterRows;
     std::wstring statusText = L"正在等待服务快照…";
+    // Two snapshot slots live here for "what changed since the last scan": a
+    // service that appeared or started is the interesting event, and the list
+    // itself only ever shows the present.
+    Ksword::Ui::TableSnapshotEngine snapshotEngine;
     std::wstring filterQuery;
     bool filterUseRegex = false;
     std::uint64_t displayGeneration = 0;
@@ -838,6 +853,8 @@ void ShowServiceContextMenu(ServiceViewState& state, POINT screenPoint) {
     ::AppendMenuW(menu, MF_STRING, kMenuExportVisible, L"导出可见服务 TSV…");
     ::AppendMenuW(menu, MF_STRING | (entry ? MF_ENABLED : MF_GRAYED), kMenuExportDetail, L"导出所选服务详情 TSV…");
     ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    Ksword::Ui::AppendTableCompareMenuItems(menu, state.snapshotEngine);
+    ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     HMENU investigationMenu = ::CreatePopupMenu();
     if (investigationMenu) {
         ::AppendMenuW(investigationMenu, MF_STRING | (canOpenProcess ? 0U : MF_GRAYED),
@@ -893,6 +910,12 @@ void ShowServiceContextMenu(ServiceViewState& state, POINT screenPoint) {
         BeginServiceRefresh(state);
         break;
     default:
+        // The snapshot verbs share one id range across every table in the
+        // program, so the page forwards anything it does not own.
+        if (Ksword::Ui::HandleTableCompareCommand(state.snapshotEngine, static_cast<UINT>(command),
+                state.serviceList, ServiceColumnTitles(), state.statusText)) {
+            ::InvalidateRect(state.hwnd, nullptr, TRUE);
+        }
         break;
     }
 }
@@ -984,15 +1007,17 @@ bool CreateChildControls(ServiceViewState& state) {
     if (!state.serviceList.create(hwnd, kServiceListId, 0, 0, 1, 1, LVS_SHOWSELALWAYS | LVS_SINGLESEL)) {
         return false;
     }
-    state.serviceList.addColumns({
-        { 0, 180, LVCFMT_LEFT, L"服务名" },
-        { 1, 240, LVCFMT_LEFT, L"显示名" },
-        { 2, 90, LVCFMT_LEFT, L"状态" },
-        { 3, 100, LVCFMT_LEFT, L"启动类型" },
-        { 4, 70, LVCFMT_RIGHT, L"PID" },
-        { 5, 170, LVCFMT_LEFT, L"账户" },
-        { 6, 180, LVCFMT_LEFT, L"风险" },
-    });
+    {
+        const std::vector<std::wstring>& titles = ServiceColumnTitles();
+        std::vector<Ksword::Ui::ListViewColumn> columns;
+        static const int widths[] = { 180, 240, 90, 100, 70, 170, 180 };
+        static const int formats[] = { LVCFMT_LEFT, LVCFMT_LEFT, LVCFMT_LEFT, LVCFMT_LEFT,
+            LVCFMT_RIGHT, LVCFMT_LEFT, LVCFMT_LEFT };
+        for (std::size_t index = 0; index < titles.size(); ++index) {
+            columns.push_back({ static_cast<int>(index), widths[index], formats[index], titles[index] });
+        }
+        state.serviceList.addColumns(columns);
+    }
     if (HWND list = state.serviceList.hwnd()) {
         ListView_SetExtendedListViewStyle(list,
             LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER | LVS_EX_GRIDLINES | LVS_EX_LABELTIP);

@@ -81,6 +81,20 @@ std::vector<PopupMenuItem> BuildTableCompareMenuItems(const TableSnapshotEngine&
     return items;
 }
 
+void AppendTableCompareMenuItems(HMENU menu, const TableSnapshotEngine& engine)
+{
+    if (!menu) {
+        return;
+    }
+    for (const PopupMenuItem& item : BuildTableCompareMenuItems(engine)) {
+        if (item.separator) {
+            ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+            continue;
+        }
+        ::AppendMenuW(menu, MF_STRING | (item.enabled ? 0U : MF_GRAYED), item.id, item.text.c_str());
+    }
+}
+
 bool CaptureVisibleListSnapshot(TableSnapshotEngine& engine, const VirtualListView& list,
     const std::vector<std::wstring>& columnTitles, std::wstring& messageOut)
 {

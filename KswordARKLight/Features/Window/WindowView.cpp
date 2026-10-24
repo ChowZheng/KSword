@@ -14,6 +14,7 @@
 #include "../../Ui/FilterBar.h"
 #include "../../Ui/ListViewUtil.h"
 #include "../../Ui/LoadingOverlay.h"
+#include "../../Ui/TableCompareActions.h"
 #include "../../Ui/Theme.h"
 #include "../../Ui/EntityNavigation.h"
 #include "../../Ui/VirtualListView.h"
@@ -71,6 +72,8 @@ constexpr UINT kWindowMenuExcludeFromCapture = 62616;
 constexpr UINT kWindowMenuOpenProcess = 62617;
 constexpr UINT kWindowMenuOpenImageDirectory = 62618;
 constexpr UINT kWindowMenuExportDetail = 62619;
+constexpr UINT kWindowMenuExportVisible = 62620;
+constexpr UINT kWindowMenuExportAll = 62621;
 constexpr UINT kMsgWindowRefreshCompleted = WM_APP + 610;
 constexpr UINT kMsgWindowFilterCompleted = WM_APP + 611;
 constexpr UINT kMsgWindowDetailCompleted = WM_APP + 612;
@@ -239,6 +242,9 @@ struct WindowViewState {
     std::vector<AuditEntry> auditRows;
     WindowViewMode viewMode = WindowViewMode::WindowList;
     std::wstring statusText;
+    // Windows come and go between two refreshes; the snapshot pair answers "what
+    // appeared since I last looked", which the list by itself cannot.
+    Ksword::Ui::TableSnapshotEngine snapshotEngine;
     std::wstring filterQuery;
     bool filterUseRegex = false;
     // selectedStableKey keeps the identity of the selected display row, so a
@@ -1642,6 +1648,50 @@ void OpenSelectedWindowImageDirectory(WindowViewState* state) {
 // itself. Inputs are page state and screen coordinates; processing selects the
 // hit row when needed, groups detail/window actions into submenus, then
 // dispatches the chosen menu command; no value is returned.
+// WindowColumnTitles is the caption list shared by the header row, the TSV
+// export and the snapshot capture, so a captured column can never be compared
+// against a column that means something else.
+const std::vector<std::wstring>& WindowColumnTitles() {
+    static const std::vector<std::wstring> titles{
+        L"进程 / PID", L"HWND", L"Title", L"Class", L"State"
+    };
+    return titles;
+}
+
+// ExportWindowList writes one scope of the window list to disk. A window list is
+// a point-in-time desktop snapshot; once the owning process exits there is no
+// way to reconstruct what was on screen, so copy-only was the wrong ceiling.
+void ExportWindowList(WindowViewState* state, const Ksword::Ui::ExportRowScope scope) {
+    if (!state) {
+        return;
+    }
+    Ksword::Ui::ExportRowCount count{};
+    std::wstring error;
+    const Ksword::Ui::SaveTextFileResult result = Ksword::Ui::ExportVirtualListTsvWithDialog(
+        state->hwnd,
+        state->virtualList,
+        WindowColumnTitles(),
+        scope,
+        L"window_list.tsv",
+        scope == Ksword::Ui::ExportRowScope::Visible
+            ? L"导出窗口列表（可见行）"
+            : L"导出窗口列表（全部行）",
+        L"窗口列表导出",
+        &count,
+        &error);
+    if (result == Ksword::Ui::SaveTextFileResult::Failed) {
+        state->statusText = error.empty() ? L"窗口列表导出失败。" : L"窗口列表导出失败：" + error;
+    } else if (result == Ksword::Ui::SaveTextFileResult::Saved) {
+        std::wstring summary = L"已导出 " + std::to_wstring(count.exportedRows) + L" / " +
+            std::to_wstring(count.totalRows) + L" 个窗口";
+        if (count.filteredRows) {
+            summary += L"（筛选隐藏的 " + std::to_wstring(count.totalRows - count.exportedRows) + L" 个未写入）";
+        }
+        state->statusText = summary + L"。";
+    }
+    ::InvalidateRect(state->hwnd, nullptr, TRUE);
+}
+
 void ShowWindowContextMenu(WindowViewState* state, POINT screenPoint) {
     if (!state || !state->windowList) {
         return;
@@ -1713,6 +1763,15 @@ void ShowWindowContextMenu(WindowViewState* state, POINT screenPoint) {
         ::AppendMenuW(copyMenu, MF_STRING | (!state->virtualList.visibleIndexes().empty() ? 0U : MF_GRAYED), kWindowMenuCopyVisible, L"复制可见结果");
         ::AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(copyMenu), L"复制");
     }
+    HMENU exportMenu = ::CreatePopupMenu();
+    if (exportMenu) {
+        const bool hasVisible = !state->virtualList.visibleIndexes().empty();
+        ::AppendMenuW(exportMenu, MF_STRING | (hasVisible ? 0U : MF_GRAYED), kWindowMenuExportVisible, L"导出可见行为 TSV…");
+        ::AppendMenuW(exportMenu, MF_STRING | (hasVisible ? 0U : MF_GRAYED), kWindowMenuExportAll, L"导出全部行为 TSV…");
+        ::AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(exportMenu), L"导出");
+    }
+    ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    Ksword::Ui::AppendTableCompareMenuItems(menu, state->snapshotEngine);
 
     const UINT command = ::TrackPopupMenu(menu,
         TPM_RETURNCMD | TPM_RIGHTBUTTON,
@@ -1781,7 +1840,17 @@ void ShowWindowContextMenu(WindowViewState* state, POINT screenPoint) {
     case kWindowMenuOpenImageDirectory:
         OpenSelectedWindowImageDirectory(state);
         break;
+    case kWindowMenuExportVisible:
+        ExportWindowList(state, Ksword::Ui::ExportRowScope::Visible);
+        break;
+    case kWindowMenuExportAll:
+        ExportWindowList(state, Ksword::Ui::ExportRowScope::All);
+        break;
     default:
+        if (Ksword::Ui::HandleTableCompareCommand(state->snapshotEngine, command,
+                state->virtualList, WindowColumnTitles(), state->statusText)) {
+            ::InvalidateRect(state->hwnd, nullptr, TRUE);
+        }
         break;
     }
 }
@@ -1897,13 +1966,15 @@ bool CreateChildControls(WindowViewState* state, HWND hwnd) {
     if (state->processImageList != nullptr) {
         ListView_SetImageList(state->windowList, state->processImageList, LVSIL_SMALL);
     }
-    state->virtualList.addColumns({
-        { 0, 190, LVCFMT_LEFT, L"进程 / PID" },
-        { 1, 120, LVCFMT_LEFT, L"HWND" },
-        { 2, 300, LVCFMT_LEFT, L"Title" },
-        { 3, 190, LVCFMT_LEFT, L"Class" },
-        { 4, 220, LVCFMT_LEFT, L"State" },
-    });
+    {
+        const std::vector<std::wstring>& titles = WindowColumnTitles();
+        std::vector<Ksword::Ui::ListViewColumn> columns;
+        static const int widths[] = { 190, 120, 300, 190, 220 };
+        for (std::size_t index = 0; index < titles.size(); ++index) {
+            columns.push_back({ static_cast<int>(index), widths[index], LVCFMT_LEFT, titles[index] });
+        }
+        state->virtualList.addColumns(columns);
+    }
     AddColumn(state->detailList, 0, L"Property", 170);
     AddColumn(state->detailList, 1, L"Value", 720);
     state->loadingOverlay = Ksword::Ui::CreateLoadingOverlay(hwnd, kLoadingOverlayId, { 0, 0, 1, 1 });

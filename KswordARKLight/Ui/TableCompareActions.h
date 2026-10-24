@@ -24,6 +24,13 @@ inline constexpr UINT kMenuTableClearSnapshots = 0xE112;
 // yet. Output: menu descriptors ready for BuildPopupMenu.
 std::vector<PopupMenuItem> BuildTableCompareMenuItems(const TableSnapshotEngine& engine);
 
+// AppendTableCompareMenuItems is the same three verbs appended straight onto an
+// existing HMENU. Half the pages in this program build their popup with raw
+// AppendMenuW calls and only own a fragment of it, so handing them a descriptor
+// vector they would have to translate back adds a step without adding anything.
+// The caller appends its own separator before this call.
+void AppendTableCompareMenuItems(HMENU menu, const TableSnapshotEngine& engine);
+
 // CaptureVisibleListSnapshot stores the list's currently visible rows as the
 // table's next snapshot. Input: the engine, the list, the exact column captions
 // the page shows (same vector it passes to BuildVisibleVirtualListTsv) and an
