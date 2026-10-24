@@ -120,6 +120,12 @@ public:
 
     // findItem returns the node with the given key, or nullptr.
     HTREEITEM findItem(const std::wstring& key) const;
+    // duplicateKeyCount reports how many rows arrived carrying a key that an
+    // already live row had claimed. The first claim wins; a duplicate row is
+    // still shown but is not addressable through findItem. A page that sees a
+    // nonzero count has a key bug of its own: two rows are being given the same
+    // identity, and navigation by key will silently land on the first one.
+    std::size_t duplicateKeyCount() const noexcept { return duplicateKeyCount_; }
     std::wstring keyOf(HTREEITEM item) const;
     LPARAM userDataOf(HTREEITEM item) const;
     bool isLoaded(HTREEITEM item) const;
@@ -207,6 +213,7 @@ private:
     // itemByKey_ is the index that kills the recursive FindTreeItemByPath scan
     // every page used to run on each expand.
     std::unordered_map<std::wstring, HTREEITEM> itemByKey_;
+    std::size_t duplicateKeyCount_ = 0;
     ExpansionCallback onExpand_;
     ChildSource childSource_;
     int updateDepth_ = 0;

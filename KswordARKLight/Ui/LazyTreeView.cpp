@@ -34,6 +34,7 @@ LazyTreeView::~LazyTreeView()
     }
     nodes_.clear();
     itemByKey_.clear();
+    duplicateKeyCount_ = 0;
 }
 
 bool LazyTreeView::create(HWND parent, int id, int x, int y, int width, int height, DWORD extraStyle)
@@ -142,7 +143,13 @@ void LazyTreeView::eraseRecord(HTREEITEM item)
         return;
     }
     if (!it->second->key.empty()) {
-        itemByKey_.erase(it->second->key);
+        // Only release the key if this record still owns it. A duplicate row
+        // never claimed it, and deleting the older row must not make the newer
+        // row unfindable.
+        const auto keyIt = itemByKey_.find(it->second->key);
+        if (keyIt != itemByKey_.end() && keyIt->second == item) {
+            itemByKey_.erase(keyIt);
+        }
     }
     nodes_.erase(it);
 }
@@ -181,7 +188,15 @@ HTREEITEM LazyTreeView::insertOne(HTREEITEM parent, const TreeRow& row)
     node->parent = parent;
     node->hasChildren = row.hasChildren;
     if (!row.key.empty()) {
-        itemByKey_[node->key] = item;
+        // Keep the first claim instead of overwriting. Overwriting used to make
+        // findItem() jump to the newest duplicate while the older row stayed on
+        // screen, and deleting the older row then erased the key that the newer
+        // row was supposed to be reachable by.
+        if (itemByKey_.find(node->key) == itemByKey_.end()) {
+            itemByKey_.emplace(node->key, item);
+        } else {
+            ++duplicateKeyCount_;
+        }
     }
     nodes_.emplace(item, std::move(node));
     return item;
@@ -314,6 +329,7 @@ void LazyTreeView::discardAllRecords()
     // every TVN_DELETEITEMW that arrives afterwards finds no record and returns.
     nodes_.clear();
     itemByKey_.clear();
+    duplicateKeyCount_ = 0;
 }
 
 void LazyTreeView::clearImmediately()
