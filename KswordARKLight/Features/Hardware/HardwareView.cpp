@@ -16,6 +16,7 @@
 
 #include <algorithm>
 #include <cwctype>
+#include <iterator>
 #include <memory>
 #include <regex>
 #include <sstream>
@@ -40,6 +41,7 @@ constexpr UINT kMenuCopyDetailCell = 62003;
 constexpr UINT kMenuCopyDetailRow = 62004;
 constexpr UINT kMenuCopyDetailVisible = 62005;
 constexpr UINT kMenuExportDetail = 62006;
+constexpr UINT kMenuExportTree = 62007;
 constexpr UINT kMsgRefreshCompleted = WM_APP + 585;
 constexpr UINT kMsgFilterCompleted = WM_APP + 586;
 constexpr UINT kMsgDetailCompleted = WM_APP + 587;
@@ -579,6 +581,9 @@ void BeginDeviceRefresh(HardwareViewState& state) {
         });
 }
 
+// ExportDeviceTree 定义在文件靠后（和详情导出放在一起），右键菜单先用到。
+void ExportDeviceTree(HardwareViewState& state);
+
 // ShowDeviceContextMenu displays read-only evidence actions for the selected
 // device. Inputs are module state and a screen point; processing corrects
 // selection and offers only refresh/copy operations; no device configuration is
@@ -615,6 +620,10 @@ void ShowDeviceContextMenu(HardwareViewState* state, POINT screenPoint) {
         ::AppendMenuW(copyMenu, MF_STRING | (hasDevice ? 0U : MF_GRAYED), kMenuCopyInstanceId, L"复制实例 ID");
         ::AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(copyMenu), L"复制");
     }
+    const bool hasTreeRows = state->tree.hwnd() != nullptr
+        && TreeView_GetRoot(state->tree.hwnd()) != nullptr;
+    ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    ::AppendMenuW(menu, MF_STRING | (hasTreeRows ? 0U : MF_GRAYED), kMenuExportTree, L"导出设备树 TSV…");
 
     const UINT command = ::TrackPopupMenu(menu,
         TPM_RETURNCMD | TPM_RIGHTBUTTON,
@@ -637,9 +646,87 @@ void ShowDeviceContextMenu(HardwareViewState* state, POINT screenPoint) {
         state->statusText = WriteClipboardText(state->hwnd, node->instanceId) ? L"已复制设备实例 ID。" : L"复制设备实例 ID 失败。";
         ::InvalidateRect(state->hwnd, nullptr, TRUE);
         return;
+    case kMenuExportTree:
+        ExportDeviceTree(*state);
+        return;
     default:
         break;
     }
+}
+
+// ExportDeviceTree writes the device tree as it is currently materialized: the
+// visible rows, in the order the operator sees them, with the depth kept as both
+// an indent and its own column. A tree has no columns, so a flat "名称 / 深度"
+// TSV is the only shape that survives a round trip — and it is read off the
+// control rather than the model, so a half-expanded tree exports what is really
+// on screen instead of thousands of rows nobody ever loaded.
+void ExportDeviceTree(HardwareViewState& state) {
+    const HWND tree = state.tree.hwnd();
+    if (tree == nullptr || TreeView_GetRoot(tree) == nullptr) {
+        state.statusText = L"设备树为空，没有可导出的行。";
+        ::InvalidateRect(state.hwnd, nullptr, TRUE);
+        return;
+    }
+
+    std::wstring text = L"名称\t深度\r\n";
+    std::size_t exportedRows = 0;
+    for (HTREEITEM item = TreeView_GetRoot(tree); item != nullptr;
+         item = TreeView_GetNextItem(tree, item, TVGN_NEXTVISIBLE)) {
+        std::size_t depth = 0;
+        for (HTREEITEM parent = TreeView_GetParent(tree, item); parent != nullptr;
+             parent = TreeView_GetParent(tree, parent)) {
+            ++depth;
+            if (depth > 32U) {
+                // 深度异常只可能来自控件数据损坏，别让导出循环失控。
+                break;
+            }
+        }
+
+        std::wstring name;
+        if (state.tree.isNotice(item)) {
+            // 提示行（「已截断」「加载中」）也是屏幕上的一行，如实写出来，
+            // 别让导出的树看起来比界面少一截却没有任何解释。
+            name = L"（提示行）";
+        } else {
+            wchar_t buffer[512] = {};
+            TVITEMW query{};
+            query.mask = TVIF_TEXT;
+            query.hItem = item;
+            query.pszText = buffer;
+            query.cchTextMax = static_cast<int>(std::size(buffer));
+            if (TreeView_GetItem(tree, &query)) {
+                name.assign(buffer);
+            }
+        }
+
+        text += Ksword::Ui::SanitizeTsvCell(std::wstring(depth, L' ') + name);
+        text += L'\t';
+        text += std::to_wstring(depth);
+        text += L"\r\n";
+        ++exportedRows;
+    }
+
+    if (exportedRows == 0U) {
+        state.statusText = L"设备树为空，没有可导出的行。";
+        ::InvalidateRect(state.hwnd, nullptr, TRUE);
+        return;
+    }
+
+    std::wstring error;
+    const Ksword::Ui::SaveTextFileResult result = Ksword::Ui::SaveUtf8TextFileWithDialog(
+        state.hwnd,
+        L"hardware_device_tree.tsv",
+        L"导出设备树",
+        L"制表符分隔文件 (*.tsv)\0*.tsv\0所有文件 (*.*)\0*.*\0",
+        L"tsv",
+        text,
+        &error);
+    if (result == Ksword::Ui::SaveTextFileResult::Failed) {
+        state.statusText = error.empty() ? L"设备树导出失败。" : L"设备树导出失败：" + error;
+    } else if (result == Ksword::Ui::SaveTextFileResult::Saved) {
+        state.statusText = L"已导出设备树 " + std::to_wstring(exportedRows) + L" 行（仅当前展开的部分）。";
+    }
+    ::InvalidateRect(state.hwnd, nullptr, TRUE);
 }
 
 // ExportDetailTable writes the property pane as TSV. The pane is a plain report
