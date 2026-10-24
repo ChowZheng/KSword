@@ -133,7 +133,9 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="KswordCLI.cpp" />
+    <ClCompile Include="CliArgs.cpp" />
     <ClCompile Include="CliCore.cpp" />
+    <ClCompile Include="CliText.cpp" />
     <ClCompile Include="ArkDriverExtended.cpp" />
     <ClCompile Include="..\Ksword5.1\Ksword5.1\ArkDriverClient\ArkDriverClient.cpp" />
     <ClCompile Include="..\Ksword5.1\Ksword5.1\ArkDriverClient\ArkDriverAudit.cpp" />
@@ -162,7 +164,9 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="ArkDriverExtended.h" />
+    <ClInclude Include="CliArgs.h" />
     <ClInclude Include="CliCore.h" />
+    <ClInclude Include="CliText.h" />
     <ClInclude Include="..\shared\driver\KswordArkMemoryResult.h" />
   </ItemGroup>
   <ItemGroup>
