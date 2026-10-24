@@ -214,7 +214,10 @@ void ExportCurrentTabTsv(DriverFeaturePageState& state) {
         suggestedFileName = L"ksword-arklight-system-threads.tsv";
         dialogTitle = L"导出系统线程 TSV";
     } else {
-        SetStatus(state, L"当前页不支持顶栏 TSV 导出。");
+        // The remaining tabs own live buffers rather than a table this feature
+        // can serialize, so the top bar has nothing to ask for. Say where the
+        // export actually lives instead of just declaring it unsupported.
+        SetStatus(state, L"当前页没有顶栏 TSV 导出；请在表格上右键选择「导出…」。");
         return;
     }
 

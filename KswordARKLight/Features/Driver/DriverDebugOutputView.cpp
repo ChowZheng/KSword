@@ -5,6 +5,7 @@
 #include "../../../Ksword5.1/Ksword5.1/ArkDriverClient/ArkDriverClient.h"
 #include "../../Ui/AsyncTask.h"
 #include "../../Ui/Controls.h"
+#include "../../Ui/ExportUtil.h"
 #include "../../Ui/FilterBar.h"
 #include "../../Ui/ListViewUtil.h"
 #include "../../Ui/NumericSortKey.h"
@@ -50,6 +51,8 @@ constexpr UINT kMsgFilterCompleted = WM_APP + 602;
 constexpr UINT kMenuCopyCell = 64351;
 constexpr UINT kMenuCopyRow = 64352;
 constexpr UINT kMenuCopyVisible = 64353;
+constexpr UINT kMenuExportVisible = 64354;
+constexpr UINT kMenuExportAll = 64355;
 
 struct DebugRecordRow {
     std::uint64_t sequence = 0;
@@ -231,22 +234,70 @@ std::wstring ControlStatusText(const ksword::ark::DebugOutputControlResult& resu
         L"，累计丢弃=" + std::to_wstring(result.droppedCount) + L"。";
 }
 
+// AppendDebugTsvRow writes one record as a tab-separated line. The debug text
+// column is driver output and can carry tabs or newlines, so it goes through the
+// shared cell sanitizer rather than being pasted raw.
+void AppendDebugTsvRow(std::wstring& text, const DebugRecordRow& row) {
+    const auto& cells = DebugCells(row);
+    for (std::size_t cell = 0; cell < cells.size(); ++cell) {
+        if (cell != 0) {
+            text += L'\t';
+        }
+        text += DriverModel::sanitizeTsvCell(cells[cell]);
+    }
+    text += L"\r\n";
+}
+
 std::wstring BuildVisibleTsv(const DriverDebugOutputViewState& state, const bool selectedOnly) {
     std::wstring text = L"序号\t中断时间(100ns)\t组件\t级别\t标记\t文本\r\n";
     const int selected = ListView_GetNextItem(state.listView, -1, LVNI_SELECTED);
     const int start = selectedOnly ? selected : 0;
     const int end = selectedOnly ? selected + 1 : static_cast<int>(state.visibleRows.size());
     for (int index = start; index >= 0 && index < end; ++index) {
-        const auto& cells = DebugCells(*state.visibleRows[static_cast<std::size_t>(index)]);
-        for (std::size_t cell = 0; cell < cells.size(); ++cell) {
-            if (cell != 0) {
-                text += L'\t';
-            }
-            text += DriverModel::sanitizeTsvCell(cells[cell]);
-        }
-        text += L"\r\n";
+        AppendDebugTsvRow(text, *state.visibleRows[static_cast<std::size_t>(index)]);
     }
     return text;
+}
+
+// BuildAllTsv serializes the whole ring buffer, ignoring the active filter. The
+// buffer only holds the last kMaximumRecords records and the driver discards the
+// oldest as it wraps, so a filtered export can silently omit records that will
+// never be capturable again.
+std::wstring BuildAllTsv(const DriverDebugOutputViewState& state) {
+    std::wstring text = L"序号\t中断时间(100ns)\t组件\t级别\t标记\t文本\r\n";
+    for (const auto& row : state.records) {
+        AppendDebugTsvRow(text, *row);
+    }
+    return text;
+}
+
+// ExportRows writes an already serialized debug-output table to disk and
+// reports the outcome in the status line. Text arrives pre-built because the two
+// scopes walk different containers, and a cancelled save stays silent: the user
+// who pressed Esc should not be told the export failed.
+void ExportRows(DriverDebugOutputViewState& state, const std::wstring& text,
+    const std::size_t exportedRows, const std::size_t totalRows, const wchar_t* dialogTitle) {
+    std::wstring error;
+    const Ksword::Ui::SaveTextFileResult result = Ksword::Ui::SaveUtf8TextFileWithDialog(
+        state.hwnd,
+        L"driver_debug_output.tsv",
+        dialogTitle,
+        L"制表符分隔文件 (*.tsv)\0*.tsv\0所有文件 (*.*)\0*.*\0",
+        L"tsv",
+        text,
+        &error);
+    if (result == Ksword::Ui::SaveTextFileResult::Failed) {
+        SetStatus(state, error.empty() ? L"调试输出导出失败。" : L"调试输出导出失败：" + error);
+        return;
+    }
+    if (result != Ksword::Ui::SaveTextFileResult::Saved) {
+        return;
+    }
+    std::wstring message = L"已导出 " + std::to_wstring(exportedRows) + L" 条调试输出。";
+    if (exportedRows < totalRows) {
+        message += L"筛选隐藏的 " + std::to_wstring(totalRows - exportedRows) + L" 条未写入。";
+    }
+    SetStatus(state, message);
 }
 
 void CommitVisibleRows(DriverDebugOutputViewState& state, const std::wstring& selected, const std::wstring& top) {
@@ -577,6 +628,13 @@ void ShowContextMenu(DriverDebugOutputViewState& state, POINT screenPoint) {
     ::AppendMenuW(menu, MF_STRING | (selected >= 0 ? 0U : MF_GRAYED), kMenuCopyCell, L"复制单元格");
     ::AppendMenuW(menu, MF_STRING | (selected >= 0 ? 0U : MF_GRAYED), kMenuCopyRow, L"复制行");
     ::AppendMenuW(menu, MF_STRING | (!state.visibleRows.empty() ? 0U : MF_GRAYED), kMenuCopyVisible, L"复制可见结果");
+    ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    // Two scopes on purpose. "可见结果" follows the filter and matches what the
+    // user is looking at; "全部记录" ignores it because this is a 2000-record
+    // ring buffer fed by driver DbgPrint, so a filtered export would drop
+    // records that cannot be replayed.
+    ::AppendMenuW(menu, MF_STRING | (!state.visibleRows.empty() ? 0U : MF_GRAYED), kMenuExportVisible, L"导出可见结果为 TSV…");
+    ::AppendMenuW(menu, MF_STRING | (!state.records.empty() ? 0U : MF_GRAYED), kMenuExportAll, L"导出全部记录为 TSV…");
     const UINT command = ::TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, screenPoint.x, screenPoint.y, 0, state.hwnd, nullptr);
     ::DestroyMenu(menu);
     if (command == kMenuCopyCell && selected >= 0 && selected < static_cast<int>(state.visibleRows.size())) {
@@ -587,6 +645,12 @@ void ShowContextMenu(DriverDebugOutputViewState& state, POINT screenPoint) {
         DriverActions::CopyTextToClipboard(state.hwnd, BuildVisibleTsv(state, true));
     } else if (command == kMenuCopyVisible) {
         DriverActions::CopyTextToClipboard(state.hwnd, BuildVisibleTsv(state, false));
+    } else if (command == kMenuExportVisible) {
+        ExportRows(state, BuildVisibleTsv(state, false), state.visibleRows.size(), state.records.size(),
+            L"导出驱动调试输出（可见结果）");
+    } else if (command == kMenuExportAll) {
+        ExportRows(state, BuildAllTsv(state), state.records.size(), state.records.size(),
+            L"导出驱动调试输出（全部记录）");
     }
 }
 
