@@ -34,6 +34,7 @@ constexpr UINT kThreadTerminateCommand = 64107;
 constexpr UINT kThreadR0TerminateCommand = 64108;
 constexpr UINT kThreadR0SuspendCommand = 64109;
 constexpr UINT kThreadR0ResumeCommand = 64110;
+constexpr UINT kThreadExportCommand = 64111;
 constexpr UINT kThreadAffinityFollowProcessCommand = 50000;
 constexpr UINT kThreadAffinityProcessorBaseCommand = 50001;
 constexpr std::size_t kThreadAffinityMaxProcessorCommands = 15000U;
@@ -605,8 +606,11 @@ bool ProcessDetailPage::HandleThreadCommand(int controlId) {
 
 bool ProcessDetailPage::HandleThreadContextMenu(POINT screenPoint) {
     HWND list = Control(TabIndex::Threads, ThreadList);
-    if (!list || SelectedListRow(list) < 0) {
+    if (!list) {
         return true;
+    }
+    if (SelectedListRow(list) < 0) {
+        return ShowListOnlyContextMenu(list, screenPoint, L"threads");
     }
 
     std::size_t selectedIndex = 0;
@@ -624,6 +628,10 @@ bool ProcessDetailPage::HandleThreadContextMenu(POINT screenPoint) {
     ::AppendMenuW(menu, MF_STRING, kThreadCopyCellCommand, L"复制当前单元格");
     ::AppendMenuW(menu, MF_STRING, kThreadCopyRowCommand, L"复制当前行");
     ::AppendMenuW(menu, MF_STRING, kThreadCopyAllCommand, L"复制全部");
+    ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    // Thread ownership and creation times are gone the moment the process exits,
+    // so the table has to be exportable as a file and not only to the clipboard.
+    ::AppendMenuW(menu, MF_STRING, kThreadExportCommand, L"导出线程表为 TSV…");
     ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     ::AppendMenuW(menu, MF_STRING, kThreadShowDetailCommand, L"线程详细信息");
     ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
@@ -695,6 +703,7 @@ bool ProcessDetailPage::HandleThreadContextMenu(POINT screenPoint) {
     case kThreadCopyCellCommand: CopyListCell(list); break;
     case kThreadCopyRowCommand: CopyListRow(list); break;
     case kThreadCopyAllCommand: CopyListAll(list); break;
+    case kThreadExportCommand: ExportListTsv(list, L"threads"); break;
     case kThreadShowDetailCommand: ShowSelectedThreadSummary(); break;
     case kThreadSuspendCommand: SuspendSelectedThread(); break;
     case kThreadResumeCommand: ResumeSelectedThread(); break;

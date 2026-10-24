@@ -38,6 +38,7 @@ constexpr UINT kModuleMenuUnload = 64105;
 constexpr UINT kModuleMenuSuspendThread = 64106;
 constexpr UINT kModuleMenuResumeThread = 64107;
 constexpr UINT kModuleMenuTerminateThread = 64108;
+constexpr UINT kModuleMenuExport = 64109;
 
 constexpr UINT_PTR kModulePageVisualSubclassId = 0x4D4F4455U; // "MODU"
 constexpr UINT_PTR kModuleHeaderSubclassId = 0x4D4F4448U;     // "MODH"
@@ -858,8 +859,11 @@ LRESULT CALLBACK ProcessDetailPage::ModuleHeaderSubclassProc(
 
 bool ProcessDetailPage::HandleModuleContextMenu(POINT screenPoint) {
     HWND list = Control(TabIndex::Modules, ModuleList);
-    if (!list || SelectedListRow(list) < 0) {
+    if (!list) {
         return true;
+    }
+    if (SelectedListRow(list) < 0) {
+        return ShowListOnlyContextMenu(list, screenPoint, L"modules");
     }
     HMENU menu = ::CreatePopupMenu();
     if (!menu) {
@@ -867,6 +871,10 @@ bool ProcessDetailPage::HandleModuleContextMenu(POINT screenPoint) {
     }
     ::AppendMenuW(menu, MF_STRING, kModuleMenuCopyCell, L"复制单元格");
     ::AppendMenuW(menu, MF_STRING, kModuleMenuCopyRow, L"复制行");
+    ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    // The loaded-module list is the answer to "what did this process pull in",
+    // and it dies with the process, so it needs a file path out.
+    ::AppendMenuW(menu, MF_STRING, kModuleMenuExport, L"导出模块表为 TSV…");
     ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     ::AppendMenuW(menu, MF_STRING, kModuleMenuDetail, L"查看模块详情");
     ::AppendMenuW(menu, MF_STRING, kModuleMenuOpenFolder, L"打开文件夹");
@@ -887,6 +895,7 @@ bool ProcessDetailPage::HandleModuleContextMenu(POINT screenPoint) {
     switch (command) {
     case kModuleMenuCopyCell: CopyListCell(list); break;
     case kModuleMenuCopyRow: CopyListRow(list); break;
+    case kModuleMenuExport: ExportListTsv(list, L"modules"); break;
     case kModuleMenuDetail: ShowModuleDetailDialog(); break;
     case kModuleMenuOpenFolder: OpenSelectedModuleFolder(); break;
     case kModuleMenuUnload: UnloadSelectedModule(); break;

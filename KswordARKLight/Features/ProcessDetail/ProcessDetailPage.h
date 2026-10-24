@@ -23,6 +23,13 @@
 
 namespace Ksword::Features::ProcessDetail {
 
+// AttachTextActionsToTextPanel installs the shared right-click menu on a
+// read-only text panel: copy, and export as a UTF-8 text file. It is a free
+// function because the panels are created by several translation units and none
+// of them needs page state to answer either command. suggestedName must have
+// static lifetime; it becomes the default file name in the save dialog.
+void AttachTextActionsToTextPanel(HWND control, const wchar_t* suggestedName);
+
 // ProcessDetailPage is the native Win32 conversion of the full process-detail
 // layout. It owns native tab pages and does not load foreign UI sources,
 // resources, or binaries.
@@ -383,6 +390,18 @@ private:
     void CopyListCell(HWND list);
     void CopyListRow(HWND list);
     void CopyListAll(HWND list);
+    // BuildListTsv serializes an entire report table with its header row. It is
+    // shared by the clipboard path and the file path so an exported table and a
+    // copied table can never drift apart.
+    std::wstring BuildListTsv(HWND list) const;
+    // ExportListTsv writes one table to disk. Every table on this page is
+    // investigation data — modules and threads disappear when the process exits
+    // — so none of them should be clipboard-only.
+    void ExportListTsv(HWND list, const wchar_t* label);
+    // ShowListOnlyContextMenu is the menu for a populated table with nothing
+    // selected: the row actions have no target, but copying and exporting the
+    // whole table still do.
+    bool ShowListOnlyContextMenu(HWND list, POINT screenPoint, const wchar_t* label);
     int SelectedListRow(HWND list) const;
 
     void PopulateDetailTab();
