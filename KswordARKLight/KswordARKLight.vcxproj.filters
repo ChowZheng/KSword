@@ -338,6 +338,9 @@
     <ClCompile Include="Features\Misc\MiscFeature.cpp">
       <Filter>Features\Misc</Filter>
     </ClCompile>
+    <ClCompile Include="Features\Misc\MiscAuditCollectors.cpp">
+      <Filter>Features\Misc</Filter>
+    </ClCompile>
     <ClCompile Include="Features\Monitor\EtwFilterDialog.cpp">
       <Filter>Features\Monitor</Filter>
     </ClCompile>
@@ -948,6 +951,9 @@
       <Filter>Features\Memory</Filter>
     </ClInclude>
     <ClInclude Include="Features\Misc\MiscFeature.h">
+      <Filter>Features\Misc</Filter>
+    </ClInclude>
+    <ClInclude Include="Features\Misc\MiscAuditPage.h">
       <Filter>Features\Misc</Filter>
     </ClInclude>
     <ClInclude Include="Features\Monitor\EtwEventModel.h">

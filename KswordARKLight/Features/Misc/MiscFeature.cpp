@@ -1,10 +1,6 @@
-#include "../../../shared/usermode/backend/security/BugcheckEvidence.h"
-#include "../../../shared/usermode/backend/security/BamAhcache.h"
-#include "../../../shared/usermode/backend/security/AppLocker.h"
-#include "../../../shared/usermode/backend/security/HyperV.h"
-#include "../../../shared/usermode/backend/security/Vbs.h"
-#include "../../../shared/usermode/backend/security/CodeIntegrity.h"
 #include "MiscFeature.h"
+
+#include "MiscAuditPage.h"
 
 #include "../../Ui/AsyncTask.h"
 #include "../../Ui/Controls.h"
@@ -12,6 +8,7 @@
 #include "../../Ui/FilterBar.h"
 #include "../../Ui/ListViewUtil.h"
 #include "../../Ui/LoadingOverlay.h"
+#include "../../Ui/TableCompareActions.h"
 #include "../../Ui/TabUtil.h"
 #include "../../Ui/Theme.h"
 #include "../../Ui/VirtualListView.h"
@@ -33,11 +30,6 @@
 
 namespace Ksword::Features::Misc {
 namespace {
-using namespace ks::r3::security;
-using namespace ks::r3::security;
-using namespace ks::r3::security;
-using namespace ks::r3::security;
-using namespace ks::r3::security;
 using namespace ks::r3::security;
 
 constexpr wchar_t kMiscHostClass[] = L"KswordARKLight.MiscFeaturePage";
@@ -66,15 +58,6 @@ constexpr UINT kMenuExportAll = 69206;
 constexpr UINT kMsgAuditRefreshCompleted = WM_APP + 603;
 constexpr UINT kMsgAuditFilterCompleted = WM_APP + 604;
 constexpr UINT kMsgBugcheckUploadCompleted = WM_APP + 605;
-
-enum class MiscAuditPageId {
-    CodeIntegrity,
-    VbsHvciSkci,
-    HyperV,
-    AppLocker,
-    BamAhcache,
-    Bugcheck,
-};
 
 // MiscAuditRow is the value-only evidence record rendered into each ListView.
 // Inputs come from read-only R3 commands, registry reads, service status queries
@@ -128,6 +111,9 @@ struct MiscAuditViewState {
     std::uint64_t snapshotGeneration = 0;
     int contextColumn = 0;
     bool hasLoaded = false;
+    // 每个标签页各持一个引擎：六个页面的列集虽然相同，但数据来源与刷新时机
+    // 完全不同，共用一份快照会把两个页面的证据混在一起。
+    Ksword::Ui::TableSnapshotEngine snapshotEngine;
     std::unique_ptr<Ksword::Ui::AsyncSnapshotTask<MiscAuditRefreshResult>> refreshTask;
     std::unique_ptr<Ksword::Ui::AsyncSnapshotTask<MiscAuditFilterResult>> filterTask;
     std::unique_ptr<Ksword::Ui::AsyncSnapshotTask<BugcheckUploadResult>> bugcheckUploadTask;
@@ -170,260 +156,6 @@ MiscAuditViewState* StateFromAuditView(HWND hwnd) {
 // is the host HWND; output is null before creation or after destruction.
 MiscFeaturePageState* StateFromHost(HWND hwnd) {
     return reinterpret_cast<MiscFeaturePageState*>(::GetWindowLongPtrW(hwnd, GWLP_USERDATA));
-}
-
-// TrimCopy removes leading and trailing whitespace from display command output.
-// Input is any captured string; processing does not alter interior newlines;
-// output is a new trimmed string.
-
-
-// CollapseWhitespace converts multi-line command output into compact cell text.
-// Input is a captured string; processing replaces CR/LF/TAB runs with spaces;
-// output is bounded by the caller when inserted into the ListView.
-
-
-// QuotePowerShellCommand wraps a script body in a PowerShell script block.
-// Input is one read-only command body; processing keeps the body executable by
-// powershell.exe while avoiding cmd.exe parsing; output is used only locally.
-
-
-// GetLastErrorText formats a Win32 error. Input is a DWORD error code; output is
-// a readable message with the numeric value retained for diagnostics.
-
-
-// AppendRow appends one evidence row to a vector. Inputs are display fields and
-// optional detail; processing copies them into the row list; no value is returned.
-
-
-// RunCaptureCommand starts a bounded child process and captures stdout/stderr.
-// Inputs are the full command line and timeout in milliseconds; processing uses
-// anonymous pipes, waits without injecting input, and terminates only the helper
-// process if it exceeds the local UI budget; output includes failure reason.
-
-
-// PowerShellCommand builds a hidden, non-profile PowerShell invocation for local
-// read-only posture queries. Input is a script body; output is a command line for
-// RunCaptureCommand. The script is expected to avoid mutation cmdlets.
-
-
-// RunPowerShellScalar executes one PowerShell query and returns compact output.
-// Inputs are a script body and timeout; processing captures stdout/stderr and
-// keeps the failure reason if PowerShell/WMI is unavailable; output is a command
-// result suitable for AddCommandRow.
-
-
-// AddCommandRow converts a command result into one evidence row. Inputs identify
-// the evidence and command source; processing stores either output or an explicit
-// failure reason; no value is returned.
-
-
-// QueryRegistryValueString reads one HKLM value without writing registry state.
-// Inputs are a subkey and value name; processing uses RegOpenKeyEx/RegQueryValueEx
-// with KEY_READ only; output is true when a display value was extracted.
-
-
-// AddRegistryRow appends one read-only registry evidence row. Inputs are HKLM
-// path/value labels; processing never writes or creates keys; no value is returned.
-
-
-// QueryServiceStatusText reads one service/driver status with the Service Control
-// Manager using query access only. Inputs are a service name; output is true with
-// status text or false with a failure reason.
-
-
-// AddServiceRow appends one SCM status row. Inputs are a display category/item
-// and SCM service name; processing uses query-only SCM handles; no return value.
-
-
-// AddDriverCapabilityRow queries existing ArkDriverClient capability status as
-// the only R0-facing check in this module. Inputs are a row list and scope label;
-// processing calls the existing wrapper and never opens DeviceIoControl directly;
-// no value is returned.
-void AddDriverCapabilityRow(std::vector<MiscAuditRow>& rows, const std::wstring& scope) {
-    const ksword::ark::DriverClient client;
-    const ksword::ark::DriverCapabilitiesQueryResult capability = client.queryDriverCapabilities();
-    if (capability.io.ok) {
-        std::wostringstream detail;
-        detail << L"Protocol=" << capability.driverProtocolVersion
-               << L"; StatusFlags=0x" << std::hex << std::uppercase << capability.statusFlags
-               << L"; DynData=0x" << capability.dynDataStatusFlags
-               << L"; Returned=" << std::dec << capability.returnedFeatureCount << L"/" << capability.totalFeatureCount;
-        AppendRow(rows, scope, L"KswordARK R0 capability", L"Online", L"ArkDriverClient::queryDriverCapabilities", L"Info", detail.str());
-    } else {
-        std::wstring detail = L"R0 能力查询失败：Win32=" + std::to_wstring(capability.io.win32Error) + L"; " +
-            std::wstring(capability.io.message.begin(), capability.io.message.end());
-        AppendRow(rows, scope, L"KswordARK R0 capability", L"Unavailable", L"ArkDriverClient::queryDriverCapabilities", L"Unknown", detail);
-    }
-}
-
-// AddSecurityAuditRows 调用新增 ArkDriverClient 安全审计 wrapper。
-// 输入：目标 rows 和页面 scope。
-// 处理：按当前页面追加 Security/DriverTrust/HyperV/AppControl 的只读摘要。
-// 返回：无返回值；所有失败原因保留在详情列，不裸 DeviceIoControl。
-void AddSecurityAuditRows(std::vector<MiscAuditRow>& rows, const std::wstring& scope) {
-    const ksword::ark::DriverClient client;
-    const auto security = client.querySecurityStatus();
-    {
-        std::wostringstream detail;
-        detail << L"Win32=" << security.io.win32Error
-               << L"; QueryStatus=0x" << std::hex << std::uppercase << static_cast<unsigned long>(security.response.queryStatus)
-               << L"; CIOptions=0x" << security.response.codeIntegrityOptions
-               << L"; SecureBoot=" << std::dec << security.response.secureBootEnabled
-               << L"; VBS=" << security.response.vbsPresent
-               << L"; HVCI=" << security.response.hvciKmciEnabled
-               << L"; TestSigning=" << security.response.testSigningEnabled;
-        AppendRow(rows, scope, L"R0 SecurityStatus", security.io.ok ? L"OK" : (security.unsupported ? L"Unsupported" : L"Unavailable"), L"ArkDriverClient::querySecurityStatus", security.io.ok ? L"Info" : L"Unknown", detail.str());
-    }
-
-    const auto trust = client.queryDriverTrustView();
-    {
-        std::wostringstream detail;
-        detail << L"Win32=" << trust.io.win32Error
-               << L"; total=" << trust.totalCount
-               << L"; returned=" << trust.returnedCount
-               << L"; truncated=" << trust.truncated
-               << L"; moduleStatus=0x" << std::hex << std::uppercase << static_cast<unsigned long>(trust.moduleQueryStatus);
-        AppendRow(rows, scope, L"R0 DriverTrustView", trust.io.ok ? L"OK" : (trust.unsupported ? L"Unsupported" : L"Unavailable"), L"ArkDriverClient::queryDriverTrustView", trust.truncated ? L"Partial" : L"Info", detail.str());
-    }
-
-    const auto hyperv = client.queryHyperVSummary();
-    {
-        std::wostringstream detail;
-        detail << L"Win32=" << hyperv.io.win32Error
-               << L"; Hypervisor=" << hyperv.response.hypervisorPresent
-               << L"; VMBus=" << hyperv.response.vmbusStatus
-               << L"; vSwitch=" << hyperv.response.vSwitchStatus
-               << L"; vPCI=" << hyperv.response.vPciStatus
-               << L"; vendor=" << hyperv.response.hypervisorVendor;
-        AppendRow(rows, scope, L"R0 HyperVSummary", hyperv.io.ok ? L"OK" : (hyperv.unsupported ? L"Unsupported" : L"Unavailable"), L"ArkDriverClient::queryHyperVSummary", hyperv.io.ok ? L"Info" : L"Unknown", detail.str());
-    }
-
-    const auto appControl = client.queryAppControlStatus();
-    {
-        std::wostringstream detail;
-        detail << L"Win32=" << appControl.io.win32Error
-               << L"; AppID=" << appControl.response.appidStatus
-               << L"; AppLockerFilter=" << appControl.response.appLockerFilterStatus
-               << L"; mssecflt=" << appControl.response.mssecfltStatus
-               << L"; BAM=" << appControl.response.bamStatus
-               << L"; owner=" << appControl.response.appLockerOwnerModule;
-        AppendRow(rows, scope, L"R0 AppControlStatus", appControl.io.ok ? L"OK" : (appControl.unsupported ? L"Unsupported" : L"Unavailable"), L"ArkDriverClient::queryAppControlStatus", appControl.io.ok ? L"Info" : L"Unknown", detail.str());
-    }
-}
-
-// CollectCodeIntegrityRows gathers CI/WDAC posture evidence through documented
-// R3 queries and registry reads. There is no input; output is a row vector for
-// the Code Integrity / WDAC tab.
-std::vector<MiscAuditRow> CollectCodeIntegrityRows() {
-    std::vector<MiscAuditRow> rows;
-    AddDriverCapabilityRow(rows, L"Code Integrity / WDAC");
-    AddSecurityAuditRows(rows, L"Code Integrity / WDAC");
-    ks::r3::security::AppendCodeIntegrityR3(rows);
-
-    return rows;
-}
-
-
-
-
-// CollectVbsRows gathers VBS/HVCI/SKCI evidence from DeviceGuard CIM, systeminfo
-// and service/module presence. There is no input; output is a row vector for the
-// VBS/HVCI/SKCI tab.
-std::vector<MiscAuditRow> CollectVbsRows() {
-    std::vector<MiscAuditRow> rows;
-    AddDriverCapabilityRow(rows, L"VBS / HVCI / SKCI");
-    AddSecurityAuditRows(rows, L"VBS / HVCI / SKCI");
-    ks::r3::security::AppendVbsR3(rows);
-
-    return rows;
-}
-
-
-
-
-// CollectHyperVRows gathers Hyper-V, VMBus, vSwitch, vPCI and HvSocket posture
-// with read-only service/module/CIM evidence. There is no input; output is a row
-// vector for the Hyper-V tab.
-std::vector<MiscAuditRow> CollectHyperVRows() {
-    std::vector<MiscAuditRow> rows;
-    AddDriverCapabilityRow(rows, L"Hyper-V / VMBus / HvSocket");
-    AddSecurityAuditRows(rows, L"Hyper-V / VMBus / HvSocket");
-    ks::r3::security::AppendHyperVR3(rows);
-
-    return rows;
-}
-
-
-
-
-// CollectAppLockerRows gathers AppID/AppLocker/appid.sys/applockerfltr/mssecflt
-// evidence without policy mutation or rule export. There is no input; output is
-// a row vector for the AppLocker tab.
-std::vector<MiscAuditRow> CollectAppLockerRows() {
-    std::vector<MiscAuditRow> rows;
-    AddDriverCapabilityRow(rows, L"AppLocker / AppID");
-    AddSecurityAuditRows(rows, L"AppLocker / AppID");
-    ks::r3::security::AppendAppLockerR3(rows);
-
-    return rows;
-}
-
-
-
-
-// CollectAuxiliaryRows gathers BAM and ahcache availability in privacy-preserving
-// summary mode. There is no input; output is a row vector for the BAM/ahcache tab.
-std::vector<MiscAuditRow> CollectAuxiliaryRows() {
-    std::vector<MiscAuditRow> rows;
-    AddDriverCapabilityRow(rows, L"BAM / ahcache");
-    AddSecurityAuditRows(rows, L"BAM / ahcache");
-    ks::r3::security::AppendBamAhcacheR3(rows);
-
-    return rows;
-}
-
-
-
-
-// CollectBugcheckRows reports only feature applicability. The R0 feature is
-// VMware-only and its valid upload path is intentionally quiet when inactive,
-// so this page never claims that a successful transport activated a panel.
-std::vector<MiscAuditRow> CollectBugcheckRows() {
-    std::vector<MiscAuditRow> rows;
-    AddDriverCapabilityRow(rows, L"Bugcheck / VMware branding");
-    ks::r3::security::AppendBugcheckEvidenceR3(rows);
-    AppendRow(rows, L"Bugcheck / VMware branding", L"R0 feature scope", L"VMware-only", L"KswordARK bugcheck runtime", L"Info",
-        L"驱动仅在检测到受支持的 VMware 显示环境时启用该诊断面板；非 VMware 环境会安全忽略合法上传包。");
-    AppendRow(rows, L"Bugcheck / VMware branding", L"内置测试位图", L"Explicit action required", L"ArkDriverClient::setBugcheckBitmap", L"Low",
-        L"点击“上传内置位图”后才会在后台发送 16×16 BGRA 测试图；不会自动上传，也不会改变 Bugcheck 策略。传输成功不代表 VMware 面板已经激活。");
-
-
-    return rows;
-}
-
-
-
-
-// CollectRowsForPage dispatches a tab id to its read-only collector. Input is a
-// stable page id; processing performs local R3 queries; output is the fresh row
-// snapshot used by RefreshAuditView.
-std::vector<MiscAuditRow> CollectRowsForPage(const MiscAuditPageId pageId) {
-    switch (pageId) {
-    case MiscAuditPageId::CodeIntegrity:
-        return CollectCodeIntegrityRows();
-    case MiscAuditPageId::VbsHvciSkci:
-        return CollectVbsRows();
-    case MiscAuditPageId::HyperV:
-        return CollectHyperVRows();
-    case MiscAuditPageId::AppLocker:
-        return CollectAppLockerRows();
-    case MiscAuditPageId::BamAhcache:
-        return CollectAuxiliaryRows();
-    case MiscAuditPageId::Bugcheck:
-        return CollectBugcheckRows();
-    default:
-        return {};
-    }
 }
 
 // AuditColumns returns the fixed ListView schema shared by every Misc tab. There
@@ -795,6 +527,8 @@ void ShowAuditContextMenu(MiscAuditViewState& state, POINT screenPoint) {
     ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     ::AppendMenuW(menu, MF_STRING, kMenuExportVisible, L"导出可见审计结果 TSV…");
     ::AppendMenuW(menu, MF_STRING, kMenuExportAll, L"导出全部审计结果 TSV…");
+    ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    Ksword::Ui::AppendTableCompareMenuItems(menu, state.snapshotEngine);
 
     const UINT command = ::TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, screenPoint.x, screenPoint.y, 0, state.hwnd, nullptr);
     ::DestroyMenu(menu);
@@ -826,6 +560,11 @@ void ShowAuditContextMenu(MiscAuditViewState& state, POINT screenPoint) {
         ExportAuditRows(state, Ksword::Ui::ExportRowScope::All);
         break;
     default:
+        // 快照命令 id 在所有表之间共用一段，不是本页的一律交给引擎判定。
+        if (Ksword::Ui::HandleTableCompareCommand(state.snapshotEngine, static_cast<UINT>(command),
+                state.virtualList, AuditColumnTitles(), state.statusText)) {
+            ::InvalidateRect(state.hwnd, nullptr, TRUE);
+        }
         break;
     }
 }

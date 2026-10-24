@@ -164,6 +164,7 @@
     <ClCompile Include="Features\Memory\MemorySnapshot.cpp" />
     <ClCompile Include="Features\Memory\MemoryWritePlan.cpp" />
     <ClCompile Include="Features\Misc\MiscFeature.cpp" />
+    <ClCompile Include="Features\Misc\MiscAuditCollectors.cpp" />
     <ClCompile Include="Features\Monitor\EtwEventClassifier.cpp" />
     <ClCompile Include="Features\Monitor\EtwFilterDialog.cpp" />
     <ClCompile Include="Features\Monitor\EtwMonitorView.cpp" />
@@ -376,6 +377,7 @@
     <ClInclude Include="Features\Memory\MemorySnapshot.h" />
     <ClInclude Include="Features\Memory\MemoryWritePlan.h" />
     <ClInclude Include="Features\Misc\MiscFeature.h" />
+    <ClInclude Include="Features\Misc\MiscAuditPage.h" />
     <ClInclude Include="Features\Monitor\EtwEventModel.h" />
     <ClInclude Include="Features\Monitor\EtwFilterDialog.h" />
     <ClInclude Include="Features\Monitor\EtwFilterModel.h" />
