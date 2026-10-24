@@ -78,6 +78,32 @@ std::wstring ComparisonRowStatusText(const TableComparisonRow& row);
 std::wstring ComparisonCellText(const TableComparisonResult& result,
     const TableComparisonRow& row, std::size_t columnIndex);
 
+// TableCompareRows exposes a table that is not a VirtualListView as the three
+// callbacks a capture needs. The Process and File pages drive a raw
+// LVS_OWNERDATA report control and keep their rows in the page, so forcing them
+// through VirtualListView just to reach the engine would mean building a second
+// container identical to their own. rowCount is the number of rows the user can
+// currently see (after the page's own filtering); sourceRowAt is optional and
+// may be left empty when the visual index is the source index; cellText
+// addresses columns in the same order as the columnTitles vector.
+struct TableCompareRows {
+    std::size_t rowCount = 0;
+    std::function<int(int visualRow)> sourceRowAt;
+    std::function<std::wstring(int sourceRow, int column)> cellText;
+};
+
+// CaptureRowSourceSnapshot stores the row source's currently visible rows as the
+// table's next snapshot. Same contract as CaptureVisibleListSnapshot, only the
+// row access differs.
+bool CaptureRowSourceSnapshot(TableSnapshotEngine& engine, const TableCompareRows& rows,
+    const std::vector<std::wstring>& columnTitles, std::wstring& messageOut);
+
+// HandleTableCompareCommand runs one menu verb against a row source. owner is
+// the window the result window is centred on and disabled while it is open.
+bool HandleTableCompareCommand(TableSnapshotEngine& engine, UINT commandId,
+    const TableCompareRows& rows, HWND owner, const std::vector<std::wstring>& columnTitles,
+    std::wstring& messageOut, const std::wstring& tableName = std::wstring());
+
 // HandleTableCompareCommand runs one menu verb and reports the outcome. Input:
 // the engine, the command id, then the list and captions used by capture.
 // Processing: dispatches capture/compare/clear, opens the result window for a

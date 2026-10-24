@@ -3,7 +3,9 @@
 #include "TableCompareResultWindow.h"
 #include "VirtualListView.h"
 
+#include <algorithm>
 #include <cstddef>
+#include <limits>
 #include <utility>
 
 namespace Ksword::Ui {
@@ -101,6 +103,48 @@ bool CaptureVisibleListSnapshot(TableSnapshotEngine& engine, const VirtualListVi
         return false;
     }
 
+    // The control exposes visible position -> backing row through
+    // visibleIndexes(), which is what a sort permutes. Reporting the backing row
+    // as the source row keeps the snapshot's sourceRow meaningful and lets the
+    // cell reader stay a plain index lookup.
+    TableCompareRows rows;
+    rows.rowCount = list.visibleIndexes().size();
+    rows.sourceRowAt = [&list](int visualRow) -> int {
+        const std::vector<std::size_t>& visible = list.visibleIndexes();
+        if (visualRow < 0 || static_cast<std::size_t>(visualRow) >= visible.size()) {
+            return -1;
+        }
+        return static_cast<int>(visible[static_cast<std::size_t>(visualRow)]);
+    };
+    rows.cellText = [&list](int sourceRow, int sourceColumn) -> std::wstring {
+        if (sourceRow < 0 || sourceColumn < 0) {
+            return {};
+        }
+        const std::vector<VirtualListRow>& backingRows = list.rows();
+        const std::size_t backing = static_cast<std::size_t>(sourceRow);
+        if (backing >= backingRows.size()) {
+            return {};
+        }
+        const std::size_t column = static_cast<std::size_t>(sourceColumn);
+        return column < backingRows[backing].cells.size()
+            ? backingRows[backing].cells[column]
+            : std::wstring();
+    };
+    return CaptureRowSourceSnapshot(engine, rows, columnTitles, messageOut);
+}
+
+bool CaptureRowSourceSnapshot(TableSnapshotEngine& engine, const TableCompareRows& rows,
+    const std::vector<std::wstring>& columnTitles, std::wstring& messageOut)
+{
+    if (columnTitles.empty()) {
+        messageOut = L"这张表还没有列，无法采集快照。";
+        return false;
+    }
+    if (rows.rowCount == 0 || !rows.cellText) {
+        messageOut = L"快照采集失败：表格当前没有可读数据。";
+        return false;
+    }
+
     TableSnapshotCaptureInput input;
     input.label = SnapshotLabelForOrdinal(engine.Sequence() + 1);
     input.view.columnTitles = [columnTitles]() {
@@ -111,32 +155,17 @@ bool CaptureVisibleListSnapshot(TableSnapshotEngine& engine, const VirtualListVi
         }
         return columns;
     };
-    input.view.rowCount = [&list]() {
-        return static_cast<int>(list.visibleIndexes().size());
+    input.view.rowCount = [&rows]() {
+        // Capture walks the count once, so clamping to int here is what keeps a
+        // page with more than 2^31 rows from turning the count negative rather
+        // than from being truncated by the engine's own row limit.
+        const std::size_t maximum = static_cast<std::size_t>(std::numeric_limits<int>::max());
+        return static_cast<int>(std::min(rows.rowCount, maximum));
     };
-    // The control exposes visible position -> backing row through
-    // visibleIndexes(), which is what a sort permutes. Reporting the backing row
-    // as the source row keeps the snapshot's sourceRow meaningful and lets the
-    // cell reader stay a plain index lookup.
-    input.view.sourceRowAt = [&list](int visualRow) -> int {
-        const std::vector<std::size_t>& visible = list.visibleIndexes();
-        if (visualRow < 0 || static_cast<std::size_t>(visualRow) >= visible.size()) {
-            return -1;
-        }
-        return static_cast<int>(visible[static_cast<std::size_t>(visualRow)]);
-    };
-    input.view.cellText = [&list](int sourceRow, int sourceColumn) -> std::wstring {
-        if (sourceRow < 0 || sourceColumn < 0) {
-            return {};
-        }
-        const std::vector<VirtualListRow>& rows = list.rows();
-        const std::size_t backing = static_cast<std::size_t>(sourceRow);
-        if (backing >= rows.size()) {
-            return {};
-        }
-        const std::size_t column = static_cast<std::size_t>(sourceColumn);
-        return column < rows[backing].cells.size() ? rows[backing].cells[column] : std::wstring();
-    };
+    if (rows.sourceRowAt) {
+        input.view.sourceRowAt = rows.sourceRowAt;
+    }
+    input.view.cellText = rows.cellText;
 
     if (!engine.Capture(input)) {
         messageOut = L"快照采集失败：表格当前没有可读数据。";
@@ -243,20 +272,47 @@ bool HandleTableCompareCommand(TableSnapshotEngine& engine, UINT commandId,
     std::wstring& messageOut, const std::wstring& tableName)
 {
     switch (commandId) {
+    case kMenuTableCompareSnapshots: {
+        if (!engine.HasLater()) {
+            messageOut = L"比对需要两份快照：先采集一次，刷新后再采集一次。";
+            return true;
+        }
+        // The list overload still owns the capture path (it can read the control
+        // directly), but the comparison half is shared with the row-source
+        // overload so both end up in the same window.
+        TableComparisonResult result = CompareListSnapshots(engine);
+        messageOut = DescribeComparison(result);
+        HWND listWindow = list.hwnd();
+        HWND owner = listWindow != nullptr ? ::GetParent(listWindow) : nullptr;
+        ShowTableCompareResult(owner != nullptr ? owner : listWindow, std::move(result), tableName);
+        return true;
+    }
     case kMenuTableCaptureSnapshot:
         return CaptureVisibleListSnapshot(engine, list, columnTitles, messageOut);
+    case kMenuTableClearSnapshots:
+        engine.Clear();
+        messageOut = L"已清除全部快照。";
+        return true;
+    default:
+        return false;
+    }
+}
+
+bool HandleTableCompareCommand(TableSnapshotEngine& engine, UINT commandId,
+    const TableCompareRows& rows, HWND owner, const std::vector<std::wstring>& columnTitles,
+    std::wstring& messageOut, const std::wstring& tableName)
+{
+    switch (commandId) {
+    case kMenuTableCaptureSnapshot:
+        return CaptureRowSourceSnapshot(engine, rows, columnTitles, messageOut);
     case kMenuTableCompareSnapshots: {
         if (!engine.HasLater()) {
             messageOut = L"比对需要两份快照：先采集一次，刷新后再采集一次。";
             return true;
         }
         TableComparisonResult result = CompareListSnapshots(engine);
-        // The status line keeps the verdict on the page after the window closes;
-        // the window is what lets the operator actually read the diff.
         messageOut = DescribeComparison(result);
-        HWND listWindow = list.hwnd();
-        HWND owner = listWindow != nullptr ? ::GetParent(listWindow) : nullptr;
-        ShowTableCompareResult(owner != nullptr ? owner : listWindow, std::move(result), tableName);
+        ShowTableCompareResult(owner, std::move(result), tableName);
         return true;
     }
     case kMenuTableClearSnapshots:
