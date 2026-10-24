@@ -81,6 +81,9 @@ private:
         DetailRam,
         DetailDisk,
         DetailSignature,
+        // ExportDetailReport writes the whole detail tab as one text report;
+        // the per-field copy buttons only ever carry a single value.
+        DetailExportReport,
 
         ThreadRefresh = 1200,
         ThreadSample,
@@ -409,6 +412,9 @@ private:
     int SelectedListRow(HWND list) const;
 
     void PopulateDetailTab();
+    // ExportDetailReport reads every field back off its control, so the saved
+    // report can never disagree with what the operator is looking at.
+    void ExportDetailReport();
     void PopulateThreadTab();
     void PopulateModuleTab();
     void PopulateTokenTab();
