@@ -435,8 +435,9 @@ namespace ks::ui
             [this](const QPoint& position) { showValueCopyMenu(position); });
         const auto recordExpansion = [this](const QModelIndex& index, bool expanded)
         {
+            if (m_valueApplying) return; // 程序化回填不记录用户展开，也不借用发布快照。
             const auto displayed = m_valueModel->snapshot();
-            if (!m_valueApplying && displayed && displayed->query.isEmpty())
+            if (displayed && displayed->query.isEmpty())
             {
                 ++m_valueReadingRevision;
                 m_valueExpansion.insert(index.data(KeyRole).toString(), expanded);
