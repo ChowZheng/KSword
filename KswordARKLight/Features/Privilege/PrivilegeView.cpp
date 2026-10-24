@@ -5,6 +5,7 @@
 #include "PrivilegeModel.h"
 #include "../../Ui/AsyncTask.h"
 #include "../../Ui/Controls.h"
+#include "../../Ui/ExportUtil.h"
 #include "../../Ui/FilterBar.h"
 #include "../../Ui/ListViewUtil.h"
 #include "../../Ui/LoadingOverlay.h"
@@ -16,8 +17,8 @@
 
 #include <algorithm>
 #include <cstdint>
-#include <cstring>
 #include <memory>
+#include <sstream>
 #include <string>
 #include <utility>
 #include <vector>
@@ -41,6 +42,9 @@ constexpr UINT kMenuCopyRow = 65603;
 constexpr UINT kMenuCopyVisible = 65604;
 constexpr UINT kMenuCopyDetail = 65605;
 constexpr UINT kMenuRefresh = 65606;
+constexpr UINT kMenuExportVisible = 65607;
+constexpr UINT kMenuExportAll = 65608;
+constexpr UINT kMenuExportDetail = 65609;
 
 constexpr UINT kMsgRefreshCompleted = WM_APP + 650;
 constexpr UINT kMsgFilterCompleted = WM_APP + 651;
@@ -73,6 +77,15 @@ struct PrivilegeActionTaskResult final {
     PrivilegeActionResult action;
     bool refreshRequired = false;
 };
+
+// PrivilegeColumnTitles is read by the header and by the TSV export, so a saved
+// privilege inventory always carries the captions it was read from.
+const std::vector<std::wstring>& PrivilegeColumnTitles() {
+    static const std::vector<std::wstring> titles{
+        L"权限名", L"显示名", L"状态", L"风险"
+    };
+    return titles;
+}
 
 struct PrivilegeViewState final {
     HWND hwnd = nullptr;
@@ -117,32 +130,10 @@ void SetDetailText(HWND list, int row, int column, const std::wstring& text) {
     ListView_SetItemText(list, row, column, const_cast<LPWSTR>(text.c_str()));
 }
 
+// CopyText forwards to the shared clipboard writer so a copied privilege row is
+// recorded in the evidence session like every other page's copy.
 bool CopyText(HWND owner, const std::wstring& text) {
-    if (text.empty() || !::OpenClipboard(owner)) {
-        return false;
-    }
-    ::EmptyClipboard();
-    const SIZE_T bytes = (text.size() + 1) * sizeof(wchar_t);
-    HGLOBAL memory = ::GlobalAlloc(GMEM_MOVEABLE, bytes);
-    if (!memory) {
-        ::CloseClipboard();
-        return false;
-    }
-    void* target = ::GlobalLock(memory);
-    if (!target) {
-        ::GlobalFree(memory);
-        ::CloseClipboard();
-        return false;
-    }
-    std::memcpy(target, text.c_str(), bytes);
-    ::GlobalUnlock(memory);
-    if (!::SetClipboardData(CF_UNICODETEXT, memory)) {
-        ::GlobalFree(memory);
-        ::CloseClipboard();
-        return false;
-    }
-    ::CloseClipboard();
-    return true;
+    return Ksword::Ui::CopyTextToClipboard(owner, text, L"令牌权限导出");
 }
 
 int SelectedModelIndex(const PrivilegeViewState& state) {
@@ -422,6 +413,70 @@ std::wstring DetailAsText(const PrivilegeViewState& state) {
     return text;
 }
 
+// ExportPrivilegeList writes one row scope of the inventory as TSV. "Visible"
+// follows the active filter; "all" keeps the whole snapshot, which is what an
+// evidence record needs when the operator has narrowed the table.
+void ExportPrivilegeList(PrivilegeViewState& state, const Ksword::Ui::ExportRowScope scope) {
+    Ksword::Ui::ExportRowCount count{};
+    std::wstring error;
+    const Ksword::Ui::SaveTextFileResult result = Ksword::Ui::ExportVirtualListTsvWithDialog(
+        state.hwnd,
+        state.privilegeList,
+        PrivilegeColumnTitles(),
+        scope,
+        L"privileges.tsv",
+        scope == Ksword::Ui::ExportRowScope::Visible
+            ? L"导出令牌权限（可见项）"
+            : L"导出令牌权限（全部项）",
+        L"令牌权限导出",
+        &count,
+        &error);
+    if (result == Ksword::Ui::SaveTextFileResult::Failed) {
+        state.statusText = error.empty() ? L"令牌权限导出失败。" : L"令牌权限导出失败：" + error;
+    } else if (result == Ksword::Ui::SaveTextFileResult::Saved) {
+        std::wostringstream summary;
+        summary << L"已导出 " << count.exportedRows << L" / " << count.totalRows << L" 项令牌权限";
+        if (count.filteredRows) {
+            summary << L"（筛选隐藏的 " << (count.totalRows - count.exportedRows) << L" 项未写入）";
+        }
+        summary << L"。";
+        state.statusText = summary.str();
+    }
+    ::InvalidateRect(state.hwnd, nullptr, TRUE);
+}
+
+// The detail pane is a reading layout, so it is saved as "属性：值" text rather
+// than flattened into two TSV columns that only make it harder to read.
+void ExportPrivilegeDetail(PrivilegeViewState& state) {
+    const PrivilegeEntry* entry = SelectedEntry(state);
+    const std::vector<PrivilegeProperty> properties =
+        entry != nullptr ? state.model.propertiesForEntry(*entry) : state.model.tokenProperties();
+    std::wstring text;
+    for (const PrivilegeProperty& property : properties) {
+        text += property.name + L"：" + property.value + L"\r\n";
+    }
+    if (text.empty()) {
+        state.statusText = L"当前没有可导出的令牌权限详情。";
+        ::InvalidateRect(state.hwnd, nullptr, TRUE);
+        return;
+    }
+    std::wstring error;
+    const Ksword::Ui::SaveTextFileResult result = Ksword::Ui::SaveUtf8TextFileWithDialog(
+        state.hwnd,
+        L"privilege_detail.txt",
+        L"导出令牌权限详情",
+        L"文本文件 (*.txt)\0*.txt\0所有文件 (*.*)\0*.*\0",
+        L"txt",
+        text,
+        &error);
+    if (result == Ksword::Ui::SaveTextFileResult::Failed) {
+        state.statusText = error.empty() ? L"令牌权限详情导出失败。" : L"令牌权限详情导出失败：" + error;
+    } else if (result == Ksword::Ui::SaveTextFileResult::Saved) {
+        state.statusText = L"已导出令牌权限详情。";
+    }
+    ::InvalidateRect(state.hwnd, nullptr, TRUE);
+}
+
 void ShowPrivilegeContextMenu(PrivilegeViewState& state, POINT screenPoint) {
     const PrivilegeEntry* entry = SelectedEntry(state);
     HMENU menu = ::CreatePopupMenu();
@@ -435,6 +490,10 @@ void ShowPrivilegeContextMenu(PrivilegeViewState& state, POINT screenPoint) {
     ::AppendMenuW(menu, MF_STRING | (entry ? MF_ENABLED : MF_GRAYED), kMenuCopyRow, L"复制选中行");
     ::AppendMenuW(menu, MF_STRING, kMenuCopyVisible, L"复制可见行");
     ::AppendMenuW(menu, MF_STRING, kMenuCopyDetail, L"复制详情");
+    ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    ::AppendMenuW(menu, MF_STRING, kMenuExportVisible, L"导出可见令牌权限 TSV…");
+    ::AppendMenuW(menu, MF_STRING, kMenuExportAll, L"导出全部令牌权限 TSV…");
+    ::AppendMenuW(menu, MF_STRING, kMenuExportDetail, L"导出令牌权限详情 TXT…");
     ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     ::AppendMenuW(menu, MF_STRING, kMenuRefresh, L"刷新");
 
@@ -460,6 +519,15 @@ void ShowPrivilegeContextMenu(PrivilegeViewState& state, POINT screenPoint) {
     case kMenuCopyDetail:
         state.statusText = CopyText(state.hwnd, DetailAsText(state)) ? L"已复制详情。" : L"复制失败。";
         ::InvalidateRect(state.hwnd, nullptr, TRUE);
+        break;
+    case kMenuExportVisible:
+        ExportPrivilegeList(state, Ksword::Ui::ExportRowScope::Visible);
+        break;
+    case kMenuExportAll:
+        ExportPrivilegeList(state, Ksword::Ui::ExportRowScope::All);
+        break;
+    case kMenuExportDetail:
+        ExportPrivilegeDetail(state);
         break;
     case kMenuRefresh:
         BeginPrivilegeRefresh(state);
@@ -514,12 +582,15 @@ bool CreateChildControls(PrivilegeViewState& state) {
     if (!state.privilegeList.create(hwnd, kPrivilegeListId, 0, 0, 1, 1, LVS_SHOWSELALWAYS | LVS_SINGLESEL)) {
         return false;
     }
-    state.privilegeList.addColumns({
-        { 0, 280, LVCFMT_LEFT, L"权限名" },
-        { 1, 260, LVCFMT_LEFT, L"显示名" },
-        { 2, 120, LVCFMT_LEFT, L"状态" },
-        { 3, 180, LVCFMT_LEFT, L"风险" },
-    });
+    {
+        const std::vector<std::wstring>& titles = PrivilegeColumnTitles();
+        static const int widths[] = { 280, 260, 120, 180 };
+        std::vector<Ksword::Ui::ListViewColumn> columns;
+        for (std::size_t index = 0; index < titles.size(); ++index) {
+            columns.push_back({ static_cast<int>(index), widths[index], LVCFMT_LEFT, titles[index] });
+        }
+        state.privilegeList.addColumns(columns);
+    }
     if (HWND list = state.privilegeList.hwnd()) {
         ListView_SetExtendedListViewStyle(list,
             LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER | LVS_EX_GRIDLINES | LVS_EX_LABELTIP);

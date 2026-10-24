@@ -8,6 +8,7 @@
 
 #include "../../Ui/AsyncTask.h"
 #include "../../Ui/Controls.h"
+#include "../../Ui/ExportUtil.h"
 #include "../../Ui/FilterBar.h"
 #include "../../Ui/ListViewUtil.h"
 #include "../../Ui/LoadingOverlay.h"
@@ -22,7 +23,6 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
-#include <cstring>
 #include <cwctype>
 #include <memory>
 #include <optional>
@@ -61,6 +61,8 @@ constexpr UINT kMenuRefresh = 69201;
 constexpr UINT kMenuCopyRow = 69202;
 constexpr UINT kMenuCopyAll = 69203;
 constexpr UINT kMenuCopyCell = 69204;
+constexpr UINT kMenuExportVisible = 69205;
+constexpr UINT kMenuExportAll = 69206;
 constexpr UINT kMsgAuditRefreshCompleted = WM_APP + 603;
 constexpr UINT kMsgAuditFilterCompleted = WM_APP + 604;
 constexpr UINT kMsgBugcheckUploadCompleted = WM_APP + 605;
@@ -441,6 +443,16 @@ std::vector<std::wstring> AuditCells(const MiscAuditRow& row) {
     return { row.category, row.item, row.state, row.source, row.risk, row.detail };
 }
 
+// AuditColumnTitles feeds the TSV export from the schema AuditColumns installs,
+// so a saved audit cannot name columns the table never showed.
+std::vector<std::wstring> AuditColumnTitles() {
+    std::vector<std::wstring> titles;
+    for (const Ksword::Ui::ListViewColumn& column : AuditColumns()) {
+        titles.push_back(column.title);
+    }
+    return titles;
+}
+
 std::wstring AuditStableKey(const MiscAuditRow& row) {
     return row.category + L"\n" + row.item + L"\n" + row.source;
 }
@@ -536,59 +548,29 @@ void PopulateAuditList(MiscAuditViewState& state) {
     RequestAuditFilter(state, state.filterBar ? Ksword::Ui::GetFilterBarText(state.filterBar) : state.filterQuery);
 }
 
-// BuildRowsTsv converts current rows to clipboard-friendly TSV. Input is a row
-// vector; processing does not escape beyond replacing line breaks; output is text
-// suitable for copy/paste into a spreadsheet.
+// BuildRowsTsv converts current rows to clipboard-friendly TSV. Detail text can
+// carry tabs or newlines, so every cell goes through the shared sanitizer instead
+// of a private copy of the same loop.
 std::wstring BuildRowsTsv(const std::vector<MiscAuditRow>& rows) {
-    auto clean = [](std::wstring text) {
-        std::replace(text.begin(), text.end(), L'\r', L' ');
-        std::replace(text.begin(), text.end(), L'\n', L' ');
-        std::replace(text.begin(), text.end(), L'\t', L' ');
-        return text;
-    };
-
     std::wostringstream stream;
     stream << L"类别\t项目\t状态\t来源\t风险\t详情\r\n";
     for (const MiscAuditRow& row : rows) {
-        stream << clean(row.category) << L'\t'
-               << clean(row.item) << L'\t'
-               << clean(row.state) << L'\t'
-               << clean(row.source) << L'\t'
-               << clean(row.risk) << L'\t'
-               << clean(row.detail) << L"\r\n";
+        const std::vector<std::wstring> cells = AuditCells(row);
+        for (std::size_t cell = 0; cell < cells.size(); ++cell) {
+            if (cell != 0) {
+                stream << L'\t';
+            }
+            stream << Ksword::Ui::SanitizeTsvCell(cells[cell]);
+        }
+        stream << L"\r\n";
     }
     return stream.str();
 }
 
-// WriteClipboardText copies Unicode text to the clipboard. Inputs are owner HWND
-// and text; processing transfers a movable global allocation to Windows; output
-// reports success for status messages.
+// WriteClipboardText forwards to the shared clipboard writer so a copied audit
+// row is recorded in the evidence session like every other page's copy.
 bool WriteClipboardText(HWND owner, const std::wstring& text) {
-    if (text.empty() || !::OpenClipboard(owner)) {
-        return false;
-    }
-    const SIZE_T bytes = (text.size() + 1) * sizeof(wchar_t);
-    HGLOBAL memory = ::GlobalAlloc(GMEM_MOVEABLE, bytes);
-    if (!memory) {
-        ::CloseClipboard();
-        return false;
-    }
-    void* target = ::GlobalLock(memory);
-    if (!target) {
-        ::GlobalFree(memory);
-        ::CloseClipboard();
-        return false;
-    }
-    std::memcpy(target, text.c_str(), bytes);
-    ::GlobalUnlock(memory);
-    ::EmptyClipboard();
-    if (!::SetClipboardData(CF_UNICODETEXT, memory)) {
-        ::GlobalFree(memory);
-        ::CloseClipboard();
-        return false;
-    }
-    ::CloseClipboard();
-    return true;
+    return Ksword::Ui::CopyTextToClipboard(owner, text, L"杂项审计导出");
 }
 
 // SelectedRowIndex returns the selected ListView row index. Input is a page state;
@@ -616,6 +598,30 @@ void CopySelectedRow(MiscAuditViewState& state) {
 void CopyAllRows(MiscAuditViewState& state) {
     const bool ok = WriteClipboardText(state.hwnd, BuildRowsTsv(state.visibleRows));
     state.statusText = ok ? L"已复制可见审计结果。" : L"复制可见审计结果失败。";
+    ::InvalidateRect(state.hwnd, nullptr, TRUE);
+}
+
+// ExportAuditRows writes one row scope of the audit as TSV. "Visible" follows the
+// active filter; "all" keeps the whole snapshot, which is what an evidence record
+// needs when the operator has narrowed the table.
+void ExportAuditRows(MiscAuditViewState& state, const Ksword::Ui::ExportRowScope scope) {
+    Ksword::Ui::ExportRowCount count{};
+    std::wstring error;
+    const Ksword::Ui::SaveTextFileResult result = Ksword::Ui::ExportVirtualListTsvWithDialog(
+        state.hwnd, state.virtualList, AuditColumnTitles(), scope, L"misc_audit.tsv",
+        scope == Ksword::Ui::ExportRowScope::Visible ? L"导出可见审计结果" : L"导出全部审计结果",
+        L"杂项审计导出", &count, &error);
+    if (result == Ksword::Ui::SaveTextFileResult::Failed) {
+        state.statusText = error.empty() ? L"审计结果导出失败。" : L"审计结果导出失败：" + error;
+    } else if (result == Ksword::Ui::SaveTextFileResult::Saved) {
+        std::wostringstream summary;
+        summary << L"已导出 " << count.exportedRows << L" / " << count.totalRows << L" 行审计结果";
+        if (count.filteredRows) {
+            summary << L"（筛选隐藏的 " << (count.totalRows - count.exportedRows) << L" 行未写入）";
+        }
+        summary << L"。";
+        state.statusText = summary.str();
+    }
     ::InvalidateRect(state.hwnd, nullptr, TRUE);
 }
 
@@ -786,6 +792,9 @@ void ShowAuditContextMenu(MiscAuditViewState& state, POINT screenPoint) {
     ::AppendMenuW(menu, MF_STRING | (hasSelection ? 0U : MF_GRAYED), kMenuCopyRow, L"复制当前行");
     ::AppendMenuW(menu, MF_STRING | (hasSelection ? 0U : MF_GRAYED), kMenuCopyCell, L"复制单元格");
     ::AppendMenuW(menu, MF_STRING, kMenuCopyAll, L"复制可见结果");
+    ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    ::AppendMenuW(menu, MF_STRING, kMenuExportVisible, L"导出可见审计结果 TSV…");
+    ::AppendMenuW(menu, MF_STRING, kMenuExportAll, L"导出全部审计结果 TSV…");
 
     const UINT command = ::TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, screenPoint.x, screenPoint.y, 0, state.hwnd, nullptr);
     ::DestroyMenu(menu);
@@ -809,6 +818,12 @@ void ShowAuditContextMenu(MiscAuditViewState& state, POINT screenPoint) {
     }
     case kMenuCopyAll:
         CopyAllRows(state);
+        break;
+    case kMenuExportVisible:
+        ExportAuditRows(state, Ksword::Ui::ExportRowScope::Visible);
+        break;
+    case kMenuExportAll:
+        ExportAuditRows(state, Ksword::Ui::ExportRowScope::All);
         break;
     default:
         break;

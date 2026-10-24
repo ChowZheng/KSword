@@ -5,6 +5,7 @@
 #include "../../../Ksword5.1/Ksword5.1/ArkDriverClient/ArkDriverClient.h"
 #include "../../Ui/AsyncTask.h"
 #include "../../Ui/Controls.h"
+#include "../../Ui/ExportUtil.h"
 #include "../../Ui/FilterBar.h"
 #include "../../Ui/LazyTreeView.h"
 #include "../../Ui/LoadingOverlay.h"
@@ -14,7 +15,6 @@
 #include <windowsx.h>
 
 #include <algorithm>
-#include <cstring>
 #include <cwctype>
 #include <memory>
 #include <regex>
@@ -39,6 +39,7 @@ constexpr UINT kMenuCopyInstanceId = 62002;
 constexpr UINT kMenuCopyDetailCell = 62003;
 constexpr UINT kMenuCopyDetailRow = 62004;
 constexpr UINT kMenuCopyDetailVisible = 62005;
+constexpr UINT kMenuExportDetail = 62006;
 constexpr UINT kMsgRefreshCompleted = WM_APP + 585;
 constexpr UINT kMsgFilterCompleted = WM_APP + 586;
 constexpr UINT kMsgDetailCompleted = WM_APP + 587;
@@ -49,6 +50,10 @@ constexpr UINT kFilterDebounceMs = 250;
 // Upper bound on roots auto-expanded by one filtered rebuild. Roots are cheap to
 // leave collapsed, and the control's batch cap only bounds a single parent.
 constexpr int kMaxAutoExpandRoots = 20;
+
+// kDetailColumnTitles is the one caption list behind the detail header and the
+// TSV export, so a saved device record always names the columns it was read from.
+constexpr const wchar_t* kDetailColumnTitles[2] = { L"属性", L"值" };
 
 struct HardwareDetailSnapshot {
     int deviceIndex = -1;
@@ -133,38 +138,10 @@ void AddDetailRow(HWND list, int row, const std::wstring& name, const std::wstri
     SetListText(list, row, 1, value);
 }
 
-// WriteClipboardText copies Unicode text to the clipboard. Inputs are an owner
-// window and text; processing transfers a movable CF_UNICODETEXT allocation to
-// Windows; output reports whether the clipboard accepted it.
+// WriteClipboardText forwards to the shared clipboard writer so this page also
+// lands in the evidence session instead of quietly bypassing it.
 bool WriteClipboardText(HWND owner, const std::wstring& text) {
-    if (text.empty() || !::OpenClipboard(owner)) {
-        return false;
-    }
-
-    const SIZE_T bytes = (text.size() + 1) * sizeof(wchar_t);
-    HGLOBAL memory = ::GlobalAlloc(GMEM_MOVEABLE, bytes);
-    if (!memory) {
-        ::CloseClipboard();
-        return false;
-    }
-
-    void* target = ::GlobalLock(memory);
-    if (!target) {
-        ::GlobalFree(memory);
-        ::CloseClipboard();
-        return false;
-    }
-    std::memcpy(target, text.c_str(), bytes);
-    ::GlobalUnlock(memory);
-
-    ::EmptyClipboard();
-    if (!::SetClipboardData(CF_UNICODETEXT, memory)) {
-        ::GlobalFree(memory);
-        ::CloseClipboard();
-        return false;
-    }
-    ::CloseClipboard();
-    return true;
+    return Ksword::Ui::CopyTextToClipboard(owner, text, L"硬件设备导出");
 }
 
 std::wstring DetailListText(HWND list, int row, int column) {
@@ -180,9 +157,9 @@ std::wstring DetailRowsAsText(HWND list, bool allRows) {
         if (!allRows && (ListView_GetItemState(list, row, LVIS_SELECTED) & LVIS_SELECTED) == 0) {
             continue;
         }
-        text += DetailListText(list, row, 0);
+        text += Ksword::Ui::SanitizeTsvCell(DetailListText(list, row, 0));
         text += L'\t';
-        text += DetailListText(list, row, 1);
+        text += Ksword::Ui::SanitizeTsvCell(DetailListText(list, row, 1));
         text += L"\r\n";
     }
     return text;
@@ -665,6 +642,39 @@ void ShowDeviceContextMenu(HardwareViewState* state, POINT screenPoint) {
     }
 }
 
+// ExportDetailTable writes the property pane as TSV. The pane is a plain report
+// ListView with no filter of its own -- the tree carries the filter -- so there
+// is only one scope to export and no hidden rows to account for.
+void ExportDetailTable(HardwareViewState& state) {
+    if (SelectedDeviceIndex(&state) < 0) {
+        state.statusText = L"未选择设备，没有可导出的详情。";
+        ::InvalidateRect(state.hwnd, nullptr, TRUE);
+        return;
+    }
+    const std::wstring rows = DetailRowsAsText(state.detail, true);
+    if (rows.empty()) {
+        state.statusText = L"设备详情仍在加载，没有可导出的行。";
+        ::InvalidateRect(state.hwnd, nullptr, TRUE);
+        return;
+    }
+    const std::wstring text = std::wstring(kDetailColumnTitles[0]) + L'\t' + kDetailColumnTitles[1] + L"\r\n" + rows;
+    std::wstring error;
+    const Ksword::Ui::SaveTextFileResult result = Ksword::Ui::SaveUtf8TextFileWithDialog(
+        state.hwnd,
+        L"hardware_device_detail.tsv",
+        L"导出设备详情",
+        L"制表符分隔文件 (*.tsv)\0*.tsv\0所有文件 (*.*)\0*.*\0",
+        L"tsv",
+        text,
+        &error);
+    if (result == Ksword::Ui::SaveTextFileResult::Failed) {
+        state.statusText = error.empty() ? L"设备详情导出失败。" : L"设备详情导出失败：" + error;
+    } else if (result == Ksword::Ui::SaveTextFileResult::Saved) {
+        state.statusText = L"已导出当前设备的详情表。";
+    }
+    ::InvalidateRect(state.hwnd, nullptr, TRUE);
+}
+
 void ShowDetailContextMenu(HardwareViewState& state, POINT screenPoint) {
     HMENU menu = ::CreatePopupMenu();
     if (!menu) {
@@ -672,9 +682,12 @@ void ShowDetailContextMenu(HardwareViewState& state, POINT screenPoint) {
     }
     const int selected = ListView_GetNextItem(state.detail, -1, LVNI_SELECTED);
     const bool hasSelection = selected >= 0;
+    const bool hasDevice = SelectedDeviceIndex(&state) >= 0;
     ::AppendMenuW(menu, MF_STRING | (hasSelection ? 0U : MF_GRAYED), kMenuCopyDetailCell, L"复制单元格");
     ::AppendMenuW(menu, MF_STRING | (hasSelection ? 0U : MF_GRAYED), kMenuCopyDetailRow, L"复制行");
     ::AppendMenuW(menu, MF_STRING | (ListView_GetItemCount(state.detail) > 0 ? 0U : MF_GRAYED), kMenuCopyDetailVisible, L"复制可见结果");
+    ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    ::AppendMenuW(menu, MF_STRING | (hasDevice ? 0U : MF_GRAYED), kMenuExportDetail, L"导出设备详情 TSV…");
     const UINT command = ::TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, screenPoint.x, screenPoint.y, 0, state.hwnd, nullptr);
     ::DestroyMenu(menu);
     if (command == 0) {
@@ -690,6 +703,9 @@ void ShowDetailContextMenu(HardwareViewState& state, POINT screenPoint) {
     case kMenuCopyDetailVisible:
         state.statusText = WriteClipboardText(state.hwnd, DetailRowsAsText(state.detail, true)) ? L"已复制可见详情。" : L"复制可见详情失败。";
         break;
+    case kMenuExportDetail:
+        ExportDetailTable(state);
+        return;
     default:
         return;
     }
@@ -735,8 +751,8 @@ bool CreateChildControls(HardwareViewState* state, HWND hwnd) {
     }
     ::SendMessageW(state->detail, WM_SETFONT, reinterpret_cast<WPARAM>(Ksword::Ui::SystemUIFont()), TRUE);
     ListView_SetExtendedListViewStyle(state->detail, LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER | LVS_EX_GRIDLINES | LVS_EX_LABELTIP);
-    AddListColumn(state->detail, 0, L"属性", 180);
-    AddListColumn(state->detail, 1, L"值", 560);
+    AddListColumn(state->detail, 0, kDetailColumnTitles[0], 180);
+    AddListColumn(state->detail, 1, kDetailColumnTitles[1], 560);
     return true;
 }
 
