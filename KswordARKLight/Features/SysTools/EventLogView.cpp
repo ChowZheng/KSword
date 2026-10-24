@@ -9,6 +9,7 @@
 #include "../../Ui/FilterBar.h"
 #include "../../Ui/ListViewUtil.h"
 #include "../../Ui/LoadingOverlay.h"
+#include "../../Ui/TableCompareActions.h"
 #include "../../Ui/TextFindSupport.h"
 #include "../../Ui/Theme.h"
 #include "../../Ui/VirtualListView.h"
@@ -66,6 +67,13 @@ constexpr const wchar_t* kColumnTitles[kColumnCount] = {
     L"时间", L"级别", L"来源", L"事件 ID", L"PID", L"描述"
 };
 
+// EventLogColumnTitles exposes the same captions as a vector for the export and
+// the snapshot capture, so neither can drift from the header row.
+const std::vector<std::wstring>& EventLogColumnTitles() {
+    static const std::vector<std::wstring> titles(std::begin(kColumnTitles), std::end(kColumnTitles));
+    return titles;
+}
+
 int Width(const RECT& rc) {
     return rc.right > rc.left ? static_cast<int>(rc.right - rc.left) : 0;
 }
@@ -97,6 +105,9 @@ struct EventLogViewState final {
     std::wstring filterQuery;
     bool filterUseRegex = false;
     std::uint64_t displayGeneration = 0;
+    // 事件日志是一段会滚动的窗口，两次读取之间新记录把旧记录挤出查询范围，
+    // 只有并排比对两份快照才能指出哪些记录是新出现的。
+    Ksword::Ui::TableSnapshotEngine snapshotEngine;
     std::unique_ptr<Ksword::Ui::AsyncSnapshotTask<EventLogQueryResult>> queryTask;
     std::unique_ptr<Ksword::Ui::AsyncSnapshotTask<EventLogFilterResult>> filterTask;
 };
@@ -396,7 +407,7 @@ void OpenSelectedEventProcess(EventLogViewState& state) {
 // rotated out, so the export has to be able to leave with everything the current
 // query returned, not only with what survived the filter.
 void ExportRows(EventLogViewState& state, const Ksword::Ui::ExportRowScope scope) {
-    const std::vector<std::wstring> titles(std::begin(kColumnTitles), std::end(kColumnTitles));
+    const std::vector<std::wstring>& titles = EventLogColumnTitles();
     Ksword::Ui::ExportRowCount count{};
     std::wstring error;
     const Ksword::Ui::SaveTextFileResult result = Ksword::Ui::ExportVirtualListTsvWithDialog(
@@ -445,6 +456,8 @@ void ShowContextMenu(EventLogViewState& state, POINT screenPoint) {
         kMenuOpenProcess, L"查看当前 PID 的进程详细信息");
     ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     ::AppendMenuW(menu, MF_STRING, kMenuRefresh, L"刷新");
+    ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    Ksword::Ui::AppendTableCompareMenuItems(menu, state.snapshotEngine);
 
     const int command = ::TrackPopupMenu(
         menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, screenPoint.x, screenPoint.y, 0, state.hwnd, nullptr);
@@ -481,6 +494,11 @@ void ShowContextMenu(EventLogViewState& state, POINT screenPoint) {
         BeginQuery(state);
         break;
     default:
+        // 快照命令 id 在所有表之间共用一段，不是本页的一律交给引擎判定。
+        if (Ksword::Ui::HandleTableCompareCommand(state.snapshotEngine, static_cast<UINT>(command),
+                state.list, EventLogColumnTitles(), state.statusText)) {
+            ::InvalidateRect(state.hwnd, nullptr, TRUE);
+        }
         break;
     }
 }
