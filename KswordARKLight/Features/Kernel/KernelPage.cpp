@@ -482,6 +482,43 @@ int HeaderColumnCount(HWND list) {
     return header ? Header_GetItemCount(header) : 0;
 }
 
+// HeaderColumnText returns one report column caption. Inputs are a ListView and
+// a column index; output is empty when the column is invalid. Exported files
+// are read by someone who was not looking at the screen, so a file without a
+// header row cannot be interpreted once the column order changes.
+std::wstring HeaderColumnText(HWND list, const int column) {
+    if (!list || column < 0) {
+        return {};
+    }
+    wchar_t headerText[256]{};
+    LVCOLUMNW lvColumn{};
+    lvColumn.mask = LVCF_TEXT;
+    lvColumn.pszText = headerText;
+    lvColumn.cchTextMax = static_cast<int>(std::size(headerText));
+    if (!ListView_GetColumn(list, column, &lvColumn)) {
+        return {};
+    }
+    return headerText;
+}
+
+// AppendTsvHeaderRow writes one tab-separated caption line. Inputs are a
+// ListView and the output text; processing reads every column caption; output
+// is true when a line was appended, so the caller can decide whether the first
+// data row still needs a leading CRLF.
+bool AppendTsvHeaderRow(HWND list, std::wstring& text) {
+    const int columns = HeaderColumnCount(list);
+    if (columns <= 0) {
+        return false;
+    }
+    for (int column = 0; column < columns; ++column) {
+        if (column > 0) {
+            text += L'\t';
+        }
+        text += HeaderColumnText(list, column);
+    }
+    return true;
+}
+
 // BuildListViewSelectionTsv serializes selected rows from any report ListView.
 // Inputs are the list and includeHeader flag; processing reads visible text
 // exactly as displayed; output is a tab-separated string suitable for clipboard
@@ -493,21 +530,7 @@ std::wstring BuildListViewSelectionTsv(HWND list, const bool includeHeader) {
     const int columns = HeaderColumnCount(list);
     const int rows = ListView_GetItemCount(list);
     std::wstring text;
-    if (includeHeader) {
-        for (int column = 0; column < columns; ++column) {
-            if (column > 0) {
-                text += L'\t';
-            }
-            wchar_t headerText[256]{};
-            LVCOLUMNW lvColumn{};
-            lvColumn.mask = LVCF_TEXT;
-            lvColumn.pszText = headerText;
-            lvColumn.cchTextMax = static_cast<int>(std::size(headerText));
-            ListView_GetColumn(list, column, &lvColumn);
-            text += headerText;
-        }
-    }
-    bool wroteRow = includeHeader;
+    bool wroteRow = includeHeader && AppendTsvHeaderRow(list, text);
     for (int row = 0; row < rows; ++row) {
         if (ListView_GetItemState(list, row, LVIS_SELECTED) == 0) {
             continue;
@@ -8271,8 +8294,12 @@ void KernelPage::OnCallbackExportFileMonitor() {
     std::wstring text;
     const int rows = callbackFileMonitorList_ ? ListView_GetItemCount(callbackFileMonitorList_) : 0;
     const int columns = callbackFileMonitorList_ ? HeaderColumnCount(callbackFileMonitorList_) : 0;
+    // The file-monitor export used to start at row 0, so a saved capture arrived
+    // with no column captions and only the on-screen order told a reader which
+    // field was the path and which was the verdict.
+    bool wroteRow = callbackFileMonitorList_ != nullptr && AppendTsvHeaderRow(callbackFileMonitorList_, text);
     for (int row = 0; row < rows; ++row) {
-        if (row > 0) {
+        if (wroteRow) {
             text += L"\r\n";
         }
         for (int column = 0; column < columns; ++column) {
@@ -8281,6 +8308,7 @@ void KernelPage::OnCallbackExportFileMonitor() {
             }
             text += ListViewText(callbackFileMonitorList_, row, column);
         }
+        wroteRow = true;
     }
     StartCallbackFileIo(CallbackFileIoOperation::ExportFileMonitor, path, std::move(text));
 }
