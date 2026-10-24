@@ -9,6 +9,7 @@
 #include "../../Ui/FilterBar.h"
 #include "../../Ui/ListViewUtil.h"
 #include "../../Ui/NumericSortKey.h"
+#include "../../Ui/TableCompareActions.h"
 #include "../../Ui/Theme.h"
 #include "../../Ui/VirtualListView.h"
 
@@ -121,6 +122,10 @@ struct DriverDebugOutputViewState {
     std::uint64_t nextSequence = 0;
     int contextColumn = 0;
     bool capturing = false;
+    // 调试输出是连续追加的流，"从这里往后又多打了什么"只能靠两份快照并排看。
+    // 序号随记录单调递增，环满后被挤掉的旧记录会显示成"移除"，那是缓存上限
+    // 不是系统变化，所以状态行同时给出 缓存 N/2000。
+    Ksword::Ui::TableSnapshotEngine snapshotEngine;
     std::shared_ptr<DebugControlLifetime> controlLifetime = std::make_shared<DebugControlLifetime>();
     std::shared_ptr<Ksword::Ui::BackgroundCleanup> retirement;
     bool retirementCancelled = false;
@@ -609,6 +614,36 @@ std::vector<Ksword::Ui::ListViewColumn> Columns() {
     };
 }
 
+// DebugColumnTitles feeds the snapshot capture from the same schema the header
+// was built with.
+const std::vector<std::wstring>& DebugColumnTitles() {
+    static const std::vector<std::wstring> titles = [] {
+        std::vector<std::wstring> result;
+        for (const Ksword::Ui::ListViewColumn& column : Columns()) {
+            result.push_back(column.title);
+        }
+        return result;
+    }();
+    return titles;
+}
+
+// DebugCompareRows exposes the current visible projection to the shared snapshot
+// engine. The rows live in this page's own container (the ListView is a bare
+// LVS_OWNERDATA control), so they are described rather than copied.
+Ksword::Ui::TableCompareRows DebugCompareRows(const DriverDebugOutputViewState& state) {
+    Ksword::Ui::TableCompareRows rows;
+    rows.rowCount = state.visibleRows.size();
+    rows.cellText = [&state](int sourceRow, int column) -> std::wstring {
+        if (sourceRow < 0 || column < 0 ||
+            static_cast<std::size_t>(sourceRow) >= state.visibleRows.size()) {
+            return {};
+        }
+        const std::vector<std::wstring>& cells = state.visibleRows[static_cast<std::size_t>(sourceRow)]->cells;
+        return static_cast<std::size_t>(column) < cells.size() ? cells[static_cast<std::size_t>(column)] : std::wstring{};
+    };
+    return rows;
+}
+
 void ShowContextMenu(DriverDebugOutputViewState& state, POINT screenPoint) {
     POINT client = screenPoint;
     ::ScreenToClient(state.listView, &client);
@@ -635,6 +670,8 @@ void ShowContextMenu(DriverDebugOutputViewState& state, POINT screenPoint) {
     // records that cannot be replayed.
     ::AppendMenuW(menu, MF_STRING | (!state.visibleRows.empty() ? 0U : MF_GRAYED), kMenuExportVisible, L"导出可见结果为 TSV…");
     ::AppendMenuW(menu, MF_STRING | (!state.records.empty() ? 0U : MF_GRAYED), kMenuExportAll, L"导出全部记录为 TSV…");
+    ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    Ksword::Ui::AppendTableCompareMenuItems(menu, state.snapshotEngine);
     const UINT command = ::TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, screenPoint.x, screenPoint.y, 0, state.hwnd, nullptr);
     ::DestroyMenu(menu);
     if (command == kMenuCopyCell && selected >= 0 && selected < static_cast<int>(state.visibleRows.size())) {
@@ -651,6 +688,13 @@ void ShowContextMenu(DriverDebugOutputViewState& state, POINT screenPoint) {
     } else if (command == kMenuExportAll) {
         ExportRows(state, BuildAllTsv(state), state.records.size(), state.records.size(),
             L"导出驱动调试输出（全部记录）");
+    } else {
+        // 快照命令 id 在所有表之间共用一段，不是本页的一律交给引擎判定。
+        std::wstring message;
+        if (Ksword::Ui::HandleTableCompareCommand(state.snapshotEngine, command, DebugCompareRows(state),
+                state.hwnd, DebugColumnTitles(), message, L"驱动调试输出")) {
+            SetStatus(state, message);
+        }
     }
 }
 
