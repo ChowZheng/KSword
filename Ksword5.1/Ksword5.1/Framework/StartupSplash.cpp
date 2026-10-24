@@ -534,13 +534,8 @@ private:
                 0.0f, 0.0f, static_cast<float>(m_imageWidth),
                 static_cast<float>(m_imageHeight), Gdiplus::UnitPixel);
             Gdiplus::SolidBrush panel(Gdiplus::Color(170, 255, 255, 255));
-            fillRoundedRectangle(graphics, panel, 10.0f, 10.0f, 355.0f, 580.0f, 15.0f);
-            Gdiplus::GraphicsPath rim;
-            roundedRectangle(rim, 5.0f, 5.0f,
-                static_cast<float>(kBaseWidth) - 10.0f,
-                static_cast<float>(kBaseHeight) - 10.0f, 15.0f);
-            Gdiplus::Pen rimPen(Gdiplus::Color(80, 255, 255, 255), 10.0f);
-            graphics.DrawPath(&rimPen, &rim);
+            graphics.FillRectangle(&panel, Gdiplus::RectF(
+                0.0f, 0.0f, 365.0f, static_cast<float>(kBaseHeight)));
             graphics.ResetClip();
 
             if (m_logo)
