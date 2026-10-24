@@ -163,6 +163,8 @@
     <ClCompile Include="..\KswordARKLight\Features\Memory\MemoryInspection.cpp" />
     <ClCompile Include="..\KswordARKLight\Features\Memory\MemoryWritePlan.cpp" />
     <ClCompile Include="..\KswordARKLight\Ui\EvidenceSession.cpp" />
+    <ClCompile Include="TableSnapshotStressTests.cpp" />
+    <ClCompile Include="..\KswordARKLight\Ui\TableSnapshotCompare.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="TestSupport.h" />
@@ -234,6 +236,7 @@
     <ClInclude Include="..\KswordARKLight\Features\Memory\MemoryInspection.h" />
     <ClInclude Include="..\KswordARKLight\Features\Memory\MemoryWritePlan.h" />
     <ClInclude Include="..\KswordARKLight\Ui\EvidenceSession.h" />
+    <ClInclude Include="..\KswordARKLight\Ui\TableSnapshotCompare.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="R3NetworkBackendTests.cpp" />

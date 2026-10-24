@@ -243,6 +243,8 @@
     <ClCompile Include="Ui\PlaceholderPage.cpp" />
     <ClCompile Include="Ui\SplitterUtil.cpp" />
     <ClCompile Include="Ui\TabUtil.cpp" />
+    <ClCompile Include="Ui\TableCompareActions.cpp" />
+    <ClCompile Include="Ui\TableSnapshotCompare.cpp" />
     <ClCompile Include="Ui\TextFindSupport.cpp" />
     <ClCompile Include="Ui\Theme.cpp" />
     <ClCompile Include="Ui\Dpi.cpp" />
@@ -474,6 +476,8 @@
     <ClInclude Include="Ui\PlaceholderPage.h" />
     <ClInclude Include="Ui\SplitterUtil.h" />
     <ClInclude Include="Ui\TabUtil.h" />
+    <ClInclude Include="Ui\TableCompareActions.h" />
+    <ClInclude Include="Ui\TableSnapshotCompare.h" />
     <ClInclude Include="Ui\TextFindSupport.h" />
     <ClInclude Include="Ui\Theme.h" />
     <ClInclude Include="Ui\Dpi.h" />

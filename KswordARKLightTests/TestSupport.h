@@ -94,4 +94,8 @@ int RunMemwbPatchStoreTests();        // IPatchByteStore 适配器：int3 补丁
 int RunProcessInformationTests();
 int RunCallbackEnumerationTests();
 
+// 表格快照比对引擎（KswordARKLight/Ui/TableSnapshotCompare，纯 Win32 抽象视图）
+// 的抗压用例：行/列/字节/文本四类截断、抓取取消、键列字段级 diff、表头重排。
+int RunTableSnapshotStressTests();
+
 int RunR3BackendTests();

@@ -116,6 +116,8 @@
     <ClCompile Include="..\KswordARKLight\Features\Memory\MemoryInspection.cpp"><Filter>Production</Filter></ClCompile>
     <ClCompile Include="..\KswordARKLight\Features\Memory\MemoryWritePlan.cpp"><Filter>Production</Filter></ClCompile>
     <ClCompile Include="..\KswordARKLight\Ui\EvidenceSession.cpp"><Filter>Production</Filter></ClCompile>
+    <ClCompile Include="TableSnapshotStressTests.cpp"><Filter>Tests</Filter></ClCompile>
+    <ClCompile Include="..\KswordARKLight\Ui\TableSnapshotCompare.cpp"><Filter>Production</Filter></ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="TestSupport.h"><Filter>Tests</Filter></ClInclude>
@@ -187,6 +189,7 @@
     <ClInclude Include="..\KswordARKLight\Features\Memory\MemoryInspection.h"><Filter>Production</Filter></ClInclude>
     <ClInclude Include="..\KswordARKLight\Features\Memory\MemoryWritePlan.h"><Filter>Production</Filter></ClInclude>
     <ClInclude Include="..\KswordARKLight\Ui\EvidenceSession.h"><Filter>Production</Filter></ClInclude>
+    <ClInclude Include="..\KswordARKLight\Ui\TableSnapshotCompare.h"><Filter>Production</Filter></ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="R3NetworkBackendTests.cpp">
