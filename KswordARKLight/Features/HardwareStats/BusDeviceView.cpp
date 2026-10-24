@@ -7,6 +7,7 @@
 #include "../../Ui/FilterBar.h"
 #include "../../Ui/ListViewUtil.h"
 #include "../../Ui/LoadingOverlay.h"
+#include "../../Ui/TableCompareActions.h"
 #include "../../Ui/Theme.h"
 #include "../../Ui/VirtualListView.h"
 
@@ -49,6 +50,20 @@ constexpr int kDetailHeight = 180;
 constexpr int kStatusHeight = 22;
 constexpr int kColumnCount = 12;
 
+// kColumnTitles 是表头和快照比对的唯一来源：比对按列名对齐两份快照，
+// 列名一旦两处分叉，diff 结果就会错位。
+constexpr const wchar_t* kColumnTitles[kColumnCount] = {
+    L"设备", L"枚举器", L"总线类型", L"传统总线类型", L"总线号", L"地址",
+    L"槽位", L"位置信息", L"已分配资源", L"驱动服务", L"状态", L"实例 ID"
+};
+
+// BusColumnTitles exposes the same captions as a vector for the export and the
+// snapshot capture.
+const std::vector<std::wstring>& BusColumnTitles() {
+    static const std::vector<std::wstring> titles(kColumnTitles, kColumnTitles + kColumnCount);
+    return titles;
+}
+
 int Width(const RECT& rc) {
     return rc.right > rc.left ? static_cast<int>(rc.right - rc.left) : 0;
 }
@@ -82,6 +97,9 @@ struct BusDeviceViewState final {
     bool filterUseRegex = false;
     bool includeAllEnumerators = false;
     std::uint64_t displayGeneration = 0;
+    // 总线号/槽位会在热插拔后分配给另一块设备，同一实例 ID 的"已分配资源"
+    // 也可能被 PnP 重新平衡，只有两份快照并排才看得出是谁换了位置。
+    Ksword::Ui::TableSnapshotEngine snapshotEngine;
     std::unique_ptr<Ksword::Ui::AsyncSnapshotTask<BusDeviceSnapshot>> refreshTask;
     std::unique_ptr<Ksword::Ui::AsyncSnapshotTask<BusFilterResult>> filterTask;
 };
@@ -406,6 +424,8 @@ void ShowContextMenu(BusDeviceViewState& state, POINT screenPoint) {
     ::AppendMenuW(menu, MF_STRING | (row ? MF_ENABLED : MF_GRAYED), kMenuCopyDetail, L"复制详情");
     ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     ::AppendMenuW(menu, MF_STRING, kMenuRefresh, L"刷新");
+    ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    Ksword::Ui::AppendTableCompareMenuItems(menu, state.snapshotEngine);
 
     const int command = ::TrackPopupMenu(
         menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, screenPoint.x, screenPoint.y, 0, state.hwnd, nullptr);
@@ -428,6 +448,11 @@ void ShowContextMenu(BusDeviceViewState& state, POINT screenPoint) {
         BeginBusRefresh(state);
         break;
     default:
+        // 快照命令 id 在所有表之间共用一段，不是本页的一律交给引擎判定。
+        if (Ksword::Ui::HandleTableCompareCommand(state.snapshotEngine, static_cast<UINT>(command),
+                state.busList, BusColumnTitles(), state.statusText)) {
+            ::InvalidateRect(state.hwnd, nullptr, TRUE);
+        }
         break;
     }
 }
@@ -485,18 +510,18 @@ bool CreateChildControls(BusDeviceViewState& state) {
         return false;
     }
     state.busList.addColumns({
-        { 0, 280, LVCFMT_LEFT, L"设备" },
-        { 1, 90, LVCFMT_LEFT, L"枚举器" },
-        { 2, 100, LVCFMT_LEFT, L"总线类型" },
-        { 3, 110, LVCFMT_LEFT, L"传统总线类型" },
-        { 4, 70, LVCFMT_RIGHT, L"总线号" },
-        { 5, 160, LVCFMT_LEFT, L"地址" },
-        { 6, 70, LVCFMT_RIGHT, L"槽位" },
-        { 7, 170, LVCFMT_LEFT, L"位置信息" },
-        { 8, 300, LVCFMT_LEFT, L"已分配资源" },
-        { 9, 110, LVCFMT_LEFT, L"驱动服务" },
-        { 10, 90, LVCFMT_LEFT, L"状态" },
-        { 11, 300, LVCFMT_LEFT, L"实例 ID" },
+        { 0, 280, LVCFMT_LEFT, kColumnTitles[0] },
+        { 1, 90, LVCFMT_LEFT, kColumnTitles[1] },
+        { 2, 100, LVCFMT_LEFT, kColumnTitles[2] },
+        { 3, 110, LVCFMT_LEFT, kColumnTitles[3] },
+        { 4, 70, LVCFMT_RIGHT, kColumnTitles[4] },
+        { 5, 160, LVCFMT_LEFT, kColumnTitles[5] },
+        { 6, 70, LVCFMT_RIGHT, kColumnTitles[6] },
+        { 7, 170, LVCFMT_LEFT, kColumnTitles[7] },
+        { 8, 300, LVCFMT_LEFT, kColumnTitles[8] },
+        { 9, 110, LVCFMT_LEFT, kColumnTitles[9] },
+        { 10, 90, LVCFMT_LEFT, kColumnTitles[10] },
+        { 11, 300, LVCFMT_LEFT, kColumnTitles[11] },
     });
     if (HWND list = state.busList.hwnd()) {
         ListView_SetExtendedListViewStyle(list,
@@ -725,8 +750,15 @@ std::wstring ExportBusDeviceViewTsv(HWND view) {
     if (!state) {
         return {};
     }
-    std::wstring text =
-        L"设备\t枚举器\t总线类型\t传统总线类型\t总线号\t地址\t槽位\t位置信息\t已分配资源\t驱动服务\t状态\t实例 ID\r\n";
+    std::wstring text;
+    const std::vector<std::wstring>& titles = BusColumnTitles();
+    for (std::size_t index = 0; index < titles.size(); ++index) {
+        if (index != 0) {
+            text += L'\t';
+        }
+        text += titles[index];
+    }
+    text += L"\r\n";
     text += RowsAsText(*state, true);
     return text;
 }
