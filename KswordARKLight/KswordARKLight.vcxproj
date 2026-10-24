@@ -164,6 +164,7 @@
     <ClCompile Include="Features\Memory\MemorySnapshot.cpp" />
     <ClCompile Include="Features\Memory\MemoryWritePlan.cpp" />
     <ClCompile Include="Features\Misc\MiscFeature.cpp" />
+    <ClCompile Include="Features\Monitor\EtwEventClassifier.cpp" />
     <ClCompile Include="Features\Monitor\EtwFilterDialog.cpp" />
     <ClCompile Include="Features\Monitor\EtwMonitorView.cpp" />
     <ClCompile Include="Features\Monitor\MonitorFeature.cpp" />

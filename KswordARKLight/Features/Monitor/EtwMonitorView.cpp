@@ -35,6 +35,8 @@ constexpr int kClearButtonId = 52004;
 constexpr int kExportButtonId = 52007;
 constexpr int kListId = 52005;
 constexpr int kLocalFilterBarId = 52006;
+constexpr int kCategoryComboId = 52008;
+constexpr int kLevelComboId = 52009;
 constexpr UINT kLocalFilterMessage = WM_APP + 63;
 constexpr UINT kExternalProcessFilterMessage = WM_APP + 64;
 constexpr UINT kSessionControlMessage = WM_APP + 65;
@@ -264,6 +266,14 @@ LRESULT EtwMonitorView::handleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
             requestLocalFilter(Ksword::Ui::GetFilterBarText(localFilterBar_));
             return 0;
         }
+        if ((LOWORD(wParam) == kCategoryComboId || LOWORD(wParam) == kLevelComboId) &&
+            HIWORD(wParam) == CBN_SELCHANGE) {
+            // requestLocalFilter re-reads both combos and bumps the generation
+            // when either selection actually changed, so a stray notification
+            // does not throw away the accumulated projection.
+            requestLocalFilter(Ksword::Ui::GetFilterBarText(localFilterBar_));
+            return 0;
+        }
         if (LOWORD(wParam) == kStartButtonId) {
             startSession();
             return 0;
@@ -401,7 +411,31 @@ void EtwMonitorView::createControls() {
     clearButton_ = Ksword::Ui::CreateButton(hwnd_, kClearButtonId, L"清空", 282, 12, 78, 28);
     exportButton_ = Ksword::Ui::CreateButton(hwnd_, kExportButtonId, L"导出...", 366, 12, 88, 28);
     statusText_ = Ksword::Ui::CreateText(hwnd_, 0, L"ETW 已停止。筛选器在弹窗中配置。", 470, 18, 520, 22);
-    localFilterBar_ = Ksword::Ui::CreateFilterBar(hwnd_, kLocalFilterBarId, L"本地筛选所有事件字段和摘要", 12, 46, 320, 24);
+    categoryCombo_ = ::CreateWindowExW(0, WC_COMBOBOXW, L"",
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL | CBS_DROPDOWNLIST | CBS_HASSTRINGS,
+        0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kCategoryComboId)),
+        ::GetModuleHandleW(nullptr), nullptr);
+    levelCombo_ = ::CreateWindowExW(0, WC_COMBOBOXW, L"",
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL | CBS_DROPDOWNLIST | CBS_HASSTRINGS,
+        0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kLevelComboId)),
+        ::GetModuleHandleW(nullptr), nullptr);
+    if (categoryCombo_ != nullptr) {
+        for (int value = 0; value <= static_cast<int>(EtwCategory::Other); ++value) {
+            ::SendMessageW(categoryCombo_, CB_ADDSTRING, 0,
+                reinterpret_cast<LPARAM>(EtwCategoryText(static_cast<EtwCategory>(value))));
+        }
+        ::SendMessageW(categoryCombo_, CB_SETCURSEL, 0, 0);
+    }
+    if (levelCombo_ != nullptr) {
+        // Index 0 is "全部"; the rest line up with ETW level numbers 1..5 so the
+        // filter comparison stays a plain equality test.
+        ::SendMessageW(levelCombo_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"全部级别"));
+        for (std::uint8_t level = 1; level <= 5; ++level) {
+            ::SendMessageW(levelCombo_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(EtwLevelText(level)));
+        }
+        ::SendMessageW(levelCombo_, CB_SETCURSEL, 0, 0);
+    }
+    localFilterBar_ = Ksword::Ui::CreateFilterBar(hwnd_, kLocalFilterBarId, L"本地筛选所有事件字段和摘要", 232, 46, 320, 24);
 
     eventList_ = ::CreateWindowExW(
         WS_EX_CLIENTEDGE,
@@ -433,6 +467,7 @@ void EtwMonitorView::createControls() {
     InsertColumn(eventList_, 4, L"EventId", 70);
     InsertColumn(eventList_, 5, L"Level", 60);
     InsertColumn(eventList_, 6, L"摘要", 420);
+    InsertColumn(eventList_, 7, L"分类", 76);
     ::SendMessageW(eventList_, WM_SETFONT, reinterpret_cast<WPARAM>(Ksword::Ui::SystemUIFont()), TRUE);
     localFilterTask_ = std::make_unique<Ksword::Ui::AsyncSnapshotTask<EtwEventFilterResult>>(hwnd_, kLocalFilterMessage);
 
@@ -456,7 +491,11 @@ void EtwMonitorView::layout() {
     const int width = rc.right - rc.left;
     const int height = rc.bottom - rc.top;
     ::MoveWindow(statusText_, 470, 17, width - 482, 24, TRUE);
-    ::MoveWindow(localFilterBar_, 12, 46, width - 24, 24, TRUE);
+    // The combo popups size themselves from the control height, not from the
+    // item count, so the height passed here is intentionally taller than a row.
+    ::MoveWindow(levelCombo_, 12, 46, 100, 24 * 8, TRUE);
+    ::MoveWindow(categoryCombo_, 118, 46, 108, 24 * 12, TRUE);
+    ::MoveWindow(localFilterBar_, 232, 46, (std::max)(120, width - 244), 24, TRUE);
     ::MoveWindow(eventList_, 12, 76, width - 24, height - 88, TRUE);
 }
 
@@ -662,10 +701,25 @@ void EtwMonitorView::commitEventProjection(const ViewAnchor& anchor) {
     ::InvalidateRect(eventList_, nullptr, FALSE);
 }
 
+void EtwMonitorView::readStructuredFilters() {
+    if (categoryCombo_ != nullptr) {
+        const int selection = static_cast<int>(::SendMessageW(categoryCombo_, CB_GETCURSEL, 0, 0));
+        categoryFilter_ = selection >= 0 ? static_cast<EtwCategory>(selection) : EtwCategory::All;
+    }
+    if (levelCombo_ != nullptr) {
+        const int selection = static_cast<int>(::SendMessageW(levelCombo_, CB_GETCURSEL, 0, 0));
+        levelFilter_ = selection > 0 ? selection : 0;
+    }
+}
+
 void EtwMonitorView::requestLocalFilter(std::wstring query) {
     const ViewAnchor anchor = captureViewAnchor();
     const bool useRegex = Ksword::Ui::GetFilterBarRegexEnabled(localFilterBar_);
-    const bool changed = query != localFilterQuery_ || useRegex != localFilterUseRegex_;
+    const EtwCategory previousCategory = categoryFilter_;
+    const int previousLevel = levelFilter_;
+    readStructuredFilters();
+    const bool changed = query != localFilterQuery_ || useRegex != localFilterUseRegex_
+        || categoryFilter_ != previousCategory || levelFilter_ != previousLevel;
     localFilterQuery_ = std::move(query);
     localFilterUseRegex_ = useRegex;
     if (changed) {
@@ -675,7 +729,11 @@ void EtwMonitorView::requestLocalFilter(std::wstring query) {
     if (eventList_ == nullptr) {
         return;
     }
-    if (localFilterQuery_.empty()) {
+    // A text query is no longer the only way to narrow the list: "only file
+    // events at warning level" is a valid filter with an empty query, and it
+    // must not take the show-everything shortcut below.
+    const bool structuredActive = categoryFilter_ != EtwCategory::All || levelFilter_ > 0;
+    if (localFilterQuery_.empty() && !structuredActive) {
         visibleEventIndexes_.resize(eventRows_.size());
         for (std::size_t index = 0; index < visibleEventIndexes_.size(); ++index) {
             visibleEventIndexes_[index] = index;
@@ -698,12 +756,17 @@ void EtwMonitorView::requestLocalFilter(std::wstring query) {
     const auto begin = eventRows_.begin() + static_cast<std::ptrdiff_t>(firstSequence - firstEventSequence_);
     const auto snapshot = std::make_shared<const std::vector<std::shared_ptr<const EtwEvent>>>(begin, eventRows_.end());
     const std::uint64_t generation = localFilterGeneration_;
+    const int categoryFilter = static_cast<int>(categoryFilter_);
+    const int levelFilter = levelFilter_;
     localFilterTask_->request(
-        [snapshot, generation, useRegex, firstSequence, query = localFilterQuery_]() mutable {
+        [snapshot, generation, useRegex, firstSequence, categoryFilter, levelFilter,
+            query = localFilterQuery_]() mutable {
             EtwEventFilterResult result{};
             result.generation = generation;
             result.query = std::move(query);
             result.useRegex = useRegex;
+            result.categoryFilter = categoryFilter;
+            result.levelFilter = levelFilter;
             std::wregex compiled;
             bool regexReady = false;
             if (useRegex && !result.query.empty()) {
@@ -718,9 +781,17 @@ void EtwMonitorView::requestLocalFilter(std::wstring query) {
             result.endSequence = firstSequence + snapshot->size();
             result.visibleSequences.reserve(snapshot->size());
             for (std::size_t index = 0; index < snapshot->size(); ++index) {
-                if (MatchesEvent(*(*snapshot)[index], result.query, regexReady ? &compiled : nullptr)) {
-                    result.visibleSequences.push_back(firstSequence + index);
+                const EtwEvent& row = *(*snapshot)[index];
+                if (!EtwLevelFilterMatches(result.levelFilter, row.level)) {
+                    continue;
                 }
+                if (!EtwCategoryFilterMatches(static_cast<EtwCategory>(result.categoryFilter), row)) {
+                    continue;
+                }
+                if (!MatchesEvent(row, result.query, regexReady ? &compiled : nullptr)) {
+                    continue;
+                }
+                result.visibleSequences.push_back(firstSequence + index);
             }
             return result;
         },
@@ -735,7 +806,8 @@ void EtwMonitorView::requestLocalFilter(std::wstring query) {
 
 void EtwMonitorView::applyLocalFilter(EtwEventFilterResult result) {
     if (result.generation != localFilterGeneration_ || result.query != localFilterQuery_ ||
-        result.useRegex != localFilterUseRegex_) {
+        result.useRegex != localFilterUseRegex_ ||
+        result.categoryFilter != static_cast<int>(categoryFilter_) || result.levelFilter != levelFilter_) {
         requestLocalFilter(localFilterQuery_);
         return;
     }
@@ -752,7 +824,17 @@ void EtwMonitorView::applyLocalFilter(EtwEventFilterResult result) {
     filteredThroughSequence_ = (std::max)(filteredThroughSequence_, result.endSequence);
     commitEventProjection(anchor);
     if (::IsWindowVisible(hwnd_)) {
-        updateStatusText(L"ETW 本地筛选结果：" + std::to_wstring(visibleEventIndexes_.size()) + L" 项。");
+        std::wstring scope = L"ETW 筛选结果：" + std::to_wstring(visibleEventIndexes_.size()) + L" 项";
+        if (categoryFilter_ != EtwCategory::All) {
+            scope += L"；分类 ";
+            scope += EtwCategoryText(categoryFilter_);
+        }
+        if (levelFilter_ > 0) {
+            scope += L"；级别 ";
+            scope += EtwLevelText(static_cast<std::uint8_t>(levelFilter_));
+        }
+        scope += L"。";
+        updateStatusText(scope);
     }
     requestLocalFilter(localFilterQuery_);
 }
@@ -809,6 +891,7 @@ bool EtwMonitorView::handleVirtualEventDisplayInfo(NMLVDISPINFOW* displayInfo) {
         case 3: eventTextScratch_ = NumberText(eventRow.threadId); break;
         case 4: eventTextScratch_ = NumberText(eventRow.eventId); break;
         case 5: eventTextScratch_ = NumberText(eventRow.level); break;
+        case 7: eventTextScratch_ = EtwCategoryText(ClassifyEtwEvent(eventRow)); break;
         case 6: eventTextScratch_ = eventRow.summary; break;
         default: eventTextScratch_.clear(); break;
         }
@@ -982,7 +1065,8 @@ void EtwMonitorView::copySelectedEventRow() {
         << eventRow.threadId << L'\t'
         << eventRow.eventId << L'\t'
         << static_cast<unsigned int>(eventRow.level) << L'\t'
-        << eventRow.summary;
+        << eventRow.summary << L'\t'
+        << EtwCategoryText(ClassifyEtwEvent(eventRow));
     updateStatusText(CopyTextToClipboard(hwnd_, row.str()) ? L"已复制 ETW 行。" : L"复制 ETW 行失败。");
 }
 
@@ -1000,6 +1084,7 @@ void EtwMonitorView::copySelectedEventCell() {
     case 4: text = NumberText(eventRow.eventId); break;
     case 5: text = NumberText(eventRow.level); break;
     case 6: text = eventRow.summary; break;
+    case 7: text = EtwCategoryText(ClassifyEtwEvent(eventRow)); break;
     default: break;
     }
     updateStatusText(CopyTextToClipboard(hwnd_, text) ? L"已复制 ETW 单元格。" : L"复制 ETW 单元格失败。");
@@ -1018,24 +1103,46 @@ void EtwMonitorView::copyVisibleEventRows() {
                << eventRow.threadId << L'\t'
                << eventRow.eventId << L'\t'
                << static_cast<unsigned int>(eventRow.level) << L'\t'
-               << eventRow.summary << L"\r\n";
+               << eventRow.summary << L'\t'
+               << EtwCategoryText(ClassifyEtwEvent(eventRow)) << L"\r\n";
     }
     updateStatusText(CopyTextToClipboard(hwnd_, output.str()) ? L"已复制 ETW 可见结果。" : L"复制 ETW 可见结果失败。");
 }
 
 void EtwMonitorView::exportVisibleEventRows() {
-    std::vector<EtwEvent> exportRows;
-    std::vector<std::size_t> exportIndexes;
-    exportRows.reserve(visibleEventIndexes_.size());
-    exportIndexes.reserve(visibleEventIndexes_.size());
-    for (const auto index : visibleEventIndexes_) {
-        if (index < eventRows_.size()) {
-            exportIndexes.push_back(exportRows.size());
-            exportRows.push_back(*eventRows_[index]);
-        }
+    const std::size_t visibleCount = visibleEventIndexes_.size();
+    if (visibleCount == 0) {
+        updateStatusText(L"没有可导出的 ETW 可见结果。");
+        return;
     }
-    const std::wstring text = BuildVisibleEtwEventsTsv(exportRows, exportIndexes);
-    if (text.empty()) {
+    // The shared serializer writes seven columns and knows nothing about the
+    // 分类 column this page now shows; exporting through it would hand the user
+    // a file whose header does not match the table they were reading. The
+    // header order here is the on-screen column order.
+    std::wstring text = L"PID\t时间\tProvider\tTID\tEventId\tLevel\t摘要\t分类\r\n";
+    for (const auto index : visibleEventIndexes_) {
+        if (index >= eventRows_.size()) {
+            continue;
+        }
+        const EtwEvent& eventRow = *eventRows_[index];
+        text += NumberText(eventRow.processId);
+        text += L'\t';
+        text += Ksword::Ui::SanitizeTsvCell(eventRow.timeText);
+        text += L'\t';
+        text += Ksword::Ui::SanitizeTsvCell(eventRow.providerText);
+        text += L'\t';
+        text += NumberText(eventRow.threadId);
+        text += L'\t';
+        text += NumberText(eventRow.eventId);
+        text += L'\t';
+        text += NumberText(eventRow.level);
+        text += L'\t';
+        text += Ksword::Ui::SanitizeTsvCell(eventRow.summary);
+        text += L'\t';
+        text += EtwCategoryText(ClassifyEtwEvent(eventRow));
+        text += L"\r\n";
+    }
+    if (text.size() <= 64U) {
         updateStatusText(L"没有可导出的 ETW 可见结果。");
         return;
     }

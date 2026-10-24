@@ -3,6 +3,7 @@
 #include "../../Core/Win32Lean.h"
 #include "../../Ui/AsyncTask.h"
 #include "../../Ui/AsyncShellIconLoader.h"
+#include "EtwEventClassifier.h"
 #include "EtwFilterModel.h"
 #include "EtwSessionController.h"
 
@@ -40,6 +41,10 @@ struct EtwEventFilterResult {
     std::uint64_t generation = 0;
     std::wstring query;
     bool useRegex = false;
+    // Structured filters travel with the result so a stale completion can be
+    // rejected on every input that produced it, not only on the text query.
+    int categoryFilter = 0;
+    int levelFilter = 0;
     std::uint64_t firstSequence = 0;
     std::uint64_t endSequence = 0;
     std::vector<std::uint64_t> visibleSequences;
@@ -103,6 +108,9 @@ private:
     ViewAnchor captureViewAnchor() const;
     void commitEventProjection(const ViewAnchor& anchor);
     void requestLocalFilter(std::wstring query);
+    // readStructuredFilters pulls the two combo selections into the member
+    // filters. There are no inputs and no return value.
+    void readStructuredFilters();
     void applyLocalFilter(EtwEventFilterResult result);
     void clearEventList();
     void updateStatusText(const std::wstring& text);
@@ -130,6 +138,8 @@ private:
     HWND exportButton_ = nullptr;
     HWND statusText_ = nullptr;
     HWND localFilterBar_ = nullptr;
+    HWND categoryCombo_ = nullptr;
+    HWND levelCombo_ = nullptr;
     HWND eventList_ = nullptr;
     HIMAGELIST eventImageList_ = nullptr;
     std::vector<std::shared_ptr<const EtwEvent>> eventRows_;
@@ -143,6 +153,11 @@ private:
     std::vector<std::size_t> visibleEventIndexes_;
     std::wstring localFilterQuery_;
     bool localFilterUseRegex_ = false;
+    // Structured filters narrow the live stream by subsystem and severity. They
+    // are separate from the text query because typing "file" would also match a
+    // summary that merely mentions the word.
+    EtwCategory categoryFilter_ = EtwCategory::All;
+    int levelFilter_ = 0;
     std::uint64_t eventGeneration_ = 0;
     int eventContextColumn_ = 0;
     std::wstring eventTextScratch_;
