@@ -4,6 +4,7 @@
 #include "../../../Ksword5.1/Ksword5.1/ArkDriverClient/ArkDriverClient.h"
 #include "../../Ui/AsyncTask.h"
 #include "../../Ui/Controls.h"
+#include "../../Ui/ExportUtil.h"
 #include "../../Ui/LoadingOverlay.h"
 #include "../../Ui/TextFindSupport.h"
 #include "../../Ui/Theme.h"
@@ -38,6 +39,7 @@ constexpr int kSpeedComboId = 67411;
 constexpr int kFactorEditId = 67412;
 constexpr int kAcknowledgeId = 67413;
 constexpr int kRiskTextId = 67414;
+constexpr int kExportButtonId = 67415;
 constexpr int kR0StatusTextId = 67415;
 
 constexpr UINT kMsgCollectCompleted = WM_APP + 715;
@@ -72,6 +74,7 @@ struct SystemTimeViewState final {
     HWND hwnd = nullptr;
     HWND refreshButton = nullptr;
     HWND copyButton = nullptr;
+    HWND exportButton = nullptr;
     HWND queryButton = nullptr;
     HWND applyButton = nullptr;
     HWND resetButton = nullptr;
@@ -307,9 +310,12 @@ void LayoutView(SystemTimeViewState& state) {
     if (state.copyButton) {
         ::MoveWindow(state.copyButton, kGap * 2 + 64, firstRowY, 96, kRowHeight, TRUE);
     }
-    ::MoveWindow(state.queryButton, 174, firstRowY, 80, kRowHeight, TRUE);
-    ::MoveWindow(state.applyButton, 260, firstRowY, 88, kRowHeight, TRUE);
-    ::MoveWindow(state.resetButton, 354, firstRowY, 88, kRowHeight, TRUE);
+    if (state.exportButton) {
+        ::MoveWindow(state.exportButton, 174, firstRowY, 88, kRowHeight, TRUE);
+    }
+    ::MoveWindow(state.queryButton, 268, firstRowY, 80, kRowHeight, TRUE);
+    ::MoveWindow(state.applyButton, 354, firstRowY, 88, kRowHeight, TRUE);
+    ::MoveWindow(state.resetButton, 448, firstRowY, 88, kRowHeight, TRUE);
 
     const int secondRowY = firstRowY + kRowHeight + kGap;
     if (state.clockText) {
@@ -337,6 +343,7 @@ bool CreateChildControls(SystemTimeViewState& state) {
     HWND hwnd = state.hwnd;
     state.refreshButton = Ksword::Ui::CreateButton(hwnd, kRefreshButtonId, L"刷新", 0, 0, 0, 0);
     state.copyButton = Ksword::Ui::CreateButton(hwnd, kCopyButtonId, L"复制报告", 0, 0, 0, 0);
+    state.exportButton = Ksword::Ui::CreateButton(hwnd, kExportButtonId, L"导出报告", 0, 0, 0, 0);
     state.queryButton = Ksword::Ui::CreateButton(hwnd, kQueryButtonId, L"R0状态", 0, 0, 0, 0);
     state.applyButton = Ksword::Ui::CreateButton(hwnd, kApplyButtonId, L"应用变速", 0, 0, 0, 0);
     state.resetButton = Ksword::Ui::CreateButton(hwnd, kResetButtonId, L"恢复 1x", 0, 0, 0, 0);
@@ -469,6 +476,28 @@ LRESULT CALLBACK SystemTimeViewProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                 state->statusText = CopyText(hwnd, state->reportText) ? L"已复制系统时间报告。" : L"复制失败。";
                 ::InvalidateRect(hwnd, nullptr, TRUE);
                 return 0;
+            case kExportButtonId: {
+                if (state->reportText.empty()) {
+                    state->statusText = L"当前没有可导出的系统时间报告。";
+                } else {
+                    std::wstring error;
+                    const Ksword::Ui::SaveTextFileResult result = Ksword::Ui::SaveUtf8TextFileWithDialog(
+                        hwnd,
+                        L"system_time_report.txt",
+                        L"导出系统时间报告",
+                        L"文本文件 (*.txt)\0*.txt\0所有文件 (*.*)\0*.*\0",
+                        L"txt",
+                        state->reportText,
+                        &error);
+                    if (result == Ksword::Ui::SaveTextFileResult::Failed) {
+                        state->statusText = error.empty() ? L"导出系统时间报告失败。" : error;
+                    } else if (result == Ksword::Ui::SaveTextFileResult::Saved) {
+                        state->statusText = L"已导出系统时间报告，并已记录到证据会话。";
+                    }
+                }
+                ::InvalidateRect(hwnd, nullptr, TRUE);
+                return 0;
+            }
             default:
                 break;
             }
