@@ -9,6 +9,7 @@
 #include "../../Ui/FilterBar.h"
 #include "../../Ui/ListViewUtil.h"
 #include "../../Ui/LoadingOverlay.h"
+#include "../../Ui/TableCompareActions.h"
 #include "../../Ui/Theme.h"
 #include "../../Ui/VirtualListView.h"
 
@@ -98,6 +99,9 @@ struct HotkeyViewState final {
     bool filterUseRegex = false;
     std::uint64_t displayGeneration = 0;
     bool hasProbeResult = false;
+    // 每次探测都会重新抢注一遍，占用状态可能在两次之间被别的程序放掉或抢走。
+    // 单看一屏只能知道"现在被占"，两次快照才能指出这次是谁腾出来了。
+    Ksword::Ui::TableSnapshotEngine snapshotEngine;
     std::unique_ptr<Ksword::Ui::AsyncSnapshotTask<HotkeyProbeResult>> probeTask;
     std::unique_ptr<Ksword::Ui::AsyncSnapshotTask<HotkeyFilterResult>> filterTask;
 };
@@ -274,9 +278,15 @@ void BeginProbe(HotkeyViewState& state) {
         });
 }
 
+// HotkeyColumnTitles 是表头、可见行导出与快照采集共用的列标题，三处同源，
+// 快照才不会把"状态"和"错误码"两列对调着比。
+const std::vector<std::wstring>& HotkeyColumnTitles() {
+    static const std::vector<std::wstring> titles{ L"组合", L"修饰键", L"主键", L"状态", L"错误码" };
+    return titles;
+}
+
 void ExportVisibleRows(HotkeyViewState& state) {
-    const std::wstring text = Ksword::Ui::BuildVisibleVirtualListTsv(
-        { L"组合", L"修饰键", L"主键", L"状态", L"错误码" }, state.hotkeyList);
+    const std::wstring text = Ksword::Ui::BuildVisibleVirtualListTsv(HotkeyColumnTitles(), state.hotkeyList);
     if (text.empty()) {
         state.statusText = L"没有可导出的可见结果。";
         ::InvalidateRect(state.hwnd, nullptr, TRUE);
@@ -302,6 +312,8 @@ void ShowContextMenu(HotkeyViewState& state, const POINT screenPoint) {
     ::AppendMenuW(menu, MF_STRING | (hasRows ? MF_ENABLED : MF_GRAYED), kMenuCopyVisible, L"复制可见行");
     ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     ::AppendMenuW(menu, MF_STRING, kMenuProbe, L"重新探测");
+    ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    Ksword::Ui::AppendTableCompareMenuItems(menu, state.snapshotEngine);
 
     const int command = ::TrackPopupMenu(
         menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, screenPoint.x, screenPoint.y, 0, state.hwnd, nullptr);
@@ -320,7 +332,11 @@ void ShowContextMenu(HotkeyViewState& state, const POINT screenPoint) {
         BeginProbe(state);
         return;
     default:
-        return;
+        if (!Ksword::Ui::HandleTableCompareCommand(state.snapshotEngine, static_cast<UINT>(command),
+                state.hotkeyList, HotkeyColumnTitles(), state.statusText)) {
+            return;
+        }
+        break;
     }
     ::InvalidateRect(state.hwnd, nullptr, TRUE);
 }
@@ -394,13 +410,16 @@ bool CreateChildControls(HotkeyViewState& state) {
     if (!state.hotkeyList.create(hwnd, kHotkeyListId, 0, 0, 1, 1, LVS_SHOWSELALWAYS)) {
         return false;
     }
-    state.hotkeyList.addColumns({
-        { 0, 180, LVCFMT_LEFT, L"组合" },
-        { 1, 140, LVCFMT_LEFT, L"修饰键" },
-        { 2, 110, LVCFMT_LEFT, L"主键" },
-        { 3, 160, LVCFMT_LEFT, L"状态" },
-        { 4, 380, LVCFMT_LEFT, L"错误码" },
-    });
+    {
+        const std::vector<std::wstring>& titles = HotkeyColumnTitles();
+        static const int widths[] = { 180, 140, 110, 160, 380 };
+        std::vector<Ksword::Ui::ListViewColumn> columns;
+        columns.reserve(titles.size());
+        for (std::size_t index = 0; index < titles.size(); ++index) {
+            columns.push_back({ static_cast<int>(index), widths[index], LVCFMT_LEFT, titles[index] });
+        }
+        state.hotkeyList.addColumns(columns);
+    }
     if (HWND list = state.hotkeyList.hwnd()) {
         ListView_SetExtendedListViewStyle(list,
             LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER | LVS_EX_GRIDLINES | LVS_EX_LABELTIP);

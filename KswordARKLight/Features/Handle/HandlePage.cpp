@@ -13,6 +13,7 @@
 #include "../../Ui/ListViewUtil.h"
 #include "../../Ui/LoadingOverlay.h"
 #include "../../Ui/TabUtil.h"
+#include "../../Ui/TableCompareActions.h"
 #include "../../Ui/Theme.h"
 #include "../../Ui/VirtualListView.h"
 
@@ -95,6 +96,9 @@ struct HandlePageState {
     std::wstring filterQuery;
     bool filterUseRegex = false;
     int contextColumn = 0;
+    // 句柄表每次枚举都是一份新结果：两次之间会有关闭、重开以及访问权限变化。
+    // 列表只答得出“现在有哪些句柄”，答不出“这次少了哪几个”，那正是快照要比的东西。
+    Ksword::Ui::TableSnapshotEngine snapshotEngine;
     std::unique_ptr<Ksword::Ui::AsyncSnapshotTask<HandleRefreshSnapshot>> refreshTask;
     std::unique_ptr<Ksword::Ui::AsyncSnapshotTask<HandleFilterResult>> filterTask;
     std::unique_ptr<Ksword::Ui::AsyncSnapshotTask<HandleDetailTaskResult>> detailTask;
@@ -254,6 +258,16 @@ std::wstring AnomalyText(const HandleEntryView& entry) {
     return text;
 }
 
+// HandleColumnTitles 是表头、可见行导出和快照采集共用的列标题。
+// 快照只保存显示文本，两处列序一旦分叉，比对就会拿甲列去比乙列。
+const std::vector<std::wstring>& HandleColumnTitles() {
+    static const std::vector<std::wstring> titles{
+        L"PID", L"Handle", L"Object", L"ObjectHeader", L"ObjectType", L"TypeIdx",
+        L"GrantedAccess", L"Attributes", L"PtrCount", L"HandleCount", L"Decode", L"异常句柄标记"
+    };
+    return titles;
+}
+
 std::vector<Ksword::Ui::VirtualListRow> BuildVirtualHandleRows(const HandleEnumView& snapshot) {
     std::vector<Ksword::Ui::VirtualListRow> rows;
     rows.reserve(snapshot.entries.size());
@@ -378,10 +392,7 @@ std::wstring RowsAsTsv(const HandlePageState& state, const bool allVisible) {
 // current filtered handle table. Input is the immutable rendered snapshot;
 // processing never refreshes, resolves objects, or reads hidden diagnostics.
 std::wstring VisibleHandleRowsAsTsv(const HandlePageState& state) {
-    static const std::vector<std::wstring> kColumnTitles = {
-        L"PID", L"Handle", L"Object", L"ObjectHeader", L"ObjectType", L"TypeIdx",
-        L"GrantedAccess", L"Attributes", L"PtrCount", L"HandleCount", L"Decode", L"异常句柄标记"
-    };
+    const std::vector<std::wstring>& kColumnTitles = HandleColumnTitles();
     const auto& visible = state.handleList.visibleIndexes();
     const auto& rows = state.handleList.rows();
     if (visible.empty()) {
@@ -549,20 +560,20 @@ bool HandlePage::Initialize(HWND hwnd) {
     if (!handleList_ || !detailList_) {
         return false;
     }
-    state_->handleList.addColumns({
-        { 0, 80, LVCFMT_RIGHT, L"PID" },
-        { 1, 90, LVCFMT_RIGHT, L"Handle" },
-        { 2, 165, LVCFMT_LEFT, L"Object" },
-        { 3, 165, LVCFMT_LEFT, L"ObjectHeader" },
-        { 4, 165, LVCFMT_LEFT, L"ObjectType" },
-        { 5, 70, LVCFMT_RIGHT, L"TypeIdx" },
-        { 6, 110, LVCFMT_RIGHT, L"GrantedAccess" },
-        { 7, 100, LVCFMT_RIGHT, L"Attributes" },
-        { 8, 100, LVCFMT_RIGHT, L"PtrCount" },
-        { 9, 100, LVCFMT_RIGHT, L"HandleCount" },
-        { 10, 150, LVCFMT_LEFT, L"Decode" },
-        { 11, 220, LVCFMT_LEFT, L"异常句柄标记" },
-    });
+    {
+        const std::vector<std::wstring>& titles = HandleColumnTitles();
+        static const int widths[] = { 80, 90, 165, 165, 165, 70, 110, 100, 100, 100, 150, 220 };
+        static const int formats[] = {
+            LVCFMT_RIGHT, LVCFMT_RIGHT, LVCFMT_LEFT, LVCFMT_LEFT, LVCFMT_LEFT, LVCFMT_RIGHT,
+            LVCFMT_RIGHT, LVCFMT_RIGHT, LVCFMT_RIGHT, LVCFMT_RIGHT, LVCFMT_LEFT, LVCFMT_LEFT
+        };
+        std::vector<Ksword::Ui::ListViewColumn> columns;
+        columns.reserve(titles.size());
+        for (std::size_t index = 0; index < titles.size(); ++index) {
+            columns.push_back({ static_cast<int>(index), widths[index], formats[index], titles[index] });
+        }
+        state_->handleList.addColumns(columns);
+    }
     InsertDetailColumns(detailList_);
     ListView_SetExtendedListViewStyle(handleList_, LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER | LVS_EX_GRIDLINES | LVS_EX_LABELTIP);
 
@@ -772,6 +783,8 @@ void HandlePage::ShowHandleContextMenu(POINT screenPoint) {
         MF_STRING | (hasAuditedProcessIdentity ? 0U : MF_GRAYED),
         kHandleMenuOpenProcessDetails,
         L"查看已审计进程详细信息");
+    ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    Ksword::Ui::AppendTableCompareMenuItems(menu, state_->snapshotEngine);
     const UINT command = ::TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, screenPoint.x, screenPoint.y, 0, hwnd_, nullptr);
     ::DestroyMenu(menu);
     if (command == kHandleMenuCopyCell) {
@@ -816,6 +829,12 @@ void HandlePage::ShowHandleContextMenu(POINT screenPoint) {
         SetStatus(routed
             ? L"已请求打开已审计 PID " + std::to_wstring(state_->snapshotProcessId) + L" 的进程详细信息。"
             : L"进程详细信息页未能接收该已审计进程身份。");
+    } else {
+        std::wstring snapshotMessage;
+        if (Ksword::Ui::HandleTableCompareCommand(state_->snapshotEngine, command,
+                state_->handleList, HandleColumnTitles(), snapshotMessage)) {
+            SetStatus(snapshotMessage);
+        }
     }
 }
 

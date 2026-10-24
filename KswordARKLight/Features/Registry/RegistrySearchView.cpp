@@ -9,6 +9,7 @@
 #include "../../Ui/ExportUtil.h"
 #include "../../Ui/FilterBar.h"
 #include "../../Ui/ListViewUtil.h"
+#include "../../Ui/TableCompareActions.h"
 #include "../../Ui/Theme.h"
 #include "../../Ui/VirtualListView.h"
 
@@ -82,6 +83,9 @@ struct RegistrySearchViewState final {
     std::wstring searchStatusText;
     int lastSubItem = 0;
     bool creationSucceeded = false;
+    // 同一组搜索条件下重复搜索，命中的键和值可能已经变了；结果页只显示当前一次，
+    // 而"哪个键这次才出现、哪个值的数据被改写"要靠两次搜到的快照对照。
+    Ksword::Ui::TableSnapshotEngine snapshotEngine;
 };
 
 RegistrySearchViewState* StateFromWindow(HWND hwnd) noexcept {
@@ -134,17 +138,28 @@ const wchar_t* EntryKindText(const RegistrySearchEntryKind kind) {
     return kind == RegistrySearchEntryKind::Key ? L"键" : L"值";
 }
 
-std::vector<Ksword::Ui::ListViewColumn> SearchColumns() {
-    return {
-        { 0, 64, LVCFMT_LEFT, L"类型" },
-        { 1, 270, LVCFMT_LEFT, L"键路径" },
-        { 2, 150, LVCFMT_LEFT, L"值名称" },
-        { 3, 100, LVCFMT_LEFT, L"值类型" },
-        { 4, 330, LVCFMT_LEFT, L"数据预览" },
-        { 5, 76, LVCFMT_RIGHT, L"字节" },
-        { 6, 56, LVCFMT_RIGHT, L"深度" },
-        { 7, 76, LVCFMT_LEFT, L"预览" }
+// SearchColumnTitles 是表头与快照采集共用的列标题；列序必须和 addColumns 一致，
+// 否则比对会拿"值名称"去比"数据预览"。
+const std::vector<std::wstring>& SearchColumnTitles() {
+    static const std::vector<std::wstring> titles{
+        L"类型", L"键路径", L"值名称", L"值类型", L"数据预览", L"字节", L"深度", L"预览"
     };
+    return titles;
+}
+
+std::vector<Ksword::Ui::ListViewColumn> SearchColumns() {
+    const std::vector<std::wstring>& titles = SearchColumnTitles();
+    static const int widths[] = { 64, 270, 150, 100, 330, 76, 56, 76 };
+    static const int formats[] = {
+        LVCFMT_LEFT, LVCFMT_LEFT, LVCFMT_LEFT, LVCFMT_LEFT,
+        LVCFMT_LEFT, LVCFMT_RIGHT, LVCFMT_RIGHT, LVCFMT_LEFT
+    };
+    std::vector<Ksword::Ui::ListViewColumn> columns;
+    columns.reserve(titles.size());
+    for (std::size_t index = 0; index < titles.size(); ++index) {
+        columns.push_back({ static_cast<int>(index), widths[index], formats[index], titles[index] });
+    }
+    return columns;
 }
 
 void RenderStatus(const RegistrySearchViewState& state) {
@@ -480,6 +495,8 @@ void ShowContextMenu(RegistrySearchViewState& state, POINT screenPoint) {
     ::AppendMenuW(menu, MF_STRING | (hasVisibleRows ? 0U : MF_GRAYED), kMenuCopyVisible, L"复制可见结果");
     ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     ::AppendMenuW(menu, MF_STRING | (hasVisibleRows ? 0U : MF_GRAYED), kMenuExportVisible, L"导出可见 TSV");
+    ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    Ksword::Ui::AppendTableCompareMenuItems(menu, state.snapshotEngine);
     const UINT command = ::TrackPopupMenu(
         menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, screenPoint.x, screenPoint.y, 0, state.hwnd, nullptr);
     ::DestroyMenu(menu);
@@ -499,8 +516,14 @@ void ShowContextMenu(RegistrySearchViewState& state, POINT screenPoint) {
     case kMenuExportVisible:
         ExportVisibleRows(state);
         break;
-    default:
+    default: {
+        std::wstring snapshotMessage;
+        if (Ksword::Ui::HandleTableCompareCommand(state.snapshotEngine, command,
+                state.list, SearchColumnTitles(), snapshotMessage)) {
+            SetStatus(state, snapshotMessage);
+        }
         break;
+    }
     }
 }
 

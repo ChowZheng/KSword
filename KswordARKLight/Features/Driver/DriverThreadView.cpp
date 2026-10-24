@@ -3,6 +3,7 @@
 #include "../../Ui/AsyncTask.h"
 #include "../../Ui/Controls.h"
 #include "../../Ui/ExportUtil.h"
+#include "../../Ui/TableCompareActions.h"
 #include "../../Ui/Theme.h"
 #include "../../Ui/VirtualListView.h"
 #include "../../../Ksword5.1/Ksword5.1/ArkDriverClient/ArkDriverClient.h"
@@ -106,6 +107,9 @@ struct ViewState {
     HWND status = nullptr;
     Ksword::Ui::VirtualListView list;
     std::vector<ThreadRow> threads;
+    // 系统线程的启动地址、状态、等待原因每次刷新都在动，逐行看只能看到当下。
+    // 两次快照并排才能说明哪个 TID 是这期间新起的、哪个转移到了别的模块。
+    Ksword::Ui::TableSnapshotEngine snapshotEngine;
     std::unique_ptr<Ksword::Ui::AsyncSnapshotTask<Snapshot>> task;
     std::unique_ptr<Ksword::Ui::AsyncSnapshotTask<ksword::ark::IoResult>> actionTask;
 };
@@ -375,6 +379,9 @@ void RunAction(ViewState& state, unsigned long action) {
     UpdateDetail(state);
 }
 
+// 列标题定义在本文件靠后，右键菜单的快照命令先用到，这里先声明。
+const std::vector<std::wstring>& ThreadColumnTitles();
+
 void ShowRowMenu(ViewState& state, POINT screen) {
     HMENU menu = ::CreatePopupMenu();
     if (!menu) return;
@@ -384,6 +391,8 @@ void ShowRowMenu(ViewState& state, POINT screen) {
     ::AppendMenuW(menu, MF_STRING | (selected ? 0U : MF_GRAYED), kMenuTerminate, L"终止系统线程");
     ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     ::AppendMenuW(menu, MF_STRING | (selected ? 0U : MF_GRAYED), kMenuCopy, L"复制详情");
+    ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    Ksword::Ui::AppendTableCompareMenuItems(menu, state.snapshotEngine);
     const UINT command = static_cast<UINT>(::TrackPopupMenu(
         menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, screen.x, screen.y, 0, state.hwnd, nullptr));
     ::DestroyMenu(menu);
@@ -394,7 +403,14 @@ void ShowRowMenu(ViewState& state, POINT screen) {
     case kMenuCopy:
         Ksword::Ui::CopyTextToClipboard(state.hwnd, WindowText(state.detail));
         break;
-    default: break;
+    default: {
+        std::wstring message;
+        if (Ksword::Ui::HandleTableCompareCommand(state.snapshotEngine, command,
+                state.list, ThreadColumnTitles(), message)) {
+            ::SetWindowTextW(state.status, message.c_str());
+        }
+        break;
+    }
     }
 }
 
@@ -429,6 +445,16 @@ void Layout(ViewState& state) {
     ::MoveWindow(state.status, gap, statusTop, std::max(50, width - 2 * gap), statusHeight, TRUE);
 }
 
+// ThreadColumnTitles 是表头、可见行导出与快照采集共用的列标题；三处必须同源，
+// 否则快照会按错位的列做比对。
+const std::vector<std::wstring>& ThreadColumnTitles() {
+    static const std::vector<std::wstring> titles{
+        L"TID", L"启动地址", L"模块", L"状态", L"等待原因",
+        L"优先级", L"工作线程", L"R0状态", L"创建时间", L"模块路径"
+    };
+    return titles;
+}
+
 bool CreateChildren(ViewState& state) {
     state.refresh = Ksword::Ui::CreateButton(state.hwnd, kRefreshId, L"刷新", 0, 0, 0, 0);
     state.suspend = Ksword::Ui::CreateButton(state.hwnd, kSuspendId, L"挂起", 0, 0, 0, 0);
@@ -446,18 +472,16 @@ bool CreateChildren(ViewState& state) {
     if (!state.refresh || !state.suspend || !state.resume || !state.terminate ||
         !state.filter || !state.detail || !state.status ||
         !state.list.create(state.hwnd, kListId, 0, 0, 0, 0)) return false;
-    state.list.addColumns({
-        { 0, 80, LVCFMT_LEFT, L"TID" },
-        { 1, 150, LVCFMT_LEFT, L"启动地址" },
-        { 2, 150, LVCFMT_LEFT, L"模块" },
-        { 3, 65, LVCFMT_LEFT, L"状态" },
-        { 4, 85, LVCFMT_LEFT, L"等待原因" },
-        { 5, 80, LVCFMT_LEFT, L"优先级" },
-        { 6, 85, LVCFMT_LEFT, L"工作线程" },
-        { 7, 80, LVCFMT_LEFT, L"R0状态" },
-        { 8, 150, LVCFMT_LEFT, L"创建时间" },
-        { 9, 320, LVCFMT_LEFT, L"模块路径" }
-    });
+    {
+        const std::vector<std::wstring>& titles = ThreadColumnTitles();
+        static const int widths[] = { 80, 150, 150, 65, 85, 80, 85, 80, 150, 320 };
+        std::vector<Ksword::Ui::ListViewColumn> columns;
+        columns.reserve(titles.size());
+        for (std::size_t index = 0; index < titles.size(); ++index) {
+            columns.push_back({ static_cast<int>(index), widths[index], LVCFMT_LEFT, titles[index] });
+        }
+        state.list.addColumns(columns);
+    }
     Ksword::Ui::SetWindowFontRecursive(state.hwnd);
     UpdateDetail(state);
     return true;
@@ -592,10 +616,7 @@ HWND CreateDriverThreadView(HWND parent, const RECT& bounds) {
 std::wstring ExportDriverThreadViewTsv(HWND page) {
     ViewState* state = page ? State(page) : nullptr;
     if (!state) return {};
-    return Ksword::Ui::BuildVisibleVirtualListTsv({
-        L"TID", L"启动地址", L"模块", L"状态", L"等待原因",
-        L"优先级", L"工作线程", L"R0状态", L"创建时间", L"模块路径"
-    }, state->list);
+    return Ksword::Ui::BuildVisibleVirtualListTsv(ThreadColumnTitles(), state->list);
 }
 
 } // namespace Ksword::Features::Driver

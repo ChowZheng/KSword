@@ -10,6 +10,7 @@
 #include "../../Ui/FilterBar.h"
 #include "../../Ui/ListViewUtil.h"
 #include "../../Ui/LoadingOverlay.h"
+#include "../../Ui/TableCompareActions.h"
 #include "../../Ui/Theme.h"
 #include "../../Ui/VirtualListView.h"
 
@@ -97,6 +98,9 @@ struct ConnectionViewState final {
     std::wstring filterQuery;
     bool filterUseRegex = false;
     std::uint64_t displayGeneration = 0;
+    // 连接表按秒级变化：本地端口几秒内就可能被另一个进程重新占用，光看当前一屏
+    // 分不出"这条连接还是不是刚才那条"。两次快照比对才答得出谁新增、谁换了主人。
+    Ksword::Ui::TableSnapshotEngine snapshotEngine;
     bool actionInProgress = false;
     std::unique_ptr<Ksword::Ui::AsyncSnapshotTask<ConnectionEnumerationResult>> refreshTask;
     std::unique_ptr<Ksword::Ui::AsyncSnapshotTask<ConnectionFilterResult>> filterTask;
@@ -379,11 +383,17 @@ void BeginConnectionRefresh(ConnectionViewState& state) {
         });
 }
 
-void ExportVisibleConnections(ConnectionViewState& state) {
-    static const std::vector<std::wstring> kColumnTitles = {
+// ConnectionColumnTitles 是表头、可见行导出与快照采集共用的列标题。快照只存显示
+// 文本，列序若在这里和 addColumns 之间分叉，比对就会拿端口去比地址。
+const std::vector<std::wstring>& ConnectionColumnTitles() {
+    static const std::vector<std::wstring> titles{
         L"协议", L"本地地址", L"本地端口", L"远端地址", L"远端端口", L"状态", L"PID", L"进程名"
     };
-    const std::wstring text = Ksword::Ui::BuildVisibleVirtualListTsv(kColumnTitles, state.connectionList);
+    return titles;
+}
+
+void ExportVisibleConnections(ConnectionViewState& state) {
+    const std::wstring text = Ksword::Ui::BuildVisibleVirtualListTsv(ConnectionColumnTitles(), state.connectionList);
     if (text.empty()) {
         state.statusText = L"没有可导出的当前可见连接。";
         ::InvalidateRect(state.hwnd, nullptr, TRUE);
@@ -530,6 +540,8 @@ void ShowConnectionContextMenu(ConnectionViewState& state, POINT screenPoint) {
     ::AppendMenuW(menu, MF_STRING | (entry && entry->processId != 0 ? MF_ENABLED : MF_GRAYED),
         kMenuOpenProcess, L"打开所属进程详细信息");
     ::AppendMenuW(menu, MF_STRING, kMenuRefresh, L"刷新");
+    ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    Ksword::Ui::AppendTableCompareMenuItems(menu, state.snapshotEngine);
 
     const int command = ::TrackPopupMenu(
         menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, screenPoint.x, screenPoint.y, 0, state.hwnd, nullptr);
@@ -567,6 +579,10 @@ void ShowConnectionContextMenu(ConnectionViewState& state, POINT screenPoint) {
         BeginConnectionRefresh(state);
         break;
     default:
+        if (Ksword::Ui::HandleTableCompareCommand(state.snapshotEngine, static_cast<UINT>(command),
+                state.connectionList, ConnectionColumnTitles(), state.statusText)) {
+            ::InvalidateRect(state.hwnd, nullptr, TRUE);
+        }
         break;
     }
 }
@@ -639,16 +655,20 @@ bool CreateChildControls(ConnectionViewState& state) {
     if (!state.connectionList.create(hwnd, kConnectionListId, 0, 0, 1, 1, LVS_SHOWSELALWAYS | LVS_SINGLESEL)) {
         return false;
     }
-    state.connectionList.addColumns({
-        { 0, 70, LVCFMT_LEFT, L"协议" },
-        { 1, 190, LVCFMT_LEFT, L"本地地址" },
-        { 2, 80, LVCFMT_RIGHT, L"本地端口" },
-        { 3, 190, LVCFMT_LEFT, L"远端地址" },
-        { 4, 80, LVCFMT_RIGHT, L"远端端口" },
-        { 5, 110, LVCFMT_LEFT, L"状态" },
-        { 6, 70, LVCFMT_RIGHT, L"PID" },
-        { 7, 170, LVCFMT_LEFT, L"进程名" },
-    });
+    {
+        const std::vector<std::wstring>& titles = ConnectionColumnTitles();
+        static const int widths[] = { 70, 190, 80, 190, 80, 110, 70, 170 };
+        static const int formats[] = {
+            LVCFMT_LEFT, LVCFMT_LEFT, LVCFMT_RIGHT, LVCFMT_LEFT,
+            LVCFMT_RIGHT, LVCFMT_LEFT, LVCFMT_RIGHT, LVCFMT_LEFT
+        };
+        std::vector<Ksword::Ui::ListViewColumn> columns;
+        columns.reserve(titles.size());
+        for (std::size_t index = 0; index < titles.size(); ++index) {
+            columns.push_back({ static_cast<int>(index), widths[index], formats[index], titles[index] });
+        }
+        state.connectionList.addColumns(columns);
+    }
     if (HWND list = state.connectionList.hwnd()) {
         ListView_SetExtendedListViewStyle(list,
             LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER | LVS_EX_GRIDLINES | LVS_EX_LABELTIP);
