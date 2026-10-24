@@ -16,6 +16,13 @@ namespace Ksword::Ui {
 // same loop, and a single missed copy turns one cell into two bogus columns.
 std::wstring SanitizeTsvCell(std::wstring cell);
 
+// AppendTsvRow writes exactly columnCount scrubbed cells followed by CRLF. Short
+// rows are padded with empty cells and extra cells are dropped, so a header row
+// and a data row can never disagree about how many columns the file has — a
+// ragged TSV opens shifted in every spreadsheet.
+void AppendTsvRow(std::wstring& output, const std::vector<std::wstring>& cells,
+    std::size_t columnCount);
+
 // SaveTextFileResult distinguishes an intentional dialog cancellation from a
 // failed write so a feature page can keep its local status text accurate.
 enum class SaveTextFileResult {

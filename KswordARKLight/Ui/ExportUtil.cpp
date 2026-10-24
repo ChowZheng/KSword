@@ -24,17 +24,20 @@ std::wstring SanitizeTsvCell(std::wstring cell) {
     return cell;
 }
 
-namespace {
-
-void AppendTsvRow(std::wstring& output, const std::vector<std::wstring>& cells) {
-    for (std::size_t column = 0; column < cells.size(); ++column) {
+void AppendTsvRow(std::wstring& output, const std::vector<std::wstring>& cells,
+    const std::size_t columnCount) {
+    for (std::size_t column = 0; column < columnCount; ++column) {
         if (column != 0) {
             output.push_back(L'\t');
         }
-        output += SanitizeTsvCell(cells[column]);
+        if (column < cells.size()) {
+            output += SanitizeTsvCell(cells[column]);
+        }
     }
     output += L"\r\n";
 }
+
+namespace {
 
 bool WriteAll(HANDLE file, const void* data, const std::size_t byteCount, std::wstring* errorOut) {
     if (byteCount == 0U) {
@@ -240,7 +243,7 @@ std::wstring BuildVirtualListTsv(
     }
 
     std::wstring output;
-    AppendTsvRow(output, columnTitles);
+    AppendTsvRow(output, columnTitles, columnTitles.size());
 
     std::size_t exported = 0;
     const bool walkVisible = scope == ExportRowScope::Visible || visible.size() == rows.size();
@@ -250,7 +253,7 @@ std::wstring BuildVirtualListTsv(
         // all" from silently dropping an applied sort in the common case.
         for (const std::size_t index : visible) {
             if (index < rows.size()) {
-                AppendTsvRow(output, rows[index].cells);
+                AppendTsvRow(output, rows[index].cells, columnTitles.size());
                 ++exported;
             }
         }
@@ -259,7 +262,7 @@ std::wstring BuildVirtualListTsv(
         // snapshot's natural order is honest; pretending the sort still covers
         // rows it never ordered would not be.
         for (const auto& row : rows) {
-            AppendTsvRow(output, row.cells);
+            AppendTsvRow(output, row.cells, columnTitles.size());
             ++exported;
         }
     }

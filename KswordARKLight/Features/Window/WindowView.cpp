@@ -273,30 +273,6 @@ std::vector<std::wstring> WindowColumnTitles(const WindowViewState& state) {
     return { L"类别", L"数据源", L"入口 / 对象", L"状态", L"说明" };
 }
 
-// AppendTsvCell appends one strictly single-line TSV cell. Inputs are the
-// current rendered string and an output buffer; tabs/newlines are flattened so
-// a copied window title or driver diagnostic cannot add columns or rows.
-void AppendTsvCell(std::wstring& output, const std::wstring& cell) {
-    for (const wchar_t character : cell) {
-        output.push_back(character == L'\t' || character == L'\r' || character == L'\n' ? L' ' : character);
-    }
-}
-
-// AppendTsvRow writes exactly columnCount cells from one retained display row.
-// The Window list keeps additional cells for filtering, but export intentionally
-// stops at the currently visible column count so headers and data remain aligned.
-void AppendTsvRow(std::wstring& output, const std::vector<std::wstring>& cells, const std::size_t columnCount) {
-    for (std::size_t column = 0U; column < columnCount; ++column) {
-        if (column != 0U) {
-            output.push_back(L'\t');
-        }
-        if (column < cells.size()) {
-            AppendTsvCell(output, cells[column]);
-        }
-    }
-    output += L"\r\n";
-}
-
 // BuildVisibleRowsTsv serializes the already-filtered display snapshot. It
 // never enumerates HWNDs or queries ArkDriverClient; normal window rows retain
 // extra supporting cells for in-page workflows, which are deliberately excluded
@@ -316,10 +292,11 @@ std::wstring BuildVisibleRowsTsv(const WindowViewState& state) {
             continue;
         }
         if (!wroteHeader) {
-            AppendTsvRow(text, columns, columns.size());
+            // 行拼装统一走 ExportUtil：它按列数补齐截断，表头和数据行不会对不齐。
+            Ksword::Ui::AppendTsvRow(text, columns, columns.size());
             wroteHeader = true;
         }
-        AppendTsvRow(text, rows[index].cells, columns.size());
+        Ksword::Ui::AppendTsvRow(text, rows[index].cells, columns.size());
     }
     return text;
 }
@@ -456,15 +433,9 @@ std::wstring BuildRenderedDetailTsv(HWND detailList) {
     }
 
     std::wstring text;
-    AppendTsvCell(text, L"Property");
-    text.push_back(L'\t');
-    AppendTsvCell(text, L"Value");
-    text += L"\r\n";
+    Ksword::Ui::AppendTsvRow(text, { L"Property", L"Value" }, 2);
     for (int row = 0; row < rows; ++row) {
-        AppendTsvCell(text, ListText(detailList, row, 0));
-        text.push_back(L'\t');
-        AppendTsvCell(text, ListText(detailList, row, 1));
-        text += L"\r\n";
+        Ksword::Ui::AppendTsvRow(text, { ListText(detailList, row, 0), ListText(detailList, row, 1) }, 2);
     }
     return text;
 }
