@@ -562,7 +562,7 @@ void ShowAuditContextMenu(MiscAuditViewState& state, POINT screenPoint) {
     default:
         // 快照命令 id 在所有表之间共用一段，不是本页的一律交给引擎判定。
         if (Ksword::Ui::HandleTableCompareCommand(state.snapshotEngine, static_cast<UINT>(command),
-                state.virtualList, AuditColumnTitles(), state.statusText)) {
+                state.virtualList, AuditColumnTitles(), state.statusText, state.title)) {
             ::InvalidateRect(state.hwnd, nullptr, TRUE);
         }
         break;

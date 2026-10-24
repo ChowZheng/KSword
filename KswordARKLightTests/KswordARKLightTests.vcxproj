@@ -165,6 +165,7 @@
     <ClCompile Include="..\KswordARKLight\Ui\EvidenceSession.cpp" />
     <ClCompile Include="TableSnapshotStressTests.cpp" />
     <ClCompile Include="..\KswordARKLight\Ui\TableSnapshotCompare.cpp" />
+    <ClCompile Include="..\KswordARKLight\Ui\TableCompareRowSource.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="TestSupport.h" />

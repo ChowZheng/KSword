@@ -558,6 +558,9 @@
     <ClCompile Include="Ui\TableCompareActions.cpp">
       <Filter>Ui</Filter>
     </ClCompile>
+    <ClCompile Include="Ui\TableCompareRowSource.cpp">
+      <Filter>Ui</Filter>
+    </ClCompile>
     <ClCompile Include="Ui\TableCompareResultWindow.cpp">
       <Filter>Ui</Filter>
     </ClCompile>

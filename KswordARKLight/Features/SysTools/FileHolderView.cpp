@@ -487,7 +487,7 @@ void ShowContextMenu(FileHolderViewState& state, POINT screenPoint) {
     default:
         // 快照命令 id 在所有表之间共用一段，不是本页的一律交给引擎判定。
         if (Ksword::Ui::HandleTableCompareCommand(state.snapshotEngine, static_cast<UINT>(command),
-                state.list, FileHolderColumnTitles(), state.statusText)) {
+                state.list, FileHolderColumnTitles(), state.statusText, L"文件占用")) {
             ::InvalidateRect(state.hwnd, nullptr, TRUE);
         }
         break;

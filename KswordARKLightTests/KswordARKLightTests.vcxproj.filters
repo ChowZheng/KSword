@@ -118,6 +118,7 @@
     <ClCompile Include="..\KswordARKLight\Ui\EvidenceSession.cpp"><Filter>Production</Filter></ClCompile>
     <ClCompile Include="TableSnapshotStressTests.cpp"><Filter>Tests</Filter></ClCompile>
     <ClCompile Include="..\KswordARKLight\Ui\TableSnapshotCompare.cpp"><Filter>Production</Filter></ClCompile>
+    <ClCompile Include="..\KswordARKLight\Ui\TableCompareRowSource.cpp"><Filter>Production</Filter></ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="TestSupport.h"><Filter>Tests</Filter></ClInclude>

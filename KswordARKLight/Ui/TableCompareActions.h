@@ -90,6 +90,10 @@ struct TableCompareRows {
     std::size_t rowCount = 0;
     std::function<int(int visualRow)> sourceRowAt;
     std::function<std::wstring(int sourceRow, int column)> cellText;
+    // Optional stable field IDs, parallel to columnTitles. cellText still takes
+    // a position in the current schema; the adapter translates IDs to positions.
+    // Empty keeps positional identities for tables with a fixed schema.
+    std::vector<int> sourceColumns;
 };
 
 // CaptureRowSourceSnapshot stores the row source's currently visible rows as the

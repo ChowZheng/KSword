@@ -19,6 +19,7 @@
 #include "../../Ui/FilterBar.h"
 #include "../../Ui/AsyncShellIconLoader.h"
 #include "../../Ui/ListViewUtil.h"
+#include "../../Ui/TableCompareActions.h"
 #include "../../Ui/Theme.h"
 #include "../../Ui/VirtualListView.h"
 #include "../../../Ksword5.1/Ksword5.1/ArkDriverClient/ArkDriverClient.h"
@@ -376,6 +377,9 @@ struct ProcessViewState {
     std::wstring filterQuery;
     bool filterUseRegex = false;
     std::uint64_t displayGeneration = 0;
+    // Compare the displayed snapshot without re-enumerating processes. With no
+    // visible stable key, the shared engine reports its whole-row fallback.
+    Ksword::Ui::TableSnapshotEngine snapshotEngine;
     std::unique_ptr<Ksword::Ui::AsyncSnapshotTask<struct ProcessRefreshSnapshot>> refreshTask;
     std::unique_ptr<Ksword::Ui::AsyncSnapshotTask<ProcessFilterResult>> filterTask;
     std::unique_ptr<Ksword::Ui::AsyncSnapshotTask<ProcessViewActionResult>> actionTask;
@@ -452,6 +456,20 @@ std::vector<Ksword::Ui::ListViewColumn> ActiveColumnSet(const ProcessViewState& 
         if (descriptor) columns.push_back({ static_cast<int>(index), descriptor->width, descriptor->format, descriptor->title });
     }
     return columns;
+}
+
+// ProcessColumnTitles mirrors ActiveColumnSet: same descriptors, same order, so a
+// snapshot's columns always line up with the header the user is reading. Hidden
+// columns never reach either list.
+std::vector<std::wstring> ProcessColumnTitles(const ProcessViewState& state) {
+    std::vector<std::wstring> titles;
+    titles.reserve(DisplayedProcessColumns(state).size());
+    for (const ProcessColumnId id : DisplayedProcessColumns(state)) {
+        if (const ProcessColumnDescriptor* descriptor = FindProcessColumn(id)) {
+            titles.push_back(descriptor->title);
+        }
+    }
+    return titles;
 }
 
 // StateFromWindow returns the state pointer stored on the page HWND. Input is a
@@ -703,6 +721,42 @@ int DisplayIndexFromListItem(const ProcessViewState& state, int item) {
     }
     const std::size_t displayIndex = state.mapping->visibleIndexes[static_cast<std::size_t>(item)];
     return displayIndex <= static_cast<std::size_t>(INT_MAX) ? static_cast<int>(displayIndex) : -1;
+}
+
+// ProcessCompareRows describes the visible rows to the snapshot engine. Both
+// callbacks read the immutable presentation snapshot that the owner-data list is
+// already drawing from, so a capture never re-enumerates processes.
+Ksword::Ui::TableCompareRows ProcessCompareRows(ProcessViewState& state) {
+    Ksword::Ui::TableCompareRows rows;
+    const auto mapping = state.mapping;
+    const auto presentation = state.presentation;
+    rows.rowCount = mapping ? mapping->visibleIndexes.size() : 0U;
+    for (const ProcessColumnId id : DisplayedProcessColumns(state)) {
+        if (FindProcessColumn(id)) {
+            rows.sourceColumns.push_back(static_cast<int>(id));
+        }
+    }
+    rows.sourceRowAt = [mapping](int visualRow) {
+        if (!mapping || visualRow < 0 || static_cast<std::size_t>(visualRow) >= mapping->visibleIndexes.size()) {
+            return -1;
+        }
+        const auto index = mapping->visibleIndexes[static_cast<std::size_t>(visualRow)];
+        return index <= static_cast<std::size_t>(INT_MAX) ? static_cast<int>(index) : -1;
+    };
+    rows.cellText = [presentation](int sourceRow, int column) -> std::wstring {
+        if (sourceRow < 0 || column < 0 || !presentation) {
+            return {};
+        }
+        const auto& presentationRows = presentation->rows;
+        const std::size_t rowIndex = static_cast<std::size_t>(sourceRow);
+        if (rowIndex >= presentationRows.size()) {
+            return {};
+        }
+        const auto& cells = presentationRows[rowIndex].cells;
+        const std::size_t columnIndex = static_cast<std::size_t>(column);
+        return columnIndex < cells.size() ? cells[columnIndex] : std::wstring{};
+    };
+    return rows;
 }
 
 // SelectedDisplayIndexes reads the current multi-selection and translates the
@@ -2441,6 +2495,8 @@ void ShowContextMenu(ProcessViewState& state, POINT screenPoint) {
         ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
         ::AppendMenuW(menu, MF_GRAYED, 0, L"未选择进程");
     }
+    ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    Ksword::Ui::AppendTableCompareMenuItems(menu, state.snapshotEngine);
 
     const UINT command = ::TrackPopupMenu(menu,
         TPM_RETURNCMD | TPM_RIGHTBUTTON,
@@ -2451,6 +2507,17 @@ void ShowContextMenu(ProcessViewState& state, POINT screenPoint) {
         nullptr);
     ::DestroyMenu(menu);
 
+    if (command == Ksword::Ui::kMenuTableCaptureSnapshot ||
+        command == Ksword::Ui::kMenuTableCompareSnapshots ||
+        command == Ksword::Ui::kMenuTableClearSnapshots) {
+        std::wstring snapshotMessage;
+        if (Ksword::Ui::HandleTableCompareCommand(state.snapshotEngine, command,
+                ProcessCompareRows(state), state.hwnd, ProcessColumnTitles(state),
+                snapshotMessage, L"进程")) {
+            TraceProcessStatus(snapshotMessage);
+        }
+        return;
+    }
     if (command >= kContextMenuBaseId) {
         const std::size_t index = static_cast<std::size_t>(command - kContextMenuBaseId);
         if (index < state.activeMenuItems.size()) {

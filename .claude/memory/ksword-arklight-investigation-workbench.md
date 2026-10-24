@@ -66,3 +66,13 @@
 - Light 移除实验 unlink 菜单与执行路径；内部旧 action 枚举保留编号并本地拒绝。枚举不再自行截断到 256 行。注册类型列必须映射 `RegistrationTypeText`，不能误把列别名加到 IAT/EAT 页面。
 - 注销响应先验证长度/size/version，再判断 NTSTATUS；失败保留当前枚举表并展示原始驱动错误，成功重新枚举，不能把注销响应当成枚举表渲染。
 - 验证：Light Release/x64 构建、整套 LightTests、44 项回调策略/封包/列映射回归，以及 `tools/callback_remove_tests/run.py --cc cl` 的生产 R0 模拟测试通过。未实际注销回调、卸载过滤器或装载驱动。
+
+## 表格快照收尾（2026-10-24）
+
+- 本轮按用户确认仅提交 Light；UI CPU 采样工具、动态偏移调查笔记和 `.tmp/` 原有内容保留未提交。用户随后明确停止 Computer Use，无需评估 UI 合规性；后续不要自动继续 GUI 验收。
+- 进程主表通过 `TableCompareRows` 接入共享采集/比对/清除菜单，回调保留当前展示快照与筛选映射的共享所有权。跨列组必须使用 `ProcessColumnId`，不能把显示位置当稳定列身份；否则切换列组后会错配不同字段。
+- `TableCompareRows::sourceColumns` 是与表头平行的可选稳定 ID；单元格回调仍接收当前位置，生产适配器负责转换。空 ID 向量保留旧位置编号；长度不匹配、重复/负 ID 拒绝采集且不覆盖快照。生产适配移至 `Ui/TableCompareRowSource.cpp`，同时进入 Light 与独立 `/W4 /WX` 测试工程，两个工程及 filters 均登记。
+- 进程表未配置稳定行键，仍明确使用共享引擎的整行回退，不能声称已经按 PID + 创建时间作字段级身份比对。七个其他页面调用补充比对窗口/导出表名，其中杂项审计沿用每个子页的 `state.title`。
+- `CreateCaptureProtectionView` 当前仅有声明/定义，未挂入窗口模块工厂；保留代码的构建不等于导航可达。完整入口记录见 `docs/audit/arklight-closeout-20261024.md`。
+- HostX64 Light Release Build 成功（退出 0，约 35 秒，17 条既有 KernelPage/ArkDriverKernel 路径警告）；测试工程 Release `/W4 /WX` 构建成功，0 警告。完整测试及清单 43/43 通过，快照压力/适配套件 151/151。该套件此前漏登必跑清单，本轮补齐。
+- 日志位于 `.codex-build-logs/light-closeout-20261024/`。复用现有驱动，不执行驱动构建、签名或装载；不构建主程序 Qt 工程、不推送或重写历史。真实窗口曾启动，但捕获接口连续超时，未完成视觉验证；之后按用户要求停止。

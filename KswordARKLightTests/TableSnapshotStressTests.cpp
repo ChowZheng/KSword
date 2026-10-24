@@ -16,6 +16,7 @@
 #include "TestSupport.h"
 
 #include "../KswordARKLight/Ui/TableSnapshotCompare.h"
+#include "../KswordARKLight/Ui/TableCompareActions.h"
 
 #include <algorithm>
 #include <chrono>
@@ -767,6 +768,78 @@ void TestLargeTableComparison(KswordTests::Suite& s) {
              L"T-11 the 10000x20 comparison finishes far below the pathological bound");
 }
 
+// Exercise the production row-source adapter with a filtered/reordered view and
+// changing field positions, as used by the process page's column presets.
+void TestRowSourceAdapter(KswordTests::Suite& s) {
+    TableSnapshotEngine engine;
+    engine.SetKeyColumns({ 11 });
+    std::wstring message;
+    const std::vector<std::vector<std::wstring>> cells{
+        { L"alpha", L"101", L"1%" },
+        { L"hidden", L"202", L"2%" },
+        { L"gamma", L"303", L"3%" }
+    };
+    const std::vector<int> visible{ 2, 0 };
+    TableCompareRows rows;
+    rows.rowCount = visible.size();
+    rows.sourceRowAt = [&visible](int index) { return visible.at(static_cast<std::size_t>(index)); };
+    rows.cellText = [&cells](int row, int column) {
+        return cells.at(static_cast<std::size_t>(row)).at(static_cast<std::size_t>(column));
+    };
+    rows.sourceColumns = { 7, 11, 23 };
+    s.expect(CaptureRowSourceSnapshot(engine, rows, { L"name", L"PID", L"CPU" }, message),
+             L"T-12 row adapter captures the filtered projection");
+    s.expect(engine.Earlier().rows.size() == 2U && engine.Earlier().rows[0].sourceRow == 2 &&
+                 engine.Earlier().rows[0].values[0] == L"gamma" &&
+                 engine.Earlier().rows[1].values[1] == L"101",
+             L"T-12 filtered and reordered rows retain their source values");
+    rows.sourceColumns = { 23, 11, 7 };
+    rows.cellText = [&cells](int row, int column) {
+        return cells.at(static_cast<std::size_t>(row)).at(static_cast<std::size_t>(2 - column));
+    };
+    s.expect(CaptureRowSourceSnapshot(engine, rows, { L"CPU", L"PID", L"name" }, message),
+             L"T-12 reordered schema capture succeeds");
+    const auto result = engine.Compare({});
+    s.expect(result.usesStableKeys && result.rows.size() == 2U &&
+                 CountSource(result, TableComparisonSource::Both) == 2,
+             L"T-12 stable identity survives a schema reorder");
+    s.expect(CountFieldChangedRows(result) == 0,
+             L"T-12 column position changes produce no false field differences");
+    s.expect(engine.Later().visibleColumns[0].sourceColumn == 23 &&
+                 engine.Later().rows[0].values[0] == L"3%" &&
+                 engine.Later().rows[0].values[2] == L"gamma",
+             L"T-12 field IDs map back to the current positional cell reader");
+    rows.sourceColumns = { 11, 7 };
+    rows.cellText = [&cells](int row, int column) {
+        return cells.at(static_cast<std::size_t>(row)).at(static_cast<std::size_t>(1 - column));
+    };
+    s.expect(CaptureRowSourceSnapshot(engine, rows, { L"PID", L"name" }, message) &&
+                 engine.Earlier().visibleColumns.size() == 3U &&
+                 engine.Later().visibleColumns[0].sourceColumn == 11 &&
+                 engine.Later().rows[0].values[1] == L"gamma",
+             L"T-12 a reduced preset keeps the baseline and the original field identities");
+    const auto sequence = engine.Sequence();
+    rows.sourceColumns = { 11 };
+    s.expect(!CaptureRowSourceSnapshot(engine, rows, { L"PID", L"name" }, message) &&
+                 engine.Sequence() == sequence && !message.empty(),
+             L"T-12 mismatched schema is rejected without replacing snapshots");
+    rows.sourceColumns = { 11, 11 };
+    s.expect(!CaptureRowSourceSnapshot(engine, rows, { L"PID", L"name" }, message) &&
+                 engine.Sequence() == sequence,
+             L"T-12 duplicate field identities are rejected");
+    rows.sourceColumns = { -1, 7 };
+    s.expect(!CaptureRowSourceSnapshot(engine, rows, { L"PID", L"name" }, message),
+             L"T-12 negative field identity is rejected");
+    rows.sourceColumns.clear();
+    s.expect(CaptureRowSourceSnapshot(engine, rows, { L"PID", L"name" }, message) &&
+                 engine.Later().visibleColumns[0].sourceColumn == 0 &&
+                 engine.Later().rows[0].values[0] == L"303",
+             L"T-12 fixed-schema callers retain positional behavior");
+    rows.rowCount = 0;
+    s.expect(!CaptureRowSourceSnapshot(engine, rows, { L"PID", L"name" }, message),
+             L"T-12 empty projection reports a capture failure");
+}
+
 } // namespace
 
 int RunTableSnapshotStressTests() {
@@ -782,6 +855,7 @@ int RunTableSnapshotStressTests() {
     TestDegenerateInputs(suite);
     TestCaptureCompareLoop(suite);
     TestLargeTableComparison(suite);
+    TestRowSourceAdapter(suite);
     suite.report();
     return suite.failures();
 }
