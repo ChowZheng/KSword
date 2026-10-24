@@ -316,7 +316,8 @@ namespace
             // 只有可见的忙进度动画需要刷新；确定进度只随业务value更新重绘。
             const bool busy = m_bar->minimum() == 0 && m_bar->maximum() == 0;
             BOOL animations = TRUE;
-            SystemParametersInfoW(SPI_GETCLIENTAREAANIMATION, 0, &animations, 0);
+            // 确定进度不使用动画设置；忙进度继续逐帧读取系统偏好。
+            if (busy) SystemParametersInfoW(SPI_GETCLIENTAREAANIMATION, 0, &animations, 0);
             if (busy && animations && m_bar->isVisible())
             {
                 const qreal rate = m_bar->screen() ? m_bar->screen()->refreshRate() : 60.0;
