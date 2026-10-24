@@ -92,11 +92,11 @@ SaveTextFileResult ChooseSavePath(HWND owner,
     return error == 0 ? SaveTextFileResult::Cancelled : SaveTextFileResult::Failed;
 }
 
-SaveTextFileResult WriteExportFile(const std::array<wchar_t, MAX_PATH>& path,
+SaveTextFileResult WriteExportFile(const wchar_t* path,
     const void* data,
     const std::size_t byteCount,
     std::wstring* errorOut) {
-    HANDLE file = ::CreateFileW(path.data(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
+    HANDLE file = ::CreateFileW(path, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
         FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
     if (file == INVALID_HANDLE_VALUE) {
         if (errorOut) {
@@ -148,6 +148,28 @@ std::vector<char> ToUtf8WithBom(const std::wstring& text, std::wstring* errorOut
     return bytes;
 }
 
+// kEvidencePayloadLimit is how much exported text the evidence session keeps
+// verbatim. Past it the session records a summary instead: a whole-table export
+// can reach tens of megabytes, and the session is an investigation log, not a
+// second copy of every file the user wrote.
+constexpr std::size_t kEvidencePayloadLimit = 64U * 1024U;
+
+void RecordExportEvidence(const std::wstring& source, const std::wstring& format, const std::wstring& text) {
+    // An empty source means "this write is not an investigation artifact" --
+    // the callback rule file is the one caller that relies on it.
+    if (source.empty()) {
+        return;
+    }
+    const std::wstring resolvedFormat = format.empty() ? L"text" : format;
+    if (text.size() <= kEvidencePayloadLimit) {
+        GlobalEvidenceSession().record(source, resolvedFormat, text);
+        return;
+    }
+    GlobalEvidenceSession().record(source, resolvedFormat,
+        L"导出内容较大（" + std::to_wstring(text.size())
+            + L" 字符），完整内容已写入导出文件，此处仅记录摘要。");
+}
+
 } // namespace
 
 SaveTextFileResult ChooseTextExportDestination(HWND owner,
@@ -159,14 +181,20 @@ SaveTextFileResult ChooseTextExportDestination(HWND owner,
         defaultExtension, destination.path, errorOut);
 }
 
-SaveTextFileResult WriteUtf8TextToDestination(const TextExportDestination& destination,
-    const std::wstring& text, const std::wstring& evidenceSource,
-    const std::wstring& evidenceFormat, std::wstring* errorOut) {
+SaveTextFileResult WriteUtf8TextFile(const std::wstring& path,
+    const std::wstring& text,
+    const std::wstring& evidenceSource,
+    const std::wstring& evidenceFormat,
+    std::wstring* errorOut) {
     if (errorOut) errorOut->clear();
     // Distinguish "nothing to export" from a conversion failure so the page can
     // tell the user why the export produced no file.
     if (text.empty()) {
         if (errorOut) *errorOut = L"没有可导出的内容。";
+        return SaveTextFileResult::Failed;
+    }
+    if (path.empty()) {
+        if (errorOut) *errorOut = L"导出路径为空。";
         return SaveTextFileResult::Failed;
     }
     std::wstring conversionError;
@@ -175,29 +203,114 @@ SaveTextFileResult WriteUtf8TextToDestination(const TextExportDestination& desti
         if (errorOut) *errorOut = conversionError.empty() ? L"无法转换导出文本。" : conversionError;
         return SaveTextFileResult::Failed;
     }
-    const auto result = WriteExportFile(destination.path, bytes.data(), bytes.size(), errorOut);
+    const auto result = WriteExportFile(path.c_str(), bytes.data(), bytes.size(), errorOut);
     if (result == SaveTextFileResult::Saved) {
-        GlobalEvidenceSession().record(evidenceSource.empty() ? L"文件导出" : evidenceSource,
-            evidenceFormat.empty() ? L"text" : evidenceFormat, text);
+        RecordExportEvidence(evidenceSource, evidenceFormat, text);
     }
     return result;
+}
+
+SaveTextFileResult WriteUtf8TextToDestination(const TextExportDestination& destination,
+    const std::wstring& text, const std::wstring& evidenceSource,
+    const std::wstring& evidenceFormat, std::wstring* errorOut) {
+    return WriteUtf8TextFile(destination.path.data(), text, evidenceSource, evidenceFormat, errorOut);
 }
 
 std::wstring BuildVisibleVirtualListTsv(
     const std::vector<std::wstring>& columnTitles,
     const VirtualListView& list) {
-    if (columnTitles.empty() || list.visibleIndexes().empty()) {
+    // Kept as the page-facing name for "export what I can see"; the scope-aware
+    // builder owns the traversal so the two scopes cannot drift apart.
+    return BuildVirtualListTsv(columnTitles, list, ExportRowScope::Visible, nullptr);
+}
+
+std::wstring BuildVirtualListTsv(
+    const std::vector<std::wstring>& columnTitles,
+    const VirtualListView& list,
+    ExportRowScope scope,
+    ExportRowCount* countOut) {
+    if (countOut) {
+        *countOut = ExportRowCount{};
+    }
+    const auto& rows = list.rows();
+    const auto& visible = list.visibleIndexes();
+    if (columnTitles.empty() || rows.empty()) {
         return {};
     }
+
     std::wstring output;
     AppendTsvRow(output, columnTitles);
-    const auto& rows = list.rows();
-    for (const std::size_t index : list.visibleIndexes()) {
-        if (index < rows.size()) {
-            AppendTsvRow(output, rows[index].cells);
+
+    std::size_t exported = 0;
+    const bool walkVisible = scope == ExportRowScope::Visible || visible.size() == rows.size();
+    if (walkVisible) {
+        // With no filter active the visible index set covers every row, so it is
+        // also the sorted order the user is looking at. Reusing it keeps "export
+        // all" from silently dropping an applied sort in the common case.
+        for (const std::size_t index : visible) {
+            if (index < rows.size()) {
+                AppendTsvRow(output, rows[index].cells);
+                ++exported;
+            }
+        }
+    } else {
+        // A filter is on, so only a subset carries the sort. Exporting the
+        // snapshot's natural order is honest; pretending the sort still covers
+        // rows it never ordered would not be.
+        for (const auto& row : rows) {
+            AppendTsvRow(output, row.cells);
+            ++exported;
         }
     }
+
+    if (countOut) {
+        countOut->totalRows = rows.size();
+        countOut->exportedRows = exported;
+        countOut->filteredRows = scope == ExportRowScope::Visible && exported < rows.size();
+    }
     return output;
+}
+
+std::wstring BuildAllRowsVirtualListTsv(
+    const std::vector<std::wstring>& columnTitles,
+    const VirtualListView& list,
+    ExportRowCount* countOut) {
+    return BuildVirtualListTsv(columnTitles, list, ExportRowScope::All, countOut);
+}
+
+SaveTextFileResult ExportVirtualListTsvWithDialog(
+    HWND owner,
+    const VirtualListView& list,
+    const std::vector<std::wstring>& columnTitles,
+    ExportRowScope scope,
+    const wchar_t* suggestedFileName,
+    const wchar_t* dialogTitle,
+    const std::wstring& evidenceSource,
+    ExportRowCount* countOut,
+    std::wstring* errorOut) {
+    if (errorOut) {
+        errorOut->clear();
+    }
+    ExportRowCount count;
+    const std::wstring text = BuildVirtualListTsv(columnTitles, list, scope, &count);
+    if (countOut) {
+        *countOut = count;
+    }
+    if (text.empty()) {
+        if (errorOut) {
+            *errorOut = L"没有可导出的行。";
+        }
+        return SaveTextFileResult::Failed;
+    }
+
+    std::array<wchar_t, MAX_PATH> path{};
+    const SaveTextFileResult selection = ChooseSavePath(owner, suggestedFileName, dialogTitle,
+        L"制表符分隔文件 (*.tsv)\0*.tsv\0所有文件 (*.*)\0*.*\0", L"tsv", path, errorOut);
+    if (selection != SaveTextFileResult::Saved) {
+        return selection;
+    }
+    return WriteUtf8TextFile(path.data(), text,
+        evidenceSource.empty() ? L"表格导出" : evidenceSource, L"tsv", errorOut);
 }
 
 bool CopyTextToClipboard(HWND owner, const std::wstring& text, const std::wstring& source) {
@@ -280,7 +393,7 @@ SaveTextFileResult SaveBinaryFileWithDialog(
     if (selection != SaveTextFileResult::Saved) {
         return selection;
     }
-    const SaveTextFileResult writeResult = WriteExportFile(path, bytes.data(), bytes.size(), errorOut);
+    const SaveTextFileResult writeResult = WriteExportFile(path.data(), bytes.data(), bytes.size(), errorOut);
     if (writeResult != SaveTextFileResult::Saved) {
         return writeResult;
     }

@@ -38,6 +38,81 @@ std::wstring BuildVisibleVirtualListTsv(
     const std::vector<std::wstring>& columnTitles,
     const VirtualListView& list);
 
+// ExportRowScope resolves the ambiguity in the word "export" for a filtered
+// table. A user who narrowed a filter usually means what is on screen; a user
+// building an evidence record means everything the snapshot still holds, and
+// that second case used to be impossible outside the kernel page.
+enum class ExportRowScope {
+    Visible,
+    All
+};
+
+// ExportRowCount reports how much of the snapshot actually left the process.
+// filteredRows is true when a filter hid rows that this export skipped, which
+// the caller must surface: silently writing 42 of 5000 rows into a file named
+// "export" is the failure this struct exists to prevent.
+struct ExportRowCount {
+    std::size_t totalRows = 0;
+    std::size_t exportedRows = 0;
+    bool filteredRows = false;
+
+    bool truncated() const noexcept { return exportedRows < totalRows; }
+};
+
+// BuildVirtualListTsv serializes one scope of a virtual list. Inputs are column
+// captions, the list and a scope; processing walks the backing snapshot for All
+// and the visible index set for Visible; output is TSV text with CRLF endings.
+//
+// All keeps the visible order while no filter is active, because that order is
+// the sort the user just applied. Once a filter is on, only a subset of rows is
+// ordered, so All falls back to the snapshot's natural order instead of
+// pretending the sort still applies to rows it never touched.
+std::wstring BuildVirtualListTsv(
+    const std::vector<std::wstring>& columnTitles,
+    const VirtualListView& list,
+    ExportRowScope scope,
+    ExportRowCount* countOut = nullptr);
+
+// BuildAllRowsVirtualListTsv serializes every row in the backing snapshot.
+std::wstring BuildAllRowsVirtualListTsv(
+    const std::vector<std::wstring>& columnTitles,
+    const VirtualListView& list,
+    ExportRowCount* countOut = nullptr);
+
+// ExportVirtualListTsvWithDialog asks for a destination, writes one row scope as
+// UTF-8 with BOM and records the export in the evidence session. Inputs are the
+// owner window, the list, captions, the scope, the suggested name, the dialog
+// title and an evidence source label. Processing rejects an export with nothing
+// in it instead of writing a BOM-only file. Output is the save result; countOut
+// reports how many rows were written so the caller can say so.
+SaveTextFileResult ExportVirtualListTsvWithDialog(
+    HWND owner,
+    const VirtualListView& list,
+    const std::vector<std::wstring>& columnTitles,
+    ExportRowScope scope,
+    const wchar_t* suggestedFileName,
+    const wchar_t* dialogTitle,
+    const std::wstring& evidenceSource,
+    ExportRowCount* countOut,
+    std::wstring* errorOut = nullptr);
+
+// WriteUtf8TextFile writes text to an already chosen path as UTF-8 with BOM and
+// records the export in the evidence session. It is path-based rather than
+// dialog-based on purpose: a worker thread can finish an export the UI thread
+// started, without ever touching a dialog or an HWND.
+//
+// The evidence record keeps the full text only up to an internal size limit and
+// degrades to a summary beyond it, so exporting a large table cannot silently
+// grow the session by tens of megabytes. An empty evidenceSource suppresses the
+// record entirely, which is what a configuration file needs: writing
+// callback_rules.kswrules is not an investigation artifact.
+SaveTextFileResult WriteUtf8TextFile(
+    const std::wstring& path,
+    const std::wstring& text,
+    const std::wstring& evidenceSource,
+    const std::wstring& evidenceFormat,
+    std::wstring* errorOut = nullptr);
+
 // CopyTextToClipboard centralizes CF_UNICODETEXT export and records the exact
 // text in the current evidence session when the clipboard transfer succeeds.
 bool CopyTextToClipboard(

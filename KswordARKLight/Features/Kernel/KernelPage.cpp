@@ -9,6 +9,7 @@
 #include "../../Ui/Controls.h"
 #include "../../Ui/BackgroundWork.h"
 #include "../../Ui/EntityNavigation.h"
+#include "../../Ui/ExportUtil.h"
 #include "../../Ui/ListViewUtil.h"
 #include "../../Ui/NumericSortKey.h"
 #include "../../Ui/TextFindSupport.h"
@@ -883,13 +884,23 @@ std::wstring ReadWholeFileText(const std::wstring& path, std::wstring* errorText
         const std::size_t wcharCount = (bytes.size() - 2) / sizeof(wchar_t);
         return std::wstring(wide, wide + wcharCount);
     }
-    const int needed = ::MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, reinterpret_cast<const char*>(bytes.data()), static_cast<int>(bytes.size()), nullptr, 0);
+    // Exports are UTF-8 with BOM, so the reader has to drop the same three bytes
+    // the writer adds. Without this the imported text starts with an invisible
+    // U+FEFF and every rule key stops matching -- a round trip that only breaks
+    // after the encoding was unified.
+    std::size_t offset = 0;
+    if (bytes.size() >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF) {
+        offset = 3;
+    }
+    const auto* payload = reinterpret_cast<const char*>(bytes.data() + offset);
+    const int payloadSize = static_cast<int>(bytes.size() - offset);
+    const int needed = ::MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, payload, payloadSize, nullptr, 0);
     if (needed > 0) {
         std::wstring text(static_cast<std::size_t>(needed), L'\0');
-        ::MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, reinterpret_cast<const char*>(bytes.data()), static_cast<int>(bytes.size()), text.data(), needed);
+        ::MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, payload, payloadSize, text.data(), needed);
         return text;
     }
-    const int ansiNeeded = ::MultiByteToWideChar(CP_ACP, 0, reinterpret_cast<const char*>(bytes.data()), static_cast<int>(bytes.size()), nullptr, 0);
+    const int ansiNeeded = ::MultiByteToWideChar(CP_ACP, 0, payload, payloadSize, nullptr, 0);
     if (ansiNeeded <= 0) {
         if (errorText) {
             *errorText = L"无法按 UTF-8/ANSI 解码配置文件。";
@@ -897,32 +908,42 @@ std::wstring ReadWholeFileText(const std::wstring& path, std::wstring* errorText
         return {};
     }
     std::wstring text(static_cast<std::size_t>(ansiNeeded), L'\0');
-    ::MultiByteToWideChar(CP_ACP, 0, reinterpret_cast<const char*>(bytes.data()), static_cast<int>(bytes.size()), text.data(), ansiNeeded);
+    ::MultiByteToWideChar(CP_ACP, 0, payload, payloadSize, text.data(), ansiNeeded);
     return text;
 }
 
-// WriteWholeFileText writes UTF-16LE with BOM. Inputs are path and text; output
-// is success/failure and optional Win32 error message.
-bool WriteWholeFileText(const std::wstring& path, const std::wstring& text, std::wstring* errorText) {
-    HANDLE file = ::CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (file == INVALID_HANDLE_VALUE) {
-        if (errorText) {
-            *errorText = L"无法创建文件，Win32=" + std::to_wstring(::GetLastError());
-        }
-        return false;
+// WriteWholeFileText writes a text file through the shared export path, which
+// means UTF-8 with BOM like every other export in the product. The kernel page
+// used to emit UTF-16LE, so two .tsv files produced by two pages of the same
+// application opened differently in the same spreadsheet program. The shared
+// path also records the export in the evidence session, which the kernel page
+// previously skipped entirely -- the pages that most need an audit trail were
+// the only ones leaving none.
+//
+// evidenceSource is passed through so a configuration export can opt out: the
+// callback rule file is written for round-tripping, not as investigation
+// evidence, and an empty source suppresses the record.
+bool WriteWholeFileText(const std::wstring& path, const std::wstring& text,
+    const std::wstring& evidenceSource, std::wstring* errorText) {
+    return Ksword::Ui::WriteUtf8TextFile(path, text, evidenceSource, L"tsv", errorText)
+        == Ksword::Ui::SaveTextFileResult::Saved;
+}
+
+// ExportEvidenceSourceFor names the evidence record for one file-I/O operation.
+// Import and module-detail operations never reach the writer, so only the three
+// export verbs answer here.
+std::wstring ExportEvidenceSourceFor(CallbackFileIoOperation operation) {
+    switch (operation) {
+    case CallbackFileIoOperation::ExportConfig:
+        // Round-trip artifact, not evidence: keep it out of the session.
+        return {};
+    case CallbackFileIoOperation::ExportFileMonitor:
+        return L"回调文件监控导出";
+    case CallbackFileIoOperation::ExportResultTsv:
+        return L"内核结果导出";
+    default:
+        return L"内核导出";
     }
-    const std::uint8_t bom[] = { 0xFF, 0xFE };
-    DWORD written = 0;
-    BOOL ok = ::WriteFile(file, bom, sizeof(bom), &written, nullptr);
-    if (ok) {
-        ok = ::WriteFile(file, text.data(), static_cast<DWORD>(text.size() * sizeof(wchar_t)), &written, nullptr);
-    }
-    const DWORD error = ok ? ERROR_SUCCESS : ::GetLastError();
-    ::CloseHandle(file);
-    if (!ok && errorText) {
-        *errorText = L"写入文件失败，Win32=" + std::to_wstring(error);
-    }
-    return ok != FALSE;
 }
 
 } // namespace
@@ -8089,7 +8110,7 @@ void KernelPage::StartCallbackFileIo(
                         result.text = L"状态：已打开模块所在目录。";
                     }
                 }
-            } else if (!WriteWholeFileText(result.path, text, &result.errorText)) {
+            } else if (!WriteWholeFileText(result.path, text, ExportEvidenceSourceFor(operation), &result.errorText)) {
                 result.text.clear();
             }
             return result;
