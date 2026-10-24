@@ -20,7 +20,7 @@ public:
     kStartupSplash& operator=(const kStartupSplash&) = delete;
 
     // If unset, loads the bundled Style\StartupLandscape.png next to the host executable.
-    // Set before show(); only the right artwork panel changes.
+    // Set before show(); the image fills the 16:9 canvas beneath translucent panels.
     void setBackgroundImagePath(const std::wstring& path);
     void setLegalText(const std::wstring& copyright, const std::wstring& license,
         const std::wstring& thirdParty, const std::wstring& website,

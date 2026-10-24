@@ -25,12 +25,8 @@
 namespace
 {
     constexpr wchar_t kWindowClass[] = L"KswordFrameworkSplashWindow";
-    constexpr int kBaseWidth = 900;
+    constexpr int kBaseWidth = 1067;
     constexpr int kBaseHeight = 600;
-    constexpr float kArtX = 375.0f;
-    constexpr float kArtY = 10.0f;
-    constexpr float kArtWidth = 515.0f;
-    constexpr float kArtHeight = 580.0f;
     constexpr float kTrackX = 28.0f;
     constexpr float kTrackY = 421.0f;
     constexpr float kTrackWidth = 318.0f;
@@ -527,25 +523,24 @@ private:
             graphics.Clear(Gdiplus::Color(0, 0, 0, 0));
             graphics.ScaleTransform(m_scale, m_scale);
 
-            // Keep the window and the artwork as separate surfaces. The artwork
-            // is clipped to its own panel so it never contaminates legal text.
-            Gdiplus::SolidBrush white(Gdiplus::Color(255, 255, 255, 255));
-            fillRoundedRectangle(graphics, white, 0.0f, 0.0f,
-                static_cast<float>(kBaseWidth), static_cast<float>(kBaseHeight), 20.0f);
+            // Composite the information panel over the complete 16:9 artwork.
+            // Only the backing colors are translucent; text stays fully opaque.
             Gdiplus::GraphicsPath artClip;
-            roundedRectangle(artClip, kArtX, kArtY, kArtWidth, kArtHeight, 15.0f);
+            roundedRectangle(artClip, 0.0f, 0.0f,
+                static_cast<float>(kBaseWidth), static_cast<float>(kBaseHeight), 20.0f);
             graphics.SetClip(&artClip);
-            float sourceWidth = static_cast<float>(m_imageWidth);
-            float sourceHeight = static_cast<float>(m_imageHeight);
-            if (sourceWidth / sourceHeight > kArtWidth / kArtHeight)
-                sourceWidth = sourceHeight * kArtWidth / kArtHeight;
-            else
-                sourceHeight = sourceWidth * kArtHeight / kArtWidth;
             graphics.DrawImage(m_image.get(), Gdiplus::RectF(
-                kArtX, kArtY, kArtWidth, kArtHeight),
-                (m_imageWidth - sourceWidth) * 0.5f,
-                (m_imageHeight - sourceHeight) * 0.5f,
-                sourceWidth, sourceHeight, Gdiplus::UnitPixel);
+                0.0f, 0.0f, static_cast<float>(kBaseWidth), static_cast<float>(kBaseHeight)),
+                0.0f, 0.0f, static_cast<float>(m_imageWidth),
+                static_cast<float>(m_imageHeight), Gdiplus::UnitPixel);
+            Gdiplus::SolidBrush panel(Gdiplus::Color(170, 255, 255, 255));
+            fillRoundedRectangle(graphics, panel, 10.0f, 10.0f, 355.0f, 580.0f, 15.0f);
+            Gdiplus::GraphicsPath rim;
+            roundedRectangle(rim, 5.0f, 5.0f,
+                static_cast<float>(kBaseWidth) - 10.0f,
+                static_cast<float>(kBaseHeight) - 10.0f, 15.0f);
+            Gdiplus::Pen rimPen(Gdiplus::Color(80, 255, 255, 255), 10.0f);
+            graphics.DrawPath(&rimPen, &rim);
             graphics.ResetClip();
 
             if (m_logo)
@@ -562,7 +557,7 @@ private:
                 Gdiplus::RectF(106.0f, 44.0f, 240.0f, 48.0f),
                 nullptr, &heading);
 
-            Gdiplus::SolidBrush body(Gdiplus::Color(255, 88, 98, 112));
+            Gdiplus::SolidBrush body(Gdiplus::Color(255, 30, 42, 58));
             Gdiplus::Font bodyFont(L"Segoe UI", 14.0f,
                 Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
             Gdiplus::StringFormat paragraphFormat;
@@ -591,11 +586,11 @@ private:
             graphics.DrawString(status.c_str(), -1, &statusFont,
                 Gdiplus::RectF(kTrackX, 389.0f, kTrackWidth, 24.0f),
                 &oneLine, &body);
-            Gdiplus::SolidBrush track(Gdiplus::Color(255, 221, 228, 238));
+            Gdiplus::SolidBrush track(Gdiplus::Color(100, 60, 78, 102));
             fillRoundedRectangle(graphics, track,
                 kTrackX, kTrackY, kTrackWidth, kTrackHeight, 3.0f);
 
-            Gdiplus::SolidBrush link(Gdiplus::Color(255, 37, 78, 136));
+            Gdiplus::SolidBrush link(Gdiplus::Color(255, 17, 51, 101));
             Gdiplus::Font linkFont(L"Segoe UI", 14.0f,
                 Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
             graphics.DrawString(website.c_str(), -1, &linkFont,
