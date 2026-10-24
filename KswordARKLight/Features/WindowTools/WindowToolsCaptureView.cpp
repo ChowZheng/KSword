@@ -11,6 +11,7 @@
 #include "../../Ui/FilterBar.h"
 #include "../../Ui/ListViewUtil.h"
 #include "../../Ui/LoadingOverlay.h"
+#include "../../Ui/TableCompareActions.h"
 #include "../../Ui/Theme.h"
 #include "../../Ui/VirtualListView.h"
 
@@ -52,6 +53,19 @@ constexpr int kHeaderHeight = kGap * 3 + kRowHeight * 2;
 constexpr int kStatusHeight = 22;
 constexpr int kColumnCount = 7;
 
+// kColumnTitles 是表头、导出和快照比对的唯一来源：比对按列名对齐两份快照，
+// 列名分叉会让 diff 结果错位。
+constexpr const wchar_t* kColumnTitles[kColumnCount] = {
+    L"窗口句柄", L"标题", L"类名", L"PID", L"进程", L"捕获保护", L"可见"
+};
+
+// CaptureColumnTitles exposes the same captions as a vector for the export and
+// the snapshot capture.
+const std::vector<std::wstring>& CaptureColumnTitles() {
+    static const std::vector<std::wstring> titles(kColumnTitles, kColumnTitles + kColumnCount);
+    return titles;
+}
+
 int Width(const RECT& rc) {
     return rc.right > rc.left ? static_cast<int>(rc.right - rc.left) : 0;
 }
@@ -83,6 +97,9 @@ struct CaptureViewState final {
     std::wstring filterQuery;
     bool filterUseRegex = false;
     std::uint64_t displayGeneration = 0;
+    // HWND 会被系统回收再分配给新窗口，只按句柄认窗口会把两个不同窗口当成同一个；
+    // 两次刷新的差异只能靠并排比对两份快照看出来。
+    Ksword::Ui::TableSnapshotEngine snapshotEngine;
     std::unique_ptr<Ksword::Ui::AsyncSnapshotTask<std::vector<TopLevelWindowInfo>>> refreshTask;
     std::unique_ptr<Ksword::Ui::AsyncSnapshotTask<CaptureFilterResult>> filterTask;
 };
@@ -271,8 +288,7 @@ void BeginRefresh(CaptureViewState& state) {
 }
 
 void ExportVisibleRows(CaptureViewState& state) {
-    const std::wstring text = Ksword::Ui::BuildVisibleVirtualListTsv(
-        { L"窗口句柄", L"标题", L"类名", L"PID", L"进程", L"捕获保护", L"可见" }, state.windowList);
+    const std::wstring text = Ksword::Ui::BuildVisibleVirtualListTsv(CaptureColumnTitles(), state.windowList);
     if (text.empty()) {
         state.statusText = L"没有可导出的可见结果。";
         ::InvalidateRect(state.hwnd, nullptr, TRUE);
@@ -399,6 +415,8 @@ void ShowContextMenu(CaptureViewState& state, const POINT screenPoint) {
     ::AppendMenuW(menu, MF_STRING, kMenuCopyVisible, L"复制可见行");
     ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     ::AppendMenuW(menu, MF_STRING, kMenuRefresh, L"刷新");
+    ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    Ksword::Ui::AppendTableCompareMenuItems(menu, state.snapshotEngine);
 
     const int command = ::TrackPopupMenu(
         menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, screenPoint.x, screenPoint.y, 0, state.hwnd, nullptr);
@@ -423,6 +441,11 @@ void ShowContextMenu(CaptureViewState& state, const POINT screenPoint) {
         BeginRefresh(state);
         return;
     default:
+        // 快照命令 id 在所有表之间共用一段，不是本页的一律交给引擎判定。
+        if (Ksword::Ui::HandleTableCompareCommand(state.snapshotEngine, static_cast<UINT>(command),
+                state.windowList, CaptureColumnTitles(), state.statusText)) {
+            ::InvalidateRect(state.hwnd, nullptr, TRUE);
+        }
         return;
     }
     ::InvalidateRect(state.hwnd, nullptr, TRUE);
@@ -492,13 +515,13 @@ bool CreateChildControls(CaptureViewState& state) {
         return false;
     }
     state.windowList.addColumns({
-        { 0, 130, LVCFMT_LEFT, L"窗口句柄" },
-        { 1, 260, LVCFMT_LEFT, L"标题" },
-        { 2, 180, LVCFMT_LEFT, L"类名" },
-        { 3, 70,  LVCFMT_RIGHT, L"PID" },
-        { 4, 160, LVCFMT_LEFT, L"进程" },
-        { 5, 280, LVCFMT_LEFT, L"捕获保护" },
-        { 6, 60,  LVCFMT_LEFT, L"可见" },
+        { 0, 130, LVCFMT_LEFT, kColumnTitles[0] },
+        { 1, 260, LVCFMT_LEFT, kColumnTitles[1] },
+        { 2, 180, LVCFMT_LEFT, kColumnTitles[2] },
+        { 3, 70,  LVCFMT_RIGHT, kColumnTitles[3] },
+        { 4, 160, LVCFMT_LEFT, kColumnTitles[4] },
+        { 5, 280, LVCFMT_LEFT, kColumnTitles[5] },
+        { 6, 60,  LVCFMT_LEFT, kColumnTitles[6] },
     });
     if (HWND list = state.windowList.hwnd()) {
         ListView_SetExtendedListViewStyle(list,
