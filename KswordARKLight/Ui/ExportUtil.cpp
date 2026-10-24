@@ -14,7 +14,6 @@
 #pragma comment(lib, "Comdlg32.lib")
 
 namespace Ksword::Ui {
-namespace {
 
 std::wstring SanitizeTsvCell(std::wstring cell) {
     for (wchar_t& character : cell) {
@@ -24,6 +23,8 @@ std::wstring SanitizeTsvCell(std::wstring cell) {
     }
     return cell;
 }
+
+namespace {
 
 void AppendTsvRow(std::wstring& output, const std::vector<std::wstring>& cells) {
     for (std::size_t column = 0; column < cells.size(); ++column) {

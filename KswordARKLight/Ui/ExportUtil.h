@@ -10,6 +10,12 @@
 
 namespace Ksword::Ui {
 
+// SanitizeTsvCell replaces the characters a TSV consumer treats as structure —
+// tab, CR and LF — with plain spaces. It lives here rather than in each feature
+// because every table that builds its own TSV was keeping a private copy of the
+// same loop, and a single missed copy turns one cell into two bogus columns.
+std::wstring SanitizeTsvCell(std::wstring cell);
+
 // SaveTextFileResult distinguishes an intentional dialog cancellation from a
 // failed write so a feature page can keep its local status text accurate.
 enum class SaveTextFileResult {

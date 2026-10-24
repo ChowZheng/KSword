@@ -401,7 +401,17 @@ FileActionId FileActions::showContextMenu(HWND owner, const FileActionContext& c
         appendAction(copyMenu, FileActionId::CopyKernelModeAddress, L"复制内核模式路径", true);
         appendAction(copyMenu, FileActionId::CopyShortFileName, L"复制短文件名", true);
         appendAction(copyMenu, FileActionId::CopyLinkTarget, L"复制链接目标", true);
+        ::AppendMenuW(copyMenu, MF_SEPARATOR, 0, nullptr);
+        appendAction(copyMenu, FileActionId::CopySelectedRow, L"复制整行", true);
+        appendAction(copyMenu, FileActionId::CopyVisibleRows, L"复制可见行", false);
         ::AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(copyMenu), L"复制");
+    }
+
+    HMENU exportMenu = ::CreatePopupMenu();
+    if (exportMenu) {
+        appendAction(exportMenu, FileActionId::ExportVisibleTsv, L"导出可见行为 TSV...", false);
+        appendAction(exportMenu, FileActionId::ExportAllTsv, L"导出全部行为 TSV...", false);
+        ::AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(exportMenu), L"导出");
     }
 
     HMENU fileMenu = ::CreatePopupMenu();

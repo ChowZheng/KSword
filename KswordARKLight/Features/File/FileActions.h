@@ -36,7 +36,14 @@ enum class FileActionId : UINT {
     Entropy,
     HexView,
     PeViewer,
-    MappedProcessScan
+    MappedProcessScan,
+    // Table export is not a filesystem operation, but it lives in this id space
+    // because the file list context menu is the only entry point it needs.
+    // FileView intercepts these before any background action is scheduled.
+    CopySelectedRow,
+    CopyVisibleRows,
+    ExportVisibleTsv,
+    ExportAllTsv
 };
 
 // FileActionContext describes the row and directory that an action operates on.
