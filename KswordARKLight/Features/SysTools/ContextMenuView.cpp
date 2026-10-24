@@ -10,6 +10,7 @@
 #include "../../Ui/FilterBar.h"
 #include "../../Ui/ListViewUtil.h"
 #include "../../Ui/LoadingOverlay.h"
+#include "../../Ui/TableCompareActions.h"
 #include "../../Ui/TextFindSupport.h"
 #include "../../Ui/Theme.h"
 #include "../../Ui/VirtualListView.h"
@@ -92,6 +93,9 @@ struct ContextMenuViewState final {
     bool filterUseRegex = false;
     bool actionInProgress = false;
     std::uint64_t displayGeneration = 0;
+    // 注册点会在安装/卸载 shell 扩展时增删，同名 CLSID 也可能被新模块接管，
+    // 单看一次枚举分不清"本来就有"和"刚刚被换掉"，需要两份快照并排看。
+    Ksword::Ui::TableSnapshotEngine snapshotEngine;
     std::unique_ptr<Ksword::Ui::AsyncSnapshotTask<ContextMenuScanResult>> scanTask;
     std::unique_ptr<Ksword::Ui::AsyncSnapshotTask<ContextMenuFilterResult>> filterTask;
     std::unique_ptr<Ksword::Ui::AsyncSnapshotTask<ContextMenuActionResult>> actionTask;
@@ -576,6 +580,8 @@ void ShowContextMenu(ContextMenuViewState& state, POINT screenPoint) {
     ::AppendMenuW(menu, MF_STRING | (entry ? MF_ENABLED : MF_GRAYED), kMenuExportDetail, L"导出注册详情 TXT…");
     ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     ::AppendMenuW(menu, MF_STRING, kMenuRefresh, L"刷新");
+    ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    Ksword::Ui::AppendTableCompareMenuItems(menu, state.snapshotEngine);
 
     const int command = ::TrackPopupMenu(
         menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, screenPoint.x, screenPoint.y, 0, state.hwnd, nullptr);
@@ -615,6 +621,11 @@ void ShowContextMenu(ContextMenuViewState& state, POINT screenPoint) {
         BeginScan(state);
         break;
     default:
+        // 快照命令 id 在所有表之间共用一段，不是本页的一律交给引擎判定。
+        if (Ksword::Ui::HandleTableCompareCommand(state.snapshotEngine, static_cast<UINT>(command),
+                state.list, ContextMenuColumnTitles(), state.statusText)) {
+            ::InvalidateRect(state.hwnd, nullptr, TRUE);
+        }
         break;
     }
 }
