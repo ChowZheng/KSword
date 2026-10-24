@@ -5,6 +5,7 @@
 #include "../../Ui/AsyncTask.h"
 #include "../../Ui/Controls.h"
 #include "../../Ui/EntityNavigation.h"
+#include "../../Ui/ExportUtil.h"
 #include "../../Ui/FilterBar.h"
 #include "../../Ui/ListViewUtil.h"
 #include "../../Ui/LoadingOverlay.h"
@@ -44,6 +45,8 @@ constexpr int kLoadingOverlayId = 67107;
 
 constexpr UINT kMenuCopyRow = 67601;
 constexpr UINT kMenuCopyVisible = 67602;
+constexpr UINT kMenuExportVisible = 67606;
+constexpr UINT kMenuExportAll = 67607;
 constexpr UINT kMenuOpenLocation = 67603;
 constexpr UINT kMenuRescan = 67604;
 constexpr UINT kMenuOpenProcessDetails = 67605;
@@ -56,6 +59,13 @@ constexpr int kRowHeight = 24;
 constexpr int kHeaderHeight = kGap * 3 + kRowHeight * 2;
 constexpr int kStatusHeight = 22;
 constexpr int kColumnCount = 6;
+
+// kColumnTitles backs both the header row and the TSV export. A "who is holding
+// this file" report is worthless if the exported file labels the 访问权限 column
+// as something the user has to guess.
+constexpr const wchar_t* kColumnTitles[kColumnCount] = {
+    L"进程", L"PID", L"句柄", L"访问权限", L"占用路径", L"进程映像"
+};
 
 int Width(const RECT& rc) {
     return rc.right > rc.left ? static_cast<int>(rc.right - rc.left) : 0;
@@ -384,6 +394,39 @@ void OpenHoldingProcessDetails(FileHolderViewState& state) {
     ::InvalidateRect(state.hwnd, nullptr, TRUE);
 }
 
+// ExportRows writes one scope of the holder table to disk. A Restart Manager
+// answer is a snapshot of one instant: the lock is released as soon as the
+// holding program closes, so the clipboard is not a durable record of it.
+void ExportRows(FileHolderViewState& state, const Ksword::Ui::ExportRowScope scope) {
+    const std::vector<std::wstring> titles(std::begin(kColumnTitles), std::end(kColumnTitles));
+    Ksword::Ui::ExportRowCount count{};
+    std::wstring error;
+    const Ksword::Ui::SaveTextFileResult result = Ksword::Ui::ExportVirtualListTsvWithDialog(
+        state.hwnd,
+        state.list,
+        titles,
+        scope,
+        L"file_holders.tsv",
+        scope == Ksword::Ui::ExportRowScope::Visible
+            ? L"导出文件占用（可见行）"
+            : L"导出文件占用（全部行）",
+        L"文件占用导出",
+        &count,
+        &error);
+    if (result == Ksword::Ui::SaveTextFileResult::Failed) {
+        state.statusText = error.empty() ? L"文件占用导出失败。" : L"文件占用导出失败：" + error;
+    } else if (result == Ksword::Ui::SaveTextFileResult::Saved) {
+        std::wostringstream summary;
+        summary << L"已导出 " << count.exportedRows << L" / " << count.totalRows << L" 条占用记录";
+        if (count.filteredRows) {
+            summary << L"（筛选隐藏的 " << (count.totalRows - count.exportedRows) << L" 条未写入）";
+        }
+        summary << L"。";
+        state.statusText = summary.str();
+    }
+    ::InvalidateRect(state.hwnd, nullptr, TRUE);
+}
+
 void ShowContextMenu(FileHolderViewState& state, POINT screenPoint) {
     const HWND list = state.list.hwnd();
     int clickedItem = -1;
@@ -412,6 +455,9 @@ void ShowContextMenu(FileHolderViewState& state, POINT screenPoint) {
     ::AppendMenuW(menu, MF_STRING | (hasSelection ? MF_ENABLED : MF_GRAYED), kMenuOpenLocation, L"定位进程文件");
     ::AppendMenuW(menu, MF_STRING | (hasProcess ? MF_ENABLED : MF_GRAYED), kMenuOpenProcessDetails, L"查看进程详细信息");
     ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    ::AppendMenuW(menu, MF_STRING, kMenuExportVisible, L"导出可见行为 TSV…");
+    ::AppendMenuW(menu, MF_STRING, kMenuExportAll, L"导出全部行为 TSV…");
+    ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     ::AppendMenuW(menu, MF_STRING, kMenuRescan, L"重新扫描");
 
     const int command = ::TrackPopupMenu(
@@ -432,6 +478,12 @@ void ShowContextMenu(FileHolderViewState& state, POINT screenPoint) {
         break;
     case kMenuOpenProcessDetails:
         OpenHoldingProcessDetails(state);
+        break;
+    case kMenuExportVisible:
+        ExportRows(state, Ksword::Ui::ExportRowScope::Visible);
+        break;
+    case kMenuExportAll:
+        ExportRows(state, Ksword::Ui::ExportRowScope::All);
         break;
     case kMenuRescan:
         BeginScan(state);
@@ -503,12 +555,12 @@ bool CreateChildControls(FileHolderViewState& state) {
         return false;
     }
     state.list.addColumns({
-        { 0, 180, LVCFMT_LEFT, L"进程" },
-        { 1, 70, LVCFMT_RIGHT, L"PID" },
-        { 2, 90, LVCFMT_LEFT, L"句柄" },
-        { 3, 220, LVCFMT_LEFT, L"访问权限" },
-        { 4, 320, LVCFMT_LEFT, L"占用路径" },
-        { 5, 320, LVCFMT_LEFT, L"进程映像" },
+        { 0, 180, LVCFMT_LEFT, kColumnTitles[0] },
+        { 1, 70, LVCFMT_RIGHT, kColumnTitles[1] },
+        { 2, 90, LVCFMT_LEFT, kColumnTitles[2] },
+        { 3, 220, LVCFMT_LEFT, kColumnTitles[3] },
+        { 4, 320, LVCFMT_LEFT, kColumnTitles[4] },
+        { 5, 320, LVCFMT_LEFT, kColumnTitles[5] },
     });
     if (HWND list = state.list.hwnd()) {
         ListView_SetExtendedListViewStyle(list,

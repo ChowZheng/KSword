@@ -5,6 +5,7 @@
 #include "../../Ui/AsyncTask.h"
 #include "../../Ui/Controls.h"
 #include "../../Ui/EntityNavigation.h"
+#include "../../Ui/ExportUtil.h"
 #include "../../Ui/FilterBar.h"
 #include "../../Ui/ListViewUtil.h"
 #include "../../Ui/LoadingOverlay.h"
@@ -18,6 +19,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
+#include <iterator>
 #include <memory>
 #include <optional>
 #include <sstream>
@@ -41,6 +43,8 @@ constexpr int kLoadingOverlayId = 67208;
 
 constexpr UINT kMenuCopyRow = 67611;
 constexpr UINT kMenuCopyVisible = 67612;
+constexpr UINT kMenuExportVisible = 67616;
+constexpr UINT kMenuExportAll = 67617;
 constexpr UINT kMenuCopyMessage = 67613;
 constexpr UINT kMenuRefresh = 67614;
 constexpr UINT kMenuOpenProcess = 67615;
@@ -54,6 +58,13 @@ constexpr int kHeaderHeight = kGap * 3 + kRowHeight * 2;
 constexpr int kDetailHeight = 140;
 constexpr int kStatusHeight = 22;
 constexpr int kColumnCount = 6;
+
+// kColumnTitles is the single source of truth for the six captions: the header
+// row, the report columns and the TSV export all read it, so an exported file
+// cannot end up labelled differently from the screen it came from.
+constexpr const wchar_t* kColumnTitles[kColumnCount] = {
+    L"时间", L"级别", L"来源", L"事件 ID", L"PID", L"描述"
+};
 
 int Width(const RECT& rc) {
     return rc.right > rc.left ? static_cast<int>(rc.right - rc.left) : 0;
@@ -397,6 +408,40 @@ void OpenSelectedEventProcess(EventLogViewState& state) {
     ::InvalidateRect(state.hwnd, nullptr, TRUE);
 }
 
+// ExportRows writes one scope of the event log to disk. The whole point is that
+// an event log scrolls: the record the user wants is often the one that already
+// rotated out, so the export has to be able to leave with everything the current
+// query returned, not only with what survived the filter.
+void ExportRows(EventLogViewState& state, const Ksword::Ui::ExportRowScope scope) {
+    const std::vector<std::wstring> titles(std::begin(kColumnTitles), std::end(kColumnTitles));
+    Ksword::Ui::ExportRowCount count{};
+    std::wstring error;
+    const Ksword::Ui::SaveTextFileResult result = Ksword::Ui::ExportVirtualListTsvWithDialog(
+        state.hwnd,
+        state.list,
+        titles,
+        scope,
+        L"event_log.tsv",
+        scope == Ksword::Ui::ExportRowScope::Visible
+            ? L"导出事件日志（可见行）"
+            : L"导出事件日志（全部行）",
+        L"事件日志导出",
+        &count,
+        &error);
+    if (result == Ksword::Ui::SaveTextFileResult::Failed) {
+        state.statusText = error.empty() ? L"事件日志导出失败。" : L"事件日志导出失败：" + error;
+    } else if (result == Ksword::Ui::SaveTextFileResult::Saved) {
+        std::wostringstream summary;
+        summary << L"已导出 " << count.exportedRows << L" / " << count.totalRows << L" 条事件记录";
+        if (count.filteredRows) {
+            summary << L"（筛选隐藏的 " << (count.totalRows - count.exportedRows) << L" 条未写入）";
+        }
+        summary << L"。";
+        state.statusText = summary.str();
+    }
+    ::InvalidateRect(state.hwnd, nullptr, TRUE);
+}
+
 void ShowContextMenu(EventLogViewState& state, POINT screenPoint) {
     SelectRowAtPoint(state, screenPoint);
     HMENU menu = ::CreatePopupMenu();
@@ -409,6 +454,9 @@ void ShowContextMenu(EventLogViewState& state, POINT screenPoint) {
     ::AppendMenuW(menu, MF_STRING | (hasSelection ? MF_ENABLED : MF_GRAYED), kMenuCopyRow, L"复制选中行");
     ::AppendMenuW(menu, MF_STRING, kMenuCopyVisible, L"复制可见行");
     ::AppendMenuW(menu, MF_STRING | (hasSelection ? MF_ENABLED : MF_GRAYED), kMenuCopyMessage, L"复制完整描述");
+    ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    ::AppendMenuW(menu, MF_STRING, kMenuExportVisible, L"导出可见行为 TSV…");
+    ::AppendMenuW(menu, MF_STRING, kMenuExportAll, L"导出全部行为 TSV…");
     ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     ::AppendMenuW(menu, MF_STRING | (hasCurrentProcess ? MF_ENABLED : MF_GRAYED),
         kMenuOpenProcess, L"查看当前 PID 的进程详细信息");
@@ -439,6 +487,12 @@ void ShowContextMenu(EventLogViewState& state, POINT screenPoint) {
     }
     case kMenuOpenProcess:
         OpenSelectedEventProcess(state);
+        break;
+    case kMenuExportVisible:
+        ExportRows(state, Ksword::Ui::ExportRowScope::Visible);
+        break;
+    case kMenuExportAll:
+        ExportRows(state, Ksword::Ui::ExportRowScope::All);
         break;
     case kMenuRefresh:
         BeginQuery(state);
@@ -530,12 +584,12 @@ bool CreateChildControls(EventLogViewState& state) {
         return false;
     }
     state.list.addColumns({
-        { 0, 140, LVCFMT_LEFT, L"时间" },
-        { 1, 60, LVCFMT_LEFT, L"级别" },
-        { 2, 210, LVCFMT_LEFT, L"来源" },
-        { 3, 80, LVCFMT_RIGHT, L"事件 ID" },
-        { 4, 70, LVCFMT_RIGHT, L"PID" },
-        { 5, 620, LVCFMT_LEFT, L"描述" },
+        { 0, 140, LVCFMT_LEFT, kColumnTitles[0] },
+        { 1, 60, LVCFMT_LEFT, kColumnTitles[1] },
+        { 2, 210, LVCFMT_LEFT, kColumnTitles[2] },
+        { 3, 80, LVCFMT_RIGHT, kColumnTitles[3] },
+        { 4, 70, LVCFMT_RIGHT, kColumnTitles[4] },
+        { 5, 620, LVCFMT_LEFT, kColumnTitles[5] },
     });
     if (HWND list = state.list.hwnd()) {
         ListView_SetExtendedListViewStyle(list,
