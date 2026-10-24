@@ -9,6 +9,7 @@
 #include "../../Ui/FilterBar.h"
 #include "../../Ui/ListViewUtil.h"
 #include "../../Ui/LoadingOverlay.h"
+#include "../../Ui/TableCompareActions.h"
 #include "../../Ui/Theme.h"
 #include "../../Ui/VirtualListView.h"
 
@@ -99,6 +100,9 @@ struct PrivilegeViewState final {
     PrivilegeModel model;
     std::shared_ptr<const std::vector<Ksword::Ui::VirtualListRow>> filterRows;
     std::wstring statusText = L"正在读取当前进程令牌…";
+    // 令牌权限会被本页动作、组策略或调试器在两次刷新之间改变；列表只说明"现在是什么"，
+    // 比对才能指出这次多给了哪一项（提权痕迹往往就藏在这个差集里）。
+    Ksword::Ui::TableSnapshotEngine snapshotEngine;
     std::wstring filterQuery;
     bool filterUseRegex = false;
     std::uint64_t displayGeneration = 0;
@@ -496,6 +500,8 @@ void ShowPrivilegeContextMenu(PrivilegeViewState& state, POINT screenPoint) {
     ::AppendMenuW(menu, MF_STRING, kMenuExportDetail, L"导出令牌权限详情 TXT…");
     ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     ::AppendMenuW(menu, MF_STRING, kMenuRefresh, L"刷新");
+    ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    Ksword::Ui::AppendTableCompareMenuItems(menu, state.snapshotEngine);
 
     const int command = ::TrackPopupMenu(
         menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, screenPoint.x, screenPoint.y, 0, state.hwnd, nullptr);
@@ -533,6 +539,10 @@ void ShowPrivilegeContextMenu(PrivilegeViewState& state, POINT screenPoint) {
         BeginPrivilegeRefresh(state);
         break;
     default:
+        if (Ksword::Ui::HandleTableCompareCommand(state.snapshotEngine, static_cast<UINT>(command),
+                state.privilegeList, PrivilegeColumnTitles(), state.statusText, L"令牌权限")) {
+            ::InvalidateRect(state.hwnd, nullptr, TRUE);
+        }
         break;
     }
 }
