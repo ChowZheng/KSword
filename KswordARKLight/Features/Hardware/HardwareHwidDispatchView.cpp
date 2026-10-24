@@ -2,6 +2,7 @@
 
 #include "../AuditCommon/AuditTable.h"
 #include "../../Ui/AsyncTask.h"
+#include "../../Ui/ExportUtil.h"
 #include "../../Ui/Controls.h"
 #include "../../Ui/TextFindSupport.h"
 #include "../../Ui/Theme.h"
@@ -160,31 +161,10 @@ void CopyTextToWideField(const std::wstring& text, wchar_t* target, const std::s
 }
 
 bool WriteClipboardText(HWND owner, const std::wstring& text) {
-    if (text.empty() || !::OpenClipboard(owner)) {
-        return false;
-    }
-    const SIZE_T bytes = (text.size() + 1U) * sizeof(wchar_t);
-    HGLOBAL memory = ::GlobalAlloc(GMEM_MOVEABLE, bytes);
-    if (!memory) {
-        ::CloseClipboard();
-        return false;
-    }
-    void* target = ::GlobalLock(memory);
-    if (!target) {
-        ::GlobalFree(memory);
-        ::CloseClipboard();
-        return false;
-    }
-    std::memcpy(target, text.c_str(), bytes);
-    ::GlobalUnlock(memory);
-    ::EmptyClipboard();
-    if (!::SetClipboardData(CF_UNICODETEXT, memory)) {
-        ::GlobalFree(memory);
-        ::CloseClipboard();
-        return false;
-    }
-    ::CloseClipboard();
-    return true;
+    // Forward to the shared writer: one implementation means a copied
+    // value also lands in the evidence session, which the local copies
+    // never did.
+    return Ksword::Ui::CopyTextToClipboard(owner, text, L"硬件 HWID");
 }
 
 HWND CreateCheck(HWND parent, int id, const wchar_t* text, bool checked) {

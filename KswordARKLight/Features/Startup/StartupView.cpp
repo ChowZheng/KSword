@@ -144,31 +144,14 @@ std::wstring ListText(HWND list, int row, int column) {
 }
 
 bool CopyText(HWND owner, const std::wstring& text) {
-    if (text.empty() || !::OpenClipboard(owner)) {
+    // An empty payload stays a failure: the callers show "复制失败" and a
+    // clipboard that silently keeps its previous contents would contradict
+    // that message. Otherwise use the shared writer so the copied text also
+    // reaches the evidence session.
+    if (text.empty()) {
         return false;
     }
-    ::EmptyClipboard();
-    const SIZE_T bytes = (text.size() + 1) * sizeof(wchar_t);
-    HGLOBAL memory = ::GlobalAlloc(GMEM_MOVEABLE, bytes);
-    if (!memory) {
-        ::CloseClipboard();
-        return false;
-    }
-    void* target = ::GlobalLock(memory);
-    if (!target) {
-        ::GlobalFree(memory);
-        ::CloseClipboard();
-        return false;
-    }
-    std::memcpy(target, text.c_str(), bytes);
-    ::GlobalUnlock(memory);
-    if (!::SetClipboardData(CF_UNICODETEXT, memory)) {
-        ::GlobalFree(memory);
-        ::CloseClipboard();
-        return false;
-    }
-    ::CloseClipboard();
-    return true;
+    return Ksword::Ui::CopyTextToClipboard(owner, text, L"启动项导出");
 }
 
 std::wstring StableKeyForEntry(const StartupEntry& entry) {

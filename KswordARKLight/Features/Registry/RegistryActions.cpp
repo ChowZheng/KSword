@@ -1,4 +1,6 @@
 #include "RegistryActions.h"
+
+#include "../../Ui/ExportUtil.h"
 #include "../../../shared/usermode/backend/registry/RegistryBackend.h"
 #include "../../../shared/usermode/backend/registry/RegistrySupport.h"
 
@@ -366,31 +368,10 @@ RegistryOperationResult RenameRegistryKey(const std::wstring& path, const std::w
 }
 
 bool CopyRegistryTextToClipboard(HWND owner, const std::wstring& text) {
-    if (!::OpenClipboard(owner)) {
-        return false;
-    }
-    ::EmptyClipboard();
-    const SIZE_T bytes = (text.size() + 1U) * sizeof(wchar_t);
-    HGLOBAL memory = ::GlobalAlloc(GMEM_MOVEABLE, bytes);
-    if (!memory) {
-        ::CloseClipboard();
-        return false;
-    }
-    void* target = ::GlobalLock(memory);
-    if (!target) {
-        ::GlobalFree(memory);
-        ::CloseClipboard();
-        return false;
-    }
-    std::memcpy(target, text.c_str(), bytes);
-    ::GlobalUnlock(memory);
-    if (!::SetClipboardData(CF_UNICODETEXT, memory)) {
-        ::GlobalFree(memory);
-        ::CloseClipboard();
-        return false;
-    }
-    ::CloseClipboard();
-    return true;
+    // Forward to the shared writer: one implementation means a copied
+    // value also lands in the evidence session, which the local copies
+    // never did.
+    return Ksword::Ui::CopyTextToClipboard(owner, text, L"注册表动作");
 }
 
 } // namespace Ksword::Features::Registry

@@ -6,6 +6,7 @@
 #include "../../Ui/FilterBar.h"
 #include "../../Ui/ListViewUtil.h"
 #include "../../Ui/LoadingOverlay.h"
+#include "../../Ui/TableCompareActions.h"
 #include "../../Ui/Theme.h"
 #include "../../Ui/VirtualListView.h"
 #include "../../../Ksword5.1/Ksword5.1/ArkDriverClient/ArkDriverClient.h"
@@ -93,6 +94,9 @@ struct UnloadedViewState final {
     std::wstring filterQuery;
     bool filterUseRegex = false;
     std::uint64_t displayGeneration = 0;
+    // 内核缓存槽位会被系统回收再复用，同名驱动也可能反复装卸。两次读取之间的
+    // "少了一条记录/条目地址换了主人"只能靠两份快照并排看出来。
+    Ksword::Ui::TableSnapshotEngine snapshotEngine;
     std::unique_ptr<Ksword::Ui::AsyncSnapshotTask<UnloadedSnapshot>> refreshTask;
     std::unique_ptr<Ksword::Ui::AsyncSnapshotTask<UnloadedFilterResult>> filterTask;
 };
@@ -246,32 +250,10 @@ std::wstring CellText(const ksword::ark::UnloadedDriverEntry& entry, const int c
     }
 }
 
+// CopyText forwards to the shared clipboard writer so an unloaded-driver row
+// copied here joins the evidence session like every other page's copy.
 bool CopyText(HWND owner, const std::wstring& text) {
-    if (text.empty() || !::OpenClipboard(owner)) {
-        return false;
-    }
-    ::EmptyClipboard();
-    const SIZE_T bytes = (text.size() + 1) * sizeof(wchar_t);
-    HGLOBAL memory = ::GlobalAlloc(GMEM_MOVEABLE, bytes);
-    if (!memory) {
-        ::CloseClipboard();
-        return false;
-    }
-    void* target = ::GlobalLock(memory);
-    if (!target) {
-        ::GlobalFree(memory);
-        ::CloseClipboard();
-        return false;
-    }
-    std::memcpy(target, text.c_str(), bytes);
-    ::GlobalUnlock(memory);
-    if (!::SetClipboardData(CF_UNICODETEXT, memory)) {
-        ::GlobalFree(memory);
-        ::CloseClipboard();
-        return false;
-    }
-    ::CloseClipboard();
-    return true;
+    return Ksword::Ui::CopyTextToClipboard(owner, text, L"已卸载驱动复制");
 }
 
 std::wstring RowsAsText(const UnloadedViewState& state, bool visibleRows) {
@@ -474,6 +456,8 @@ void ShowContextMenu(UnloadedViewState& state, POINT screenPoint) {
     ::AppendMenuW(menu, MF_STRING, kMenuCopyVisible, L"复制可见行");
     ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     ::AppendMenuW(menu, MF_STRING, kMenuRefresh, L"刷新");
+    ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    Ksword::Ui::AppendTableCompareMenuItems(menu, state.snapshotEngine);
     const int command = ::TrackPopupMenu(
         menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, screenPoint.x, screenPoint.y, 0, state.hwnd, nullptr);
     ::DestroyMenu(menu);
@@ -490,6 +474,11 @@ void ShowContextMenu(UnloadedViewState& state, POINT screenPoint) {
         BeginRefresh(state);
         break;
     default:
+        // 快照命令 id 在所有表之间共用一段，不是本页的一律交给引擎判定。
+        if (Ksword::Ui::HandleTableCompareCommand(state.snapshotEngine, static_cast<UINT>(command),
+                state.list, UnloadedColumnTitles(), state.statusText)) {
+            ::InvalidateRect(state.hwnd, nullptr, TRUE);
+        }
         break;
     }
 }
@@ -542,16 +531,16 @@ bool CreateChildControls(UnloadedViewState& state) {
     if (!state.list.create(hwnd, kListId, 0, 0, 1, 1, LVS_SHOWSELALWAYS)) {
         return false;
     }
-    state.list.addColumns({
-        { 0, 170, LVCFMT_LEFT, L"来源" },
-        { 1, 220, LVCFMT_LEFT, L"驱动名" },
-        { 2, 150, LVCFMT_LEFT, L"基址" },
-        { 3, 130, LVCFMT_LEFT, L"映像大小" },
-        { 4, 150, LVCFMT_LEFT, L"卸载时间" },
-        { 5, 200, LVCFMT_LEFT, L"编译时间戳" },
-        { 6, 120, LVCFMT_LEFT, L"加载状态" },
-        { 7, 150, LVCFMT_LEFT, L"条目地址" },
-    });
+    {
+        const std::vector<std::wstring>& titles = UnloadedColumnTitles();
+        static const int widths[] = { 170, 220, 150, 130, 150, 200, 120, 150 };
+        std::vector<Ksword::Ui::ListViewColumn> columns;
+        columns.reserve(titles.size());
+        for (std::size_t index = 0; index < titles.size(); ++index) {
+            columns.push_back({ static_cast<int>(index), widths[index], LVCFMT_LEFT, titles[index] });
+        }
+        state.list.addColumns(columns);
+    }
     if (HWND list = state.list.hwnd()) {
         ListView_SetExtendedListViewStyle(list,
             LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER | LVS_EX_GRIDLINES | LVS_EX_LABELTIP);

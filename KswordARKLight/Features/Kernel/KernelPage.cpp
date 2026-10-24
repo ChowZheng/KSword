@@ -415,28 +415,13 @@ void SetEditCueBanner(HWND edit, const wchar_t* text) {
 }
 
 // SetClipboardText copies Unicode text to the process clipboard. Input is the
-// text to copy; processing owns the global memory after SetClipboardData; no
-// value is returned.
+// text to copy; no value is returned.
+//
+// This page used to own the clipboard write outright, which kept every kernel
+// copy out of the evidence session. It now goes through the shared writer; the
+// read side below stays local because it is a genuine paste path, not a copy.
 void SetClipboardText(HWND owner, const std::wstring& text) {
-    if (!::OpenClipboard(owner)) {
-        return;
-    }
-    ::EmptyClipboard();
-    const SIZE_T bytes = (text.size() + 1) * sizeof(wchar_t);
-    HGLOBAL memory = ::GlobalAlloc(GMEM_MOVEABLE, bytes);
-    if (memory) {
-        void* target = ::GlobalLock(memory);
-        if (target) {
-            std::memcpy(target, text.c_str(), bytes);
-            ::GlobalUnlock(memory);
-            ::SetClipboardData(CF_UNICODETEXT, memory);
-            memory = nullptr;
-        }
-        if (memory) {
-            ::GlobalFree(memory);
-        }
-    }
-    ::CloseClipboard();
+    Ksword::Ui::CopyTextToClipboard(owner, text, L"内核结果复制");
 }
 
 // GetClipboardText reads Unicode text from the process clipboard. Input is the
