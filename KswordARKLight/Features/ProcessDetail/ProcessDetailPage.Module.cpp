@@ -6,6 +6,7 @@
 #include "../../Ui/Controls.h"
 #include "../../Ui/ExportUtil.h"
 #include "../../Ui/NumericSortKey.h"
+#include "../../Ui/TableCompareActions.h"
 #include "../../Ui/TextFindSupport.h"
 #include "../../Ui/Theme.h"
 
@@ -43,6 +44,15 @@ constexpr UINT kModuleMenuExport = 64109;
 constexpr UINT_PTR kModulePageVisualSubclassId = 0x4D4F4455U; // "MODU"
 constexpr UINT_PTR kModuleHeaderSubclassId = 0x4D4F4448U;     // "MODH"
 constexpr UINT_PTR kModuleStatusSubclassId = 0x4D4F4453U;     // "MODS"
+
+// ModuleColumnTitles 同时喂表头和快照采集。模块表会随 LoadLibrary 变化，两次快照
+// 才看得出这次多挂了哪个 DLL；列序分叉则会把"数字签名"当成"大小"来比。
+const std::vector<std::wstring>& ModuleColumnTitles() {
+    static const std::vector<std::wstring> titles{
+        L"模块路径", L"大小", L"数字签名", L"入口偏移量", L"运行状态", L"ThreadID"
+    };
+    return titles;
+}
 
 constexpr wchar_t kModuleDetailClass[] = L"KswordARKLight.ProcessDetail.ModuleDetail";
 constexpr int kModuleDetailSummaryId = 65101;
@@ -660,12 +670,13 @@ bool ProcessDetailPage::CreateModuleTab() {
     }
 
     ::SendMessageW(verify, BM_SETCHECK, BST_CHECKED, 0);
-    AddListColumn(list, 0, L"模块路径", 560);
-    AddListColumn(list, 1, L"大小", 110);
-    AddListColumn(list, 2, L"数字签名", 260);
-    AddListColumn(list, 3, L"入口偏移量", 120);
-    AddListColumn(list, 4, L"运行状态", 90);
-    AddListColumn(list, 5, L"ThreadID", 180);
+    {
+        static const int widths[] = { 560, 110, 260, 120, 90, 180 };
+        const std::vector<std::wstring>& titles = ModuleColumnTitles();
+        for (std::size_t index = 0; index < titles.size(); ++index) {
+            AddListColumn(list, static_cast<int>(index), titles[index].c_str(), widths[index]);
+        }
+    }
     listColumnCounts_[list] = 6;
     listExportLabels_[list] = L"modules";
     if (moduleFilterRows_) {
@@ -883,6 +894,8 @@ bool ProcessDetailPage::HandleModuleContextMenu(POINT screenPoint) {
     ::AppendMenuW(menu, MF_STRING, kModuleMenuSuspendThread, L"挂起Thread");
     ::AppendMenuW(menu, MF_STRING, kModuleMenuResumeThread, L"取消挂起Thread");
     ::AppendMenuW(menu, MF_STRING, kModuleMenuTerminateThread, L"结束Thread");
+    ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    Ksword::Ui::AppendTableCompareMenuItems(menu, moduleSnapshotEngine_);
     const UINT command = ::TrackPopupMenu(
         menu,
         TPM_RETURNCMD | TPM_RIGHTBUTTON,
@@ -903,7 +916,14 @@ bool ProcessDetailPage::HandleModuleContextMenu(POINT screenPoint) {
     case kModuleMenuSuspendThread: SuspendSelectedModuleThread(); break;
     case kModuleMenuResumeThread: ResumeSelectedModuleThread(); break;
     case kModuleMenuTerminateThread: TerminateSelectedModuleThread(); break;
-    default: break;
+    default: {
+        std::wstring snapshotMessage;
+        if (Ksword::Ui::HandleTableCompareCommand(moduleSnapshotEngine_, command,
+                moduleVirtualList_, ModuleColumnTitles(), snapshotMessage, L"模块")) {
+            SetPageStatus(TabIndex::Modules, ModuleStatus, snapshotMessage);
+        }
+        break;
+    }
     }
     return true;
 }
