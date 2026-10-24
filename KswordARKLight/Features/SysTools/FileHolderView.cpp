@@ -9,6 +9,7 @@
 #include "../../Ui/FilterBar.h"
 #include "../../Ui/ListViewUtil.h"
 #include "../../Ui/LoadingOverlay.h"
+#include "../../Ui/TableCompareActions.h"
 #include "../../Ui/Theme.h"
 #include "../../Ui/VirtualListView.h"
 
@@ -67,6 +68,13 @@ constexpr const wchar_t* kColumnTitles[kColumnCount] = {
     L"进程", L"PID", L"句柄", L"访问权限", L"占用路径", L"进程映像"
 };
 
+// FileHolderColumnTitles feeds the TSV export and the snapshot capture from the
+// same captions as the header row.
+const std::vector<std::wstring>& FileHolderColumnTitles() {
+    static const std::vector<std::wstring> titles(std::begin(kColumnTitles), std::end(kColumnTitles));
+    return titles;
+}
+
 int Width(const RECT& rc) {
     return rc.right > rc.left ? static_cast<int>(rc.right - rc.left) : 0;
 }
@@ -98,6 +106,9 @@ struct FileHolderViewState final {
     bool filterUseRegex = false;
     bool scanInProgress = false;
     std::uint64_t displayGeneration = 0;
+    // 句柄值在进程关掉句柄后会被系统重新分配给别的占用者，只有比对两份快照
+    // 才能看出某个句柄号是不是换了主人、占用方是不是换成了别的进程。
+    Ksword::Ui::TableSnapshotEngine snapshotEngine;
     std::unique_ptr<Ksword::Ui::AsyncSnapshotTask<FileHolderScanResult>> scanTask;
     std::unique_ptr<Ksword::Ui::AsyncSnapshotTask<FileHolderFilterResult>> filterTask;
 };
@@ -381,7 +392,7 @@ void OpenHoldingProcessDetails(FileHolderViewState& state) {
 // answer is a snapshot of one instant: the lock is released as soon as the
 // holding program closes, so the clipboard is not a durable record of it.
 void ExportRows(FileHolderViewState& state, const Ksword::Ui::ExportRowScope scope) {
-    const std::vector<std::wstring> titles(std::begin(kColumnTitles), std::end(kColumnTitles));
+    const std::vector<std::wstring>& titles = FileHolderColumnTitles();
     Ksword::Ui::ExportRowCount count{};
     std::wstring error;
     const Ksword::Ui::SaveTextFileResult result = Ksword::Ui::ExportVirtualListTsvWithDialog(
@@ -442,6 +453,8 @@ void ShowContextMenu(FileHolderViewState& state, POINT screenPoint) {
     ::AppendMenuW(menu, MF_STRING, kMenuExportAll, L"导出全部行为 TSV…");
     ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     ::AppendMenuW(menu, MF_STRING, kMenuRescan, L"重新扫描");
+    ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    Ksword::Ui::AppendTableCompareMenuItems(menu, state.snapshotEngine);
 
     const int command = ::TrackPopupMenu(
         menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, screenPoint.x, screenPoint.y, 0, state.hwnd, nullptr);
@@ -472,6 +485,11 @@ void ShowContextMenu(FileHolderViewState& state, POINT screenPoint) {
         BeginScan(state);
         break;
     default:
+        // 快照命令 id 在所有表之间共用一段，不是本页的一律交给引擎判定。
+        if (Ksword::Ui::HandleTableCompareCommand(state.snapshotEngine, static_cast<UINT>(command),
+                state.list, FileHolderColumnTitles(), state.statusText)) {
+            ::InvalidateRect(state.hwnd, nullptr, TRUE);
+        }
         break;
     }
 }
