@@ -555,6 +555,9 @@
     <ClCompile Include="Ui\TableCompareActions.cpp">
       <Filter>Ui</Filter>
     </ClCompile>
+    <ClCompile Include="Ui\TableCompareResultWindow.cpp">
+      <Filter>Ui</Filter>
+    </ClCompile>
     <ClCompile Include="Ui\TableSnapshotCompare.cpp">
       <Filter>Ui</Filter>
     </ClCompile>
@@ -1245,6 +1248,9 @@
       <Filter>Ui</Filter>
     </ClInclude>
     <ClInclude Include="Ui\TableCompareActions.h">
+      <Filter>Ui</Filter>
+    </ClInclude>
+    <ClInclude Include="Ui\TableCompareResultWindow.h">
       <Filter>Ui</Filter>
     </ClInclude>
     <ClInclude Include="Ui\TableSnapshotCompare.h">

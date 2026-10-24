@@ -1,30 +1,14 @@
 #include "TableCompareActions.h"
 
+#include "TableCompareResultWindow.h"
 #include "VirtualListView.h"
 
 #include <cstddef>
+#include <utility>
 
 namespace Ksword::Ui {
 
 namespace {
-
-// StatusLabel names what happened to one comparison row. Input: one row plus the
-// later snapshot index range. Processing: prefers the presence flags, then the
-// changed-column set. Output: a short Chinese label used both on screen and in
-// the exported TSV.
-std::wstring StatusLabel(const TableComparisonRow& row)
-{
-    if (row.source == TableComparisonSource::LaterOnly) {
-        return L"新增";
-    }
-    if (row.source == TableComparisonSource::EarlierOnly) {
-        return L"移除";
-    }
-    // Field-level differences only exist when stable keys aligned the rows.
-    // Without them the engine deliberately leaves the set empty, so "both" with
-    // an empty set means "matched and identical as far as we can prove".
-    return row.changedSourceColumns.empty() ? L"相同" : L"变更";
-}
 
 // RowValues picks the value vector that belongs to the side being displayed.
 const std::vector<std::wstring>* RowValues(const TableComparisonResult& result, const TableComparisonRow& row)
@@ -40,15 +24,31 @@ const std::vector<std::wstring>* RowValues(const TableComparisonResult& result, 
     return nullptr;
 }
 
-// CellFor reads one compared column from the chosen side. result column index ->
-// per-snapshot value index is what keeps the export aligned when a column is
-// missing on one side.
-std::wstring CellFor(const TableComparisonResult& result, const TableComparisonRow& row,
-    std::size_t columnIndex, const std::vector<std::wstring>* values)
+} // namespace
+
+std::wstring ComparisonRowStatusText(const TableComparisonRow& row)
 {
+    if (row.source == TableComparisonSource::LaterOnly) {
+        return L"新增";
+    }
+    if (row.source == TableComparisonSource::EarlierOnly) {
+        return L"移除";
+    }
+    // Field-level differences only exist when stable keys aligned the rows.
+    // Without them the engine deliberately leaves the set empty, so "both" with
+    // an empty set means "matched and identical as far as we can prove".
+    return row.changedSourceColumns.empty() ? L"相同" : L"变更";
+}
+
+std::wstring ComparisonCellText(const TableComparisonResult& result, const TableComparisonRow& row,
+    const std::size_t columnIndex)
+{
+    const std::vector<std::wstring>* values = RowValues(result, row);
     if (!values) {
         return {};
     }
+    // result column index -> per-snapshot value index is what keeps the export
+    // aligned when a column is missing on one side.
     const bool later = row.displayLater && row.laterRowIndex >= 0;
     const std::vector<int>& indexes = later ? result.laterValueIndexes : result.earlierValueIndexes;
     if (columnIndex >= indexes.size()) {
@@ -60,8 +60,6 @@ std::wstring CellFor(const TableComparisonResult& result, const TableComparisonR
     }
     return (*values)[static_cast<std::size_t>(valueIndex)];
 }
-
-} // namespace
 
 std::vector<PopupMenuItem> BuildTableCompareMenuItems(const TableSnapshotEngine& engine)
 {
@@ -220,14 +218,13 @@ std::wstring BuildComparisonTsv(const TableComparisonResult& result)
     text += L"\r\n";
 
     for (const TableComparisonRow& row : result.rows) {
-        text += StatusLabel(row);
+        text += ComparisonRowStatusText(row);
         text += L"\t";
-        const std::vector<std::wstring>* values = RowValues(result, row);
         for (std::size_t column = 0; column < result.columns.size(); ++column) {
             // A tab inside a cell would shift every following column, so the
             // export replaces it with a space instead of promising a TSV the
             // user cannot open.
-            std::wstring cell = CellFor(result, row, column, values);
+            std::wstring cell = ComparisonCellText(result, row, column);
             for (wchar_t& character : cell) {
                 if (character == L'\t' || character == L'\r' || character == L'\n') {
                     character = L' ';
@@ -243,18 +240,25 @@ std::wstring BuildComparisonTsv(const TableComparisonResult& result)
 
 bool HandleTableCompareCommand(TableSnapshotEngine& engine, UINT commandId,
     const VirtualListView& list, const std::vector<std::wstring>& columnTitles,
-    std::wstring& messageOut)
+    std::wstring& messageOut, const std::wstring& tableName)
 {
     switch (commandId) {
     case kMenuTableCaptureSnapshot:
         return CaptureVisibleListSnapshot(engine, list, columnTitles, messageOut);
-    case kMenuTableCompareSnapshots:
+    case kMenuTableCompareSnapshots: {
         if (!engine.HasLater()) {
             messageOut = L"比对需要两份快照：先采集一次，刷新后再采集一次。";
             return true;
         }
-        messageOut = DescribeComparison(CompareListSnapshots(engine));
+        TableComparisonResult result = CompareListSnapshots(engine);
+        // The status line keeps the verdict on the page after the window closes;
+        // the window is what lets the operator actually read the diff.
+        messageOut = DescribeComparison(result);
+        HWND listWindow = list.hwnd();
+        HWND owner = listWindow != nullptr ? ::GetParent(listWindow) : nullptr;
+        ShowTableCompareResult(owner != nullptr ? owner : listWindow, std::move(result), tableName);
         return true;
+    }
     case kMenuTableClearSnapshots:
         engine.Clear();
         messageOut = L"已清除全部快照。";

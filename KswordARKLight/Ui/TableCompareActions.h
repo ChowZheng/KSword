@@ -64,13 +64,29 @@ std::wstring DescribeComparison(const TableComparisonResult& result);
 // text with CRLF line endings, ready for SaveUtf8TextFileWithDialog.
 std::wstring BuildComparisonTsv(const TableComparisonResult& result);
 
+// ComparisonRowStatusText names what happened to one comparison row. Input: one
+// row. Processing: prefers the presence flags, then the changed-column set.
+// Output: 新增 / 移除 / 变更 / 相同 — the same label the TSV and the result
+// window show, so a screenshot and an export never disagree.
+std::wstring ComparisonRowStatusText(const TableComparisonRow& row);
+
+// ComparisonCellText reads one compared column out of a row. Input: the result,
+// the row and the compared column index. Processing: picks the side that is
+// actually displayed (a removed row only has earlier values) and maps the
+// compared column onto that side's value index. Output: the display text, empty
+// when the column does not exist on the chosen side.
+std::wstring ComparisonCellText(const TableComparisonResult& result,
+    const TableComparisonRow& row, std::size_t columnIndex);
+
 // HandleTableCompareCommand runs one menu verb and reports the outcome. Input:
 // the engine, the command id, then the list and captions used by capture.
-// Processing: dispatches capture/compare/clear and leaves the engine consistent
-// when a verb is rejected. Output: true when the id belonged to this menu;
-// messageOut receives the status line to show.
+// Processing: dispatches capture/compare/clear, opens the result window for a
+// successful comparison and leaves the engine consistent when a verb is
+// rejected. tableName only captions that window and names the suggested export
+// file; an empty name falls back to a generic caption. Output: true when the id
+// belonged to this menu; messageOut receives the status line to show.
 bool HandleTableCompareCommand(TableSnapshotEngine& engine, UINT commandId,
     const VirtualListView& list, const std::vector<std::wstring>& columnTitles,
-    std::wstring& messageOut);
+    std::wstring& messageOut, const std::wstring& tableName = std::wstring());
 
 } // namespace Ksword::Ui
