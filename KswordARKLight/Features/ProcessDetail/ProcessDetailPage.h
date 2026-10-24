@@ -6,6 +6,7 @@
 #include "../../Core/Common.h"
 #include "../../Core/Win32Lean.h"
 #include "../../Ui/AsyncTask.h"
+#include "../../Ui/TableSnapshotCompare.h"
 #include "../../Ui/VirtualListView.h"
 
 #include <commctrl.h>
@@ -509,6 +510,9 @@ private:
     std::unique_ptr<Ksword::Ui::AsyncSnapshotTask<DetailTableFilterResult>> moduleFilterTask_;
     Ksword::Ui::VirtualListView threadVirtualList_;
     Ksword::Ui::VirtualListView moduleVirtualList_;
+    // 线程表与模块表列集不同，各持一个快照槽：共用会把"优先级"和"大小"当成同一列。
+    Ksword::Ui::TableSnapshotEngine threadSnapshotEngine_;
+    Ksword::Ui::TableSnapshotEngine moduleSnapshotEngine_;
     std::shared_ptr<const std::vector<ProcessThreadInfo>> threadEntries_;
     std::shared_ptr<const std::vector<ProcessThreadInfo>> pendingThreadEntries_;
     std::shared_ptr<const std::vector<ProcessModuleInfo>> moduleEntries_;
