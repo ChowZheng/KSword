@@ -779,10 +779,15 @@ namespace
         ArkRiskProjection projection;
         projection.previousEntries = std::move(previousEntries);
         projection.previousIndexes = std::move(previousIndexes);
-        projection.rowsBySource.assign(entries.size(), -1);
-        for (std::size_t row = 0; row < indexes.size(); ++row)
-            projection.rowsBySource[indexes[row]] = static_cast<int>(row);
-        projection.sameMembers = projection.previousEntries == entriesRoot && projection.previousIndexes
+        const bool sameRoot = projection.previousEntries == entriesRoot;
+        if (sameRoot)
+        {
+            // 跨根发布既不会做同成员置换，也不会按旧源下标恢复新根选择。
+            projection.rowsBySource.assign(entries.size(), -1);
+            for (std::size_t row = 0; row < indexes.size(); ++row)
+                projection.rowsBySource[indexes[row]] = static_cast<int>(row);
+        }
+        projection.sameMembers = sameRoot && projection.previousIndexes
             && projection.previousIndexes->size() == indexes.size();
         if (projection.sameMembers)
             for (const auto source : *projection.previousIndexes)
@@ -1607,6 +1612,12 @@ void MonitorDock::rebuildArkRiskCenterTable()
                 const auto selectedEntries = model->entriesSnapshot();
                 const auto selectedSource = model->sourceIndexAt(current.row());
                 const int selectedColumn = current.isValid() ? current.column() : riskColumnIndex(RiskColumn::Score);
+                if (current.isValid() && selectedEntries == entries && projection->previousEntries != entries)
+                {
+                    // 同步重入若已发布目标根，复用原准备路径补齐当前根映射，保留最新选择。
+                    rebuildArkRiskCenterTable();
+                    return;
+                }
                 if (!model->replace(entries, projection))
                 {
                     if (alive && modelOwner && ticket == m_arkRiskProjectionTicket) rebuildArkRiskCenterTable();
