@@ -905,6 +905,7 @@
     <ClInclude Include="Framework\ProgressDockWidget.h" />
     <ClInclude Include="Framework\TaskSnapshotFeed.h" />
     <ClInclude Include="Framework\StartupSplash.h" />
+    <ClInclude Include="Framework\ReleaseMetadata.h" />
     <ClInclude Include="KernelDock\KernelDockAtomWorker.h" />
     <ClInclude Include="KernelDock\KernelKnowledgeCatalog.h" />
     <ClInclude Include="KernelDock\KernelKnowledgeTab.h" />

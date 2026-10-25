@@ -3315,6 +3315,9 @@
     <ClInclude Include="Framework\StartupSplash.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="Framework\ReleaseMetadata.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="KernelDock\KernelDockQueryWorker.h">
       <Filter>Header Files</Filter>
     </ClInclude>

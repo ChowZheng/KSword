@@ -25,12 +25,12 @@
 namespace
 {
     constexpr wchar_t kWindowClass[] = L"KswordFrameworkSplashWindow";
-    constexpr int kBaseWidth = 1067;
-    constexpr int kBaseHeight = 600;
-    constexpr float kTrackX = 28.0f;
-    constexpr float kTrackY = 421.0f;
-    constexpr float kTrackWidth = 318.0f;
-    constexpr float kTrackHeight = 6.0f;
+    constexpr int kBaseWidth = 960;
+    constexpr int kBaseHeight = 540;
+    constexpr float kTrackX = 24.0f;
+    constexpr float kTrackY = 416.0f;
+    constexpr float kTrackWidth = 302.0f;
+    constexpr float kTrackHeight = 5.0f;
     constexpr UINT kShowMessage = WM_APP + 1;
     constexpr UINT kHideMessage = WM_APP + 2;
     constexpr UINT kRedrawMessage = WM_APP + 3;
@@ -204,6 +204,21 @@ public:
     {
         std::lock_guard<std::mutex> lock(m_stateMutex);
         if (!m_thread.joinable()) m_imagePath = path;
+    }
+
+    void setBrandingText(const std::wstring& title, const std::wstring& buildTime,
+        const std::wstring& authors)
+    {
+        {
+            std::lock_guard<std::mutex> lock(m_stateMutex);
+            if (m_title == title && m_buildTime == buildTime && m_authors == authors) return;
+            m_title = title;
+            m_buildTime = buildTime;
+            m_authors = authors;
+            ++m_stateRevision;
+            ++m_staticRevision;
+        }
+        requestRedraw();
     }
 
     void setLegalText(const std::wstring& copyright, const std::wstring& license,
@@ -477,6 +492,9 @@ private:
     bool paint(HDC target, bool force = false)
     {
         std::wstring status;
+        std::wstring title;
+        std::wstring buildTime;
+        std::wstring authors;
         std::wstring copyright;
         std::wstring license;
         std::wstring thirdParty;
@@ -489,6 +507,9 @@ private:
         {
             std::lock_guard<std::mutex> lock(m_stateMutex);
             status = m_status;
+            title = m_title;
+            buildTime = m_buildTime;
+            authors = m_authors;
             copyright = m_copyright;
             license = m_license;
             thirdParty = m_thirdParty;
@@ -533,42 +554,47 @@ private:
                 0.0f, 0.0f, static_cast<float>(kBaseWidth), static_cast<float>(kBaseHeight)),
                 0.0f, 0.0f, static_cast<float>(m_imageWidth),
                 static_cast<float>(m_imageHeight), Gdiplus::UnitPixel);
-            Gdiplus::SolidBrush panel(Gdiplus::Color(170, 255, 255, 255));
+            Gdiplus::SolidBrush panel(Gdiplus::Color(190, 10, 20, 34));
             graphics.FillRectangle(&panel, Gdiplus::RectF(
-                0.0f, 0.0f, 365.0f, static_cast<float>(kBaseHeight)));
+                0.0f, 0.0f, 350.0f, static_cast<float>(kBaseHeight)));
             graphics.ResetClip();
 
             if (m_logo)
-                graphics.DrawImage(m_logo.get(), Gdiplus::RectF(28.0f, 34.0f, 64.0f, 64.0f));
+                graphics.DrawImage(m_logo.get(), Gdiplus::RectF(24.0f, 44.0f, 48.0f, 48.0f));
             else
             {
                 Gdiplus::SolidBrush fallback(Gdiplus::Color(255, 12, 25, 84));
-                fillRoundedRectangle(graphics, fallback, 28.0f, 34.0f, 64.0f, 64.0f, 13.0f);
+                fillRoundedRectangle(graphics, fallback, 24.0f, 44.0f, 48.0f, 48.0f, 10.0f);
             }
-            Gdiplus::SolidBrush heading(Gdiplus::Color(255, 10, 24, 77));
-            Gdiplus::Font headingFont(L"Segoe UI", 31.0f,
+            Gdiplus::SolidBrush heading(Gdiplus::Color(255, 247, 250, 255));
+            Gdiplus::Font headingFont(L"Segoe UI", 22.0f,
                 Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
-            graphics.DrawString(L"KSword", -1, &headingFont,
-                Gdiplus::RectF(106.0f, 44.0f, 240.0f, 48.0f),
+            graphics.DrawString(title.c_str(), -1, &headingFont,
+                Gdiplus::RectF(84.0f, 50.0f, 242.0f, 36.0f),
                 nullptr, &heading);
 
-            Gdiplus::SolidBrush body(Gdiplus::Color(255, 30, 42, 58));
-            Gdiplus::Font bodyFont(L"Segoe UI", 14.0f,
+            Gdiplus::SolidBrush body(Gdiplus::Color(255, 228, 234, 242));
+            Gdiplus::Font bodyFont(L"Microsoft YaHei UI", 14.0f,
                 Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
+            Gdiplus::SolidBrush metadata(Gdiplus::Color(255, 188, 201, 218));
+            graphics.DrawString(buildTime.c_str(), -1, &bodyFont,
+                Gdiplus::RectF(24.0f, 102.0f, 302.0f, 22.0f), nullptr, &metadata);
+            graphics.DrawString(authors.c_str(), -1, &bodyFont,
+                Gdiplus::RectF(24.0f, 126.0f, 302.0f, 22.0f), nullptr, &metadata);
             Gdiplus::StringFormat paragraphFormat;
             paragraphFormat.SetTrimming(Gdiplus::StringTrimmingNone);
-            float paragraphY = 178.0f;
+            float paragraphY = 196.0f;
             const std::wstring* paragraphs[] = {&copyright, &license, &thirdParty};
             for (const std::wstring* paragraph : paragraphs)
             {
                 if (paragraph->empty()) continue;
                 Gdiplus::RectF bounds;
                 graphics.MeasureString(paragraph->c_str(), -1, &bodyFont,
-                    Gdiplus::RectF(0.0f, 0.0f, 318.0f, 180.0f),
+                    Gdiplus::RectF(0.0f, 0.0f, 302.0f, 180.0f),
                     &paragraphFormat, &bounds);
                 const float height = std::min(bounds.Height + 2.0f, 180.0f);
                 graphics.DrawString(paragraph->c_str(), -1, &bodyFont,
-                    Gdiplus::RectF(28.0f, paragraphY, 318.0f, height),
+                    Gdiplus::RectF(24.0f, paragraphY, 302.0f, height),
                     &paragraphFormat, &body);
                 paragraphY += height + 10.0f;
             }
@@ -579,19 +605,19 @@ private:
             Gdiplus::Font statusFont(L"Microsoft YaHei UI", 12.0f,
                 Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
             graphics.DrawString(status.c_str(), -1, &statusFont,
-                Gdiplus::RectF(kTrackX, 389.0f, kTrackWidth, 24.0f),
+                Gdiplus::RectF(kTrackX, 384.0f, kTrackWidth, 24.0f),
                 &oneLine, &body);
-            Gdiplus::SolidBrush track(Gdiplus::Color(100, 60, 78, 102));
+            Gdiplus::SolidBrush track(Gdiplus::Color(100, 180, 200, 225));
             fillRoundedRectangle(graphics, track,
                 kTrackX, kTrackY, kTrackWidth, kTrackHeight, 3.0f);
 
-            Gdiplus::SolidBrush link(Gdiplus::Color(255, 17, 51, 101));
+            Gdiplus::SolidBrush link(Gdiplus::Color(255, 150, 204, 255));
             Gdiplus::Font linkFont(L"Segoe UI", 14.0f,
                 Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
             graphics.DrawString(website.c_str(), -1, &linkFont,
-                Gdiplus::RectF(28.0f, 524.0f, 318.0f, 24.0f), &oneLine, &link);
+                Gdiplus::RectF(24.0f, 466.0f, 302.0f, 22.0f), &oneLine, &link);
             graphics.DrawString(repository.c_str(), -1, &linkFont,
-                Gdiplus::RectF(28.0f, 549.0f, 318.0f, 24.0f), &oneLine, &link);
+                Gdiplus::RectF(24.0f, 490.0f, 302.0f, 22.0f), &oneLine, &link);
             graphics.Flush(Gdiplus::FlushIntentionSync);
             m_cachedStaticRevision = staticRevision;
             m_cachedStaticGeometryRevision = m_geometryRevision;
@@ -763,6 +789,9 @@ private:
     bool m_threadSucceeded = false;
     std::wstring m_imagePath;
     std::wstring m_status = L"Ksword";
+    std::wstring m_title = L"KSword";
+    std::wstring m_buildTime;
+    std::wstring m_authors;
     std::wstring m_copyright;
     std::wstring m_license;
     std::wstring m_thirdParty;
@@ -799,6 +828,8 @@ private:
 kStartupSplash::kStartupSplash() : m_impl(std::make_unique<Impl>()) {}
 kStartupSplash::~kStartupSplash() = default;
 void kStartupSplash::setBackgroundImagePath(const std::wstring& path) { m_impl->setBackgroundImagePath(path); }
+void kStartupSplash::setBrandingText(const std::wstring& title, const std::wstring& buildTime,
+    const std::wstring& authors) { m_impl->setBrandingText(title, buildTime, authors); }
 void kStartupSplash::setLegalText(const std::wstring& copyright, const std::wstring& license,
     const std::wstring& thirdParty, const std::wstring& website,
     const std::wstring& repository)

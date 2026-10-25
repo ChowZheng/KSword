@@ -15,6 +15,7 @@
 #include <QtWidgets/QWidget>
 
 #include "Framework.h"
+#include "Framework/ReleaseMetadata.h"
 #include "UI/ThemedMessageBox.h"
 #include "UI/GlobalDialogTheme.h"
 #include "UI/GlobalRefreshShortcut.h"
@@ -1580,6 +1581,13 @@ int main(int argc, char* argv[])
     startupTraceRaw("after applyQtScaleFactorEnvironment");
 
     kSplash.setProgressMode(SplashProgressMode::Determinate);
+    kSplash.setBrandingText(
+        localizedStartupText(QStringLiteral("main.startup.brand.title"),
+            QStringLiteral("KSword %1")).arg(ks::app::releaseVersionText()).toStdWString(),
+        localizedStartupText(QStringLiteral("main.startup.brand.build_time"),
+            QStringLiteral("编译时间：%1")).arg(ks::app::releaseBuildTimeText()).toStdWString(),
+        localizedStartupText(QStringLiteral("main.startup.brand.authors"),
+            QStringLiteral("作者：%1")).arg(ks::app::releaseAuthorsText()).toStdWString());
     kSplash.setLegalText(
         localizedStartupText(QStringLiteral("main.startup.legal.copyright"),
             QStringLiteral("Copyright © 2023-2026 KSword contributors and applicable copyright holders")).toStdWString(),
