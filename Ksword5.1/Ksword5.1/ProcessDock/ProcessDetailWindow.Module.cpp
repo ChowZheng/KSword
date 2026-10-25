@@ -5,6 +5,7 @@
 #include "../UI/DetailDialogChrome.h"
 #include "../UI/X64DbgNavigation.h"
 #include "../UI/TableInteractionSupport.h"
+#include "../UI/ThemeAccentIcon.h"
 #include "../MemoryDock/MemoryDock.h"
 #include <Shellapi.h>
 
@@ -372,8 +373,9 @@ void ProcessDetailWindow::showModuleContextMenu(const QPoint& localPosition)
     const auto addAction = [](QMenu* menu, const char* icon, const char* key,
         const QString& title, const QString& tooltip)
     {
-        QAction* action = menu->addAction(QIcon(QString::fromLatin1(icon)),
+        QAction* action = menu->addAction(ks::ui::MakeThemeAccentIcon(QIcon(QString::fromLatin1(icon))),
             ks::i18n::contextText(QString::fromLatin1(key), title)); // 返回供分发比较的动作。
+        action->setIconVisibleInMenu(true);
         action->setToolTip(ks::i18n::sourceText(tooltip));
         return action;
     };
@@ -385,51 +387,46 @@ void ProcessDetailWindow::showModuleContextMenu(const QPoint& localPosition)
     // 声明业务菜单已提供此能力，避免共享表格菜单追加重复项。
     ks::ui::SetTableContextActionRole(copyRowAction, ks::ui::TableContextActionRole::CopyRows);
     QAction* copyBaseAction = addAction(&contextMenu, ":/Icon/process_copy_cell.svg",
-        "process.detail.module.copy_base", QStringLiteral("复制模块基址"), QStringLiteral("复制所选模块的加载基址"));
+        "process.detail.module.copy_base", QStringLiteral("复制模块起始地址"), QStringLiteral("复制所选模块的加载基址"));
     QAction* copyPathAction = addAction(&contextMenu, ":/Icon/process_copy_row.svg",
-        "process.detail.module.copy_path", QStringLiteral("复制模块路径"), QStringLiteral("复制所选模块的完整文件路径"));
+        "process.detail.module.copy_path", QStringLiteral("复制模块文件路径"), QStringLiteral("复制所选模块的完整文件路径"));
     copyBaseAction->setEnabled(validRange);
     copyPathAction->setEnabled(!modulePath.isEmpty());
     contextMenu.addSeparator();
     QAction* gotoModuleAction = contextMenu.addAction(QIcon(":/Icon/process_details.svg"), "查看模块详情");
-    QAction* openMemoryAction = addAction(&contextMenu, ":/Icon/process_details.svg",
-        "process.detail.module.open_memory", QStringLiteral("在内存 Tab 中打开基址"),
+    QAction* openMemoryAction = addAction(&contextMenu, ":/Icon/memwb_tab_hex.svg",
+        "process.detail.module.open_memory", QStringLiteral("查看模块内存"),
         QStringLiteral("切到当前进程的内存工作台并定位模块加载基址"));
     openMemoryAction->setEnabled(validRange);
 
-    QMenu* navigationMenu = contextMenu.addMenu(ks::i18n::contextText(
-        QStringLiteral("process.detail.module.related_pages"), QStringLiteral("相关页面"))); // 跨页导航组。
-    navigationMenu->setStyleSheet(KswordTheme::ContextMenuStyle());
-    navigationMenu->setToolTipsVisible(true);
-    QAction* entryAction = addAction(navigationMenu, ":/Icon/process_details.svg",
-        "process.detail.module.open_entry", QStringLiteral("在内存 Tab 中打开入口点"),
+    // 直接按用户任务列出目标，不用“相关页面”之类的分类把常用动作藏进二级菜单。
+    QAction* entryAction = addAction(&contextMenu, ":/Icon/memwb_tab_disasm.svg",
+        "process.detail.module.open_entry", QStringLiteral("查看模块入口地址"),
         QStringLiteral("按模块基址加入口点 RVA 定位内存工作台"));
     entryAction->setEnabled(validEntry);
-    QAction* regionsAction = addAction(navigationMenu, ":/Icon/process_details.svg",
-        "process.detail.module.open_regions", QStringLiteral("定位到内存区域"),
+    QAction* regionsAction = addAction(&contextMenu, ":/Icon/codeeditor_structured.svg",
+        "process.detail.module.open_regions", QStringLiteral("定位模块所在内存区域"),
         QStringLiteral("切到内存区域列表并选中模块基址所在区域"));
-    QAction* searchAction = addAction(navigationMenu, ":/Icon/process_details.svg",
-        "process.detail.module.search_range", QStringLiteral("在此模块范围内搜索"),
+    QAction* searchAction = addAction(&contextMenu, ":/Icon/codeeditor_find.svg",
+        "process.detail.module.search_range", QStringLiteral("搜索此模块的内存…"),
         QStringLiteral("预填模块起止地址并打开内存搜索，不自动开始扫描"));
     regionsAction->setEnabled(validRange);
     searchAction->setEnabled(validRange);
-    QAction* fileDetailAction = addAction(navigationMenu, ":/Icon/process_details.svg",
-        "process.detail.module.file_detail", QStringLiteral("打开模块文件详情"),
+    QAction* fileDetailAction = addAction(&contextMenu, ":/Icon/process_details.svg",
+        "process.detail.module.file_detail", QStringLiteral("查看模块文件属性…"),
         QStringLiteral("通过文件页面查看所选模块的落盘文件详情"));
     fileDetailAction->setEnabled(QFileInfo(modulePath).isFile());
 
-    // Dump 明确标注原始布局，沿用现有异步导出和原子文件提交。
-    QMenu* dumpMenu = contextMenu.addMenu(ks::i18n::contextText(
-        QStringLiteral("process.detail.module.dump"), QStringLiteral("Dump 模块内存（原始布局）")));
-    dumpMenu->setStyleSheet(KswordTheme::ContextMenuStyle());
-    dumpMenu->setToolTipsVisible(true);
-    QAction* dumpR3Action = addAction(dumpMenu, ":/Icon/log_export.svg",
-        "process.detail.module.dump_r3", QStringLiteral("R3 Dump…"),
+    // 保存动作直接说明输出及读取方式，后端缩写不再承担菜单含义。
+    contextMenu.addSeparator();
+    QAction* dumpR3Action = addAction(&contextMenu, ":/Icon/disk_save.svg",
+        "process.detail.module.dump_r3", QStringLiteral("保存模块内存（用户态读取）…"),
         QStringLiteral("使用 R3 读取完整模块内存并保存为 bin，不重建 PE 文件"));
-    QAction* dumpR0Action = addAction(dumpMenu, ":/Icon/log_export.svg",
-        "process.detail.module.dump_r0", QStringLiteral("R0 Dump…"),
+    QAction* dumpR0Action = addAction(&contextMenu, ":/Icon/disk_save.svg",
+        "process.detail.module.dump_r0", QStringLiteral("保存模块内存（驱动读取）…"),
         QStringLiteral("使用 R0 驱动读取完整模块内存并保存为 bin，不重建 PE 文件"));
-    dumpMenu->setEnabled(validRange);
+    dumpR3Action->setEnabled(validRange);
+    dumpR0Action->setEnabled(validRange);
     // 禁用项保留可读的依赖原因，资源 DLL 没有入口点时也不会被误认为菜单故障。
     if (!validEntry)
     {
@@ -442,11 +439,12 @@ void ProcessDetailWindow::showModuleContextMenu(const QPoint& localPosition)
     if (!validRange)
     {
         const QString reason = ks::i18n::sourceText(QStringLiteral("模块地址范围或进程身份无效。")); // 共享依赖说明。
-        for (QAction* action : {copyBaseAction, openMemoryAction, regionsAction, searchAction, dumpMenu->menuAction()})
+        for (QAction* action : {copyBaseAction, openMemoryAction, regionsAction, searchAction, dumpR3Action, dumpR0Action})
         {
             action->setToolTip(reason);
         }
     }
+    contextMenu.addSeparator();
     if (validRange)
         ks::ui::x64dbg_navigation::AddAction(&contextMenu, this,
             {processId, creationTime, module.moduleBaseAddress,
