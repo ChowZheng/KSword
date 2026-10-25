@@ -256,7 +256,11 @@ jobs:
           --en-pack Ksword5.1/Ksword5.1/languages/en-US.json
 
       - name: Validate kernel knowledge research chain
-        run: python tools/validate_kernel_knowledge.py
+        shell: pwsh
+        run: |
+          python tools/test_validate_kernel_knowledge.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/validate_kernel_knowledge.py
 
       - name: Test QADS artifact validation
         run: python tools/test_verify_qads_runtime.py

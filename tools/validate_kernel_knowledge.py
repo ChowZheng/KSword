@@ -7,6 +7,8 @@ import json
 import re
 from pathlib import Path
 
+from test_memory_dock_layout_gate import extract_function_body
+
 
 ROOT = Path(__file__).resolve().parents[1]
 CATALOG_PATH = (
@@ -171,6 +173,28 @@ def load_context_translations(path: Path) -> dict[str, str]:
     if not isinstance(translations, dict):
         raise ValueError(f"{path}: context_translations is missing or not an object")
     return translations
+
+
+def validate_kernel_routes(source: str) -> list[str]:
+    """Check only the route function's body, independent of adjacent methods.
+
+    Reuse the source gate's comment/string-aware brace matcher. A neighboring
+    function's name, return type or position must not determine this boundary.
+    """
+    body = extract_function_body(source, r"\bKernelDock\s*::\s*openKnowledgeRoute")
+    if body is None:
+        return ["KernelDock::openKnowledgeRoute function is missing"]
+    errors: list[str] = []
+    routed_ids = ROUTE_RE.findall(body)
+    if duplicates := duplicate_values(routed_ids):
+        errors.append(f"duplicate KernelDock routes: {', '.join(duplicates)}")
+    missing_routes = (EXPECTED_ROUTES - {""}) - set(routed_ids)
+    extra_routes = set(routed_ids) - EXPECTED_ROUTES
+    if missing_routes:
+        errors.append(f"KernelDock routes missing: {', '.join(sorted(missing_routes))}")
+    if extra_routes:
+        errors.append(f"KernelDock routes not whitelisted: {', '.join(sorted(extra_routes))}")
+    return errors
 
 
 def validate() -> list[str]:
@@ -412,32 +436,7 @@ def validate() -> list[str]:
                 errors.append(f"第二规划 still contains stale marker {stale_marker}")
 
     kernel_dock_source = KERNEL_DOCK_PATH.read_text(encoding="utf-8")
-    route_function_start = kernel_dock_source.find(
-        "void KernelDock::openKnowledgeRoute"
-    )
-    route_function_end = kernel_dock_source.find(
-        "void KernelDock::ensureTabInitialized",
-        route_function_start,
-    )
-    if route_function_start < 0 or route_function_end < 0:
-        errors.append("KernelDock::openKnowledgeRoute function is missing")
-    else:
-        routed_ids = ROUTE_RE.findall(
-            kernel_dock_source[route_function_start:route_function_end]
-        )
-        if duplicates := duplicate_values(routed_ids):
-            errors.append(f"duplicate KernelDock routes: {', '.join(duplicates)}")
-        if set(routed_ids) != EXPECTED_ROUTES - {""}:
-            missing_routes = (EXPECTED_ROUTES - {""}) - set(routed_ids)
-            extra_routes = set(routed_ids) - EXPECTED_ROUTES
-            if missing_routes:
-                errors.append(
-                    f"KernelDock routes missing: {', '.join(sorted(missing_routes))}"
-                )
-            if extra_routes:
-                errors.append(
-                    f"KernelDock routes not whitelisted: {', '.join(sorted(extra_routes))}"
-                )
+    errors.extend(validate_kernel_routes(kernel_dock_source))
 
     for language_id, path in LANGUAGE_PATHS.items():
         try:
