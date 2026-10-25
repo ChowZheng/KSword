@@ -420,10 +420,10 @@ void ProcessDetailWindow::showModuleContextMenu(const QPoint& localPosition)
     // 保存动作直接说明输出及读取方式，后端缩写不再承担菜单含义。
     contextMenu.addSeparator();
     QAction* dumpR3Action = addAction(&contextMenu, ":/Icon/disk_save.svg",
-        "process.detail.module.dump_r3", QStringLiteral("保存模块内存（用户态读取）…"),
+        "process.detail.module.dump_r3", QStringLiteral("R3 Dump…"),
         QStringLiteral("使用 R3 读取完整模块内存并保存为 bin，不重建 PE 文件"));
     QAction* dumpR0Action = addAction(&contextMenu, ":/Icon/disk_save.svg",
-        "process.detail.module.dump_r0", QStringLiteral("保存模块内存（驱动读取）…"),
+        "process.detail.module.dump_r0", QStringLiteral("R0 Dump…"),
         QStringLiteral("使用 R0 驱动读取完整模块内存并保存为 bin，不重建 PE 文件"));
     dumpR3Action->setEnabled(validRange);
     dumpR0Action->setEnabled(validRange);
