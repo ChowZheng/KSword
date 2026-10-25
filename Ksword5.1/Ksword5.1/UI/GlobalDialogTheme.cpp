@@ -1,6 +1,7 @@
 ﻿#include "GlobalDialogTheme.h"
 #include "./DetailDialogChrome.h"
 #include "./ThemeBinding.h"
+#include "./GroupBoxStyle.h"
 
 #include "../theme.h"
 
@@ -19,6 +20,7 @@
 #include <QFontDialog>
 #include <QInputDialog>
 #include <QLayout>
+#include <QFontMetrics>
 
 namespace
 {
@@ -171,17 +173,10 @@ namespace
             "  selection-background-color:__ACCENT__;"
             "  selection-color:__ON_ACCENT__;"
             "}"
+            "__GROUP_BOX_STYLE__"
             "QDialog[%2=\"true\"] QGroupBox{"
             "  background-color:__SURFACE_BACKGROUND__ !important;"
             "  color:__SURFACE_TEXT__ !important;"
-            "  border:0;"
-            "  border-radius:8px;"
-            "  margin-top:0px;"
-            "  padding-top:28px;"
-            "}"
-            "QDialog[%2=\"true\"] QGroupBox::title{"
-            "  subcontrol-origin:padding;subcontrol-position:top left;"
-            "  left:16px;top:10px;padding:0;font-weight:600;"
             "}"
             "QDialog[%2=\"true\"] QGroupBox QLabel{"
             "  background-color:transparent !important;"
@@ -221,6 +216,12 @@ namespace
             "__COMBO_BOX_STYLE__"
             "__BUTTON_STYLE__");
         styleSheetText = styleSheetText.arg(QString::fromLatin1(kGlobalDialogThemePropertyName));
+        // 普通弹窗继续拥有原表面与文字角色，只从共享配方取得标题和正文几何。
+        styleSheetText.replace(QStringLiteral("__GROUP_BOX_STYLE__"), ks::ui::GroupBoxStyle(
+            QStringLiteral("QDialog[%1=\"true\"] QGroupBox")
+                .arg(QString::fromLatin1(kGlobalDialogThemePropertyName)),
+            surfaceBackgroundText, textColorText,
+            KswordTheme::TextDisabledColorHex(), QFontMetrics(QApplication::font()).height()));
         styleSheetText.replace(QStringLiteral("__MARKER__"), QString::fromLatin1(kGlobalDialogStyleMarker));
         styleSheetText.replace(QStringLiteral("__WINDOW_BACKGROUND__"), windowBackgroundText);
         styleSheetText.replace(QStringLiteral("__SURFACE_BACKGROUND__"), surfaceBackgroundText);

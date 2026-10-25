@@ -2,10 +2,13 @@
 #include "./FlatButtonTheme.h"
 #include "./PageControlStyle.h"
 #include "./ThemedSlider.h"
+#include "./GroupBoxStyle.h"
 
 #include "ThemeStatusRole.h"
 
 #include "../theme.h"
+#include <QApplication>
+#include <QFontMetrics>
 
 namespace ks::ui
 {
@@ -165,20 +168,7 @@ namespace ks::ui
 
             // ---------- 分组框基线 ----------
             // 新分组默认是无描边内容面；标题和留白建立层级，不再退回原生凹凸线框。
-            "QGroupBox{"
-            "  border:0;"
-            "  border-radius:8px;"
-            "  background-color:__SURFACE__;"
-            "  margin:0;padding:32px 10px 10px 10px;"
-            "}"
-            "QGroupBox::title{"
-            "  subcontrol-origin:padding;"
-            "  subcontrol-position:top left;"
-            "  left:16px;top:10px;"
-            "  padding:0;background:transparent;"
-            "  color:__TEXT_SECONDARY__;"
-            "  font-weight:600;"
-            "}"
+            "__GROUP_BOX_STYLE__"
 
             // ---------- 表格/树基线 ----------
             // 只保留表头下方的分隔；逐格网格和外框由 TablePresentation 关闭。
@@ -258,6 +248,11 @@ namespace ks::ui
         };
 
         baseControlStyle.replace(QStringLiteral("__BEGIN_MARKER__"), QString::fromLatin1(kBaseControlStyleBeginMarker));
+        // 默认基线与局部分组共用标题几何；颜色仍在本块原有角色替换链中解析。
+        baseControlStyle.replace(QStringLiteral("__GROUP_BOX_STYLE__"), GroupBoxStyle(
+            QStringLiteral("QGroupBox"), QStringLiteral("__SURFACE__"),
+            QStringLiteral("__TEXT_SECONDARY__"), QStringLiteral("__TEXT_DISABLED__"),
+            QFontMetrics(QApplication::font()).height()));
         baseControlStyle.replace(
             QStringLiteral("__ARROW_UP_OFF__"),
             arrowResourcePath(KswordTheme::SurfaceMutedColor(), true, true));

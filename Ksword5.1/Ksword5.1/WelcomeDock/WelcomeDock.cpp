@@ -293,7 +293,7 @@ WelcomeDock::WelcomeDock(QWidget* parent)
 
     QHBoxLayout* lowerLayout = new QHBoxLayout();
     lowerLayout->setContentsMargins(0, 0, 0, 0);
-    lowerLayout->setSpacing(18);
+    lowerLayout->setSpacing(16);
 
     // 兼容旧字段但不再用一段换行文本排版；系统摘要改为项目名/内容两列网格。
     m_systemInfoPanel = new QWidget(this);
@@ -315,7 +315,6 @@ WelcomeDock::WelcomeDock(QWidget* parent)
     ks::i18n::LanguageManager::instance().bindText(systemGroup,
         QStringLiteral("welcome.system_info.group"), QStringLiteral("系统信息"));
     auto* systemLayout = new QVBoxLayout(systemGroup);
-    systemLayout->setContentsMargins(10, 10, 10, 8);
     systemLayout->addWidget(m_systemInfoPanel, 1);
     ks::ui::StylePrimaryGroup(systemGroup);
     lowerLayout->addWidget(systemGroup, 1);
@@ -324,7 +323,6 @@ WelcomeDock::WelcomeDock(QWidget* parent)
     ks::i18n::LanguageManager::instance().bindText(communityGroup,
         QStringLiteral("welcome.community.group"), QStringLiteral("项目与社区"));
     QVBoxLayout* rightLayout = new QVBoxLayout(communityGroup);
-    rightLayout->setContentsMargins(10, 10, 10, 8);
     rightLayout->setSpacing(8);
     rightLayout->addLayout(m_btnLayout);
     rightLayout->addLayout(m_referenceLayout);

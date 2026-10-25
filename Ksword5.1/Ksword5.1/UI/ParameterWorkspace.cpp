@@ -4,6 +4,7 @@
 #include "./FlatButtonTheme.h"
 #include "./ThemeBinding.h"
 #include "./MainSurfaceStyle.h"
+#include "./GroupBoxStyle.h"
 #include "./ToolbarMetrics.h"
 #include "./CodeTextEdit.h"
 #include "./CodeEditorWidget.h"
@@ -49,7 +50,7 @@ namespace
             setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Maximum);
             m_columns = new QHBoxLayout(this);
             m_columns->setContentsMargins(0, 0, 0, 0);
-            m_columns->setSpacing(18);
+            m_columns->setSpacing(16);
 
             // 两列各自使用自然高度，长分区不会把另一列的短分区撑成大块空白。
             m_primaryPanel = new QWidget(this);
@@ -83,7 +84,7 @@ namespace
         {
             auto* column = new QVBoxLayout(panel);
             column->setContentsMargins(0, 0, 0, 0);
-            column->setSpacing(18);
+            column->setSpacing(16);
             column->setAlignment(Qt::AlignTop);
             column->setSizeConstraint(QLayout::SetNoConstraint);
             return column;
@@ -450,7 +451,7 @@ namespace ks::ui
         form->setMinimumWidth(0);
         m_parameters = new QVBoxLayout(form);
         m_parameters->setContentsMargins(0, 0, 0, 0);
-        m_parameters->setSpacing(18);
+        m_parameters->setSpacing(16);
         m_parameters->setAlignment(Qt::AlignTop);
         m_scroll->setWidget(form);
         // QScrollArea的viewport与setWidget后的表单会自动填Window底色，不能继承页根的深色。
@@ -524,8 +525,7 @@ namespace ks::ui
             if (section->property("ksword_parameter_section").toBool())
             {
                 section->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Maximum);
-                if (section->layout())
-                    section->layout()->setContentsMargins(0, section->title().isEmpty() ? 4 : 8, 0, 4);
+                ConfigureGroupBoxLayout(section);
             }
         }
         NormalizeToolbarRow(m_actions);
@@ -584,11 +584,7 @@ namespace ks::ui
         if (!group) return;
         group->setProperty("ksword_parameter_section", true);
         StylePrimaryGroup(group);
-        if (group->layout())
-        {
-            group->layout()->setContentsMargins(0, group->title().isEmpty() ? 4 : 22, 0, 4);
-            group->layout()->setSpacing(8);
-        }
+        ConfigureGroupBoxLayout(group);
     }
 
     void StyleParameterFields(QWidget* container)
@@ -695,7 +691,6 @@ namespace ks::ui
         toggle->setMinimumHeight(30);
         group->setTitle(QString());
         StyleParameterSection(group);
-        group->layout()->setContentsMargins(0, 4, 0, 4);
         layout->addWidget(toggle);
         layout->addWidget(group);
         group->setVisible(expanded);

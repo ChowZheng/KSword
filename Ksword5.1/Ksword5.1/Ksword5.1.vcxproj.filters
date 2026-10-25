@@ -3159,6 +3159,9 @@
     <ClInclude Include="UI\PrimaryPageStyle.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="UI\GroupBoxStyle.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="UI\ParameterWorkspace.h">
       <Filter>Header Files</Filter>
     </ClInclude>

@@ -1036,6 +1036,7 @@
     <ClInclude Include="UI\RoundedViewSurface.h" />
     <ClInclude Include="UI\SecondaryPageLayout.h" />
     <ClInclude Include="UI\PrimaryPageStyle.h" />
+    <ClInclude Include="UI\GroupBoxStyle.h" />
     <ClInclude Include="UI\ParameterWorkspace.h" />
     <ClInclude Include="UI\MainSurfaceStyle.h" />
     <ClInclude Include="UI\PageNavigationCatalog.h" />

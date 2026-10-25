@@ -4,6 +4,7 @@
 #include "./FlatButtonTheme.h"
 #include "./ToolbarMetrics.h"
 #include "./PageTabMotion.h"
+#include "./GroupBoxStyle.h"
 #include "../theme.h"
 
 #include <QDialogButtonBox>
@@ -398,16 +399,30 @@ namespace ks::ui
             {
                 return;
             }
-            // 细线位于标题下方，正文没有卡片底色和额外侧边，信息密度由页面布局决定。
+            // 设置页可隔着零边距列壳借用外层留白，窄边距工具页仍由卡片拥有16px内距。
+            bool embedded = false; // 只读取当前窗口内实际存在的外围布局，不改动祖先。
             const bool settings = target->property("ksword_settings_section").toBool();
-            SetOwnedStyle(target, QStringLiteral(
-                "QGroupBox[ksword_secondary_section=\"true\"]{background:transparent;"
-                "border:0;border-top:1px solid %1;border-radius:0;margin:%3px 0 0 0;padding:%4px 0 0 0;}"
-                "QGroupBox[ksword_secondary_section=\"true\"]::title{"
-                "subcontrol-origin:margin;subcontrol-position:top left;left:0;top:0;"
-                "padding:0;background:transparent;color:%2;font-weight:600;}")
-                .arg(KswordTheme::BorderColor().name(), KswordTheme::TextSecondaryColor().name())
-                .arg(settings ? 24 : 22).arg(8));
+            QWidget* const content = target->parentWidget(); // 普通分区只借用直属内容壳。
+            for (QWidget* outer = content; outer; outer = outer->parentWidget())
+            {
+                if (outer != content && (!settings || qobject_cast<QGroupBox*>(outer))) break;
+                if (const QLayout* layout = outer->layout())
+                {
+                    const QMargins margins = layout->contentsMargins();
+                    if (margins.left() != 0 || margins.right() != 0)
+                    {
+                        embedded = margins.left() >= 16 && margins.right() >= 16;
+                        break; // 最近的侧边留白就是当前内容边界，不能继续借用更外层页根。
+                    }
+                }
+                if (outer->isWindow()) break;
+            }
+            ConfigureGroupBoxLayout(target);
+            SetOwnedStyle(target, GroupBoxStyle(
+                QStringLiteral("QGroupBox[ksword_secondary_section=\"true\"]"),
+                QStringLiteral("transparent"), KswordTheme::TextSecondaryColor().name(),
+                KswordTheme::TextDisabledColor().name(), target->fontMetrics().height(),
+                embedded, !target->title().isEmpty()));
         });
     }
 

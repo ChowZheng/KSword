@@ -217,6 +217,11 @@ namespace
             if (m_registry != nullptr && event != nullptr &&
                 (event->type() == QEvent::ApplicationPaletteChange ||
                     event->type() == QEvent::LanguageChange ||
+                    // 组框沿用本绑定的合并刷新，标题预留随字体变化，不另建几何观察器。
+                    (!m_applying && m_widget && (m_widget->property("ksword_primary_group").toBool()
+                        || m_widget->property("ksword_secondary_section").toBool())
+                        && (event->type() == QEvent::FontChange
+                            || event->type() == QEvent::ApplicationFontChange)) ||
                     (!m_applying && (event->type() == QEvent::PaletteChange
                         || (m_widget && m_widget->property("ksword_flat_button_shared_owner").toBool()
                             && (event->type() == QEvent::StyleChange || event->type() == QEvent::ParentChange

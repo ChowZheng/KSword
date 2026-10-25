@@ -119,6 +119,7 @@
 #include "UI/DockTabInteraction.h"
 #include "UI/GlobalDialogTheme.h"
 #include "UI/GlobalUiBaseStyle.h"
+#include "UI/GroupBoxStyle.h"
 #include "UI/StandardWidgetTheme.h"
 #include "UI/ThemedSlider.h"
 #include "UI/GlobalUiSearch.h"
@@ -14167,21 +14168,6 @@ QString MainWindow::buildAppearanceOverlayStyleSheet(
         "  background:%1;"
         "  margin-top:12px;"
         "}"
-        // 默认组框与卡片共用无描边标准面，明确的专业分组仍可用自己的共享角色。
-        "QGroupBox{"
-        "  border:0;"
-        "  border-radius:8px;"
-        "  background:%1;"
-        "  margin:0;padding:32px 10px 10px 10px;"
-        "}"
-        "QGroupBox::title{"
-        "  subcontrol-origin:padding;"
-        "  subcontrol-position:top left;"
-        "  left:16px;top:10px;"
-        "  padding:0;"
-        "  background:transparent;"
-        "  color:%2;"
-        "}"
         "QTabWidget::pane{"
         "  border:none !important;"
         "  border-radius:8px;"
@@ -14189,7 +14175,8 @@ QString MainWindow::buildAppearanceOverlayStyleSheet(
         "  top:0px;"
         "}")
         .arg(panelBackgroundColor)
-        .arg(primaryTextColor);
+        + ks::ui::GroupBoxStyle(QStringLiteral("QGroupBox"), panelBackgroundColor,
+            primaryTextColor, KswordTheme::TextDisabledColorHex(), QFontMetrics(QApplication::font()).height());
 
     // sharedOverlayStyle 作用：
     // - 统一 hover/pressed 与 Tab 高亮；

@@ -157,6 +157,7 @@
     <QtMoc Include="TaskbarSettingsDialog.h" />
     <ClInclude Include="TaskbarEarthquakeAudioPlayer.h" />
     <ClInclude Include="TaskbarRestartCoordinator.h" />
+    <ClInclude Include="..\Ksword5.1\Ksword5.1\UI\GroupBoxStyle.h" />
     <ClInclude Include="Function.h" />
     <ClInclude Include="PageOverviewWindow.h" />
     <ClInclude Include="PageOverviewBackdrop.h" />

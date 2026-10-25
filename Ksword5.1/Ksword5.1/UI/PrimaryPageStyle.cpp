@@ -3,6 +3,7 @@
 #include "./ThemeBinding.h"
 #include "./ToolbarMetrics.h"
 #include "./MainSurfaceStyle.h"
+#include "./GroupBoxStyle.h"
 #include "../theme.h"
 
 #include <QComboBox>
@@ -11,6 +12,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QPointer>
+#include <QVariant>
 #include <QBoxLayout>
 #include <QFont>
 #include <utility>
@@ -157,11 +159,20 @@ namespace ks::ui
 
     void StylePrimaryGroup(QGroupBox* group)
     {
-        if (group == nullptr || group->property("ksword_primary_group").toBool())
+        if (group == nullptr)
+        {
+            return;
+        }
+        // 先普通卡片、后参数分区的构造顺序会改变角色；只在已登记同一角色时跳过。
+        const bool embedded = group->property("ksword_parameter_section").toBool();
+        const QVariant registeredRole = group->property("ksword_primary_group_embedded_role");
+        if (group->property("ksword_primary_group").toBool() && registeredRole.isValid()
+            && registeredRole.toBool() == embedded && HasWidgetThemeBinding(group))
         {
             return;
         }
         group->setProperty("ksword_primary_group", true);
+        group->setProperty("ksword_primary_group_embedded_role", embedded);
         const QPointer<QGroupBox> target(group);
         BindWidgetTheme(group, [target]()
         {
@@ -175,40 +186,17 @@ namespace ks::ui
                 KswordTheme::TextSecondaryColor(), surface, 4.5);
             const QColor disabled = KswordTheme::EnsureTextContrast(
                 KswordTheme::TextDisabledColor(), surface, 3.0);
-            // 参数工作区用标题与细分隔线表达分区，不在两栏面板内重复堆大边框。
-            if (target->property("ksword_parameter_section").toBool())
-            {
-                const bool hasTitle = !target->title().isEmpty();
-                // Callers may register the section before constructing its layout.
-                // The existing first-frame theme pass runs after construction.
-                if (auto* layout = target->layout())
-                {
-                    const QMargins margins(0, hasTitle ? 22 : 4, 0, 4);
-                    if (layout->contentsMargins() != margins) layout->setContentsMargins(margins);
-                    if (layout->spacing() != 8) layout->setSpacing(8);
-                }
-                const QColor separator = KswordTheme::BlendColors(surface, KswordTheme::BorderColor(), 70);
-                ReplacePrimaryStyle(target, QStringLiteral(
-                    "QGroupBox[ksword_parameter_section=\"true\"]{background:transparent;"
-                    "border:0;border-top:%4px solid %1;border-radius:0;margin:%5px 0 0 0;padding:0;}"
-                    "QGroupBox[ksword_parameter_section=\"true\"]::title{"
-                    "subcontrol-origin:margin;subcontrol-position:top left;left:0;"
-                    "padding:0 0 5px 0;background:transparent;color:%2;font-weight:600;}"
-                    "QGroupBox[ksword_parameter_section=\"true\"]::title:disabled{color:%3;}")
-                    .arg(separator.name(), title.name(), disabled.name())
-                    .arg(hasTitle ? 1 : 0).arg(hasTitle ? 18 : 0));
-                return;
-            }
-            // 普通分组使用新版卡片：标题在卡片内部，正文留白自然，不再显示框线上的图例。
-            ReplacePrimaryStyle(target, QStringLiteral(
-                "QGroupBox[ksword_primary_group=\"true\"]{background:%1;"
-                "border:0;border-radius:8px;margin:0;padding:%4px 10px 10px 10px;}"
-                "QGroupBox[ksword_primary_group=\"true\"]::title{"
-                "subcontrol-origin:padding;subcontrol-position:top left;left:16px;top:10px;"
-                "padding:0;background:transparent;color:%2;font-weight:600;}"
-                "QGroupBox[ksword_primary_group=\"true\"]::title:disabled{color:%3;}")
-                .arg(UsesTransparentMainSurface(target) ? QStringLiteral("transparent") : surface.name(), title.name(), disabled.name())
-                .arg(target->title().isEmpty() ? 10 : 32));
+            // 标题与正文内距由唯一共享配方管理；参数分区借外部卡片的16px，不叠第二层。
+            const bool embedded = target->property("ksword_parameter_section").toBool();
+            const QString selector = embedded
+                ? QStringLiteral("QGroupBox[ksword_parameter_section=\"true\"]")
+                : QStringLiteral("QGroupBox[ksword_primary_group=\"true\"]");
+            const QString background = UsesTransparentMainSurface(target)
+                ? QStringLiteral("transparent") : surface.name();
+            ConfigureGroupBoxLayout(target);
+            ReplacePrimaryStyle(target, GroupBoxStyle(selector, background,
+                title.name(), disabled.name(), target->fontMetrics().height(),
+                embedded, !target->title().isEmpty()));
         });
     }
 
