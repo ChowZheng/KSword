@@ -593,6 +593,9 @@ private:
                 Gdiplus::RectF(kContentX, 70.0f, 280.0f, 20.0f), &paragraphFormat, &metadata);
             graphics.DrawString(authors.c_str(), -1, &bodyFont,
                 Gdiplus::RectF(kContentX, 92.0f, 280.0f, 20.0f), &paragraphFormat, &metadata);
+            // 仅版权与许可正文略缩小；品牌、元信息及加载进度沿用原字号。
+            Gdiplus::Font legalFont(L"Microsoft YaHei UI", 13.0f,
+                Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
             const std::wstring* paragraphs[] = {&copyright, &license, &thirdParty};
             float paragraphHeights[3] = {};
             float legalHeight = 0.0f;
@@ -602,7 +605,7 @@ private:
                 const std::wstring* paragraph = paragraphs[index];
                 if (paragraph->empty()) continue;
                 Gdiplus::RectF bounds;
-                graphics.MeasureString(paragraph->c_str(), -1, &bodyFont,
+                graphics.MeasureString(paragraph->c_str(), -1, &legalFont,
                     Gdiplus::RectF(0.0f, 0.0f, 280.0f, 220.0f),
                     &paragraphFormat, &bounds);
                 paragraphHeights[index] = bounds.Height + 2.0f;
@@ -617,7 +620,7 @@ private:
             {
                 const std::wstring* paragraph = paragraphs[index];
                 if (paragraph->empty()) continue;
-                graphics.DrawString(paragraph->c_str(), -1, &bodyFont,
+                graphics.DrawString(paragraph->c_str(), -1, &legalFont,
                     Gdiplus::RectF(kContentX, paragraphY, 280.0f, paragraphHeights[index]),
                     &paragraphFormat, &body);
                 paragraphY += paragraphHeights[index] + 6.0f;
