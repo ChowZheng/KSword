@@ -520,6 +520,7 @@
     <ClInclude Include="include\ark\ark_network.h" />
     <ClInclude Include="include\ark\ark_keyboard.h" />
     <ClInclude Include="src\features\keyboard\keyboard_internal.h" />
+    <ClInclude Include="src\features\keyboard\keyboard_profiles.generated.h" />
     <ClInclude Include="include\ark\ark_storage.h" />
     <ClInclude Include="include\ark\ark_mutation.h" />
     <ClInclude Include="..\shared\driver\KswordArkKernelObjectIoctl.h" />

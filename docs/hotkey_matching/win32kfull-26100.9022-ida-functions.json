@@ -1,0 +1,782 @@
+[
+  {
+    "name": "NtUserUnregisterHotKey",
+    "rva": "0x1c7ff0",
+    "instructions": [
+      {
+        "rva": "0x1c7ff0",
+        "asm": "mov     [rsp+arg_0], rbx"
+      },
+      {
+        "rva": "0x1c7ff5",
+        "asm": "mov     [rsp+arg_8], rbp"
+      },
+      {
+        "rva": "0x1c7ffa",
+        "asm": "mov     [rsp+arg_10], rsi"
+      },
+      {
+        "rva": "0x1c7fff",
+        "asm": "push    rdi"
+      },
+      {
+        "rva": "0x1c8000",
+        "asm": "sub     rsp, 20h"
+      },
+      {
+        "rva": "0x1c8004",
+        "asm": "mov     ebp, edx"
+      },
+      {
+        "rva": "0x1c8006",
+        "asm": "mov     rsi, rcx"
+      },
+      {
+        "rva": "0x1c8009",
+        "asm": "xor     edx, edx"
+      },
+      {
+        "rva": "0x1c800b",
+        "asm": "xor     ecx, ecx"
+      },
+      {
+        "rva": "0x1c800d",
+        "asm": "call    cs:__imp_EnterCrit"
+      },
+      {
+        "rva": "0x1c8014",
+        "asm": "nop     dword ptr [rax+rax+00h]"
+      },
+      {
+        "rva": "0x1c8019",
+        "asm": "call    ?EnforceConsistency@AtomicExecutionCheck@@AEAAXXZ; AtomicExecutionCheck::EnforceConsistency(void)"
+      },
+      {
+        "rva": "0x1c801e",
+        "asm": "call    cs:__imp_PsGetCurrentThreadWin32Thread"
+      },
+      {
+        "rva": "0x1c8025",
+        "asm": "nop     dword ptr [rax+rax+00h]"
+      },
+      {
+        "rva": "0x1c802a",
+        "asm": "xor     ebx, ebx"
+      },
+      {
+        "rva": "0x1c802c",
+        "asm": "mov     rdi, rax"
+      },
+      {
+        "rva": "0x1c802f",
+        "asm": "inc     dword ptr [rax+1Ch]"
+      },
+      {
+        "rva": "0x1c8032",
+        "asm": "test    rsi, rsi"
+      },
+      {
+        "rva": "0x1c8035",
+        "asm": "jz      short loc_1401C8080"
+      },
+      {
+        "rva": "0x1c8037",
+        "asm": "mov     rcx, rsi"
+      },
+      {
+        "rva": "0x1c803a",
+        "asm": "call    cs:__imp_ValidateHwnd"
+      },
+      {
+        "rva": "0x1c8041",
+        "asm": "nop     dword ptr [rax+rax+00h]"
+      },
+      {
+        "rva": "0x1c8046",
+        "asm": "test    rax, rax"
+      },
+      {
+        "rva": "0x1c8049",
+        "asm": "jz      short loc_1401C8058"
+      },
+      {
+        "rva": "0x1c804b",
+        "asm": "mov     edx, ebp; int"
+      },
+      {
+        "rva": "0x1c804d",
+        "asm": "mov     rcx, rax; struct tagWND *"
+      },
+      {
+        "rva": "0x1c8050",
+        "asm": "call    ?_UnregisterHotKey@@YA_NPEAUtagWND@@H@Z; _UnregisterHotKey(tagWND *,int)"
+      },
+      {
+        "rva": "0x1c8055",
+        "asm": "movzx   ebx, al"
+      },
+      {
+        "rva": "0x1c8058",
+        "asm": "dec     dword ptr [rdi+1Ch]"
+      },
+      {
+        "rva": "0x1c805b",
+        "asm": "call    cs:__imp_UserSessionSwitchLeaveCrit"
+      },
+      {
+        "rva": "0x1c8062",
+        "asm": "nop     dword ptr [rax+rax+00h]"
+      },
+      {
+        "rva": "0x1c8067",
+        "asm": "mov     rbp, [rsp+28h+arg_8]"
+      },
+      {
+        "rva": "0x1c806c",
+        "asm": "mov     rax, rbx"
+      },
+      {
+        "rva": "0x1c806f",
+        "asm": "mov     rbx, [rsp+28h+arg_0]"
+      },
+      {
+        "rva": "0x1c8074",
+        "asm": "mov     rsi, [rsp+28h+arg_10]"
+      },
+      {
+        "rva": "0x1c8079",
+        "asm": "add     rsp, 20h"
+      },
+      {
+        "rva": "0x1c807d",
+        "asm": "pop     rdi"
+      },
+      {
+        "rva": "0x1c807e",
+        "asm": "retn"
+      },
+      {
+        "rva": "0x1c8080",
+        "asm": "mov     rax, rbx"
+      },
+      {
+        "rva": "0x1c8083",
+        "asm": "jmp     short loc_1401C804B"
+      }
+    ]
+  },
+  {
+    "name": "?_UnregisterHotKey@@YA_NPEAUtagWND@@H@Z",
+    "rva": "0x1c808c",
+    "instructions": [
+      {
+        "rva": "0x1c808c",
+        "asm": "mov     [rsp+arg_0], rbx"
+      },
+      {
+        "rva": "0x1c8091",
+        "asm": "push    rdi"
+      },
+      {
+        "rva": "0x1c8092",
+        "asm": "sub     rsp, 20h"
+      },
+      {
+        "rva": "0x1c8096",
+        "asm": "mov     ebx, edx"
+      },
+      {
+        "rva": "0x1c8098",
+        "asm": "mov     rdi, rcx"
+      },
+      {
+        "rva": "0x1c809b",
+        "asm": "call    ?PtiCurrent@@YAPEAUtagTHREADINFO@@XZ; PtiCurrent(void)"
+      },
+      {
+        "rva": "0x1c80a0",
+        "asm": "mov     r9d, 3"
+      },
+      {
+        "rva": "0x1c80a6",
+        "asm": "mov     r8d, ebx"
+      },
+      {
+        "rva": "0x1c80a9",
+        "asm": "mov     rdx, rdi"
+      },
+      {
+        "rva": "0x1c80ac",
+        "asm": "mov     rcx, rax"
+      },
+      {
+        "rva": "0x1c80af",
+        "asm": "call    ?HKRemoveMatchingHotkeys@@YA_NPEAUtagTHREADINFO@@PEAUtagWND@@HW4HotkeyQueryType@@@Z; HKRemoveMatchingHotkeys(tagTHREADINFO *,tagWND *,int,HotkeyQueryType)"
+      },
+      {
+        "rva": "0x1c80b4",
+        "asm": "test    al, al"
+      },
+      {
+        "rva": "0x1c80b6",
+        "asm": "jnz     short loc_1401C80D0"
+      },
+      {
+        "rva": "0x1c80b8",
+        "asm": "mov     ecx, 58Bh"
+      },
+      {
+        "rva": "0x1c80bd",
+        "asm": "call    UserSetLastError"
+      },
+      {
+        "rva": "0x1c80c2",
+        "asm": "xor     al, al"
+      },
+      {
+        "rva": "0x1c80c4",
+        "asm": "mov     rbx, [rsp+28h+arg_0]"
+      },
+      {
+        "rva": "0x1c80c9",
+        "asm": "add     rsp, 20h"
+      },
+      {
+        "rva": "0x1c80cd",
+        "asm": "pop     rdi"
+      },
+      {
+        "rva": "0x1c80ce",
+        "asm": "retn"
+      },
+      {
+        "rva": "0x1c80d0",
+        "asm": "call    cs:__imp_W32GetUserSessionState"
+      },
+      {
+        "rva": "0x1c80d7",
+        "asm": "nop     dword ptr [rax+rax+00h]"
+      },
+      {
+        "rva": "0x1c80dc",
+        "asm": "cmp     qword ptr [rax+36A8h], 0"
+      },
+      {
+        "rva": "0x1c80e4",
+        "asm": "jnz     short loc_1401C80EA"
+      },
+      {
+        "rva": "0x1c80e6",
+        "asm": "mov     al, 1"
+      },
+      {
+        "rva": "0x1c80e8",
+        "asm": "jmp     short loc_1401C80C4"
+      },
+      {
+        "rva": "0x1c80ea",
+        "asm": "call    cs:__imp_W32GetUserSessionState"
+      },
+      {
+        "rva": "0x1c80f1",
+        "asm": "nop     dword ptr [rax+rax+00h]"
+      },
+      {
+        "rva": "0x1c80f6",
+        "asm": "and     qword ptr [rax+36A8h], 0"
+      },
+      {
+        "rva": "0x1c80fe",
+        "asm": "jmp     short loc_1401C80E6"
+      }
+    ]
+  },
+  {
+    "name": "?HKRemoveMatchingHotkeys@@YA_NPEAUtagTHREADINFO@@PEAUtagWND@@HW4HotkeyQueryType@@@Z",
+    "rva": "0x1c8108",
+    "instructions": [
+      {
+        "rva": "0x1c8108",
+        "asm": "mov     [rsp+arg_0], rbx"
+      },
+      {
+        "rva": "0x1c810d",
+        "asm": "mov     [rsp+arg_8], rbp"
+      },
+      {
+        "rva": "0x1c8112",
+        "asm": "mov     [rsp+arg_10], rsi"
+      },
+      {
+        "rva": "0x1c8117",
+        "asm": "push    rdi"
+      },
+      {
+        "rva": "0x1c8118",
+        "asm": "push    r12"
+      },
+      {
+        "rva": "0x1c811a",
+        "asm": "push    r13"
+      },
+      {
+        "rva": "0x1c811c",
+        "asm": "push    r14"
+      },
+      {
+        "rva": "0x1c811e",
+        "asm": "push    r15"
+      },
+      {
+        "rva": "0x1c8120",
+        "asm": "sub     rsp, 30h"
+      },
+      {
+        "rva": "0x1c8124",
+        "asm": "xor     bpl, bpl"
+      },
+      {
+        "rva": "0x1c8127",
+        "asm": "mov     r14d, r9d"
+      },
+      {
+        "rva": "0x1c812a",
+        "asm": "mov     r15d, r8d"
+      },
+      {
+        "rva": "0x1c812d",
+        "asm": "mov     rdi, rdx"
+      },
+      {
+        "rva": "0x1c8130",
+        "asm": "mov     r12, rcx"
+      },
+      {
+        "rva": "0x1c8133",
+        "asm": "call    cs:__imp_W32GetUserSessionState"
+      },
+      {
+        "rva": "0x1c813a",
+        "asm": "nop     dword ptr [rax+rax+00h]"
+      },
+      {
+        "rva": "0x1c813f",
+        "asm": "mov     r13d, 80h"
+      },
+      {
+        "rva": "0x1c8145",
+        "asm": "lea     rsi, [rax+3290h]"
+      },
+      {
+        "rva": "0x1c814c",
+        "asm": "mov     rcx, [rsi]"
+      },
+      {
+        "rva": "0x1c814f",
+        "asm": "mov     rbx, rsi"
+      },
+      {
+        "rva": "0x1c8152",
+        "asm": "jmp     short loc_1401C81A7"
+      },
+      {
+        "rva": "0x1c8154",
+        "asm": "mov     eax, r14d"
+      },
+      {
+        "rva": "0x1c8157",
+        "asm": "test    r14d, r14d"
+      },
+      {
+        "rva": "0x1c815a",
+        "asm": "jz      loc_1401C81F4"
+      },
+      {
+        "rva": "0x1c8160",
+        "asm": "sub     eax, 1"
+      },
+      {
+        "rva": "0x1c8163",
+        "asm": "jz      short loc_1401C81E2"
+      },
+      {
+        "rva": "0x1c8165",
+        "asm": "sub     eax, 1"
+      },
+      {
+        "rva": "0x1c8168",
+        "asm": "jz      short loc_1401C81DC"
+      },
+      {
+        "rva": "0x1c816a",
+        "asm": "sub     eax, 1"
+      },
+      {
+        "rva": "0x1c816d",
+        "asm": "jz      short loc_1401C81D7"
+      },
+      {
+        "rva": "0x1c816f",
+        "asm": "cmp     eax, 1"
+      },
+      {
+        "rva": "0x1c8172",
+        "asm": "jz      loc_1401C81FD"
+      },
+      {
+        "rva": "0x1c8178",
+        "asm": "mov     rcx, [rbx]"
+      },
+      {
+        "rva": "0x1c817b",
+        "asm": "mov     r9d, r15d"
+      },
+      {
+        "rva": "0x1c817e",
+        "asm": "mov     r8, rdi"
+      },
+      {
+        "rva": "0x1c8181",
+        "asm": "mov     [rsp+58h+var_38], r14d"
+      },
+      {
+        "rva": "0x1c8186",
+        "asm": "mov     rdx, r12"
+      },
+      {
+        "rva": "0x1c8189",
+        "asm": "call    ?HKRemoveMatchingChildHotkeys@@YA_NPEAUtagHOTKEY@@PEAUtagTHREADINFO@@PEAUtagWND@@HW4HotkeyQueryType@@@Z; HKRemoveMatchingChildHotkeys(tagHOTKEY *,tagTHREADINFO *,tagWND *,int,HotkeyQueryType)"
+      },
+      {
+        "rva": "0x1c818e",
+        "asm": "mov     rcx, rbx; struct tagHOTKEY **"
+      },
+      {
+        "rva": "0x1c8191",
+        "asm": "or      bpl, al"
+      },
+      {
+        "rva": "0x1c8194",
+        "asm": "call    ?HKRemoveHotkeyIfEmptyPlaceholder@@YA_NPEAPEAUtagHOTKEY@@@Z; HKRemoveHotkeyIfEmptyPlaceholder(tagHOTKEY * *)"
+      },
+      {
+        "rva": "0x1c8199",
+        "asm": "test    al, al"
+      },
+      {
+        "rva": "0x1c819b",
+        "asm": "jnz     short loc_1401C81A4"
+      },
+      {
+        "rva": "0x1c819d",
+        "asm": "mov     rbx, [rbx]"
+      },
+      {
+        "rva": "0x1c81a0",
+        "asm": "add     rbx, 30h ; '0'"
+      },
+      {
+        "rva": "0x1c81a4",
+        "asm": "mov     rcx, [rbx]"
+      },
+      {
+        "rva": "0x1c81a7",
+        "asm": "test    rcx, rcx"
+      },
+      {
+        "rva": "0x1c81aa",
+        "asm": "jnz     short loc_1401C8154"
+      },
+      {
+        "rva": "0x1c81ac",
+        "asm": "add     rsi, 8"
+      },
+      {
+        "rva": "0x1c81b0",
+        "asm": "sub     r13, 1"
+      },
+      {
+        "rva": "0x1c81b4",
+        "asm": "jnz     short loc_1401C814C"
+      },
+      {
+        "rva": "0x1c81b6",
+        "asm": "mov     rbx, [rsp+58h+arg_0]"
+      },
+      {
+        "rva": "0x1c81bb",
+        "asm": "mov     al, bpl"
+      },
+      {
+        "rva": "0x1c81be",
+        "asm": "mov     rbp, [rsp+58h+arg_8]"
+      },
+      {
+        "rva": "0x1c81c3",
+        "asm": "mov     rsi, [rsp+58h+arg_10]"
+      },
+      {
+        "rva": "0x1c81c8",
+        "asm": "add     rsp, 30h"
+      },
+      {
+        "rva": "0x1c81cc",
+        "asm": "pop     r15"
+      },
+      {
+        "rva": "0x1c81ce",
+        "asm": "pop     r14"
+      },
+      {
+        "rva": "0x1c81d0",
+        "asm": "pop     r13"
+      },
+      {
+        "rva": "0x1c81d2",
+        "asm": "pop     r12"
+      },
+      {
+        "rva": "0x1c81d4",
+        "asm": "pop     rdi"
+      },
+      {
+        "rva": "0x1c81d5",
+        "asm": "retn"
+      },
+      {
+        "rva": "0x1c81d7",
+        "asm": "cmp     [rcx], r12"
+      },
+      {
+        "rva": "0x1c81da",
+        "asm": "jnz     short loc_1401C8178"
+      },
+      {
+        "rva": "0x1c81dc",
+        "asm": "cmp     [rcx+28h], r15d"
+      },
+      {
+        "rva": "0x1c81e0",
+        "asm": "jnz     short loc_1401C8178"
+      },
+      {
+        "rva": "0x1c81e2",
+        "asm": "test    rdi, rdi"
+      },
+      {
+        "rva": "0x1c81e5",
+        "asm": "jnz     short loc_1401C81EB"
+      },
+      {
+        "rva": "0x1c81e7",
+        "asm": "xor     eax, eax"
+      },
+      {
+        "rva": "0x1c81e9",
+        "asm": "jmp     short loc_1401C81EE"
+      },
+      {
+        "rva": "0x1c81eb",
+        "asm": "mov     rax, [rdi]"
+      },
+      {
+        "rva": "0x1c81ee",
+        "asm": "cmp     [rcx+10h], rax"
+      },
+      {
+        "rva": "0x1c81f2",
+        "asm": "jmp     short loc_1401C81F7"
+      },
+      {
+        "rva": "0x1c81f4",
+        "asm": "cmp     [rcx], r12"
+      },
+      {
+        "rva": "0x1c81f7",
+        "asm": "jnz     loc_1401C8178"
+      },
+      {
+        "rva": "0x1c81fd",
+        "asm": "mov     rcx, rbx; struct tagHOTKEY **"
+      },
+      {
+        "rva": "0x1c8200",
+        "asm": "call    ?HKRemoveHotkeyOrMakePlaceholder@@YA_NPEAPEAUtagHOTKEY@@@Z; HKRemoveHotkeyOrMakePlaceholder(tagHOTKEY * *)"
+      },
+      {
+        "rva": "0x1c8205",
+        "asm": "test    al, al"
+      },
+      {
+        "rva": "0x1c8207",
+        "asm": "jnz     short loc_1401C824A"
+      },
+      {
+        "rva": "0x1c8209",
+        "asm": "call    Feature_1493938489__private_IsEnabledDeviceUsageNoInline"
+      },
+      {
+        "rva": "0x1c820e",
+        "asm": "test    eax, eax"
+      },
+      {
+        "rva": "0x1c8210",
+        "asm": "jz      short loc_1401C823D"
+      },
+      {
+        "rva": "0x1c8212",
+        "asm": "mov     rax, [rbx]"
+      },
+      {
+        "rva": "0x1c8215",
+        "asm": "cmp     r14d, 3"
+      },
+      {
+        "rva": "0x1c8219",
+        "asm": "jz      short loc_1401C8246"
+      },
+      {
+        "rva": "0x1c821b",
+        "asm": "mov     r9d, r15d"
+      },
+      {
+        "rva": "0x1c821e",
+        "asm": "mov     [rsp+58h+var_38], r14d"
+      },
+      {
+        "rva": "0x1c8223",
+        "asm": "mov     r8, rdi"
+      },
+      {
+        "rva": "0x1c8226",
+        "asm": "mov     rdx, r12"
+      },
+      {
+        "rva": "0x1c8229",
+        "asm": "mov     rcx, rax"
+      },
+      {
+        "rva": "0x1c822c",
+        "asm": "call    ?HKRemoveMatchingChildHotkeys@@YA_NPEAUtagHOTKEY@@PEAUtagTHREADINFO@@PEAUtagWND@@HW4HotkeyQueryType@@@Z; HKRemoveMatchingChildHotkeys(tagHOTKEY *,tagTHREADINFO *,tagWND *,int,HotkeyQueryType)"
+      },
+      {
+        "rva": "0x1c8231",
+        "asm": "mov     rcx, rbx; struct tagHOTKEY **"
+      },
+      {
+        "rva": "0x1c8234",
+        "asm": "call    ?HKRemoveHotkeyIfEmptyPlaceholder@@YA_NPEAPEAUtagHOTKEY@@@Z; HKRemoveHotkeyIfEmptyPlaceholder(tagHOTKEY * *)"
+      },
+      {
+        "rva": "0x1c8239",
+        "asm": "test    al, al"
+      },
+      {
+        "rva": "0x1c823b",
+        "asm": "jnz     short loc_1401C824A"
+      },
+      {
+        "rva": "0x1c823d",
+        "asm": "mov     rbx, [rbx]"
+      },
+      {
+        "rva": "0x1c8240",
+        "asm": "add     rbx, 30h ; '0'"
+      },
+      {
+        "rva": "0x1c8244",
+        "asm": "jmp     short loc_1401C824A"
+      },
+      {
+        "rva": "0x1c8246",
+        "asm": "lea     rbx, [rax+30h]"
+      },
+      {
+        "rva": "0x1c824a",
+        "asm": "mov     bpl, 1"
+      },
+      {
+        "rva": "0x1c824d",
+        "asm": "jmp     loc_1401C81A4"
+      }
+    ]
+  },
+  {
+    "name": "?HKInsertHashElement@@YAXPEAUtagHOTKEY@@@Z",
+    "rva": "0x20c67c",
+    "instructions": [
+      {
+        "rva": "0x20c67c",
+        "asm": "mov     [rsp+arg_0], rbx"
+      },
+      {
+        "rva": "0x20c681",
+        "asm": "push    rdi"
+      },
+      {
+        "rva": "0x20c682",
+        "asm": "sub     rsp, 20h"
+      },
+      {
+        "rva": "0x20c686",
+        "asm": "mov     al, [rcx+24h]"
+      },
+      {
+        "rva": "0x20c689",
+        "asm": "mov     rdi, rcx"
+      },
+      {
+        "rva": "0x20c68c",
+        "asm": "and     al, 7Fh"
+      },
+      {
+        "rva": "0x20c68e",
+        "asm": "movzx   ebx, al"
+      },
+      {
+        "rva": "0x20c691",
+        "asm": "call    cs:__imp_W32GetUserSessionState"
+      },
+      {
+        "rva": "0x20c698",
+        "asm": "nop     dword ptr [rax+rax+00h]"
+      },
+      {
+        "rva": "0x20c69d",
+        "asm": "mov     rdx, [rax+rbx*8+3290h]"
+      },
+      {
+        "rva": "0x20c6a5",
+        "asm": "mov     [rdi+30h], rdx"
+      },
+      {
+        "rva": "0x20c6a9",
+        "asm": "call    cs:__imp_W32GetUserSessionState"
+      },
+      {
+        "rva": "0x20c6b0",
+        "asm": "nop     dword ptr [rax+rax+00h]"
+      },
+      {
+        "rva": "0x20c6b5",
+        "asm": "mov     [rax+rbx*8+3290h], rdi"
+      },
+      {
+        "rva": "0x20c6bd",
+        "asm": "mov     rbx, [rsp+28h+arg_0]"
+      },
+      {
+        "rva": "0x20c6c2",
+        "asm": "add     rsp, 20h"
+      },
+      {
+        "rva": "0x20c6c6",
+        "asm": "pop     rdi"
+      },
+      {
+        "rva": "0x20c6c7",
+        "asm": "retn"
+      }
+    ]
+  }
+]

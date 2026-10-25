@@ -60,7 +60,7 @@ Environment:
 #define KSWORD_ARK_HOOK_MODULE_ID_OFFSET           0x44UL
 #define KSWORD_ARK_HOOK_TARGET_THREAD_INFO_OFFSET  0x48UL
 
-typedef PVOID(NTAPI* KSWORD_USER_GET_SILO_GLOBALS_FN)(VOID);
+typedef PVOID(NTAPI* KSWORD_W32_GET_USER_SESSION_STATE_FN)(VOID); // Full热键表使用WIN32K用户会话状态，不使用Base的SiloGlobals间接层。
 
 typedef PEPROCESS(NTAPI* KSWORD_PS_GET_NEXT_PROCESS_FN)(
     _In_opt_ PEPROCESS Process
@@ -255,18 +255,68 @@ KswordARKKeyboardResolvePsGetThreadWin32Thread(
     return (KSWORD_PS_GET_THREAD_WIN32_THREAD_FN)MmGetSystemRoutineAddress(&routineName);
 }
 
-static KSWORD_USER_GET_SILO_GLOBALS_FN
-KswordARKKeyboardResolveUserGetSiloGlobals(
-    _In_ const KSW_HOOK_SYSTEM_MODULE_ENTRY* Win32kbaseEntry
+static KSWORD_W32_GET_USER_SESSION_STATE_FN
+KswordARKKeyboardResolveUserSessionState(
+    _In_ const KSW_HOOK_SYSTEM_MODULE_ENTRY* Win32kEntry
     )
 {
-    if (Win32kbaseEntry == NULL || Win32kbaseEntry->ImageBase == NULL) {
-        return NULL;
+    IMAGE_DOS_HEADER dosHeader; // 节表位置来自实际已加载映像的DOS头。
+    IMAGE_NT_HEADERS ntHeaders; // PE节与导出目录用于拒绝转发字符串和非代码地址。
+    IMAGE_DATA_DIRECTORY exportDirectory; // 导出目录范围只用于排除forwarder。
+    ULONG_PTR routineAddress = 0U; // 仅在范围与可执行节校验后转换为可调用函数。
+    ULONG routineRva = 0UL; // 导出相对实际WIN32K映像的偏移。
+    ULONG sectionTableRva = 0UL; // 节表首项的有界RVA。
+    ULONG sectionIndex = 0UL; // 只遍历PE头明确声明的有限节数。
+    if (Win32kEntry == NULL || Win32kEntry->ImageBase == NULL || // 空模块不能解析会话入口。
+        !KswordARKHookReadImageBytes(Win32kEntry, 0UL, &dosHeader, sizeof(dosHeader)) || // 所有映像读取沿用安全读取器。
+        dosHeader.e_lfanew < 0 || !KswordARKHookReadImageNtHeaders(Win32kEntry, &ntHeaders) || // 拒绝无效PE头。
+        ntHeaders.FileHeader.NumberOfSections == 0U || ntHeaders.FileHeader.NumberOfSections > 96U) { // 限制损坏节表的遍历预算。
+        return NULL; // 解析失败不得退回语义不同的UserGetSiloGlobals。
     }
+    routineAddress = (ULONG_PTR)RtlFindExportedRoutineByName(Win32kEntry->ImageBase, "W32GetUserSessionState"); // 精确选择Full实际导入的导出名称。
+    if (routineAddress < (ULONG_PTR)Win32kEntry->ImageBase || // 拒绝空地址及落在模块之前的地址。
+        routineAddress - (ULONG_PTR)Win32kEntry->ImageBase >= Win32kEntry->ImageSize) { // 转发到其它映像的地址也不接受。
+        return NULL; // 只调用当前已加载WIN32K映像内的代码。
+    }
+    routineRva = (ULONG)(routineAddress - (ULONG_PTR)Win32kEntry->ImageBase); // 上面的映像范围已保证RVA可由ULONG表示。
+    if (KswordARKHookGetDataDirectory(&ntHeaders, IMAGE_DIRECTORY_ENTRY_EXPORT, &exportDirectory) && // 有导出目录时显式拒绝forwarder字符串。
+        routineRva >= exportDirectory.VirtualAddress && routineRva - exportDirectory.VirtualAddress < exportDirectory.Size) { // 使用减法避免范围终点回绕。
+        return NULL; // 导出目录中的字节不是可调用会话函数。
+    }
+    if (!KswordARKHookAddRvaOffset((ULONG)dosHeader.e_lfanew, 1UL, // 使用共享有界RVA加法定位节表。
+            (ULONG)FIELD_OFFSET(IMAGE_NT_HEADERS, OptionalHeader) + ntHeaders.FileHeader.SizeOfOptionalHeader, &sectionTableRva)) {
+        return NULL; // 损坏头部不能构造节表地址。
+    }
+    for (sectionIndex = 0UL; sectionIndex < ntHeaders.FileHeader.NumberOfSections; ++sectionIndex) { // 逐节验证导出确实位于代码区。
+        IMAGE_SECTION_HEADER section; // 单个节头不增加大型内核栈帧。
+        ULONG sectionRva = 0UL; // 当前节头的有界映像偏移。
+        ULONG sectionBytes = 0UL; // 已映射节范围取虚拟与文件大小的较大值。
+        if (!KswordARKHookAddRvaOffset(sectionTableRva, sectionIndex, (ULONG)sizeof(section), &sectionRva) || // 拒绝节表索引溢出。
+            !KswordARKHookReadImageBytes(Win32kEntry, sectionRva, &section, sizeof(section))) { // 节头仍通过共享映像读取器读取。
+            return NULL; // 不能确认节属性时拒绝调用。
+        }
+        sectionBytes = section.Misc.VirtualSize > section.SizeOfRawData ? section.Misc.VirtualSize : section.SizeOfRawData; // 同时覆盖正常虚拟节与尾部对齐。
+        if ((section.Characteristics & IMAGE_SCN_MEM_EXECUTE) != 0UL && // 仅接受可执行节。
+            routineRva >= section.VirtualAddress && routineRva - section.VirtualAddress < sectionBytes) { // 导出必须完整落在该映射范围内。
+            return (KSWORD_W32_GET_USER_SESSION_STATE_FN)routineAddress; // 代码与模块范围都确认后才发布入口。
+        }
+    }
+    return NULL; // 未命中代码节时保持不可用。
+}
 
-    return (KSWORD_USER_GET_SILO_GLOBALS_FN)RtlFindExportedRoutineByName(
-        Win32kbaseEntry->ImageBase,
-        "UserGetSiloGlobals");
+// 保留只读枚举的首个失败原因，输出容量不足时不覆盖更具体的截断状态。
+static VOID
+KswordARKKeyboardMarkHotkeyPartial(
+    _Inout_ KSWORD_ARK_ENUM_KEYBOARD_HOTKEYS_RESPONSE* Response,
+    _In_ NTSTATUS FailureStatus
+    )
+{
+    if (Response->status != KSWORD_ARK_KEYBOARD_ENUM_STATUS_BUFFER_TRUNCATED) { // 截断状态已有独立客户端语义。
+        Response->status = KSWORD_ARK_KEYBOARD_ENUM_STATUS_PARTIAL; // 读失败或无法确认身份都不是成功空结果。
+    }
+    if (NT_SUCCESS(Response->lastStatus)) { // 保留最先观察到的实际失败。
+        Response->lastStatus = FailureStatus; // 供R3区分缺页、损坏链与身份缺失。
+    }
 }
 
 static BOOLEAN
@@ -425,7 +475,8 @@ KswordARKKeyboardResolveHotkeyRuntime(
     ULONG moduleInfoBytes = 0UL;
     KSW_HOOK_SYSTEM_MODULE_ENTRY win32kfullEntry;
     KSW_HOOK_SYSTEM_MODULE_ENTRY win32kbaseEntry;
-    KSWORD_USER_GET_SILO_GLOBALS_FN userGetSiloGlobals = NULL;
+    KSW_HOOK_SYSTEM_MODULE_ENTRY win32kEntry; // Full热键表的会话入口来自独立WIN32K模块。
+    KSWORD_W32_GET_USER_SESSION_STATE_FN userSessionState = NULL; // 不再使用Base的SiloGlobals层。
     NTSTATUS status = STATUS_SUCCESS;
 
     if (RuntimeOut == NULL) {
@@ -439,7 +490,8 @@ KswordARKKeyboardResolveHotkeyRuntime(
     }
 
     if (!KswordARKKeyboardFindModuleByName(moduleInfo, "win32kfull.sys", &win32kfullEntry) ||
-        !KswordARKKeyboardFindModuleByName(moduleInfo, "win32kbase.sys", &win32kbaseEntry)) {
+        !KswordARKKeyboardFindModuleByName(moduleInfo, "win32kbase.sys", &win32kbaseEntry) ||
+        !KswordARKKeyboardFindModuleByName(moduleInfo, "win32k.sys", &win32kEntry)) { // 会话导出模块缺失时保持不可用。
         status = STATUS_NOT_FOUND;
         goto Cleanup;
     }
@@ -463,10 +515,10 @@ KswordARKKeyboardResolveHotkeyRuntime(
         goto Cleanup;
     }
 
-    userGetSiloGlobals = KswordARKKeyboardResolveUserGetSiloGlobals(&win32kbaseEntry);
-    if (userGetSiloGlobals != NULL) {
+    userSessionState = KswordARKKeyboardResolveUserSessionState(&win32kEntry); // 与Full实际调用的用户会话状态保持一致。
+    if (userSessionState != NULL) { // 仅调用已经过映像代码区校验的入口。
         __try {
-            RuntimeOut->SessionGlobals = (ULONG_PTR)userGetSiloGlobals();
+            RuntimeOut->SessionGlobals = (ULONG_PTR)userSessionState(); // 取得热键表真正使用的会话基址。
         }
         __except (EXCEPTION_EXECUTE_HANDLER) {
             status = GetExceptionCode();
@@ -633,18 +685,22 @@ KswordARKKeyboardAppendHotkeyEntry(
     if (!KswordARKKeyboardReadPointer(HotkeyObject + KSWORD_ARK_KEYBOARD_HOTKEY_THREADINFO_OFFSET, &threadInfo)) {
         tempEntry.status = KSWORD_ARK_KEYBOARD_ENUM_STATUS_PARTIAL;
     }
-    (VOID)KswordARKKeyboardReadPointer(HotkeyObject + KSWORD_ARK_KEYBOARD_HOTKEY_WINDOW_OFFSET, &windowObject);
+    if (!KswordARKKeyboardReadPointer(HotkeyObject + KSWORD_ARK_KEYBOARD_HOTKEY_WINDOW_OFFSET, &windowObject)) { // 窗口字段失败不能伪装为正常的无窗口热键。
+        tempEntry.status = KSWORD_ARK_KEYBOARD_ENUM_STATUS_PARTIAL; // 后续诊断筛选前统一发布到响应状态。
+    }
     if (!KswordARKKeyboardReadUshort(HotkeyObject + ModifiersOffset, &modifiers)) {
         tempEntry.status = KSWORD_ARK_KEYBOARD_ENUM_STATUS_READ_FAILED;
     }
     if (!KswordARKKeyboardReadUshort(HotkeyObject + KSWORD_ARK_KEYBOARD_HOTKEY_FLAGS2_OFFSET, &flags2)) {
         flags2 = 0U;
+        tempEntry.status = KSWORD_ARK_KEYBOARD_ENUM_STATUS_READ_FAILED; // 标志读取失败不能伪装为普通零标志项。
     }
     if (!KswordARKKeyboardReadUlong(HotkeyObject + VkOffset, &tempEntry.virtualKey)) {
         tempEntry.status = KSWORD_ARK_KEYBOARD_ENUM_STATUS_READ_FAILED;
     }
     if (!KswordARKKeyboardReadUlong(HotkeyObject + IdOffset, &tempEntry.hotkeyId)) {
         tempEntry.hotkeyId = 0UL;
+        tempEntry.status = KSWORD_ARK_KEYBOARD_ENUM_STATUS_PARTIAL; // 未读到ID时仍保留真实诊断状态。
     }
 
     tempEntry.nextHotkeyObject = (ULONG64)nextHotkey;
@@ -710,11 +766,24 @@ KswordARKKeyboardAppendHotkeyEntry(
         &tempEntry.processId,
         &tempEntry.threadId);
     tempEntry.threadObject = (ULONG64)threadObject;
+    if (tempEntry.status != KSWORD_ARK_KEYBOARD_ENUM_STATUS_OK || // 读取失败先发布到整体响应，不能被后续筛选抹掉。
+        (threadInfo != 0U && tempEntry.processId == 0UL)) { // 有安装线程但未确认PID属于身份缺失诊断。
+        tempEntry.lastStatus = tempEntry.status != KSWORD_ARK_KEYBOARD_ENUM_STATUS_OK ? STATUS_PARTIAL_COPY : STATUS_NOT_FOUND; // 区分字段读取与归属查询失败。
+        if (tempEntry.status == KSWORD_ARK_KEYBOARD_ENUM_STATUS_OK) tempEntry.status = KSWORD_ARK_KEYBOARD_ENUM_STATUS_PARTIAL; // 身份未知不得作为正常进程行。
+        KswordARKKeyboardMarkHotkeyPartial(Response, tempEntry.lastStatus); // 即使诊断行不展示也保留不完整结果语义。
+    }
     if ((RequestFlags & KSWORD_ARK_KEYBOARD_ENUM_FLAG_FILTER_PROCESS) != 0UL &&
         FilterProcessId != 0UL &&
-        tempEntry.processId != 0UL &&
         tempEntry.processId != FilterProcessId) {
         return;
+    }
+    if ((RequestFlags & KSWORD_ARK_KEYBOARD_ENUM_FLAG_INCLUDE_SYSTEM) == 0UL && threadInfo == 0U) { // 无安装线程的系统项只在显式包含系统时展示。
+        return; // 不把系统项混入普通进程列表。
+    }
+    if ((RequestFlags & KSWORD_ARK_KEYBOARD_ENUM_FLAG_INCLUDE_DIAGNOSTICS) == 0UL && // 普通查询不展示读取失败或占位诊断行。
+        (tempEntry.status != KSWORD_ARK_KEYBOARD_ENUM_STATUS_OK || // 失败状态已在整体响应中保留。
+            (tempEntry.entryFlags & KSWORD_ARK_KEYBOARD_HOTKEY_ENTRY_FLAG_PLACEHOLDER) != 0UL)) { // 占位项不是独立注册热键。
+        return; // 诊断筛选只控制投影，不改变失败回执。
     }
 
     if (Response->totalCount < MaxEntries) {
@@ -1045,8 +1114,8 @@ KswordARKDriverEnumerateKeyboardHotkeys(
     KSW_HOOK_SYSTEM_MODULE_INFORMATION* moduleInfo = NULL;
     ULONG moduleInfoBytes = 0UL;
     KSW_HOOK_SYSTEM_MODULE_ENTRY win32kfullEntry;
-    KSW_HOOK_SYSTEM_MODULE_ENTRY win32kbaseEntry;
-    KSWORD_USER_GET_SILO_GLOBALS_FN userGetSiloGlobals = NULL;
+    KSW_HOOK_SYSTEM_MODULE_ENTRY win32kEntry; // 热键会话状态从WIN32K模块解析。
+    KSWORD_W32_GET_USER_SESSION_STATE_FN userSessionState = NULL; // 与Full热键代码使用相同的状态层。
     ULONG requestFlags = KSWORD_ARK_KEYBOARD_ENUM_FLAG_INCLUDE_SYSTEM;
     ULONG maxEntries = 1024UL;
     ULONG entryCapacity = 0UL;
@@ -1087,6 +1156,11 @@ KswordARKDriverEnumerateKeyboardHotkeys(
     response->entrySize = sizeof(KSWORD_ARK_KEYBOARD_HOTKEY_ENTRY);
     response->status = KSWORD_ARK_KEYBOARD_ENUM_STATUS_UNKNOWN;
     response->flags = requestFlags;
+    if (KeGetCurrentIrql() != PASSIVE_LEVEL) { // 会话导出和进程附加必须在可等待上下文执行。
+        response->status = KSWORD_ARK_KEYBOARD_ENUM_STATUS_SESSION_UNAVAILABLE; // 不允许跳过附加后查询其它会话。
+        response->lastStatus = STATUS_INVALID_DEVICE_STATE; // 返回真实的上下文错误。
+        goto Cleanup; // 尚未取得引用时走统一安全清理。
+    }
     entryCapacity = (ULONG)((OutputBufferLength - KSWORD_ARK_KEYBOARD_HOTKEY_RESPONSE_HEADER_SIZE) / sizeof(KSWORD_ARK_KEYBOARD_HOTKEY_ENTRY));
     if (entryCapacity > maxEntries) {
         entryCapacity = maxEntries;
@@ -1102,13 +1176,14 @@ KswordARKDriverEnumerateKeyboardHotkeys(
     }
 
     if (!KswordARKKeyboardFindModuleByName(moduleInfo, "win32kfull.sys", &win32kfullEntry) ||
-        !KswordARKKeyboardFindModuleByName(moduleInfo, "win32kbase.sys", &win32kbaseEntry)) {
+        !KswordARKKeyboardFindModuleByName(moduleInfo, "win32k.sys", &win32kEntry)) { // 缺少正确状态模块时不替换为Base导出。
         response->status = KSWORD_ARK_KEYBOARD_ENUM_STATUS_WIN32K_NOT_FOUND;
+        response->lastStatus = STATUS_NOT_FOUND; // 模块快照成功不等于所需模块存在。
         goto Cleanup;
     }
 
     response->win32kBase = (ULONG64)(ULONG_PTR)win32kfullEntry.ImageBase;
-    userGetSiloGlobals = KswordARKKeyboardResolveUserGetSiloGlobals(&win32kbaseEntry);
+    userSessionState = KswordARKKeyboardResolveUserSessionState(&win32kEntry); // 只采用实际Full导入的用户会话入口。
     if (!KswordARKKeyboardResolveIsHotKeyBody(&win32kfullEntry, &isHotKeyAddress) ||
         !KswordARKKeyboardResolveHotkeyLayout(
             isHotKeyAddress,
@@ -1123,7 +1198,7 @@ KswordARKDriverEnumerateKeyboardHotkeys(
         goto Cleanup;
     }
 
-    if (tableBase == 0U && userGetSiloGlobals == NULL) {
+    if (tableBase == 0U && userSessionState == NULL) { // 没有直接表地址时必须能取得正确会话基址。
         response->status = KSWORD_ARK_KEYBOARD_ENUM_STATUS_SESSION_UNAVAILABLE;
         response->lastStatus = STATUS_PROCEDURE_NOT_FOUND;
         goto Cleanup;
@@ -1140,30 +1215,35 @@ KswordARKDriverEnumerateKeyboardHotkeys(
         response->lastStatus = status;
         if (!NT_SUCCESS(status)) {
             attachProcess = NULL;
+            response->status = KSWORD_ARK_KEYBOARD_ENUM_STATUS_READ_FAILED; // 指定PID失效时不能退回当前调用者会话。
+            goto Cleanup; // 保留PsLookupProcessByProcessId的真实失败码。
         }
         else {
             referencedProcess = TRUE;
         }
     }
 
-    if (attachProcess != NULL && KeGetCurrentIrql() == PASSIVE_LEVEL) {
+    if (attachProcess != NULL) { // 上方已经验证PASSIVE_LEVEL，指定PID必须实际完成附加。
         RtlZeroMemory(attachState, sizeof(attachState));
         KeStackAttachProcess((PVOID)attachProcess, attachState);
         attached = TRUE;
     }
 
-    if (userGetSiloGlobals != NULL) {
+    if (userSessionState != NULL) { // 使用与Full表访问相同层级的基址。
         __try {
-            sessionGlobals = (ULONG_PTR)userGetSiloGlobals();
+            sessionGlobals = (ULONG_PTR)userSessionState(); // 当前已处于请求选择的进程上下文。
         }
         __except (EXCEPTION_EXECUTE_HANDLER) {
             sessionGlobals = 0U;
             response->lastStatus = GetExceptionCode();
+            response->status = KSWORD_ARK_KEYBOARD_ENUM_STATUS_SESSION_UNAVAILABLE; // 入口执行失败时不能以直接表地址掩盖上下文错误。
+            goto Cleanup; // 保留真实异常状态并成对解除附加。
         }
     }
 
     if (tableBase == 0U && sessionGlobals == 0U) {
         response->status = KSWORD_ARK_KEYBOARD_ENUM_STATUS_SESSION_UNAVAILABLE;
+        if (NT_SUCCESS(response->lastStatus)) response->lastStatus = STATUS_INVALID_DEVICE_STATE; // 空会话状态不是正常空表。
         goto Cleanup;
     }
     response->sessionGlobals = (ULONG64)sessionGlobals;
@@ -1175,6 +1255,7 @@ KswordARKDriverEnumerateKeyboardHotkeys(
         ULONG depth = 0UL;
 
         if (!KswordARKKeyboardReadPointer(listHeadAddress, &hotkeyObject)) {
+            KswordARKKeyboardMarkHotkeyPartial(response, STATUS_PARTIAL_COPY); // 桶头读取失败不得变成成功零行。
             continue;
         }
 
@@ -1198,17 +1279,22 @@ KswordARKDriverEnumerateKeyboardHotkeys(
                 (Request != NULL) ? Request->processId : 0UL);
 
             if (!KswordARKKeyboardReadPointer(hotkeyObject + nextOffset, &nextHotkey)) {
+                KswordARKKeyboardMarkHotkeyPartial(response, STATUS_PARTIAL_COPY); // 链断读保留已取得行并标记不完整。
                 break;
             }
             if (nextHotkey == hotkeyObject) {
+                KswordARKKeyboardMarkHotkeyPartial(response, STATUS_DATA_ERROR); // 自环是损坏或竞争快照，不是链尾。
                 break;
             }
             hotkeyObject = nextHotkey;
             ++depth;
         }
+        if (hotkeyObject != 0U && depth >= KSWORD_ARK_KEYBOARD_CHAIN_WALK_LIMIT) { // 多节点环及超长链都受既有预算限制。
+            KswordARKKeyboardMarkHotkeyPartial(response, STATUS_BUFFER_OVERFLOW); // 达到预算明确报告部分结果。
+        }
     }
 
-    if (response->status != KSWORD_ARK_KEYBOARD_ENUM_STATUS_BUFFER_TRUNCATED) {
+    if (response->status == KSWORD_ARK_KEYBOARD_ENUM_STATUS_UNKNOWN) { // 不覆盖读取失败、身份缺失或截断状态。
         response->status = KSWORD_ARK_KEYBOARD_ENUM_STATUS_OK;
     }
 

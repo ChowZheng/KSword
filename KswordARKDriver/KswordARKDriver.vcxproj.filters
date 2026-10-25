@@ -614,6 +614,9 @@
     <ClInclude Include="src\features\keyboard\keyboard_internal.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="src\features\keyboard\keyboard_profiles.generated.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="include\ark\ark_storage.h">
       <Filter>Header Files</Filter>
     </ClInclude>

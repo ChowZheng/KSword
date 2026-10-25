@@ -12,7 +12,9 @@
 // - 编辑只改变 modifiers、virtualKey 及换桶所需的 next 链接，其他对象字节必须不变。
 // ============================================================
 
-#define KSWORD_ARK_KEYBOARD_PROTOCOL_VERSION 2UL
+// v3保留v2结构布局，但变更必须使用已修正会话基址和EnterCrit调用约定的驱动。
+// 新客户端拒绝用旧v2回执发起清除，旧客户端的v2变更请求也不会进入新驱动写路径。
+#define KSWORD_ARK_KEYBOARD_PROTOCOL_VERSION 3UL
 
 #define KSWORD_ARK_IOCTL_FUNCTION_ENUM_KEYBOARD_HOTKEYS 0x847UL
 #define KSWORD_ARK_IOCTL_FUNCTION_ENUM_KEYBOARD_HOOKS   0x848UL

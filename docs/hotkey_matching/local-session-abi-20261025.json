@@ -1,0 +1,313 @@
+{
+  "source": "read-only actual PE disassembly",
+  "images": [
+    {
+      "file": "win32kbase.sys",
+      "sha256": "ADA11DB7B97AC5D3ACA370A988C8655E24BED2B4DAD2D1C38E034AF00B9BF517",
+      "timestamp": "0x6efdb59e",
+      "sizeOfImage": "0x343000",
+      "rsds": [
+        {
+          "guid": "45d0067d-cac4-0108-52e2-b643f02d42bf",
+          "age": 1
+        }
+      ],
+      "functions": [
+        {
+          "name": "EnterCrit",
+          "rva": "0x12f40",
+          "instructions": [
+            {
+              "rva": "0x12f40",
+              "bytes": "48895c2408",
+              "instruction": "mov qword ptr [rsp + 8], rbx"
+            },
+            {
+              "rva": "0x12f45",
+              "bytes": "4889742410",
+              "instruction": "mov qword ptr [rsp + 0x10], rsi"
+            },
+            {
+              "rva": "0x12f4a",
+              "bytes": "57",
+              "instruction": "push rdi"
+            },
+            {
+              "rva": "0x12f4b",
+              "bytes": "4883ec20",
+              "instruction": "sub rsp, 0x20"
+            },
+            {
+              "rva": "0x12f4f",
+              "bytes": "8bda",
+              "instruction": "mov ebx, edx"
+            },
+            {
+              "rva": "0x12f51",
+              "bytes": "8bf1",
+              "instruction": "mov esi, ecx"
+            },
+            {
+              "rva": "0x12f53",
+              "bytes": "48ff1516922b00",
+              "instruction": "call qword ptr [rip + 0x2b9216]",
+              "import": "WIN32K.SYS!W32GetUserSessionState"
+            },
+            {
+              "rva": "0x12f5a",
+              "bytes": "0f1f440000",
+              "instruction": "nop dword ptr [rax + rax]"
+            },
+            {
+              "rva": "0x12f5f",
+              "bytes": "4c8d0d1af41800",
+              "instruction": "lea r9, [rip + 0x18f41a]"
+            },
+            {
+              "rva": "0x12f66",
+              "bytes": "448bc3",
+              "instruction": "mov r8d, ebx"
+            },
+            {
+              "rva": "0x12f69",
+              "bytes": "488bc8",
+              "instruction": "mov rcx, rax"
+            },
+            {
+              "rva": "0x12f6c",
+              "bytes": "8bd6",
+              "instruction": "mov edx, esi"
+            },
+            {
+              "rva": "0x12f6e",
+              "bytes": "488bf8",
+              "instruction": "mov rdi, rax"
+            },
+            {
+              "rva": "0x12f71",
+              "bytes": "e83af31800",
+              "instruction": "call 0x1a22b0"
+            },
+            {
+              "rva": "0x12f76",
+              "bytes": "48894710",
+              "instruction": "mov qword ptr [rdi + 0x10], rax"
+            },
+            {
+              "rva": "0x12f7a",
+              "bytes": "488bd8",
+              "instruction": "mov rbx, rax"
+            },
+            {
+              "rva": "0x12f7d",
+              "bytes": "4885c0",
+              "instruction": "test rax, rax"
+            },
+            {
+              "rva": "0x12f80",
+              "bytes": "7514",
+              "instruction": "jne 0x12f96"
+            },
+            {
+              "rva": "0x12f82",
+              "bytes": "488b742438",
+              "instruction": "mov rsi, qword ptr [rsp + 0x38]"
+            },
+            {
+              "rva": "0x12f87",
+              "bytes": "488bc3",
+              "instruction": "mov rax, rbx"
+            },
+            {
+              "rva": "0x12f8a",
+              "bytes": "488b5c2430",
+              "instruction": "mov rbx, qword ptr [rsp + 0x30]"
+            },
+            {
+              "rva": "0x12f8f",
+              "bytes": "4883c420",
+              "instruction": "add rsp, 0x20"
+            },
+            {
+              "rva": "0x12f93",
+              "bytes": "5f",
+              "instruction": "pop rdi"
+            },
+            {
+              "rva": "0x12f94",
+              "bytes": "c3",
+              "instruction": "ret"
+            },
+            {
+              "rva": "0x12f95",
+              "bytes": "cc",
+              "instruction": "int3"
+            },
+            {
+              "rva": "0x12f96",
+              "bytes": "85f6",
+              "instruction": "test esi, esi"
+            },
+            {
+              "rva": "0x12f98",
+              "bytes": "7526",
+              "instruction": "jne 0x12fc0"
+            },
+            {
+              "rva": "0x12f9a",
+              "bytes": "488d8f784d0000",
+              "instruction": "lea rcx, [rdi + 0x4d78]"
+            },
+            {
+              "rva": "0x12fa1",
+              "bytes": "e8120a0000",
+              "instruction": "call 0x139b8"
+            },
+            {
+              "rva": "0x12fa6",
+              "bytes": "488d8fb04d0000",
+              "instruction": "lea rcx, [rdi + 0x4db0]"
+            },
+            {
+              "rva": "0x12fad",
+              "bytes": "e87e090000",
+              "instruction": "call 0x13930"
+            },
+            {
+              "rva": "0x12fb2",
+              "bytes": "488d8fa04d0000",
+              "instruction": "lea rcx, [rdi + 0x4da0]"
+            },
+            {
+              "rva": "0x12fb9",
+              "bytes": "e872090000",
+              "instruction": "call 0x13930"
+            },
+            {
+              "rva": "0x12fbe",
+              "bytes": "ebc2",
+              "instruction": "jmp 0x12f82"
+            },
+            {
+              "rva": "0x12fc0",
+              "bytes": "488bcb",
+              "instruction": "mov rcx, rbx"
+            },
+            {
+              "rva": "0x12fc3",
+              "bytes": "e820f61800",
+              "instruction": "call 0x1a25e8"
+            },
+            {
+              "rva": "0x12fc8",
+              "bytes": "84c0",
+              "instruction": "test al, al"
+            },
+            {
+              "rva": "0x12fca",
+              "bytes": "75ce",
+              "instruction": "jne 0x12f9a"
+            },
+            {
+              "rva": "0x12fcc",
+              "bytes": "ebb4",
+              "instruction": "jmp 0x12f82"
+            }
+          ]
+        },
+        {
+          "name": "UserGetSiloGlobals",
+          "rva": "0x15d7c0",
+          "instructions": [
+            {
+              "rva": "0x15d7c0",
+              "bytes": "4883ec28",
+              "instruction": "sub rsp, 0x28"
+            },
+            {
+              "rva": "0x15d7c4",
+              "bytes": "48ff153de91600",
+              "instruction": "call qword ptr [rip + 0x16e93d]",
+              "import": "WIN32K.SYS!W32GetSiloSessionState"
+            },
+            {
+              "rva": "0x15d7cb",
+              "bytes": "0f1f440000",
+              "instruction": "nop dword ptr [rax + rax]"
+            },
+            {
+              "rva": "0x15d7d0",
+              "bytes": "488b4010",
+              "instruction": "mov rax, qword ptr [rax + 0x10]"
+            },
+            {
+              "rva": "0x15d7d4",
+              "bytes": "4883c428",
+              "instruction": "add rsp, 0x28"
+            },
+            {
+              "rva": "0x15d7d8",
+              "bytes": "c3",
+              "instruction": "ret"
+            },
+            {
+              "rva": "0x15d7d9",
+              "bytes": "cc",
+              "instruction": "int3"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "file": "win32k.sys",
+      "sha256": "86DAB4D97246DA16B2CE7A522856D949488FC01E7B48646DC9754E2207B23DF4",
+      "timestamp": "0x375344a6",
+      "sizeOfImage": "0xc7000",
+      "rsds": [
+        {
+          "guid": "a1cd7edf-ec13-d776-a41b-9d7129133f3e",
+          "age": 1
+        }
+      ],
+      "functions": [
+        {
+          "name": "W32GetUserSessionState",
+          "rva": "0x19020",
+          "instructions": [
+            {
+              "rva": "0x19020",
+              "bytes": "4883ec28",
+              "instruction": "sub rsp, 0x28"
+            },
+            {
+              "rva": "0x19024",
+              "bytes": "e857d0ffff",
+              "instruction": "call 0x16080"
+            },
+            {
+              "rva": "0x19029",
+              "bytes": "488b00",
+              "instruction": "mov rax, qword ptr [rax]"
+            },
+            {
+              "rva": "0x1902c",
+              "bytes": "4883c428",
+              "instruction": "add rsp, 0x28"
+            },
+            {
+              "rva": "0x19030",
+              "bytes": "c3",
+              "instruction": "ret"
+            },
+            {
+              "rva": "0x19031",
+              "bytes": "cc",
+              "instruction": "int3"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -36,6 +36,8 @@ namespace ksword::ark
         const unsigned long flags,
         const unsigned long maxEntries) const
     {
+        // 后台调用线程先准备 USER 会话；驱动在原调用者上下文读取本会话热键。
+        (void)::GetDesktopWindow();
         KeyboardHotkeyEnumResult enumResult{};
         KSWORD_ARK_ENUM_KEYBOARD_REQUEST request{};
         request.version = KSWORD_ARK_KEYBOARD_PROTOCOL_VERSION;

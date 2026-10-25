@@ -17,6 +17,7 @@ Environment:
 
 #include "ark/ark_driver.h"
 #include "keyboard_internal.h"
+#include "keyboard_profiles.generated.h"
 #include "../../dispatch/ioctl_validation.h"
 #include "../kernel/hook_scan_support.h"
 
@@ -35,17 +36,12 @@ Environment:
 #define KSW_HOTKEY_ID_OFFSET 0x28UL
 #define KSW_HOTKEY_NEXT_OFFSET 0x30UL
 #define KSW_HOTKEY_CHILD_OFFSET 0x38UL
-#define KSW_HOTKEY_TABLE_OFFSET 0x3290UL
-#define KSW_HOTKEY_SESSION_CACHE_OFFSET 0x36A8UL
-#define KSW_HOTKEY_REMOVE_MATCHING_RVA 0x1C8108UL
-#define KSW_HOTKEY_EXPECTED_TIMESTAMP 0x5CD0A4AFUL
-#define KSW_HOTKEY_EXPECTED_IMAGE_SIZE 0x00428000UL
-#define KSW_HOTKEY_EXPECTED_PDB_AGE 1UL
 #define KSW_HOTKEY_RSDS_SIGNATURE 0x53445352UL
 #define KSW_HOTKEY_QUERY_OWNER_WINDOW_ID 3UL
 #define KSW_HOTKEY_ALLOWED_MODIFIERS 0x0000400FUL
 
-typedef VOID(NTAPI* KSW_ENTER_CRIT_FN)(VOID);
+// 本机 EnterCrit 实际消费 ECX/EDX；NtUserUnregisterHotKey 在调用前将两参置零。
+typedef PVOID(NTAPI* KSW_ENTER_CRIT_FN)(_In_ ULONG Flags, _In_ ULONG Reserved);
 typedef VOID(NTAPI* KSW_LEAVE_CRIT_FN)(VOID);
 typedef PVOID(NTAPI* KSW_VALIDATE_HWND_FN)(_In_ PVOID WindowHandle);
 typedef PVOID(NTAPI* KSW_PS_GET_THREAD_WIN32_THREAD_FN)(_In_ PETHREAD Thread);
@@ -83,6 +79,7 @@ typedef struct _KSW_HOTKEY_VIEW
 typedef struct _KSW_HOTKEY_EXACT_RUNTIME
 {
     KSW_KEYBOARD_HOTKEY_RUNTIME Layout;
+    const KSW_HOTKEY_MATCH_PROFILE* Profile; // 仅指向完整PE/RSDS身份匹配的离线验证项。
     KSW_ENTER_CRIT_FN EnterCrit;
     KSW_LEAVE_CRIT_FN LeaveCrit;
     KSW_VALIDATE_HWND_FN ValidateHwnd;
@@ -92,20 +89,6 @@ typedef struct _KSW_HOTKEY_EXACT_RUNTIME
     ULONG ImageSize;
     ULONG PdbAge;
 } KSW_HOTKEY_EXACT_RUNTIME;
-
-static const GUID g_KswHotkeyExpectedPdbGuid = {
-    0x80DB0813UL,
-    0x4711U,
-    0x330DU,
-    { 0xD7U, 0x06U, 0x8DU, 0x82U, 0x6FU, 0xF8U, 0xE1U, 0xB0U }
-};
-
-static const UCHAR g_KswHotkeyRemoveMatchingPrologue[] = {
-    0x48U, 0x89U, 0x5CU, 0x24U, 0x08U, 0x48U, 0x89U, 0x6CU,
-    0x24U, 0x10U, 0x48U, 0x89U, 0x74U, 0x24U, 0x18U, 0x57U,
-    0x41U, 0x54U, 0x41U, 0x55U, 0x41U, 0x56U, 0x41U, 0x57U,
-    0x48U, 0x83U, 0xECU, 0x30U, 0x40U, 0x32U, 0xEDU, 0x45U
-};
 
 NTSYSAPI
 PVOID
@@ -216,82 +199,89 @@ KswHotkeyResolveExactRuntime(
     _Out_ KSW_HOTKEY_EXACT_RUNTIME* RuntimeOut
     )
 {
-    GUID pdbGuid;
-    UCHAR prologue[sizeof(g_KswHotkeyRemoveMatchingPrologue)] = { 0 };
-    UNICODE_STRING routineName;
-    NTSTATUS status = STATUS_SUCCESS;
+    GUID fullGuid; // 已加载full的RSDS身份。
+    GUID baseGuid; // 已加载base的RSDS身份。
+    ULONG baseTimestamp = 0UL; // base PE时间戳。
+    ULONG baseImageSize = 0UL; // base映像大小。
+    ULONG baseAge = 0UL; // base PDB代次。
+    ULONG profileIndex = 0UL; // 已验证配对目录的有界索引。
+    UCHAR prologue[32] = { 0 }; // 当前删除函数的原始头部字节。
+    UNICODE_STRING routineName; // 内核导出查询名。
+    NTSTATUS status = STATUS_SUCCESS; // 独立保留每层解析失败。
 
-    if (RuntimeOut == NULL) {
-        return STATUS_INVALID_PARAMETER;
+    if (RuntimeOut == NULL) { // 不接受无输出宿主的调用。
+        return STATUS_INVALID_PARAMETER; // 不解引用空指针。
     }
-    RtlZeroMemory(RuntimeOut, sizeof(*RuntimeOut));
-    RtlZeroMemory(&pdbGuid, sizeof(pdbGuid));
-    status = KswordARKKeyboardResolveHotkeyRuntime(&RuntimeOut->Layout);
-    if (!NT_SUCCESS(status)) {
-        return status;
+    RtlZeroMemory(RuntimeOut, sizeof(*RuntimeOut)); // 失败时不遗留可调用地址。
+    status = KswordARKKeyboardResolveHotkeyRuntime(&RuntimeOut->Layout); // 读取当前USER会话与只读布局。
+    if (!NT_SUCCESS(status)) { // 不绕过布局解析失败。
+        return status; // 保留实际错误。
     }
     if (RuntimeOut->Layout.TableBase != 0U ||
-        RuntimeOut->Layout.TableOffset != KSW_HOTKEY_TABLE_OFFSET ||
         RuntimeOut->Layout.NextOffset != KSW_HOTKEY_NEXT_OFFSET ||
         RuntimeOut->Layout.ModifiersOffset != KSW_HOTKEY_MODIFIERS_OFFSET ||
         RuntimeOut->Layout.VkOffset != KSW_HOTKEY_VK_OFFSET ||
-        RuntimeOut->Layout.IdOffset != KSW_HOTKEY_ID_OFFSET ||
-        !KswHotkeyReadLoadedRsds(
-            RuntimeOut->Layout.Win32kfullBase,
-            RuntimeOut->Layout.Win32kfullSize,
-            &RuntimeOut->TimeDateStamp,
-            &RuntimeOut->ImageSize,
-            &pdbGuid,
-            &RuntimeOut->PdbAge) ||
-        RuntimeOut->TimeDateStamp != KSW_HOTKEY_EXPECTED_TIMESTAMP ||
-        RuntimeOut->ImageSize != KSW_HOTKEY_EXPECTED_IMAGE_SIZE ||
-        RuntimeOut->PdbAge != KSW_HOTKEY_EXPECTED_PDB_AGE ||
-        RtlCompareMemory(&pdbGuid, &g_KswHotkeyExpectedPdbGuid, sizeof(GUID)) != sizeof(GUID)) {
-        return STATUS_REVISION_MISMATCH;
+        RuntimeOut->Layout.IdOffset != KSW_HOTKEY_ID_OFFSET) { // 仅接受工具证明的固定节点ABI。
+        return STATUS_REVISION_MISMATCH; // 未覆盖的布局不启用变更。
+    }
+    if (!KswHotkeyReadLoadedRsds(RuntimeOut->Layout.Win32kfullBase,
+            RuntimeOut->Layout.Win32kfullSize, &RuntimeOut->TimeDateStamp,
+            &RuntimeOut->ImageSize, &fullGuid, &RuntimeOut->PdbAge) ||
+        !KswHotkeyReadLoadedRsds(RuntimeOut->Layout.Win32kbaseBase,
+            RuntimeOut->Layout.Win32kbaseSize, &baseTimestamp,
+            &baseImageSize, &baseGuid, &baseAge)) { // 必须同时验证full与base身份。
+        return STATUS_REVISION_MISMATCH; // 不按文件名或版本范围猜匹配。
+    }
+    for (profileIndex = 0UL; profileIndex < g_KswHotkeyMatchProfileCount; ++profileIndex) { // 只访问实际生成的项目。
+        const KSW_HOTKEY_MATCH_PROFILE* profile = &g_KswHotkeyMatchProfiles[profileIndex]; // 当前精确配对。
+        if (profile->FullTimeDateStamp == RuntimeOut->TimeDateStamp &&
+            profile->FullImageSize == RuntimeOut->ImageSize &&
+            profile->FullPdbAge == RuntimeOut->PdbAge &&
+            profile->BaseTimeDateStamp == baseTimestamp &&
+            profile->BaseImageSize == baseImageSize &&
+            profile->BasePdbAge == baseAge &&
+            profile->TableOffset == RuntimeOut->Layout.TableOffset &&
+            RtlCompareMemory(&fullGuid, &profile->FullPdbGuid, sizeof(GUID)) == sizeof(GUID) &&
+            RtlCompareMemory(&baseGuid, &profile->BasePdbGuid, sizeof(GUID)) == sizeof(GUID)) { // 身份与表布局必须全部一致。
+            if (RuntimeOut->Profile != NULL) { // 生成目录中的歧义同样拒绝。
+                return STATUS_OBJECT_NAME_COLLISION; // 不取第一个貌似匹配的地址。
+            }
+            RuntimeOut->Profile = profile; // 只保存静态已验证目录项。
+        }
+    }
+    if (RuntimeOut->Profile == NULL) { // 未验证的系统版本没有变更能力。
+        return STATUS_REVISION_MISMATCH; // 仍可保留独立只读枚举诊断。
     }
 
     RuntimeOut->EnterCrit = (KSW_ENTER_CRIT_FN)RtlFindExportedRoutineByName(
-        RuntimeOut->Layout.Win32kbaseBase,
-        "EnterCrit");
+        RuntimeOut->Layout.Win32kbaseBase, "EnterCrit"); // 两个ULONG参数的已核对入口。
     RuntimeOut->LeaveCrit = (KSW_LEAVE_CRIT_FN)RtlFindExportedRoutineByName(
-        RuntimeOut->Layout.Win32kbaseBase,
-        "UserSessionSwitchLeaveCrit");
+        RuntimeOut->Layout.Win32kbaseBase, "UserSessionSwitchLeaveCrit"); // 保持系统原退出路径。
     RuntimeOut->ValidateHwnd = (KSW_VALIDATE_HWND_FN)RtlFindExportedRoutineByName(
-        RuntimeOut->Layout.Win32kbaseBase,
-        "ValidateHwnd");
-    RuntimeOut->RemoveMatchingHotkeys = (KSW_REMOVE_MATCHING_HOTKEYS_FN)(
-        (UCHAR*)RuntimeOut->Layout.Win32kfullBase + KSW_HOTKEY_REMOVE_MATCHING_RVA);
-    RtlInitUnicodeString(&routineName, L"PsGetThreadWin32Thread");
-    RuntimeOut->PsGetThreadWin32Thread =
-        (KSW_PS_GET_THREAD_WIN32_THREAD_FN)MmGetSystemRoutineAddress(&routineName);
-    if (!KswHotkeyPointerInImage(
-            (PVOID)RuntimeOut->EnterCrit,
-            RuntimeOut->Layout.Win32kbaseBase,
-            RuntimeOut->Layout.Win32kbaseSize) ||
-        !KswHotkeyPointerInImage(
-            (PVOID)RuntimeOut->LeaveCrit,
-            RuntimeOut->Layout.Win32kbaseBase,
-            RuntimeOut->Layout.Win32kbaseSize) ||
-        !KswHotkeyPointerInImage(
-            (PVOID)RuntimeOut->ValidateHwnd,
-            RuntimeOut->Layout.Win32kbaseBase,
-            RuntimeOut->Layout.Win32kbaseSize) ||
-        RuntimeOut->PsGetThreadWin32Thread == NULL ||
-        !KswHotkeyPointerInImage(
-            (PVOID)RuntimeOut->RemoveMatchingHotkeys,
-            RuntimeOut->Layout.Win32kfullBase,
-            RuntimeOut->Layout.Win32kfullSize) ||
-        !KswordARKHookReadMemorySafe(
-            (const VOID*)RuntimeOut->RemoveMatchingHotkeys,
-            prologue,
-            sizeof(prologue)) ||
-        RtlCompareMemory(
-            prologue,
-            g_KswHotkeyRemoveMatchingPrologue,
-            sizeof(prologue)) != sizeof(prologue)) {
-        return STATUS_PROCEDURE_NOT_FOUND;
+        RuntimeOut->Layout.Win32kbaseBase, "ValidateHwnd"); // 由系统验证窗口对象。
+    if (RuntimeOut->Profile->RemoveMatchingRva >= RuntimeOut->Layout.Win32kfullSize ||
+        sizeof(prologue) > RuntimeOut->Layout.Win32kfullSize - RuntimeOut->Profile->RemoveMatchingRva) { // 先排除RVA越界及整数回绕。
+        return STATUS_PROCEDURE_NOT_FOUND; // 不从无效地址读取函数头。
     }
-    return STATUS_SUCCESS;
+    RuntimeOut->RemoveMatchingHotkeys = (KSW_REMOVE_MATCHING_HOTKEYS_FN)(
+        (UCHAR*)RuntimeOut->Layout.Win32kfullBase + RuntimeOut->Profile->RemoveMatchingRva); // 地址只来自精确配对。
+    RtlInitUnicodeString(&routineName, L"PsGetThreadWin32Thread"); // 解析标准内核导出。
+    RuntimeOut->PsGetThreadWin32Thread =
+        (KSW_PS_GET_THREAD_WIN32_THREAD_FN)MmGetSystemRoutineAddress(&routineName); // 查询当前GUI线程身份。
+    if (!KswHotkeyPointerInImage((PVOID)RuntimeOut->EnterCrit,
+            RuntimeOut->Layout.Win32kbaseBase, RuntimeOut->Layout.Win32kbaseSize) ||
+        !KswHotkeyPointerInImage((PVOID)RuntimeOut->LeaveCrit,
+            RuntimeOut->Layout.Win32kbaseBase, RuntimeOut->Layout.Win32kbaseSize) ||
+        !KswHotkeyPointerInImage((PVOID)RuntimeOut->ValidateHwnd,
+            RuntimeOut->Layout.Win32kbaseBase, RuntimeOut->Layout.Win32kbaseSize) ||
+        RuntimeOut->PsGetThreadWin32Thread == NULL ||
+        !KswordARKHookReadMemorySafe((const VOID*)RuntimeOut->RemoveMatchingHotkeys,
+            prologue, sizeof(prologue)) ||
+        RtlCompareMemory(prologue, RuntimeOut->Profile->RemoveMatchingPrologue,
+            sizeof(prologue)) != sizeof(prologue)) { // 运行时再次拒绝不完整导出或被更改的函数头。
+        return STATUS_PROCEDURE_NOT_FOUND; // 不调用未验证的私有函数。
+    }
+    return STATUS_SUCCESS; // 只授予已匹配身份且布局、函数均一致的当前系统。
 }
 
 static BOOLEAN
@@ -793,10 +783,11 @@ KswordARKKeyboardIoctlMutateHotkey(
         return STATUS_SUCCESS;
     }
     outputBuffer->responseFlags |= KSWORD_ARK_KEYBOARD_MUTATION_RESPONSE_CALLER_VALIDATED;
-    tableAddress = runtime.Layout.SessionGlobals + KSW_HOTKEY_TABLE_OFFSET;
+    tableAddress = runtime.Layout.SessionGlobals + runtime.Profile->TableOffset; // 已验证相同会话基址的表。
 
     __try {
-        runtime.EnterCrit();
+        // 按经反汇编核对的 USER 入口传参，不让未定义寄存器值进入临界区实现。
+        (VOID)runtime.EnterCrit(0UL, 0UL);
         critEntered = TRUE;
         if (runtime.Layout.SessionGlobals != (ULONG_PTR)requestSnapshot.sessionGlobals) {
             status = STATUS_REVISION_MISMATCH;
@@ -868,7 +859,7 @@ KswordARKKeyboardIoctlMutateHotkey(
                 outputBuffer->status = KSWORD_ARK_KEYBOARD_MUTATION_STATUS_OPERATION_FAILED;
                 __leave;
             }
-            *(volatile ULONG_PTR*)(runtime.Layout.SessionGlobals + KSW_HOTKEY_SESSION_CACHE_OFFSET) = 0U;
+            *(volatile ULONG_PTR*)(runtime.Layout.SessionGlobals + runtime.Profile->SessionCacheOffset) = 0U; // 同一版本的缓存位。
             KeMemoryBarrier();
             outputBuffer->status = KSWORD_ARK_KEYBOARD_MUTATION_STATUS_OK;
             outputBuffer->responseFlags |= KSWORD_ARK_KEYBOARD_MUTATION_RESPONSE_CHANGED;
@@ -919,7 +910,7 @@ KswordARKKeyboardIoctlMutateHotkey(
             }
             __leave;
         }
-        *(volatile ULONG_PTR*)(runtime.Layout.SessionGlobals + KSW_HOTKEY_SESSION_CACHE_OFFSET) = 0U;
+        *(volatile ULONG_PTR*)(runtime.Layout.SessionGlobals + runtime.Profile->SessionCacheOffset) = 0U; // 同一版本的缓存位。
         KeMemoryBarrier();
         outputBuffer->status = KSWORD_ARK_KEYBOARD_MUTATION_STATUS_OK;
         outputBuffer->responseFlags |=
