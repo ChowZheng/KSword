@@ -179,6 +179,14 @@ namespace ks::ui
             if (target->property("ksword_parameter_section").toBool())
             {
                 const bool hasTitle = !target->title().isEmpty();
+                // Callers may register the section before constructing its layout.
+                // The existing first-frame theme pass runs after construction.
+                if (auto* layout = target->layout())
+                {
+                    const QMargins margins(0, hasTitle ? 22 : 4, 0, 4);
+                    if (layout->contentsMargins() != margins) layout->setContentsMargins(margins);
+                    if (layout->spacing() != 8) layout->setSpacing(8);
+                }
                 const QColor separator = KswordTheme::BlendColors(surface, KswordTheme::BorderColor(), 70);
                 ReplacePrimaryStyle(target, QStringLiteral(
                     "QGroupBox[ksword_parameter_section=\"true\"]{background:transparent;"

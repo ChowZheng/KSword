@@ -59,6 +59,8 @@ namespace
     //   列宽总和自然超出 viewport，由 Qt 按 ScrollBarAsNeeded 显示横向滚动条。
     //   本文件全程不修改滚动条策略，因此横向滚动始终可用。
     constexpr int kReadableSectionWidthCap = 96;
+    // This cap applies to long cell content. Actual header requirements remain
+    // an independent minimum in sectionWidthHints.
 
     // kHeaderHorizontalPadding/kCellHorizontalPadding 作用：
     // - 用字体度量估算列宽时补偿 item margin、网格线、排序箭头和图标留白；
@@ -100,6 +102,7 @@ namespace
         int preferredWidth = 0; // preferredWidth：根据表头和抽样内容估算出的首选列宽。
         int fittedWidth = 0;    // fittedWidth：压缩/扩展后的目标列宽。
         bool prefersViewportExpansion = false; // prefersViewportExpansion：业务层原本声明为 Stretch 的填充候选列。
+        bool fixed = false;      // fixed：业务锁定列按当前实际宽度参与预算，fit 不接管模式或宽度。
     };
 
     struct SectionWidthHints
@@ -134,6 +137,18 @@ namespace
             ++m_revision;
             content.clear();
             headers.clear();
+            if (!m_view.isNull()) scheduleColumnFit(m_view.data());
+        }
+
+        void invalidateHeaders(Qt::Orientation orientation, int first, int last)
+        {
+            if (orientation != Qt::Horizontal) return;
+            ++m_revision;
+            for (auto it = headers.begin(); it != headers.end();)
+            {
+                if (it.key() >= first && it.key() <= last) it = headers.erase(it);
+                else ++it;
+            }
             if (!m_view.isNull()) scheduleColumnFit(m_view.data());
         }
 
@@ -177,7 +192,9 @@ namespace
                     connect(model, &QAbstractItemModel::columnsInserted, this, changed);
                     connect(model, &QAbstractItemModel::columnsRemoved, this, changed);
                     connect(model, &QAbstractItemModel::columnsMoved, this, changed);
-                    connect(model, &QAbstractItemModel::headerDataChanged, this, changed);
+                    connect(model, &QAbstractItemModel::headerDataChanged, this,
+                        [this](Qt::Orientation orientation, int first, int last)
+                        { invalidateHeaders(orientation, first, last); });
                     connect(model, &QAbstractItemModel::dataChanged, this,
                         [this](const QModelIndex&, const QModelIndex&, const QList<int>& roles) {
                             if (roles.isEmpty() || roles.contains(Qt::DisplayRole)
@@ -507,7 +524,11 @@ namespace
             && header->sortIndicatorSection() == logicalIndex
             ? 18
             : 0;
-        return textWidth + kHeaderHorizontalPadding + sortIndicatorReserve;
+        // Qt's hint also includes header FontRole/DecorationRole/SizeHintRole
+        // and the actual style metrics. Keep the padded text estimate as a floor.
+        return std::min(header->maximumSectionSize(),
+            std::max(textWidth + kHeaderHorizontalPadding + sortIndicatorReserve,
+                header->sectionSizeHint(logicalIndex)));
     }
 
     // widgetWidthHint 作用：
@@ -719,8 +740,11 @@ namespace
             cache->headers.insert(logicalIndex, headerPreferredWidth(view, header, logicalIndex));
             cachedHeader = cache->headers.constFind(logicalIndex);
         }
-        hints.preferredWidth = std::max(
-            hints.minimumWidth,
+        // Summary text belongs to the header, so compression must not shrink it
+        // below the space required for its label, value, icon and sort marker.
+        if (header->sectionResizeMode(logicalIndex) != QHeaderView::Fixed)
+            hints.minimumWidth = std::max(hints.minimumWidth, cachedHeader.value());
+        hints.preferredWidth = std::max(hints.minimumWidth,
             std::max(cachedHeader.value(), hints.preferredWidth));
         return hints;
     }
@@ -813,7 +837,15 @@ namespace
                 continue;
             }
 
-            const int sectionWidth = std::max(header->sectionSize(logicalIndex), minimumWidth);
+            const bool fixed = header->sectionResizeMode(logicalIndex) == QHeaderView::Fixed;
+            const int actualWidth = header->sectionSize(logicalIndex);
+            if (fixed)
+            {
+                visibleSections.push_back({logicalIndex, actualWidth, actualWidth,
+                    actualWidth, actualWidth, false, true});
+                continue;
+            }
+            const int sectionWidth = std::max(actualWidth, minimumWidth);
             const SectionWidthHints widthHints = sectionWidthHints(
                 view,
                 header,
@@ -825,7 +857,7 @@ namespace
                 widthHints.minimumWidth,
                 widthHints.preferredWidth,
                 widthHints.preferredWidth,
-                sectionPrefersViewportExpansion(header, logicalIndex) });
+                sectionPrefersViewportExpansion(header, logicalIndex), false });
         }
 
         return visibleSections;
@@ -878,6 +910,13 @@ namespace
         const int sectionCount = static_cast<int>(sections.size());
         for (VisibleSection& section : sections)
         {
+            if (section.fixed)
+            {
+                section.minimumWidth = section.currentWidth;
+                section.preferredWidth = section.currentWidth;
+                section.fittedWidth = section.currentWidth;
+                continue;
+            }
             section.minimumWidth = std::max(1, section.minimumWidth);
             // 可读下限：短列按自身首选宽度封顶，长内容列停在 kReadableSectionWidthCap。
             // preferredWidth 在 sectionWidthHints 里已保证不小于 minimumWidth，
@@ -922,6 +961,7 @@ namespace
                     {
                         return;
                     }
+                    if (sections[static_cast<std::size_t>(sectionIndex)].fixed) return;
                     expansionIndexes.push_back(sectionIndex);
                     expansionWeights.push_back(std::max(1, expansionWeight));
                 };
@@ -954,13 +994,13 @@ namespace
             // 第三优先级：没有 Stretch 意图时，把剩余空间给当前首选宽度最大的可见列。
             if (expansionIndexes.empty())
             {
-                const auto largestPreferredIt = std::max_element(
-                    sections.begin(),
-                    sections.end(),
-                    [](const VisibleSection& leftSection, const VisibleSection& rightSection)
-                    {
-                        return leftSection.preferredWidth < rightSection.preferredWidth;
-                    });
+                auto largestPreferredIt = sections.end();
+                for (auto it = sections.begin(); it != sections.end(); ++it)
+                {
+                    if (!it->fixed && (largestPreferredIt == sections.end() ||
+                        it->preferredWidth > largestPreferredIt->preferredWidth))
+                        largestPreferredIt = it;
+                }
                 if (largestPreferredIt != sections.end())
                 {
                     addExpansionTarget(
@@ -969,10 +1009,17 @@ namespace
                 }
             }
 
-            // 兜底：理论上 sections 非空时不会走到这里；仍保留最后可见列，确保默认总宽尽量贴合 viewport。
+            // 全部列均为 Fixed 时保留剩余空白；其它情况选最后一个可调整列。
             if (expansionIndexes.empty())
             {
-                addExpansionTarget(sectionCount - 1, 1);
+                for (int index = sectionCount - 1; index >= 0; --index)
+                {
+                    if (!sections[static_cast<std::size_t>(index)].fixed)
+                    {
+                        addExpansionTarget(index, 1);
+                        break;
+                    }
+                }
             }
 
             int totalExpansionWeight = 0;
@@ -1024,7 +1071,8 @@ namespace
         int totalContentWeight = 0;
         for (const VisibleSection& section : sections)
         {
-            totalContentWeight += std::max(0, section.preferredWidth - section.minimumWidth);
+            if (!section.fixed)
+                totalContentWeight += std::max(0, section.preferredWidth - section.minimumWidth);
         }
 
         for (VisibleSection& section : sections)
@@ -1036,6 +1084,7 @@ namespace
         {
             for (VisibleSection& section : sections)
             {
+                if (section.fixed) continue;
                 if (remainingAssignableWidth <= 0)
                 {
                     break;
@@ -1048,6 +1097,7 @@ namespace
 
         for (VisibleSection& section : sections)
         {
+            if (section.fixed) continue;
             const int contentWeight = std::max(0, section.preferredWidth - section.minimumWidth);
             const int extraWidth =
                 remainingAssignableWidth * contentWeight / totalContentWeight;
@@ -1057,14 +1107,13 @@ namespace
         int finalTotalWidth = totalFittedWidth();
         while (finalTotalWidth < availableWidth)
         {
-            auto targetIt = std::max_element(
-                sections.begin(),
-                sections.end(),
-                [](const VisibleSection& leftSection, const VisibleSection& rightSection)
-                {
-                    return (leftSection.preferredWidth - leftSection.fittedWidth)
-                        < (rightSection.preferredWidth - rightSection.fittedWidth);
-                });
+            auto targetIt = sections.end();
+            for (auto it = sections.begin(); it != sections.end(); ++it)
+            {
+                if (!it->fixed && (targetIt == sections.end() ||
+                    it->preferredWidth - it->fittedWidth > targetIt->preferredWidth - targetIt->fittedWidth))
+                    targetIt = it;
+            }
             if (targetIt == sections.end())
             {
                 break;
@@ -1075,14 +1124,14 @@ namespace
 
         while (finalTotalWidth > availableWidth)
         {
-            auto targetIt = std::max_element(
-                sections.begin(),
-                sections.end(),
-                [](const VisibleSection& leftSection, const VisibleSection& rightSection)
-                {
-                    return leftSection.fittedWidth < rightSection.fittedWidth;
-                });
-            if (targetIt == sections.end() || targetIt->fittedWidth <= targetIt->minimumWidth)
+            auto targetIt = sections.end();
+            for (auto it = sections.begin(); it != sections.end(); ++it)
+            {
+                if (!it->fixed && it->fittedWidth > it->minimumWidth &&
+                    (targetIt == sections.end() || it->fittedWidth > targetIt->fittedWidth))
+                    targetIt = it;
+            }
+            if (targetIt == sections.end())
             {
                 break;
             }
@@ -1121,7 +1170,7 @@ namespace
 
     // fitViewColumnsToViewport 作用：
     // - 将目标表格当前可见列一次性调整到 viewport 宽度以内；
-    // - 统一把列 resize mode 设为 Interactive，保证用户后续可以拖拽调整；
+    // - 只把可调整列设为 Interactive；业务 Fixed 列保留模式与当前宽度；
     // - 不设置/隐藏任何滚动条。
     // 参数 view：目标表格/树表视图。
     // 返回值：true=执行过有效 fit；false=当前视图暂不可处理。
@@ -1182,6 +1231,7 @@ namespace
         geometryRefreshRequired = geometryRefreshRequired || header->stretchLastSection();
         for (const VisibleSection& section : visibleSections)
         {
+            if (section.fixed) continue;
             if (header->sectionResizeMode(section.logicalIndex) != QHeaderView::Interactive ||
                 header->sectionSize(section.logicalIndex) != section.fittedWidth)
             {
@@ -1205,11 +1255,15 @@ namespace
             header->setStretchLastSection(false);
             for (const VisibleSection& section : visibleSections)
             {
-                header->setSectionResizeMode(section.logicalIndex, QHeaderView::Interactive);
+                if (!section.fixed)
+                    header->setSectionResizeMode(section.logicalIndex, QHeaderView::Interactive);
             }
             for (const VisibleSection& section : visibleSections)
             {
-                header->resizeSection(section.logicalIndex, section.fittedWidth);
+                if (!section.fixed)
+                    header->resizeSection(section.logicalIndex, section.fittedWidth);
+                else if (header->sectionSize(section.logicalIndex) != section.currentWidth)
+                    header->resizeSection(section.logicalIndex, section.currentWidth);
             }
         }
 

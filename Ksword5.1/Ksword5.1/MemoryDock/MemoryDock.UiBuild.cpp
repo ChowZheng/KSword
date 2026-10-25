@@ -1335,7 +1335,7 @@ void MemoryDock::initializeMemorySearchTab()
     // Tab3：内存搜索。
     m_tabSearch = new QWidget(m_tabWidget);
     // 扫描条件独立滚动，扫描/取消固定，结果表保持完整工作高度。
-    QWidget* const tabContent = ks::ui::EnablePageInnerScroll(m_tabSearch);
+    QWidget* const tabContent = m_tabSearch; // 工作区已管理内部滚动，固定动作与结果不再随整页滚动。
     QVBoxLayout* tabLayout = new QVBoxLayout(tabContent);
     tabLayout->setContentsMargins(6, 6, 6, 6);
     tabLayout->setSpacing(6);

@@ -11,6 +11,7 @@
 #include <memory>
 
 class QComboBox;
+class QGridLayout;
 class QLabel;
 class QLineEdit;
 class QShowEvent;
@@ -94,7 +95,8 @@ namespace ks::ui
     public:
         enum class Presentation { Sections, Tree };
 
-        explicit StructuredFieldView(QWidget* parent = nullptr);
+        // Optional leading action shares the existing search/presentation/copy/export toolbar.
+        explicit StructuredFieldView(QWidget* parent = nullptr, QWidget* toolbarLeadingWidget = nullptr);
         ~StructuredFieldView() override;
         // Empty initial view only: the same six toolbar/header values used by
         // the real controls. Pages opt into unique targets before installation.
@@ -158,6 +160,7 @@ namespace ks::ui
         bool valueRowSelected(const QString& key) const;
         void flushValueSelection() const;
         void updateTranslations();
+        void updateToolbarLayout();
         void applyPresentation();
         void applySearch();
         void updateColumns();
@@ -172,6 +175,10 @@ namespace ks::ui
         FieldDocument m_document;
         Presentation m_presentation = Presentation::Sections;
         QLabel* m_title = nullptr;
+        QGridLayout* m_toolbarLayout = nullptr;
+        QWidget* m_toolbarLeadingWidget = nullptr;
+        bool m_toolbarCompact = false;
+        int m_toolbarActionColumns = 0;
         QLineEdit* m_search = nullptr;
         QComboBox* m_style = nullptr;
         QToolButton* m_copy = nullptr;

@@ -411,7 +411,7 @@ void MemoryDock::initializeKernelMemoryEvidenceTab()
     // 返回：无。
     m_tabKernelMemoryEvidence = new QWidget(m_tabWidget);
     // 参数独立滚动，刷新固定在参数栏底部，表格和详情持续保留结果区高度。
-    QWidget* const tabContent = ks::ui::EnablePageInnerScroll(m_tabKernelMemoryEvidence);
+    QWidget* const tabContent = m_tabKernelMemoryEvidence; // 工作区已管理内部滚动，固定动作与结果不再随整页滚动。
     QVBoxLayout* tabLayout = new QVBoxLayout(tabContent);
     tabLayout->setContentsMargins(6, 6, 6, 6);
     tabLayout->setSpacing(6);

@@ -7,6 +7,7 @@
 #include <QAbstractSpinBox>
 #include <QComboBox>
 #include <QLineEdit>
+#include <QLayout>
 #include <QLabel>
 #include <QPushButton>
 #include <QToolButton>
@@ -89,12 +90,12 @@ namespace ks::ui
         }
     }
 
-    // 只接管页面明确登记的一行控件；全局主题不写高度，避免挤压标题栏和编辑器。
+    // 只接管页面明确登记的工具控件；支持单行、流式和网格布局。
     class ToolbarRowMetrics final : public QObject
     {
     public:
         // row 完成添加控件后调用，随布局销毁；字号变化后按整行最高字体重新对齐。
-        explicit ToolbarRowMetrics(QHBoxLayout* row) : QObject(row), m_row(row)
+        explicit ToolbarRowMetrics(QLayout* row) : QObject(row), m_row(row)
         {
             for (int index = 0; index < row->count(); ++index)
             {
@@ -160,24 +161,30 @@ namespace ks::ui
             }
         }
 
-        QPointer<QHBoxLayout> m_row; // 页面原布局，不重建、不移动动作或改变连接。
+        QPointer<QLayout> m_row; // 页面原布局，不重建、不移动动作或改变连接。
         bool m_pending = false;     // 合并同一轮字体/样式事件，防止布局反馈循环。
     };
 
-    // 一行只登记一次；调用方在该行全部控件插入后调用。
-    inline void NormalizeToolbarRow(QHBoxLayout* row, int spacing = 8)
+    // 调用方先插入全部控件；自适应布局继续拥有自己的间距和换行规则。
+    inline void NormalizeToolbarLayout(QLayout* row)
     {
         if (row == nullptr)
         {
             return;
         }
-        // A/B 列组等有明确分段语义的行可显式传 0，普通工具行默认统一 8px。
-        row->setSpacing(spacing);
         if (row->property("ksword_equal_control_height").toBool())
         {
             return;
         }
         row->setProperty("ksword_equal_control_height", true);
         new ToolbarRowMetrics(row);
+    }
+
+    inline void NormalizeToolbarRow(QHBoxLayout* row, int spacing = 8)
+    {
+        if (row == nullptr) return;
+        // A/B 分段仍可显式传0；普通单行工具保持既有8px规则。
+        row->setSpacing(spacing);
+        NormalizeToolbarLayout(row);
     }
 }

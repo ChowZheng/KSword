@@ -3531,6 +3531,11 @@
     "disk_map.unreadable": "无法读取磁盘布局，请刷新或以管理员权限运行",
     "disk_map.footer": "0  ·  扇区 %1 B  ·  共 %2 个分区块  ·  末尾 %3",
     "other.thumbnail.none": "无可用缩略图",
+    "other.thumbnail.hidden": "隐藏窗口无法预览",
+    "other.thumbnail.current": "当前窗口无法预览",
+    "other.thumbnail.restricted": "窗口限制截图",
+    "other.thumbnail.minimized": "最小化窗口无法预览",
+    "other.thumbnail.select_one": "请选择一个窗口以保存截图",
     "network.timeline.upload": "上行",
     "network.timeline.download": "下行",
     "network.tab.traffic": "流量监控",
@@ -7116,6 +7121,11 @@
     "notification.copy.log_template": "%1\n%2\n%3\n文件：%4\n函数：%5\nGUID：%6"
   },
   "source_translations": {
+    "隐藏窗口无法预览": "隐藏窗口无法预览",
+    "当前窗口无法预览": "当前窗口无法预览",
+    "窗口限制截图": "窗口限制截图",
+    "最小化窗口无法预览": "最小化窗口无法预览",
+    "请选择一个窗口以保存截图": "请选择一个窗口以保存截图",
     "ProcessColumnViewNameDialog": "ProcessColumnViewNameDialog",
     "ProcessColumnViewNameEdit": "ProcessColumnViewNameEdit",
     "无法保存当前列视图，请重试。": "无法保存当前列视图，请重试。",

@@ -6,6 +6,8 @@
 #include "./MainSurfaceStyle.h"
 #include "./ToolbarMetrics.h"
 #include "./CodeTextEdit.h"
+#include "./CodeEditorWidget.h"
+#include "./StructuredFieldView.h"
 #include "../Internationalization/LanguageManager.h"
 #include "../theme.h"
 #include <QAbstractItemView>
@@ -584,7 +586,7 @@ namespace ks::ui
         StylePrimaryGroup(group);
         if (group->layout())
         {
-            group->layout()->setContentsMargins(0, 22, 0, 4);
+            group->layout()->setContentsMargins(0, group->title().isEmpty() ? 4 : 22, 0, 4);
             group->layout()->setSpacing(8);
         }
     }
@@ -592,15 +594,30 @@ namespace ks::ui
     void StyleParameterFields(QWidget* container)
     {
         if (!container) return;
+        const auto ownsCompositeLayout = [](QWidget* widget)
+        {
+            return qobject_cast<QAbstractItemView*>(widget)
+                || qobject_cast<StructuredFieldView*>(widget)
+                || qobject_cast<CodeEditorWidget*>(widget)
+                || widget->property("ksword_detail_projection").toBool()
+                || widget->property("ksword_detail_keep_layout").toBool();
+        };
+        if (ownsCompositeLayout(container)) return;
+        const auto isCompositeInterior = [container, ownsCompositeLayout](QWidget* widget)
+        {
+            for (QWidget* ancestor = widget; ancestor && ancestor != container;
+                ancestor = ancestor->parentWidget())
+            {
+                if (ownsCompositeLayout(ancestor) || ancestor->isWindow()) return true;
+            }
+            return false;
+        };
         const auto fields = container->findChildren<QWidget*>();
         for (QWidget* field : fields)
         {
-            // 不接管表格内部临时编辑器、连体数值框的内部文本框或业务单元格。
-            bool tableEditor = false;
-            for (QWidget* ancestor = field->parentWidget(); ancestor && ancestor != container;
-                ancestor = ancestor->parentWidget())
-                tableEditor = tableEditor || qobject_cast<QAbstractItemView*>(ancestor);
-            if (tableEditor) continue;
+            // Shared field/editor toolbars and professional viewports own their
+            // internal metrics. Parameter forms only normalize their own fields.
+            if (isCompositeInterior(field)) continue;
             if (auto* label = qobject_cast<QLabel*>(field))
             {
                 label->setWordWrap(true);
@@ -633,7 +650,8 @@ namespace ks::ui
             else if (auto* edit = qobject_cast<QLineEdit*>(field))
             {
                 if (qobject_cast<QComboBox*>(edit->parentWidget())
-                    || qobject_cast<QAbstractSpinBox*>(edit->parentWidget())) continue;
+                    || qobject_cast<QAbstractSpinBox*>(edit->parentWidget())
+                    || edit->property("ksword_page_search_style").toBool()) continue;
                 NormalizeToolbarControl(edit);
                 // 搜索、参数输入和数值框使用同一编辑层；这里只拥有紧凑表单的横向留白。
                 BindLineEditTheme(edit);
@@ -650,6 +668,7 @@ namespace ks::ui
         }
         for (auto* form : container->findChildren<QFormLayout*>())
         {
+            if (isCompositeInterior(form->parentWidget())) continue;
             if (form->rowWrapPolicy() == QFormLayout::DontWrapRows)
                 form->setRowWrapPolicy(QFormLayout::WrapLongRows);
             form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
