@@ -11,6 +11,7 @@ namespace ks::ui
     void ApplySettingsPresentation(QWidget* settings);
     void StyleSettingsNavigation(QTabBar* bar, const QFont& bodyFont);
     // 设置表单独立统一标签/控件行高与紧凑行距，不影响属性窗口和主页面工具栏。
+    // 默认行几何在首显前完成，真实字体变化继续沿局部布局边界更新。
     void StyleSettingsForm(QFormLayout* form, int labelWidth = 204);
     // 调色按钮保留数据色块，复原动作作为轻文字链接；仅接管明确登记的控件。
     void StyleSettingsColorButton(QAbstractButton* button);

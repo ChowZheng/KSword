@@ -37,6 +37,7 @@ public:
     static void applyChartColors(QChart* chart, const QColor& colorValue);
 
 protected:
+    bool eventFilter(QObject* watched, QEvent* event) override;
     void resizeEvent(QResizeEvent* resizeEventPointer) override;
     void showEvent(QShowEvent* showEventPointer) override;
     void hideEvent(QHideEvent* hideEventPointer) override;
@@ -181,6 +182,7 @@ private:
     QString buildCpuSensorText(bool forceRefresh);
 
 private:
+    bool m_adjustingChartHeights = false;
     QHBoxLayout* m_bodyLayout = nullptr;
     QListWidget* m_sidebarList = nullptr;
     QStackedWidget* m_detailStack = nullptr;

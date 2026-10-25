@@ -119,9 +119,10 @@ namespace ks::ui
             bool structured = false;
         };
 
-        // initializeHostUi / scheduleHostUiInitialization / initializeConnections：
-        // 延迟到页面构造完成后创建统一分隔器、箭头并绑定文本/点击事件。
+        // 构造后在首显/可见布局边界准备统一分隔器和箭头；排队处理尚未挂载的面板。
+        // 文本、点击与业务内容仍由既有连接及页面管理。
         void initializeHostUi();
+        void prepareHostUi();
         void scheduleHostUiInitialization();
         void initializeConnections();
 
@@ -224,10 +225,12 @@ namespace ks::ui
             ks::settings::DetailDisplayScheme::BottomCollapsed;
         ks::settings::DetailDisplayScheme m_requestedScheme =
             ks::settings::DetailDisplayScheme::BottomCollapsed; // 保留全局请求，能力回退不改设置。
+        bool m_preparingHostUi = false;                 // Coalesce synchronous layout/show reentry.
         bool m_constructing = true;                     // 构造期间只排队，避免 Show 回调销毁半构造宿主。
         bool m_bottomExpanded = false;                  // m_bottomExpanded：下方详情是否展开。
         bool m_explicitBinding = false;                 // 是否启用页面显式布局契约。
         quint64 m_bindingGeneration = 0;                // 取消换布局/模型前 queued 点击。
+        quint64 m_hostUiInitializationGeneration = 0;    // Invalidate a consumed queued initialization.
         bool m_hostUiInitializationScheduled = false;   // m_hostUiInitializationScheduled：页面构造结束后的延迟初始化是否已排队。
         bool m_indicatorRefreshScheduled = false;       // 合并当前可见视口的指示器刷新。
         bool m_embeddedIndicatorsDirty = true;          // 隐藏视图只记录脏状态，Show首帧前安装delegate。

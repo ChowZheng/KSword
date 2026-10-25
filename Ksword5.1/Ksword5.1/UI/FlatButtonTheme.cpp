@@ -8,6 +8,7 @@
 #include <QApplication>
 #include <QHash>
 #include <QEvent>
+#include <QFocusEvent>
 #include <QPalette>
 #include <QPointer>
 #include <QPushButton>
@@ -15,6 +16,7 @@
 #include <QVariant>
 #include <QStringView>
 #include <QStyle>
+#include <QStyleOption>
 #include <memory>
 #include <array>
 
@@ -266,9 +268,12 @@ namespace
             const auto& pressed = recipe[2];
             const auto& checked = recipe[3];
             const auto& disabled = recipe[4];
+            // Keep keyboard focus visible without overriding pressed/checked/disabled;
+            // native mouse-focus outlines can otherwise leave a second tinted overlay.
             style += QStringLiteral(
                 "%1{background-color:%2;color:%3;border:none;}"
-                "%1:hover,%1:focus{background-color:%4;color:%5;border:none;}"
+                "%1:hover,%1[ksword_flat_button_keyboard_focus=\"true\"]:focus:enabled:!checked:!pressed{background-color:%4;color:%5;border:none;}"
+                "%1[ksword_flat_button_keyboard_focus=\"false\"]:focus{outline:none;}"
                 "%1:pressed{background-color:%6;color:%7;border:none;}"
                 "%1:checked,%1:checked:hover{background-color:%8;color:%9;border:none;}"
                 "%1:disabled,%1:checked:disabled{background-color:%10;color:%11;border:none;}")
@@ -395,6 +400,26 @@ namespace
         return true;
     }
 
+    // Dynamic selectors need a local repolish only when input origin changes.
+    // Keep the previous origin while a popup or inactive window temporarily owns focus.
+    bool setButtonKeyboardFocus(QAbstractButton* button, bool keyboard)
+    {
+        const QPointer<QAbstractButton> target(button);
+        const bool changed = button->property(ks::ui::FlatButtonKeyboardFocusProperty).toBool() != keyboard;
+        button->setProperty(ks::ui::FlatButtonKeyboardFocusProperty, keyboard);
+        if (!target) return false;
+        if (changed && button->testAttribute(Qt::WA_WState_Polished)
+            && (qobject_cast<QPushButton*>(button) || qobject_cast<QToolButton*>(button)))
+        {
+            button->style()->unpolish(button);
+            if (!target) return false;
+            button->style()->polish(button);
+            if (!target) return false;
+        }
+        if (changed) button->update();
+        return true;
+    }
+
     // 只对明确使用本组件标记的本地/父级样式登记绑定，不猜测未审核业务的动作色。
     class FlatButtonFilter final : public QObject
     {
@@ -404,14 +429,46 @@ namespace
         bool eventFilter(QObject* object, QEvent* event) override
         {
             if (event == nullptr || (event->type() != QEvent::Polish
-                && event->type() != QEvent::Show && event->type() != QEvent::StyleChange))
+                && event->type() != QEvent::Show && event->type() != QEvent::StyleChange
+                && event->type() != QEvent::FocusIn && event->type() != QEvent::KeyPress
+                && event->type() != QEvent::MouseButtonPress && event->type() != QEvent::MouseButtonDblClick))
             {
                 return false;
             }
             auto* button = qobject_cast<QAbstractButton*>(object);
             if (button == nullptr || button->inherits("QLineEditIconButton")
-                || button->property("ksword_segmented_button").toBool() || (!qobject_cast<QPushButton*>(button)
-                && !qobject_cast<QToolButton*>(button)) || (ks::ui::HasWidgetThemeBinding(button)
+                || button->property("ksword_segmented_button").toBool())
+            {
+                return false;
+            }
+            const bool styledButton = qobject_cast<QPushButton*>(button) || qobject_cast<QToolButton*>(button);
+            if (!styledButton && !button->property(ks::ui::FlatButtonKeyboardFocusProperty).isValid())
+            {
+                return false;
+            }
+            if (event->type() == QEvent::MouseButtonPress || event->type() == QEvent::MouseButtonDblClick)
+            {
+                return !setButtonKeyboardFocus(button, false);
+            }
+            if (event->type() == QEvent::KeyPress)
+            {
+                return button->hasFocus() && !setButtonKeyboardFocus(button, true);
+            }
+            if (event->type() == QEvent::FocusIn)
+            {
+                const Qt::FocusReason reason = static_cast<QFocusEvent*>(event)->reason();
+                const bool restored = reason == Qt::PopupFocusReason || reason == Qt::ActiveWindowFocusReason;
+                const bool keyboard = restored ? button->property(ks::ui::FlatButtonKeyboardFocusProperty).toBool()
+                    : reason == Qt::TabFocusReason || reason == Qt::BacktabFocusReason
+                        || reason == Qt::ShortcutFocusReason || reason == Qt::MenuBarFocusReason;
+                return !setButtonKeyboardFocus(button, keyboard);
+            }
+            if (!button->property(ks::ui::FlatButtonKeyboardFocusProperty).isValid()
+                && !setButtonKeyboardFocus(button, ks::ui::HasFlatButtonKeyboardFocus(button)))
+            {
+                return true;
+            }
+            if (!styledButton || (ks::ui::HasWidgetThemeBinding(button)
                 && !button->property("ksword_flat_button_managed").toBool()))
             {
                 return false;
@@ -716,6 +773,24 @@ void ks::ui::InstallGlobalFlatButtonTheme(QApplication* app)
     app->installEventFilter(new FlatButtonFilter(app));
 }
 
+void ks::ui::TrackFlatButtonKeyboardFocus(QAbstractButton* button)
+{
+    if (button && !button->property(FlatButtonKeyboardFocusProperty).isValid())
+        setButtonKeyboardFocus(button, HasFlatButtonKeyboardFocus(button));
+}
+
+bool ks::ui::HasFlatButtonKeyboardFocus(const QAbstractButton* button)
+{
+    if (!button || !button->hasFocus()) return false;
+    const QVariant origin = button->property(FlatButtonKeyboardFocusProperty);
+    if (origin.isValid()) return origin.toBool();
+    // Purely painted QAbstractButton subclasses use the same window modality
+    // that Qt supplies to its native focus primitives.
+    QStyleOption option;
+    option.initFrom(button);
+    return option.state.testFlag(QStyle::State_KeyboardFocusChange);
+}
+
 bool ks::ui::TryGetFlatButtonBackground(const QAbstractButton* button,
     QIcon::Mode mode, QIcon::State state, QColor* background)
 {
@@ -786,7 +861,9 @@ bool ks::ui::TryGetFlatButtonBackground(const QAbstractButton* button,
     appearance = resolvedAppearance(static_cast<FlatButtonTone>(tone), appearance,
         toolPresentation(button));
     FlatButtonState actualState = FlatButtonState::Normal;
-    if (mode == QIcon::Active || button->underMouse() || button->hasFocus())
+    // Qt may request Active for a button that merely retains mouse focus.
+    // Its actual surface follows hover/keyboard origin, not the icon request mode.
+    if (button->underMouse() || HasFlatButtonKeyboardFocus(button))
     {
         actualState = FlatButtonState::Hover;
     }
@@ -827,8 +904,8 @@ bool ks::ui::IsFlatButtonBackgroundTransparent(const QAbstractButton* button,
         return false;
     }
     const bool disabled = !button->isEnabled() || mode == QIcon::Disabled;
-    if (!disabled && (mode == QIcon::Active || mode == QIcon::Selected || state == QIcon::On
-        || button->isChecked() || button->isDown() || button->underMouse() || button->hasFocus()))
+    if (!disabled && (mode == QIcon::Selected || state == QIcon::On
+        || button->isChecked() || button->isDown() || button->underMouse() || HasFlatButtonKeyboardFocus(button)))
     {
         return false;
     }

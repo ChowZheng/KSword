@@ -7,6 +7,7 @@
 #include <QElapsedTimer>
 #include <QFileInfo>
 #include <QFrame>
+#include <QFocusEvent>
 #include <QHBoxLayout>
 #include <QHideEvent>
 #include <QHash>
@@ -68,17 +69,44 @@ namespace
             if (m_depth != depth) { m_depth = depth; update(); }
             return searchChanged;
         }
+        bool isHighlightActive() const
+        {
+            return isEnabled() && (underMouse() || isDown() || (hasFocus() && m_keyboardFocus));
+        }
         bool searchMatch = false;
         QString route;      // 服务端对象生命周期身份，不能解释为地址或命令。
         QString searchPath; // 包含父级标题的完整检索路径。
         qreal hue = 0.0;
         bool current = false;
     protected:
+        bool event(QEvent* event) override
+        {
+            bool keyboardFocus = m_keyboardFocus;
+            if (event->type() == QEvent::MouseButtonPress || event->type() == QEvent::MouseButtonDblClick)
+                keyboardFocus = false;
+            else if (event->type() == QEvent::KeyPress && hasFocus())
+                keyboardFocus = true;
+            else if (event->type() == QEvent::FocusIn)
+            {
+                const auto reason = static_cast<QFocusEvent*>(event)->reason();
+                // Popup/window activation restores the existing input origin. A mouse
+                // click on an already focused item still clears the keyboard cue.
+                if (reason != Qt::PopupFocusReason && reason != Qt::ActiveWindowFocusReason)
+                    keyboardFocus = reason == Qt::TabFocusReason || reason == Qt::BacktabFocusReason
+                        || reason == Qt::ShortcutFocusReason || reason == Qt::MenuBarFocusReason;
+            }
+            if (m_keyboardFocus != keyboardFocus)
+            {
+                m_keyboardFocus = keyboardFocus;
+                update();
+            }
+            return QPushButton::event(event);
+        }
         void paintEvent(QPaintEvent*) override
         {
             QPainter painter(this);
             painter.setRenderHint(QPainter::Antialiasing);
-            const bool active = isEnabled() && (underMouse() || hasFocus() || isDown());
+            const bool active = isHighlightActive();
             if (current || active)
             {
                 painter.setPen(Qt::NoPen);
@@ -97,6 +125,7 @@ namespace
                 QFontMetrics(textFont).elidedText(text(), Qt::ElideRight, textRect.width()));
         }
     private:
+        bool m_keyboardFocus = false;
         int m_depth; // 一级列标题为 -1，二级页为 1，后续每层缩进。
     };
 
@@ -696,7 +725,7 @@ PageOverviewWindow::PageOverviewWindow(QWidget* owner)
             for (PageEntry* entry : column->entries)
             {
                 entry->hue = column->hue;
-                if (entry->underMouse() || entry->current || entry->hasFocus()) entry->update();
+                if (entry->current || entry->isHighlightActive()) entry->update();
             }
             if (!column->isHidden()) column->update();
         }

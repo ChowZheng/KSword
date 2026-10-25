@@ -10,6 +10,7 @@
 #include <QElapsedTimer>
 #include <QHash>
 #include <QList>
+#include <QLayout>
 #include <QObject>
 #include <QPalette>
 #include <QPointer>
@@ -37,6 +38,61 @@ namespace
     constexpr char kSpinStyleBegin[] = "/* KSWORD_SPIN_FIELD_BEGIN */"; // 数值框独有颜色片段起点。
     constexpr char kSpinStyleEnd[] = "/* KSWORD_SPIN_FIELD_END */"; // 页面其它样式不属于此片段。
     class WidgetThemeBinding;
+
+    // A queued QSS change can land after Qt's first layout pass but before the
+    // backing-store update already in the event queue. Finish only the actual
+    // ancestor layouts of this batch's newly prepared, visible controls.
+    void activateInitialThemeLayouts(const QVector<QPointer<QWidget>>& controls)
+    {
+        struct LayoutOwner
+        {
+            QPointer<QWidget> widget;
+            QPointer<QWidget> window;
+        };
+        QVector<LayoutOwner> owners;
+        QSet<QWidget*> collected;
+        QVector<QWidget*> branch;
+        for (const QPointer<QWidget>& control : controls)
+        {
+            if (!control || !control->isVisible()) continue;
+            QWidget* const window = control->window();
+            if (window->windowType() == Qt::Popup || window->windowType() == Qt::ToolTip) continue;
+            branch.clear();
+            for (QWidget* widget = control; widget && !collected.contains(widget);
+                widget = widget->parentWidget())
+            {
+                branch.append(widget);
+                if (widget->isWindow()) break;
+            }
+            for (qsizetype index = branch.size(); index > 0; --index)
+            {
+                QWidget* const widget = branch[index - 1];
+                if (!collected.contains(widget))
+                {
+                    collected.insert(widget);
+                    if (widget->layout()) owners.append(LayoutOwner{widget, window});
+                }
+            }
+        }
+        for (const LayoutOwner& owner : owners)
+        {
+            // Layout activation may resize, reparent or close a later owner.
+            // Never retain a layout pointer across one of those callbacks.
+            if (owner.widget && owner.window && owner.widget->isVisible()
+                && owner.widget->window() == owner.window && owner.widget->layout())
+            {
+                // A form's font observer can have posted its own row-metrics
+                // preparation. Deliver only that owner's existing layout work,
+                // never unrelated windows, timers or arbitrary MetaCall events.
+                QCoreApplication::sendPostedEvents(owner.widget.data(), QEvent::LayoutRequest);
+                if (owner.widget && owner.window && owner.widget->isVisible()
+                    && owner.widget->window() == owner.window && owner.widget->layout())
+                {
+                    owner.widget->layout()->activate();
+                }
+            }
+        }
+    }
 
     // 只替换本组件拥有的颜色片段，页面的尺寸、padding 和其它规则继续保留。
     QString replaceFieldStyle(QString style, const QString& replacement,
@@ -71,12 +127,31 @@ namespace
         void schedule(WidgetThemeBinding* binding);
         void scheduleAll();
         void applyPending(WidgetThemeBinding* binding); // 首帧入口消费同一登记项，不另建主题绑定。
-        void applyPendingForScope(QWidget* scope);
+        void applyPendingForScope(QWidget* scope, bool firstPreparationOnly = false);
 
     protected:
         // 应用调色板更新只排队刷新；各控件的局部 palette 事件由自己的绑定观察。
         bool eventFilter(QObject* watched, QEvent* event) override
         {
+            // UpdateRequest is the ordinary window's backing-store boundary,
+            // after construction/show traversal and before its first paint.
+            // Catch late default bindings without synchronously calling an
+            // unknown refresher from Polish/Show or preparing hidden pages.
+            if (event && event->type() == QEvent::UpdateRequest && !m_preparingForPaint
+                && !m_initialBindings.isEmpty())
+            {
+                const QPointer<QWidget> window(qobject_cast<QWidget*>(watched));
+                if (window && window->isWindow() && window->isVisible()
+                    && window->windowType() != Qt::Popup && window->windowType() != Qt::ToolTip)
+                {
+                    m_preparingForPaint = true;
+                    const QPointer<ThemeBindingRegistry> lifetime(this);
+                    applyPendingForScope(window, true);
+                    if (!lifetime) return window.isNull();
+                    m_preparingForPaint = false;
+                    if (!window) return true;
+                }
+            }
             if (watched == parent() && event != nullptr &&
                 event->type() == QEvent::ApplicationPaletteChange)
             {
@@ -92,6 +167,8 @@ namespace
         std::deque<QPointer<WidgetThemeBinding>> m_pending; // 常数时间取队首，保持登记顺序。
         QSet<WidgetThemeBinding*> m_pendingMembership; // 仅作常数时间去重；实际队列仍持弱引用。
         QSet<WidgetThemeBinding*> m_dirtyBindings; // 实际未消费请求；FIFO可含已首帧消费的旧节点。
+        QSet<WidgetThemeBinding*> m_initialBindings; // Only unfinished first preparations; hot colors never enter.
+        bool m_preparingForPaint = false; // Theme/layout callbacks can request a nested repaint.
         bool m_scheduled = false; // 合并同一轮重复主题事件的调度门禁。
     };
 
@@ -213,6 +290,15 @@ namespace
                 {
                     return true;
                 }
+                if (initialPaint && m_hasApplied)
+                {
+                    // QWidget::render and a newly created leaf may paint
+                    // without a top-level UpdateRequest. Keep this fallback
+                    // local and finish its initial layout before drawing.
+                    activateInitialThemeLayouts({owner});
+                    if (!lifetime) return owner.isNull();
+                    if (!owner) return true;
+                }
             }
             if (m_registry != nullptr && event != nullptr &&
                 (event->type() == QEvent::ApplicationPaletteChange ||
@@ -258,6 +344,7 @@ namespace
             m_bindings.erase(registration);
             m_pendingMembership.remove(binding); // 防止释放后同址新对象被旧待刷新地址误判为已排队。
             m_dirtyBindings.remove(binding);
+            m_initialBindings.remove(binding);
         });
         schedule(binding);
     }
@@ -270,6 +357,7 @@ namespace
         }
         binding->requestRefresh();
         m_dirtyBindings.insert(binding);
+        if (!binding->hasApplied()) m_initialBindings.insert(binding);
         // weakBinding 为当前对象的弱引用；重复事件只保留一次待刷新记录。
         const QPointer<WidgetThemeBinding> weakBinding(binding);
         if (!m_pendingMembership.contains(binding))
@@ -305,7 +393,10 @@ namespace
         m_dirtyBindings.remove(binding);
         if (binding->takePendingRefresh())
         {
+            const QPointer<WidgetThemeBinding> target(binding);
+            const QPointer<ThemeBindingRegistry> lifetime(this);
             binding->apply();
+            if (lifetime && target && target->hasApplied()) m_initialBindings.remove(target.data());
         }
     }
 
@@ -315,6 +406,8 @@ namespace
         // 只在实际取出时解除去重，保留回调重登记及真正嵌套更新的后续刷新。
         QElapsedTimer slice;
         slice.start();
+        QVector<QPointer<QWidget>> initialLayouts;
+        const QPointer<ThemeBindingRegistry> lifetime(this);
         const std::size_t initialCount = m_pending.size();
         for (std::size_t index = 0; index < initialCount && !m_pending.empty(); ++index)
         {
@@ -323,7 +416,11 @@ namespace
             if (binding != nullptr)
             {
                 m_pendingMembership.remove(binding.data());
+                const bool initial = !binding->hasApplied();
+                const QPointer<QWidget> widget(binding->widget());
                 applyPending(binding.data());
+                if (!lifetime) return;
+                if (initial && binding && binding->hasApplied() && widget) initialLayouts.append(widget);
             }
             // 不在同一次GUI回调里刷新全部页面，给输入、布局和绘制留出事件循环机会。
             // 单个业务回调仍必须自己有界；这里不能中断正在执行的setStyleSheet。
@@ -332,6 +429,8 @@ namespace
                 break;
             }
         }
+        activateInitialThemeLayouts(initialLayouts);
+        if (!lifetime) return;
         // 处理期间始终保留scheduled，嵌套事件循环不会启动第二个drain消费同一队列。
         m_scheduled = false;
         if (!m_pending.empty())
@@ -419,7 +518,7 @@ namespace
         return depth >= 0 ? depth + 1 : -1;
     }
 
-    void ThemeBindingRegistry::applyPendingForScope(QWidget* scope)
+    void ThemeBindingRegistry::applyPendingForScope(QWidget* scope, bool firstPreparationOnly)
     {
         if (m_dirtyBindings.isEmpty())
         {
@@ -430,13 +529,15 @@ namespace
             QPointer<WidgetThemeBinding> binding;
             int depth;
         };
+        const auto& candidates = firstPreparationOnly ? m_initialBindings : m_dirtyBindings;
         QVector<Pending> pending;
-        pending.reserve(m_dirtyBindings.size());
+        pending.reserve(candidates.size());
         {
             QHash<QWidget*, int> depths;
             QVector<QWidget*> branch; // 复用路径，缓存随收集结束释放。
-            for (WidgetThemeBinding* binding : m_dirtyBindings)
+            for (WidgetThemeBinding* binding : candidates)
             {
+                if (firstPreparationOnly && binding->hasApplied()) continue;
                 const int depth = collectVisibleDepth(binding->widget(), scope, depths, branch);
                 if (depth >= 0)
                 {
@@ -450,6 +551,7 @@ namespace
         });
         const QPointer<QWidget> owner(scope);
         const QPointer<ThemeBindingRegistry> lifetime(this);
+        QVector<QPointer<QWidget>> initialLayouts;
         for (const Pending& request : pending)
         {
             if (owner == nullptr || lifetime == nullptr)
@@ -460,9 +562,15 @@ namespace
             if (request.binding != nullptr
                 && visibleDepthInScope(request.binding->widget(), owner.data()) >= 0)
             {
+                const bool initial = !request.binding->hasApplied();
+                const QPointer<QWidget> widget(request.binding->widget());
                 lifetime->applyPending(request.binding.data());
+                if (!lifetime || !owner) return;
+                if (initial && request.binding && request.binding->hasApplied() && widget)
+                    initialLayouts.append(widget);
             }
         }
+        activateInitialThemeLayouts(initialLayouts);
     }
 }
 

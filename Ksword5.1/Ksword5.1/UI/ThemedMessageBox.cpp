@@ -51,6 +51,10 @@ namespace
     // - 避免同一主题下重复 setStyleSheet/setPalette 触发额外样式事件。
     constexpr const char* kThemeModePropertyName = "ksword_theme_dark_mode";
 
+    constexpr const char* kThemePendingPropertyName = "ksword_message_theme_pending";
+    constexpr const char* kThemeRevisionPropertyName = "ksword_message_theme_revision";
+    constexpr const char* kFirstFramePendingPropertyName = "ksword_message_first_frame_pending";
+
     // 消息框尺寸常量：
     // - kMessageBoxMinWidth：消息框允许的最小宽度；
     // - kMessageBoxPreferredWidth：默认偏好的可读宽度；
@@ -89,7 +93,8 @@ namespace
     // - 解决长文本把对话框强行撑宽的问题。
     void polishMessageTextLabel(QLabel* targetLabel, const int maxTextWidth)
     {
-        if (targetLabel == nullptr)
+        const QPointer<QLabel> target(targetLabel);
+        if (!target)
         {
             return;
         }
@@ -98,24 +103,29 @@ namespace
         if (!targetLabel->wordWrap())
         {
             targetLabel->setWordWrap(true);
+            if (!target) return;
         }
         if (targetLabel->minimumWidth() != 0)
         {
             targetLabel->setMinimumWidth(0);
+            if (!target) return;
         }
         const int targetMaxWidth = std::max(maxTextWidth, 220); // targetMaxWidth：当前屏幕文字安全宽度。
         if (targetLabel->maximumWidth() != targetMaxWidth)
         {
             targetLabel->setMaximumWidth(targetMaxWidth);
+            if (!target) return;
         }
         const QSizePolicy textPolicy(QSizePolicy::Preferred, QSizePolicy::Preferred);
         if (targetLabel->sizePolicy() != textPolicy)
         {
             targetLabel->setSizePolicy(textPolicy);
+            if (!target) return;
         }
         if (targetLabel->alignment() != (Qt::AlignLeft | Qt::AlignTop))
         {
             targetLabel->setAlignment(Qt::AlignLeft | Qt::AlignTop);
+            if (!target) return;
         }
         if (targetLabel->textInteractionFlags() != Qt::TextSelectableByMouse)
         {
@@ -455,8 +465,40 @@ namespace
             }
 
             const QEvent::Type eventType = eventObject->type();
+            const QPointer<QMessageBox> target(messageBox);
+            if (messageBox->property(kThemePolishingPropertyName).toBool())
+            {
+                return false;
+            }
+            if (eventType == QEvent::Show)
+            {
+                // Show is the completed ordinary dialog boundary. The real grid,
+                // labels and buttons must have their defaults before first paint;
+                // constructor/Polish work remains queued until this safe point.
+                polishMessageBox(messageBox);
+                if (!target) return true;
+                messageBox->setProperty(kFirstFramePendingPropertyName, true);
+                return target.isNull();
+            }
+            if (eventType == QEvent::UpdateRequest && messageBox->isVisible()
+                && messageBox->property(kFirstFramePendingPropertyName).toBool())
+            {
+                // QMessageBox::showEvent may reset label wrapping and fixed size
+                // after application Show filters. Finish at the first window
+                // update boundary, before the backing store starts painting.
+                messageBox->setProperty(kFirstFramePendingPropertyName, false);
+                if (!target) return true;
+                polishMessageBox(messageBox, true);
+                if (!target) return true;
+                if (messageBox->layout()) messageBox->layout()->activate();
+                if (!target) return true;
+                // Let QMessageBox consume its own size calculation now as well;
+                // an already posted LayoutRequest must not resize a painted box.
+                QEvent layoutRequest(QEvent::LayoutRequest);
+                QCoreApplication::sendEvent(messageBox, &layoutRequest);
+                return target.isNull();
+            }
             if (eventType == QEvent::Polish ||
-                eventType == QEvent::Show ||
                 eventType == QEvent::LanguageChange ||
                 eventType == QEvent::FontChange ||
                 eventType == QEvent::ApplicationFontChange ||
@@ -464,21 +506,21 @@ namespace
                 eventType == QEvent::ApplicationPaletteChange ||
                 eventType == QEvent::StyleChange)
             {
-                // 主题应用过程中会同步触发 StyleChange/PaletteChange；
-                // 若不在这里短路，会递归再次进入 polishMessageBox。
-                if (messageBox->property(kThemePolishingPropertyName).toBool())
+                // Real theme/font changes still coalesce. A synchronous Show or
+                // explicit refresh consumes the request and invalidates this turn.
+                if (!messageBox->property(kThemePendingPropertyName).toBool())
                 {
-                    return QObject::eventFilter(watchedObject, eventObject);
-                }
-                // 显示之后再计算文本尺寸，避免 Qt 的首次布局覆盖主题的几何约束。
-                // context 绑定消息框寿命；提前关闭时回调自动取消。
-                if (!messageBox->property("ksword_message_theme_pending").toBool())
-                {
-                    messageBox->setProperty("ksword_message_theme_pending", true);
-                    QTimer::singleShot(0, messageBox, [this, messageBox]()
+                    const quint64 revision = messageBox->property(kThemeRevisionPropertyName).toULongLong() + 1;
+                    messageBox->setProperty(kThemeRevisionPropertyName, revision);
+                    if (!target) return true;
+                    messageBox->setProperty(kThemePendingPropertyName, true);
+                    if (!target) return true;
+                    const QPointer<GlobalMessageBoxStyler> styler(this);
+                    QTimer::singleShot(0, messageBox, [styler, target, revision]()
                     {
-                        messageBox->setProperty("ksword_message_theme_pending", false);
-                        polishMessageBox(messageBox);
+                        if (!styler || !target || !target->property(kThemePendingPropertyName).toBool()
+                            || target->property(kThemeRevisionPropertyName).toULongLong() != revision) return;
+                        styler->polishMessageBox(target.data());
                     });
                 }
             }
@@ -487,9 +529,10 @@ namespace
         }
 
         // polishMessageBox 作用：把统一主题应用到单个 QMessageBox。
-        void polishMessageBox(QMessageBox* messageBox) const
+        void polishMessageBox(QMessageBox* messageBox, bool finishFirstLayout = false) const
         {
-            if (messageBox == nullptr)
+            const QPointer<QMessageBox> target(messageBox);
+            if (!target)
             {
                 return;
             }
@@ -511,7 +554,7 @@ namespace
             // - 避免消息框永久停留在“重入保护开启”状态。
             struct PolishingStateResetter
             {
-                QMessageBox* targetMessageBox = nullptr; // targetMessageBox：需要在析构时清理属性的消息框。
+                QPointer<QMessageBox> targetMessageBox; // Styling callbacks may close or destroy the dialog.
 
                 ~PolishingStateResetter()
                 {
@@ -523,7 +566,13 @@ namespace
             };
 
             messageBox->setProperty(kThemePolishingPropertyName, true);
+            if (!target) return;
             PolishingStateResetter currentPolishingStateResetter{ messageBox };
+            const quint64 revision = messageBox->property(kThemeRevisionPropertyName).toULongLong() + 1;
+            messageBox->setProperty(kThemeRevisionPropertyName, revision);
+            if (!target) return;
+            messageBox->setProperty(kThemePendingPropertyName, false);
+            if (!target) return;
 
             const QPalette sourcePalette = (qApp != nullptr) ? qApp->palette() : messageBox->palette();
             // dialogMaxWidth 用于按屏幕可用宽度限制消息框，避免超宽导致视觉拥挤。
@@ -540,43 +589,58 @@ namespace
             if (layoutInputsChanged)
             {
                 messageBox->setProperty("ksword_message_layout_inputs", layoutInputs);
+                if (!target) return;
             }
             messageBox->setObjectName(QString::fromLatin1(kThemedMessageBoxObjectName));
+            if (!target) return;
             messageBox->setAttribute(Qt::WA_StyledBackground, true);
+            if (!target) return;
             messageBox->setAutoFillBackground(true);
+            if (!target) return;
             messageBox->setMinimumWidth(kMessageBoxMinWidth);
+            if (!target) return;
             messageBox->setMaximumWidth(dialogMaxWidth);
+            if (!target) return;
             messageBox->setProperty(kThemeModePropertyName, darkModeEnabled);
+            if (!target) return;
             // 保留原生标题栏及关闭语义，圆角/阴影交由系统；不在 Show 中重建窗口句柄。
             if (messageBox->windowIcon().isNull())
             {
                 messageBox->setWindowIcon(resolveApplicationIcon(messageBox));
+                if (!target) return;
             }
 
             // 相同主题重复进入时，只刷新按钮与文本可选属性，避免重复 setStyleSheet 造成样式风暴。
             if (!themeAlreadyApplied)
             {
                 messageBox->setPalette(buildMessageBoxPalette(sourcePalette, darkModeEnabled));
+                if (!target) return;
                 if (messageBox->styleSheet() != targetStyleSheet)
                 {
                     messageBox->setStyleSheet(targetStyleSheet);
+                    if (!target) return;
                 }
             }
 
             QLabel* mainTextLabel = messageBox->findChild<QLabel*>(QStringLiteral("qt_msgbox_label"));
             polishMessageTextLabel(mainTextLabel, textMaxWidth);
+            if (!target) return;
 
             QLabel* informativeLabel = messageBox->findChild<QLabel*>(QStringLiteral("qt_msgbox_informativelabel"));
             polishMessageTextLabel(informativeLabel, textMaxWidth);
+            if (!target) return;
 
             QTextEdit* detailTextEdit = messageBox->findChild<QTextEdit*>();
             if (detailTextEdit != nullptr)
             {
                 detailTextEdit->setReadOnly(true);
+                if (!target) return;
                 detailTextEdit->setMinimumHeight(160);
+                if (!target) return;
             }
 
             const bool buttonGeometryChanged = polishButtons(messageBox);
+            if (!target) return;
             // QMessageBox::updateSize 会重新 setFixedSize，单设窗口 minimumWidth 会被覆盖。
             // 把最低可读宽度纳入真实网格的尺寸提示；零高 spacer 不增加可见空白行。
             bool widthReservationAdded = false; // widthReservationAdded：仅新网格需要额外尺寸约束。
@@ -588,12 +652,15 @@ namespace
                     0, QSizePolicy::Minimum, QSizePolicy::Fixed),
                     grid->rowCount(), 0, 1, qMax(1, grid->columnCount()));
                 grid->setProperty("ksword_message_width_reserved", true);
+                if (!target) return;
                 widthReservationAdded = true;
             }
             // 主题/字体/实际按钮几何或新网格需要重算，重复 StyleChange 不再重新调整同一窗口尺寸。
-            if (!themeAlreadyApplied || buttonGeometryChanged || widthReservationAdded || layoutInputsChanged)
+            if (finishFirstLayout || !themeAlreadyApplied || buttonGeometryChanged
+                || widthReservationAdded || layoutInputsChanged)
             {
                 messageBox->adjustSize();
+                if (!target) return;
             }
             ks::ui::ApplyWindowChrome(messageBox);
         }
@@ -602,15 +669,18 @@ namespace
         // polishButtons 作用：统一处理消息框按钮图标、悬停释义与主次按钮样式。
         bool polishButtons(QMessageBox* messageBox) const
         {
+            const QPointer<QMessageBox> target(messageBox);
             bool geometryChanged = false; // geometryChanged：仅实际文本、图标或尺寸变化需要窗口重算。
-            const QList<QAbstractButton*> buttonList = messageBox->buttons();
-            for (QAbstractButton* abstractButton : buttonList)
+            QList<QPointer<QAbstractButton>> buttonList;
+            for (QAbstractButton* button : messageBox->buttons()) buttonList.append(button);
+            for (const QPointer<QAbstractButton>& abstractButton : buttonList)
             {
-                QPushButton* pushButton = qobject_cast<QPushButton*>(abstractButton);
+                QPushButton* pushButton = qobject_cast<QPushButton*>(abstractButton.data());
                 if (pushButton == nullptr)
                 {
                     continue;
                 }
+                const QPointer<QPushButton> button(pushButton);
 
                 const QMessageBox::StandardButton standardButton = messageBox->standardButton(pushButton);
                 const QMessageBox::ButtonRole buttonRole = messageBox->buttonRole(pushButton);
@@ -624,34 +694,46 @@ namespace
                 if (roleChanged)
                 {
                     pushButton->setProperty("ksword_primary", primaryButton);
+                    if (!target) return geometryChanged;
+                    if (!button) continue;
                 }
                 if (pushButton->cursor().shape() != Qt::PointingHandCursor)
                 {
                     pushButton->setCursor(Qt::PointingHandCursor);
+                    if (!target) return geometryChanged;
+                    if (!button) continue;
                 }
                 const int targetHeight = std::max(28, QFontMetrics(pushButton->font()).height() + 12);
                 if (pushButton->minimumHeight() != targetHeight || pushButton->maximumHeight() != targetHeight
                     || !pushButton->styleSheet().contains(ks::ui::ToolbarControlGeometryStyle()))
                 {
                     ks::ui::NormalizeToolbarControl(pushButton);
+                    if (!target) return geometryChanged;
+                    if (!button) continue;
                     geometryChanged = true;
                 }
                 const int targetWidth = primaryButton ? 86 : 76; // targetWidth：主次动作的最低文字宽度。
                 if (pushButton->minimumWidth() != targetWidth)
                 {
                     pushButton->setMinimumWidth(targetWidth);
+                    if (!target) return geometryChanged;
+                    if (!button) continue;
                     geometryChanged = true;
                 }
                 const QSizePolicy buttonPolicy(QSizePolicy::Minimum, QSizePolicy::Fixed);
                 if (pushButton->sizePolicy() != buttonPolicy)
                 {
                     pushButton->setSizePolicy(buttonPolicy);
+                    if (!target) return geometryChanged;
+                    if (!button) continue;
                     geometryChanged = true;
                 }
                 const QString localizedButtonText = standardButtonText(standardButton);
                 if (!localizedButtonText.isEmpty() && pushButton->text() != localizedButtonText)
                 {
                     pushButton->setText(localizedButtonText);
+                    if (!target) return geometryChanged;
+                    if (!button) continue;
                     geometryChanged = true;
                 }
                 if (standardButton != QMessageBox::NoButton)
@@ -660,11 +742,15 @@ namespace
                     if (pushButton->toolTip() != toolTip)
                     {
                         pushButton->setToolTip(toolTip);
+                        if (!target) return geometryChanged;
+                        if (!button) continue;
                     }
                 }
                 else if (pushButton->toolTip().isEmpty())
                 {
                     pushButton->setToolTip(pushButton->text());
+                    if (!target) return geometryChanged;
+                    if (!button) continue;
                 }
 
                 const QString iconPath = standardButtonIconPath(standardButton);
@@ -672,12 +758,18 @@ namespace
                     && pushButton->property("ksword_message_icon_path").toString() != iconPath)
                 {
                     pushButton->setIcon(QIcon(iconPath));
+                    if (!target) return geometryChanged;
+                    if (!button) continue;
                     pushButton->setProperty("ksword_message_icon_path", iconPath);
+                    if (!target) return geometryChanged;
+                    if (!button) continue;
                     geometryChanged = true;
                 }
                 if (!iconPath.isEmpty() && pushButton->iconSize() != QSize(16, 16))
                 {
                     pushButton->setIconSize(QSize(16, 16));
+                    if (!target) return geometryChanged;
+                    if (!button) continue;
                     geometryChanged = true;
                 }
 
@@ -686,7 +778,10 @@ namespace
                 if (roleChanged && widgetStyle != nullptr)
                 {
                     widgetStyle->unpolish(pushButton);
-                    widgetStyle->polish(pushButton);
+                    if (!target) return geometryChanged;
+                    if (!button) continue;
+                    pushButton->style()->polish(pushButton);
+                    if (!target) return geometryChanged;
                 }
             }
             return geometryChanged;

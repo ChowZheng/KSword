@@ -27,49 +27,97 @@ namespace
     public:
         explicit SettingsFormMetrics(QFormLayout* form) : QObject(form), m_form(form)
         {
-            if (form->parentWidget())
-            {
-                form->parentWidget()->installEventFilter(this);
-            }
+            refreshHost();
             schedule();
         }
 
-    protected:
-        bool eventFilter(QObject*, QEvent* event) override
+        void refresh(bool changed = true)
         {
-            if (event->type() == QEvent::FontChange || event->type() == QEvent::StyleChange
-                || event->type() == QEvent::LayoutRequest)
+            m_dirty = m_dirty || changed;
+            prepare();
+        }
+
+    protected:
+        bool eventFilter(QObject* watched, QEvent* event) override
+        {
+            const QPointer<QObject> alive(watched);
+            if (event->type() == QEvent::Show || event->type() == QEvent::Polish)
             {
-                schedule();
+                if (watched == m_host) prepare();
             }
-            return false;
+            else if (event->type() == QEvent::LayoutRequest)
+            {
+                if (watched == m_host) prepare();
+            }
+            else if (event->type() == QEvent::FontChange
+                || event->type() == QEvent::ApplicationFontChange
+                || event->type() == QEvent::ScreenChangeInternal)
+            {
+                if (!m_applying) schedule();
+            }
+            else if (event->type() == QEvent::ChildAdded || event->type() == QEvent::ChildRemoved)
+            {
+                if (!m_applying) schedule();
+            }
+            return alive.isNull();
         }
 
     private:
-        // 合并 Qt 样式/布局事件，避免在布局计算中再次改变几何。
-        void schedule()
+        void refreshHost()
         {
-            if (m_pending)
-            {
-                return;
-            }
+            if (!m_form) return;
+            QWidget* host = m_form->parentWidget();
+            if (host == m_host) return;
+            if (m_host) m_host->removeEventFilter(this);
+            m_host = host;
+            if (m_host) m_host->installEventFilter(this);
+        }
+
+        void schedule(bool changed = true)
+        {
+            m_dirty = m_dirty || changed;
+            if (m_pending) return;
             m_pending = true;
             QTimer::singleShot(0, this, [this]()
             {
                 m_pending = false;
-                apply();
+                prepare(true);
             });
+        }
+
+        // Registered row metrics run at Show/posted-layout boundaries, never
+        // in Paint. A stale constructor timer does not move a painted form.
+        void prepare(bool deferred = false)
+        {
+            if (!m_form || m_applying) return;
+            refreshHost();
+            const int rows = m_form->rowCount();
+            if (rows != m_lastRowCount) m_dirty = true;
+            if (!m_dirty) return;
+            if (!deferred && m_host && (m_host->window()->windowType() == Qt::Popup
+                || m_host->window()->windowType() == Qt::ToolTip))
+            {
+                schedule();
+                return;
+            }
+            m_dirty = false;
+            m_lastRowCount = rows;
+            m_applying = true;
+            const QPointer<SettingsFormMetrics> alive(this);
+            apply();
+            if (alive) m_applying = false;
         }
 
         void apply()
         {
-            const int labelWidth = m_form->property("ksword_settings_label_width").toInt();
-            for (int row = 0; row < m_form->rowCount(); ++row)
+            const QPointer<QFormLayout> form(m_form);
+            const int labelWidth = form->property("ksword_settings_label_width").toInt();
+            for (int row = 0; form && row < form->rowCount(); ++row)
             {
                 QLayoutItem* labelItem = m_form->itemAt(row, QFormLayout::LabelRole);
                 QLayoutItem* fieldItem = m_form->itemAt(row, QFormLayout::FieldRole);
-                auto* label = labelItem ? qobject_cast<QLabel*>(labelItem->widget()) : nullptr;
-                QWidget* field = fieldItem ? fieldItem->widget() : nullptr;
+                const QPointer<QLabel> label(labelItem ? qobject_cast<QLabel*>(labelItem->widget()) : nullptr);
+                const QPointer<QWidget> field(fieldItem ? fieldItem->widget() : nullptr);
                 // 跨行说明不强加控件行高；长标签仍可按实际宽度换行。
                 if (!label || label->text().isEmpty() || !field)
                 {
@@ -77,12 +125,16 @@ namespace
                 }
                 label->installEventFilter(this);
                 field->installEventFilter(this);
-                label->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
-                label->setWordWrap(true);
+                if (label->alignment() != (Qt::AlignLeft | Qt::AlignVCenter))
+                    label->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+                if (!form || !label || !field) return;
+                if (!label->wordWrap()) label->setWordWrap(true);
+                if (!form || !label || !field) return;
                 if (label->minimumWidth() != labelWidth)
                 {
                     label->setMinimumWidth(labelWidth);
                 }
+                if (!form || !label || !field) return;
                 // 行内文字按同一字号测量，右侧的原生复选框也占据完整的单行高度。
                 const int rowHeight = std::max({28, label->fontMetrics().height() + 12,
                     field->fontMetrics().height() + 12});
@@ -90,6 +142,7 @@ namespace
                 {
                     field->setMinimumHeight(rowHeight);
                 }
+                if (!form || !label || !field) return;
                 // 不能将复合行的无宽度 sizeHint 固化为最小高度：可换行说明的建议
                 // 高度可能很大。实际换行与整行高度交给 QFormLayout 的 heightForWidth。
                 if (label->minimumHeight() != rowHeight)
@@ -99,8 +152,12 @@ namespace
             }
         }
 
-        QFormLayout* m_form; // 布局拥有此对象，不跨设置页保存状态。
+        QPointer<QFormLayout> m_form; // 布局拥有此对象，不跨设置页保存状态。
+        QPointer<QWidget> m_host;
+        int m_lastRowCount = -1;
+        bool m_dirty = true; // 首显消费与后续字体更新共用同一工作。
         bool m_pending = false; // 每轮只执行一次尺寸同步。
+        bool m_applying = false; // 自身几何更新不安排重复工作。
     };
 }
 
@@ -112,18 +169,23 @@ namespace ks::ui
         {
             return;
         }
-        form->setProperty("ksword_settings_label_width", labelWidth);
-        form->setHorizontalSpacing(16);
-        form->setVerticalSpacing(4);
-        form->setLabelAlignment(Qt::AlignLeft | Qt::AlignVCenter);
-        form->setFormAlignment(Qt::AlignLeft | Qt::AlignTop);
-        form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
-        form->setRowWrapPolicy(QFormLayout::WrapLongRows);
-        if (!form->property("ksword_settings_form_metrics").toBool())
+        const bool labelWidthChanged = form->property("ksword_settings_label_width").toInt() != labelWidth;
+        if (labelWidthChanged) form->setProperty("ksword_settings_label_width", labelWidth);
+        if (form->horizontalSpacing() != 16) form->setHorizontalSpacing(16);
+        if (form->verticalSpacing() != 4) form->setVerticalSpacing(4);
+        if (form->labelAlignment() != (Qt::AlignLeft | Qt::AlignVCenter)) form->setLabelAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+        if (form->formAlignment() != (Qt::AlignLeft | Qt::AlignTop)) form->setFormAlignment(Qt::AlignLeft | Qt::AlignTop);
+        if (form->fieldGrowthPolicy() != QFormLayout::AllNonFixedFieldsGrow) form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+        if (form->rowWrapPolicy() != QFormLayout::WrapLongRows) form->setRowWrapPolicy(QFormLayout::WrapLongRows);
+        auto* metrics = static_cast<SettingsFormMetrics*>(
+            form->property("ksword_settings_form_metrics_owner").value<QObject*>());
+        if (!metrics)
         {
+            metrics = new SettingsFormMetrics(form);
             form->setProperty("ksword_settings_form_metrics", true);
-            new SettingsFormMetrics(form);
+            form->setProperty("ksword_settings_form_metrics_owner", QVariant::fromValue<QObject*>(metrics));
         }
+        metrics->refresh(labelWidthChanged);
     }
 
     void ApplySettingsPresentation(QWidget* settings)

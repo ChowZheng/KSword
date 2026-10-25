@@ -12,6 +12,12 @@ class QWidget;
 
 namespace ks::ui
 {
+    // The shared filter records input origin without changing the real Qt focus.
+    inline constexpr char FlatButtonKeyboardFocusProperty[] = "ksword_flat_button_keyboard_focus";
+    // Custom-painted abstract buttons opt into input tracking without a QSS owner.
+    void TrackFlatButtonKeyboardFocus(QAbstractButton* button);
+    bool HasFlatButtonKeyboardFocus(const QAbstractButton* button);
+
     // 语义色由页面明确选择，不从按钮文字猜测危险/成功动作。
     enum class FlatButtonTone
     {
@@ -68,7 +74,8 @@ namespace ks::ui
         FlatButtonAppearance appearance = FlatButtonAppearance::Auto);
 
     // 为已审核的共享按钮图标查询实际状态底色；未知页面本地样式返回 false。
-    // mode/state 同时兼容 Qt 请求的 Active/On，不能只用普通模式猜悬停与选中底。
+    // Active may also be requested for mouse focus; hover uses actual button input state.
+    // Selected/On and Disabled still preserve the requested selection/disabled state.
     bool TryGetFlatButtonBackground(const QAbstractButton* button,
         QIcon::Mode mode, QIcon::State state, QColor* background);
     bool IsFlatButtonBackgroundTransparent(const QAbstractButton* button,

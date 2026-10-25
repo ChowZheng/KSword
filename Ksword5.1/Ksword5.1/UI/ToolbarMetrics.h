@@ -36,35 +36,45 @@ namespace ks::ui
 
     // 已审核的单个按钮/单行输入控件也可接入统一几何，供 FlowLayout 等换行工具行使用。
     // height 为整行共同高度；0 表示按该控件字体计算，不修改文字、状态或业务配色。
-    inline void NormalizeToolbarControl(QWidget* widget, int height = 0)
+    inline void NormalizeToolbarControl(QWidget* widget, int height = 0, bool updateStyle = true)
     {
         if (widget == nullptr)
         {
             return;
         }
+        const QPointer<QWidget> target(widget);
         const int controlHeight = height > 0 ? height
-            : std::max(28, QFontMetrics(widget->font()).height() + 12);
+            : std::max(28, widget->fontMetrics().height() + 12);
         widget->setFixedHeight(controlHeight);
+        if (!target) return;
         if (auto* button = qobject_cast<QAbstractButton*>(widget))
         {
             const QString geometryRule = ToolbarControlGeometryStyle();
             if (!button->property("ksword_toolbar_control").toBool())
             {
                 button->setProperty("ksword_toolbar_control", true);
+                if (!target) return;
             }
             button->setIconSize(QSize(16, 16));
+            if (!target) return;
             const auto* toolButton = qobject_cast<QToolButton*>(button);
             // 翻译绑定前的文字按钮也可能暂时没有文字，不能因此把它锁成一个图标方块。
             const bool explicitIconTool = toolButton && toolButton->toolButtonStyle() == Qt::ToolButtonIconOnly;
             const bool fixedIconAction = button->text().isEmpty()
-                && button->minimumWidth() == button->maximumWidth() && button->maximumWidth() <= 40;
+                && button->minimumWidth() == button->maximumWidth()
+                && (button->maximumWidth() <= 40 || button->property("ksword_toolbar_icon_only").toBool());
             const bool iconOnlyAction = !button->icon().isNull() && (explicitIconTool || fixedIconAction);
             if (iconOnlyAction)
             {
                 button->setFixedWidth(controlHeight);
+                if (!target) return;
                 // 图标按钮保持方形，不能被文字按钮的横向留白压缩可见图标。
                 button->setProperty("ksword_toolbar_icon_only", true);
+                if (!target) return;
             }
+            // Font/style notifications may arrive during first-paint theme preparation.
+            // Keep measured geometry current without re-entering QSS polish in that stack.
+            if (!updateStyle) return;
             // 几何QSS只匹配这两类按钮。给复选框/单选框追加无效规则会与
             // 它们的独立主题绑定互相覆盖，并经StyleChange/PaletteChange循环排队。
             if (!toolButton && !qobject_cast<QPushButton*>(button)) return;
@@ -110,14 +120,43 @@ namespace ks::ui
     protected:
         bool eventFilter(QObject* source, QEvent* event) override
         {
-            if (event->type() == QEvent::FontChange || event->type() == QEvent::ApplicationFontChange
-                || event->type() == QEvent::StyleChange)
+            if (m_applying) return false;
+            if (event->type() == QEvent::Polish || event->type() == QEvent::Show)
             {
+                const QPointer<QObject> target(source);
+                if (m_pending)
+                {
+                    m_pending = false;
+                    ++m_generation;
+                    apply();
+                }
+                return target.isNull();
+            }
+            if (event->type() == QEvent::FontChange || event->type() == QEvent::ApplicationFontChange
+                || event->type() == QEvent::ScreenChangeInternal)
+            {
+                const QPointer<QObject> target(source);
+                apply(false);
+                return target.isNull();
+            }
+            if (event->type() == QEvent::StyleChange)
+            {
+                // Defaults are installed once by the row constructor. A color/focus
+                // refresh does not require measuring and styling the whole row again.
+                const auto* button = qobject_cast<QAbstractButton*>(source);
+                if (!button || (!qobject_cast<const QPushButton*>(button)
+                    && !qobject_cast<const QToolButton*>(button))) return false;
+                const QString style = button->styleSheet();
+                if (style.contains(ToolbarControlGeometryStyle())
+                    && (!button->property("ksword_toolbar_icon_only").toBool()
+                        || style.endsWith(ToolbarIconGeometryStyle()))) return false;
                 if (!m_pending)
                 {
                     m_pending = true;
-                    QTimer::singleShot(0, this, [this]()
+                    const quint64 generation = ++m_generation;
+                    QTimer::singleShot(0, this, [this, generation]()
                     {
+                        if (!m_pending || generation != m_generation) return;
                         m_pending = false;
                         apply();
                     });
@@ -137,32 +176,39 @@ namespace ks::ui
                 || (label && !label->wordWrap());
         }
 
-        void apply()
+        void apply(bool updateStyle = true)
         {
-            if (m_row.isNull())
+            if (m_row.isNull() || m_applying)
             {
                 return;
             }
+            m_applying = true;
+            const QPointer<ToolbarRowMetrics> alive(this);
             int height = 28; // 基础逻辑像素，Qt 负责设备 DPI；大字体不裁剪。
             for (int index = 0; index < m_row->count(); ++index)
             {
                 if (QWidget* widget = m_row->itemAt(index)->widget(); widget && isSingleLineControl(widget))
                 {
-                    height = std::max(height, QFontMetrics(widget->font()).height() + 12);
+                    height = std::max(height, widget->fontMetrics().height() + 12);
                 }
             }
             for (int index = 0; index < m_row->count(); ++index)
             {
                 if (QWidget* widget = m_row->itemAt(index)->widget(); widget && isSingleLineControl(widget))
                 {
-                    NormalizeToolbarControl(widget, height);
-                    m_row->setAlignment(widget, Qt::AlignVCenter);
+                    const QPointer<QWidget> target(widget);
+                    NormalizeToolbarControl(widget, height, updateStyle);
+                    if (!alive || !m_row) return;
+                    if (target) m_row->setAlignment(target, Qt::AlignVCenter);
                 }
             }
+            m_applying = false;
         }
 
         QPointer<QLayout> m_row; // 页面原布局，不重建、不移动动作或改变连接。
         bool m_pending = false;     // 合并同一轮字体/样式事件，防止布局反馈循环。
+        bool m_applying = false;
+        quint64 m_generation = 0; // 首显消费后不让旧队列重复修改度量。
     };
 
     // 调用方先插入全部控件；自适应布局继续拥有自己的间距和换行规则。

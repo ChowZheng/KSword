@@ -37,7 +37,7 @@
 
 namespace
 {
-    // 明确登记的参数分区使用独立两列；Resize 后排队切换，避免布局计算中同步搬动子控件。
+    // 明确登记的参数分区使用独立两列，在正常布局事件内按实际宽度选择列数。
     class ParameterColumns final : public QWidget
     {
     public:
@@ -47,7 +47,9 @@ namespace
             m_minimumColumnWidth(qMax(200, minimumColumnWidth))
         {
             setMinimumWidth(0);
-            setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Maximum);
+            QSizePolicy policy(QSizePolicy::Ignored, QSizePolicy::Maximum);
+            policy.setHeightForWidth(true);
+            setSizePolicy(policy);
             m_columns = new QHBoxLayout(this);
             m_columns->setContentsMargins(0, 0, 0, 0);
             m_columns->setSpacing(16);
@@ -63,22 +65,82 @@ namespace
             m_secondaryLayout = createColumn(m_secondaryPanel);
             m_columns->addWidget(m_primaryPanel, 1, Qt::AlignTop);
             m_columns->addWidget(m_secondaryPanel, 1, Qt::AlignTop);
+            m_primaryPanel->installEventFilter(this);
+            m_secondaryPanel->installEventFilter(this);
+            for (QWidget* section : m_originalOrder) section->installEventFilter(this);
             applyColumns(false);
         }
+        bool hasHeightForWidth() const override { return true; }
+        int heightForWidth(int availableWidth) const override
+        {
+            const bool twoColumns = availableWidth >= m_minimumColumnWidth * 2 + m_columns->spacing();
+            const int columnWidth = twoColumns
+                ? qMax(0, (availableWidth - m_columns->spacing()) / 2) : qMax(0, availableWidth);
+            const auto columnHeight = [columnWidth](const QList<QWidget*>& sections)
+            {
+                int total = 0;
+                int count = 0;
+                for (QWidget* section : sections)
+                {
+                    QWidgetItem item(section);
+                    if (item.isEmpty()) continue;
+                    const int height = item.hasHeightForWidth()
+                        ? item.heightForWidth(columnWidth) : item.sizeHint().height();
+                    total += qBound(item.minimumSize().height(), height, item.maximumSize().height());
+                    ++count;
+                }
+                return total + qMax(0, count - 1) * 16;
+            };
+            return twoColumns ? qMax(columnHeight(m_primary), columnHeight(m_secondary))
+                : columnHeight(m_originalOrder);
+        }
     protected:
+        bool eventFilter(QObject* watched, QEvent* event) override
+        {
+            // The outer layout caches this widget's custom heightForWidth.
+            // Section visibility changes must invalidate that cache directly,
+            // rather than waiting for both nested native column layouts.
+            if (event->type() == QEvent::ShowToParent || event->type() == QEvent::HideToParent
+                || event->type() == QEvent::LayoutRequest)
+            {
+                const QPointer<QObject> target(watched);
+                updateGeometry();
+                return target.isNull();
+            }
+            return QWidget::eventFilter(watched, event);
+        }
+        bool event(QEvent* event) override
+        {
+            const QPointer<ParameterColumns> alive(this);
+            if (event->type() == QEvent::Show || event->type() == QEvent::LayoutRequest)
+            {
+                arrange();
+                if (!alive) return true;
+            }
+            return QWidget::event(event);
+        }
         void resizeEvent(QResizeEvent* event) override
         {
             QWidget::resizeEvent(event);
-            if (m_pending) return;
-            m_pending = true;
-            QTimer::singleShot(0, this, [this]()
-            {
-                m_pending = false;
-                const bool twoColumns = width() >= m_minimumColumnWidth * 2 + m_columns->spacing();
-                if (twoColumns != m_twoColumns) applyColumns(twoColumns);
-            });
+            arrange();
         }
     private:
+        void arrange()
+        {
+            if (m_arranging || !m_columns) return;
+            const bool twoColumns = width() >= m_minimumColumnWidth * 2 + m_columns->spacing();
+            if (twoColumns == m_twoColumns) return;
+            m_arranging = true;
+            const QPointer<ParameterColumns> alive(this);
+            applyColumns(twoColumns);
+            if (!alive) return;
+            m_columns->activate();
+            if (!alive) return;
+            m_primaryLayout->activate();
+            if (!alive) return;
+            if (twoColumns) m_secondaryLayout->activate();
+            if (alive) m_arranging = false;
+        }
         // 输入列容器，返回只在顶部排列且不传播硬最小宽度的纵向布局。
         static QVBoxLayout* createColumn(QWidget* panel)
         {
@@ -91,16 +153,26 @@ namespace
         }
         void applyColumns(bool twoColumns)
         {
+            const QPointer<ParameterColumns> alive(this);
             // 删除的只是布局项；业务分区、字段对象、折叠状态与已有信号连接继续保留。
             while (QLayoutItem* item = m_primaryLayout->takeAt(0)) delete item;
             while (QLayoutItem* item = m_secondaryLayout->takeAt(0)) delete item;
             const QList<QWidget*>& first = twoColumns ? m_primary : m_originalOrder;
-            for (QWidget* section : first) m_primaryLayout->addWidget(section);
+            for (QWidget* section : first)
+            {
+                m_primaryLayout->addWidget(section);
+                if (!alive) return;
+            }
             if (twoColumns)
             {
-                for (QWidget* section : m_secondary) m_secondaryLayout->addWidget(section);
+                for (QWidget* section : m_secondary)
+                {
+                    m_secondaryLayout->addWidget(section);
+                    if (!alive) return;
+                }
             }
             m_secondaryPanel->setVisible(twoColumns);
+            if (!alive) return;
             m_twoColumns = twoColumns;
             updateGeometry();
         }
@@ -114,7 +186,7 @@ namespace
         QVBoxLayout* m_secondaryLayout = nullptr;
         int m_minimumColumnWidth = 300; // 每列最少正文宽度。
         bool m_twoColumns = false;
-        bool m_pending = false; // 合并连续 Resize，避免重复搬动字段。
+        bool m_arranging = false;
     };
 
     // 只作用于明确登记的参数复选框/单选框。保留原文与对象，仅重绘标签并按宽度测量高度。
@@ -125,6 +197,7 @@ namespace
         {
             button->setMinimumWidth(0);
             button->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+            button->setMinimumHeight(qMax(28, button->fontMetrics().height() + 6));
             button->installEventFilter(this);
             schedule();
         }
@@ -170,9 +243,16 @@ namespace
                     return true;
                 }
             }
-            if (event->type() == QEvent::Resize || event->type() == QEvent::FontChange
-                || event->type() == QEvent::StyleChange || event->type() == QEvent::LayoutRequest
-                || event->type() == QEvent::Show)
+            if (event->type() == QEvent::Show || event->type() == QEvent::LayoutRequest)
+            {
+                const QPointer<QAbstractButton> owner(m_button);
+                m_pending = false;
+                applyMetrics();
+                return owner.isNull();
+            }
+            else if (event->type() == QEvent::Resize || event->type() == QEvent::FontChange
+                || event->type() == QEvent::ApplicationFontChange || event->type() == QEvent::StyleChange
+                || event->type() == QEvent::ScreenChangeInternal || event->type() == QEvent::LanguageChange)
                 schedule();
             return false;
         }
@@ -202,22 +282,40 @@ namespace
         }
         void schedule()
         {
-            if (m_pending) return;
+            if (m_pending || m_applying) return;
             m_pending = true;
-            QTimer::singleShot(0, this, [this]()
-            {
-                m_pending = false;
-                if (!m_button || m_button->width() <= 0) return;
-                const int width = qMax(1, labelRect().width());
-                const int height = m_button->fontMetrics().boundingRect(QRect(0, 0, width, 10000),
-                    Qt::TextWordWrap | Qt::TextWrapAnywhere | Qt::TextHideMnemonic, m_button->text()).height() + 6;
-                const int needed = qMax(28, height);
-                if (m_button->minimumHeight() != needed) m_button->setMinimumHeight(needed);
-            });
+            if (m_button && m_button->isVisible())
+                QCoreApplication::postEvent(m_button, new QEvent(QEvent::LayoutRequest));
+        }
+        void applyMetrics()
+        {
+            if (m_applying || !m_button || !m_button->isVisible() || m_button->width() <= 0) return;
+            const int width = qMax(1, labelRect().width());
+            const QFont font = m_button->font();
+            const QString text = m_button->text();
+            const int dpi = m_button->logicalDpiY();
+            if (width == m_measuredWidth && font == m_measuredFont
+                && text == m_measuredText && dpi == m_measuredDpi) return;
+            m_measuredWidth = width;
+            m_measuredFont = font;
+            m_measuredText = text;
+            m_measuredDpi = dpi;
+            const int height = m_button->fontMetrics().boundingRect(QRect(0, 0, width, 10000),
+                Qt::TextWordWrap | Qt::TextWrapAnywhere | Qt::TextHideMnemonic, text).height() + 6;
+            const int needed = qMax(28, height);
+            m_applying = true;
+            const QPointer<ParameterChoiceWrap> alive(this);
+            if (m_button->minimumHeight() != needed) m_button->setMinimumHeight(needed);
+            if (alive) m_applying = false;
         }
         QPointer<QAbstractButton> m_button; // 原始业务控件，不复制 checked 或 text 状态。
         bool m_pending = false;
         bool m_forwarding = false;
+        bool m_applying = false;
+        int m_measuredWidth = -1;
+        int m_measuredDpi = 0;
+        QFont m_measuredFont;
+        QString m_measuredText;
     };
 
     // 仅用于参数滚动正文：矩形、零圆角且由本模块对每个像素实填。
@@ -316,7 +414,7 @@ namespace
             const QColor panel = ks::ui::MainWindowSurfaceColors().content;
             QColor fill = KswordTheme::BlendColors(panel, KswordTheme::SurfaceAltColor(), 140);
             if (isDown()) fill = KswordTheme::ControlInputFocusColor(fill);
-            else if (underMouse() || hasFocus()) fill = KswordTheme::ControlInputHoverColor(fill);
+            else if (underMouse() || ks::ui::HasFlatButtonKeyboardFocus(this)) fill = KswordTheme::ControlInputHoverColor(fill);
             const QColor label = KswordTheme::EnsureTextContrast(isEnabled()
                 ? KswordTheme::TextSecondaryColor() : KswordTheme::TextDisabledColor(), fill, isEnabled() ? 4.5 : 3.0);
             const QColor chevron = KswordTheme::EnsureTextContrast(

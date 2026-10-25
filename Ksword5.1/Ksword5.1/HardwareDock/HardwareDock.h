@@ -455,7 +455,6 @@ private:
     void prepareNewUtilizationChartTheme(QChartView* view,
         KswordTheme::PerformanceRole primaryRole, KswordTheme::PerformanceRole secondaryRole);
     void prepareNewUtilizationEngineChartTheme(QChartView* view, const QString& engineKey);
-    void applyInitialUtilizationSplitterSize();
     void syncUtilizationSidebarCardWidths();
     void syncUtilizationSidebarSelection(int selectedRowIndex);
     void adjustUtilizationChartHeights();
@@ -762,7 +761,7 @@ private:
     QWidget* m_utilizationPage = nullptr;          // m_utilizationPage：利用率 Tab。
     QVBoxLayout* m_utilizationLayout = nullptr;    // m_utilizationLayout：利用率外层布局。
     QSplitter* m_utilizationBodySplitter = nullptr; // m_utilizationBodySplitter：可拖动的左右分栏。
-    bool m_utilizationSplitterInitialSizeApplied = false; // m_utilizationSplitterInitialSizeApplied：是否已应用 300px 默认左栏。
+    bool m_utilizationLayoutRefreshPending = false; // Real device/viewport changes share one queued geometry refresh.
     QListWidget* m_utilizationSidebarList = nullptr; // m_utilizationSidebarList：左侧性能卡片列表。
     QStackedWidget* m_utilizationDetailStack = nullptr; // m_utilizationDetailStack：右侧详情页栈。
     QWidget* m_virtualNetworkPage = nullptr; // m_virtualNetworkPage：虚拟网卡共用详情页。

@@ -595,22 +595,14 @@ void MonitorPanelWidget::showEvent(QShowEvent* showEventPointer)
     QWidget::showEvent(showEventPointer);
     if (!owner) return;
     updateCompactVisibility();
-    applyChartTextTheme();
+    if (m_chartThemeDirty) applyChartTextTheme();
     reconcileMetrics();
     if (!owner) return;
     refreshVisiblePresentation(true);
     if (!owner) return;
     adjustChartCellHeights();
-    // 延迟到事件循环末尾再重排，保证首帧也能拿到稳定几何尺寸。
-    QTimer::singleShot(0, this, [this]()
-    {
-        adjustChartCellHeights();
-    });
-    // Dock 布局在 show 后可能继续调整，补一帧延迟避免底部两张图首帧被压没。
-    QTimer::singleShot(80, this, [this]()
-    {
-        adjustChartCellHeights();
-    });
+    // Future real geometry changes arrive through resizeEvent; do not guess
+    // stability by traversing the same charts again at 0ms and 80ms.
 }
 
 void MonitorPanelWidget::hideEvent(QHideEvent* hideEventPointer)
@@ -629,7 +621,8 @@ void MonitorPanelWidget::changeEvent(QEvent* eventPointer)
 
     const QEvent::Type eventType = eventPointer->type();
     if (eventType == QEvent::PaletteChange || eventType == QEvent::ApplicationPaletteChange
-        || eventType == QEvent::StyleChange || eventType == QEvent::LanguageChange)
+        || eventType == QEvent::StyleChange || eventType == QEvent::LanguageChange
+        || eventType == QEvent::FontChange || eventType == QEvent::ApplicationFontChange)
     {
         m_chartThemeDirty = true;
         m_chartPresentationDirty = true;
