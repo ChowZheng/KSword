@@ -7,6 +7,7 @@ metadata:
 
 # CI 合并回归恢复
 
+- 调试器后端隔离测试在 `DebuggerBackend/tests/BackendTests.cpp` 内手写 `DriverClient` 桩，不链接真实 `ArkDriverClient.cpp`。生产后端改用 `openSilently()` 后，测试桩也必须提供相同签名；否则 x96dbg CI 在 `BackendTests` 链接时出现 LNK2019。静默入口复用测试事件句柄实现，不能为补符号引入真实设备访问；须继续执行后续完整契约测试，不能仅凭源码门禁通过判定整条 CI 成功。
 - `validate_kernel_knowledge.py` 的站内路由边界必须按 `openKnowledgeRoute` 自身花括号提取，复用现有源码门禁的注释/字面量感知 helper；不能用下一函数的固定返回类型作结束哨兵。`ensureTabInitialized` 改为 `bool` 后，旧 `void ...` 哨兵会把真实存在的路由误报为缺失。回归入口 `python tools/test_validate_kernel_knowledge.py` 与完整验证在 CI 同一步运行；缺失/额外/重复路由仍必须拒绝。
 - 先看最新提交对应的 `Source integrity`、用户态构建和 `Driver CI` 日志；`git diff --check` 失败会跳过后续 JSON、i18n 与 IOCTL 审计，修完空白后必须单独补跑这些检查。
 - 跟踪 JSON 路径用 `git ls-files -z` 的原始字节按 NUL 分隔，再用 `utf-8-sig` 严格读取内容。逐行解析默认 Git 输出会把中文路径的 C 风格引号/八进制转义当成文件名，导致文件打开失败；不能靠跳过这些 JSON 或全局改 `core.quotePath` 绕过检查。
