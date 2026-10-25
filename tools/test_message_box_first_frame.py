@@ -263,7 +263,7 @@ def main() -> None:
         include_paths = [includes, *(includes / module for module in ("QtCore", "QtGui", "QtWidgets"))]
         libraries = [args.qt_root / "lib", *sorted((args.qt_root / "lib").glob("*-linux-gnu"))]
         if os.name == "nt":
-            command = [args.cxx, "/nologo", "/std:c++20", "/Zc:__cplusplus", "/utf-8", "/EHsc", "/MD", "/DNOMINMAX",
+            command = [args.cxx, "/nologo", "/std:c++20", "/Zc:__cplusplus", "/permissive-", "/utf-8", "/EHsc", "/MD", "/DNOMINMAX",
                        *(f"/I{path}" for path in include_paths), str(source), "/Fe:" + str(binary), "/link",
                        "/LIBPATH:" + str(args.qt_root / "lib"), "Qt6Widgets.lib", "Qt6Gui.lib", "Qt6Core.lib"]
         else:

@@ -269,7 +269,7 @@ def main() -> None:
         libraries = [args.qt_root / "lib", *sorted((args.qt_root / "lib").glob("*-linux-gnu"))]
         sources = [source, ROOT / "shared/ui/KsPainterChart.cpp"]
         if os.name == "nt":
-            command = [args.cxx, "/nologo", "/std:c++20", "/Zc:__cplusplus", "/utf-8", "/EHsc", "/MD", "/DNOMINMAX",
+            command = [args.cxx, "/nologo", "/std:c++20", "/Zc:__cplusplus", "/permissive-", "/utf-8", "/EHsc", "/MD", "/DNOMINMAX",
                        *(f"/I{path}" for path in include_paths), *(str(path) for path in sources), "/Fe:" + str(binary),
                        "/link", "/LIBPATH:" + str(args.qt_root / "lib"), "Qt6Widgets.lib", "Qt6Gui.lib", "Qt6Core.lib"]
         else:

@@ -30,7 +30,7 @@ def main():
             paths.insert(0, baseline)
         source = root / 'tools/toolbar_first_frame_ui_tests.cpp'
         if os.name == 'nt':
-            command = [args.cxx, '/nologo', '/std:c++20', '/Zc:__cplusplus', '/utf-8', '/EHsc', '/MD', '/DNOMINMAX',
+            command = [args.cxx, '/nologo', '/std:c++20', '/Zc:__cplusplus', '/permissive-', '/utf-8', '/EHsc', '/MD', '/DNOMINMAX',
                        *('/I' + str(path) for path in paths), str(source), '/Fe:' + str(binary), '/link',
                        '/LIBPATH:' + str(args.qt_root / 'lib'), 'Qt6Widgets.lib', 'Qt6Gui.lib', 'Qt6Core.lib']
         else:

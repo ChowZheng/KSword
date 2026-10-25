@@ -375,7 +375,7 @@ def main() -> None:
                          ROOT / "KswordHUD", ROOT / "shared/ui"]
         sources = [source, ROOT / "shared/ui/KsPainterChart.cpp", ROOT / "KswordHUD/PerformanceNavCard.cpp"]
         if os.name == "nt":
-            command = [args.cxx, "/nologo", "/std:c++20", "/Zc:__cplusplus", "/utf-8", "/EHsc", "/MD", "/DNOMINMAX", "/DQT_WIDGETS_LIB", "/DQT_GUI_LIB",
+            command = [args.cxx, "/nologo", "/std:c++20", "/Zc:__cplusplus", "/permissive-", "/utf-8", "/EHsc", "/MD", "/DNOMINMAX", "/DQT_WIDGETS_LIB", "/DQT_GUI_LIB",
                        *(f"/I{p}" for p in include_paths), *(str(p) for p in sources), "/Fe:" + str(binary),
                        "/link", "/LIBPATH:" + str(args.qt_root / "lib"), "Qt6Widgets.lib", "Qt6Gui.lib", "Qt6Core.lib", "Qt6Test.lib"]
         else:

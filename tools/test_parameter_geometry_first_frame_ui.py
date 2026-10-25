@@ -47,7 +47,7 @@ def main():
         binary = work / ('test.exe' if os.name == 'nt' else 'test')
         paths = [include, *(include / module for module in ('QtCore', 'QtGui', 'QtWidgets', 'QtTest'))]
         if os.name == 'nt':
-            command = [args.cxx, '/nologo', '/std:c++20', '/Zc:__cplusplus', '/utf-8', '/EHsc', '/MD', '/DNOMINMAX',
+            command = [args.cxx, '/nologo', '/std:c++20', '/Zc:__cplusplus', '/permissive-', '/utf-8', '/EHsc', '/MD', '/DNOMINMAX',
                        '/DQT_WIDGETS_LIB', '/DQT_GUI_LIB', *('/I' + str(p) for p in paths), str(generated), '/Fe:' + str(binary),
                        '/link', '/LIBPATH:' + str(args.qt_root / 'lib'), 'Qt6Widgets.lib', 'Qt6Gui.lib', 'Qt6Core.lib', 'Qt6Test.lib']
         else:

@@ -57,7 +57,7 @@ def main() -> None:
         include_paths = [includes, *(includes / module for module in ('QtCore', 'QtGui', 'QtWidgets', 'QtTest')), app, app / 'UI', app / 'UI/MemoryWorkbench']
         sources = [str(root / 'tools/button_focus_ui_tests.cpp'), *production]
         if os.name == 'nt':
-            command = [args.cxx, '/nologo', '/std:c++20', '/Zc:__cplusplus', '/utf-8', '/EHsc', '/MD',
+            command = [args.cxx, '/nologo', '/std:c++20', '/Zc:__cplusplus', '/permissive-', '/utf-8', '/EHsc', '/MD',
                        '/DNOMINMAX', '/DUNICODE', '/D_UNICODE', '/DQT_WIDGETS_LIB', '/DQT_GUI_LIB']
             command.extend('/I' + str(p) for p in include_paths)
             command.extend([*sources, '/Fe:' + str(binary), '/link', '/LIBPATH:' + str(args.qt_root / 'lib')])

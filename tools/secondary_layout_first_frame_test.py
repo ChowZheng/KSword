@@ -48,7 +48,7 @@ def run_fixture(args, work: Path, baseline: bool = False) -> subprocess.Complete
     fixture = Path(__file__).with_suffix('.cpp')
     modules = ('QtCore', 'QtGui', 'QtWidgets')
     if Path(args.cxx).name.lower() in ('cl', 'cl.exe'):
-        command = [args.cxx, '/nologo', '/std:c++17', '/Zc:__cplusplus', '/utf-8', '/EHsc', '/MD', '/W3', '/WX', '/wd4100',
+        command = [args.cxx, '/nologo', '/std:c++17', '/Zc:__cplusplus', '/permissive-', '/utf-8', '/EHsc', '/MD', '/W3', '/WX', '/wd4100',
                    '/DUNICODE', '/D_UNICODE', '/DNOMINMAX', '/DWIN32_LEAN_AND_MEAN',
                    f'/I{UI}', f'/I{includes}']
         command.extend(f'/I{includes / module}' for module in modules)

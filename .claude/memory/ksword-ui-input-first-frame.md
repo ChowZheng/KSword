@@ -9,3 +9,4 @@
 - 硬件导航使用列表默认 sizeHint=300 和原 QSplitter 约束，取消隐藏页按构造宽度早锁 140px 的校准标记；实际列表变化、非 opaque splitter 松开仍保留安全后续更新。Monitor 不再每次 Show 固定 0/80ms 遍历图表。
 - Taskbar/HUD 是独立进程且不编译主程序标准主题实现。PageEntry 自绘须局部追踪输入来源；HUD 默认高度用已知页面和 CPU viewport 的实际 Resize/Show 收口，保留真实采样，不再用固定 0/80ms 校准。完整辅助项目与 Win32/FLTK 边界见审计文档。
 - 范围、组件回归及准确边界见 [UI 默认状态与首帧修复](../../docs/UI默认状态与首帧修复-20261025.md)。统一入口为 `python tools/run_shared_ui_regressions.py --qt-dir <Qt prefix>`；Windows 须 HostX64/x64，并给 `--msbuild`。组件 offscreen 回归不是全产品 Windows GUI 或整体性能结论。
+- Qt 6.9.3 在 MSVC 头内强制 `/permissive-`。测试直调 cl 要显式提供；临时 MSBuild 工程设 `ConformanceMode=true`。不能仅检查 `/Zc:__cplusplus` 或依赖 C++20 隐式启用，C++17 回归尤其会触发静态断言和后续比较模板连锁错误。

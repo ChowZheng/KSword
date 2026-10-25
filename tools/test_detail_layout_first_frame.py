@@ -161,7 +161,7 @@ namespace ks::i18n { inline QString text(const QString&, const QString& fallback
         sources = [root / 'tools/detail_layout_first_frame_tests.cpp', work / 'ProductionMethods.cpp', work / 'moc_EditorAdapters.cpp']
         executable = work / ('detail_first_frame.exe' if os.name == 'nt' else 'detail_first_frame')
         if os.name == 'nt':
-            command = [args.cxx, '/nologo', '/std:c++20', '/Zc:__cplusplus', '/utf-8', '/EHsc', '/MD', '/DNOMINMAX',
+            command = [args.cxx, '/nologo', '/std:c++20', '/Zc:__cplusplus', '/permissive-', '/utf-8', '/EHsc', '/MD', '/DNOMINMAX',
                        *('/I' + str(p) for p in include_paths), *(str(p) for p in sources), '/Fe:' + str(executable),
                        '/link', '/LIBPATH:' + str(args.qt_root / 'lib'), 'Qt6Widgets.lib', 'Qt6Gui.lib', 'Qt6Core.lib']
         else:
