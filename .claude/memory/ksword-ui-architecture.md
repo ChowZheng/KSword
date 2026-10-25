@@ -300,7 +300,7 @@ KSword 主程序位于 `Ksword5.1/Ksword5.1`（Qt 6.9.3 Widgets + Qt Advanced Do
 ## 共享详情框架统一安装（2026-10-11）
 
 - 用户纠正实现方式：详情必须使用共享框架，不逐窗复制/维护摘要、导航或卡片布局。统一入口 `InstallDetailWindowFramework` 只登记控制器；`PrepareDetailWindowForShow` 在构造结束后的首个Show、首帧绘制前完成窗口摘要/原Tab导航/文档卡片/自适应字段及滚动区安装。各模块只提供实际身份、字段和动作配置，业务模型不由框架复制。
-- `GlobalDialogTheme` 为普通业务QDialog安装结构，已登记二级工具同样装结构但保留Secondary颜色所有权。Qt文件/颜色/字体/单项输入选择器和带 `ksword_detail_keep_layout` 的共享设置页保留已有结构。ProcessDetailWindow为QWidget，明确从ConfigureDetailDialogRoot接入。
+- `GlobalDialogTheme` 为普通业务QDialog安装结构，已登记二级工具同样装结构，但根QSS只由Secondary拥有，详情框架不得追加根配色块。Qt文件/颜色/字体/单项输入选择器和带 `ksword_detail_keep_layout` 的共享设置页保留已有结构。ProcessDetailWindow为QWidget，明确从ConfigureDetailDialogRoot接入。
 - `DetailFieldProjection` 直接复用原StructuredFieldView搜索/复制/导出控件，原source仍持规范文档。详情固定分组卡片，`setDocumentOnly()` 删除旧树与格式下拉，停止隐藏树重建、列测量和其排队回调。字段分组匹配时保留整组搜索语义；数值刷新原位更新，只有结构变化重建卡片。
 - 卡片实底由DetailCard绘制，正文间隔和滚动Canvas走Window层，避免QSS对子面板再次铺矩形实底导致错误色块/黑色角缝。共享框架根QSS必须让GlobalDialogTheme保持唯一所有权，否则双方增删末尾块会产生StyleChange循环。
 - 只有投影自身有滚动区才关闭多余外滚动壳；自然高卡片scrollBody=false必须保留唯一外层纵向滚动。QSplitter替换使用占位并保留非零用户比例，隐藏页首次布局前全零sizes不应恢复为显式折叠。
@@ -562,3 +562,5 @@ KSword 主程序位于 `Ksword5.1/Ksword5.1`（Qt 6.9.3 Widgets + Qt Advanced Do
 - 同日用户要求可调控件背景：原固定192由AppearanceSettings::controlBackgroundOpacityPercent（默认75，0..100，control_background_opacity_percent）替代。设置→外观→背景的共享滑块只改待应用值；应用/取消/重载沿原流程。MainSurfaceStyle维护GUI线程运行值，变化时只失效原颜色/QSS代次、主/浮动宿主样式和已登记ThemeBinding，单改alpha不走业务枚举、背景文件重读或全局旧色扫描。表格/表头/工具带/标准按钮与输入/页签/ADS/监控时间轴复用现有绘制；Collapse与页根外壳透明，参数滚动三层由现有外板负责底面，避免重复同色铺底。参数正文只有实际alpha255才保留opaque快路径。下拉popup/独立窗和原生插件边界保持原实底，控件文字图标与语义颜色不整体淡化。82项实际alpha/cache/Combo弹层/ADS QSS纯值检查通过，无QApplication/QWidget；实际GUI与性能仍由用户测。
 
 - 2026-10-24 进程列选择器：导航为进程列表→选择列（字段选择二级工具，SecondaryPageLayout）→保存为视图（名称输入二级工具，同共享入口）。ProcessDock 懒建并复用同语言下的唯一列选择窗口，重开只同步复选框/搜索/删除动作，语言变化才重建；回调状态由窗口拥有，禁止捕获已返回构造函数的临时变量。保存名称使用显式输入/OK/回车连接，空白名禁用确认，只有保存函数成功才关闭选择器；QSettings 同步状态失败返回错误并恢复原内存视图，列未实际变化时不额外枚举。源码与构建验证不等于实际确认点击、保存后重开或性能验收，真实GUI由用户测试。
+
+- 2026-10-24 二级弹窗根QSS双拥有者：SecondaryPageLayout::SetOwnedStyle 与 DetailWindowFramework::applyStyle 都采用移除自身块再追加末尾的算法，会把 A+B 与 B+A 来回改写；Qt 6.9.3 的 polish 先 unsetPalette 再 setPalette，进而让根 ThemeBinding 的 PaletteChange 与详情控制器的 StyleChange 互相排队。选择列/保存名称的卡顿与按钮失效不能只修业务连线。详情框架及 ApplyDetailDialogChrome 必须让出 ksword_secondary_window 的根QSS；StyleSecondaryWindow 首次接管时移除既有详情块，仍保留共享结构与标准控件主题。独立弹窗点击不属于 ProcessDock 页面空白点击，不得清空进程选区及刷新图表。纯静态分析和构建不代表已完成用户实际点击验收；不保留事件日志、轮询或诊断观察器。

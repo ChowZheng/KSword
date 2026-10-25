@@ -5209,6 +5209,12 @@ bool ProcessDock::eventFilter(QObject* watched, QEvent* event)
     {
         return QWidget::eventFilter(watched, event);
     }
+    // Owned dialogs are QObject descendants but belong to separate windows.
+    // Their clicks must not clear process selection or refresh the activity view.
+    if (watchedWidget->window() != window())
+    {
+        return QWidget::eventFilter(watched, event);
+    }
     // 修改列表设置不属于点击业务空白区，尤其后端切换必须保留原选区。
     if (watchedWidget == m_processSettingsButton || (m_processSettingsDialog != nullptr
         && (watchedWidget == m_processSettingsDialog || m_processSettingsDialog->isAncestorOf(watchedWidget))))

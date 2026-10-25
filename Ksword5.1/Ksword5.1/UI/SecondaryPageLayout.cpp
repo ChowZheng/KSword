@@ -276,11 +276,27 @@ namespace ks::ui
         window->setProperty("ksword_secondary_window", true);
         window->setAttribute(Qt::WA_StyledBackground, true);
         // 部分页面在登记前已触发过旧弹窗兜底，先移除它拥有的尾块，避免两套样式竞争。
-        const QString oldStyle = window->styleSheet();
+        QString ownedStyle = window->styleSheet();
+        const QString oldStyle = ownedStyle;
         const qsizetype oldBlock = oldStyle.indexOf(QStringLiteral("/* KSWORD_GLOBAL_DIALOG_THEME_BEGIN */"));
         if (oldBlock >= 0)
         {
-            window->setStyleSheet(oldStyle.left(oldBlock));
+            ownedStyle = oldStyle.left(oldBlock);
+        }
+        // Late enrollment must also relinquish an already installed detail block.
+        // Otherwise the secondary binding and detail controller keep moving their
+        // own blocks to the end and trigger each other's palette/style refresh.
+        const QString detailBegin = QStringLiteral("/* KSWORD_DETAIL_FRAMEWORK_BEGIN */");
+        const QString detailEnd = QStringLiteral("/* KSWORD_DETAIL_FRAMEWORK_END */");
+        const qsizetype detailFirst = ownedStyle.indexOf(detailBegin);
+        const qsizetype detailLast = detailFirst < 0 ? -1 : ownedStyle.indexOf(detailEnd, detailFirst);
+        if (detailFirst >= 0 && detailLast >= detailFirst)
+        {
+            ownedStyle.remove(detailFirst, detailLast + detailEnd.size() - detailFirst);
+        }
+        if (ownedStyle != oldStyle)
+        {
+            window->setStyleSheet(ownedStyle);
         }
         const QPointer<QWidget> target(window); // 窗口关闭后不再执行排队的主题刷新。
         BindWidgetTheme(window, [target]()

@@ -82,7 +82,8 @@ namespace ks::ui
         // 单页详情的根layout也排列摘要、工具和状态，它们的业务间距不能被当作外框清掉。
         if (window->layout() != nullptr) window->layout()->setSpacing(spacing);
         if (window->property("ksword_global_dialog_theme").toBool()
-            || window->property("ksword_detail_theme_owner").toBool())
+            || window->property("ksword_detail_theme_owner").toBool()
+            || window->property("ksword_secondary_window").toBool())
         {
             return; // 已有根主题拥有者生成同一套Chrome，不能再追加第二份。
         }
