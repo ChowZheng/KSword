@@ -52,7 +52,7 @@
 - [FileDock 大目录响应性](ksword-filedock-latency.md) — 快照模型、缓存排序、后台重解析标记与状态查询、十万项全选回归
 - [R0 文件删除边界](ksword-file-delete.md) — POSIX 路径移除、共享检查高风险模式、回执兼容与 Win10 动态入口
 - [Win32k 消息 Hook 筛选](ksword-message-hook-filtering.md) — 同侧原子筛选、目标/所有者 UI 范围、异步旧结果抑制、Hook 独立预算与诊断
-- [快捷键清除与本机自动匹配](ksword-hotkey-clear-matching.md) — 规范目标/来源与逐项回执、杂项导航代理、USER会话和EnterCrit实际ABI、双PE/RSDS匹配目录与v3变更门禁
+- [快捷键清除与跨版本规则匹配](ksword-hotkey-clear-matching.md) — 规范目标与逐项回执、USER会话及EnterCrit ABI、当前映像通用C规则和v4变更门禁；六组静态证据见[跨版本记录](../../docs/快捷键跨版本规则匹配-20261025.md)
 - [Win32k 窗口 Band 事务](ksword-window-band-control.md) — 跨 UIAccess 原生顺序、精确版本 ABI、GUI 调用线程、恢复及未完成的实机验收
 - [R0-only 进程身份校验](ksword-process-r0-identity.md) — 内核枚举创建时间、驱动对象校验、普通进程与仅 R0 可见进程的动作分流
 - [进程列表 R0 字段显示](ksword-process-list-fields.md) — 保护来源提示、PS_PROTECTION 名称解码与 HandleTable 空值/不可用区别

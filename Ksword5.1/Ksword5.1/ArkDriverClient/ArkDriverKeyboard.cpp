@@ -142,6 +142,7 @@ namespace ksword::ark
             row.snapshotHash = static_cast<std::uint64_t>(sourceEntry->snapshotHash);
             row.objectSize = static_cast<std::uint32_t>(sourceEntry->objectSize);
             row.entryFlags = static_cast<std::uint32_t>(sourceEntry->entryFlags);
+            row.sessionId = static_cast<std::uint32_t>(sourceEntry->sessionId);
             row.detail = fixedKeyboardWideToString(sourceEntry->detail, KSWORD_ARK_KEYBOARD_DETAIL_CHARS);
             enumResult.entries.push_back(std::move(row));
         }
@@ -179,6 +180,7 @@ namespace ksword::ark
         request.expectedHotkeyId = entry.hotkeyId;
         request.newModifiers = newModifiers;
         request.newVirtualKey = newVirtualKey;
+        request.expectedSessionId = entry.sessionId;
         request.hotkeyObject = entry.hotkeyObject;
         request.sessionGlobals = entry.sessionGlobals;
         request.expectedThreadInfo = entry.threadInfo;

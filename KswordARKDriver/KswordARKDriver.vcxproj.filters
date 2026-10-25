@@ -614,7 +614,16 @@
     <ClInclude Include="src\features\keyboard\keyboard_internal.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="src\features\keyboard\keyboard_profiles.generated.h">
+    <ClInclude Include="src\features\keyboard\keyboard_rule_ir.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="src\features\keyboard\keyboard_rule_match.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="src\features\keyboard\keyboard_rule_flow.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="src\features\keyboard\keyboard_rule_proof.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="include\ark\ark_storage.h">
@@ -1270,6 +1279,20 @@
     <ClCompile Include="src\features\keyboard\keyboard_mutation.c">
       <Filter>Source Files\Features\Keyboard</Filter>
     </ClCompile>
+    <ClCompile Include="src\features\keyboard\keyboard_rule_runtime.c"><Filter>Source Files\Features\Keyboard</Filter></ClCompile>
+    <ClCompile Include="src\features\keyboard\keyboard_rule_match.c"><Filter>Source Files\Features\Keyboard</Filter></ClCompile>
+    <ClCompile Include="src\features\keyboard\keyboard_rule_register.c"><Filter>Source Files\Features\Keyboard</Filter></ClCompile>
+    <ClCompile Include="src\features\keyboard\keyboard_rule_remove.c"><Filter>Source Files\Features\Keyboard</Filter></ClCompile>
+    <ClCompile Include="src\features\keyboard\keyboard_rule_insert.c"><Filter>Source Files\Features\Keyboard</Filter></ClCompile>
+    <ClCompile Include="src\features\keyboard\keyboard_rule_assignment.c"><Filter>Source Files\Features\Keyboard</Filter></ClCompile>
+    <ClCompile Include="src\features\keyboard\keyboard_rule_owner.c"><Filter>Source Files\Features\Keyboard</Filter></ClCompile>
+    <ClCompile Include="src\features\keyboard\keyboard_rule_slot.c"><Filter>Source Files\Features\Keyboard</Filter></ClCompile>
+    <ClCompile Include="src\features\keyboard\keyboard_rule_loop.c"><Filter>Source Files\Features\Keyboard</Filter></ClCompile>
+    <ClCompile Include="src\features\keyboard\keyboard_rule_flow.c"><Filter>Source Files\Features\Keyboard</Filter></ClCompile>
+    <ClCompile Include="src\features\keyboard\keyboard_rule_values.c"><Filter>Source Files\Features\Keyboard</Filter></ClCompile>
+    <ClCompile Include="src\features\keyboard\keyboard_rule_pe.c"><Filter>Source Files\Features\Keyboard</Filter></ClCompile>
+    <ClCompile Include="src\features\keyboard\keyboard_rule_decode.c"><Filter>Source Files\Features\Keyboard</Filter></ClCompile>
+    <ClCompile Include="..\third_party\zydis\Zydis.c"><Filter>Source Files\Features\Keyboard</Filter></ClCompile>
     <ClCompile Include="src\features\win32k\win32k_timer.c">
       <Filter>Source Files\Features\Win32k</Filter>
     </ClCompile>

@@ -12,9 +12,9 @@
 // - 编辑只改变 modifiers、virtualKey 及换桶所需的 next 链接，其他对象字节必须不变。
 // ============================================================
 
-// v3保留v2结构布局，但变更必须使用已修正会话基址和EnterCrit调用约定的驱动。
-// 新客户端拒绝用旧v2回执发起清除，旧客户端的v2变更请求也不会进入新驱动写路径。
-#define KSWORD_ARK_KEYBOARD_PROTOCOL_VERSION 3UL
+// v4的entry尾新增实际SessionId，request沿用reserved0位置传expectedSessionId。
+// namespace指针和SID分别比较，不把版本身份或压缩散列当作操作授权。
+#define KSWORD_ARK_KEYBOARD_PROTOCOL_VERSION 4UL
 
 #define KSWORD_ARK_IOCTL_FUNCTION_ENUM_KEYBOARD_HOTKEYS 0x847UL
 #define KSWORD_ARK_IOCTL_FUNCTION_ENUM_KEYBOARD_HOOKS   0x848UL
@@ -150,6 +150,8 @@ typedef struct _KSWORD_ARK_KEYBOARD_HOTKEY_ENTRY
     unsigned long long snapshotHash;
     unsigned long objectSize;
     unsigned long entryFlags;
+    unsigned long sessionId; // v4实际USER会话，零是合法System会话。
+    unsigned long reserved; // 保持后续扩展及8字节对齐。
 } KSWORD_ARK_KEYBOARD_HOTKEY_ENTRY;
 
 typedef struct _KSWORD_ARK_ENUM_KEYBOARD_HOTKEYS_RESPONSE
@@ -186,7 +188,7 @@ typedef struct _KSWORD_ARK_MUTATE_KEYBOARD_HOTKEY_REQUEST
     unsigned long expectedHotkeyId;
     unsigned long newModifiers;
     unsigned long newVirtualKey;
-    unsigned long reserved0;
+    unsigned long expectedSessionId; // v4复用旧保留位置，独立于namespace指针验证。
     unsigned long reserved1;
     unsigned long long hotkeyObject;
     unsigned long long sessionGlobals;

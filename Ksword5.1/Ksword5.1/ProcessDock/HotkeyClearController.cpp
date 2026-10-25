@@ -393,6 +393,7 @@ namespace
         snapshot.snapshotHash = entry.snapshotHash;
         snapshot.objectSize = entry.objectSize;
         snapshot.entryFlags = entry.entryFlags;
+        snapshot.sessionId = entry.sessionId;
         return snapshot;
     }
 }

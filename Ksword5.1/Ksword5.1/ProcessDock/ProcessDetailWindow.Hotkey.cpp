@@ -1318,6 +1318,7 @@ namespace
             row.r0MutationSnapshot.snapshotHash = entry.snapshotHash;
             row.r0MutationSnapshot.objectSize = entry.objectSize;
             row.r0MutationSnapshot.entryFlags = entry.entryFlags;
+            row.r0MutationSnapshot.sessionId = entry.sessionId;
             row.isRegisteredHotkey = true;
             row.hasR0MutationSnapshot =
                 (entry.entryFlags & KSWORD_ARK_KEYBOARD_HOTKEY_ENTRY_FLAG_MUTABLE) != 0UL;
@@ -2146,7 +2147,19 @@ void ProcessDetailWindow::editSelectedHotkey()
                 KSWORD_ARK_KEYBOARD_MUTATION_OPERATION_EDIT, modifiers, virtualKey);
             result.ok = native.io.ok && native.response.status == KSWORD_ARK_KEYBOARD_MUTATION_STATUS_OK &&
                 (native.response.responseFlags & KSWORD_ARK_KEYBOARD_MUTATION_RESPONSE_OTHER_BYTES_SAME) != 0UL;
-            if (!result.ok) result.detail = keyboardMutationFailureText(native, translator).toStdString();
+            const unsigned long responseFlags = native.response.responseFlags;
+            const bool rolledBack = (responseFlags & KSWORD_ARK_KEYBOARD_MUTATION_RESPONSE_ROLLED_BACK) != 0UL;
+            // 只有快照已验证或明确报告变化时，零hash才表示操作后的状态未确认。
+            result.outcomeUncertain = !result.ok && !rolledBack &&
+                (((responseFlags & KSWORD_ARK_KEYBOARD_MUTATION_RESPONSE_CHANGED) != 0UL) ||
+                    (native.io.ok &&
+                        (responseFlags & KSWORD_ARK_KEYBOARD_MUTATION_RESPONSE_SNAPSHOT_VALIDATED) != 0UL &&
+                        native.response.currentSnapshotHash == 0ULL));
+            if (result.outcomeUncertain)
+                result.detail = translator.contextText(QStringLiteral("process.hotkey.edit.unconfirmed"),
+                    QStringLiteral("修改请求的最终状态未确认，请刷新后核对。")).toStdString();
+            else if (!result.ok)
+                result.detail = keyboardMutationFailureText(native, translator).toStdString();
         }
         else
         {
@@ -2157,16 +2170,19 @@ void ProcessDetailWindow::editSelectedHotkey()
             result.detail = error.toStdString();
         }
         return result;
-    }, false, [this, titleText, resultText](const DetailActionResult& result)
+    }, false, [this, titleText, resultText, isR0Hotkey](const DetailActionResult& result)
     {
         const QPointer<ProcessDetailWindow> alive(this);
-        if (!result.ok)
+        if (result.outcomeUncertain)
+            QMessageBox::warning(this, titleText, QString::fromStdString(result.detail));
+        else if (!result.ok)
             QMessageBox::critical(this, titleText, hotkeyUiText(QStringLiteral("process.hotkey.edit.failed"),
                 QStringLiteral("热键修改失败：%1")).arg(QString::fromStdString(result.detail)));
         else
             QMessageBox::information(this, titleText, result.conflict ? resultText + QLatin1Char('\n') +
                 hotkeyUiText(QStringLiteral("process.hotkey.edit.window_conflict"), QStringLiteral("提示：系统报告另一个窗口使用了相同热键。")) : resultText);
-        if (alive && result.ok) QTimer::singleShot(0, alive, [alive] { if (alive) alive->requestAsyncHotkeyRefresh(); });
+        if (alive && (result.ok || result.outcomeUncertain || isR0Hotkey))
+            QTimer::singleShot(0, alive, [alive] { if (alive) alive->requestAsyncHotkeyRefresh(); });
     });
 }
 

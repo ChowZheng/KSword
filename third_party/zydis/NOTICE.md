@@ -10,6 +10,10 @@
 - Third-party licensing note: these bundled files are governed by the license(s) noted above and are not automatically covered by Ksword's project `LICENSE`.
 - Imported files: official generated amalgamation `Zydis.h` and `Zydis.c`
 - Local use: bounded x86/x64 instruction decoding and Intel-syntax formatting
+- The driver also builds the original amalgamation with `ZYAN_NO_LIBC` for its
+  bounded Win32k hotkey semantic rules. MSVC warning 4201 is disabled only for
+  the vendor translation unit and vendor header inclusion because the original
+  declarations use anonymous structs/unions; project warning-as-error remains enabled.
 
 The amalgamated files were generated without local modifications from the
 fixed Zydis 4.1.1 tag and its pinned Zycore submodule by the release's

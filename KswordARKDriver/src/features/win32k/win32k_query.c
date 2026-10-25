@@ -549,6 +549,11 @@ Return Value:
     for (index = 0UL; index < copyCount; ++index) {
         const KSWORD_ARK_KEYBOARD_HOTKEY_ENTRY* sourceEntry = &keyboardResponse->entries[index];
         KSWORD_ARK_WIN32K_HOTKEY_ENTRY* targetEntry = NULL; // 先筛选canonical行，再分配输出槽位。
+        if (sourceEntry->sessionId != selectedSessionId) { // PID在预检与实际查询之间退出/复用时，不给另一会话贴旧标签。
+            if (response->status == KSWORD_ARK_WIN32K_STATUS_OK) response->status = KSWORD_ARK_WIN32K_STATUS_PARTIAL;
+            if (NT_SUCCESS(response->lastStatus)) response->lastStatus = STATUS_REVISION_MISMATCH;
+            continue;
+        }
         if (Request != NULL && // PID与TID筛选都要求明确归属，未知身份不能穿透。
             ((Request->processId != 0UL && sourceEntry->processId == 0UL) || // 后端未知PID仍防御性拒绝。
                 (Request->threadId != 0UL && sourceEntry->threadId == 0UL))) { // 未知TID不属于任何已确认线程筛选结果。
@@ -576,7 +581,7 @@ Return Value:
         targetEntry->flags = sourceEntry->flags;
         targetEntry->processId = sourceEntry->processId;
         targetEntry->threadId = sourceEntry->threadId;
-        targetEntry->sessionId = selectedSessionId; // 表所属会话已在读取前通过真实进程上下文确认。
+        targetEntry->sessionId = sourceEntry->sessionId; // v4使用实际查询持有进程的SID，不依赖较早的预检快照。
         targetEntry->modifiers = sourceEntry->modifiers;
         targetEntry->virtualKey = sourceEntry->virtualKey;
         targetEntry->hotkeyId = sourceEntry->hotkeyId;
