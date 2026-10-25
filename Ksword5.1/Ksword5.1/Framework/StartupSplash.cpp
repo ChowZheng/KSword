@@ -546,10 +546,6 @@ private:
 
             // Composite the information panel over the complete 16:9 artwork.
             // Only the backing colors are translucent; text stays fully opaque.
-            Gdiplus::GraphicsPath artClip;
-            roundedRectangle(artClip, 0.0f, 0.0f,
-                static_cast<float>(kBaseWidth), static_cast<float>(kBaseHeight), 16.0f);
-            graphics.SetClip(&artClip);
             graphics.DrawImage(m_image.get(), Gdiplus::RectF(
                 0.0f, 0.0f, static_cast<float>(kBaseWidth), static_cast<float>(kBaseHeight)),
                 0.0f, 0.0f, static_cast<float>(m_imageWidth),
@@ -557,8 +553,6 @@ private:
             Gdiplus::SolidBrush panel(Gdiplus::Color(190, 10, 20, 34));
             graphics.FillRectangle(&panel, Gdiplus::RectF(
                 0.0f, 0.0f, 320.0f, static_cast<float>(kBaseHeight)));
-            graphics.ResetClip();
-
             if (m_logo)
                 graphics.DrawImage(m_logo.get(), Gdiplus::RectF(20.0f, 38.0f, 40.0f, 40.0f));
             else
