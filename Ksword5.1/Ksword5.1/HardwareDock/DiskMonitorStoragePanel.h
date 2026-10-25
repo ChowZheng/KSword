@@ -20,6 +20,8 @@
 #include <vector>
 
 class QTableWidget;
+class QTableView;
+class QBoxLayout;
 struct DiskMonitorStoragePerformanceState;
 
 // DiskMonitorStorageSample：
@@ -116,6 +118,9 @@ public:
     // - 返回：最近一轮最高活动时间、总吞吐和卷数量摘要。
     QString summaryText() const;
 
+protected:
+    void changeEvent(QEvent* event) override;
+
 private:
     // StorageBaseline：
     // - 作用：保存单卷上一轮累计值；
@@ -149,3 +154,12 @@ private:
     QHash<QString, StorageBaseline> m_baselineByIdentity; // m_baselineByIdentity：稳定卷身份到历史基线。
     QString m_summaryText;                   // m_summaryText：最近一轮资源监视器式摘要。
 };
+
+// Disk-monitor business column groups, composed with the shared segmented control.
+// Header customization clears A/B; showing all columns enables full-field export.
+namespace disk_monitor_ui
+{
+    void InstallColumnPresets(QBoxLayout* toolbar, QTableView* table,
+        std::vector<int> overview, std::vector<int> diagnostics,
+        const QString& overviewTip, const QString& diagnosticsTip, int initialPreset = 0);
+}

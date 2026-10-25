@@ -387,37 +387,37 @@ void ProcessDetailWindow::showModuleContextMenu(const QPoint& localPosition)
     // 声明业务菜单已提供此能力，避免共享表格菜单追加重复项。
     ks::ui::SetTableContextActionRole(copyRowAction, ks::ui::TableContextActionRole::CopyRows);
     QAction* copyBaseAction = addAction(&contextMenu, ":/Icon/process_copy_cell.svg",
-        "process.detail.module.copy_base", QStringLiteral("复制模块起始地址"), QStringLiteral("复制所选模块的加载基址"));
+        "process.detail.module.copy_base", QStringLiteral("复制基址"), QStringLiteral("复制所选模块的加载基址"));
     QAction* copyPathAction = addAction(&contextMenu, ":/Icon/process_copy_row.svg",
-        "process.detail.module.copy_path", QStringLiteral("复制模块文件路径"), QStringLiteral("复制所选模块的完整文件路径"));
+        "process.detail.module.copy_path", QStringLiteral("复制路径"), QStringLiteral("复制所选模块的完整文件路径"));
     copyBaseAction->setEnabled(validRange);
     copyPathAction->setEnabled(!modulePath.isEmpty());
     contextMenu.addSeparator();
     QAction* gotoModuleAction = contextMenu.addAction(QIcon(":/Icon/process_details.svg"), "查看模块详情");
     QAction* openMemoryAction = addAction(&contextMenu, ":/Icon/memwb_tab_hex.svg",
-        "process.detail.module.open_memory", QStringLiteral("查看模块内存"),
+        "process.detail.module.open_memory", QStringLiteral("查看内存"),
         QStringLiteral("切到当前进程的内存工作台并定位模块加载基址"));
     openMemoryAction->setEnabled(validRange);
 
     // 直接按用户任务列出目标，不用“相关页面”之类的分类把常用动作藏进二级菜单。
     QAction* entryAction = addAction(&contextMenu, ":/Icon/memwb_tab_disasm.svg",
-        "process.detail.module.open_entry", QStringLiteral("查看模块入口地址"),
+        "process.detail.module.open_entry", QStringLiteral("转到入口点"),
         QStringLiteral("按模块基址加入口点 RVA 定位内存工作台"));
     entryAction->setEnabled(validEntry);
     QAction* regionsAction = addAction(&contextMenu, ":/Icon/codeeditor_structured.svg",
-        "process.detail.module.open_regions", QStringLiteral("定位模块所在内存区域"),
+        "process.detail.module.open_regions", QStringLiteral("定位内存区域"),
         QStringLiteral("切到内存区域列表并选中模块基址所在区域"));
     QAction* searchAction = addAction(&contextMenu, ":/Icon/codeeditor_find.svg",
-        "process.detail.module.search_range", QStringLiteral("搜索此模块的内存…"),
+        "process.detail.module.search_range", QStringLiteral("搜索内存…"),
         QStringLiteral("预填模块起止地址并打开内存搜索，不自动开始扫描"));
     regionsAction->setEnabled(validRange);
     searchAction->setEnabled(validRange);
     QAction* fileDetailAction = addAction(&contextMenu, ":/Icon/process_details.svg",
-        "process.detail.module.file_detail", QStringLiteral("查看模块文件属性…"),
+        "process.detail.module.file_detail", QStringLiteral("文件属性…"),
         QStringLiteral("通过文件页面查看所选模块的落盘文件详情"));
     fileDetailAction->setEnabled(QFileInfo(modulePath).isFile());
 
-    // 保存动作直接说明输出及读取方式，后端缩写不再承担菜单含义。
+    // R3/R0 Dump 直接列出，保留惯用名称与对应图标。
     contextMenu.addSeparator();
     QAction* dumpR3Action = addAction(&contextMenu, ":/Icon/disk_save.svg",
         "process.detail.module.dump_r3", QStringLiteral("R3 Dump…"),

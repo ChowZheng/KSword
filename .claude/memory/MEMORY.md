@@ -1,5 +1,7 @@
 # Memory Index
 
+- [磁盘队列、I/O 日志与 MFT 索引](ksword-ntfs-index.md) — 只读 MFT/USN 快照、硬链接与尺寸口径、卷队列和有界 Kernel-File 日志
+
 - [未跟踪文件审查与原生回归补齐](../../docs/未跟踪文件审查-20261014.md) — 生成夹具与规范源区分、真实进程目录/受控 R3 目标、完整文件 UTF-8 解码须结束流状态
 
 - [MCP 设置与本次启停](ksword-mcp-settings.md) — 二级设置布局、会话状态与自动启动偏好分离、PID 配置预览及关闭后重新创建桥

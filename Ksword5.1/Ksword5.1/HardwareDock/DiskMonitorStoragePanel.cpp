@@ -7,8 +7,19 @@
 
 #include <QAbstractItemView>
 #include <QBrush>
+#include <QLabel>
+#include <QEvent>
+#include <QCryptographicHash>
+#include "../Internationalization/LanguageManager.h"
+#include "../UI/TablePresentation.h"
+#include "../UI/SegmentedControl.h"
+#include "../UI/ToolbarMetrics.h"
 #include <QColor>
 #include <QHeaderView>
+#include <QHBoxLayout>
+#include <QPushButton>
+#include <QAction>
+#include <QMenu>
 #include <QPointer>
 #include <QSet>
 #include <QSignalBlocker>
@@ -29,6 +40,109 @@
 #endif
 #include <Windows.h>
 #include <winioctl.h>
+
+namespace disk_monitor_ui
+{
+    void InstallColumnPresets(QBoxLayout* toolbar, QTableView* table,
+        std::vector<int> overview, std::vector<int> diagnostics,
+        const QString& overviewTip, const QString& diagnosticsTip, int initialPreset)
+    {
+        if (toolbar == nullptr || table == nullptr
+            || table->property("ksword_disk_column_presets").toBool()) return;
+        table->setProperty("ksword_disk_column_presets", true);
+        struct State
+        {
+            QPointer<QTableView> table;
+            std::array<QPointer<QPushButton>, 2> buttons;
+            std::array<std::vector<int>, 2> columns;
+        };
+        auto state = std::make_shared<State>();
+        state->table = table;
+        state->columns = {std::move(overview), std::move(diagnostics)};
+        auto* segments = new QHBoxLayout;
+        segments->setContentsMargins(0, 0, 0, 0);
+        segments->setSpacing(0);
+        const QStringList tips{overviewTip, diagnosticsTip};
+        for (int preset = 0; preset < 2; ++preset)
+        {
+            auto* button = new QPushButton(preset == 0 ? QStringLiteral("A") : QStringLiteral("B"), table->parentWidget());
+            button->setCheckable(true);
+            const auto source = tips[preset];
+            const auto key = QStringLiteral("source.") + QString::fromLatin1(
+                QCryptographicHash::hash(source.toUtf8(), QCryptographicHash::Sha1).toHex().left(16));
+            ks::i18n::LanguageManager::instance().bindToolTip(button, key, source);
+            state->buttons[static_cast<std::size_t>(preset)] = button;
+            segments->addWidget(button);
+        }
+        ks::ui::InstallSegmentedButtons(segments, {state->buttons[0], state->buttons[1]});
+        toolbar->addLayout(segments);
+        const auto selectPreset = [state](int preset) {
+            if (state->table == nullptr) return;
+            state->table->setProperty("ksword_disk_column_preset", preset);
+            for (int index = 0; index < 2; ++index)
+            {
+                if (auto* button = state->buttons[static_cast<std::size_t>(index)].data())
+                {
+                    const QSignalBlocker blocker(button);
+                    button->setChecked(index == preset);
+                    ks::ui::SetSegmentedButtonSelected(button, index == preset);
+                }
+            }
+        };
+        const auto applyPreset = [state, selectPreset](int preset) {
+            if (state->table == nullptr || state->table->model() == nullptr || preset < 0 || preset > 1) return;
+            const auto& visible = state->columns[static_cast<std::size_t>(preset)];
+            for (int column = 0; column < state->table->model()->columnCount(); ++column)
+                state->table->setColumnHidden(column, std::find(visible.begin(), visible.end(), column) == visible.end());
+            selectPreset(preset);
+        };
+        for (int preset = 0; preset < 2; ++preset)
+            QObject::connect(state->buttons[static_cast<std::size_t>(preset)], &QPushButton::clicked, table,
+                [applyPreset, preset]() { applyPreset(preset); });
+        auto* header = table->horizontalHeader();
+        // These two tables had no prior business header menu. Install exactly
+        // one column menu, preserving the independent shared body/action menus.
+        header->setContextMenuPolicy(Qt::CustomContextMenu);
+        QObject::connect(header, &QHeaderView::customContextMenuRequested, table,
+            [state, selectPreset, header](const QPoint& position) {
+                if (state->table == nullptr || state->table->model() == nullptr) return;
+                QMenu menu;
+                // exec() runs a nested loop: the view may be destroyed there.
+                // A parentless stack menu cannot be deleted with that view.
+                menu.setPalette(state->table->palette());
+                menu.setFont(state->table->font());
+                menu.setStyleSheet(KswordTheme::ContextMenuStyle());
+                auto* showAll = menu.addAction(ks::i18n::sourceText(QStringLiteral("显示全部列")));
+                menu.addSeparator();
+                int visibleCount = 0;
+                const int count = state->table->model()->columnCount();
+                for (int column = 0; column < count; ++column)
+                    if (!state->table->isColumnHidden(column)) ++visibleCount;
+                for (int column = 0; column < count; ++column)
+                {
+                    auto* action = menu.addAction(state->table->model()->headerData(column, Qt::Horizontal).toString());
+                    action->setCheckable(true);
+                    const bool visible = !state->table->isColumnHidden(column);
+                    action->setChecked(visible);
+                    action->setEnabled(!visible || visibleCount > 1);
+                    action->setData(column);
+                }
+                auto* chosen = menu.exec(header->mapToGlobal(position));
+                if (chosen == nullptr || state->table == nullptr || state->table->model() == nullptr) return;
+                if (chosen == showAll)
+                    for (int column = 0; column < count; ++column) state->table->setColumnHidden(column, false);
+                else
+                {
+                    bool valid = false;
+                    const int column = chosen->data().toInt(&valid);
+                    if (!valid || column < 0 || column >= count) return;
+                    state->table->setColumnHidden(column, !chosen->isChecked());
+                }
+                selectPreset(-1); // A/B must not imply a match after customization.
+            });
+        applyPreset(initialPreset);
+    }
+}
 
 struct DiskMonitorStoragePerformanceState
 {
@@ -52,7 +166,11 @@ namespace
     constexpr int kStorageColumnWriteRate = 7;      // kStorageColumnWriteRate：写入速率列。
     constexpr int kStorageColumnResponse = 8;       // kStorageColumnResponse：平均响应时间列。
     constexpr int kStorageColumnQueueDepth = 9;     // kStorageColumnQueueDepth：队列深度列。
-    constexpr int kStorageColumnCount = 10;         // kStorageColumnCount：存储表总列数。
+    constexpr int kStorageColumnAverageQueue = 10;
+    constexpr int kStorageColumnReadIops = 11;
+    constexpr int kStorageColumnWriteIops = 12;
+    constexpr int kStorageColumnDevice = 13;
+    constexpr int kStorageColumnCount = 14;         // kStorageColumnCount：存储表总列数。
 
     std::uint64_t nonNegativeLargeInteger(const LARGE_INTEGER value)
     {
@@ -342,8 +460,8 @@ DiskMonitorStoragePanel::DiskMonitorStoragePanel(QWidget* parent)
     rootLayout->setSpacing(0);
 
     m_table = new ks::ui::VisibleTableWidget(this);
-    // 小型卷性能摘要嵌入监控页，复制导出留在右键菜单，避免重复工具条。
-    ks::ui::SetTableActionBarMode(m_table, ks::ui::TableActionBarMode::None);
+    // Queue evidence can be copied/exported using the shared compact action bar.
+    ks::ui::SetTableActionBarMode(m_table, ks::ui::TableActionBarMode::Compact);
     m_table->setColumnCount(kStorageColumnCount);
     m_table->setHorizontalHeaderLabels({
         QStringLiteral("驱动器"),
@@ -355,7 +473,11 @@ DiskMonitorStoragePanel::DiskMonitorStoragePanel(QWidget* parent)
         QStringLiteral("读(字节/秒)"),
         QStringLiteral("写(字节/秒)"),
         QStringLiteral("响应时间(ms)"),
-        QStringLiteral("队列长度")
+        ks::i18n::sourceText(QStringLiteral("瞬时队列长度")),
+        ks::i18n::sourceText(QStringLiteral("平均队列长度")),
+        ks::i18n::sourceText(QStringLiteral("读 IOPS")),
+        ks::i18n::sourceText(QStringLiteral("写 IOPS")),
+        ks::i18n::sourceText(QStringLiteral("性能设备"))
         });
     m_table->setAlternatingRowColors(true);
     m_table->setSelectionBehavior(QAbstractItemView::SelectRows);
@@ -373,9 +495,38 @@ DiskMonitorStoragePanel::DiskMonitorStoragePanel(QWidget* parent)
         .arg(KswordTheme::BorderHex())
         .arg(KswordTheme::SurfaceAltHex())
         .arg(KswordTheme::TextPrimaryHex()));
+    ks::ui::ApplyTablePresentation(m_table);
+    auto* scope = new QLabel(ks::i18n::sourceText(QStringLiteral("队列范围为卷性能提供者，不能将多个卷相加视为物理磁盘队列。瞬时队列来自 QueueDepth；平均队列为采样间隔内累计读写耗时 / QueryTime 间隔；N/A 表示无有效样本。")), this);
+    const QString scopeSource = QStringLiteral("队列范围为卷性能提供者，不能将多个卷相加视为物理磁盘队列。瞬时队列来自 QueueDepth；平均队列为采样间隔内累计读写耗时 / QueryTime 间隔；N/A 表示无有效样本。");
+    ks::i18n::LanguageManager::instance().bindText(scope, QStringLiteral("source.") + QString::fromLatin1(
+        QCryptographicHash::hash(scopeSource.toUtf8(), QCryptographicHash::Sha1).toHex().left(16)), scopeSource);
+    scope->setWordWrap(true);
+    rootLayout->addWidget(scope);
+    auto* columnControls = new QHBoxLayout;
+    columnControls->setContentsMargins(0, 0, 0, 0);
+    disk_monitor_ui::InstallColumnPresets(columnControls, m_table,
+        {kStorageColumnDrive, kStorageColumnLabel, kStorageColumnFileSystem, kStorageColumnActiveTime,
+         kStorageColumnAvailable, kStorageColumnTotal, kStorageColumnReadRate, kStorageColumnWriteRate},
+        {kStorageColumnDrive, kStorageColumnResponse, kStorageColumnQueueDepth, kStorageColumnAverageQueue,
+         kStorageColumnReadIops, kStorageColumnWriteIops, kStorageColumnDevice},
+        QStringLiteral("A：容量与吞吐"), QStringLiteral("B：队列与延迟"), 1);
+    columnControls->addStretch();
+    ks::ui::NormalizeToolbarRow(columnControls);
+    rootLayout->addLayout(columnControls);
     rootLayout->addWidget(m_table, 1);
 
     m_summaryText = QStringLiteral("存储：等待首轮采样");
+}
+
+void DiskMonitorStoragePanel::changeEvent(QEvent* event)
+{
+    QWidget::changeEvent(event);
+    if (event->type() != QEvent::LanguageChange || m_table == nullptr) return;
+    const QStringList labels{QStringLiteral("瞬时队列长度"), QStringLiteral("平均队列长度"),
+        QStringLiteral("读 IOPS"), QStringLiteral("写 IOPS"), QStringLiteral("性能设备")};
+    for (int column = kStorageColumnQueueDepth; column < kStorageColumnCount; ++column)
+        if (auto* item = m_table->horizontalHeaderItem(column))
+            item->setText(ks::i18n::sourceText(labels[column - kStorageColumnQueueDepth]));
 }
 
 DiskMonitorStoragePanel::~DiskMonitorStoragePanel()
@@ -998,6 +1149,9 @@ void DiskMonitorStoragePanel::applySamples(
         double writeRate = 0.0;
         double activePercent = 0.0;
         double responseTimeMs = 0.0;
+        double averageQueue = 0.0;
+        double readIops = 0.0;
+        double writeIops = 0.0;
         bool rateAvailable = false;
         bool responseTimeAvailable = false;
         if (!baselineKey.isEmpty() &&
@@ -1083,11 +1237,13 @@ void DiskMonitorStoragePanel::applySamples(
 
                     const std::uint64_t operationDelta =
                         readOperationDelta + writeOperationDelta;
-                    const std::uint64_t operationTimeDelta =
-                        (sample.readTime100ns -
-                         baselineIterator->readTime100ns) +
-                        (sample.writeTime100ns -
-                         baselineIterator->writeTime100ns);
+                    // Convert each term before adding to avoid uint64 sum overflow.
+                    const double operationTimeDelta =
+                        static_cast<double>(sample.readTime100ns - baselineIterator->readTime100ns) +
+                        static_cast<double>(sample.writeTime100ns - baselineIterator->writeTime100ns);
+                    averageQueue = operationTimeDelta / static_cast<double>(queryDelta);
+                    readIops = static_cast<double>(readOperationDelta) / elapsedSeconds;
+                    writeIops = static_cast<double>(writeOperationDelta) / elapsedSeconds;
                     if (operationDelta > 0U)
                     {
                         responseTimeMs =
@@ -1198,6 +1354,17 @@ void DiskMonitorStoragePanel::applySamples(
                 responseTimeAvailable
                     ? responseTimeMs
                     : std::numeric_limits<double>::quiet_NaN()));
+        const auto addMetric = [this, rowIndex, rateAvailable](int column, double value) {
+            m_table->setItem(rowIndex, column, createStorageItem(
+                rateAvailable ? QString::number(value, 'f', 2) : QStringLiteral("N/A"),
+                rateAvailable ? value : std::numeric_limits<double>::quiet_NaN()));
+        };
+        addMetric(kStorageColumnAverageQueue, averageQueue);
+        addMetric(kStorageColumnReadIops, readIops);
+        addMetric(kStorageColumnWriteIops, writeIops);
+        m_table->setItem(rowIndex, kStorageColumnDevice, createStorageItem(
+            sample.performanceAvailable ? QStringLiteral("%1 / %2").arg(sample.storageManagerName).arg(sample.storageDeviceNumber)
+                : QStringLiteral("N/A")));
         m_table->setItem(
             rowIndex,
             kStorageColumnQueueDepth,
