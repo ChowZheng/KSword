@@ -731,8 +731,9 @@ private:
 
     // loadCustomViewsFromSettings / saveCustomViewsToSettings 作用：
     // - 在 QSettings 中读写用户自定义视图列表。
+    // - 保存同步检查写入状态，失败返回 false，另存分支保留原视图并提示。
     void loadCustomViewsFromSettings();
-    void saveCustomViewsToSettings() const;
+    bool saveCustomViewsToSettings() const;
 
     // isStaticDetailIntensiveViewActive 作用：
     // - 判断当前可见列是否包含路径 / 命令行 / 用户 / 签名 / 描述这类需要打开进程的静态字段；
@@ -754,6 +755,7 @@ private:
     // 参数：无。
     // 返回值：无。
     void showColumnChooserDialog();
+    QDialog* createColumnChooserDialog();
 
     // setProcessColumnVisible 作用：
     // - 统一的列显隐入口，负责写入用户覆盖、更新表格并刷新采集需求；
@@ -1234,6 +1236,7 @@ private:
     QLabel* m_sampleIntervalLabel = nullptr;  // 活动采样间隔标签。
     QDoubleSpinBox* m_refreshIntervalSpin = nullptr; // 活动采样/后台监视间隔步进框，0.05~60 秒，默认 1 秒。
     QPushButton* m_columnChooserButton = nullptr; // “选择列”按钮：打开添加/减少列对话框。
+    QPointer<QDialog> m_columnChooserDialog; // 首次打开时构造；同一语言下复用列控件和连接。
     QPushButton* m_processSettingsButton = nullptr; // 齿轮按钮：打开进程列表设置窗口。
 
     // ======== 进程活动记录面板 ========

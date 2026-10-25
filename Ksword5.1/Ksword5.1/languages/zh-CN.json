@@ -2405,6 +2405,7 @@
     "process.columns.dialog.delete_view": "删除当前视图",
     "process.columns.dialog.save_view_title": "保存为视图",
     "process.columns.dialog.save_view_prompt": "视图名称：",
+    "process.columns.dialog.save_failed": "无法保存当前列视图，请重试。",
     "process.table.header.status": "状态",
     "process.table.header.session_id": "会话 ID",
     "process.table.header.job_object": "作业对象",
@@ -7115,6 +7116,9 @@
     "notification.copy.log_template": "%1\n%2\n%3\n文件：%4\n函数：%5\nGUID：%6"
   },
   "source_translations": {
+    "ProcessColumnViewNameDialog": "ProcessColumnViewNameDialog",
+    "ProcessColumnViewNameEdit": "ProcessColumnViewNameEdit",
+    "无法保存当前列视图，请重试。": "无法保存当前列视图，请重试。",
     "KSword %1": "KSword %1",
     "编译时间：%1": "编译时间：%1",
     "作者：%1": "作者：%1",

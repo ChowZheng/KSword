@@ -560,3 +560,5 @@ KSword 主程序位于 `Ksword5.1/Ksword5.1`（Qt 6.9.3 Widgets + Qt Advanced Do
 - 透明主宿主的数据衬底统一由MainSurfaceStyle的TransparentMainDataSurfaceAlpha控制（192/255），表头节与工具带同入口；表头画布不再额外叠同色alpha层，前景按同一alpha的黑/白极端背板校准。独立窗和无背景模式保留原不透明配方，不用setWindowOpacity淡化文字。亮暗/主题色/背景模式热切换和GPU/普通表格实际合成仍由用户验收。
 
 - 同日用户要求可调控件背景：原固定192由AppearanceSettings::controlBackgroundOpacityPercent（默认75，0..100，control_background_opacity_percent）替代。设置→外观→背景的共享滑块只改待应用值；应用/取消/重载沿原流程。MainSurfaceStyle维护GUI线程运行值，变化时只失效原颜色/QSS代次、主/浮动宿主样式和已登记ThemeBinding，单改alpha不走业务枚举、背景文件重读或全局旧色扫描。表格/表头/工具带/标准按钮与输入/页签/ADS/监控时间轴复用现有绘制；Collapse与页根外壳透明，参数滚动三层由现有外板负责底面，避免重复同色铺底。参数正文只有实际alpha255才保留opaque快路径。下拉popup/独立窗和原生插件边界保持原实底，控件文字图标与语义颜色不整体淡化。82项实际alpha/cache/Combo弹层/ADS QSS纯值检查通过，无QApplication/QWidget；实际GUI与性能仍由用户测。
+
+- 2026-10-24 进程列选择器：导航为进程列表→选择列（字段选择二级工具，SecondaryPageLayout）→保存为视图（名称输入二级工具，同共享入口）。ProcessDock 懒建并复用同语言下的唯一列选择窗口，重开只同步复选框/搜索/删除动作，语言变化才重建；回调状态由窗口拥有，禁止捕获已返回构造函数的临时变量。保存名称使用显式输入/OK/回车连接，空白名禁用确认，只有保存函数成功才关闭选择器；QSettings 同步状态失败返回错误并恢复原内存视图，列未实际变化时不额外枚举。源码与构建验证不等于实际确认点击、保存后重开或性能验收，真实GUI由用户测试。
