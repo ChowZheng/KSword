@@ -21,7 +21,8 @@ bool MemoryDock::dumpMemoryRegionToFile(
     const std::function<bool()>& canceled,
     QString& errorTextOut,
     const std::function<bool()>& beginCommit,
-    const std::function<void(std::uint64_t, std::uint64_t)>& progress)
+    const std::function<void(std::uint64_t, std::uint64_t)>& progress,
+    const bool moduleImage)
 {
     errorTextOut.clear();
     using namespace ksword::memory_backend;
@@ -59,8 +60,35 @@ bool MemoryDock::dumpMemoryRegionToFile(
         }
         return true;
     };
-    const auto checkRegion = [&]()
+    // 模块可跨多个 VQE 区段；冻结完整区段的真实边界，不能把整个映像伪装成一个区域。
+    std::vector<MEMORY_BASIC_INFORMATION> moduleRegions; // 仅模块请求保存各区段元数据。
+    const auto checkRegion = [&](const std::size_t moduleSegment = std::numeric_limits<std::size_t>::max())
     {
+        if (moduleImage)
+        {
+            const bool allSegments = moduleSegment == std::numeric_limits<std::size_t>::max();
+            const std::size_t first = allSegments ? 0U : moduleSegment;
+            const std::size_t end = allSegments ? moduleRegions.size() : moduleSegment + 1U;
+            if (first >= moduleRegions.size())
+            {
+                errorTextOut = QStringLiteral("region_changed");
+                return false;
+            }
+            for (std::size_t index = first; index < end; ++index)
+            {
+                const MEMORY_BASIC_INFORMATION& expected = moduleRegions[index]; // 单次只复核正在读取区段。
+                MEMORY_BASIC_INFORMATION current{}; // 逐段复核映像身份、边界、提交和保护状态。
+                if (::VirtualQueryEx(processHandle, expected.BaseAddress, &current, sizeof(current)) != sizeof(current)
+                    || current.BaseAddress != expected.BaseAddress || current.AllocationBase != expected.AllocationBase
+                    || current.AllocationProtect != expected.AllocationProtect || current.RegionSize != expected.RegionSize
+                    || current.State != expected.State || current.Protect != expected.Protect || current.Type != expected.Type)
+                {
+                    errorTextOut = QStringLiteral("region_changed");
+                    return false;
+                }
+            }
+            return !moduleRegions.empty();
+        }
         MEMORY_BASIC_INFORMATION current{}; // 重新查询该地址，拒绝已释放/拆分/合并/改保护的区域。
         if (::VirtualQueryEx(processHandle, reinterpret_cast<LPCVOID>(region.baseAddress),
                 &current, sizeof(current)) != sizeof(current)
@@ -73,6 +101,49 @@ bool MemoryDock::dumpMemoryRegionToFile(
         }
         return true;
     };
+    if (moduleImage)
+    {
+        constexpr std::uint64_t maximumModuleBytes = 512ULL * 1024ULL * 1024ULL; // 有界模块快照。
+        constexpr std::size_t maximumModuleRegions = 65536U; // 拒绝异常碎片映像导致的无界元数据。
+        if (region.regionSize > maximumModuleBytes || !checkTarget())
+        {
+            if (errorTextOut.isEmpty())
+            {
+                errorTextOut = QStringLiteral("invalid_range");
+            }
+            return false;
+        }
+        const std::uint64_t endAddress = region.baseAddress + region.regionSize; // 已检查溢出。
+        std::uint64_t address = region.baseAddress; // 沿真实 VQE 边界遍历整个映像。
+        while (address < endAddress)
+        {
+            MEMORY_BASIC_INFORMATION current{}; // 快照必须全部来自同一映像分配。
+            if (!checkTarget())
+            {
+                return false;
+            }
+            if (::VirtualQueryEx(processHandle, reinterpret_cast<LPCVOID>(address), &current, sizeof(current)) != sizeof(current)
+                || reinterpret_cast<std::uintptr_t>(current.BaseAddress) != address
+                || reinterpret_cast<std::uintptr_t>(current.AllocationBase) != region.baseAddress
+                || current.State != MEM_COMMIT || current.Type != MEM_IMAGE || current.RegionSize == 0
+                || current.RegionSize > std::numeric_limits<std::uint64_t>::max() - address
+                || current.RegionSize > endAddress - address || moduleRegions.size() >= maximumModuleRegions)
+            {
+                errorTextOut = QStringLiteral("region_changed");
+                return false;
+            }
+            moduleRegions.push_back(current);
+            address += current.RegionSize;
+        }
+        // 选中范围必须覆盖完整映像分配，拒绝在区段边界提前结束的过期模块大小。
+        MEMORY_BASIC_INFORMATION following{};
+        if (::VirtualQueryEx(processHandle, reinterpret_cast<LPCVOID>(endAddress), &following, sizeof(following)) != sizeof(following)
+            || reinterpret_cast<std::uintptr_t>(following.AllocationBase) == region.baseAddress)
+        {
+            errorTextOut = QStringLiteral("region_changed");
+            return false;
+        }
+    }
     if (!checkTarget() || !checkRegion())
     {
         return false;
@@ -88,17 +159,34 @@ bool MemoryDock::dumpMemoryRegionToFile(
     }
     const DdmaSession unusedSession{}; // 本任务只允许 R3/R0，不读取或切换 DDMA/HVM 配置。
     std::uint64_t offset = 0; // 仅保留一个分块的字节缓冲，不分配整个区域大小。
+    std::size_t moduleSegment = 0U; // 读取顺序固定，区段游标只向前推进，避免逐块遍历全部映像。
     while (offset < region.regionSize)
     {
-        if (!checkTarget() || !checkRegion())
+        const std::uint64_t address = region.baseAddress + offset; // 本次块的确切起点。
+        if (moduleImage)
+        {
+            while (moduleSegment < moduleRegions.size()
+                && address - reinterpret_cast<std::uintptr_t>(moduleRegions[moduleSegment].BaseAddress)
+                    >= moduleRegions[moduleSegment].RegionSize)
+            {
+                ++moduleSegment;
+            }
+        }
+        if (!checkTarget() || !checkRegion(moduleSegment))
         {
             return false;
         }
-        const std::uint64_t length = std::min<std::uint64_t>( // 沿用共享协议的单次读取上限。
+        std::uint64_t length = std::min<std::uint64_t>( // 沿用共享协议的单次读取上限。
             region.regionSize - offset, KSWORD_ARK_MEMORY_READ_MAX_BYTES);
+        if (moduleImage)
+        {
+            const MEMORY_BASIC_INFORMATION& segment = moduleRegions[moduleSegment]; // 分块不跨保护边界。
+            length = std::min<std::uint64_t>(length,
+                reinterpret_cast<std::uintptr_t>(segment.BaseAddress) + segment.RegionSize - address);
+        }
         const AccessOutcome outcome = readVirtual(backend, unusedSession, pid,
             region.baseAddress + offset, length);
-        if (!checkTarget() || !checkRegion())
+        if (!checkTarget() || !checkRegion(moduleSegment))
         {
             return false;
         }
@@ -160,6 +248,62 @@ bool MemoryDock::tryCancelMemoryRegionDump()
     return expected == RegionDumpPhase::CancelRequested;
 }
 
+// DLL 菜单入口：固定实例与模块范围，复用单区导出的后台任务和文件生命周期。
+void MemoryDock::requestDumpProcessModule(
+    const std::uint32_t pid,
+    const std::uint64_t creationTime,
+    const std::uint64_t moduleBase,
+    const std::uint64_t moduleSize,
+    const QString& moduleName,
+    const ksword::memory_backend::MemoryAccessBackend backend)
+{
+    const QString title = ks::i18n::sourceText(QStringLiteral("导出模块内存（原始布局）"));
+    if (pid == 0U || creationTime == 0U || moduleBase == 0U || moduleSize == 0U
+        || moduleSize > 512ULL * 1024ULL * 1024ULL
+        || moduleSize > std::numeric_limits<std::uint64_t>::max() - moduleBase
+        || (backend != ksword::memory_backend::MemoryAccessBackend::UserMode
+            && backend != ksword::memory_backend::MemoryAccessBackend::StandardDriver))
+    {
+        QMessageBox::warning(this, title, ks::i18n::sourceText(
+            QStringLiteral("模块范围无效或超过 512 MiB，无法导出。")));
+        return;
+    }
+    const DWORD access = PROCESS_QUERY_INFORMATION | SYNCHRONIZE
+        | (backend == ksword::memory_backend::MemoryAccessBackend::UserMode ? PROCESS_VM_READ : 0U);
+    const HANDLE handle = ::OpenProcess(access, FALSE, pid); // 独立租约保留到后台物理完成。
+    if (handle == nullptr)
+    {
+        const DWORD error = ::GetLastError(); // 保留原生错误，不能把打开失败当作空模块。
+        QMessageBox::warning(this, title, ks::i18n::sourceText(
+            QStringLiteral("无法打开目标进程（Win32=%1）。")).arg(error));
+        return;
+    }
+    const std::shared_ptr<void> target(handle, [](void* value) { ::CloseHandle(value); });
+    FILETIME created{}, exited{}, kernel{}, user{}; // 在保存框前拒绝 PID 复用或已退出对象。
+    if (::WaitForSingleObject(handle, 0) != WAIT_TIMEOUT
+        || !::GetProcessTimes(handle, &created, &exited, &kernel, &user)
+        || ((static_cast<std::uint64_t>(created.dwHighDateTime) << 32U) | created.dwLowDateTime) != creationTime)
+    {
+        QMessageBox::warning(this, title, ks::i18n::sourceText(
+            QStringLiteral("目标进程已退出或身份已改变，导出已取消。")));
+        return;
+    }
+    RegionEntry range{}; // 共享请求仅表达导出范围；worker 的模块模式负责真实区段快照。
+    range.baseAddress = moduleBase;
+    range.regionSize = moduleSize;
+    range.state = MEM_COMMIT;
+    range.type = MEM_IMAGE;
+    QString safeName = QFileInfo(moduleName).fileName(); // 模块名只参与文件名，不成为输出目录。
+    for (QChar& character : safeName)
+    {
+        if (character.unicode() < 32U || QStringLiteral("<>:\"/\\|?*").contains(character))
+        {
+            character = QLatin1Char('_');
+        }
+    }
+    requestDumpMemoryRegion(pid, safeName, target, creationTime, range, backend, true);
+}
+
 // 菜单入口只负责固定范围、选路径和提交共享异步任务，真正读取在上述静态函数中执行。
 void MemoryDock::requestDumpMemoryRegion(
     const std::uint32_t pid,
@@ -167,9 +311,12 @@ void MemoryDock::requestDumpMemoryRegion(
     const std::shared_ptr<void>& targetProcess,
     const std::uint64_t creationTime,
     const RegionEntry& region,
-    const ksword::memory_backend::MemoryAccessBackend backend)
+    const ksword::memory_backend::MemoryAccessBackend backend,
+    const bool moduleImage)
 {
-    const QString title = ks::i18n::sourceText(QStringLiteral("导出内存区域")); // 本次语言快照。
+    const QString title = moduleImage
+        ? ks::i18n::sourceText(QStringLiteral("导出模块内存（原始布局）"))
+        : ks::i18n::sourceText(QStringLiteral("导出内存区域")); // 本次语言快照。
     if (m_regionDumpOperation != nullptr
         && (m_regionDumpOperation->isInFlight() || m_regionDumpOperation->hasPending()))
     {
@@ -179,7 +326,14 @@ void MemoryDock::requestDumpMemoryRegion(
     }
     const auto targetStillSelected = [&]()
     {
-        FILETIME created{}, exited{}, kernel{}, user{}; // 模态保存框前后都核对当前附加对象。
+        FILETIME created{}, exited{}, kernel{}, user{}; // 模块转储使用独立租约，不依赖 Dock 附加状态。
+        if (moduleImage)
+        {
+            return targetProcess && ::GetProcessId(targetProcess.get()) == pid
+                && ::WaitForSingleObject(targetProcess.get(), 0) == WAIT_TIMEOUT
+                && ::GetProcessTimes(targetProcess.get(), &created, &exited, &kernel, &user)
+                && ((static_cast<std::uint64_t>(created.dwHighDateTime) << 32U) | created.dwLowDateTime) == creationTime;
+        }
         return targetProcess && m_attachedPid == pid && m_attachedProcessHandle != nullptr
             && ::GetProcessId(m_attachedProcessHandle) == pid
             && ::WaitForSingleObject(targetProcess.get(), 0) == WAIT_TIMEOUT
@@ -242,9 +396,15 @@ void MemoryDock::requestDumpMemoryRegion(
         {QStringLiteral("write_failed"), ks::i18n::sourceText(QStringLiteral("区域转储文件写入失败。"))},
         {QStringLiteral("commit_failed"), ks::i18n::sourceText(QStringLiteral("区域转储文件提交失败。"))}
     };
-    const QString successTitle = ks::i18n::sourceText(QStringLiteral("区域导出完成"));
-    const QString failureTitle = ks::i18n::sourceText(QStringLiteral("区域导出失败"));
-    const QString successText = ks::i18n::sourceText(QStringLiteral("PID %1，区域 0x%2（%3 字节）已通过 %4 保存到：\n%5"));
+    const QString successTitle = moduleImage
+        ? ks::i18n::sourceText(QStringLiteral("模块内存导出完成"))
+        : ks::i18n::sourceText(QStringLiteral("区域导出完成"));
+    const QString failureTitle = moduleImage
+        ? ks::i18n::sourceText(QStringLiteral("模块内存导出失败"))
+        : ks::i18n::sourceText(QStringLiteral("区域导出失败"));
+    const QString successText = moduleImage
+        ? ks::i18n::sourceText(QStringLiteral("PID %1，模块 0x%2（%3 字节）已通过 %4 保存为原始内存布局：\n%5\n未进行 PE 文件重建。"))
+        : ks::i18n::sourceText(QStringLiteral("PID %1，区域 0x%2（%3 字节）已通过 %4 保存到：\n%5"));
     const QString failureText = ks::i18n::sourceText(QStringLiteral("PID %1，区域 0x%2（%3 字节），后端 %4。\n%5"));
     const QString exceptionText = ks::i18n::sourceText(QStringLiteral("区域导出发生异常，未完成保存。"));
 
@@ -260,6 +420,7 @@ void MemoryDock::requestDumpMemoryRegion(
         std::uint64_t progressGeneration; // 拒绝过期任务更新当前进度。
         std::shared_ptr<std::atomic<RegionDumpPhase>> phase; // 提交/取消仲裁。
         std::string readStep; // UI 线程预译的步骤文本。
+        bool moduleImage; // true 时冻结/复核映像全部区段，false 保留单区导出语义。
     };
     struct Result final // 后台终态数据由共享控制器投递到所属 UI 线程。
     {
@@ -267,7 +428,7 @@ void MemoryDock::requestDumpMemoryRegion(
         QString error; // 内部原因码与外部接口详情。
     };
     const Request request{pid, targetProcess, creationTime, region, backend, outputPath, progressPid,
-        progressGeneration, phase, ks::i18n::sourceText(QStringLiteral("正在导出内存区域")).toStdString()};
+        progressGeneration, phase, ks::i18n::sourceText(QStringLiteral("正在导出内存区域")).toStdString(), moduleImage};
     m_regionDumpOperation->submit<Request, Result>(request,
         [](const Request& job, const ks::ui::AsyncOperationToken& token)
         {
@@ -287,7 +448,7 @@ void MemoryDock::requestDumpMemoryRegion(
                     {
                         kPro.set(progressPid, generation, step, 0,
                             static_cast<float>(static_cast<double>(done) / static_cast<double>(total) * 0.99));
-                    });
+                    }, job.moduleImage);
             }
             catch (...)
             {

@@ -5,6 +5,7 @@
 #include "../UI/DetailDialogChrome.h"
 #include "../UI/X64DbgNavigation.h"
 #include "../UI/TableInteractionSupport.h"
+#include "../MemoryDock/MemoryDock.h"
 #include <Shellapi.h>
 
 using namespace process_detail_window_internal;
@@ -347,27 +348,35 @@ void ProcessDetailWindow::showModuleContextMenu(const QPoint& localPosition)
     }
     m_moduleTable->setCurrentIndex(clickedItem);
 
+    // 嵌套菜单期间异步刷新可能回填；新动作只使用菜单打开时的模块与进程实例。
+    const auto* selectedModule = selectedModuleRecord(); // 当前源行映射后的模块。
+    if (selectedModule == nullptr)
+    {
+        return;
+    }
+    const auto module = *selectedModule; // 不跨菜单保存缓存指针。
+    const auto processId = m_baseRecord.pid; // 菜单所属进程身份。
+    const auto creationTime = m_baseRecord.creationTime100ns;
+    const QPointer<ProcessDetailWindow> owner(this); // 防止菜单期间关闭详情窗。
+    const bool validRange = creationTime != 0 && module.moduleBaseAddress != 0
+        && module.moduleSizeBytes != 0
+        && module.moduleSizeBytes <= std::numeric_limits<std::uint64_t>::max() - module.moduleBaseAddress;
+    const bool validEntry = validRange && module.entryPointRva != 0
+        && module.entryPointRva < module.moduleSizeBytes;
+    const QString modulePath = QString::fromStdString(module.modulePath); // 文件页路由使用原路径。
+
     QMenu contextMenu(this);
-    contextMenu.setStyleSheet(QStringLiteral(
-        "QMenu{"
-        "  background:%1;"
-        "  color:%2;"
-        "  border:1px solid %3;"
-        "}"
-        "QMenu::item:selected{"
-        "  background:%4;"
-        "  color:%5;"
-        "}"
-        "QMenu::separator{"
-        "  height:1px;"
-        "  background:%3;"
-        "  margin:4px 8px;"
-        "}")
-        .arg(KswordTheme::SurfaceColorHex())
-        .arg(KswordTheme::TextPrimaryColorHex())
-        .arg(KswordTheme::BorderColorHex())
-        .arg(KswordTheme::AccentHex(KswordTheme::AccentRole::Blue))
-        .arg(KswordTheme::OnAccentHex()));
+    contextMenu.setStyleSheet(KswordTheme::ContextMenuStyle());
+    contextMenu.setToolTipsVisible(true);
+    // 菜单统一使用共享不透明背景及禁用态；每个新动作有明确用途说明。
+    const auto addAction = [](QMenu* menu, const char* icon, const char* key,
+        const QString& title, const QString& tooltip)
+    {
+        QAction* action = menu->addAction(QIcon(QString::fromLatin1(icon)),
+            ks::i18n::contextText(QString::fromLatin1(key), title)); // 返回供分发比较的动作。
+        action->setToolTip(ks::i18n::sourceText(tooltip));
+        return action;
+    };
 
     QAction* copyCellAction = contextMenu.addAction(QIcon(":/Icon/process_copy_cell.svg"), "复制单元格");
     // 声明业务菜单已提供此能力，避免共享表格菜单追加重复项。
@@ -375,32 +384,192 @@ void ProcessDetailWindow::showModuleContextMenu(const QPoint& localPosition)
     QAction* copyRowAction = contextMenu.addAction(QIcon(":/Icon/process_copy_row.svg"), "复制行");
     // 声明业务菜单已提供此能力，避免共享表格菜单追加重复项。
     ks::ui::SetTableContextActionRole(copyRowAction, ks::ui::TableContextActionRole::CopyRows);
+    QAction* copyBaseAction = addAction(&contextMenu, ":/Icon/process_copy_cell.svg",
+        "process.detail.module.copy_base", QStringLiteral("复制模块基址"), QStringLiteral("复制所选模块的加载基址"));
+    QAction* copyPathAction = addAction(&contextMenu, ":/Icon/process_copy_row.svg",
+        "process.detail.module.copy_path", QStringLiteral("复制模块路径"), QStringLiteral("复制所选模块的完整文件路径"));
+    copyBaseAction->setEnabled(validRange);
+    copyPathAction->setEnabled(!modulePath.isEmpty());
     contextMenu.addSeparator();
     QAction* gotoModuleAction = contextMenu.addAction(QIcon(":/Icon/process_details.svg"), "查看模块详情");
-    if (const auto* module = selectedModuleRecord(); module != nullptr && m_baseRecord.creationTime100ns != 0)
+    QAction* openMemoryAction = addAction(&contextMenu, ":/Icon/process_details.svg",
+        "process.detail.module.open_memory", QStringLiteral("在内存 Tab 中打开基址"),
+        QStringLiteral("切到当前进程的内存工作台并定位模块加载基址"));
+    openMemoryAction->setEnabled(validRange);
+
+    QMenu* navigationMenu = contextMenu.addMenu(ks::i18n::contextText(
+        QStringLiteral("process.detail.module.related_pages"), QStringLiteral("相关页面"))); // 跨页导航组。
+    navigationMenu->setStyleSheet(KswordTheme::ContextMenuStyle());
+    navigationMenu->setToolTipsVisible(true);
+    QAction* entryAction = addAction(navigationMenu, ":/Icon/process_details.svg",
+        "process.detail.module.open_entry", QStringLiteral("在内存 Tab 中打开入口点"),
+        QStringLiteral("按模块基址加入口点 RVA 定位内存工作台"));
+    entryAction->setEnabled(validEntry);
+    QAction* regionsAction = addAction(navigationMenu, ":/Icon/process_details.svg",
+        "process.detail.module.open_regions", QStringLiteral("定位到内存区域"),
+        QStringLiteral("切到内存区域列表并选中模块基址所在区域"));
+    QAction* searchAction = addAction(navigationMenu, ":/Icon/process_details.svg",
+        "process.detail.module.search_range", QStringLiteral("在此模块范围内搜索"),
+        QStringLiteral("预填模块起止地址并打开内存搜索，不自动开始扫描"));
+    regionsAction->setEnabled(validRange);
+    searchAction->setEnabled(validRange);
+    QAction* fileDetailAction = addAction(navigationMenu, ":/Icon/process_details.svg",
+        "process.detail.module.file_detail", QStringLiteral("打开模块文件详情"),
+        QStringLiteral("通过文件页面查看所选模块的落盘文件详情"));
+    fileDetailAction->setEnabled(QFileInfo(modulePath).isFile());
+
+    // Dump 明确标注原始布局，沿用现有异步导出和原子文件提交。
+    QMenu* dumpMenu = contextMenu.addMenu(ks::i18n::contextText(
+        QStringLiteral("process.detail.module.dump"), QStringLiteral("Dump 模块内存（原始布局）")));
+    dumpMenu->setStyleSheet(KswordTheme::ContextMenuStyle());
+    dumpMenu->setToolTipsVisible(true);
+    QAction* dumpR3Action = addAction(dumpMenu, ":/Icon/log_export.svg",
+        "process.detail.module.dump_r3", QStringLiteral("R3 Dump…"),
+        QStringLiteral("使用 R3 读取完整模块内存并保存为 bin，不重建 PE 文件"));
+    QAction* dumpR0Action = addAction(dumpMenu, ":/Icon/log_export.svg",
+        "process.detail.module.dump_r0", QStringLiteral("R0 Dump…"),
+        QStringLiteral("使用 R0 驱动读取完整模块内存并保存为 bin，不重建 PE 文件"));
+    dumpMenu->setEnabled(validRange);
+    // 禁用项保留可读的依赖原因，资源 DLL 没有入口点时也不会被误认为菜单故障。
+    if (!validEntry)
+    {
+        entryAction->setToolTip(ks::i18n::sourceText(QStringLiteral("入口点不可用或不在模块范围内。")));
+    }
+    if (!fileDetailAction->isEnabled())
+    {
+        fileDetailAction->setToolTip(ks::i18n::sourceText(QStringLiteral("模块文件不存在或路径不可用。")));
+    }
+    if (!validRange)
+    {
+        const QString reason = ks::i18n::sourceText(QStringLiteral("模块地址范围或进程身份无效。")); // 共享依赖说明。
+        for (QAction* action : {copyBaseAction, openMemoryAction, regionsAction, searchAction, dumpMenu->menuAction()})
+        {
+            action->setToolTip(reason);
+        }
+    }
+    if (validRange)
         ks::ui::x64dbg_navigation::AddAction(&contextMenu, this,
-            {m_baseRecord.pid, m_baseRecord.creationTime100ns, module->moduleBaseAddress,
+            {processId, creationTime, module.moduleBaseAddress,
                 ks::ui::x64dbg_navigation::View::Disassembly});
     QAction* openFolderAction = contextMenu.addAction(QIcon(":/Icon/process_open_folder.svg"), "打开文件夹");
+    contextMenu.addSeparator();
     QAction* unloadAction = contextMenu.addAction(QIcon(":/Icon/process_terminate.svg"), "卸载");
     QAction* suspendThreadAction = contextMenu.addAction(QIcon(":/Icon/process_suspend.svg"), "挂起线程");
     QAction* resumeThreadAction = contextMenu.addAction(QIcon(":/Icon/process_resume.svg"), "恢复线程");
     QAction* terminateThreadAction = contextMenu.addAction(QIcon(":/Icon/process_terminate.svg"), "结束线程");
 
     QAction* selectedAction = contextMenu.exec(m_moduleTable->viewport()->mapToGlobal(localPosition));
-    if (selectedAction == nullptr)
+    if (!owner || selectedAction == nullptr || m_baseRecord.pid != processId
+        || m_baseRecord.creationTime100ns != creationTime)
     {
         return;
     }
 
     if (selectedAction == copyCellAction) { copyCurrentModuleCell(); return; }
     if (selectedAction == copyRowAction) { copyCurrentModuleRow(); return; }
+    // 所有新增动作按值分发，不再查询可能已变化的选区。
+    if (selectedAction == copyBaseAction)
+    {
+        QApplication::clipboard()->setText(formatHexText(module.moduleBaseAddress));
+        return;
+    }
+    if (selectedAction == copyPathAction)
+    {
+        QApplication::clipboard()->setText(modulePath);
+        return;
+    }
+    if (selectedAction == fileDetailAction)
+    {
+        emit requestOpenFileDetailByPath(modulePath);
+        return;
+    }
+    // 内存动作均走同一惰性请求，不让各菜单项复制附加和首显时序。
+    const std::pair<QAction*, ModuleMemoryAction> memoryActions[] = {
+        {openMemoryAction, ModuleMemoryAction::Base}, {entryAction, ModuleMemoryAction::EntryPoint},
+        {regionsAction, ModuleMemoryAction::Regions}, {searchAction, ModuleMemoryAction::Search},
+        {dumpR3Action, ModuleMemoryAction::DumpR3}, {dumpR0Action, ModuleMemoryAction::DumpR0}
+    };
+    for (const auto& [action, destination] : memoryActions)
+    {
+        if (selectedAction == action)
+        {
+            requestModuleMemoryAction(module, destination);
+            return;
+        }
+    }
     if (selectedAction == gotoModuleAction) { showCurrentModuleDetailDialog(); return; }
     if (selectedAction == openFolderAction) { openCurrentModuleFolder(); return; }
     if (selectedAction == unloadAction) { unloadCurrentModule(); return; }
     if (selectedAction == suspendThreadAction) { suspendCurrentModuleThread(); return; }
     if (selectedAction == resumeThreadAction) { resumeCurrentModuleThread(); return; }
     if (selectedAction == terminateThreadAction) { terminateCurrentModuleThread(); return; }
+}
+
+// requestModuleMemoryAction：保存菜单值快照并打开内嵌内存页，不等待固定时间猜测加载完成。
+void ProcessDetailWindow::requestModuleMemoryAction(
+    const ks::process::ProcessModuleRecord& module, const ModuleMemoryAction action)
+{
+    if (m_tabWidget == nullptr || m_embeddedMemoryTab == nullptr)
+    {
+        return;
+    }
+    // 只保留最新导航意图；同一详情窗内的快速连续操作不会排队打开过时地址。
+    m_pendingModuleMemoryRequest = std::make_unique<ModuleMemoryRequest>(
+        ModuleMemoryRequest{m_baseRecord.pid, m_baseRecord.creationTime100ns, module, action});
+    ensureTabContentInitialized(m_embeddedMemoryTab);
+    m_tabWidget->setCurrentWidget(m_embeddedMemoryTab);
+    ensureEmbeddedMemoryView();
+}
+
+// applyPendingModuleMemoryAction：内存页真实就绪后消费一次；身份校验和异步附加由共享入口执行。
+void ProcessDetailWindow::applyPendingModuleMemoryAction()
+{
+    if (m_embeddedMemoryDock == nullptr || !m_pendingModuleMemoryRequest)
+    {
+        return;
+    }
+    const auto request = std::move(m_pendingModuleMemoryRequest); // 移走后再进可能产生事件循环的操作。
+    if (request->pid != m_baseRecord.pid || request->creationTime != m_baseRecord.creationTime100ns)
+    {
+        return;
+    }
+    const auto& module = request->module; // 此次请求独占的模块快照。
+    if (request->action == ModuleMemoryAction::DumpR3 || request->action == ModuleMemoryAction::DumpR0)
+    {
+        const auto backend = request->action == ModuleMemoryAction::DumpR0
+            ? ksword::memory_backend::MemoryAccessBackend::StandardDriver
+            : ksword::memory_backend::MemoryAccessBackend::UserMode; // Dump 后端不会隐式回退。
+        // 冷建内存页也先按强身份附加，取消保存后仍可继续查看本进程的区域与工作台。
+        const QPointer<MemoryDock> dock(m_embeddedMemoryDock); // 附加守卫可能异步完成或销毁页面。
+        dock->openProcessMemoryRange(request->pid, request->creationTime,
+            module.moduleBaseAddress, module.moduleSizeBytes, MemoryDock::ProcessMemoryDestination::Regions,
+            [dock, pid = request->pid, creationTime = request->creationTime,
+                base = module.moduleBaseAddress, size = module.moduleSizeBytes,
+                name = QString::fromStdString(module.moduleName), backend](const bool allowed)
+            {
+                if (dock && allowed)
+                {
+                    dock->requestDumpProcessModule(pid, creationTime, base, size, name, backend);
+                }
+            });
+        return;
+    }
+
+    // 搜索范围使用整个模块；入口点仅改变定位地址，避免把 RVA 当作进程 VA。
+    auto destination = MemoryDock::ProcessMemoryDestination::Workbench; // 默认进入内存工作台。
+    if (request->action == ModuleMemoryAction::Regions)
+    {
+        destination = MemoryDock::ProcessMemoryDestination::Regions;
+    }
+    else if (request->action == ModuleMemoryAction::Search)
+    {
+        destination = MemoryDock::ProcessMemoryDestination::Search;
+    }
+    const auto address = module.moduleBaseAddress
+        + (request->action == ModuleMemoryAction::EntryPoint ? module.entryPointRva : 0U); // 绝对地址。
+    const auto length = request->action == ModuleMemoryAction::EntryPoint ? 1U : module.moduleSizeBytes;
+    m_embeddedMemoryDock->openProcessMemoryRange(request->pid, request->creationTime,
+        address, length, destination);
 }
 
 void ProcessDetailWindow::copyCurrentModuleCell()

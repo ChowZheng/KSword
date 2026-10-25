@@ -657,6 +657,18 @@ private:
     void requestAsyncInjectionTraceScan(bool deepMode);
 
     // ======== 模块表右键 ========
+    // 模块跨页请求持有菜单时的值快照，等待内存页惰性构造后仅消费一次。
+    enum class ModuleMemoryAction { Base, EntryPoint, Regions, Search, DumpR3, DumpR0 };
+    struct ModuleMemoryRequest
+    {
+        std::uint32_t pid = 0; // 菜单所属 PID。
+        std::uint64_t creationTime = 0; // 防止惰性加载期间 PID 被复用。
+        ks::process::ProcessModuleRecord module; // 模块基址、范围及路径快照。
+        ModuleMemoryAction action = ModuleMemoryAction::Base; // 内存页中的目标动作。
+    };
+    // 请求入口负责切到现有内存 Tab；消费入口由惰性构造收尾调用，无返回值。
+    void requestModuleMemoryAction(const ks::process::ProcessModuleRecord& module, ModuleMemoryAction action);
+    void applyPendingModuleMemoryAction();
     void showModuleContextMenu(const QPoint& localPosition);
     void copyCurrentModuleCell();
     void copyCurrentModuleRow();
@@ -960,6 +972,7 @@ private:
     QVBoxLayout* m_embeddedMemoryLayout = nullptr;
     QLabel* m_embeddedMemoryPlaceholder = nullptr;
     MemoryDock* m_embeddedMemoryDock = nullptr;
+    std::unique_ptr<ModuleMemoryRequest> m_pendingModuleMemoryRequest; // 最新一次待消费的模块跨页请求。
 
     // ======== 内嵌网络连接页 ========
     QVBoxLayout* m_embeddedNetworkLayout = nullptr;

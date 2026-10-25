@@ -2508,6 +2508,8 @@ void MemoryDock::publishCoreProjection(const std::shared_ptr<CoreProjectionData>
         QString status = m_attachedPid ? QStringLiteral("显示 %1 / 共 %2 个区域").arg(data->rows->size()).arg(data->regions->size()) : QStringLiteral("未附加进程。");
         if (m_regionCachePartial) { status += QStringLiteral(" | ") + ks::i18n::packedSourceText(QStringLiteral("Region enumeration is partial (Win32: %1)")).arg(m_regionCacheError); }
         m_regionStatusLabel->setText(status);
+        // 模块跨页请求必须等真实区域投影发布后，再按地址选中排序后的显示行。
+        applyPendingModuleRegionFocus();
     }
 }
 
@@ -2607,6 +2609,8 @@ void MemoryDock::pollRegionRefresh()
                 owner->setProperty(kRegionRefreshInFlightProperty, false);
                 const bool pending = owner->property(kRegionRefreshPendingProperty).toBool();
                 owner->setProperty(kRegionRefreshPendingProperty, false);
+                // 最终枚举失败时没有新投影可发布，显式结束模块定位，避免以后刷新抢回选区。
+                if (!pending) { owner->m_pendingModuleRegionFocus.reset(); }
                 if (!hadSearch) { reportRegionEnumerateFailure(owner, QStringLiteral("VirtualQueryEx 未返回有效区域。")); }
                 if (owner && pending && job->generation == owner->m_processAttachmentGeneration.load()) { owner->refreshMemoryRegionList(true); }
                 return;

@@ -3245,7 +3245,11 @@ void ProcessDetailWindow::initializeEmbeddedMemoryTab()
 void ProcessDetailWindow::ensureEmbeddedMemoryView()
 {
     if (m_embeddedMemoryLayout == nullptr || !isCurrentEmbeddedPage(m_embeddedMemoryTab, m_tabWidget)) return;
-    if (m_embeddedMemoryDock != nullptr && !m_embeddedMemoryTab->property(kEmbeddedViewContextPendingProperty).toBool()) return;
+    if (m_embeddedMemoryDock != nullptr && !m_embeddedMemoryTab->property(kEmbeddedViewContextPendingProperty).toBool())
+    {
+        applyPendingModuleMemoryAction();
+        return;
+    }
     if (!markEmbeddedViewBuildPending(m_embeddedMemoryTab)) return;
 
     const QPointer<QWidget> page(m_embeddedMemoryTab);
@@ -3265,7 +3269,7 @@ void ProcessDetailWindow::ensureEmbeddedMemoryView()
             m_embeddedMemoryDock = new MemoryDock(page, MemoryDock::PageScope::ProcessDetail);
             m_embeddedMemoryDock->hide();
             attachEmbeddedDockToTabLayout(m_embeddedMemoryLayout, m_embeddedMemoryPlaceholder, m_embeddedMemoryDock);
-        m_embeddedMemoryDock->setProcessDetailMemoryScope();
+            m_embeddedMemoryDock->setProcessDetailMemoryScope();
             page->setProperty(kEmbeddedViewContextPendingProperty, true);
             m_embeddedMemoryDock->show();
         }
@@ -3280,7 +3284,19 @@ void ProcessDetailWindow::ensureEmbeddedMemoryView()
             }
             if (m_embeddedMemoryDock != nullptr)
             {
-                m_embeddedMemoryDock->focusProcessForOperations(targetProcessId, false);
+                // 模块导航自行核验实例并附加，普通首显仍沿用原来的区域页落点。
+                if (m_pendingModuleMemoryRequest)
+                {
+                    applyPendingModuleMemoryAction();
+                }
+                else
+                {
+                    m_embeddedMemoryDock->focusProcessForOperations(targetProcessId, false);
+                }
+                if (!page)
+                {
+                    return;
+                }
                 page->setProperty(kEmbeddedViewContextPendingProperty, false);
             }
             clearEmbeddedViewBuildPending(page);

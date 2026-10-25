@@ -60,10 +60,13 @@ constexpr unsigned WAIT_TIMEOUT = 258;
 constexpr unsigned MEM_COMMIT = 0x1000;
 constexpr unsigned MEM_RESERVE = 0x2000;
 constexpr unsigned MEM_FREE = 0x10000;
+constexpr unsigned MEM_IMAGE = 0x1000000;
 constexpr unsigned PAGE_READWRITE = 4;
 struct FILETIME { std::uint32_t dwLowDateTime{}, dwHighDateTime{}; };
 struct MEMORY_BASIC_INFORMATION {
     void* BaseAddress{};
+    void* AllocationBase{};
+    std::uint32_t AllocationProtect{};
     SIZE_T RegionSize{};
     std::uint32_t Protect{}, State{}, Type{};
 };
@@ -89,22 +92,40 @@ static bool isReadableProtect(std::uint32_t protect) { return protect == PAGE_RE
 
 // 查询替代始终返回显式元数据；指定调用可失败或返回短结构。
 static MEMORY_BASIC_INFORMATION queriedRegion;
+static std::vector<MEMORY_BASIC_INFORMATION> queriedModuleRegions;
 static unsigned queryCalls, failedQueryCall, shortQueryCall;
 static bool dataStaged, failQueryAfterWrite, shortQueryAfterWrite;
 static std::vector<std::uint64_t> queriedAddresses;
 // 每个元数据字段可独立改变，用来验证读后的查询没有遗漏字段。
 static void ChangeRegion(unsigned field) {
-    if (field == 1) queriedRegion.BaseAddress = reinterpret_cast<void*>(0xF000);
-    if (field == 2) queriedRegion.RegionSize += 4096;
-    if (field == 3) queriedRegion.Protect ^= 2U;
-    if (field == 4) queriedRegion.State = MEM_RESERVE;
-    if (field == 5) queriedRegion.Type ^= 0x40000U;
+    auto& region = queriedModuleRegions.empty() ? queriedRegion : queriedModuleRegions.front();
+    if (field == 1) region.BaseAddress = reinterpret_cast<void*>(0xF000);
+    if (field == 2) region.RegionSize += 4096;
+    if (field == 3) region.Protect ^= 2U;
+    if (field == 4) region.State = MEM_RESERVE;
+    if (field == 5) region.Type ^= 0x40000U;
+    if (field == 6) region.AllocationBase = reinterpret_cast<void*>(0xE000);
+    if (field == 7) region.AllocationProtect ^= 2U;
 }
 static SIZE_T VirtualQueryEx(HANDLE, LPCVOID address, MEMORY_BASIC_INFORMATION* value, SIZE_T size) {
     ++queryCalls;
     queriedAddresses.push_back(reinterpret_cast<std::uintptr_t>(address));
     if (queryCalls == failedQueryCall || (dataStaged && failQueryAfterWrite)) return 0;
     *value = queriedRegion;
+    if (!queriedModuleRegions.empty()) {
+        const auto requested = reinterpret_cast<std::uintptr_t>(address);
+        *value = {};
+        value->BaseAddress = const_cast<void*>(address);
+        value->RegionSize = 4096;
+        value->State = MEM_FREE;
+        for (const auto& region : queriedModuleRegions) {
+            const auto base = reinterpret_cast<std::uintptr_t>(region.BaseAddress);
+            if (requested >= base && requested - base < region.RegionSize) {
+                *value = region;
+                break;
+            }
+        }
+    }
     return queryCalls == shortQueryCall || (dataStaged && shortQueryAfterWrite) ? size - 1 : size;
 }
 static std::vector<float> defaultProgress;
@@ -140,7 +161,7 @@ public:
         if (writeCalls == cancelDuringWriteCall) cancellation = true;
         if (writeCalls == exitDuringWriteCall) processAlive = false;
         if (writeCalls == identityChangeDuringWriteCall) ++processCreation;
-        if (writeCalls == regionChangeDuringWriteCall) queriedRegion.Type ^= 0x40000U;
+        if (writeCalls == regionChangeDuringWriteCall) ChangeRegion(5);
         return length;
     }
     bool commit() {
@@ -190,7 +211,7 @@ DECLARATION = r'''
         std::uint64_t, const RegionEntry&, ksword::memory_backend::MemoryAccessBackend,
         const QString&, int, const std::function<bool()>&, QString&,
         const std::function<bool()>& = {},
-        const std::function<void(std::uint64_t, std::uint64_t)>& = {});
+        const std::function<void(std::uint64_t, std::uint64_t)>& = {}, bool = false);
     bool tryCancelMemoryRegionDump();
     std::shared_ptr<std::atomic<RegionDumpPhase>> m_regionDumpPhase;
     CancelController* m_regionDumpOperation = nullptr;
@@ -221,10 +242,13 @@ static void Reset(const MemoryDock::RegionEntry& region = CapturedRegion()) {
     processPid = 77; processCreation = kCreationTime;
     processAlive = timesAvailable = true; identityChecks = 0;
     queriedRegion.BaseAddress = reinterpret_cast<void*>(region.baseAddress);
+    queriedRegion.AllocationBase = queriedRegion.BaseAddress;
+    queriedRegion.AllocationProtect = region.protect;
     queriedRegion.RegionSize = static_cast<SIZE_T>(region.regionSize);
     queriedRegion.Protect = region.protect;
     queriedRegion.State = region.state;
     queriedRegion.Type = region.type;
+    queriedModuleRegions.clear();
     queryCalls = failedQueryCall = shortQueryCall = 0; queriedAddresses.clear();
     dataStaged = failQueryAfterWrite = shortQueryAfterWrite = false;
     destination = {'o', 'l', 'd'}; pending.clear();
@@ -241,17 +265,71 @@ static bool Dump(QString& error, const MemoryDock::RegionEntry& region = Capture
     std::uint32_t pid = 77, std::uint64_t creation = kCreationTime,
     bool emptyHandle = false, bool emptyCancellation = false,
     const std::function<bool()>& beginCommit = {},
-    const std::function<void(std::uint64_t, std::uint64_t)>& progress = {}) {
+    const std::function<void(std::uint64_t, std::uint64_t)>& progress = {}, bool moduleImage = false) {
     const std::shared_ptr<void> handle(emptyHandle ? nullptr : reinterpret_cast<void*>(1), [](void*) {});
     const std::function<bool()> canceled = emptyCancellation
         ? std::function<bool()>{} : std::function<bool()>{[] { return cancellation; }};
     return MemoryDock::dumpMemoryRegionToFile(pid, handle, creation, region, backend,
-        QStringLiteral("target.bin"), 123, canceled, error, beginCommit, progress);
+        QStringLiteral("target.bin"), 123, canceled, error, beginCommit, progress, moduleImage);
 }
 static void Uncommitted(const QString& error, const char* label) {
     Check(destination == std::vector<char>({'o', 'l', 'd'}), label);
     Check(!error.isEmpty(), "failure has a diagnostic");
     Check(commitCalls == 0, "failed work never publishes pending output");
+}
+
+// 同一 DLL 的不同保护区段必须连续完整输出，逐段身份变化则不得发布部分文件。
+static void TestModuleImageRanges() {
+    const auto module = CapturedRegion(12288);
+    const auto prepare = [&module] {
+        Reset(module);
+        MEMORY_BASIC_INFORMATION first = queriedRegion;
+        first.RegionSize = 4096;
+        first.Type = MEM_IMAGE;
+        MEMORY_BASIC_INFORMATION second = first;
+        second.BaseAddress = reinterpret_cast<void*>(kBase + first.RegionSize);
+        second.RegionSize = 8192;
+        second.Protect = 2U;
+        queriedModuleRegions = {first, second};
+    };
+    for (const auto backend : {MemoryAccessBackend::UserMode, MemoryAccessBackend::StandardDriver}) {
+        prepare(); QString completeError;
+        Check(Dump(completeError, module, backend, 77, kCreationTime, false, false, {}, {}, true),
+              "full module image spanning differently protected regions succeeds");
+        Check(completeError.isEmpty() && destination.size() == module.regionSize && commitCalls == 1,
+              "module output contains the complete raw image and commits once");
+        Check(reads.size() == 2 && reads[0].address == kBase && reads[0].length == 4096
+            && reads[1].address == kBase + 4096 && reads[1].length == 8192
+            && reads[0].backend == backend && reads[1].backend == backend,
+            "module reads preserve explicit backend and stop at each real protection boundary");
+        for (unsigned field = 1; field <= 7; ++field) {
+            prepare(); regionChangeDuringReadField = field; QString changedError;
+            Check(!Dump(changedError, module, backend, 77, kCreationTime, false, false, {}, {}, true),
+                  "each frozen module mapping field is rechecked after read");
+            Uncommitted(changedError, "changed module mapping never replaces the old output");
+        }
+        for (unsigned mode = 0; mode < 5; ++mode) {
+            prepare(); QString invalidError;
+            if (mode == 0) queriedModuleRegions.back().AllocationBase = reinterpret_cast<void*>(0x70000);
+            if (mode == 1) queriedModuleRegions.back().State = MEM_RESERVE;
+            if (mode == 2) queriedModuleRegions.back().Type = 0x20000;
+            if (mode == 3) queriedModuleRegions.back().BaseAddress = reinterpret_cast<void*>(kBase + 8192);
+            if (mode == 4) queriedModuleRegions.back().RegionSize += 4096;
+            Check(!Dump(invalidError, module, backend, 77, kCreationTime, false, false, {}, {}, true),
+                  "module rejects foreign allocations reserved private missing or excessive segments");
+            Uncommitted(invalidError, "invalid module range never replaces the old output");
+            Check(reads.empty() && openCalls == 0, "invalid module mappings fail before file creation or reads");
+        }
+        prepare(); QString prefixError;
+        auto prefix = module; prefix.regionSize = 4096;
+        Check(!Dump(prefixError, prefix, backend, 77, kCreationTime, false, false, {}, {}, true),
+              "a module size ending before the image allocation ends is rejected");
+        Uncommitted(prefixError, "truncated module metadata cannot publish a prefix");
+        prepare(); cancelDuringRead = true; QString canceledError;
+        Check(!Dump(canceledError, module, backend, 77, kCreationTime, false, false, {}, {}, true),
+              "module cancellation during a block cannot publish output");
+        Uncommitted(canceledError, "module cancellation preserves the old destination");
+    }
 }
 
 // 成功案例同时验证全部字节和每个块边界，不只检查返回 true。
@@ -588,6 +666,7 @@ static void TestCancellationPhaseArbitration() {
         "commit winning arbitration publishes once without executing controller cancellation");
 }
 int main() {
+    TestModuleImageRanges();
     TestRawBytesAndFixedBackend();
     TestParameterFailures();
     TestIdentityFailures();
