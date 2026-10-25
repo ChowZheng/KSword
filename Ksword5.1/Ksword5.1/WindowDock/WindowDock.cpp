@@ -1210,7 +1210,7 @@ namespace
         if (detailText.contains(QStringLiteral("unsupported"), Qt::CaseInsensitive) ||
             detailText.contains(QStringLiteral("not supported"), Qt::CaseInsensitive))
         {
-            return QStringLiteral("当前驱动/协议暂不支持该只读审计入口");
+            return QStringLiteral("当前驱动/协议暂不支持此只读查询");
         }
         if (detailText.contains(QStringLiteral("profile"), Qt::CaseInsensitive) &&
             (detailText.contains(QStringLiteral("missing"), Qt::CaseInsensitive) ||
@@ -1291,7 +1291,7 @@ namespace
         }
         else if (result.unsupported)
         {
-            readableStateText = QStringLiteral("当前驱动未提供这个 win32k 审计入口");
+            readableStateText = QStringLiteral("当前驱动未提供此 Win32k 查询接口");
         }
         else
         {
@@ -1355,12 +1355,12 @@ namespace
 
         const QString readableStateText = result.io.ok
             ? (result.returnedCount == 0U
-                ? QStringLiteral("键盘审计 fallback 可用，但未返回热键/Hook 行")
-                : QStringLiteral("键盘审计 fallback 已返回结构化行"))
-            : QStringLiteral("键盘审计 fallback 当前不可用");
+                ? QStringLiteral("键盘备用查询可用，但未返回热键或钩子记录")
+                : QStringLiteral("键盘备用查询已返回记录"))
+            : QStringLiteral("键盘备用查询当前不可用");
         const QString readableMessageText =
             messageText.contains(QStringLiteral("DeviceIoControl"), Qt::CaseInsensitive)
-            ? QStringLiteral("旧键盘审计接口调用失败或驱动未注册该入口")
+            ? QStringLiteral("旧版键盘查询失败或驱动未提供此接口")
             : (messageText == QStringLiteral("<empty>") ? QStringLiteral("无额外驱动消息") : messageText);
 
         return QStringLiteral("%1：%2；驱动报告 %3/%4 行；最近状态 %5；说明：%6")
@@ -1447,7 +1447,7 @@ namespace
             {
                 rows.push_back(QStringList{
                     QStringLiteral("TextPreview"),
-                    QStringLiteral("<已隐藏：当前剪贴板像是本工具表格复制行，避免和剪贴板审计结果混淆>") });
+                    QStringLiteral("<已隐藏：当前剪贴板内容疑似本工具复制的表格行>") });
             }
             else
             {
@@ -1467,7 +1467,7 @@ namespace
         }
 
         rows.push_back(QStringList{ QStringLiteral("MessageOnly窗口"), QStringLiteral("建议在“窗口管理”窗口列表中 cross-view 标注") });
-        rows.push_back(QStringList{ QStringLiteral("说明"), QStringLiteral("只读读取剪贴板 MIME 摘要；不做消息抓取，不展示疑似审计表复制行。") });
+        rows.push_back(QStringList{ QStringLiteral("说明"), QStringLiteral("只读显示剪贴板 MIME 摘要；不抓取消息，疑似本工具复制的表格行已隐藏。") });
         return rows;
     }
 
@@ -2952,7 +2952,7 @@ WindowDock::WindowDock(QWidget* parent)
     // - 本文件新增的 R0/R3 审计页默认不自动采集，等待用户点击“刷新审计”；
     // - 这样热键、Hook、GPU 等重型审计不会在切换窗口页时反复触发。
     const QString manualRefreshText =
-        QStringLiteral("审计页默认不自动刷新；窗口列表保留原有刷新行为；点击顶部“刷新审计”后采集本页 R0/R3 审计数据。");
+        QStringLiteral("这些信息默认不自动刷新；窗口列表仍可独立刷新。点击顶部“刷新数据”更新当前信息。");
     m_cachedSessionSummary = ks::ui::FieldDocument{}.note(QStringLiteral("[win32k GUI/session]\n%1\n").arg(manualRefreshText));
     m_cachedHotkeyHookSummary = ks::ui::FieldDocument{}.note(QStringLiteral("[Hotkey / Hook]\n%1\n").arg(manualRefreshText));
     m_cachedDisplaySummary = ks::ui::FieldDocument{}.note(QStringLiteral("[GPU / Display / Watchdog]\n%1\n").arg(manualRefreshText));
@@ -2976,7 +2976,7 @@ WindowDock::WindowDock(QWidget* parent)
     applyAuditViews();
     if (m_statusLabel != nullptr)
     {
-        m_statusLabel->setText(QStringLiteral("窗口列表可独立刷新；审计页等待手动刷新。"));
+        m_statusLabel->setText(QStringLiteral("窗口列表独立刷新；注册热键、钩子和设备信息可手动刷新。"));
     }
 }
 
@@ -3056,7 +3056,7 @@ void WindowDock::initializeUi()
     ks::ui::StylePrimarySectionTitle(titleLabel);
     headerLayout->addWidget(titleLabel, 0);
 
-    m_statusLabel = new QLabel(QStringLiteral("正在准备窗口审计快照..."), m_toolBarWidget);
+    m_statusLabel = new QLabel(QStringLiteral("正在准备窗口信息..."), m_toolBarWidget);
     m_statusLabel->setWordWrap(true);
     m_statusLabel->setMinimumWidth(0);
     m_statusLabel->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
@@ -3065,8 +3065,8 @@ void WindowDock::initializeUi()
         .arg(KswordTheme::TextSecondaryHex()));
     headerLayout->addWidget(m_statusLabel, 1);
 
-    m_refreshButton = new QPushButton(QStringLiteral("刷新审计"), m_toolBarWidget);
-    m_refreshButton->setToolTip(QStringLiteral("重新采集 Win32K、热键/钩子与 GPU/Display/Watchdog 只读审计数据"));
+    m_refreshButton = new QPushButton(QStringLiteral("刷新数据"), m_toolBarWidget);
+    m_refreshButton->setToolTip(QStringLiteral("重新获取 Win32k、热键、消息钩子及 GPU/显示设备信息"));
     headerLayout->addWidget(m_refreshButton, 0);
     ks::ui::NormalizeToolbarControl(m_refreshButton);
 
@@ -3249,15 +3249,6 @@ void WindowDock::initializeUi()
             QStringLiteral("window.timer.tab.tooltip"),
             QStringLiteral("只读遍历 win32k gTimerHashTable，显示定时器对象、间隔、Flags、回调和 PID/TID 归属。")));
 
-    const int globalHotkeyTabIndex = m_tabWidget->addTab(
-        new WindowGlobalHotkeyTab(m_tabWidget),
-        ks::i18n::contextText(QStringLiteral("window.global_hotkey.tab"), QStringLiteral("全部热键")));
-    m_tabWidget->setTabToolTip(
-        globalHotkeyTabIndex,
-        ks::i18n::contextText(
-            QStringLiteral("window.global_hotkey.tab.tooltip"),
-            QStringLiteral("只读汇总全部进程的窗口热键、菜单快捷键、PE Accelerator 和快捷方式热键。")));
-
     const int eventHookTabIndex = m_tabWidget->addTab(
         new WindowEventHookTab(m_tabWidget),
         ks::i18n::contextText(QStringLiteral("window.event_hook.tab"), QStringLiteral("事件 Hook")));
@@ -3352,19 +3343,24 @@ void WindowDock::initializeUi()
     m_hotkeyHookPage = new QWidget(m_tabWidget);
     {
         QVBoxLayout* pageLayout = new QVBoxLayout(m_hotkeyHookPage);
-        pageLayout->setContentsMargins(4, 4, 4, 4);
+        pageLayout->setContentsMargins(6, 6, 6, 6);
         pageLayout->setSpacing(6);
         QWidget* pageHeader = makePageHeader(m_hotkeyHookPage, pageLayout, QStringLiteral("Hotkey / Hook"));
 
         QTabWidget* innerTabWidget = makeInnerTabWidget(m_hotkeyHookPage, pageHeader);
         pageLayout->addWidget(innerTabWidget, 1);
 
-        innerTabWidget->addTab(
-            makeEditorTabPage(innerTabWidget, &m_hotkeyHookSummaryEditor),
-            QStringLiteral("摘要"));
+        // 只保留一份 R3 聚合页：首显时沿原后台分批扫描，PE 资源不冒充 R0 注册热键。
+        const int shortcutsIndex = innerTabWidget->addTab(
+            new WindowGlobalHotkeyTab(innerTabWidget),
+            ks::i18n::contextText(QStringLiteral("window.hotkey_hook.program_shortcuts"),
+                QStringLiteral("程序快捷键")));
+        innerTabWidget->setTabToolTip(shortcutsIndex,
+            ks::i18n::contextText(QStringLiteral("window.global_hotkey.tab.tooltip"),
+                QStringLiteral("只读汇总全部进程的窗口热键、菜单快捷键、PE Accelerator 和快捷方式热键。")));
 
         innerTabWidget->addTab(makeTableGroup(
-            QStringLiteral("热键（只读审计，不删除热键）"),
+            QStringLiteral("热键列表"),
             QStringList{ QStringLiteral("名称"), QStringLiteral("进程ID.线程ID"), QStringLiteral("热键"),
                          QStringLiteral("路径"), QStringLiteral("描述"), QStringLiteral("热键对象地址"),
                          QStringLiteral("热键ID"), QStringLiteral("VK"), QStringLiteral("修饰键"),
@@ -3382,7 +3378,8 @@ void WindowDock::initializeUi()
                           HotkeyColumnDepth, HotkeyColumnSource, HotkeyColumnStatus,
                           HotkeyColumnLastStatus, HotkeyColumnDiagnostic },
             &m_hotkeysTable),
-            QStringLiteral("热键表"));
+            ks::i18n::contextText(QStringLiteral("window.hotkey_hook.registered_hotkeys"),
+                QStringLiteral("注册热键")));
         applyTransparentAuditTableBackground(m_hotkeysTable);
         ks::ui::SetTableActionBarMode(m_hotkeysTable, ks::ui::TableActionBarMode::Full);
         if (m_hotkeysTable != nullptr)
@@ -3393,7 +3390,7 @@ void WindowDock::initializeUi()
             m_hotkeysTable->setIconSize(QSize(16, 16));
         }
         innerTabWidget->addTab(makeTableGroup(
-            QStringLiteral("消息 Hook（只读审计，不 remove/unlink hook 链）"),
+            QStringLiteral("消息钩子列表"),
             QStringList{ QStringLiteral("类型"), QStringLiteral("范围"), QStringLiteral("所有者 PID"),
                          QStringLiteral("所有者 TID"), QStringLiteral("Session"), QStringLiteral("目标 PID"),
                          QStringLiteral("目标 TID"), QStringLiteral("目标 Session"), QStringLiteral("Procedure"),
@@ -3406,13 +3403,17 @@ void WindowDock::initializeUi()
             QVector<int>{ 0, 1, 2, 3, 4, 5, 6, 8, 12, 14, 15, 23 },
             QVector<int>{ 0, 8, 9, 11, 13, 15, 16, 17, 18, 19, 21, 25 },
             &m_hooksTable),
-            QStringLiteral("消息 Hook 表"));
+            ks::i18n::contextText(QStringLiteral("window.hotkey_hook.message_hooks"),
+                QStringLiteral("消息钩子")));
         applyTransparentAuditTableBackground(m_hooksTable);
         ks::ui::SetTableActionBarMode(m_hooksTable, ks::ui::TableActionBarMode::Full);
         if (m_hooksTable != nullptr)
         {
             m_hooksTable->setProperty("ksword_process_detail_pid_column", 2);
         }
+        innerTabWidget->addTab(
+            makeEditorTabPage(innerTabWidget, &m_hotkeyHookSummaryEditor),
+            QStringLiteral("摘要"));
     }
     m_tabWidget->addTab(m_hotkeyHookPage, QStringLiteral("热键/钩子"));
 
@@ -3428,7 +3429,7 @@ void WindowDock::initializeUi()
         pageLayout->addWidget(innerTabWidget, 1);
 
         QWidget* group = makeTableGroup(
-            QStringLiteral("剪贴板上下文（只读，不做消息抓取）"),
+            QStringLiteral("剪贴板信息"),
             QStringList{ QStringLiteral("属性"), QStringLiteral("值") },
             QVector<int>{ 0, 1 },
             QVector<int>{ 0, 1 },
@@ -3456,7 +3457,7 @@ void WindowDock::initializeUi()
             QStringLiteral("摘要"));
 
         QWidget* group = makeTableGroup(
-            QStringLiteral("设备审计（不禁用设备 / 不卸载驱动 / 不 detach stack，全部行）"),
+            QStringLiteral("设备与驱动状态"),
             QStringList{ QStringLiteral("种类"), QStringLiteral("角色"), QStringLiteral("状态"),
                          QStringLiteral("风险"), QStringLiteral("驱动名"), QStringLiteral("设备名"),
                          QStringLiteral("DriverObject"), QStringLiteral("DeviceObject"),
@@ -3518,11 +3519,11 @@ void WindowDock::setRefreshingPlaceholderRows()
     const QString pendingDetailText = QStringLiteral("正在收集窗口信息，请稍候...");
 
     m_cachedSessionSummary =
-        ks::ui::FieldDocument{}.note(QStringLiteral("[win32k GUI/session]\n正在刷新结构化窗口、GUI线程和Session审计行...\n"));
+        ks::ui::FieldDocument{}.note(QStringLiteral("[win32k GUI/session]\n正在刷新窗口、GUI线程和Session信息...\n"));
     m_cachedHotkeyHookSummary =
-        ks::ui::FieldDocument{}.note(QStringLiteral("[Hotkey / Hook]\n正在刷新热键与Hook只读审计行...\n"));
+        ks::ui::FieldDocument{}.note(QStringLiteral("[Hotkey / Hook]\n正在刷新热键与消息钩子记录...\n"));
     m_cachedDisplaySummary =
-        ks::ui::FieldDocument{}.note(QStringLiteral("[GPU / Display / Watchdog]\n正在刷新显示设备只读审计行...\n"));
+        ks::ui::FieldDocument{}.note(QStringLiteral("[GPU / Display / Watchdog]\n正在刷新显示设备状态...\n"));
 
     m_cachedWindowsRows = buildPendingRows(
         m_windowsTable,
@@ -3604,7 +3605,7 @@ void WindowDock::requestAsyncRefresh()
 
     if (m_statusLabel != nullptr)
     {
-        m_statusLabel->setText(QStringLiteral("正在采集窗口审计快照..."));
+        m_statusLabel->setText(QStringLiteral("正在读取窗口信息..."));
     }
     if (!deferredGuard) return;
     setRefreshingPlaceholderRows();
@@ -3702,7 +3703,7 @@ void WindowDock::requestAsyncRefresh()
                 sessionSummary.note(QStringLiteral("\n[窗口站/桌面]\n"));
                 sessionSummary.field(QStringLiteral("当前窗口站"), QStringLiteral("%1").arg(queryUserObjectName(::GetProcessWindowStation())));
                 sessionSummary.field(QStringLiteral("当前桌面"), QStringLiteral("%1").arg(queryUserObjectName(::GetThreadDesktop(::GetCurrentThreadId()))));
-                sessionSummary.field(QStringLiteral("说明"), QStringLiteral("详细窗口列表与桌面切换见“窗口管理”页；本页仅做只读审计，不做消息截获、不做输入抓取。"));
+                sessionSummary.field(QStringLiteral("说明"), QStringLiteral("详细窗口列表与桌面切换见“窗口管理”页；此处只读显示当前会话信息，不截获消息或输入。"));
                 sessionSummary.field(QStringLiteral("Win32K private layout"), QStringLiteral("%1")
                     .arg(win32kPrivateLayoutLimitationText()));
 
@@ -3718,7 +3719,7 @@ void WindowDock::requestAsyncRefresh()
             ks::ui::FieldDocument hotkeyHookSummary = ks::ui::FieldDocument{}.note(
                 QStringLiteral("[Hotkey / Hook]\n")
                 + QStringLiteral("系统级 Hook 链表：无官方通用枚举接口，R0 PDB 路径仅做只读链表快照。\n")
-                + QStringLiteral("Hotkey: 只读审计，不删除热键；Hook: 只读审计，不 remove/unlink hook 链。\n")
+                + QStringLiteral("热键与消息钩子均为只读快照。\n")
                 + QStringLiteral("风险标记: 不执行安装/卸载/截获。\n\n"));
             appendIoSummary(hotkeyHookSummary, QStringLiteral("queryWin32kHotkeysPdb"), win32kHotkeysResult);
             if (keyboardHotkeysFallbackQueried)
@@ -3831,7 +3832,7 @@ void WindowDock::requestAsyncRefresh()
                 if (alive->m_statusLabel)
                     alive->m_statusLabel->setText(snapshot->failure.isEmpty()
                         ? QStringLiteral("最近刷新：%1").arg(QDateTime::currentDateTime().toString(QStringLiteral("yyyy-MM-dd HH:mm:ss")))
-                        : QStringLiteral("窗口审计刷新异常；详情已写入日志。"));
+                        : QStringLiteral("窗口信息刷新失败；详情已写入日志。"));
                 if (!alive || !alive->m_auditOperation->isCurrent(ticket)) return;
                 alive->m_refreshing.store(false);
                 if (deferred) alive->m_auditOperation->completeDeferred(ticket);
@@ -3846,7 +3847,7 @@ void WindowDock::requestAsyncRefresh()
         [this](std::exception_ptr) {
             // Infrastructure allocation/dispatch failure still releases the refresh latch.
             m_refreshing.store(false);
-            if (m_statusLabel) m_statusLabel->setText(QStringLiteral("窗口审计刷新异常；详情已写入日志。"));
+            if (m_statusLabel) m_statusLabel->setText(QStringLiteral("窗口信息刷新失败；详情已写入日志。"));
         });
 }
 
@@ -3862,37 +3863,37 @@ void WindowDock::applyAuditViews()
         m_windowsTable,
         m_cachedWindowsRows,
         QStringLiteral("<无窗口行模型>"),
-        QStringLiteral("窗口审计没有生成任何行；请重新刷新或检查 R0/R3 fallback 状态。"));
+        QStringLiteral("未获取到窗口记录；请刷新或检查 R0/R3 备用查询状态。"));
     ensureNonEmptyAuditRows(
         m_guiThreadsTable,
         m_cachedGuiThreadRows,
         QStringLiteral("<无GUI线程行模型>"),
-        QStringLiteral("GUI 线程审计没有生成任何行；请重新刷新或检查 GetGUIThreadInfo/R0 状态。"));
+        QStringLiteral("未获取到 GUI 线程记录；请刷新或检查 GetGUIThreadInfo/R0 查询状态。"));
     ensureNonEmptyAuditRows(
         m_sessionTable,
         m_cachedSessionRows,
         QStringLiteral("<无Session行模型>"),
-        QStringLiteral("Session 审计没有生成任何行；请重新刷新或检查当前交互 Session。"));
+        QStringLiteral("未获取到 Session 记录；请刷新或检查当前交互 Session。"));
     ensureNonEmptyAuditRows(
         m_hotkeysTable,
         m_cachedHotkeyRows,
         QStringLiteral("<无热键行模型>"),
-        QStringLiteral("热键审计没有生成任何行；R0/PDB 与 keyboard fallback 均未返回可展示数据。"));
+        QStringLiteral("未获取到热键记录；R0/PDB 与键盘备用查询均未返回数据。"));
     ensureNonEmptyAuditRows(
         m_hooksTable,
         m_cachedHookRows,
         QStringLiteral("<无Hook行模型>"),
-        QStringLiteral("Hook 审计没有生成任何行；R0/PDB 与 keyboard fallback 均未返回可展示数据。"));
+        QStringLiteral("未获取到消息钩子记录；R0/PDB 与键盘备用查询均未返回数据。"));
     ensureNonEmptyAuditRows(
         m_clipboardTable,
         m_cachedClipboardRows,
         QStringLiteral("<无剪贴板行模型>"),
-        QStringLiteral("剪贴板审计没有生成任何行；请重新刷新或检查当前 UI 会话剪贴板状态。"));
+        QStringLiteral("未获取到剪贴板信息；请刷新或检查当前 UI 会话的剪贴板状态。"));
     ensureNonEmptyAuditRows(
         m_deviceTable,
         m_cachedDeviceRows,
         QStringLiteral("<无显示设备行模型>"),
-        QStringLiteral("GPU/Display/Watchdog 审计没有生成任何行；请重新刷新或检查 R0 设备审计状态。"));
+        QStringLiteral("未获取到 GPU/显示/Watchdog 记录；请刷新或检查 R0 设备查询状态。"));
 
     if (m_summaryViewRevision != viewRevision)
     {

@@ -981,7 +981,7 @@ void NetworkAuditPage::initializeUi()
     m_headerLayout->setContentsMargins(8, 6, 8, 6);
     m_headerLayout->setSpacing(6);
 
-    QLabel* titleLabel = new QLabel(QStringLiteral("网络只读审计"), this);
+    QLabel* titleLabel = new QLabel(QStringLiteral("网络连接分析"), this);
     titleLabel->setStyleSheet(QStringLiteral("font-size:16px;font-weight:700;color:%1;").arg(KswordTheme::TextPrimaryHex()));
     m_headerLayout->addWidget(titleLabel);
 
@@ -3220,7 +3220,7 @@ void NetworkAuditPage::terminateSelectedTcpConnection()
     if (m_tcpTable == nullptr || m_tcpTable->currentIndex().row() < 0
         || ks::ui::IsTableRowExcludedByFilter(m_tcpTable, m_tcpTable->currentIndex().row()))
     {
-        QMessageBox::information(this, QStringLiteral("网络审计"), QStringLiteral("请先选中一条 TCP 连接。"));
+        QMessageBox::information(this, QStringLiteral("网络分析"), QStringLiteral("请先选中一条 TCP 连接。"));
         return;
     }
 
@@ -3229,7 +3229,7 @@ void NetworkAuditPage::terminateSelectedTcpConnection()
     const qulonglong cacheIndexValue = pidIndex.data(Qt::UserRole).toULongLong(&cacheIndexOk);
     if (!cacheIndexOk || cacheIndexValue >= tcpEndpointCache().size())
     {
-        QMessageBox::warning(this, QStringLiteral("网络审计"), QStringLiteral("所选连接已过期，请刷新后重试。"));
+        QMessageBox::warning(this, QStringLiteral("网络分析"), QStringLiteral("所选连接已过期，请刷新后重试。"));
         return;
     }
 
@@ -3238,7 +3238,7 @@ void NetworkAuditPage::terminateSelectedTcpConnection()
     {
         QMessageBox::information(
             this,
-            QStringLiteral("网络审计"),
+            QStringLiteral("网络分析"),
             QStringLiteral("该行来自 R0 只读快照；请选中对应的 R3 TCP 行执行终止。"));
         return;
     }
@@ -3249,7 +3249,7 @@ void NetworkAuditPage::terminateSelectedTcpConnection()
     {
         QMessageBox::information(
             this,
-            QStringLiteral("网络审计"),
+            QStringLiteral("网络分析"),
             QStringLiteral("当前 TCP 行不能终止：%1")
                 .arg(QString::fromUtf8(unsupportedReason.c_str())));
         return;
@@ -3274,7 +3274,7 @@ void NetworkAuditPage::terminateSelectedTcpConnection()
         ks::network::TerminateTcpConnectionByRecord(endpointRow.connectionRecord, &detailText);
     if (terminateOk)
     {
-        QMessageBox::information(this, QStringLiteral("网络审计"), QStringLiteral("连接终止请求已提交。"));
+        QMessageBox::information(this, QStringLiteral("网络分析"), QStringLiteral("连接终止请求已提交。"));
         refreshAllSnapshotsAsync(true);
         return;
     }
@@ -3287,7 +3287,7 @@ void NetworkAuditPage::terminateSelectedTcpConnection()
     {
         QMessageBox::warning(
             this,
-            QStringLiteral("网络审计"),
+            QStringLiteral("网络分析"),
             QStringLiteral("终止连接失败：%1").arg(QString::fromUtf8(detailText.c_str())));
     }
 }

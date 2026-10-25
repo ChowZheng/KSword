@@ -12,6 +12,7 @@
 #include "../UI/VisibleTableWidget.h"
 #include "../UI/PageControlStyle.h"
 #include "../UI/ToolbarMetrics.h"
+#include "../UI/ThemeStatusRole.h"
 #include "../ksword/process/process.h"
 #include "../theme.h"
 
@@ -180,24 +181,33 @@ void WindowGlobalHotkeyTab::showEvent(QShowEvent* event)
 void WindowGlobalHotkeyTab::initializeUi()
 {
     auto* rootLayout = new QVBoxLayout(this);
-    rootLayout->setContentsMargins(6, 6, 6, 6);
-    rootLayout->setSpacing(5);
+    // 本视图现在位于热键/钩子内页；外围6px由宿主页独占。
+    rootLayout->setContentsMargins(0, 0, 0, 0);
+    rootLayout->setSpacing(8);
 
     auto* toolbar = new QHBoxLayout();
     m_refreshButton = new QPushButton(
-        allHotkeyText("window.global_hotkey.refresh", QStringLiteral("刷新全部热键")),
+        allHotkeyText("window.global_hotkey.refresh", QStringLiteral("刷新程序快捷键")),
         this);
     m_filterEdit = new QLineEdit(this);
     ks::ui::StyleSearchField(m_filterEdit);
     m_filterEdit->setClearButtonEnabled(true);
     m_filterEdit->setPlaceholderText(allHotkeyText(
         "window.global_hotkey.filter.placeholder",
-        QStringLiteral("按热键、进程、PID/TID、来源、对象或详情筛选")));
+        QStringLiteral("按快捷键、进程、PID/TID、来源、对象或详情筛选")));
     toolbar->addWidget(m_refreshButton);
     toolbar->addWidget(m_filterEdit, 1);
     toolbar->setSpacing(8);
     ks::ui::NormalizeToolbarRow(toolbar);
     rootLayout->addLayout(toolbar);
+
+    auto* sourceNote = new QLabel(this);
+    ks::i18n::LanguageManager::instance().bindText(sourceNote,
+        QStringLiteral("window.hotkey_hook.shortcut_source_note"),
+        QStringLiteral("程序快捷键来自窗口、菜单、程序资源及快捷方式；程序资源中的快捷键不等于已注册的系统热键。"));
+    sourceNote->setWordWrap(true);
+    ks::ui::ApplyStatusRole(sourceNote, ks::ui::StatusRole::Idle);
+    rootLayout->addWidget(sourceNote);
 
     m_statusLabel = new QLabel(
         allHotkeyText("window.global_hotkey.summary.waiting", QStringLiteral("状态：等待刷新")),
@@ -285,12 +295,12 @@ void WindowGlobalHotkeyTab::refreshAsync()
     m_refreshButton->setEnabled(false);
     m_statusLabel->setText(allHotkeyText(
         "window.global_hotkey.summary.refreshing",
-        QStringLiteral("状态：正在扫描全部进程的热键...")));
+        QStringLiteral("状态：正在扫描各进程的程序快捷键...")));
     rebuildTable();
 
     m_progressTaskId = kPro.add(
         this,
-        allHotkeyText("window.global_hotkey.tab", QStringLiteral("全部热键")).toStdString(),
+        allHotkeyText("window.global_hotkey.tab", QStringLiteral("程序快捷键")).toStdString(),
         allHotkeyText(
             "window.global_hotkey.progress.enumerating",
             QStringLiteral("正在枚举进程")).toStdString());
@@ -508,7 +518,7 @@ void WindowGlobalHotkeyTab::appendSnapshotRows(
         : processName;
     m_statusLabel->setText(allHotkeyText(
         "window.global_hotkey.summary.progress",
-        QStringLiteral("状态：已扫描 %1 / %2 个进程，已发现 %3 条热键。"))
+        QStringLiteral("状态：已扫描 %1 / %2 个进程，发现 %3 条快捷键记录。"))
         .arg(m_scannedProcessCount)
         .arg(m_totalProcessCount)
         .arg(m_rowCount));
@@ -550,7 +560,7 @@ void WindowGlobalHotkeyTab::finishRefresh(const std::uint64_t ticket, const qint
     m_table->resizeColumnsToContents();
     m_statusLabel->setText(allHotkeyText(
         "window.global_hotkey.summary.completed",
-        QStringLiteral("状态：已扫描 %1 个进程，发现 %2 条热键，耗时 %3 ms。%4"))
+        QStringLiteral("状态：已扫描 %1 个进程，发现 %2 条快捷键记录，耗时 %3 ms。%4"))
         .arg(m_scannedProcessCount)
         .arg(m_rowCount)
         .arg(elapsedMs)
@@ -568,7 +578,7 @@ void WindowGlobalHotkeyTab::finishRefresh(const std::uint64_t ticket, const qint
             progressTaskId,
             allHotkeyText(
                 "window.global_hotkey.progress.completed",
-                QStringLiteral("全部热键扫描完成")).toStdString(),
+                QStringLiteral("程序快捷键扫描完成")).toStdString(),
             100,
             1.0f);
     }

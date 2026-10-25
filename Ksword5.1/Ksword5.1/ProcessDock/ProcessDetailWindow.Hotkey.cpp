@@ -1983,7 +1983,7 @@ void ProcessDetailWindow::editSelectedHotkey()
             titleText,
             hotkeyUiText(
                 QStringLiteral("process.hotkey.edit.unsupported"),
-                QStringLiteral("此来源是只读审计数据。当前仅支持修改窗口激活热键、.lnk 快捷方式热键和通过安全快照验证的 R0 RegisterHotKey 项。")));
+                QStringLiteral("该热键来源不支持修改。当前仅支持修改窗口激活热键、.lnk 快捷方式热键和通过安全快照验证的 R0 RegisterHotKey 项。")));
         return;
     }
     if (isR0Hotkey && !row.hasR0MutationSnapshot)
@@ -2149,7 +2149,7 @@ void ProcessDetailWindow::deleteSelectedHotkey()
             titleText,
             hotkeyUiText(
                 QStringLiteral("process.hotkey.delete.unsupported"),
-                QStringLiteral("该来源是只读审计数据，不能删除。")));
+                QStringLiteral("该热键来源不支持删除。")));
         return;
     }
     if (isR0Hotkey && !row.hasR0MutationSnapshot)

@@ -8314,7 +8314,7 @@ void HardwareDock::initializeKeyboardMouseHidTab()
     m_keyboardMouseHidPage = createDeviceAuditPage(
         m_sideTabWidget,
         QStringLiteral("键盘、鼠标与其他输入设备"),
-        QStringLiteral("只读审计：键盘、鼠标、HID 与输入设备状态，默认不做消息截获与输入抓取。"),
+        QStringLiteral("查看键盘、鼠标、HID 与其他输入设备状态。"),
         &m_keyboardMouseHidEditor,
         &m_keyboardMouseHidTable);
     const int tabIndex = addHardwarePageTab(m_keyboardMouseHidPage, QStringLiteral("键盘与鼠标"));
@@ -8351,7 +8351,7 @@ void HardwareDock::initializeUsbTopologyTab()
     m_usbTopologyPage = createDeviceAuditPage(
         m_sideTabWidget,
         QStringLiteral("USB 设备关系"),
-        QStringLiteral("只读审计：USB 拓扑、控制器、Hub、端口与设备树关系。"),
+        QStringLiteral("查看 USB 控制器、Hub、端口与设备树关系。"),
         &m_usbTopologyEditor,
         &m_usbTopologyTable);
     const int tabIndex = addHardwarePageTab(m_usbTopologyPage, QStringLiteral("USB 设备"));

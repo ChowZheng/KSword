@@ -28,7 +28,7 @@ namespace network_navigation_detail
         {"firewall", "", L"防火墙", "network.tab.firewall", true},
         {"firewall.events", "firewall", L"事件监控", "", true},
         {"firewall.rules", "firewall", L"规则管理", "", true},
-        {"audit", "", L"网络审计", "network.tab.audit", true},
+        {"audit", "", L"网络分析", "network.tab.audit", true},
         {"audit.cross-view", "audit", L"TCP/UDP Cross-View", "", true},
         {"audit.afd", "audit", L"AFD", "", true},
         {"audit.wfp", "audit", L"WFP", "", true},
