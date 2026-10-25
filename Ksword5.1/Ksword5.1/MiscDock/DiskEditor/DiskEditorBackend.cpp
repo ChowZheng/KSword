@@ -22,6 +22,7 @@
 
 #include <algorithm>
 #include <array>
+#include <iterator>
 #include <string>
 
 namespace
@@ -98,6 +99,15 @@ namespace
         result.replace(QChar('\0'), QChar(' '));
         result = result.simplified();
         return result == QStringLiteral(".") ? QString() : result;
+    }
+
+    QString gptPartitionName(const wchar_t (&name)[36])
+    {
+        // GPT names are fixed-size UTF-16 fields. QString::trimmed() does not
+        // remove NUL padding; keep only the bounded, terminated name so neither
+        // the partition map nor the table receives invisible/tofu characters.
+        const auto end = std::find(std::begin(name), std::end(name), L'\0');
+        return QString::fromWCharArray(name, static_cast<qsizetype>(end - std::begin(name))).trimmed();
     }
 
     // storageBusTypeText：
@@ -576,7 +586,7 @@ namespace
                     partition.kind = partitionKindFromGptType(source.Gpt.PartitionType);
                     partition.typeText = partitionTypeTextFromGpt(source.Gpt.PartitionType);
                     partition.uniqueIdText = guidToText(source.Gpt.PartitionId);
-                    const QString gptName = QString::fromWCharArray(source.Gpt.Name, 36).trimmed();
+                    const QString gptName = gptPartitionName(source.Gpt.Name);
                     if (!gptName.isEmpty())
                     {
                         partition.name = gptName;
