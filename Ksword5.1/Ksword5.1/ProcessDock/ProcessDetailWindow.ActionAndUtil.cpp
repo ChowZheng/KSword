@@ -151,7 +151,9 @@ void ProcessDetailWindow::submitDetailAction(const QString& title, const kLogEve
         {
             if (pid != m_baseRecord.pid || creationTime != m_baseRecord.creationTime100ns) return true;
             const QPointer<ProcessDetailWindow> alive(this);
-            showActionResultMessage(title, result.ok, result.detail, actionEvent);
+            // 清除请求可能已生效但读回未知时，由热键页单独给出警告，避免当作确定失败提权/报错。
+            if (!result.outcomeUncertain)
+                showActionResultMessage(title, result.ok, result.detail, actionEvent);
             if (alive && completed) completed(result);
             if (alive && refreshModules && result.ok) requestAsyncModuleRefresh(true);
             return true;

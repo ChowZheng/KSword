@@ -1,6 +1,8 @@
 ﻿#include "MiscDock.h"
 #include "../UI/PageControlStyle.h"
 #include "../UI/PrimaryPageStyle.h"
+#include "../UI/FlatButtonTheme.h"
+#include "../UI/ToolbarMetrics.h"
 #include "../UI/ThemeBinding.h"
 #include "../UI/AsyncOperation.h"
 
@@ -29,7 +31,11 @@
 
 #include "../Internationalization/LanguageManager.h"
 #include <QIcon>
+#include <QLabel>
+#include <QMetaObject>
+#include <QPushButton>
 #include <QPointer>
+#include <QSignalBlocker>
 #include <QShowEvent>
 #include <QTabBar>
 #include <QTabWidget>
@@ -58,7 +64,8 @@ const ks::ui::PageNavigationTabDefinition kMiscNavigation[] = {
     {"misc.scanner", "", "misc.scanner.tab", "扫描器", false},
     {"misc.minidump", "", "misc.minidump.tab", "转储分析", false},
     {"misc.plugin", "", "misc.plugin.tab", "插件", false},
-    {"misc.theme", "", "misc.theme_check.tab", "主题检查", false}
+    {"misc.theme", "", "misc.theme_check.tab", "主题检查", false},
+    {"misc.hotkey_manager", "", "misc.hotkey_manager.tab", "快捷键管理", false}
 };
 const char* const kMiscChildKeys[] = {
     nullptr,
@@ -80,7 +87,8 @@ const char* const kMiscChildKeys[] = {
     "misc.scanner",
     "misc.minidump",
     "misc.plugin",
-    "misc.theme_check"
+    "misc.theme_check",
+    nullptr
 };
 }
 
@@ -244,6 +252,41 @@ void MiscDock::initializeUi(const bool initializeCurrentPage)
     m_themeCheckHostWidget = new QWidget(m_mainTabWidget);
     m_themeCheckTabIndex = addNavigationTab(19, m_themeCheckHostWidget);
 
+    // 只提供导航与失败重试；热键表及扫描仍由窗口 Dock 的唯一管理页持有。
+    m_hotkeyManagerHostWidget = new QWidget(m_mainTabWidget);
+    auto* hotkeyPageLayout = new QVBoxLayout(m_hotkeyManagerHostWidget);
+    ks::ui::StyleWorkspacePage(m_hotkeyManagerHostWidget, 6);
+    hotkeyPageLayout->setSpacing(16);
+    auto* hotkeyPanel = new QWidget(m_hotkeyManagerHostWidget);
+    ks::ui::StylePrimaryContentPanel(hotkeyPanel, false);
+    auto* hotkeyPanelLayout = new QVBoxLayout(hotkeyPanel);
+    hotkeyPanelLayout->setContentsMargins(16, 16, 16, 16);
+    hotkeyPanelLayout->setSpacing(8);
+    auto* hotkeyTitle = new QLabel(hotkeyPanel);
+    ks::i18n::LanguageManager::instance().bindText(hotkeyTitle,
+        QStringLiteral("misc.hotkey_manager.tab"), QStringLiteral("快捷键管理"));
+    ks::ui::StylePrimarySectionTitle(hotkeyTitle);
+    hotkeyPanelLayout->addWidget(hotkeyTitle);
+    m_hotkeyManagerStatusLabel = new QLabel(hotkeyPanel);
+    m_hotkeyManagerStatusLabel->setWordWrap(true);
+    ks::i18n::LanguageManager::instance().bindText(m_hotkeyManagerStatusLabel,
+        QStringLiteral("misc.hotkey_manager.ready"),
+        QStringLiteral("在窗口页查看和管理快捷键。"));
+    hotkeyPanelLayout->addWidget(m_hotkeyManagerStatusLabel);
+    m_hotkeyManagerOpenButton = new QPushButton(QIcon(QStringLiteral(":/Icon/process_hotkey.svg")),
+        QString(), hotkeyPanel);
+    ks::i18n::LanguageManager::instance().bindText(m_hotkeyManagerOpenButton,
+        QStringLiteral("misc.hotkey_manager.open"), QStringLiteral("打开快捷键管理"));
+    ks::ui::ApplyFlatButtonTheme(m_hotkeyManagerOpenButton,
+        ks::ui::FlatButtonTone::Accent, ks::ui::FlatButtonAppearance::Solid);
+    hotkeyPanelLayout->addWidget(m_hotkeyManagerOpenButton, 0, Qt::AlignLeft);
+    hotkeyPageLayout->addWidget(hotkeyPanel);
+    hotkeyPageLayout->addStretch(1);
+    m_hotkeyManagerTabIndex = addNavigationTab(20, m_hotkeyManagerHostWidget,
+        QIcon(QStringLiteral(":/Icon/process_hotkey.svg")));
+    connect(m_hotkeyManagerOpenButton, &QPushButton::clicked, this,
+        [this]() { queueHotkeyManagementNavigation(); });
+
     // 页签切换：按需初始化对应子页。
     connect(
         m_mainTabWidget,
@@ -251,6 +294,8 @@ void MiscDock::initializeUi(const bool initializeCurrentPage)
         this,
         [this](const int tabIndex)
         {
+             if (tabIndex >= 0 && tabIndex != m_hotkeyManagerTabIndex)
+                 m_lastNonHotkeyTabIndex = tabIndex;
             ensureTabInitialized(tabIndex);
         });
 
@@ -286,10 +331,73 @@ void MiscDock::showEvent(QShowEvent* event)
     if (QLayout* layout = page->layout()) layout->activate(); // Qt 已激活的热页在此常数时间返回。
 }
 
+void MiscDock::queueHotkeyManagementNavigation()
+{
+    if (m_hotkeyNavigationPending || !m_mainTabWidget ||
+        m_mainTabWidget->currentIndex() != m_hotkeyManagerTabIndex) return;
+    m_hotkeyNavigationPending = true;
+    if (m_hotkeyManagerOpenButton) m_hotkeyManagerOpenButton->setEnabled(false);
+    if (m_hotkeyManagerStatusLabel)
+        ks::i18n::LanguageManager::instance().bindText(m_hotkeyManagerStatusLabel,
+            QStringLiteral("misc.hotkey_manager.opening"),
+            QStringLiteral("正在打开窗口页的快捷键管理..."));
+    const QPointer<MiscDock> self(this);
+    if (!QMetaObject::invokeMethod(this, [self]()
+    {
+        if (!self) return;
+        if (!self->m_mainTabWidget ||
+            self->m_mainTabWidget->currentIndex() != self->m_hotkeyManagerTabIndex)
+        {
+            self->m_hotkeyNavigationPending = false;
+            if (self->m_hotkeyManagerOpenButton) self->m_hotkeyManagerOpenButton->setEnabled(true);
+            if (self->m_hotkeyManagerStatusLabel)
+                ks::i18n::LanguageManager::instance().bindText(self->m_hotkeyManagerStatusLabel,
+                    QStringLiteral("misc.hotkey_manager.ready"),
+                    QStringLiteral("在窗口页查看和管理快捷键。"));
+            return;
+        }
+        emit self->hotkeyManagementRequested();
+        // 没有接收者或接收者未给出结果时，保留可重试的状态页。
+        if (self && self->m_hotkeyNavigationPending)
+            self->finishHotkeyManagementNavigation(false);
+    }, Qt::QueuedConnection))
+        finishHotkeyManagementNavigation(false);
+}
+
+void MiscDock::finishHotkeyManagementNavigation(const bool opened)
+{
+    if (!m_hotkeyNavigationPending) return;
+    m_hotkeyNavigationPending = false;
+    if (m_hotkeyManagerOpenButton) m_hotkeyManagerOpenButton->setEnabled(true);
+    if (m_hotkeyManagerStatusLabel)
+        ks::i18n::LanguageManager::instance().bindText(m_hotkeyManagerStatusLabel,
+            opened ? QStringLiteral("misc.hotkey_manager.ready")
+                : QStringLiteral("misc.hotkey_manager.failed"),
+            opened ? QStringLiteral("在窗口页查看和管理快捷键。")
+                : QStringLiteral("窗口页暂不可用，请重试。"));
+    if (!opened || !m_mainTabWidget ||
+        m_mainTabWidget->currentIndex() != m_hotkeyManagerTabIndex) return;
+    int fallback = m_lastNonHotkeyTabIndex;
+    if (fallback < 0 || fallback >= m_mainTabWidget->count() ||
+        fallback == m_hotkeyManagerTabIndex || !m_mainTabWidget->isTabVisible(fallback))
+        fallback = m_bootEditorTabIndex;
+    if (fallback < 0 || fallback == m_hotkeyManagerTabIndex) return;
+    ensureTabInitialized(fallback, false);
+    const QSignalBlocker blocked(m_mainTabWidget);
+    m_mainTabWidget->setCurrentIndex(fallback);
+}
+
 void MiscDock::ensureTabInitialized(const int tabIndex, const bool activatePage)
 {
     if (tabIndex < 0)
     {
+        return;
+    }
+    // 目录预加载只登记入口，不打开窗口页，也不启动第二份热键枚举。
+    if (tabIndex == m_hotkeyManagerTabIndex)
+    {
+        if (activatePage && m_mainTabWidget && m_mainTabWidget->currentIndex() == tabIndex)
+            queueHotkeyManagementNavigation();
         return;
     }
 
@@ -1007,6 +1115,7 @@ QWidget* MiscDock::navigationHost(const int index) const
     case 17: return m_minidumpHostWidget;
     case 18: return m_pluginHostWidget;
     case 19: return m_themeCheckHostWidget;
+    case 20: return m_hotkeyManagerHostWidget;
     default: return nullptr;
     }
 }
@@ -1034,6 +1143,7 @@ QWidget* MiscDock::navigationChild(const int index) const
     case 17: return m_minidumpPage;
     case 18: return m_pluginPage;
     case 19: return m_themeCheckPage;
+    case 20: return nullptr; // 导航代理不拥有第二份热键页面。
     default: return nullptr;
     }
 }
@@ -1145,6 +1255,8 @@ QWidget* MiscDock::activateNavigationDescriptor(const QString& id)
     if (!self->m_navigationTabs.activate(parentId, navigationCatalog(self, false))) return nullptr;
     if (!self || !tabs || !host || self->m_mainTabWidget != tabs || self->navigationHost(index) != host
         || self->navigationChild(index) != child || tabs->currentWidget() != host || !permitted(false)) return nullptr;
+    if (parentId == QStringLiteral("misc.hotkey_manager"))
+        self->queueHotkeyManagementNavigation(); // 已在代理页时的外部导航仍可重试。
     if (id == parentId) return permitted(true) ? host.data() : nullptr;
     if (!child || !kMiscChildKeys[index]) return nullptr;
     const QPointer<QWidget> target(ks::ui::NavigateRegisteredPageNavigationCatalog(

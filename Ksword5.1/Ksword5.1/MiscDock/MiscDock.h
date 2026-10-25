@@ -19,6 +19,8 @@
 namespace ks::window_input { struct InjectionInitialSnapshot; }
 
 class QShowEvent;
+class QLabel;
+class QPushButton;
 class QTabWidget;
 class QVBoxLayout;
 class BootEditorTab;
@@ -66,6 +68,9 @@ public:
     // 唯一调用方是 MainWindow 的“发现新转储后自动解析”链路。
     MinidumpDock* activateMinidumpTab();
 
+    // 快捷键管理只在窗口 Dock 中保留一个真实页面；导航完成后更新本入口的恢复状态。
+    void finishHotkeyManagementNavigation(bool opened);
+
     // setBugcheckDiagnosticsVisible 作用：按配置或本次安装会话状态显示/隐藏蓝屏诊断入口。
     // 调用方式：MainWindow 在加载配置、修改自动安装选项或手动安装完成后调用。
     // 入参 visible：true=显示并允许懒加载页面；false=隐藏且不执行页面初始化；返回：无。
@@ -78,6 +83,9 @@ public:
     // this does not mark their widgets materialized for compatibility callers.
     ks::ui::PageSearchPreparation prepareNavigationPages(bool currentPageOnly = false,
         bool singleStep = false, bool useColdBodies = false, std::function<void()> resume = {});
+
+signals:
+    void hotkeyManagementRequested();
 
 protected:
     void showEvent(QShowEvent* event) override;
@@ -99,6 +107,7 @@ private:
     // - 入参 tabIndex：主 Tab 的页签索引，越界或负数会被忽略；
     // - 返回：无。
     void ensureTabInitialized(int tabIndex, bool activatePage = true);
+    void queueHotkeyManagementNavigation();
 
     // initializeXxx 系列：
     // - 作用：把对应子页构造出来并塞进自己的页签占位控件；
@@ -157,8 +166,14 @@ private:
     QWidget* m_minidumpHostWidget = nullptr;            // m_minidumpHostWidget：转储分析页占位控件。
     QWidget* m_pluginHostWidget = nullptr;              // m_pluginHostWidget：插件页占位控件。
     QWidget* m_themeCheckHostWidget = nullptr;          // 标准主题真实检查页的惰性宿主。
-    int m_themeCheckTabIndex = -1;                      // 检查页追加于现有导航末尾。
+    int m_themeCheckTabIndex = -1;                      // 检查页保留原索引19。
     QWidget* m_themeCheckPage = nullptr;                // 不改变原有业务页生命周期。
+    QWidget* m_hotkeyManagerHostWidget = nullptr;       // 快捷键管理仅导航到窗口 Dock 的唯一页面。
+    QLabel* m_hotkeyManagerStatusLabel = nullptr;
+    QPushButton* m_hotkeyManagerOpenButton = nullptr;
+    int m_hotkeyManagerTabIndex = -1;                   // 追加在既有20个页签后，保持旧索引。
+    int m_lastNonHotkeyTabIndex = 0;
+    bool m_hotkeyNavigationPending = false;
 
     // ===================== 页签索引 =====================
     int m_bootEditorTabIndex = -1;          // m_bootEditorTabIndex：引导页页签索引。

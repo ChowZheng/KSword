@@ -10,6 +10,7 @@
 
 #include "../Framework.h"
 #include "ProcessAffinityModel.h"
+#include "ProcessHotkeyEnumerator.h"
 #include "../UI/AsyncOperation.h"
 #include "../UI/ImmutableValueTable.h"
 #include <QImage>
@@ -296,6 +297,8 @@ private:
         QString processName;             // 所属进程名。
         QString sourceText;              // 来源：窗口热键/菜单/Accelerator/.lnk 等。
         QString detailText;              // 额外上下文。
+        ks::process::UserModeHotkeyRecord clearTarget; // 采集时的类型化清除身份，不从表格文本反解析。
+        bool isRegisteredHotkey = false; // R0 RegisterHotKey 来源由采集器直接标记。
         bool hasR0MutationSnapshot = false; // 是否携带可提交的完整 R0 tagHOTKEY 快照。
         KSWORD_ARK_KEYBOARD_HOTKEY_ENTRY r0MutationSnapshot{}; // 编辑/删除的预期值快照。
     };
@@ -669,7 +672,7 @@ private:
     void terminateCurrentModuleThread();
 
     // ======== 操作页动作 ========
-    struct DetailActionResult { bool ok = false; std::string detail; bool conflict = false; };
+    struct DetailActionResult { bool ok = false; std::string detail; bool conflict = false; bool outcomeUncertain = false; };
     void submitDetailAction(const QString& title, const kLogEvent& actionEvent,
         std::function<DetailActionResult()> action, bool refreshModules = false,
         std::function<void(const DetailActionResult&)> completed = {});

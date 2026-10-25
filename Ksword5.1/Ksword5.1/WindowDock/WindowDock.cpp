@@ -1,6 +1,7 @@
 #include "WindowDock.h"
 #include "WindowSnapshotSupport.h"
 #include "WindowImmutableTableSupport.h"
+#include "WindowHotkeyClearUi.h"
 #include <QImage>
 #include <QItemSelectionModel>
 #include <shellapi.h>
@@ -53,6 +54,7 @@
 #include <QLabel>
 #include <QList>
 #include <QMenu>
+#include <QMessageBox>
 #include <QMetaObject>
 #include <QMimeData>
 #include <QModelIndex>
@@ -61,6 +63,7 @@
 #include <QPalette>
 #include <QPoint>
 #include <QPointer>
+#include <QSet>
 #include <QPushButton>
 #include "../UI/SegmentedControl.h"
 #include <QSizePolicy>
@@ -105,8 +108,14 @@ namespace
     {
         ks::ui::FieldDocument sessionSummary, hotkeyHookSummary, displaySummary;
         QVector<QStringList> windowsRows, guiThreadRows, sessionRows, hotkeyRows, hookRows, deviceRows, clipboardRows;
+        QVector<ks::process::RegisteredHotkeyClearTarget> hotkeyTargets;
         QString failure;
     };
+
+    constexpr int RegisteredHotkeyTokenRole = Qt::UserRole + 70;
+    constexpr int RegisteredHotkeyGenerationRole = Qt::UserRole + 71;
+    constexpr int RegisteredHotkeyClearableRole = Qt::UserRole + 72;
+    constexpr int RegisteredHotkeyIndexRole = Qt::UserRole + 73;
 
     // kColumnPresetSelectedProperty 作用：标识 A/B 列预设按钮的当前选中态。
     // 该内部属性名不是用户可见文本，集中定义可避免误入 i18n 语言包。
@@ -148,6 +157,22 @@ namespace
         QString processName;
         QString imagePath;
         QString description;
+        std::uint64_t creationTime100ns = 0;
+    };
+
+    struct RegisteredClearRequest
+    {
+        QVector<ks::process::RegisteredHotkeyClearTarget> targets;
+        QStringList labels;
+        quint64 snapshotGeneration = 0;
+        int skipped = 0;
+    };
+    struct RegisteredClearResult
+    {
+        QVector<ks::process::HotkeyClearReceipt> receipts;
+        QStringList labels;
+        quint64 snapshotGeneration = 0;
+        int skipped = 0;
     };
 
     // boolText 作用：
@@ -537,6 +562,9 @@ namespace
         {
             return displayInfo;
         }
+
+        (void)ks::process::QueryProcessCreationTimeByPid(
+            processId, &displayInfo.creationTime100ns, nullptr);
 
         displayInfo.imagePath = QString::fromStdString(ks::process::QueryProcessPathByPid(processId));
         if (!displayInfo.imagePath.isEmpty())
@@ -2457,9 +2485,11 @@ namespace
 
     QVector<QStringList> buildHotkeyRows(
         const ksword::ark::Win32kHotkeysPdbResult& result,
-        const ksword::ark::KeyboardHotkeyEnumResult* const fallbackResult)
+        const ksword::ark::KeyboardHotkeyEnumResult* const fallbackResult,
+        QVector<ks::process::RegisteredHotkeyClearTarget>* const targetsOut)
     {
         QVector<QStringList> rows;
+        if (targetsOut) targetsOut->clear();
         QHash<std::uint32_t, HotkeyProcessDisplayInfo> processInfoCache;
         const auto processInfoForPid = [&processInfoCache](const std::uint32_t processId) -> HotkeyProcessDisplayInfo
         {
@@ -2506,6 +2536,24 @@ namespace
                     .arg(formatUInt64Hex(entry.tagWnd))
                     .arg(formatUInt64Hex(entry.desktopObject))
                     .arg(driverDetailText) });
+            if (targetsOut)
+            {
+                ks::process::RegisteredHotkeyClearTarget target{};
+                if (entry.source == KSWORD_ARK_KEYBOARD_SOURCE_WIN32K_HOTKEY_TABLE &&
+                    entry.status == KSWORD_ARK_WIN32K_STATUS_OK)
+                {
+                    target.hotkeyObject = entry.hotkeyObject;
+                    target.expectedThreadInfo = entry.threadInfo;
+                    // PDB桥中的 hwnd 是 windowObject，并非键盘协议的 windowHandle。
+                    target.processId = entry.processId;
+                    target.processCreationTime100ns = processInfo.creationTime100ns;
+                    target.threadId = entry.threadId;
+                    target.hotkeyId = entry.hotkeyId;
+                    target.modifiers = entry.modifiers;
+                    target.virtualKey = entry.virtualKey;
+                }
+                targetsOut->push_back(target);
+            }
         }
 
         if (!rows.isEmpty())
@@ -2549,6 +2597,28 @@ namespace
                         .arg(formatUInt64Hex(entry.flags))
                         .arg(driverDetailText)
                         .arg(auditMessageText(QStringLiteral("queryWin32kHotkeysPdb"), result)) });
+                if (targetsOut)
+                {
+                    ks::process::RegisteredHotkeyClearTarget target{};
+                    if (entry.source == KSWORD_ARK_KEYBOARD_SOURCE_WIN32K_HOTKEY_TABLE &&
+                        entry.status == KSWORD_ARK_KEYBOARD_ENUM_STATUS_OK &&
+                        (entry.entryFlags & KSWORD_ARK_KEYBOARD_HOTKEY_ENTRY_FLAG_MUTABLE) != 0U &&
+                        (entry.entryFlags & KSWORD_ARK_KEYBOARD_HOTKEY_ENTRY_FLAG_MAIN) != 0U)
+                    {
+                        target.hotkeyObject = entry.hotkeyObject;
+                        target.sessionGlobals = entry.sessionGlobals;
+                        target.expectedThreadInfo = entry.threadInfo;
+                        target.expectedWindowHandle = entry.windowHandle;
+                        target.expectedSnapshotHash = entry.snapshotHash;
+                        target.processId = entry.processId;
+                        target.processCreationTime100ns = processInfo.creationTime100ns;
+                        target.threadId = entry.threadId;
+                        target.hotkeyId = entry.hotkeyId;
+                        target.modifiers = entry.modifiers;
+                        target.virtualKey = entry.virtualKey;
+                    }
+                    targetsOut->push_back(target);
+                }
             }
             return rows;
         }
@@ -2577,6 +2647,7 @@ namespace
         emptyRow[HotkeyColumnLastStatus] = formatNtStatusText(result.lastStatus);
         emptyRow[HotkeyColumnDiagnostic] = emptyDetailText;
         rows.push_back(std::move(emptyRow));
+        if (targetsOut) targetsOut->push_back({});
         return rows;
     }
 
@@ -2866,7 +2937,9 @@ namespace
         return image;
     }
 
-    void populateTable(ks::ui::ImmutableValueTable* table, const QVector<QStringList>& rows)
+    void populateTable(ks::ui::ImmutableValueTable* table, const QVector<QStringList>& rows,
+        const QVector<ks::process::RegisteredHotkeyClearTarget>* hotkeyTargets = nullptr,
+        const quint64 hotkeyGeneration = 0)
     {
         if (!table) return;
         bool hasIcon = false, hasPath = false;
@@ -2875,9 +2948,27 @@ namespace
         const auto identityColumns = hasIcon ? QVector<int>{ HotkeyColumnObject, HotkeyColumnId,
             HotkeyColumnVirtualKey, HotkeyColumnModifiers, HotkeyColumnProcessId,
             HotkeyColumnThreadId, HotkeyColumnSession, HotkeyColumnHwnd, HotkeyColumnSource } : QVector<int>{0, 1, 2};
-        table->setSourceFactory([rows, identityColumns, hasIcon, hasPath, iconColumn, pathColumn](const auto& translator) {
+        const QVector<ks::process::RegisteredHotkeyClearTarget> targets = hotkeyTargets
+            ? *hotkeyTargets : QVector<ks::process::RegisteredHotkeyClearTarget>{};
+        table->setSourceFactory([rows, targets, hotkeyGeneration, identityColumns,
+            hasIcon, hasPath, iconColumn, pathColumn](const auto& translator) {
             const auto canonical = ks::window::makeWindowTableSource(rows, identityColumns);
             auto values = std::const_pointer_cast<ks::ui::ImmutableTableValues>(ks::window::formatWindowTableSource(canonical, translator));
+            if (values && targets.size() == values->rows.size())
+                for (qsizetype index = 0; index < targets.size(); ++index)
+                {
+                    const auto& target = targets[index];
+                    auto& row = values->rows[index];
+                    row.roles.insert(RegisteredHotkeyTokenRole, QStringLiteral("%1:%2")
+                        .arg(static_cast<qulonglong>(hotkeyGeneration)).arg(static_cast<qlonglong>(index)));
+                    row.roles.insert(RegisteredHotkeyGenerationRole, static_cast<qulonglong>(hotkeyGeneration));
+                    row.roles.insert(RegisteredHotkeyIndexRole, static_cast<int>(index));
+                    row.roles.insert(RegisteredHotkeyClearableRole,
+                        target.hotkeyObject != 0U && target.processId != 0U &&
+                        target.threadId != 0U && target.virtualKey != 0U &&
+                        target.expectedThreadInfo != 0U &&
+                        target.processCreationTime100ns != 0U);
+                }
             if (values && hasIcon && hasPath)
                 for (auto& row : values->rows)
                     if (iconColumn >= 0 && pathColumn >= 0 && pathColumn < row.cells.size()
@@ -2941,6 +3032,7 @@ WindowDock::WindowDock(QWidget* parent)
     : QWidget(parent)
 {
     m_auditOperation = new ks::ui::AsyncOperation(this);
+    m_registeredHotkeyClearOperation = new ks::ui::AsyncOperation(this);
     m_windowDetailOperation = new ks::ui::AsyncOperation(this);
     initializeUi();
     initializeConnections();
@@ -2982,12 +3074,14 @@ WindowDock::WindowDock(QWidget* parent)
 
 WindowDock::~WindowDock()
 {
+    if (m_registeredHotkeyClearOperation) m_registeredHotkeyClearOperation->close();
     m_auditOperation->close();
     m_windowDetailOperation->close();
     ks::window::retireSnapshotValues(std::move(m_cachedSessionSummary), std::move(m_cachedHotkeyHookSummary),
         std::move(m_cachedDisplaySummary), std::move(m_cachedWindowsRows), std::move(m_cachedGuiThreadRows),
         std::move(m_cachedSessionRows), std::move(m_cachedHotkeyRows), std::move(m_cachedHookRows),
-        std::move(m_cachedDeviceRows), std::move(m_cachedClipboardRows));
+        std::move(m_cachedDeviceRows), std::move(m_cachedClipboardRows),
+        std::move(m_cachedHotkeyTargets));
 }
 
 void WindowDock::focusWindowsByPids(const QVector<quint32>& processIds)
@@ -2997,6 +3091,22 @@ void WindowDock::focusWindowsByPids(const QVector<quint32>& processIds)
         m_tabWidget->setCurrentWidget(m_windowManagementDock);
         m_windowManagementDock->focusProcessIds(processIds);
     }
+}
+
+QWidget* WindowDock::activateHotkeyManagement()
+{
+    // 复用现有热键/钩子页及其首个程序快捷键视图，绝不创建第二实例。
+    if (!m_tabWidget || !m_hotkeyHookPage || !m_hotkeyHookInnerTabs || !m_programShortcutPage)
+        return nullptr;
+    const QPointer<WindowDock> self(this);
+    m_tabWidget->setCurrentWidget(m_hotkeyHookPage);
+    if (!self || !m_hotkeyHookInnerTabs || m_tabWidget->currentWidget() != m_hotkeyHookPage)
+        return nullptr;
+    m_hotkeyHookInnerTabs->setCurrentWidget(m_programShortcutPage);
+    if (!self || !m_hotkeyHookInnerTabs ||
+        m_hotkeyHookInnerTabs->currentWidget() != m_programShortcutPage)
+        return nullptr;
+    return m_programShortcutPage;
 }
 
 void WindowDock::refreshThemeVisuals()
@@ -3024,6 +3134,221 @@ void WindowDock::refreshThemeVisuals()
     // A/B 分段控件在绘制时读取主题，换肤不重新写选中状态或扫描内嵌页面。
 
     // 独立查询按钮由构造时登记的 Solid 绑定刷新，换肤不重复登记或重新处理几何。
+}
+
+void WindowDock::updateRegisteredHotkeyClearAction()
+{
+    if (!m_clearRegisteredHotkeysButton || !m_hotkeysTable || !m_registeredHotkeyActionStatus)
+        return;
+    const bool blocked = m_registeredHotkeyClearBusy || m_refreshing.load() ||
+        m_hotkeysTable->isPreparing();
+    int selected = 0, eligible = 0;
+    if (!blocked && m_hotkeysTable->selectionModel())
+        for (const QModelIndex& index : m_hotkeysTable->selectionModel()->selectedRows(0))
+        {
+            if (index.data(RegisteredHotkeyGenerationRole).toULongLong() != m_hotkeyTargetGeneration ||
+                index.data(RegisteredHotkeyTokenRole).toString().isEmpty()) continue;
+            ++selected;
+            if (index.data(RegisteredHotkeyClearableRole).toBool()) ++eligible;
+        }
+    const bool canClear = !blocked && eligible > 0;
+    if (m_clearRegisteredHotkeysButton->isEnabled() != canClear)
+        m_clearRegisteredHotkeysButton->setEnabled(canClear);
+    if (m_registeredHotkeyClearBusy) return; // 保留当前事务进度文字。
+    const QString status = m_hotkeyTargetGeneration == 0
+        ? ks::i18n::contextText(QStringLiteral("window.hotkey_hook.clear.waiting"),
+            QStringLiteral("请先刷新注册热键表。"))
+        : (m_refreshing.load() || m_hotkeysTable->isPreparing())
+        ? ks::i18n::contextText(QStringLiteral("window.hotkey_hook.clear.refreshing"),
+            QStringLiteral("正在刷新注册热键，请等待。"))
+        : selected == 0
+            ? (m_lastRegisteredClearSummary.isEmpty()
+                ? ks::i18n::contextText(QStringLiteral("window.hotkey_hook.clear.select"),
+                    QStringLiteral("请选择具有完整身份的注册热键；诊断行不能清除。"))
+                : m_lastRegisteredClearSummary)
+            : eligible == 0
+                ? ks::i18n::contextText(QStringLiteral("window.hotkey_hook.clear.unsupported"),
+                    QStringLiteral("所选 %1 条均缺少可验证身份或不是可变注册热键。"))
+                    .arg(selected)
+                : ks::i18n::contextText(QStringLiteral("window.hotkey_hook.clear.eligible"),
+                    QStringLiteral("可清除 %1 条；其余 %2 条将跳过。"))
+                    .arg(eligible).arg(selected - eligible);
+    if (m_registeredHotkeyActionStatus->text() != status)
+        m_registeredHotkeyActionStatus->setText(status);
+    if (m_registeredHotkeyActionStatus->toolTip() != m_lastRegisteredClearDetails)
+        m_registeredHotkeyActionStatus->setToolTip(m_lastRegisteredClearDetails);
+}
+
+void WindowDock::clearSelectedRegisteredHotkeys()
+{
+    if (m_registeredHotkeyClearBusy || m_refreshing.load() || !m_registeredHotkeyClearOperation ||
+        !m_hotkeysTable || m_hotkeysTable->isPreparing() || !m_hotkeysTable->selectionModel()) return;
+    const QModelIndexList selected = m_hotkeysTable->selectionModel()->selectedRows(0);
+    if (selected.isEmpty() || m_cachedHotkeyTargets.size() != m_cachedHotkeyRows.size()) return;
+    const quint64 generation = m_hotkeyTargetGeneration;
+    QSet<QString> selectedTokens, identities;
+    RegisteredClearRequest request;
+    request.snapshotGeneration = generation;
+    for (const QModelIndex& index : selected)
+    {
+        bool indexOk = false;
+        const int targetIndex = index.data(RegisteredHotkeyIndexRole).toInt(&indexOk);
+        const QString token = index.data(RegisteredHotkeyTokenRole).toString();
+        const QString expectedToken = QStringLiteral("%1:%2")
+            .arg(static_cast<qulonglong>(generation)).arg(targetIndex);
+        if (!indexOk || targetIndex < 0 || targetIndex >= m_cachedHotkeyTargets.size() ||
+            token != expectedToken ||
+            index.data(RegisteredHotkeyGenerationRole).toULongLong() != generation)
+        {
+            QMessageBox::warning(this,
+                ks::i18n::contextText(QStringLiteral("window.hotkey_hook.clear.title"), QStringLiteral("清除注册热键")),
+                ks::i18n::contextText(QStringLiteral("window.hotkey_hook.clear.stale"), QStringLiteral("所选记录已变化，请刷新后重试。")));
+            return;
+        }
+        selectedTokens.insert(token);
+        const auto& target = m_cachedHotkeyTargets[targetIndex];
+        if (!index.data(RegisteredHotkeyClearableRole).toBool() ||
+            target.hotkeyObject == 0U || target.processId == 0U || target.threadId == 0U ||
+            target.virtualKey == 0U || target.expectedThreadInfo == 0U ||
+            target.processCreationTime100ns == 0U)
+        {
+            ++request.skipped;
+            continue;
+        }
+        const QString identity = QStringLiteral("%1:%2:%3")
+            .arg(static_cast<qulonglong>(target.hotkeyObject))
+            .arg(target.processId)
+            .arg(static_cast<qulonglong>(target.processCreationTime100ns));
+        if (identities.contains(identity)) { ++request.skipped; continue; }
+        identities.insert(identity);
+        request.targets.push_back(target);
+        request.labels.push_back(QStringLiteral("%1 · %2")
+            .arg(m_hotkeysTable->cell(index.row(), HotkeyColumnName).toString(),
+                m_hotkeysTable->cell(index.row(), HotkeyColumnDisplay).toString()));
+    }
+    if (request.targets.isEmpty())
+    {
+        m_registeredHotkeyActionStatus->setText(ks::i18n::contextText(
+            QStringLiteral("window.hotkey_hook.clear.unsupported"),
+            QStringLiteral("所选 %1 条均缺少可验证身份或不是可变注册热键。"))
+            .arg(selected.size()));
+        return;
+    }
+    const QString prompt = ks::i18n::contextText(QStringLiteral("window.hotkey_hook.clear.confirm"),
+        QStringLiteral("将清除 %1 条注册热键；另有 %2 条身份不完整或重复记录将跳过。驱动会重新验证对象并读回结果。确认继续？"))
+        .arg(request.targets.size()).arg(request.skipped);
+    const QPointer<WindowDock> owner(this);
+    const auto confirmed = QMessageBox::warning(this,
+            ks::i18n::contextText(QStringLiteral("window.hotkey_hook.clear.title"), QStringLiteral("清除注册热键")),
+            prompt, QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+    if (!owner || confirmed != QMessageBox::Yes)
+        return;
+    if (m_registeredHotkeyClearBusy || m_refreshing.load() || m_hotkeysTable->isPreparing() ||
+        generation != m_hotkeyTargetGeneration || !m_hotkeysTable->selectionModel()) return;
+    QSet<QString> currentTokens;
+    for (const QModelIndex& index : m_hotkeysTable->selectionModel()->selectedRows(0))
+        currentTokens.insert(index.data(RegisteredHotkeyTokenRole).toString());
+    if (currentTokens != selectedTokens) return;
+    for (auto& target : request.targets) target.confirmedByUser = true;
+
+    m_registeredHotkeyClearBusy = true;
+    updateRegisteredHotkeyClearAction();
+    if (m_refreshButton) m_refreshButton->setEnabled(false);
+    m_registeredHotkeyActionStatus->setText(ks::i18n::contextText(
+        QStringLiteral("window.hotkey_hook.clear.running"),
+        QStringLiteral("正在清除 %1 条注册热键..."))
+        .arg(request.targets.size()));
+    const QPointer<WindowDock> self(this);
+    const std::uint64_t operationTicket = m_registeredHotkeyClearOperation->submitTransaction<
+        RegisteredClearRequest, RegisteredClearResult>(std::move(request),
+        [](const RegisteredClearRequest& batch)
+        {
+            RegisteredClearResult result;
+            result.snapshotGeneration = batch.snapshotGeneration;
+            result.skipped = batch.skipped;
+            result.labels = batch.labels;
+            result.receipts.reserve(batch.targets.size());
+            for (const auto& target : batch.targets)
+            {
+                ks::process::HotkeyClearReceipt receipt;
+                try { receipt = ks::process::ClearRegisteredHotkey(target); }
+                catch (...) { receipt.code = ks::process::HotkeyClearCode::Indeterminate; }
+                result.receipts.push_back(std::move(receipt));
+            }
+            return result;
+        },
+        [self](const RegisteredClearResult& result, const std::uint64_t ticket)
+        {
+            if (!self || !self->m_registeredHotkeyClearBusy ||
+                ticket != self->m_registeredHotkeyClearTicket) return true;
+            int cleared = 0, skipped = result.skipped, failed = 0;
+            QStringList details;
+            if (result.skipped > 0)
+                details << ks::i18n::contextText(
+                    QStringLiteral("window.hotkey_hook.clear.skipped_detail"),
+                    QStringLiteral("未提交 %1 条：身份不完整、不可变或重复目标。"))
+                    .arg(result.skipped);
+            for (qsizetype index = 0; index < result.receipts.size(); ++index)
+            {
+                const auto& receipt = result.receipts[index];
+                QString outcome = ks::window::HotkeyClearCodeText(receipt.code);
+                if (receipt.code == ks::process::HotkeyClearCode::Cleared &&
+                    receipt.changed && receipt.verified) ++cleared;
+                else if (receipt.code == ks::process::HotkeyClearCode::Unsupported ||
+                    receipt.code == ks::process::HotkeyClearCode::InvalidTarget ||
+                    receipt.code == ks::process::HotkeyClearCode::StaleTarget) ++skipped;
+                else
+                {
+                    ++failed;
+                    if (receipt.code == ks::process::HotkeyClearCode::Cleared)
+                        outcome = ks::i18n::contextText(QStringLiteral("window.global_hotkey.clear.code.unverified"),
+                            QStringLiteral("更改未能确认"));
+                }
+                details << QStringLiteral("%1：%2").arg(result.labels.value(index), outcome);
+            }
+            self->m_lastRegisteredClearSummary = ks::i18n::contextText(
+                QStringLiteral("window.hotkey_hook.clear.summary"),
+                QStringLiteral("注册热键清除结果：成功 %1、跳过 %2、失败或未确认 %3。"))
+                .arg(cleared).arg(skipped).arg(failed);
+            self->m_lastRegisteredClearDetails = details.join(QLatin1Char('\n'));
+            QMessageBox resultBox(failed == 0 ? QMessageBox::Information : QMessageBox::Warning,
+                ks::i18n::contextText(QStringLiteral("window.hotkey_hook.clear.title"), QStringLiteral("清除注册热键")),
+                self->m_lastRegisteredClearSummary, QMessageBox::Ok, self.data());
+            resultBox.setDetailedText(self->m_lastRegisteredClearDetails);
+            resultBox.exec();
+            if (!self) return true;
+            self->m_registeredHotkeyClearBusy = false;
+            self->m_registeredHotkeyClearTicket = 0;
+            if (self->m_refreshButton) self->m_refreshButton->setEnabled(true);
+            self->requestAsyncRefresh(); // 清除后只作一次原有完整快照刷新。
+            return true;
+        },
+        [self](std::exception_ptr)
+        {
+            if (!self) return;
+            self->m_lastRegisteredClearSummary = ks::i18n::contextText(
+                QStringLiteral("window.hotkey_hook.clear.failed"),
+                QStringLiteral("清除任务未完成，注册热键状态可能已变化。"));
+            QMessageBox::warning(self.data(),
+                ks::i18n::contextText(QStringLiteral("window.hotkey_hook.clear.title"), QStringLiteral("清除注册热键")),
+                self->m_lastRegisteredClearSummary);
+            if (!self) return;
+            self->m_registeredHotkeyClearBusy = false;
+            self->m_registeredHotkeyClearTicket = 0;
+            if (self->m_refreshButton) self->m_refreshButton->setEnabled(true);
+            self->requestAsyncRefresh();
+        });
+    if (operationTicket == 0)
+    {
+        m_registeredHotkeyClearBusy = false;
+        if (m_refreshButton) m_refreshButton->setEnabled(true);
+        m_registeredHotkeyActionStatus->setText(ks::i18n::contextText(
+            QStringLiteral("window.hotkey_hook.clear.busy"),
+            QStringLiteral("清除任务暂不可用，请稍后重试。")));
+        updateRegisteredHotkeyClearAction();
+        return;
+    }
+    m_registeredHotkeyClearTicket = operationTicket;
 }
 
 void WindowDock::showEvent(QShowEvent* showEventPointer)
@@ -3348,18 +3673,20 @@ void WindowDock::initializeUi()
         QWidget* pageHeader = makePageHeader(m_hotkeyHookPage, pageLayout, QStringLiteral("Hotkey / Hook"));
 
         QTabWidget* innerTabWidget = makeInnerTabWidget(m_hotkeyHookPage, pageHeader);
+        m_hotkeyHookInnerTabs = innerTabWidget;
         pageLayout->addWidget(innerTabWidget, 1);
 
         // 只保留一份 R3 聚合页：首显时沿原后台分批扫描，PE 资源不冒充 R0 注册热键。
+        m_programShortcutPage = new WindowGlobalHotkeyTab(innerTabWidget);
         const int shortcutsIndex = innerTabWidget->addTab(
-            new WindowGlobalHotkeyTab(innerTabWidget),
+            m_programShortcutPage,
             ks::i18n::contextText(QStringLiteral("window.hotkey_hook.program_shortcuts"),
                 QStringLiteral("程序快捷键")));
         innerTabWidget->setTabToolTip(shortcutsIndex,
             ks::i18n::contextText(QStringLiteral("window.global_hotkey.tab.tooltip"),
                 QStringLiteral("只读汇总全部进程的窗口热键、菜单快捷键、PE Accelerator 和快捷方式热键。")));
 
-        innerTabWidget->addTab(makeTableGroup(
+        QWidget* registeredGroup = makeTableGroup(
             QStringLiteral("热键列表"),
             QStringList{ QStringLiteral("名称"), QStringLiteral("进程ID.线程ID"), QStringLiteral("热键"),
                          QStringLiteral("路径"), QStringLiteral("描述"), QStringLiteral("热键对象地址"),
@@ -3377,7 +3704,8 @@ void WindowDock::initializeUi()
                           HotkeyColumnHwnd, HotkeyColumnNext, HotkeyColumnThreadInfo,
                           HotkeyColumnDepth, HotkeyColumnSource, HotkeyColumnStatus,
                           HotkeyColumnLastStatus, HotkeyColumnDiagnostic },
-            &m_hotkeysTable),
+            &m_hotkeysTable);
+        innerTabWidget->addTab(registeredGroup,
             ks::i18n::contextText(QStringLiteral("window.hotkey_hook.registered_hotkeys"),
                 QStringLiteral("注册热键")));
         applyTransparentAuditTableBackground(m_hotkeysTable);
@@ -3388,7 +3716,35 @@ void WindowDock::initializeUi()
             m_hotkeysTable->setProperty("kswordProcessPathColumn", HotkeyColumnPath);
             m_hotkeysTable->setProperty("ksword_process_detail_pid_column", HotkeyColumnProcessId);
             m_hotkeysTable->setIconSize(QSize(16, 16));
+            m_hotkeysTable->setSelectionMode(QAbstractItemView::ExtendedSelection);
+            const auto originalSourceReady = m_hotkeysTable->sourceReady;
+            m_hotkeysTable->sourceReady = [this, originalSourceReady]()
+            {
+                if (originalSourceReady) originalSourceReady();
+                updateRegisteredHotkeyClearAction();
+            };
+            connect(m_hotkeysTable->selectionModel(), &QItemSelectionModel::selectionChanged,
+                this, [this]() { updateRegisteredHotkeyClearAction(); });
         }
+        auto* registeredActions = new QHBoxLayout();
+        m_clearRegisteredHotkeysButton = new QPushButton(registeredGroup);
+        ks::i18n::LanguageManager::instance().bindText(m_clearRegisteredHotkeysButton,
+            QStringLiteral("window.hotkey_hook.clear.selected"), QStringLiteral("清除选中注册热键"));
+        m_clearRegisteredHotkeysButton->setEnabled(false);
+        ks::ui::ApplyFlatButtonTheme(m_clearRegisteredHotkeysButton,
+            ks::ui::FlatButtonTone::Danger, ks::ui::FlatButtonAppearance::Solid);
+        m_registeredHotkeyActionStatus = new QLabel(registeredGroup);
+        m_registeredHotkeyActionStatus->setWordWrap(true);
+        m_registeredHotkeyActionStatus->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+        ks::i18n::LanguageManager::instance().bindText(m_registeredHotkeyActionStatus,
+            QStringLiteral("window.hotkey_hook.clear.waiting"),
+            QStringLiteral("请先刷新注册热键表。"));
+        registeredActions->addWidget(m_clearRegisteredHotkeysButton);
+        registeredActions->addWidget(m_registeredHotkeyActionStatus, 1);
+        ks::ui::NormalizeToolbarRow(registeredActions);
+        static_cast<QVBoxLayout*>(registeredGroup->layout())->insertLayout(2, registeredActions);
+        connect(m_clearRegisteredHotkeysButton, &QPushButton::clicked, this,
+            [this]() { clearSelectedRegisteredHotkeys(); });
         innerTabWidget->addTab(makeTableGroup(
             QStringLiteral("消息钩子列表"),
             QStringList{ QStringLiteral("类型"), QStringLiteral("范围"), QStringLiteral("所有者 PID"),
@@ -3510,10 +3866,12 @@ void WindowDock::initializeConnections()
 void WindowDock::setRefreshingPlaceholderRows()
 {
     ++m_auditViewRevision;
+    ++m_hotkeyTargetGeneration;
     ks::window::retireSnapshotValues(std::move(m_cachedSessionSummary), std::move(m_cachedHotkeyHookSummary),
         std::move(m_cachedDisplaySummary), std::move(m_cachedWindowsRows), std::move(m_cachedGuiThreadRows),
         std::move(m_cachedSessionRows), std::move(m_cachedHotkeyRows), std::move(m_cachedHookRows),
-        std::move(m_cachedDeviceRows), std::move(m_cachedClipboardRows));
+        std::move(m_cachedDeviceRows), std::move(m_cachedClipboardRows),
+        std::move(m_cachedHotkeyTargets));
     // Loading rows describe state only. R0/R3 discovery remains in the worker;
     // invoking the final row builders here also invokes their EnumWindows fallback.
     const QString pendingDetailText = QStringLiteral("正在收集窗口信息，请稍候...");
@@ -3563,6 +3921,7 @@ void WindowDock::reconcileAuditRefreshState()
     const QPointer<WindowDock> alive(this);
     m_refreshing.store(false);
     if (m_refreshButton) m_refreshButton->setEnabled(true);
+    updateRegisteredHotkeyClearAction();
     if (alive && !m_auditOperation->isBusy() && !m_auditOperation->isInFlight() && m_statusLabel) m_statusLabel->setText(ks::i18n::sourceText(QStringLiteral("后台任务发生异常。")));
 }
 
@@ -3571,6 +3930,7 @@ void WindowDock::requestAsyncRefresh()
     const QPointer<WindowDock> refreshOwner(this);
     reconcileAuditRefreshState();
     if (!refreshOwner) return;
+    if (m_registeredHotkeyClearBusy) return;
     // 一轮窗口审计会同步替换七张关联表；任一表格菜单打开时，启动阶段的
     // 占位缓存和七表提交都必须作为一个整体延后。
     const QPointer<WindowDock> deferredGuard(this);
@@ -3762,16 +4122,18 @@ void WindowDock::requestAsyncRefresh()
             const QVector<QStringList> windowsRows = buildWindowsRows(win32kWindowsResult);
             const QVector<QStringList> guiThreadRows = buildGuiThreadRows(win32kGuiThreadsResult);
             const QVector<QStringList> sessionRows = buildSessionRows(win32kProfileResult);
+            QVector<ks::process::RegisteredHotkeyClearTarget> hotkeyTargets;
             const QVector<QStringList> hotkeyRows = buildHotkeyRows(
                 win32kHotkeysResult,
-                keyboardHotkeysFallbackQueried ? &keyboardHotkeysFallbackResult : nullptr);
+                keyboardHotkeysFallbackQueried ? &keyboardHotkeysFallbackResult : nullptr,
+                &hotkeyTargets);
             const QVector<QStringList> hookRows = buildHookRows(
                 win32kHooksResult,
                 keyboardHooksFallbackQueried ? &keyboardHooksFallbackResult : nullptr, request.texts);
             const QVector<QStringList> deviceRows = buildDeviceRows(gpuAuditResult);
                 return ks::window::makeSnapshotValue(WindowAuditSnapshot{sessionSummary, hotkeyHookSummary,
                     displaySummary, windowsRows, guiThreadRows, sessionRows, hotkeyRows, hookRows,
-                    deviceRows, clipboardRows, {}});
+                    deviceRows, clipboardRows, hotkeyTargets, {}});
             }
             catch (const std::exception& exceptionObject)
             {
@@ -3793,7 +4155,8 @@ void WindowDock::requestAsyncRefresh()
                 ks::window::retireSnapshotValues(std::move(alive->m_cachedSessionSummary), std::move(alive->m_cachedHotkeyHookSummary),
                     std::move(alive->m_cachedDisplaySummary), std::move(alive->m_cachedWindowsRows), std::move(alive->m_cachedGuiThreadRows),
                     std::move(alive->m_cachedSessionRows), std::move(alive->m_cachedHotkeyRows), std::move(alive->m_cachedHookRows),
-                    std::move(alive->m_cachedDeviceRows), std::move(alive->m_cachedClipboardRows));
+                    std::move(alive->m_cachedDeviceRows), std::move(alive->m_cachedClipboardRows),
+                    std::move(alive->m_cachedHotkeyTargets));
                 if (snapshot->failure.isEmpty())
                 {
                     alive->m_cachedSessionSummary = snapshot->sessionSummary;
@@ -3803,6 +4166,7 @@ void WindowDock::requestAsyncRefresh()
                     alive->m_cachedGuiThreadRows = snapshot->guiThreadRows;
                     alive->m_cachedSessionRows = snapshot->sessionRows;
                     alive->m_cachedHotkeyRows = snapshot->hotkeyRows;
+                    alive->m_cachedHotkeyTargets = snapshot->hotkeyTargets;
                     alive->m_cachedHookRows = snapshot->hookRows;
                     alive->m_cachedDeviceRows = snapshot->deviceRows;
                     alive->m_cachedClipboardRows = snapshot->clipboardRows;
@@ -3827,6 +4191,7 @@ void WindowDock::requestAsyncRefresh()
                     warn << failureEvent << "[WindowDock] audit refresh failed, detail=" << snapshot->failure.toStdString() << eol;
                 }
                 ++alive->m_auditViewRevision;
+                ++alive->m_hotkeyTargetGeneration;
                 alive->applyAuditViews();
                 if (!alive || !alive->m_auditOperation->isCurrent(ticket)) return;
                 if (alive->m_statusLabel)
@@ -3835,6 +4200,7 @@ void WindowDock::requestAsyncRefresh()
                         : QStringLiteral("窗口信息刷新失败；详情已写入日志。"));
                 if (!alive || !alive->m_auditOperation->isCurrent(ticket)) return;
                 alive->m_refreshing.store(false);
+                alive->updateRegisteredHotkeyClearAction();
                 if (deferred) alive->m_auditOperation->completeDeferred(ticket);
             };
             if (ks::ui::DeferTableUiCommitIfContextMenuOpen(this,
@@ -3847,6 +4213,7 @@ void WindowDock::requestAsyncRefresh()
         [this](std::exception_ptr) {
             // Infrastructure allocation/dispatch failure still releases the refresh latch.
             m_refreshing.store(false);
+            updateRegisteredHotkeyClearAction();
             if (m_statusLabel) m_statusLabel->setText(QStringLiteral("窗口信息刷新失败；详情已写入日志。"));
         });
 }
@@ -3921,7 +4288,8 @@ void WindowDock::applyAuditViews()
     if (!alive || viewRevision != m_auditViewRevision) return;
     populateTable(m_sessionTable, m_cachedSessionRows);
     if (!alive || viewRevision != m_auditViewRevision) return;
-    populateTable(m_hotkeysTable, m_cachedHotkeyRows);
+    populateTable(m_hotkeysTable, m_cachedHotkeyRows,
+        &m_cachedHotkeyTargets, m_hotkeyTargetGeneration);
     if (!alive || viewRevision != m_auditViewRevision) return;
     populateTable(m_hooksTable, m_cachedHookRows);
     if (!alive || viewRevision != m_auditViewRevision) return;

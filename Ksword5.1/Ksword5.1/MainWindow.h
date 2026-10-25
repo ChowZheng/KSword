@@ -530,6 +530,10 @@ private:
     // 返回：杂项页内容控件；返回 nullptr 表示 Dock 尚不可用。
     MiscDock* activateMiscDockForMergedTab(const QString& tabDisplayName);
 
+    // 杂项快捷键入口只负责路由；页面及枚举由现有窗口 Dock 唯一持有。
+    void attachMiscHotkeyManagerLink(MiscDock* miscDock);
+    bool activateWindowHotkeyManagement();
+
     void setupDockLayout();
 
     // initCustomTitleBar 作用：

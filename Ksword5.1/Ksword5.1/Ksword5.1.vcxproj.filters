@@ -1073,6 +1073,9 @@
     <ClCompile Include="ProcessDock\ProcessDetailWindow.Hotkey.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="ProcessDock\HotkeyClearController.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="ProcessDock\ProcessDetailWindow.PdbCatalog.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -2674,6 +2677,9 @@
     <ClInclude Include="ProcessDock\ProcessHotkeyEnumerator.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="ProcessDock\HotkeyClearController.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="PluginHost.h">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -3619,6 +3625,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="WindowDock\WindowGlobalHotkeyTab.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="WindowDock\WindowHotkeyClearUi.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="WindowDock\WindowTimerTab.h">

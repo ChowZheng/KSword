@@ -485,6 +485,7 @@
     <ClCompile Include="ProcessDock\ProcessDetailWindow.InjectionTrace.cpp" />
     <ClCompile Include="ProcessDock\ProcessDetailWindow.Module.cpp" />
     <ClCompile Include="ProcessDock\ProcessDetailWindow.Hotkey.cpp" />
+    <ClCompile Include="ProcessDock\HotkeyClearController.cpp" />
     <ClCompile Include="ProcessDock\ProcessDetailWindow.PdbCatalog.cpp" />
     <ClCompile Include="ProcessDock\ProcessDetailWindow.ActionAndUtil.cpp" />
     <ClCompile Include="ProcessDock\ProcessDetailWindow.Privilege.cpp" />
@@ -1392,6 +1393,7 @@
     <ClInclude Include="StartupDock\StartupDock.Internal.h" />
     <ClInclude Include="ProcessDock\Process_Tool.h" />
     <ClInclude Include="ProcessDock\ProcessHotkeyEnumerator.h" />
+    <ClInclude Include="ProcessDock\HotkeyClearController.h" />
     <ClInclude Include="UI\UI.css\UI_css.h" />
     <ClInclude Include="MonitorDock\WinAPIEventArchive.h" />
     <ClInclude Include="MonitorDock\WinAPISessionBackend.h" />
@@ -1400,6 +1402,7 @@
     <ClInclude Include="WindowDock\WindowDock.h" />
     <ClInclude Include="WindowDock\WindowEventHookTab.h" />
     <ClInclude Include="WindowDock\WindowGlobalHotkeyTab.h" />
+    <ClInclude Include="WindowDock\WindowHotkeyClearUi.h" />
     <ClInclude Include="WindowDock\WindowGuiHandleTab.h" />
     <ClInclude Include="WindowDock\WindowTimerTab.h" />
     <QtMoc Include="WelcomeDock\WelcomeDock.h" />

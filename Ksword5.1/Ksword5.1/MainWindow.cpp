@@ -11208,6 +11208,7 @@ void MainWindow::ensureDockContentInitialized(ads::CDockWidget* dockWidget, cons
         // 扫描器 / 转储分析 / 插件已并入杂项页，不再各自占用顶层 Dock，
         // 它们随杂项页内部的页签懒加载，这里只需构造杂项容器本身。
         if (m_miscWidget == nullptr) { m_miscWidget = new MiscDock(this, !useColdBodies); }
+        attachMiscHotkeyManagerLink(m_miscWidget);
         m_miscWidget->setBugcheckDiagnosticsVisible(
             m_currentAppearanceSettings.bugcheckDiagnosticsAutoInstallEnabled ||
             m_bugcheckDiagnosticsInstalledForSession ||
@@ -11831,6 +11832,7 @@ void MainWindow::initDockWidgets()
     if (shouldEagerLoad(QStringLiteral("misc")))
     {
         m_miscWidget = new MiscDock(this);
+        attachMiscHotkeyManagerLink(m_miscWidget);
         updateBugcheckDiagnosticsEntryVisibility();
     }
 
@@ -12795,6 +12797,38 @@ MiscDock* MainWindow::activateMiscDockForMergedTab(const QString& tabDisplayName
             << eol;
     }
     return m_miscWidget;
+}
+
+void MainWindow::attachMiscHotkeyManagerLink(MiscDock* miscDock)
+{
+    if (!miscDock || miscDock->property("ksword_misc_hotkey_manager_linked").toBool()) return;
+    const QPointer<MainWindow> owner(this);
+    const QPointer<MiscDock> target(miscDock);
+    const QMetaObject::Connection connection = connect(miscDock,
+        &MiscDock::hotkeyManagementRequested, this, [owner, target]()
+    {
+        if (!owner || !target) return;
+        const bool opened = owner->activateWindowHotkeyManagement();
+        if (target) target->finishHotkeyManagementNavigation(opened);
+    });
+    if (connection) miscDock->setProperty("ksword_misc_hotkey_manager_linked", true);
+}
+
+bool MainWindow::activateWindowHotkeyManagement()
+{
+    if (!m_dockWindow) return false;
+    const QPointer<MainWindow> owner(this);
+    const QPointer<ads::CDockWidget> dock(m_dockWindow);
+    ensureDockContentInitialized(dock.data());
+    if (!owner || !dock || !m_windowWidget) return false;
+    const QPointer<WindowDock> page(m_windowWidget);
+    dock->toggleView(true);
+    if (!owner || !dock || !page) return false;
+    withTemporaryNonTopMostForDockSwitch([dock]() { if (dock) dock->raise(); });
+    if (!owner || !dock || !page) return false;
+    dock->setAsCurrentTab();
+    if (!owner || !dock || !page) return false;
+    return page->activateHotkeyManagement() != nullptr;
 }
 
 void MainWindow::checkRecentCrashDumps()
