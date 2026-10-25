@@ -711,6 +711,7 @@ private:
     QColor m_floatingDockAppearanceBaseColor;
     bool m_floatingDockAppearanceDarkMode = false;
     bool m_floatingDockAppearanceTransparency = false;
+    int m_floatingDockAppearanceDataSurfaceAlpha = -1; // 透明内容表面实际透明度；不透明宿主固定255。
 
     // buildAppearanceOverlayStyleSheet 作用：
     // - 生成深色/浅色覆盖样式字符串，叠加在基础 QSS 之后。
@@ -808,6 +809,8 @@ private:
     QMenu* m_githubMenu = nullptr;               // m_githubMenu：项目主页/发行版/问题反馈。
     QToolButton* m_windowMenuButton = nullptr;   // m_windowMenuButton：标题栏“窗口”顶级菜单。
     QMenu* m_windowMenu = nullptr;               // m_windowMenu：辅助 Dock 显示/隐藏复选菜单与日志输出窗口。
+    QToolButton* m_toolsMenuButton = nullptr;    // m_toolsMenuButton：标题栏"工具"顶级菜单。
+    QMenu* m_toolsMenu = nullptr;                // m_toolsMenu：内核 Hook 向导等高级实验工具的入口。
     QPushButton* m_uiAccessStatusButton = nullptr; // m_uiAccessStatusButton：触发 UIAccess fallback 或降级回普通实例的入口。
     QPushButton* m_adminStatusButton = nullptr;
     QPushButton* m_debugStatusButton = nullptr;

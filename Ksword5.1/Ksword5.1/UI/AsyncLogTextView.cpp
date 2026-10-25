@@ -321,6 +321,7 @@ struct AsyncLogTextView::State
     std::shared_ptr<const LogSource> source = retained(std::make_shared<LogSource>());
     LayoutReply layout;
     std::vector<Command> pending;
+    std::shared_ptr<const std::vector<Command>> sourceCommands; // 已冻结的最早批次；拒绝/失败时保持所有权，无分配恢复。
     std::map<quint64, std::function<void(const SnapshotReply&)>> callbacks;
     QString placeholder;
     QString failure;
@@ -376,7 +377,7 @@ struct AsyncLogTextView::State
     }
     bool ready() const
     {
-        return layout && !sourceBusy && pending.empty() && !layoutPending
+        return layout && !sourceBusy && !sourceCommands && pending.empty() && !layoutPending
             && layout->identity.source->revision == source->revision;
     }
     int gutterWidth() const
@@ -384,13 +385,17 @@ struct AsyncLogTextView::State
         const int digits = std::max(2, static_cast<int>(QString::number(std::max(1, source->blocks)).size()));
         return 22 + q->fontMetrics().horizontalAdvance(QLatin1Char('9')) * digits;
     }
-    void geometry()
+    bool geometry()
     {
+        const QPointer<AsyncLogTextView> guard(q);
         const int width = gutterWidth();
         const QMargins margins(width + kInset, kInset, kInset, kInset);
         if (q->viewportMargins() != margins) q->setViewportMargins(margins);
+        if (!guard) return false;
         const QRect rect = q->contentsRect();
         gutter->setGeometry(rect.left(), rect.top(), width, rect.height());
+        // 两次几何写入都可能同步分发事件；返回值只读取栈上的弱引用。
+        return !guard.isNull();
     }
     qreal scrollTop() const
     {
@@ -462,8 +467,8 @@ struct AsyncLogTextView::State
         layoutQueued = true;
         QTimer::singleShot(0, q, [this] {
             layoutQueued = false;
-            if (!q->isVisible() || sourceBusy || !pending.empty()) return;
-            geometry();
+            if (!q->isVisible() || sourceBusy || sourceCommands || !pending.empty()) return;
+            if (!geometry()) return; // 宿主已销毁时，不再读取 State 或构造请求。
             LayoutRequest request{source, q->font(), std::max(1, q->viewport()->width()),
                 q->logicalDpiX(), q->logicalDpiY(), q->devicePixelRatioF(), epoch};
             failure.clear();
@@ -517,74 +522,116 @@ struct AsyncLogTextView::State
     }
     void drain()
     {
-        if (sourceBusy || pending.empty()) return;
-        auto commands = std::make_shared<std::vector<Command>>();
-        commands->swap(pending);
-        SourceRequest request{source, retained(std::move(commands))};
-        sourceBusy = true;
-        failure.clear();
-        sourceOperation->submitTransaction<SourceRequest, SourceReply>(request, prepareSource,
-            [this](SourceReply& reply, quint64) {
-                const auto old = source;
-                source = std::move(reply.source);
-                const quint64 removed = source->origin - old->origin;
-                const auto adjusted = [&](int value) {
-                    return adjustLogPosition(value, static_cast<int>(old->raw.size()), static_cast<int>(source->raw.size()),
-                        removed, source->lastEmptyRevision > old->revision);
-                };
-                const bool moved = cursor != adjusted(cursor) || anchor != adjusted(anchor);
-                cursor = adjusted(cursor); anchor = adjusted(anchor);
-                geometry();
-                const QPointer<AsyncLogTextView> guard(q);
-                if (moved) emit q->selectionChanged();
-                if (!guard) return true;
-                if (old->revision != source->revision)
-                {
-                    emit q->textChanged();
+        if (sourceBusy || (!sourceCommands && pending.empty())) return;
+        const QPointer<AsyncLogTextView> admissionOwner(q);
+        try
+        {
+            if (!sourceCommands)
+            {
+                // 先完成可能失败的 owner/retirement 分配，再无异常地转交 pending。
+                // 保留批次本体而非逐条复制，失败后始终先重试它，再消费新命令。
+                auto commands = std::make_shared<std::vector<Command>>();
+                auto retainedCommands = retained(commands);
+                commands->swap(pending);
+                sourceCommands = std::move(retainedCommands);
+            }
+            const SourceRequest request{source, sourceCommands};
+            sourceBusy = true;
+            failure.clear();
+            const auto ticket = sourceOperation->submitTransaction<SourceRequest, SourceReply>(request, prepareSource,
+                [this](SourceReply& reply, quint64) {
+                    const QPointer<AsyncLogTextView> guard(q);
+                    const auto old = source;
+                    source = std::move(reply.source);
+                    sourceCommands.reset(); // 提交点：规范源已更新，此批 append 永远不再重放。
+                    const quint64 removed = source->origin - old->origin;
+                    const auto adjusted = [&](int value) {
+                        return adjustLogPosition(value, static_cast<int>(old->raw.size()), static_cast<int>(source->raw.size()),
+                            removed, source->lastEmptyRevision > old->revision);
+                    };
+                    const bool moved = cursor != adjusted(cursor) || anchor != adjusted(anchor);
+                    cursor = adjusted(cursor); anchor = adjusted(anchor);
+                    bool observerFailed = false;
+                    try { if (!geometry()) return true; } catch (...) { observerFailed = true; }
                     if (!guard) return true;
-#if QT_CONFIG(accessibility)
-                    if (QAccessible::isActive())
+                    if (moved)
                     {
-                        QAccessibleTextUpdateEvent changed(q,0,old->plain,source->plain);
-                        QAccessible::updateAccessibility(&changed);
+                        try { emit q->selectionChanged(); } catch (...) { observerFailed = true; }
+                        if (!guard) return true;
                     }
+                    if (old->revision != source->revision)
+                    {
+                        try { emit q->textChanged(); } catch (...) { observerFailed = true; }
+                        if (!guard) return true;
+#if QT_CONFIG(accessibility)
+                        try
+                        {
+                            if (QAccessible::isActive())
+                            {
+                                QAccessibleTextUpdateEvent changed(q,0,old->plain,source->plain);
+                                QAccessible::updateAccessibility(&changed);
+                            }
+                        }
+                        catch (...) { observerFailed = true; }
 #endif
-                }
-                if (!guard) return true;
-                // Move callbacks out before invoking user code: callbacks can
-                // append, capture again or destroy the entire owning Dock.
-                for (auto& snapshot : reply.snapshots)
-                {
-                    const auto found = callbacks.find(snapshot.id);
-                    if (found == callbacks.end()) continue;
-                    auto callback = std::move(found->second);
-                    callbacks.erase(found);
-                    callback(snapshot);
+                    }
                     if (!guard) return true;
-                }
-                sourceBusy = false;
-                if (old->revision != source->revision || (layoutPending && !layoutOperation->isBusy())) requestLayout();
-                // submitTransaction refuses a second transaction until this
-                // apply callback has returned and the first job is settled.
-                QTimer::singleShot(0, q, [this] { drain(); });
-                return true;
-            }, [this, request](std::exception_ptr) {
-                // Preserve accepted input on allocation/normalization failure.
-                // No automatic retry loop; the next request/Show retries it.
-                std::vector<Command> retry;
-                retry.reserve(request.commands->size() + pending.size());
-                retry.insert(retry.end(), request.commands->begin(), request.commands->end());
-                retry.insert(retry.end(), std::make_move_iterator(pending.begin()), std::make_move_iterator(pending.end()));
-                pending.swap(retry);
+                    // 回调异常只影响该观察者；后续快照仍按原顺序投递，已提交日志不重复。
+                    for (auto& snapshot : reply.snapshots)
+                    {
+                        const auto found = callbacks.find(snapshot.id);
+                        if (found == callbacks.end()) continue;
+                        auto callback = std::move(found->second);
+                        callbacks.erase(found);
+                        try { callback(snapshot); } catch (...) { observerFailed = true; }
+                        if (!guard) return true;
+                    }
+                    sourceBusy = false;
+                    try
+                    {
+                        if (old->revision != source->revision || (layoutPending && !layoutOperation->isBusy())) requestLayout();
+                    }
+                    catch (...)
+                    {
+                        observerFailed = true;
+                        layoutPending = true;
+                    }
+                    if (!guard) return true;
+                    if (observerFailed)
+                    {
+                        failure = QStringLiteral("后台任务发生异常。");
+                        q->viewport()->update();
+                    }
+                    // 保留原来的下一轮接续点，等当前事务 settle 后才请求下一批。
+                    QTimer::singleShot(0, q, [this] { drain(); });
+                    return true;
+                }, [this](std::exception_ptr) {
+                    // worker/启动失败仍由 sourceCommands 持有原批次，无需分配恢复队列。
+                    // 若提交后调度异常，此指针已清空，也不会重放已发布 append。
+                    sourceBusy = false;
+                    layoutPending = true;
+                    failure = QStringLiteral("后台任务发生异常。");
+                    q->viewport()->update();
+                });
+            if (ticket == 0 && admissionOwner)
+            {
+                // 未准入不会调用 apply/failure；本地批次仍完整保留，等待原有下一次触发。
                 sourceBusy = false;
                 layoutPending = true;
-                failure = QStringLiteral("后台任务发生异常。");
-                q->viewport()->update();
-            });
+            }
+        }
+        catch (...)
+        {
+            if (!admissionOwner) return;
+            sourceBusy = false;
+            layoutPending = true;
+            failure = QStringLiteral("后台任务发生异常。");
+            q->viewport()->update();
+        }
     }
     void capture(std::function<void(const SnapshotReply&)> callback)
     {
-        if (!sourceBusy && pending.empty())
+        if (!sourceBusy && !sourceCommands && pending.empty())
         {
             // Current canonical values already include every admitted append.
             // Share them directly: a read must not re-normalize/re-layout text.
@@ -633,7 +680,8 @@ struct AsyncLogTextView::State
                 if (base > 0) fontScale = static_cast<double>(QFontInfo(current).pixelSize()) / base;
             }
         }
-        geometry(); requestLayout();
+        if (!geometry()) return;
+        requestLayout();
     }
     void applicationFontChange()
     {
@@ -652,7 +700,8 @@ struct AsyncLogTextView::State
             q->setFont(updated);
             if (!guard) return;
             updatingFont = false;
-            geometry(); requestLayout();
+            if (!geometry()) return;
+            requestLayout();
         });
     }
     void paintGutter(QPaintEvent*)
@@ -1023,14 +1072,21 @@ void AsyncLogTextView::paintEvent(QPaintEvent*)
 
 void AsyncLogTextView::resizeEvent(QResizeEvent* event)
 {
+    const QPointer<AsyncLogTextView> guard(this);
     QAbstractScrollArea::resizeEvent(event);
-    if (!d) return;
-    d->geometry(); d->requestLayout();
+    if (!guard || !d) return;
+    if (!d->geometry()) return;
+    d->requestLayout();
 }
 void AsyncLogTextView::showEvent(QShowEvent* event)
 {
+    const QPointer<AsyncLogTextView> guard(this);
     QAbstractScrollArea::showEvent(event);
-    d->applicationFontChange(); d->geometry(); d->drain();
+    if (!guard || !d) return;
+    d->applicationFontChange();
+    if (!guard || !d->geometry()) return;
+    d->drain();
+    if (!guard) return;
     if (!d->ready()) d->requestLayout();
 }
 void AsyncLogTextView::hideEvent(QHideEvent* event)
@@ -1042,8 +1098,9 @@ void AsyncLogTextView::hideEvent(QHideEvent* event)
 }
 void AsyncLogTextView::changeEvent(QEvent* event)
 {
+    const QPointer<AsyncLogTextView> guard(this);
     QAbstractScrollArea::changeEvent(event);
-    if (!d) return;
+    if (!guard || !d) return;
     switch (event->type())
     {
     case QEvent::FontChange: d->fontChange(); break;
@@ -1058,10 +1115,13 @@ void AsyncLogTextView::changeEvent(QEvent* event)
 }
 bool AsyncLogTextView::event(QEvent* event)
 {
+    const QPointer<AsyncLogTextView> guard(this);
     const bool handled = QAbstractScrollArea::event(event);
+    if (!guard) return handled;
     if (d && (event->type() == QEvent::DevicePixelRatioChange || event->type() == QEvent::ScreenChangeInternal))
     {
-        d->geometry(); d->requestLayout();
+        if (!d->geometry()) return handled;
+        d->requestLayout();
     }
     return handled;
 }
@@ -1213,8 +1273,9 @@ void AsyncLogTextView::wheelEvent(QWheelEvent* event)
 }
 void AsyncLogTextView::focusInEvent(QFocusEvent* event)
 {
+    const QPointer<AsyncLogTextView> guard(this);
     QAbstractScrollArea::focusInEvent(event);
-    if (!d) return;
+    if (!guard || !d) return;
     d->caretOn = true;
     const int flash = QApplication::styleHints()->cursorFlashTime();
     if (flash > 0) d->caretTimer->start(std::max(1, flash / 2));
@@ -1244,7 +1305,7 @@ void AsyncLogTextView::contextMenuEvent(QContextMenuEvent* event)
     connect(copyAction, &QAction::triggered, this, &AsyncLogTextView::copy);
     QAction* allAction = menu->addAction(ks::i18n::sourceText(QStringLiteral("全选")));
     allAction->setShortcut(QKeySequence::SelectAll);
-    allAction->setEnabled(!isEmpty() || d->sourceBusy || !d->pending.empty());
+    allAction->setEnabled(!isEmpty() || d->sourceBusy || d->sourceCommands || !d->pending.empty());
     connect(allAction, &QAction::triggered, this, &AsyncLogTextView::selectAll);
     menu->popup(event->globalPos());
     event->accept();

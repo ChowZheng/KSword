@@ -7,7 +7,7 @@
 EXTERN_C_START
 
 #ifndef KSW_RXPF_ENABLE_EXTERNAL_IMAGE_TARGETS
-#define KSW_RXPF_ENABLE_EXTERNAL_IMAGE_TARGETS 0
+#define KSW_RXPF_ENABLE_EXTERNAL_IMAGE_TARGETS 1
 #endif
 
 #define KSW_RXPF_SELF_TEST_EXPECTED_VALUE 0x0000000012345679ULL
@@ -50,6 +50,16 @@ KswRxpfImageProtectionChangeToRwNx(
     _Inout_ PKSW_RXPF_PAGE_RECORD Record
     );
 
+/*
+ * mode=1 restore：对 Record 调用 MmChangeImageProtection(op=1)，
+ * 返回实际恢复状态；失败时保留 ChangeProtectionApplied 和 MDL 供重试。
+ * 外部映像使用整页参考回退，不据此推断 VTL1 内部摘要验证算法。
+ */
+NTSTATUS
+KswRxpfRestoreExecutableProtection(
+    _Inout_ PKSW_RXPF_PAGE_RECORD Record
+    );
+
 NTSTATUS
 KswRxpfImageProtectionWrite(
     _Inout_ PKSW_RXPF_PAGE_RECORD Record,
@@ -58,7 +68,8 @@ KswRxpfImageProtectionWrite(
     _In_ ULONG Length
     );
 
-VOID
+/* 释放失败时记录仍拥有全部未释放资源，调用方不得清槽。 */
+NTSTATUS
 KswRxpfImageProtectionReleaseRecord(
     _Inout_ PKSW_RXPF_PAGE_RECORD Record
     );

@@ -218,7 +218,8 @@ namespace ks::misc
         }
 
         const disable_dse::ApplyResult result = disable_dse::writeCiOptions(
-            m_location, readback.value, m_savedOriginalValue);
+            m_location, readback.value, m_savedOriginalValue,
+            m_posture.hvciEnabled);
 
         if (result.ok)
         {
@@ -651,17 +652,17 @@ namespace ks::misc
             runKsecLocateGadget();
         });
         connect(m_ksecDisableButton, &QPushButton::clicked, this, [this]() {
-            // HVCI 开启时追加二次确认。
+            // HVCI 开启时沿用二次确认，明确该路径的安全失败尚未验证。
             if (m_posture.hvciEnabled)
             {
                 if (!askConfirmation(
                         this,
                         ks::i18n::text(
                             QStringLiteral("misc.disable_dse.hvci_confirm.title"),
-                            QStringLiteral("HVCI 绕过警告")),
+                            QStringLiteral("HVCI 写入限制")),
                         ks::i18n::text(
                             QStringLiteral("misc.disable_dse.hvci_confirm.message"),
-                            QStringLiteral("当前系统已开启内存完整性（HVCI），g_CiOptions 所在页可能受 Hypervisor SLAT 保护。\n\n强行写入可能导致蓝屏（SYSTEM_SERVICE_EXCEPTION）。\n\n确定要尝试吗？"))))
+                            QStringLiteral("当前系统已开启内存完整性（HVCI），内核写入可能被保护机制阻止。\n\n不能保证该路径会安全失败或避免蓝屏；尝试可能失败或导致系统崩溃。\n\n确定要尝试吗？"))))
                 {
                     return;
                 }
@@ -687,10 +688,10 @@ namespace ks::misc
                         this,
                         ks::i18n::text(
                             QStringLiteral("misc.disable_dse.hvci_confirm.title"),
-                            QStringLiteral("HVCI 绕过警告")),
+                            QStringLiteral("HVCI 写入限制")),
                         ks::i18n::text(
                             QStringLiteral("misc.disable_dse.hvci_confirm.message"),
-                            QStringLiteral("当前系统已开启内存完整性（HVCI），g_CiOptions 所在页可能受 Hypervisor SLAT 保护。\n\n强行写入可能导致蓝屏（SYSTEM_SERVICE_EXCEPTION）。\n\n确定要尝试吗？"))))
+                            QStringLiteral("当前系统已开启内存完整性（HVCI），内核写入可能被保护机制阻止。\n\n不能保证该路径会安全失败或避免蓝屏；尝试可能失败或导致系统崩溃。\n\n确定要尝试吗？"))))
                 {
                     return;
                 }
@@ -704,21 +705,7 @@ namespace ks::misc
             runLocate();
         });
         connect(m_disableButton, &QPushButton::clicked, this, [this]() {
-            // HVCI 开启时追加二次确认——写入可能触发 SYSTEM_SERVICE_EXCEPTION 蓝屏。
-            if (m_posture.hvciEnabled)
-            {
-                if (!askConfirmation(
-                        this,
-                        ks::i18n::text(
-                            QStringLiteral("misc.disable_dse.hvci_confirm.title"),
-                            QStringLiteral("HVCI 绕过警告")),
-                        ks::i18n::text(
-                            QStringLiteral("misc.disable_dse.hvci_confirm.message"),
-                            QStringLiteral("当前系统已开启内存完整性（HVCI），g_CiOptions 所在页可能受 Hypervisor SLAT 保护。\n\n强行写入可能导致蓝屏（SYSTEM_SERVICE_EXCEPTION）。\n\n确定要尝试吗？"))))
-                {
-                    return;
-                }
-            }
+            // HVCI 环境下尝试 RXPF 写入，VTL1 SLAT 会安全拦截。
             const QString message = ks::i18n::text(
                 QStringLiteral("misc.disable_dse.confirm.disable"),
                 QStringLiteral("即将把 g_CiOptions 改成 0，系统将不再校验驱动签名。\n\n该变量在 PatchGuard 的巡检范围内，保持关闭状态会导致蓝屏，请在加载完驱动后立即恢复。\n\n确定继续吗？"));
@@ -734,21 +721,7 @@ namespace ks::misc
             runApply(disable_dse::kDisabledValue, false);
         });
         connect(m_restoreButton, &QPushButton::clicked, this, [this]() {
-            // 恢复同样可能触发 HVCI 拦截，追加确认。
-            if (m_posture.hvciEnabled)
-            {
-                if (!askConfirmation(
-                        this,
-                        ks::i18n::text(
-                            QStringLiteral("misc.disable_dse.hvci_confirm.title"),
-                            QStringLiteral("HVCI 绕过警告")),
-                        ks::i18n::text(
-                            QStringLiteral("misc.disable_dse.hvci_confirm.message"),
-                            QStringLiteral("当前系统已开启内存完整性（HVCI），g_CiOptions 所在页可能受 Hypervisor SLAT 保护。\n\n强行写入可能导致蓝屏（SYSTEM_SERVICE_EXCEPTION）。\n\n确定要尝试吗？"))))
-                {
-                    return;
-                }
-            }
+            // HVCI 环境下尝试 RXPF 写入，VTL1 SLAT 会安全拦截。
             runApply(m_savedOriginalValue, true);
         });
     }
@@ -845,7 +818,7 @@ namespace ks::misc
         m_ksecStrategyDetailLabel->setText(
             ks::i18n::text(
                 QStringLiteral("misc.disable_dse.strategy.r0.detail"),
-                QStringLiteral("通过 KswordARK 自有内核驱动的事务通道读写 g_CiOptions。\n需要 R0 驱动在线且定位校验通过；HVCI 开启时无法使用。")));
+                QStringLiteral("通过 KswordARK 自有内核驱动的事务通道读写 g_CiOptions。\n需要 R0 驱动在线且定位校验通过。\nHVCI 环境下使用 RXPF 框架尝试写入，但 VTL1 SLAT 保护会阻止修改。")));
         m_ksecStrategyDetailLabel->setStyleSheet(
             QStringLiteral("color:%1;").arg(KswordTheme::TextSecondaryHex()));
     }
@@ -904,8 +877,10 @@ namespace ks::misc
 
         const QPointer<DisableDsePage> guardThis(this);
         const disable_dse::TargetLocation location = m_location;
+        // hvciEnabled：捕获当前 HVCI 状态，线程内决定走 RXPF 还是常规事务。
+        const bool hvciEnabled = m_posture.hvciEnabled;
 
-        std::thread([guardThis, location, desiredValue, isRestore]() {
+        std::thread([guardThis, location, desiredValue, isRestore, hvciEnabled]() {
             ApplyResult result;
             // 写之前再读一次，把 expected-before 对齐到此刻的真实值：
             // 期间可能有别的工具动过 g_CiOptions。
@@ -918,7 +893,7 @@ namespace ks::misc
             else
             {
                 result = disable_dse::writeCiOptions(
-                    location, readback.value, desiredValue);
+                    location, readback.value, desiredValue, hvciEnabled);
             }
 
             if (guardThis == nullptr)
@@ -1137,7 +1112,7 @@ namespace ks::misc
 
     void DisableDsePage::updateButtons()
     {
-        // HVCI 不再硬阻止操作——改为点击时弹窗确认。
+        // 保留 HVCI 环境下的既有按钮可用性，不据此承诺写入能安全失败。
         const bool allowed = !m_busy
             && (m_blockReason == disable_dse::BlockReason::None
                 || m_blockReason == disable_dse::BlockReason::HvciEnabled);
@@ -1269,8 +1244,12 @@ namespace ks::misc
             const QString reasonText = disable_dse::blockReasonText(m_blockReason);
             m_blockLabel->setText(reasonText);
             m_blockLabel->setVisible(!reasonText.isEmpty());
+            // HvciEnabled 沿用提示信息的次要文字色；其它原因用警告色。
             m_blockLabel->setStyleSheet(
-                QStringLiteral("color:%1;").arg(KswordTheme::WarningHex()));
+                QStringLiteral("color:%1;").arg(
+                    m_blockReason == disable_dse::BlockReason::HvciEnabled
+                        ? KswordTheme::TextSecondaryHex()
+                        : KswordTheme::WarningHex()));
         }
 
         if (m_locationLabel != nullptr)

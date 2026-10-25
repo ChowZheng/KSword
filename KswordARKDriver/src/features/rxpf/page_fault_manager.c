@@ -369,7 +369,6 @@ KswRxpfRestoreIpi(
         return 1ULL;
     }
 
-    /* Installed rows must return to the exact IDTR captured on that CPU. */
     __lidt(&cpu->OriginalIdtr);
     RtlZeroMemory(&verifyIdtr, sizeof(verifyIdtr));
     __sidt(&verifyIdtr);
@@ -527,7 +526,33 @@ KswRxpfPageFaultInstall(
         goto Exit;
     }
 
-    /* The IPI callback performs only SIDT/LIDT and fixed-row stores. */
+    /* 预检：VBS/Hyper-V 会拦截 LIDT。原注释说会 "#GP + CFG 违规 (0x139)"，
+       实测修正：**host (root partition) + guest 都会蓝屏 0x1E
+       (STATUS_PRIVILEGED_INSTRUCTION 0xC0000096)，不是 0x139 CFG violation。**
+       两处实证 fault RIP 都落在本文件的 LIDT 指令位置。
+       CPL=0 可执行的 LIDT 被 hypervisor 识别为特权指令反弹 #GP 给 VTL0 kernel。
+       SEH 可以 catch 这个 0x1E，但 shadow IDT 本身装不上，execute path 得走
+       mode=1 restore + direct call (见 rxpf_runtime.c EXEC_PROOF 实现)。
+       EXEC_PROOF 不依赖 shadow IDT，这个 gate 只是保护 self-test IOCTL 不被
+       手动触发时意外蓝屏。 */
+    {
+        int cpuInfo[4] = {0};
+
+        __cpuid(cpuInfo, 1);
+        if (cpuInfo[2] & (1 << 31)) {
+            /* hypervisor present — 检查是否 Microsoft Hyper-V */
+            __cpuid(cpuInfo, 0x40000000);
+            if (cpuInfo[1] == 0x7263694D &&   /* "Micr" */
+                cpuInfo[2] == 0x666F736F &&   /* "osof" */
+                cpuInfo[3] == 0x76482074) {   /* "t Hv" */
+                status = STATUS_NOT_SUPPORTED;
+                KswRxpfFreeShadowTables();
+                goto Exit;
+            }
+        }
+    }
+
+    /* IPI 回调只执行 SIDT/LIDT 和定长行写入。 */
     (void)KeIpiGenericCall(KswRxpfInstallIpi, 0ULL);
     cpuCount = InterlockedCompareExchange(
         &g_KswRxpfPageFault.CpuCount,

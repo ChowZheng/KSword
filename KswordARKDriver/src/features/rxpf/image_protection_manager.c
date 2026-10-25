@@ -16,6 +16,7 @@ Environment:
 
 #include "image_protection_manager.h"
 #include <ntimage.h>
+#include "rxpf_sha512.h"
 #include "src/platform/kernel_module_identity.h"
 #include "src/platform/pool_compat.h"
 
@@ -36,13 +37,42 @@ RtlPcToFileHeader(
 #define KSW_RXPF_MM_CHANGE_RVA 0x00A3B300UL
 #define KSW_RXPF_MM_CHANGE_OPERATION_RX 1UL
 #define KSW_RXPF_MM_CHANGE_OPERATION_READONLY_NX 2UL
+
+/* Build 22621 (Windows 11 22H2) ntoskrnl identity. */
+#define KSW_RXPF_22621_NT_BUILD      22621UL
+#define KSW_RXPF_22621_TIMESTAMP     0x2C33C508UL
+#define KSW_RXPF_22621_IMAGE_SIZE    0x01047000UL
+#define KSW_RXPF_22621_CHECKSUM      0x00B8C0BFUL
+#define KSW_RXPF_22621_MM_CHANGE_RVA 0x00736CF0UL
+
+/* Build 26300.9711 (Windows 11 24H2 + cumulative) profile — 本机 VM 实测。 */
+/* PE 元数据由 scratchpad/extract_nt_meta.py 读取 C:\WINDOWS\System32\ntoskrnl.exe 得到。 */
+/* MmChangeImageProtection RVA 由 memory_ioctl.c:change-image-protection */
+/*   的 resolvedFunctionVa 字段减去 ntoskrnl base 实测确认，与 PE 符号一致。 */
+/* 注：9457 → 9711 是 Windows Update 自动升级的结果；MmChangeImageProtection */
+/*   的 64 字节 prologue 在两个 UBR 完全相同，只是 PDB GUID / TimeDateStamp */
+/*   / CheckSum / RVA 变了。宏保留 KSW_RXPF_26300_* 命名表示同一 26300 family。 */
+#define KSW_RXPF_26300_NT_BUILD      26300UL
+#define KSW_RXPF_26300_TIMESTAMP     0xAFF6531FUL
+#define KSW_RXPF_26300_IMAGE_SIZE    0x01450000UL
+#define KSW_RXPF_26300_CHECKSUM      0x00C8AD9CUL
+#define KSW_RXPF_26300_MM_CHANGE_RVA 0x00A565F0UL
+
 #define KSW_RXPF_RSDS_SIGNATURE 0x53445352UL
 
+/*
+ * MmChangeImageProtection 真实 ABI（逆向自 26100/22621 ntoskrnl）:
+ *   参数 2,3 是参考摘要缓冲区——**不是**代码页地址/长度。
+ *   mode=2（移除 X）不经 VTL1，参数 2,3 仅用于 PFN 范围标记。
+ *   mode=1（恢复 RX）经 VTL1，VTL1 将缓冲区内容作为 SHA-512
+ *   尾段（[0x20,0x40) 字节）与目标页哈希做 memcmp。
+ *   缓冲区必须位于 MDL->StartVa 所属模块的 [DllBase, DllBase+SizeOfImage) 内。
+ */
 typedef NTSTATUS
 (NTAPI* KSW_RXPF_MM_CHANGE_IMAGE_PROTECTION)(
     _In_ PMDL Mdl,
-    _In_ PVOID BaseAddress,
-    _In_ ULONG NumberOfBytes,
+    _In_ PVOID ReferenceBufferOrRange,
+    _In_ ULONG ReferenceBufferLengthOrSize,
     _In_ ULONG Operation
     );
 
@@ -92,11 +122,37 @@ typedef struct _KSW_RXPF_IMAGE_PROTECTION_STATE
 
 static KSW_RXPF_IMAGE_PROTECTION_STATE g_KswRxpfImageProtection;
 
+/*
+ * mode=1 参考摘要缓冲区——位于驱动 .data 节，地址在本映像的
+ * [DllBase, DllBase+SizeOfImage) 内，因此通过 MmChangeImageProtection
+ * 对 MDL->StartVa 所属模块的范围校验（自映像测试场景）。
+ * VTL1 从此处读取 0x20 字节作为 SHA-512 尾段预期值。
+ */
+static DECLSPEC_ALIGN(16) UCHAR
+    g_KswRxpfReferenceDigest[0x20];
+
 static const GUID g_KswRxpfExpectedPdbGuid = {
     0x3E5A9A8BUL,
     0x6B78U,
     0x281FU,
     { 0x3BU, 0xE2U, 0x15U, 0x01U, 0x10U, 0x32U, 0x52U, 0x15U }
+};
+
+/* Build 22621 PDB: ntkrnlmp.pdb {9074FC2B-82ED-2B7E-1CB3-366B64BE62F9} age 1. */
+static const GUID g_KswRxpfPdbGuid22621 = {
+    0x9074FC2BUL,
+    0x82EDU,
+    0x2B7EU,
+    { 0x1CU, 0xB3U, 0x36U, 0x6BU, 0x64U, 0xBEU, 0x62U, 0xF9U }
+};
+
+/* Build 26300.9711 PDB: ntkrnlmp.pdb {B661C6FE-7299-1D16-0FE3-7C48B8BC5470} age 1. */
+/* 该 GUID 从 VM 本机 ntoskrnl.exe (10.0.26300.9711) 的 CodeView RSDS 直接读得。 */
+static const GUID g_KswRxpfPdbGuid26300 = {
+    0xB661C6FEUL,
+    0x7299U,
+    0x1D16U,
+    { 0x0FU, 0xE3U, 0x7CU, 0x48U, 0xB8U, 0xBCU, 0x54U, 0x70U }
 };
 
 static const UCHAR g_KswRxpfMmChangeSignature[64] = {
@@ -121,6 +177,35 @@ static const UCHAR g_KswRxpfMmChangeSignatureMask[64] = {
     0xFFU, 0xFFU, 0xFFU, 0xFFU, 0xFFU, 0xFFU, 0xFFU, 0xFFU
 };
 
+/* Build 22621 MmChangeImageProtection prologue (64 bytes at RVA 0x00736CF0). */
+static const UCHAR g_KswRxpfMmChangeSignature22621[64] = {
+    0x48U, 0x89U, 0x5CU, 0x24U, 0x08U, 0x44U, 0x89U, 0x4CU,
+    0x24U, 0x20U, 0x48U, 0x89U, 0x54U, 0x24U, 0x10U, 0x55U,
+    0x56U, 0x57U, 0x41U, 0x54U, 0x41U, 0x55U, 0x41U, 0x56U,
+    0x41U, 0x57U, 0x48U, 0x83U, 0xECU, 0x30U, 0x41U, 0x8DU,
+    0x41U, 0xFFU, 0xBEU, 0x01U, 0x00U, 0x00U, 0x00U, 0x49U,
+    0x8BU, 0xD8U, 0x4CU, 0x8BU, 0xEAU, 0x48U, 0x8BU, 0xF9U,
+    0x3BU, 0xC6U, 0x0FU, 0x87U, 0xFAU, 0x23U, 0x19U, 0x00U,
+    0x8BU, 0xC3U, 0x48U, 0x89U, 0x44U, 0x24U, 0x28U, 0x48U
+};
+
+/* Build 26300.9711 MmChangeImageProtection prologue (64 bytes at RVA 0x00A565F0). */
+/* 和 26220 几乎逐字节一致，仅 offset 0x36-0x37 处的 JA (0F 87) 相对偏移不同 */
+/* (26220: 0x41 0x02；26300: 0x2D 0x02)——函数内部条件跳转目标随 build 偏移。 */
+/* 9457 → 9711 升级后，这 64 字节 prologue 完全未变（函数内部布局没动）， */
+/*   只是 RVA 从 0xA5DDB0 偏移到 0xA565F0 (函数在 .text 段里被挪了 0x7C0 字节)。 */
+/* 直接读 VM 的 ntoskrnl.exe 文件内容抓到；mask 复用全 0xFF 策略。 */
+static const UCHAR g_KswRxpfMmChangeSignature26300[64] = {
+    0x48U, 0x8BU, 0xC4U, 0x48U, 0x89U, 0x58U, 0x08U, 0x48U,
+    0x89U, 0x68U, 0x10U, 0x48U, 0x89U, 0x70U, 0x18U, 0x44U,
+    0x89U, 0x48U, 0x20U, 0x57U, 0x41U, 0x54U, 0x41U, 0x55U,
+    0x41U, 0x56U, 0x41U, 0x57U, 0x48U, 0x83U, 0xECU, 0x30U,
+    0x83U, 0x60U, 0xC8U, 0x00U, 0x49U, 0x8BU, 0xD8U, 0x41U,
+    0x8DU, 0x41U, 0xFFU, 0x4CU, 0x8BU, 0xE2U, 0x48U, 0x8BU,
+    0xF9U, 0x83U, 0xF8U, 0x01U, 0x0FU, 0x87U, 0x2DU, 0x02U,
+    0x00U, 0x00U, 0x44U, 0x8BU, 0xEBU, 0x49U, 0x3BU, 0xDDU
+};
+
 static const KSW_RXPF_BUILD_PROFILE g_KswRxpfBuildProfiles[] = {
     {
         KSW_RXPF_EXPECTED_NT_BUILD,
@@ -136,10 +221,41 @@ static const KSW_RXPF_BUILD_PROFILE g_KswRxpfBuildProfiles[] = {
         g_KswRxpfMmChangeSignature,
         g_KswRxpfMmChangeSignatureMask,
         RTL_NUMBER_OF(g_KswRxpfMmChangeSignature)
+    },
+    {
+        KSW_RXPF_22621_NT_BUILD,
+        KSW_RXPF_22621_TIMESTAMP,
+        KSW_RXPF_22621_IMAGE_SIZE,
+        KSW_RXPF_22621_CHECKSUM,
+        KSW_RXPF_22621_MM_CHANGE_RVA,
+        4UL,
+        KSW_RXPF_MM_CHANGE_OPERATION_RX,
+        KSW_RXPF_MM_CHANGE_OPERATION_READONLY_NX,
+        1UL,
+        &g_KswRxpfPdbGuid22621,
+        g_KswRxpfMmChangeSignature22621,
+        g_KswRxpfMmChangeSignatureMask,
+        RTL_NUMBER_OF(g_KswRxpfMmChangeSignature22621)
+    },
+    {
+        /* Build 26300.9457 profile — 本机 VM 实测 build，补上让 Phase G 完整链能跑。 */
+        KSW_RXPF_26300_NT_BUILD,
+        KSW_RXPF_26300_TIMESTAMP,
+        KSW_RXPF_26300_IMAGE_SIZE,
+        KSW_RXPF_26300_CHECKSUM,
+        KSW_RXPF_26300_MM_CHANGE_RVA,
+        4UL,
+        KSW_RXPF_MM_CHANGE_OPERATION_RX,
+        KSW_RXPF_MM_CHANGE_OPERATION_READONLY_NX,
+        1UL,
+        &g_KswRxpfPdbGuid26300,
+        g_KswRxpfMmChangeSignature26300,
+        g_KswRxpfMmChangeSignatureMask,
+        RTL_NUMBER_OF(g_KswRxpfMmChangeSignature26300)
     }
 };
 
-C_ASSERT(RTL_NUMBER_OF(g_KswRxpfBuildProfiles) == 1U);
+C_ASSERT(RTL_NUMBER_OF(g_KswRxpfBuildProfiles) == 3U);
 C_ASSERT(sizeof(g_KswRxpfMmChangeSignature) == 64U);
 
 /*
@@ -217,6 +333,64 @@ KswRxpfValidateExecutableSection(
         valid = FALSE;
     }
     return valid;
+}
+
+/* 根据 PE 节特征推算页面在 HVCI 下的有效保护属性。 */
+static ULONG
+KswRxpfQuerySectionProtection(
+    _In_ PVOID ImageBase,
+    _In_ ULONG Rva
+    )
+{
+    ULONG protection = PAGE_EXECUTE_READ;
+
+    __try {
+        PIMAGE_DOS_HEADER dos = (PIMAGE_DOS_HEADER)ImageBase;
+        PIMAGE_NT_HEADERS64 nt = NULL;
+        PIMAGE_SECTION_HEADER section = NULL;
+        USHORT index = 0U;
+
+        if (dos->e_magic != IMAGE_DOS_SIGNATURE ||
+            dos->e_lfanew <= 0 ||
+            (ULONG)dos->e_lfanew > 0x1000UL) {
+            return protection;
+        }
+        nt = (PIMAGE_NT_HEADERS64)((PUCHAR)ImageBase + dos->e_lfanew);
+        if (nt->Signature != IMAGE_NT_SIGNATURE ||
+            nt->OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR64_MAGIC) {
+            return protection;
+        }
+        section = IMAGE_FIRST_SECTION(nt);
+        for (index = 0U; index < nt->FileHeader.NumberOfSections; ++index) {
+            ULONG sectionSize = max(
+                section[index].Misc.VirtualSize,
+                section[index].SizeOfRawData);
+            ULONG sectionEnd = section[index].VirtualAddress + sectionSize;
+            ULONG chars = 0UL;
+
+            if (sectionEnd < section[index].VirtualAddress) {
+                continue;
+            }
+            if (Rva < section[index].VirtualAddress || Rva >= sectionEnd) {
+                continue;
+            }
+            chars = section[index].Characteristics;
+            if ((chars & IMAGE_SCN_MEM_EXECUTE) != 0UL) {
+                protection = ((chars & IMAGE_SCN_MEM_WRITE) != 0UL)
+                    ? PAGE_EXECUTE_READWRITE
+                    : PAGE_EXECUTE_READ;
+            } else {
+                protection = ((chars & IMAGE_SCN_MEM_WRITE) != 0UL)
+                    ? PAGE_READWRITE
+                    : PAGE_READONLY;
+            }
+            break;
+        }
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER) {
+        /* 解析失败按可执行保守处理——CHANGE 路径会走 MmChangeImageProtection。 */
+    }
+    return protection;
 }
 
 static BOOLEAN
@@ -757,6 +931,95 @@ KswRxpfCreateSelfImageTestPage(
     return STATUS_SUCCESS;
 }
 
+static NTSTATUS
+KswRxpfCreateExternalImagePage(
+    _In_ ULONGLONG RequestedAddress,
+    _In_ ULONG Flags,
+    _Out_ KSW_RXPF_PAGE_RECORD* RecordSource
+    )
+{
+    /* 对齐到页边界——调用方传入的可能是页内地址。 */
+    PVOID page = (PVOID)(ULONG_PTR)(RequestedAddress & ~(PAGE_SIZE - 1ULL));
+    PVOID ownerImageBase = NULL;
+    PMDL mdl = NULL;
+    BOOLEAN pagesLocked = FALSE;
+    BOOLEAN mdlLockedForWrite = FALSE;
+
+    /* 外部映像页需要 MmChangeImageProtection 的精确构建匹配。 */
+    if (!KswRxpfImageProtectionBuildSupported()) {
+        return STATUS_NOT_SUPPORTED;
+    }
+
+    /* 验证地址在规范的内核空间且页对齐。 */
+    if (!KswRxpfCanonicalKernelPage(
+            RequestedAddress & ~(PAGE_SIZE - 1ULL))) {
+        return STATUS_INVALID_ADDRESS;
+    }
+
+    /* 确认目标地址落在已加载的内核映像内。 */
+    if (RtlPcToFileHeader(page, &ownerImageBase) == NULL ||
+        ownerImageBase == NULL) {
+        return STATUS_NOT_FOUND;
+    }
+
+    /* 创建 MDL 并锁定页面。
+     * HVCI 下 IoWriteAccess 对安全映像页（如 CI.dll）会触发不可捕获的
+     * 0x1A MEMORY_MANAGEMENT，因此外部映像页始终用 IoReadAccess。 */
+    mdl = IoAllocateMdl(page, PAGE_SIZE, FALSE, FALSE, NULL);
+    if (mdl == NULL) {
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+    __try {
+        MmProbeAndLockPages(mdl, KernelMode, IoReadAccess);
+        pagesLocked = TRUE;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER) {
+        NTSTATUS exceptionStatus = GetExceptionCode();
+
+        IoFreeMdl(mdl);
+        return exceptionStatus;
+    }
+
+    /* 验证 MDL 标志——只接受 MDL_PAGES_LOCKED 单一状态。 */
+    if (!pagesLocked ||
+        (mdl->MdlFlags &
+            (MDL_MAPPED_TO_SYSTEM_VA |
+             MDL_PAGES_LOCKED |
+             MDL_SOURCE_IS_NONPAGED_POOL)) != MDL_PAGES_LOCKED ||
+        MmGetMdlByteOffset(mdl) != 0UL ||
+        MmGetMdlByteCount(mdl) != PAGE_SIZE ||
+        MmGetMdlVirtualAddress(mdl) != page) {
+        if (pagesLocked) {
+            MmUnlockPages(mdl);
+        }
+        IoFreeMdl(mdl);
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    /* 填充记录：TargetKind 为 EXTERNAL_IMAGE，保护属性按 PE 节特征设置。 */
+    {
+        ULONG sectionProt = KswRxpfQuerySectionProtection(
+            ownerImageBase,
+            (ULONG)((ULONG_PTR)page - (ULONG_PTR)ownerImageBase));
+        RtlZeroMemory(RecordSource, sizeof(*RecordSource));
+        RecordSource->TargetKind = KSWORD_ARK_RXPF_TARGET_EXTERNAL_IMAGE;
+        RecordSource->Flags = Flags;
+        RecordSource->PageBase = (LONG64)(ULONG_PTR)page;
+        RecordSource->OriginalMapping = page;
+        RecordSource->OriginalProtection = sectionProt;
+        RecordSource->CurrentProtection = sectionProt;
+        RecordSource->WritableAliasProtection = 0UL;
+    }
+    RecordSource->Pfn = (ULONGLONG)MmGetMdlPfnArray(mdl)[0];
+    RecordSource->OwnerImageBase =
+        (ULONGLONG)(ULONG_PTR)ownerImageBase;
+    RecordSource->Mdl = mdl;
+    RecordSource->PagesLockedByProbe = TRUE;
+    RecordSource->MdlLockedForWrite = mdlLockedForWrite;
+    RecordSource->LastStatus = STATUS_SUCCESS;
+    return STATUS_SUCCESS;
+}
+
 NTSTATUS
 KswRxpfImageProtectionCreateRecord(
     _In_ ULONG TargetKind,
@@ -785,9 +1048,10 @@ KswRxpfImageProtectionCreateRecord(
             RecordSource);
     } else if (TargetKind == KSWORD_ARK_RXPF_TARGET_EXTERNAL_IMAGE) {
 #if KSW_RXPF_ENABLE_EXTERNAL_IMAGE_TARGETS
-        /* External image allowlists are intentionally absent in protocol v1. */
-        UNREFERENCED_PARAMETER(RequestedAddress);
-        status = STATUS_NOT_SUPPORTED;
+        status = KswRxpfCreateExternalImagePage(
+            RequestedAddress,
+            Flags,
+            RecordSource);
 #else
         UNREFERENCED_PARAMETER(RequestedAddress);
         status = STATUS_NOT_SUPPORTED;
@@ -816,19 +1080,63 @@ KswRxpfImageProtectionCreateRecord(
             KswRxpfImageProtectionReleaseRecord(RecordSource);
             return STATUS_INSUFFICIENT_RESOURCES;
         }
-        RtlCopyMemory(
-            RecordSource->Backup,
-            RecordSource->OriginalMapping,
-            PAGE_SIZE);
+        /*
+         * Under HVCI the MDL executable mapping created for AllocatedTest
+         * may be execute-only in the SLAT, making reads fault.  The page
+         * was seeded from the static test pattern, so use that directly.
+         */
+        if (TargetKind == KSWORD_ARK_RXPF_TARGET_ALLOCATED_TEST) {
+            RtlCopyMemory(
+                RecordSource->Backup,
+                g_KswRxpfSelfImageTestPage,
+                PAGE_SIZE);
+        }
     }
     __try {
-        RtlCopyMemory(
-            RecordSource->CurrentContent,
-            RecordSource->OriginalMapping,
-            PAGE_SIZE);
+        /* Same HVCI/SLAT concern: allocated test page may be execute-only. */
+        if (TargetKind == KSWORD_ARK_RXPF_TARGET_ALLOCATED_TEST) {
+            RtlCopyMemory(
+                RecordSource->CurrentContent,
+                g_KswRxpfSelfImageTestPage,
+                PAGE_SIZE);
+        } else if (TargetKind == KSWORD_ARK_RXPF_TARGET_EXTERNAL_IMAGE) {
+            /* 临时只读别名绑定已锁定 PFN，不依赖可被卸载的原始映像 VA。 */
+            PVOID readAlias = MmMapLockedPagesSpecifyCache(
+                RecordSource->Mdl,
+                KernelMode,
+                MmCached,
+                NULL,
+                FALSE,
+                (MM_PAGE_PRIORITY)(NormalPagePriority |
+                    MdlMappingNoWrite | MdlMappingNoExecute));
+            if (readAlias == NULL) {
+                status = STATUS_INSUFFICIENT_RESOURCES;
+            } else {
+                __try {
+                    RtlCopyMemory(RecordSource->CurrentContent, readAlias, PAGE_SIZE);
+                }
+                __finally {
+                    /* 私有映像保护调用前恢复 MDL 的未映射状态。 */
+                    MmUnmapLockedPages(readAlias, RecordSource->Mdl);
+                }
+            }
+        } else {
+            RtlCopyMemory(
+                RecordSource->CurrentContent,
+                RecordSource->OriginalMapping,
+                PAGE_SIZE);
+        }
+        /* 备份与当前镜像来自同一次读取，且所有原始 VA 读取均受异常保护。 */
+        if (NT_SUCCESS(status) && RecordSource->Backup != NULL) {
+            RtlCopyMemory(RecordSource->Backup, RecordSource->CurrentContent, PAGE_SIZE);
+        }
     }
     __except (EXCEPTION_EXECUTE_HANDLER) {
         status = GetExceptionCode();
+        KswRxpfImageProtectionReleaseRecord(RecordSource);
+        return status;
+    }
+    if (!NT_SUCCESS(status)) {
         KswRxpfImageProtectionReleaseRecord(RecordSource);
         return status;
     }
@@ -838,6 +1146,9 @@ KswRxpfImageProtectionCreateRecord(
     return STATUS_SUCCESS;
 }
 
+/* MmChangeImageProtection is resolved by signature scan—not in the CFG
+   bitmap—so the indirect call trips guard_icall_bugcheck under HVCI/VBS. */
+__declspec(guard(nocf))
 NTSTATUS
 KswRxpfImageProtectionChangeToRwNx(
     _Inout_ PKSW_RXPF_PAGE_RECORD Record
@@ -861,12 +1172,16 @@ KswRxpfImageProtectionChangeToRwNx(
             Record->WritableAliasProtection = PAGE_READWRITE;
         }
     } else if (Record->TargetKind ==
-        KSWORD_ARK_RXPF_TARGET_SELF_IMAGE_TEST) {
+        KSWORD_ARK_RXPF_TARGET_SELF_IMAGE_TEST ||
+        Record->TargetKind ==
+        KSWORD_ARK_RXPF_TARGET_EXTERNAL_IMAGE) {
         PVOID writableAlias = NULL;
+        /* PE 节级别：PAGE_EXECUTE_* 表示可执行，需先移除 X 再建可写别名。 */
+        BOOLEAN sectionIsExecutable =
+            (Record->OriginalProtection & 0xF0UL) != 0UL;
 
         /* Revalidate the exact MDL low-bit contract immediately before the call. */
-        if (!KswRxpfImageProtectionBuildSupported() ||
-            (Record->Mdl->MdlFlags &
+        if ((Record->Mdl->MdlFlags &
                 (MDL_MAPPED_TO_SYSTEM_VA |
                  MDL_PAGES_LOCKED |
                  MDL_SOURCE_IS_NONPAGED_POOL)) != MDL_PAGES_LOCKED ||
@@ -876,18 +1191,54 @@ KswRxpfImageProtectionChangeToRwNx(
                 (PVOID)(ULONG_PTR)Record->PageBase) {
             return STATUS_INVALID_PARAMETER;
         }
-        status = g_KswRxpfImageProtection.MmChangeImageProtection(
-            Record->Mdl,
-            (PVOID)(ULONG_PTR)Record->PageBase,
-            PAGE_SIZE,
-            KSW_RXPF_MM_CHANGE_OPERATION_READONLY_NX);
-        if (!NT_SUCCESS(status)) {
-            Record->LastStatus = status;
-            return status;
+        if (sectionIsExecutable) {
+            /*
+             * 可执行节：必须先用 MmChangeImageProtection 移除执行位，
+             * 否则可写别名会违反 HVCI 的 W^X 不变式。
+             */
+            if (!KswRxpfImageProtectionBuildSupported()) {
+                return STATUS_NOT_SUPPORTED;
+            }
+            status = g_KswRxpfImageProtection.MmChangeImageProtection(
+                Record->Mdl,
+                (PVOID)(ULONG_PTR)Record->PageBase,
+                PAGE_SIZE,
+                KSW_RXPF_MM_CHANGE_OPERATION_READONLY_NX);
+            if (!NT_SUCCESS(status)) {
+                Record->LastStatus = status;
+                return status;
+            }
+            Record->CurrentProtection = PAGE_READONLY;
+            Record->ChangeProtectionApplied = TRUE;
+        } else if (Record->MdlLockedForWrite) {
+            /*
+             * 可写数据节且 MDL 已用 IoWriteAccess 锁定：
+             * 无需 MmChangeImageProtection——PFN 层已允许写入，
+             * 直接建 MmMapLockedPagesSpecifyCache 别名即可写。
+             */
+            status = STATUS_SUCCESS;
+        } else {
+            /*
+             * 非可执行节且 IoWriteAccess 被拒（HVCI 可能收紧了 SLAT）：
+             * 尝试 MmChangeImageProtection 作为后备，记录返回值以便诊断。
+             */
+            if (KswRxpfImageProtectionBuildSupported()) {
+                NTSTATUS slatStatus =
+                    g_KswRxpfImageProtection.MmChangeImageProtection(
+                        Record->Mdl,
+                        (PVOID)(ULONG_PTR)Record->PageBase,
+                        PAGE_SIZE,
+                        KSW_RXPF_MM_CHANGE_OPERATION_READONLY_NX);
+                if (NT_SUCCESS(slatStatus)) {
+                    Record->CurrentProtection = PAGE_READONLY;
+                } else {
+                    Record->LastStatus = slatStatus;
+                }
+            }
+            status = STATUS_SUCCESS;
         }
-        Record->CurrentProtection = PAGE_READONLY;
 
-        /* Map a separate writable/NX alias only after the image mapping is NX. */
+        /* Map a separate writable/NX alias. */
         writableAlias = MmMapLockedPagesSpecifyCache(
             Record->Mdl,
             KernelMode,
@@ -902,7 +1253,29 @@ KswRxpfImageProtectionChangeToRwNx(
         }
         Record->WritableAlias = (ULONGLONG)(ULONG_PTR)writableAlias;
         Record->MappingIsAlias = TRUE;
-        Record->WritableAliasProtection = PAGE_READWRITE;
+
+        /* 可执行节：SLAT 写保护已释放，升级别名 PTE 为可写。
+         * 非可执行节不升级——PTE 可写但 SLAT 只读会把可捕获的
+         * 0xC0000005 升级为不可捕获的 0x1A BugCheck。 */
+        if (Record->ChangeProtectionApplied) {
+            NTSTATUS protStatus = MmProtectMdlSystemAddress(
+                Record->Mdl,
+                PAGE_READWRITE);
+            Record->WritableAliasProtection =
+                NT_SUCCESS(protStatus)
+                ? PAGE_READWRITE
+                : PAGE_READONLY;
+            if (!NT_SUCCESS(protStatus)) {
+                Record->LastStatus = protStatus;
+                /* 不发布虚假的 RW_NX；原始失败交给调用方处理及清理。 */
+                status = protStatus;
+            }
+        } else {
+            Record->WritableAliasProtection =
+                Record->MdlLockedForWrite
+                ? PAGE_READWRITE
+                : PAGE_READONLY;
+        }
     } else {
         return STATUS_NOT_SUPPORTED;
     }
@@ -932,8 +1305,13 @@ KswRxpfImageProtectionWrite(
 {
     ULONGLONG end = (ULONGLONG)Offset + (ULONGLONG)Length;
     NTSTATUS status = STATUS_SUCCESS;
+    /* bit24 = MdlLockedForWrite，bit25 = ChangeProtectionApplied（SLAT 已释放）。 */
+    ULONG mdlBit = 0U;
 
-    /* Writes are bounded to one transitioned page and its explicit alias. */
+    if (Record != NULL) {
+        Record->LastFailureReason = 0x1000U;
+    }
+
     if (Record == NULL || Bytes == NULL || Length == 0UL ||
         Record->CurrentContent == NULL ||
         Length > KSWORD_ARK_RXPF_MAX_WRITE_BYTES ||
@@ -942,25 +1320,46 @@ KswRxpfImageProtectionWrite(
         Record->WritableAlias == 0ULL) {
         return STATUS_INVALID_PARAMETER;
     }
+
+    mdlBit = (Record->MdlLockedForWrite ? 0x1000000U : 0U)
+           | (Record->ChangeProtectionApplied ? 0x2000000U : 0U);
+
+    /* 诊断模式：仅探测别名是否可读，不做任何写入。 */
+    Record->LastFailureReason = 0x6000U | mdlBit;
     __try {
         RtlCopyMemory(
             (PUCHAR)(ULONG_PTR)Record->WritableAlias + Offset,
             Bytes,
             Length);
-        RtlCopyMemory(
-            (PUCHAR)Record->CurrentContent + Offset,
-            Bytes,
-            Length);
-        Record->LastWriteOffset = Offset;
-        Record->LastWriteLength = Length;
-        RtlZeroMemory(Record->LastWriteBytes, sizeof(Record->LastWriteBytes));
-        RtlCopyMemory(Record->LastWriteBytes, Bytes, Length);
-
-        KeMemoryBarrier();
+        Record->LastFailureReason = 0x4001U | mdlBit;
     }
     __except (EXCEPTION_EXECUTE_HANDLER) {
         status = GetExceptionCode();
+        Record->LastFailureReason = 0xA002U | mdlBit;
     }
+
+    if (NT_SUCCESS(status)) {
+        Record->LastFailureReason |= 0x10000U;
+        __try {
+            RtlCopyMemory(
+                (PUCHAR)Record->CurrentContent + Offset,
+                Bytes,
+                Length);
+            Record->LastWriteOffset = Offset;
+            Record->LastWriteLength = Length;
+            RtlZeroMemory(
+                Record->LastWriteBytes,
+                sizeof(Record->LastWriteBytes));
+            RtlCopyMemory(Record->LastWriteBytes, Bytes, Length);
+            KeMemoryBarrier();
+            Record->LastFailureReason |= 0x20000U;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER) {
+            status = GetExceptionCode();
+            Record->LastFailureReason = 0xA003U | mdlBit;
+        }
+    }
+    Record->LastFailureReason |= 0x40000U;
     Record->LastStatus = status;
     if (NT_SUCCESS(status)) {
         InterlockedIncrement((volatile LONG*)&Record->Generation);
@@ -968,22 +1367,221 @@ KswRxpfImageProtectionWrite(
     return status;
 }
 
-VOID
+/*
+ * 为 mode=1 (恢复 RX) 准备 VTL1 期望的参考摘要缓冲区。
+ *
+ * VTL1 的 SkciValidateDynamicCodePages 对每个目标页：
+ *   1. SHA-512(整页 4096 字节) → 64 字节
+ *   2. 取 [0x20,0x40) 的 32 字节作为"尾段"
+ *   3. memcmp(尾段, 参考缓冲区 + pageIndex*0x20, 0x20)
+ *
+ * 自映像场景：将摘要写入驱动 .data 节的静态缓冲区，
+ * 该地址在本映像范围内，通过 nt 的 DataTableEntry 范围校验。
+ *
+ * 返回 STATUS_SUCCESS 时 *RefVA/*RefLen 可直接传入 MmChangeImageProtection。
+ */
+static NTSTATUS
+KswRxpfPrepareReferenceDigest(
+    _In_ PKSW_RXPF_PAGE_RECORD Record,
+    _Out_ PVOID* RefVA,
+    _Out_ ULONG* RefLen
+    )
+{
+    UCHAR fullHash[64];
+
+    *RefVA = NULL;
+    *RefLen = 0;
+
+    if (Record->CurrentContent == NULL) {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    /* 外部映像暂不支持：参考缓冲区必须在目标模块范围内，
+     * 而驱动 .data 节不在外部模块的 [DllBase, DllBase+SizeOfImage) 内。 */
+    if (Record->TargetKind == KSWORD_ARK_RXPF_TARGET_EXTERNAL_IMAGE) {
+        return STATUS_NOT_SUPPORTED;
+    }
+
+    /* 计算当前页内容的 SHA-512。 */
+    KswRxpfSha512(Record->CurrentContent, PAGE_SIZE, fullHash);
+
+    /* 提取 [0x20, 0x40)——VTL1 比对的尾段。 */
+    RtlCopyMemory(g_KswRxpfReferenceDigest, fullHash + 0x20, 0x20);
+
+    /* 清除栈上的完整哈希。 */
+    RtlSecureZeroMemory(fullHash, sizeof(fullHash));
+
+    *RefVA = (PVOID)g_KswRxpfReferenceDigest;
+    *RefLen = 0x20;
+    return STATUS_SUCCESS;
+}
+
+/* MmChangeImageProtection 通过签名扫描解析——不在 CFG 位图中。 */
+__declspec(guard(nocf))
+NTSTATUS
+KswRxpfRestoreExecutableProtection(
+    _Inout_ PKSW_RXPF_PAGE_RECORD Record
+    )
+{
+    PVOID refVA = NULL;
+    ULONG refLen = 0;
+    NTSTATUS status;
+
+    /* ChangeProtectionApplied 为 TRUE 表示 SLAT 保护已释放，
+     * 释放记录前必须恢复为 RX，否则代码页丧失执行权。 */
+    if (Record == NULL) {
+        return STATUS_INVALID_PARAMETER;
+    }
+    if (!Record->ChangeProtectionApplied) {
+        return STATUS_SUCCESS;
+    }
+    if (Record->Mdl == NULL || !KswRxpfImageProtectionBuildSupported()) {
+        Record->LastStatus = STATUS_INVALID_DEVICE_STATE;
+        return Record->LastStatus;
+    }
+
+    /*
+     * mode=1 优先沿用现有参考缓冲区；外部映像目前使用整页参考回退。
+     * 该调用的成功或失败不单独证明 VTL1 内部采用何种摘要算法。
+     *
+     * 已实测：在 HVCI 来宾上 mode=1 对测试驱动的 .rxpftst 段统一返回
+     *   STATUS_ACCESS_VIOLATION，即使页面内容未改动。
+     *   记忆见 [[ksword-rxpf-is-half-useless-without-shadow-idt]]。
+     */
+    status = KswRxpfPrepareReferenceDigest(Record, &refVA, &refLen);
+    if (NT_SUCCESS(status)) {
+        status = g_KswRxpfImageProtection.MmChangeImageProtection(
+            Record->Mdl,
+            refVA,
+            refLen,
+            KSW_RXPF_MM_CHANGE_OPERATION_RX);
+    } else {
+        status = g_KswRxpfImageProtection.MmChangeImageProtection(
+            Record->Mdl,
+            (PVOID)(ULONG_PTR)Record->PageBase,
+            PAGE_SIZE,
+            KSW_RXPF_MM_CHANGE_OPERATION_RX);
+    }
+    Record->LastStatus = status;
+    if (NT_SUCCESS(status)) {
+        /* 仅在实际成功后撤销恢复责任，失败保留重试所需的 MDL 和状态。 */
+        Record->ChangeProtectionApplied = FALSE;
+        Record->CurrentProtection = Record->OriginalProtection;
+    }
+    return status;
+}
+
+NTSTATUS
 KswRxpfImageProtectionReleaseRecord(
     _Inout_ PKSW_RXPF_PAGE_RECORD Record
     )
 {
+    /* status：任一恢复步骤失败时停止释放，保留资源所有权。 */
+    NTSTATUS status = STATUS_SUCCESS;
+    /* retryAlias：先前 mode=1 失败且本次请求改为恢复备份时的临时别名。 */
+    PVOID retryAlias = NULL;
     /* Release only resources whose ownership flags were recorded at creation. */
     if (Record == NULL) {
-        return;
+        return STATUS_INVALID_PARAMETER;
     }
+
+    /* mode=1 失败会要求先解映射别名。若重试时调用方要求恢复原字节，
+     * 必须从仍锁定的 MDL 重建别名，不能把第二次默认注销误当作已恢复备份。 */
+    if (!Record->SkipBackupRestoreOnRelease &&
+        Record->ChangeProtectionApplied &&
+        Record->Backup != NULL &&
+        Record->Mdl != NULL &&
+        !Record->MappingIsAlias) {
+        retryAlias = MmMapLockedPagesSpecifyCache(
+            Record->Mdl,
+            KernelMode,
+            MmCached,
+            NULL,
+            FALSE,
+            (MM_PAGE_PRIORITY)(NormalPagePriority | MdlMappingNoExecute));
+        if (retryAlias == NULL) {
+            Record->LastStatus = STATUS_INSUFFICIENT_RESOURCES;
+            return Record->LastStatus;
+        }
+        status = MmProtectMdlSystemAddress(Record->Mdl, PAGE_READWRITE);
+        if (!NT_SUCCESS(status)) {
+            MmUnmapLockedPages(retryAlias, Record->Mdl);
+            Record->LastStatus = status;
+            return status;
+        }
+        Record->WritableAlias = (ULONGLONG)(ULONG_PTR)retryAlias;
+        Record->MappingIsAlias = TRUE;
+        Record->WritableAliasProtection = PAGE_READWRITE;
+    }
+
+    /*
+     * Phase F：在释放前自动把 Backup 还原到物理页。
+     * mode=1 不负责把物理页内容还原为原字节；若 Change 后曾写入过修改字节，
+     * 不做 restore 就 Unregister 必然导致 PTE 回 RX 后内核执行到被改字节 → bugcheck
+     * (SYSTEM_SERVICE_EXCEPTION, What failed: <module>)。
+     *
+     * 需要在 alias 还 RW 且 mapped 时执行，所以放在 Protect(RO)/Unmap 之前。
+     * 同步刷新 CurrentContent，使控制路径的内容镜像与实际恢复字节保持一致。
+     */
+    if (!Record->SkipBackupRestoreOnRelease &&
+        Record->MappingIsAlias && Record->WritableAlias != 0ULL &&
+        Record->Mdl != NULL && Record->Backup != NULL &&
+        Record->WritableAliasProtection == PAGE_READWRITE &&
+        Record->CurrentContent != NULL) {
+        __try {
+            /* 整页拷回原字节：物理页被 writeback 到和 catalog 一致的状态。 */
+            RtlCopyMemory(
+                (PVOID)(ULONG_PTR)Record->WritableAlias,
+                Record->Backup,
+                PAGE_SIZE);
+            /* 同步 CurrentContent，避免恢复后的参考内容仍指向修改字节。 */
+            RtlCopyMemory(
+                Record->CurrentContent,
+                Record->Backup,
+                PAGE_SIZE);
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER) {
+            /* restore 失败是致命：页内容仍是修改后的字节，接下去的 mode=1 若放行
+             * 会让内核执行到坏指令。记录 LastFailureReason 以便 R3 诊断。 */
+            Record->LastFailureReason = 0xBEEF0001U;
+            Record->LastStatus = GetExceptionCode();
+            return Record->LastStatus;
+        }
+    }
+
+    /*
+     * MmChangeImageProtection 入口校验要求 (MdlFlags & 7) == MDL_PAGES_LOCKED (0x2)，
+     * 即 MDL_MAPPED_TO_SYSTEM_VA (0x1) 不得置位。MmMapLockedPagesSpecifyCache
+     * 建的可写别名会把该位置为 1，若在 mode=1 之前不先解映射，
+     * MmChangeImageProtection 立即返回 STATUS_INVALID_PARAMETER (0xC000000D)。
+     * 顺序：BackupRestore → PROTECT(READONLY) 降权 → UNMAP 别名 → mode=1 恢复 RX → UNLOCK/FREE MDL。
+     */
     if (Record->MappingIsAlias && Record->WritableAlias != 0ULL &&
         Record->Mdl != NULL) {
+        /* Change 时若升过 RW，释放前先降回 RO 以匹配 PTE 清理约束。 */
+        if (Record->WritableAliasProtection == PAGE_READWRITE) {
+            status = MmProtectMdlSystemAddress(
+                Record->Mdl,
+                PAGE_READONLY);
+            if (!NT_SUCCESS(status)) {
+                Record->LastStatus = status;
+                return status;
+            }
+            Record->WritableAliasProtection = PAGE_READONLY;
+        }
         MmUnmapLockedPages(
             (PVOID)(ULONG_PTR)Record->WritableAlias,
             Record->Mdl);
         Record->WritableAlias = 0ULL;
-    } else if (Record->OwnsMdlPages &&
+        Record->MappingIsAlias = FALSE;
+    }
+
+    /* 恢复可执行节 SLAT 权限——必须在解锁之前，但现在在解映射之后。 */
+    status = KswRxpfRestoreExecutableProtection(Record);
+    if (!NT_SUCCESS(status)) {
+        return status;
+    }
+    if (Record->OwnsMdlPages &&
         Record->OriginalMapping != NULL && Record->Mdl != NULL) {
         MmUnmapLockedPages(Record->OriginalMapping, Record->Mdl);
         Record->OriginalMapping = NULL;
@@ -1009,4 +1607,6 @@ KswRxpfImageProtectionReleaseRecord(
         ExFreePoolWithTag(Record->CurrentContent, KSW_RXPF_CONTENT_TAG);
         Record->CurrentContent = NULL;
     }
+    Record->LastStatus = STATUS_SUCCESS;
+    return STATUS_SUCCESS;
 }

@@ -115,6 +115,8 @@ void registerSystemContextMenu();
 void registerSystemTime();
 void registerSystemIoctl();
 void registerRawIoctl();
+void registerRxpfAtomicCommit();
+void registerRxpfExecProof();
 void registerKernelNamespace();
 void registerKernelDirectory();
 void registerKernelSymlink();

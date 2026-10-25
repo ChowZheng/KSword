@@ -20,6 +20,29 @@
 #define KSWORD_ARK_IOCTL_FUNCTION_RXPF_UNREGISTER_PAGE 0x908UL
 #define KSWORD_ARK_IOCTL_FUNCTION_RXPF_RUN_SELF_TEST   0x909UL
 #define KSWORD_ARK_IOCTL_FUNCTION_RXPF_SET_HOOK_POINT 0x90AUL
+/* 0x90B/FILE_WRITE_ACCESS belongs to FILE_IRP_SUBMIT; use a distinct full CTL_CODE. */
+#define KSWORD_ARK_IOCTL_FUNCTION_RXPF_QUERY_BACKUP   0x931UL
+/*
+ * 注意：function code 0x90C 已被 ProcessProtect 的 SET_PROCESS_PROTECT_CONFIG 占用。
+ * ATOMIC_COMMIT 挑一个未分配的位置 0x925，避开 Research / HVM / DDMA / PFN /
+ * Clipboard / Memory / HVM_* 等已占段，防止 IOCTL 注册表 duplicate 导致请求
+ * 命中错误 handler → BUFFER_TOO_SMALL（已实证）。
+ */
+#define KSWORD_ARK_IOCTL_FUNCTION_RXPF_ATOMIC_COMMIT 0x925UL
+/*
+ * EXEC_PROOF：一次 IOCTL 走完 Register(ALLOCATED_TEST)→Change(mode=2)→
+ * Write(custom payload)→PageFaultInstall→ConcurrentExecute→Reset→Unregister，
+ * 用于 **直接** 证明 payload 被 CPU 取指并通过 shadow IDT #PF emulator 执行。
+ * 页面始终 NX，mode=1 restore 永不被尝试——走 ALLOCATED_TEST（driver 自有 PFN，
+ * 不受 VTL1 SHA-512 hash enforcement），所以不存在 "字节与 digest 不符导致 restore
+ * 被拒" 的问题。
+ */
+/*
+ * 原 0x926：实证返回 win32=998 (ERROR_NOACCESS) + bytesReturned=0，handler sentinel 从未写入。
+ * ATOMIC_COMMIT 0x925 走同样 dispatcher 工作正常。换成 0x930（远离 0x925），排除 function
+ * code 相邻性或 0x926 被某个 undocumented filter 识别的可能。
+ */
+#define KSWORD_ARK_IOCTL_FUNCTION_RXPF_EXEC_PROOF 0x930UL
 
 #define IOCTL_KSWORD_ARK_RXPF_QUERY_SUPPORT \
     CTL_CODE(KSWORD_ARK_IOCTL_DEVICE_TYPE, KSWORD_ARK_IOCTL_FUNCTION_RXPF_QUERY_SUPPORT, METHOD_BUFFERED, FILE_WRITE_ACCESS)
@@ -43,6 +66,12 @@
     CTL_CODE(KSWORD_ARK_IOCTL_DEVICE_TYPE, KSWORD_ARK_IOCTL_FUNCTION_RXPF_RUN_SELF_TEST, METHOD_BUFFERED, FILE_WRITE_ACCESS)
 #define IOCTL_KSWORD_ARK_RXPF_SET_HOOK_POINT \
     CTL_CODE(KSWORD_ARK_IOCTL_DEVICE_TYPE, KSWORD_ARK_IOCTL_FUNCTION_RXPF_SET_HOOK_POINT, METHOD_BUFFERED, FILE_WRITE_ACCESS)
+#define IOCTL_KSWORD_ARK_RXPF_QUERY_BACKUP \
+    CTL_CODE(KSWORD_ARK_IOCTL_DEVICE_TYPE, KSWORD_ARK_IOCTL_FUNCTION_RXPF_QUERY_BACKUP, METHOD_BUFFERED, FILE_WRITE_ACCESS)
+#define IOCTL_KSWORD_ARK_RXPF_ATOMIC_COMMIT \
+    CTL_CODE(KSWORD_ARK_IOCTL_DEVICE_TYPE, KSWORD_ARK_IOCTL_FUNCTION_RXPF_ATOMIC_COMMIT, METHOD_BUFFERED, FILE_WRITE_ACCESS)
+#define IOCTL_KSWORD_ARK_RXPF_EXEC_PROOF \
+    CTL_CODE(KSWORD_ARK_IOCTL_DEVICE_TYPE, KSWORD_ARK_IOCTL_FUNCTION_RXPF_EXEC_PROOF, METHOD_BUFFERED, FILE_WRITE_ACCESS)
 
 #define KSWORD_ARK_RXPF_CONFIRMATION_TOKEN 0x46505852UL
 #define KSWORD_ARK_RXPF_MAX_WRITE_BYTES 64UL
@@ -50,6 +79,12 @@
 
 #define KSWORD_ARK_RXPF_FLAG_UI_CONFIRMED 0x00000001UL
 #define KSWORD_ARK_RXPF_FLAG_CAPTURE_BACKUP 0x00000002UL
+/*
+ * Unregister 专用：跳过 ReleaseRecord 的 Backup→page 自动恢复。
+ * 让 R3 写入的字节保留到 PTE 回 RX 之后——必须由调用方自己负责
+ * 在短窗口内把字节改回去（否则 PatchGuard/异常指令会蓝屏）。
+ */
+#define KSWORD_ARK_RXPF_FLAG_SKIP_BACKUP_RESTORE 0x00000004UL
 
 #define KSWORD_ARK_RXPF_TARGET_ALLOCATED_TEST 1UL
 #define KSWORD_ARK_RXPF_TARGET_SELF_IMAGE_TEST 2UL
@@ -300,3 +335,102 @@ typedef struct _KSWORD_ARK_RXPF_HOOK_POINT_RESPONSE
     long lastStatus;
     unsigned long reserved;
 } KSWORD_ARK_RXPF_HOOK_POINT_RESPONSE;
+
+/*
+ * QueryBackup：读 Record->Backup（Register(CAPTURE_BACKUP) 时拷贝的原页快照）
+ * 的任意子段，供 Phase G wizard 在 Unregister(SKIP_RESTORE) 之前把原字节缓存到
+ * R3 作恢复用。offset+length 必须落在 [0, PAGE_SIZE)；length 至多
+ * KSWORD_ARK_RXPF_MAX_WRITE_BYTES (64)。若 Record 没带 CAPTURE_BACKUP，
+ * Backup 为 NULL，返回 STATUS_NOT_FOUND。
+ */
+typedef struct _KSWORD_ARK_RXPF_QUERY_BACKUP_REQUEST
+{
+    KSWORD_ARK_RXPF_REQUEST_HEADER header;
+    unsigned long long recordId;
+    unsigned long offset;
+    unsigned long length;
+} KSWORD_ARK_RXPF_QUERY_BACKUP_REQUEST;
+
+typedef struct _KSWORD_ARK_RXPF_QUERY_BACKUP_RESPONSE
+{
+    unsigned long version;
+    unsigned long size;
+    unsigned long long recordId;
+    unsigned long offset;
+    unsigned long length;
+    unsigned long hasBackup;
+    unsigned long reserved;
+    long lastStatus;
+    unsigned long reserved2;
+    unsigned char bytes[KSWORD_ARK_RXPF_MAX_WRITE_BYTES];
+} KSWORD_ARK_RXPF_QUERY_BACKUP_RESPONSE;
+
+/*
+ * AtomicCommit：在一个 IOCTL 内原子完成
+ *   Register(EXTERNAL_IMAGE) → Change(mode=2) → Write(payload) →
+ *   Unregister(SKIP_BACKUP_RESTORE)。
+ * NX 窗口被压缩到驱动函数内（微秒级），避免 GUI 分步点击在
+ * 高频 fetch 页上必蓝的时序竞态。
+ * targetKind 必须是 KSWORD_ARK_RXPF_TARGET_EXTERNAL_IMAGE。
+ * targetAddress 必须页对齐。offset+length 必须 <= PAGE_SIZE。
+ */
+typedef struct _KSWORD_ARK_RXPF_ATOMIC_COMMIT_REQUEST
+{
+    KSWORD_ARK_RXPF_REQUEST_HEADER header;
+    unsigned long targetKind;
+    unsigned long reserved;
+    unsigned long long targetAddress;
+    unsigned long offset;
+    unsigned long length;
+    unsigned char bytes[KSWORD_ARK_RXPF_MAX_WRITE_BYTES];
+} KSWORD_ARK_RXPF_ATOMIC_COMMIT_REQUEST;
+
+/*
+ * EXEC_PROOF 请求：payload + 期望 RAX。
+ * targetKind 仅接受 KSWORD_ARK_RXPF_TARGET_ALLOCATED_TEST
+ * （SELF_IMAGE_TEST 的页在 driver .text 自身，被 PatchGuard 盯着，不适合反复改）。
+ * 调用方可以写任意字节序列，但如果想通过 verdict，必须保证 payload 走完后
+ * RAX == expectedReturnValue。典型 payload: 48 B8 <imm64> C3（12 字节
+ * mov rax, imm64; ret），expectedReturnValue == imm64。
+ */
+typedef struct _KSWORD_ARK_RXPF_EXEC_PROOF_REQUEST
+{
+    KSWORD_ARK_RXPF_REQUEST_HEADER header;
+    unsigned long targetKind;
+    unsigned long length;
+    unsigned long long expectedReturnValue;
+    unsigned char bytes[KSWORD_ARK_RXPF_MAX_WRITE_BYTES];
+} KSWORD_ARK_RXPF_EXEC_PROOF_REQUEST;
+
+/*
+ * EXEC_PROOF 响应：R0 走完 Register→Change→Write→Install→Execute 后汇报
+ * 所有 worker 的 RAX（取 worker 0 作为代表）、faults 计数、匹配 verdict。
+ * verdict:
+ *   0 = SUCCESS           — returnedValue == expectedReturnValue，且 fault 计数非零
+ *   1 = RETURN_MISMATCH   — concurrent test 跑完但 RAX 不符
+ *   2 = NO_FAULTS         — RAX 匹配但 fault 计数为 0（emulator 没工作，payload 可能被别的路径执行）
+ *   3 = EXEC_FAILED       — concurrent test 抛异常或 worker=0
+ *   4 = SETUP_FAILED      — register/change/write/install 任一步失败
+ */
+typedef struct _KSWORD_ARK_RXPF_EXEC_PROOF_RESPONSE
+{
+    unsigned long version;
+    unsigned long size;
+    unsigned long targetKind;
+    unsigned long length;
+    unsigned long workerCount;
+    unsigned long verdict;
+    unsigned long long recordId;
+    unsigned long long pageBase;
+    unsigned long long returnedValue;
+    unsigned long long expectedReturnValue;
+    unsigned long long faultsObserved;
+    long lastStatus;
+    long setupStatus;
+} KSWORD_ARK_RXPF_EXEC_PROOF_RESPONSE;
+
+#define KSWORD_ARK_RXPF_EXEC_PROOF_VERDICT_SUCCESS         0UL
+#define KSWORD_ARK_RXPF_EXEC_PROOF_VERDICT_RETURN_MISMATCH 1UL
+#define KSWORD_ARK_RXPF_EXEC_PROOF_VERDICT_NO_FAULTS       2UL
+#define KSWORD_ARK_RXPF_EXEC_PROOF_VERDICT_EXEC_FAILED     3UL
+#define KSWORD_ARK_RXPF_EXEC_PROOF_VERDICT_SETUP_FAILED    4UL

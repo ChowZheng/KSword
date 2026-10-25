@@ -1,5 +1,6 @@
 #include "MainWindow.h"
 #include "UI/ToolbarMetrics.h"
+#include "UI/KernelHookWizard.h"
 #include "UI/SecondaryPageLayout.h"
 #include "UI/MainSurfaceStyle.h"
 #include "UI/PageControlStyle.h"
@@ -8204,6 +8205,24 @@ void MainWindow::initMenus()
             QStringLiteral("问题反馈"));
     });
 
+    // ======== 工具 ========（Phase G：聚合"内核 Hook"工作流到独立 wizard）
+    m_toolsMenuButton = new QToolButton(titleActionContainer);
+    m_toolsMenuButton->setObjectName(QStringLiteral("ksToolsMenuButton"));
+    m_toolsMenuButton->setText(QStringLiteral("工具"));
+    m_toolsMenuButton->setToolTip(QStringLiteral("内核 Hook 向导等高级工具"));
+    languageManager.bindText(m_toolsMenuButton, QStringLiteral("menu.tools"), QStringLiteral("工具"));
+    languageManager.bindToolTip(m_toolsMenuButton, QStringLiteral("menu.tools.tooltip"), QStringLiteral("内核 Hook 向导等高级工具"));
+    m_toolsMenu = new QMenu(m_toolsMenuButton);
+    m_toolsMenu->setObjectName(QStringLiteral("ksToolsMenu"));
+    configureTitleMenuButton(m_toolsMenuButton, m_toolsMenu);
+
+    QAction* const kernelHookWizardAction = m_toolsMenu->addAction(QStringLiteral("内核 Hook 向导"));
+    languageManager.bindText(kernelHookWizardAction, QStringLiteral("menu.tools.kernel_hook_wizard"), QStringLiteral("内核 Hook 向导"));
+    connect(kernelHookWizardAction, &QAction::triggered, this, [this]() {
+        // Wizard 自己管生命周期 (WA_DeleteOnClose)；菜单只给入口。
+        ks::ui::KernelHookWizard::openWizard(this);
+    });
+
     // ======== 窗口 ========
     m_windowMenuButton = new QToolButton(titleActionContainer);
     m_windowMenuButton->setObjectName(QStringLiteral("ksWindowMenuButton"));
@@ -8216,6 +8235,7 @@ void MainWindow::initMenus()
     configureTitleMenuButton(m_windowMenuButton, m_windowMenu);
 
     titleActionLayout->addWidget(m_optionsMenuButton);
+    titleActionLayout->addWidget(m_toolsMenuButton);
     titleActionLayout->addWidget(m_windowMenuButton);
     titleActionLayout->addWidget(m_githubMenuButton);
     m_customTitleBar->setCustomLeftWidget(titleActionContainer);
@@ -8328,6 +8348,7 @@ void MainWindow::refreshTitleActionButtonStyles()
     const QString topActionButtonStyle = buildTitleActionButtonStyle();
     const QList<QToolButton*> topActionButtonList{
         m_optionsMenuButton,
+        m_toolsMenuButton,
         m_githubMenuButton,
         m_windowMenuButton
     };
@@ -13963,13 +13984,15 @@ void MainWindow::applyFloatingDockContainerAppearance(ads::CFloatingDockContaine
     floatingWidget->setAttribute(Qt::WA_StyledBackground, false);
 
     // 配方只依赖实际深浅模式/强调色/主背景及透明内容策略，所有浮动窗共享结果。
-    // 全局种子代次也会因保存相同配置递增，故比较真实输入，图片/opacity 更新不重建 QSS。
+    // 比较实际控件底面透明度；图片/背景图opacity更新仍不重建 QSS。
     const bool darkModeEnabled = KswordTheme::IsDarkModeEnabled();
     const QColor accentColor = KswordTheme::PrimaryAccentColor();
+    const int dataSurfaceAlpha = enableDockContentTransparency ? ks::ui::MainDataSurfaceAlpha() : 255;
     if (m_floatingDockAppearanceDarkMode != darkModeEnabled
         || m_floatingDockAppearanceAccentColor != accentColor
         || m_floatingDockAppearanceBaseColor != baseColor
         || m_floatingDockAppearanceTransparency != enableDockContentTransparency
+        || m_floatingDockAppearanceDataSurfaceAlpha != dataSurfaceAlpha
         || m_floatingDockAppearanceStyleSheet.isEmpty())
     {
         m_floatingDockAppearanceStyleSheet =
@@ -13983,6 +14006,7 @@ void MainWindow::applyFloatingDockContainerAppearance(ads::CFloatingDockContaine
         m_floatingDockAppearanceAccentColor = accentColor;
         m_floatingDockAppearanceBaseColor = baseColor;
         m_floatingDockAppearanceTransparency = enableDockContentTransparency;
+        m_floatingDockAppearanceDataSurfaceAlpha = dataSurfaceAlpha;
     }
     ks::ui::RegisterSharedMainSurfaceButtonStyle(floatingWidget, m_floatingDockAppearanceStyleSheet);
     if (floatingWidget->styleSheet() != m_floatingDockAppearanceStyleSheet)

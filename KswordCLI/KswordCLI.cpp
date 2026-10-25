@@ -575,6 +575,8 @@ namespace ks::cli::legacy
         ks::cli::registerKernelAtoms();
         ks::cli::registerKernelNtQuery();
         ks::cli::registerKernelHookBaseline();
+        ks::cli::registerRxpfAtomicCommit();
+        ks::cli::registerRxpfExecProof();
         ks::cli::registerSecurityCi();
         ks::cli::registerSecurityVbs();
         ks::cli::registerSecurityHyperV();

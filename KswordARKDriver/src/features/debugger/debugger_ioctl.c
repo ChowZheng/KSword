@@ -1,4 +1,7 @@
+#include <ntifs.h>
 #include "debugger.h"
+/* 身份引用租约独立于现有调试、授权及 Shadow 操作。 */
+#include "debugger_identity.h"
 #include "../../platform/pool_compat.h"
 NTKERNELAPI ULONG IoGetRequestorProcessId(PIRP Irp);
 
@@ -14,6 +17,10 @@ NTSTATUS KswordARKDebuggerIoctlControl(WDFDEVICE Device, WDFREQUEST Request,
     size_t inputBytes = 0U, outputBytes = 0U;
     /* Preserve the transport completion status. */
     NTSTATUS status;
+    /* Pin the original requestor process independently of the WDF queue thread. */
+    PEPROCESS ownerProcess = NULL;
+    /* Keep the original IRP identity while the WDF request is live. */
+    PIRP irp;
     /* Reject an incomplete dispatcher contract. */
     if (BytesReturned == NULL) { return STATUS_INVALID_PARAMETER; }
     /* Failed validation never publishes output bytes. */
@@ -36,8 +43,24 @@ NTSTATUS KswordARKDebuggerIoctlControl(WDFDEVICE Device, WDFREQUEST Request,
     if (snapshot == NULL) { return STATUS_INSUFFICIENT_RESOURCES; }
     /* Preserve the exact validated input. */
     RtlCopyMemory(snapshot, input, sizeof(*snapshot));
-    /* Execute the feature's authoritative user-process operation. */
-    status = KswordARKDebuggerControl(Device, IoGetRequestorProcessId(WdfRequestWdmGetIrp(Request)), snapshot, (KSWORD_ARK_DEBUGGER_RESPONSE*)output);
+    /* 仅引用操作直接使用仍由分派器持有的请求，不进入原有执行与授权分支。 */
+    if (snapshot->operation == KSWORD_ARK_DEBUGGER_IDENTITY_RETAIN) {
+        /* 在独立文件上下文内保存引用，响应仍使用既有完整 v1 包。 */
+        status = KswordARKDebuggerRetainIdentity(Request, snapshot, (KSWORD_ARK_DEBUGGER_RESPONSE*)output);
+    } else {
+        /* Capture the issuing process object only for the handle-broker operation. */
+        irp = WdfRequestWdmGetIrp(Request);
+        if (snapshot->operation == KSWORD_ARK_DEBUGGER_OPEN_HANDLE) {
+            /* IoGetRequestorProcess follows the IRP requestor, not PsGetCurrentProcess. */
+            ownerProcess = IoGetRequestorProcess(irp);
+            /* Keep the process object alive until the broker has duplicated its handle. */
+            if (ownerProcess != NULL) { ObReferenceObject(ownerProcess); }
+        }
+        /* Execute the feature's authoritative user-process operation. */
+        status = KswordARKDebuggerControl(Device, IoGetRequestorProcessId(irp), ownerProcess, snapshot, (KSWORD_ARK_DEBUGGER_RESPONSE*)output);
+    }
+    /* Balance the requestor reference even when the typed operation fails. */
+    if (ownerProcess != NULL) { ObDereferenceObject(ownerProcess); }
     /* Release the request snapshot on every operation outcome. */
     ExFreePoolWithTag(snapshot, 'gdDK');
     /* Return a typed packet only when transport completion succeeded. */

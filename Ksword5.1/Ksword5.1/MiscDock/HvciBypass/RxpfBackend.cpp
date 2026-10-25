@@ -13,6 +13,12 @@
 // ArkDriverClient 提供 DriverClient、IoResult 和共享协议结构体。
 #include "../../ArkDriverClient/ArkDriverClient.h"
 
+// 诊断文件输出所需的 Qt 头文件。
+#include <QFile>
+#include <QCoreApplication>
+#include <QDateTime>
+#include <cstdio>
+
 #include <QStringList>
 
 // Framework.h 是主程序统一入口，拉入 Qt、日志和 ksword 工具链。
@@ -81,7 +87,24 @@ namespace
         info.lastFailureReason = resp.lastFailureReason;
         info.originalProtection = resp.originalProtection;
         info.currentProtection = resp.currentProtection;
+        info.writableAliasProtection = resp.writableAliasProtection;
         return info;
+    }
+
+    // 只把完整且兼容的响应解释成页面状态，传输成功仍不代表 lastStatus 成功。
+    ks::misc::rxpf::PageInfo decodePageInfo(
+        const ksword::ark::IoResult& io,
+        const KSWORD_ARK_RXPF_PAGE_RESPONSE& response)
+    {
+        ks::misc::rxpf::PageInfo result;
+        if (io.bytesReturned != sizeof(response)
+            || response.version != KSWORD_ARK_RXPF_PROTOCOL_VERSION
+            || response.size != sizeof(response))
+        {
+            result.ioErrorText = QStringLiteral("实验响应不完整或版本不兼容。");
+            return result;
+        }
+        return fillPageInfo(response);
     }
 }
 
@@ -143,6 +166,7 @@ namespace ks::misc::rxpf
         // request：注册请求体。
         KSWORD_ARK_RXPF_REGISTER_PAGE_REQUEST request{};
         request.header = buildRequestHeader(true, KSWORD_ARK_RXPF_FLAG_CAPTURE_BACKUP);
+        request.header.size = sizeof(request);
         request.targetKind = targetKind;
         request.targetAddress = targetAddress;
 
@@ -157,13 +181,40 @@ namespace ks::misc::rxpf
             &response,
             static_cast<unsigned long>(sizeof(response)));
 
+        // 诊断：记录 REGISTER 结果到文件。
+        {
+            char buf[512];
+            std::snprintf(buf, sizeof(buf),
+                "=== rxpf::registerPage %s ===\ntargetKind=%lu targetAddress=0x%llx sizeof=%zu\nok=%d win32=%lu bytesReturned=%lu\n",
+                QDateTime::currentDateTime().toString(Qt::ISODate).toUtf8().constData(),
+                targetKind, targetAddress, sizeof(request),
+                static_cast<int>(io.ok),
+                static_cast<unsigned long>(io.win32Error),
+                static_cast<unsigned long>(io.bytesReturned));
+            QByteArray msg(buf);
+            if (io.ok) {
+                std::snprintf(buf, sizeof(buf),
+                    "response::state=%u recordId=%llu origProt=0x%x curProt=0x%x pageBase=0x%llx\n",
+                    response.state, response.recordId,
+                    response.originalProtection, response.currentProtection,
+                    response.pageBase);
+                msg += buf;
+            }
+            msg += '\n';
+            QFile diagFile(QCoreApplication::applicationDirPath()
+                + QStringLiteral("/rxpf_diag.log"));
+            diagFile.open(QIODevice::Append | QIODevice::Text);
+            diagFile.write(msg);
+            diagFile.close();
+        }
+
         if (!io.ok)
         {
             result.ioErrorText = makeIoErrorText(io);
             return result;
         }
 
-        return fillPageInfo(response);
+        return decodePageInfo(io, response);
     }
 
     // ================================================================
@@ -176,7 +227,29 @@ namespace ks::misc::rxpf
         // request：基于 recordId 的操作请求。
         KSWORD_ARK_RXPF_RECORD_REQUEST request{};
         request.header = buildRequestHeader();
+        request.header.size = sizeof(request);
         request.recordId = recordId;
+
+        // 诊断：把请求原始字节写到本地文件。
+        {
+            const auto* raw =
+                reinterpret_cast<const unsigned char*>(&request);
+            QByteArray hex;
+            for (std::size_t i = 0; i < sizeof(request); ++i)
+                hex += QByteArray::number(raw[i], 16).rightJustified(2, '0') + ' ';
+            char buf[512];
+            std::snprintf(buf, sizeof(buf),
+                "=== rxpf::changePage %s ===\nsizeof=%zu IOCTL=0x%x recordId=%llu\nraw=[%s]\n",
+                QDateTime::currentDateTime().toString(Qt::ISODate).toUtf8().constData(),
+                sizeof(request),
+                static_cast<unsigned>(IOCTL_KSWORD_ARK_RXPF_CHANGE_PAGE),
+                recordId, hex.trimmed().constData());
+            QFile diagFile(QCoreApplication::applicationDirPath()
+                + QStringLiteral("/rxpf_diag.log"));
+            diagFile.open(QIODevice::Append | QIODevice::Text);
+            diagFile.write(buf);
+            diagFile.close();
+        }
 
         KSWORD_ARK_RXPF_PAGE_RESPONSE response{};
 
@@ -188,13 +261,39 @@ namespace ks::misc::rxpf
             &response,
             static_cast<unsigned long>(sizeof(response)));
 
+        // 诊断：追加 DeviceIoControl 结果到文件。
+        {
+            char buf[512];
+            std::snprintf(buf, sizeof(buf),
+                "rxpf::changePage result ok=%d win32=%lu bytesReturned=%lu sizeof=%zu\n",
+                static_cast<int>(io.ok),
+                static_cast<unsigned long>(io.win32Error),
+                static_cast<unsigned long>(io.bytesReturned),
+                sizeof(response));
+            QByteArray msg(buf);
+            if (io.ok) {
+                std::snprintf(buf, sizeof(buf),
+                    "response::state=%u lastStatus=0x%x origProt=0x%x curProt=0x%x alias=0x%llx\n",
+                    response.state, response.lastStatus,
+                    response.originalProtection, response.currentProtection,
+                    response.writableAlias);
+                msg += buf;
+            }
+            msg += '\n';
+            QFile diagFile(QCoreApplication::applicationDirPath()
+                + QStringLiteral("/rxpf_diag.log"));
+            diagFile.open(QIODevice::Append | QIODevice::Text);
+            diagFile.write(msg);
+            diagFile.close();
+        }
+
         if (!io.ok)
         {
             result.ioErrorText = makeIoErrorText(io);
             return result;
         }
 
-        return fillPageInfo(response);
+        return decodePageInfo(io, response);
     }
 
     // ================================================================
@@ -206,6 +305,7 @@ namespace ks::misc::rxpf
 
         KSWORD_ARK_RXPF_RECORD_REQUEST request{};
         request.header = buildRequestHeader();
+        request.header.size = sizeof(request);
         request.recordId = recordId;
 
         KSWORD_ARK_RXPF_PAGE_RESPONSE response{};
@@ -224,7 +324,7 @@ namespace ks::misc::rxpf
             return result;
         }
 
-        return fillPageInfo(response);
+        return decodePageInfo(io, response);
     }
 
     // ================================================================
@@ -240,6 +340,7 @@ namespace ks::misc::rxpf
         // request：写入请求体。
         KSWORD_ARK_RXPF_WRITE_PAGE_REQUEST request{};
         request.header = buildRequestHeader();
+        request.header.size = sizeof(request);
         request.recordId = recordId;
         request.offset = offset;
 
@@ -267,7 +368,14 @@ namespace ks::misc::rxpf
             return result;
         }
 
-        return fillPageInfo(response);
+        result = decodePageInfo(io, response);
+        result.requestedWriteLength = static_cast<std::uint64_t>(bytes.size());
+        if (result.ioSuccess && result.lastStatus >= 0)
+        {
+            // 保留原来的单次64字节上限；显式报告实际范围，不能把截断当成完整写入。
+            result.writtenLength = response.lastWriteLength;
+        }
+        return result;
     }
 
     // ================================================================
@@ -282,6 +390,7 @@ namespace ks::misc::rxpf
         // request：模拟控制请求体。
         KSWORD_ARK_RXPF_SET_EMULATION_REQUEST request{};
         request.header = buildRequestHeader();
+        request.header.size = sizeof(request);
         request.recordId = recordId;
         // enable：1=启用，0=禁用。
         request.enable = enable ? 1UL : 0UL;
@@ -302,7 +411,7 @@ namespace ks::misc::rxpf
             return result;
         }
 
-        return fillPageInfo(response);
+        return decodePageInfo(io, response);
     }
 
     // ================================================================
@@ -362,6 +471,7 @@ namespace ks::misc::rxpf
         // request：事件拉取请求体。
         KSWORD_ARK_RXPF_DRAIN_EVENTS_REQUEST request{};
         request.header = buildRequestHeader();
+        request.header.size = sizeof(request);
         request.afterSequence = afterSequence;
         // maxRows：截断到协议上限 64 行。
         request.maxRows = std::min<unsigned long>(
@@ -421,13 +531,24 @@ namespace ks::misc::rxpf
 
     // ================================================================
     // unregisterPage：注销已注册的页面并恢复原始保护。
+    // skipBackupRestore=true 时附带 FLAG_SKIP_BACKUP_RESTORE，让 R0
+    // ReleaseRecord 跳过 Backup → page 的自动恢复，保留 R3 写入字节
+    // 直到 PTE 回 RX（Phase G 路径）。
     // ================================================================
-    PageInfo unregisterPage(const std::uint64_t recordId)
+    PageInfo unregisterPage(const std::uint64_t recordId,
+        const bool skipBackupRestore)
     {
         PageInfo result;
 
+        // 根据 skipBackupRestore 选择附加 flag：默认不加（走 Phase F 安全路径），
+        // 显式打开时加 KSWORD_ARK_RXPF_FLAG_SKIP_BACKUP_RESTORE。
+        const unsigned long extraFlags = skipBackupRestore
+            ? KSWORD_ARK_RXPF_FLAG_SKIP_BACKUP_RESTORE
+            : 0UL;
+
         KSWORD_ARK_RXPF_RECORD_REQUEST request{};
-        request.header = buildRequestHeader();
+        request.header = buildRequestHeader(true, extraFlags);
+        request.header.size = sizeof(request);
         request.recordId = recordId;
 
         KSWORD_ARK_RXPF_PAGE_RESPONSE response{};
@@ -446,17 +567,22 @@ namespace ks::misc::rxpf
             return result;
         }
 
-        return fillPageInfo(response);
+        return decodePageInfo(io, response);
     }
 
     // ================================================================
     // runSelfTest：运行驱动内置的端到端自检。
+    // 调用方必须先 registerPage + changePage 使记录处于 RW_NX 状态。
     // ================================================================
-    SelfTestInfo runSelfTest()
+    SelfTestInfo runSelfTest(const std::uint64_t recordId)
     {
         SelfTestInfo result;
 
-        auto header = buildRequestHeader();
+        // request：自检需要完整的 RecordRequest（header + recordId）。
+        KSWORD_ARK_RXPF_RECORD_REQUEST request{};
+        request.header = buildRequestHeader();
+        request.header.size = sizeof(request);
+        request.recordId = recordId;
 
         // response：自检结果响应。
         KSWORD_ARK_RXPF_SELF_TEST_RESPONSE response{};
@@ -464,8 +590,8 @@ namespace ks::misc::rxpf
         const ksword::ark::DriverClient client;
         const auto io = client.deviceIoControl(
             IOCTL_KSWORD_ARK_RXPF_RUN_SELF_TEST,
-            &header,
-            static_cast<unsigned long>(sizeof(header)),
+            &request,
+            static_cast<unsigned long>(sizeof(request)),
             &response,
             static_cast<unsigned long>(sizeof(response)));
 
@@ -485,6 +611,57 @@ namespace ks::misc::rxpf
         result.faultsObserved = response.faultsObserved;
         result.lastStatus = response.lastStatus;
         return result;
+    }
+
+    // ================================================================
+    // atomicCommit：原子提交——Register+Change(mode=2)+Write+Unregister(SKIP)
+    // 在单次 IOCTL 内完成，把 NX 窗口压到驱动函数内部。
+    // 仅支持 EXTERNAL_IMAGE 目标。
+    // ================================================================
+    PageInfo atomicCommit(
+        const std::uint64_t targetAddress,
+        const unsigned long offset,
+        const QByteArray& bytes)
+    {
+        PageInfo result;
+
+        // request：原子提交请求体。
+        KSWORD_ARK_RXPF_ATOMIC_COMMIT_REQUEST request{};
+        request.header = buildRequestHeader();
+        request.header.size = sizeof(request);
+        // targetKind：固定 EXTERNAL_IMAGE（原子提交唯一场景）。
+        request.targetKind = KSWORD_ARK_RXPF_TARGET_EXTERNAL_IMAGE;
+        request.reserved = 0UL;
+        request.targetAddress = targetAddress;
+        request.offset = offset;
+
+        // length：实际写入长度，截断到协议上限 64 字节。
+        const unsigned long length = static_cast<unsigned long>(
+            std::min<int>(bytes.size(), KSWORD_ARK_RXPF_MAX_WRITE_BYTES));
+        request.length = length;
+
+        // 拷贝写入数据到请求体。
+        std::memcpy(request.bytes, bytes.constData(), length);
+
+        // response：复用 PAGE_RESPONSE（记录在 ReleaseRecord 后的最终状态）。
+        KSWORD_ARK_RXPF_PAGE_RESPONSE response{};
+
+        // client：通过 ArkDriverClient 发送 IOCTL。
+        const ksword::ark::DriverClient client;
+        const auto io = client.deviceIoControl(
+            IOCTL_KSWORD_ARK_RXPF_ATOMIC_COMMIT,
+            &request,
+            static_cast<unsigned long>(sizeof(request)),
+            &response,
+            static_cast<unsigned long>(sizeof(response)));
+
+        if (!io.ok)
+        {
+            result.ioErrorText = makeIoErrorText(io);
+            return result;
+        }
+
+        return decodePageInfo(io, response);
     }
 
     // ================================================================
@@ -707,3 +884,92 @@ namespace ks::misc::rxpf
     }
 
 } // namespace ks::misc::rxpf
+
+namespace ks::misc::rxpf
+{
+    // ================================================================
+    // queryBackup：读 Record->Backup 的子段。
+    // Phase G wizard 用它在 Unregister(SKIP_RESTORE) 前把原字节缓存到 R3，
+    // 以便 payload 触发后能走 Register+Change+Write(backup)+Unregister 恢复。
+    // ================================================================
+    BackupInfo queryBackup(const std::uint64_t recordId,
+        const unsigned long offset, const unsigned long length)
+    {
+        // 结果对象：失败时 bytes 保持空，调用方据 ioSuccess / hasBackup 判断。
+        BackupInfo result;
+        result.recordId = recordId;
+        result.offset = offset;
+        result.length = length;
+
+        // 组装请求：header + recordId + offset + length。
+        KSWORD_ARK_RXPF_QUERY_BACKUP_REQUEST request{};
+        request.header = buildRequestHeader();
+        request.header.size = sizeof(request);
+        request.recordId = recordId;
+        request.offset = offset;
+        request.length = length;
+
+        KSWORD_ARK_RXPF_QUERY_BACKUP_RESPONSE response{};
+
+        // 发 IOCTL；失败路径只填 ioErrorText 返回。
+        const ksword::ark::DriverClient client;
+        const auto io = client.deviceIoControl(
+            IOCTL_KSWORD_ARK_RXPF_QUERY_BACKUP,
+            &request,
+            static_cast<unsigned long>(sizeof(request)),
+            &response,
+            static_cast<unsigned long>(sizeof(response)));
+        if (!io.ok)
+        {
+            result.ioErrorText = makeIoErrorText(io);
+            return result;
+        }
+
+        // 成功：转译 R0 字段到 R3 结构。
+        result.ioSuccess = true;
+        result.recordId = response.recordId;
+        result.offset = response.offset;
+        result.length = response.length;
+        result.hasBackup = response.hasBackup != 0UL;
+        result.lastStatus = response.lastStatus;
+        if (result.hasBackup && response.length > 0UL
+            && response.length <= KSWORD_ARK_RXPF_MAX_WRITE_BYTES)
+        {
+            // 把 Backup 字节段作为 QByteArray 返回；避免 R3 直接触碰 C 数组。
+            result.bytes = QByteArray(
+                reinterpret_cast<const char*>(response.bytes),
+                static_cast<int>(response.length));
+        }
+        return result;
+    }
+}
+
+namespace ks::misc::rxpf
+{
+    // 只读回读使用现有ArkDriverClient，不增加新的驱动执行路径。
+    ReadbackInfo readPageBytes(const std::uint64_t targetAddress,
+        const unsigned long offset, const unsigned long length)
+    {
+        ReadbackInfo result;
+        if (length == 0UL || length > KSWORD_ARK_RXPF_MAX_WRITE_BYTES
+            || offset >= 4096UL || length > 4096UL - offset)
+        {
+            result.errorText = QStringLiteral("回读范围无效。");
+            return result;
+        }
+        const std::uint64_t address = (targetAddress & ~0xFFFULL) + offset;
+        const ksword::ark::DriverClient client;
+        const auto read = client.readVirtualMemory(0U, address, length,
+            KSWORD_ARK_MEMORY_READ_FLAG_KERNEL_ADDRESS);
+        if (!read.io.ok || read.readStatus != KSWORD_ARK_MEMORY_READ_STATUS_OK
+            || read.data.size() != length)
+        {
+            result.errorText = QStringLiteral("原字节回读失败，尚未证实恢复。");
+            return result;
+        }
+        result.bytes = QByteArray(reinterpret_cast<const char*>(read.data.data()),
+            static_cast<int>(read.data.size()));
+        result.ok = true;
+        return result;
+    }
+}
