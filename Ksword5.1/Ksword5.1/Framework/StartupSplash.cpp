@@ -28,8 +28,8 @@ namespace
     constexpr int kBaseWidth = 800;
     constexpr int kBaseHeight = 450;
     constexpr float kTrackX = 20.0f;
-    constexpr float kTrackY = 347.0f;
-    constexpr float kTrackWidth = 252.0f;
+    constexpr float kTrackY = 426.0f;
+    constexpr float kTrackWidth = 280.0f;
     constexpr float kTrackHeight = 4.0f;
     constexpr UINT kShowMessage = WM_APP + 1;
     constexpr UINT kHideMessage = WM_APP + 2;
@@ -556,7 +556,7 @@ private:
                 static_cast<float>(m_imageHeight), Gdiplus::UnitPixel);
             Gdiplus::SolidBrush panel(Gdiplus::Color(190, 10, 20, 34));
             graphics.FillRectangle(&panel, Gdiplus::RectF(
-                0.0f, 0.0f, 292.0f, static_cast<float>(kBaseHeight)));
+                0.0f, 0.0f, 320.0f, static_cast<float>(kBaseHeight)));
             graphics.ResetClip();
 
             if (m_logo)
@@ -567,57 +567,84 @@ private:
                 fillRoundedRectangle(graphics, fallback, 20.0f, 38.0f, 40.0f, 40.0f, 8.0f);
             }
             Gdiplus::SolidBrush heading(Gdiplus::Color(255, 247, 250, 255));
-            Gdiplus::Font headingFont(L"Segoe UI", 11.0f,
+            float headingSize = 26.0f;
+            for (; headingSize > 22.0f; headingSize -= 1.0f)
+            {
+                Gdiplus::Font candidate(L"Segoe UI", headingSize,
+                    Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
+                Gdiplus::RectF bounds;
+                graphics.MeasureString(title.c_str(), -1, &candidate,
+                    Gdiplus::PointF(0.0f, 0.0f), &bounds);
+                if (bounds.Width <= 228.0f) break;
+            }
+            Gdiplus::Font headingFont(L"Segoe UI", headingSize,
                 Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
+            Gdiplus::StringFormat headingFormat;
+            headingFormat.SetFormatFlags(Gdiplus::StringFormatFlagsNoWrap);
+            headingFormat.SetLineAlignment(Gdiplus::StringAlignmentCenter);
             graphics.DrawString(title.c_str(), -1, &headingFont,
-                Gdiplus::RectF(72.0f, 48.0f, 200.0f, 22.0f),
-                nullptr, &heading);
+                Gdiplus::RectF(72.0f, 38.0f, 228.0f, 40.0f),
+                &headingFormat, &heading);
 
             Gdiplus::SolidBrush body(Gdiplus::Color(255, 228, 234, 242));
-            Gdiplus::Font bodyFont(L"Microsoft YaHei UI", 7.0f,
+            Gdiplus::Font bodyFont(L"Microsoft YaHei UI", 14.0f,
                 Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
             Gdiplus::SolidBrush metadata(Gdiplus::Color(255, 188, 201, 218));
             graphics.DrawString(buildTime.c_str(), -1, &bodyFont,
-                Gdiplus::RectF(20.0f, 88.0f, 252.0f, 14.0f), nullptr, &metadata);
+                Gdiplus::RectF(20.0f, 88.0f, 280.0f, 20.0f), nullptr, &metadata);
             graphics.DrawString(authors.c_str(), -1, &bodyFont,
-                Gdiplus::RectF(20.0f, 104.0f, 252.0f, 14.0f), nullptr, &metadata);
+                Gdiplus::RectF(20.0f, 110.0f, 280.0f, 20.0f), nullptr, &metadata);
             Gdiplus::StringFormat paragraphFormat;
             paragraphFormat.SetTrimming(Gdiplus::StringTrimmingNone);
-            float paragraphY = 174.0f;
             const std::wstring* paragraphs[] = {&copyright, &license, &thirdParty};
-            for (const std::wstring* paragraph : paragraphs)
+            float paragraphHeights[3] = {};
+            float legalHeight = 0.0f;
+            int paragraphCount = 0;
+            for (int index = 0; index < 3; ++index)
             {
+                const std::wstring* paragraph = paragraphs[index];
                 if (paragraph->empty()) continue;
                 Gdiplus::RectF bounds;
                 graphics.MeasureString(paragraph->c_str(), -1, &bodyFont,
-                    Gdiplus::RectF(0.0f, 0.0f, 252.0f, 150.0f),
+                    Gdiplus::RectF(0.0f, 0.0f, 280.0f, 220.0f),
                     &paragraphFormat, &bounds);
-                const float height = std::min(bounds.Height + 2.0f, 150.0f);
+                paragraphHeights[index] = bounds.Height + 2.0f;
+                legalHeight += paragraphHeights[index];
+                ++paragraphCount;
+            }
+            legalHeight += std::max(0, paragraphCount - 1) * 6.0f;
+            // Keep metadata below the brand and anchor legal text above the
+            // bottom links/loading area, leaving the middle space unoccupied.
+            float paragraphY = 328.0f - legalHeight;
+            for (int index = 0; index < 3; ++index)
+            {
+                const std::wstring* paragraph = paragraphs[index];
+                if (paragraph->empty()) continue;
                 graphics.DrawString(paragraph->c_str(), -1, &bodyFont,
-                    Gdiplus::RectF(20.0f, paragraphY, 252.0f, height),
+                    Gdiplus::RectF(20.0f, paragraphY, 280.0f, paragraphHeights[index]),
                     &paragraphFormat, &body);
-                paragraphY += height + 8.0f;
+                paragraphY += paragraphHeights[index] + 6.0f;
             }
 
             Gdiplus::StringFormat oneLine;
             oneLine.SetFormatFlags(Gdiplus::StringFormatFlagsNoWrap);
             oneLine.SetTrimming(Gdiplus::StringTrimmingEllipsisCharacter);
-            Gdiplus::Font statusFont(L"Microsoft YaHei UI", 6.0f,
+            Gdiplus::Font statusFont(L"Microsoft YaHei UI", 12.0f,
                 Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
             graphics.DrawString(status.c_str(), -1, &statusFont,
-                Gdiplus::RectF(kTrackX, 319.0f, kTrackWidth, 16.0f),
+                Gdiplus::RectF(kTrackX, 398.0f, kTrackWidth, 20.0f),
                 &oneLine, &body);
             Gdiplus::SolidBrush track(Gdiplus::Color(100, 180, 200, 225));
             fillRoundedRectangle(graphics, track,
                 kTrackX, kTrackY, kTrackWidth, kTrackHeight, 3.0f);
 
             Gdiplus::SolidBrush link(Gdiplus::Color(255, 150, 204, 255));
-            Gdiplus::Font linkFont(L"Segoe UI", 7.0f,
+            Gdiplus::Font linkFont(L"Segoe UI", 14.0f,
                 Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
             graphics.DrawString(website.c_str(), -1, &linkFont,
-                Gdiplus::RectF(20.0f, 390.0f, 252.0f, 14.0f), &oneLine, &link);
+                Gdiplus::RectF(20.0f, 342.0f, 280.0f, 20.0f), &oneLine, &link);
             graphics.DrawString(repository.c_str(), -1, &linkFont,
-                Gdiplus::RectF(20.0f, 406.0f, 252.0f, 14.0f), &oneLine, &link);
+                Gdiplus::RectF(20.0f, 364.0f, 280.0f, 20.0f), &oneLine, &link);
             graphics.Flush(Gdiplus::FlushIntentionSync);
             m_cachedStaticRevision = staticRevision;
             m_cachedStaticGeometryRevision = m_geometryRevision;
