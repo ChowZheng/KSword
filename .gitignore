@@ -16,6 +16,7 @@ build_*.json
 dist/
 .codex-build-logs/
 .codex-tmp/
+/.tmp/
 package_stage/
 tmp-qmake-mm*/
 windeployqt_raw.txt
