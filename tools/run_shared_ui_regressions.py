@@ -26,6 +26,8 @@ TESTS = (
     ("monitor defaults", "test_monitor_first_frame.py", False),
     ("table defaults", "test_table_default_first_frame_ui.py", True),
     ("companion defaults", "test_companion_ui_defaults.py", False),
+    ("disk monitor layout", "test_disk_monitor_layout_ui.py", False),
+    ("MFT search page", "test_ntfs_search_page_ui.py", False),
 )
 
 
@@ -55,7 +57,8 @@ def main() -> None:
             raise SystemExit(result.returncode)
         summaries = [line for line in result.stdout.splitlines()
                      if "CHECKS=" in line or "FIRST_FRAME=PASS" in line or "THEME_FIRST_FRAME_PASS" in line
-                     or "FIRST_FRAME_UI=PASS" in line or line.startswith("TABLE_DEFAULT_")]
+                     or "FIRST_FRAME_UI=PASS" in line or line.startswith("TABLE_DEFAULT_")
+                     or line.startswith("NTFS_SEARCH_PAGE_UI_PASS")]
         print("\n".join(summaries) if summaries else f"SHARED_UI_PASS={label}", flush=True)
     print("SHARED_UI_REGRESSIONS=PASS", flush=True)
 

@@ -25,5 +25,8 @@ private:
     void startSearch();
     void showDirectory(quint64 reference);
     void updateButtons();
+    void updateUnavailableResults(const char* message);
+    void cancelOperations();
+    void restoreSpaceDirectory();
     void locateSelected();
 };
