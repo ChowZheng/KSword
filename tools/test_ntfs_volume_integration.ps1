@@ -39,10 +39,12 @@ try {
     $associatedDisks = @($image | Get-Disk)
     if ($associatedDisks.Count -ne 1) { throw 'The test image must map to exactly one disk.' }
     $disk = $associatedDisks[0]
+    # Get-Disk exposes a display string through its extended BusType property.
+    [UInt16]$busType = $disk.CimInstanceProperties['BusType'].Value
     $expectedDevice = "\\.\PHYSICALDRIVE$($disk.Number)"
     if (-not [String]::Equals($image.DevicePath, $expectedDevice, [StringComparison]::OrdinalIgnoreCase) -or
         $disk.IsBoot -or $disk.IsSystem -or $disk.PartitionStyle -ne 'RAW' -or
-        [UInt64]$disk.Size -ne $scratchBytes -or [int]$disk.BusType -notin @(14, 15)) {
+        [UInt64]$disk.Size -ne $scratchBytes -or $busType -notin @(14, 15)) {
         throw 'The new image did not pass isolated virtual-disk identity checks.'
     }
 
