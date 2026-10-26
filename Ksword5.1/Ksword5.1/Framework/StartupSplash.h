@@ -20,7 +20,7 @@ public:
     kStartupSplash& operator=(const kStartupSplash&) = delete;
 
     // If unset, loads the bundled Style\StartupLandscape.png next to the host executable.
-    // Set before show(); the image is cropped proportionally into the compact 10:3 canvas.
+    // Set before show(); the complete image determines the canvas aspect ratio without cropping or tinting.
     void setBackgroundImagePath(const std::wstring& path);
     // 发行版本独立于产品名称，数字和PRE/RC后缀在紧凑信息行显示。
     void setVersionText(const std::wstring& version);

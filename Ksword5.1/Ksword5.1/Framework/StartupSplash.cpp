@@ -25,17 +25,16 @@
 namespace
 {
     constexpr wchar_t kWindowClass[] = L"KswordFrameworkSplashWindow";
-    // 横向品牌摘要采用10:3逻辑画布；外沿方角，底轨与窗口同宽。
-    constexpr int kBaseWidth = 900;
-    constexpr int kBaseHeight = 270;
+    // 画布高度跟随原图比例；简洁信息区贴底，外沿方角且底轨与窗口同宽。
+    constexpr int kBaseWidth = 896; // 当前16:9原图对应整数逻辑尺寸896×504。
+    constexpr float kFooterHeight = 270.0f; // 只约束信息区编排，不约束背景或窗口比例。
     constexpr float kContentX = 44.0f; // 品牌与元信息共用左对齐线。
     constexpr float kTrackX = 0.0f;
-    constexpr float kTrackY = 268.0f;
     constexpr float kTrackWidth = static_cast<float>(kBaseWidth);
     constexpr float kTrackHeight = 2.0f;
-    constexpr float kPercentX = 810.0f; // 数字独立保留宽度，长状态不能挤入。
     constexpr float kStatusY = 166.0f;
     constexpr float kPercentWidth = 46.0f;
+    constexpr float kPercentX = kBaseWidth - kContentX - kPercentWidth; // 保留与左侧相同的44px边距。
     constexpr float kStatusHeight = 24.0f;
     constexpr UINT kShowMessage = WM_APP + 1;
     constexpr UINT kHideMessage = WM_APP + 2;
@@ -467,6 +466,10 @@ private:
         }
         m_imageWidth = static_cast<int>(m_image->GetWidth());
         m_imageHeight = static_cast<int>(m_image->GetHeight());
+        // 必须在首次layout之前确定真实比例，监视器查询失败时也不回退到旧横幅高度。
+        m_canvasHeight = static_cast<float>(kBaseWidth) * static_cast<float>(m_imageHeight) /
+            static_cast<float>(m_imageWidth);
+        m_height = std::max(1, static_cast<int>(std::lround(m_canvasHeight)));
         const std::wstring logoPath = splashAssetPath(L"KswordLogo.png");
         m_logo.reset(Gdiplus::Image::FromFile(logoPath.c_str(), FALSE));
         if (m_logo && m_logo->GetLastStatus() != Gdiplus::Ok) m_logo.reset();
@@ -523,9 +526,9 @@ private:
         const int workHeight = info.rcWork.bottom - info.rcWork.top;
         m_scale = std::min({static_cast<float>(m_dpi) / 96.0f,
             static_cast<float>(workWidth) * 0.90f / kBaseWidth,
-            static_cast<float>(workHeight) * 0.88f / kBaseHeight});
+            static_cast<float>(workHeight) * 0.88f / m_canvasHeight});
         m_width = std::max(1, static_cast<int>(std::lround(kBaseWidth * m_scale)));
-        m_height = std::max(1, static_cast<int>(std::lround(kBaseHeight * m_scale)));
+        m_height = std::max(1, static_cast<int>(std::lround(m_canvasHeight * m_scale)));
         m_x = info.rcWork.left + (workWidth - m_width) / 2;
         m_y = info.rcWork.top + (workHeight - m_height) / 2;
         if (oldX != m_x || oldY != m_y || oldWidth != m_width || oldHeight != m_height || oldDpi != m_dpi)
@@ -619,6 +622,13 @@ private:
             revision == m_paintedRevision && m_geometryRevision == m_paintedGeometryRevision)
             return true;
 
+        // 原图很宽时信息区整体等比缩小，仍完整留在图内；普通底图只需平移到底部。
+        const float footerScale = std::min(1.0f, m_canvasHeight / kFooterHeight);
+        const float footerX = static_cast<float>(kBaseWidth) * (1.0f - footerScale) * 0.5f;
+        const float footerY = m_canvasHeight - kFooterHeight * footerScale;
+        const float trackY = m_canvasHeight - kTrackHeight; // 静态轨道、恢复、裁剪与动态填充共用此位置。
+        const Gdiplus::RectF percentBounds(footerX + kPercentX * footerScale,
+            footerY + kStatusY * footerScale, kPercentWidth * footerScale, kStatusHeight * footerScale);
         const bool resized = m_staticSurface.width != m_width || m_staticSurface.height != m_height ||
             m_frame.width != m_width || m_frame.height != m_height;
         if (!m_staticSurface.ensure(m_width, m_height) || !m_frame.ensure(m_width, m_height)) return false;
@@ -636,26 +646,14 @@ private:
             graphics.Clear(Gdiplus::Color(0, 0, 0, 0));
             graphics.ScaleTransform(m_scale, m_scale);
 
-            // 原图等比裁成横幅并靠上取景，避免把16:9素材横向拉伸。
-            const float aspect = static_cast<float>(kBaseWidth) / kBaseHeight; // 目标横幅宽高比。
-            const float imageWidth = static_cast<float>(m_imageWidth); // 源图物理宽度只在采样入口显式转为浮点。
-            const float sourceHeight = std::min(static_cast<float>(m_imageHeight), imageWidth / aspect);
-            const float sourceWidth = sourceHeight * aspect;
-            const float sourceX = (imageWidth - sourceWidth) * 0.5f;
+            // 直接显示完整原图；目标画布与源图同宽高比，不裁切、不拉伸、不叠加颜色遮罩。
             graphics.DrawImage(m_image.get(), Gdiplus::RectF(0.0f, 0.0f,
-                static_cast<float>(kBaseWidth), static_cast<float>(kBaseHeight)),
-                sourceX, 0.0f, sourceWidth, sourceHeight, Gdiplus::UnitPixel);
-            // 渐变只负责保证下半部文字对比，不再画独立左侧卡片或外框。
-            Gdiplus::LinearGradientBrush verticalShade(Gdiplus::PointF(0.0f, 0.0f),
-                Gdiplus::PointF(0.0f, static_cast<float>(kBaseHeight)),
-                Gdiplus::Color(35, 7, 13, 23), Gdiplus::Color(248, 7, 12, 20));
-            graphics.FillRectangle(&verticalShade, 0.0f, 0.0f,
-                static_cast<float>(kBaseWidth), static_cast<float>(kBaseHeight));
-            Gdiplus::LinearGradientBrush leftShade(Gdiplus::PointF(0.0f, 0.0f),
-                Gdiplus::PointF(static_cast<float>(kBaseWidth), 0.0f),
-                Gdiplus::Color(180, 6, 11, 19), Gdiplus::Color(0, 6, 11, 19));
-            graphics.FillRectangle(&leftShade, 0.0f, 0.0f,
-                static_cast<float>(kBaseWidth), static_cast<float>(kBaseHeight));
+                static_cast<float>(kBaseWidth), m_canvasHeight),
+                0.0f, 0.0f, static_cast<float>(m_imageWidth), static_cast<float>(m_imageHeight),
+                Gdiplus::UnitPixel);
+            const Gdiplus::GraphicsState footerState = graphics.Save(); // 信息区使用独立、统一的贴底变换。
+            graphics.TranslateTransform(footerX, footerY, Gdiplus::MatrixOrderPrepend);
+            graphics.ScaleTransform(footerScale, footerScale, Gdiplus::MatrixOrderPrepend);
 
             // 品牌下移到画布下半部，保留上方背景留白；图标与标题共用中线。
             if (m_logo)
@@ -711,14 +709,15 @@ private:
             Gdiplus::Font statusFont(L"Microsoft YaHei UI", 14.0f, Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
             Gdiplus::SolidBrush statusBrush(Gdiplus::Color(255, 211, 220, 233));
             drawSplashText(graphics, status, statusFont,
-                Gdiplus::RectF(574.0f, kStatusY, 224.0f, kStatusHeight), statusBrush, Gdiplus::StringAlignmentFar);
+                Gdiplus::RectF(kPercentX - 236.0f, kStatusY, 224.0f, kStatusHeight), statusBrush, Gdiplus::StringAlignmentFar);
             Gdiplus::SolidBrush legalBrush(Gdiplus::Color(255, 153, 168, 188));
             drawSplashText(graphics, copyright, bodyFont,
-                Gdiplus::RectF(568.0f, 205.0f, 288.0f, 19.0f), legalBrush, Gdiplus::StringAlignmentFar);
+                Gdiplus::RectF(kBaseWidth - kContentX - 288.0f, 205.0f, 288.0f, 19.0f), legalBrush, Gdiplus::StringAlignmentFar);
             drawSplashText(graphics, splashWebsiteLabel(website), bodyFont,
-                Gdiplus::RectF(568.0f, 225.0f, 288.0f, 19.0f), legalBrush, Gdiplus::StringAlignmentFar);
+                Gdiplus::RectF(kBaseWidth - kContentX - 288.0f, 225.0f, 288.0f, 19.0f), legalBrush, Gdiplus::StringAlignmentFar);
+            graphics.Restore(footerState); // 底轨不随信息区缩窄，始终覆盖完整窗口宽度。
             Gdiplus::SolidBrush track(Gdiplus::Color(105, 159, 177, 202)); // 全宽细底轨不描窗口外沿。
-            graphics.FillRectangle(&track, kTrackX, kTrackY, kTrackWidth, kTrackHeight);
+            graphics.FillRectangle(&track, kTrackX, trackY, kTrackWidth, kTrackHeight);
             graphics.Flush(Gdiplus::FlushIntentionSync);
             m_cachedStaticRevision = staticRevision;
             m_cachedStaticGeometryRevision = m_geometryRevision;
@@ -730,9 +729,8 @@ private:
         {
             // 百分比和底轨各自恢复完整预乘像素；其余背景和文字复用原静态缓存。
             restoreSplashRectangle(m_frame, m_staticSurface,
-                Gdiplus::RectF(kTrackX, kTrackY, kTrackWidth, kTrackHeight), m_scale);
-            restoreSplashRectangle(m_frame, m_staticSurface,
-                Gdiplus::RectF(kPercentX, kStatusY, kPercentWidth, kStatusHeight), m_scale);
+                Gdiplus::RectF(kTrackX, trackY, kTrackWidth, kTrackHeight), m_scale);
+            restoreSplashRectangle(m_frame, m_staticSurface, percentBounds, m_scale);
         }
         {
             Gdiplus::Bitmap surface(m_width, m_height, m_width * 4,
@@ -749,14 +747,18 @@ private:
             // 仅确定模式显示真实百分比；不定进度阶段不制造假的完成数值。
             if (mode == SplashProgressMode::Determinate)
             {
+                const Gdiplus::GraphicsState footerState = graphics.Save(); // 数字与静态状态采用相同贴底变换。
+                graphics.TranslateTransform(footerX, footerY, Gdiplus::MatrixOrderPrepend);
+                graphics.ScaleTransform(footerScale, footerScale, Gdiplus::MatrixOrderPrepend);
                 const std::wstring percentage = std::to_wstring(percent) + L"%";
                 Gdiplus::Font percentFont(L"Consolas", 12.5f, Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
                 Gdiplus::SolidBrush percentBrush(Gdiplus::Color(255, 169, 184, 205));
                 drawSplashText(graphics, percentage, percentFont,
                     Gdiplus::RectF(kPercentX, kStatusY, kPercentWidth, kStatusHeight),
                     percentBrush, Gdiplus::StringAlignmentFar);
+                graphics.Restore(footerState);
             }
-            graphics.SetClip(Gdiplus::RectF(kTrackX, kTrackY, kTrackWidth, kTrackHeight));
+            graphics.SetClip(Gdiplus::RectF(kTrackX, trackY, kTrackWidth, kTrackHeight));
             if (mode == SplashProgressMode::Indeterminate)
             {
                 constexpr ULONGLONG kCycleMs = 1150;
@@ -777,12 +779,12 @@ private:
                         static_cast<BYTE>(240.0f * std::min(fadeIn, fadeOut)),
                         static_cast<BYTE>(accentRed), static_cast<BYTE>(accentGreen),
                         static_cast<BYTE>(accentBlue)));
-                    graphics.FillRectangle(&movingIndicator, segmentX, kTrackY, segmentWidth, kTrackHeight);
+                    graphics.FillRectangle(&movingIndicator, segmentX, trackY, segmentWidth, kTrackHeight);
                 }
             }
             else if (percent > 0)
             {
-                graphics.FillRectangle(&indicator, kTrackX, kTrackY,
+                graphics.FillRectangle(&indicator, kTrackX, trackY,
                     kTrackWidth * percent / 100.0f, kTrackHeight);
             }
             graphics.ResetClip();
@@ -925,7 +927,8 @@ private:
     int m_imageWidth = 0;
     int m_imageHeight = 0;
     int m_width = kBaseWidth;
-    int m_height = kBaseHeight;
+    float m_canvasHeight = static_cast<float>(kBaseWidth) * 9.0f / 16.0f; // 加载后由实际图片宽高覆盖。
+    int m_height = 504; // 图片加载成功后立即按真实比例更新，先于工作区布局。
     int m_x = 0;
     int m_y = 0;
     UINT m_dpi = 96;
