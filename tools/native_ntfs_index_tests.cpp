@@ -149,6 +149,7 @@ void diagnoseRefresh(const QString& root, qint64 initialCursor,
             std::fprintf(stderr, "NATIVE_NTFS_DIAGNOSTIC_GEOMETRY_BOUNDS=INVALID\n"); return;
         }
         constexpr quint64 indexMask = 0x0000ffffffffffffULL;
+        constexpr quint64 usaStride = 512;
         const std::size_t header = offsetof(NTFS_FILE_RECORD_OUTPUT_BUFFER, FileRecordBuffer);
         const std::size_t maximumRecords = std::min<std::size_t>(8, knownReferences.size());
         for (std::size_t index = 0; index < maximumRecords; ++index) {
@@ -188,7 +189,7 @@ void diagnoseRefresh(const QString& root, qint64 initialCursor,
             if (!load(22, 2, flags) || !load(24, 4, used) || !load(28, 4, allocated)
                 || !load(20, 2, firstAttribute) || !load(4, 2, usaOffset) || !load(6, 2, usaCount)
                 || !load(16, 2, sequence)) continue;
-            std::fprintf(stderr, "NATIVE_NTFS_DIAGNOSTIC_RECORD requested=%016llx returned=%016llx sequence=%04llx flags=%04llx used=%llu allocated=%llu firstattr=%llu usa_offset=%llu usa_count=%llu record_bytes=%llu sector_bytes=%lu\n",
+            std::fprintf(stderr, "NATIVE_NTFS_DIAGNOSTIC_RECORD requested=%016llx returned=%016llx sequence=%04llx flags=%04llx used=%llu allocated=%llu firstattr=%llu usa_offset=%llu usa_count=%llu record_bytes=%llu sector_bytes=%lu usa_stride=512\n",
                 static_cast<unsigned long long>(requested), static_cast<unsigned long long>(output.FileReferenceNumber.QuadPart),
                 static_cast<unsigned long long>(sequence), static_cast<unsigned long long>(flags),
                 static_cast<unsigned long long>(used), static_cast<unsigned long long>(allocated),
@@ -199,10 +200,10 @@ void diagnoseRefresh(const QString& root, qint64 initialCursor,
                 || !load(static_cast<std::size_t>(usaOffset), 2, updateSequence)) {
                 std::fprintf(stderr, "NATIVE_NTFS_DIAGNOSTIC_USA_BOUNDS=INVALID\n"); continue;
             }
-            const quint64 sectors = std::min<quint64>(8, std::min<quint64>(usaCount - 1, length / geometry.BytesPerSector));
+            const quint64 sectors = std::min<quint64>(8, std::min<quint64>(usaCount - 1, length / usaStride));
             for (quint64 sector = 0; sector < sectors; ++sector) {
                 quint64 tail = 0, replacement = 0;
-                const auto tailOffset = static_cast<std::size_t>((sector + 1) * geometry.BytesPerSector - 2);
+                const auto tailOffset = static_cast<std::size_t>((sector + 1) * usaStride - 2);
                 const auto replacementOffset = static_cast<std::size_t>(usaOffset + (sector + 1) * 2);
                 if (!load(tailOffset, 2, tail) || !load(replacementOffset, 2, replacement)) break;
                 std::fprintf(stderr, "NATIVE_NTFS_DIAGNOSTIC_SECTOR index=%llu tail=%04llx update_sequence=%04llx replacement=%04llx\n",

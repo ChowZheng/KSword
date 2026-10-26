@@ -109,6 +109,105 @@ static Bytes FsctlRecord(Bytes bytes)
     return bytes;
 }
 
+// Storage sectors are 4096 bytes here; the NTFS USA stride stays 512 bytes.
+// Keep the original 1 KiB fixture independent of this record-size variation.
+static Bytes Record4Kn(const std::vector<Bytes>& attributes, std::size_t usaOffset = 48)
+{
+    Bytes bytes(4096);
+    Put(bytes, 0, 0x454c4946, 4);
+    Put(bytes, 4, usaOffset, 2);
+    Put(bytes, 6, 9, 2);
+    Put(bytes, 16, 7, 2);
+    const std::size_t firstAttribute = (usaOffset + 18 + 7) & ~std::size_t{7};
+    Put(bytes, 20, firstAttribute, 2);
+    Put(bytes, 22, 1, 2);
+    Put(bytes, 28, bytes.size(), 4);
+    std::size_t position = firstAttribute;
+    for (const auto& attribute : attributes)
+    {
+        assert(position + attribute.size() + 4 < bytes.size());
+        std::copy(attribute.begin(), attribute.end(), bytes.begin() + position);
+        position += attribute.size();
+    }
+    Put(bytes, position, 0xffffffffU, 4);
+    Put(bytes, 24, position + 4, 4);
+    Put(bytes, usaOffset, 0xa55a, 2);
+    for (std::size_t stride = 0; stride < 8; ++stride)
+    {
+        const std::size_t tail = (stride + 1) * 512 - 2;
+        bytes[usaOffset + (stride + 1) * 2] = bytes[tail];
+        bytes[usaOffset + (stride + 1) * 2 + 1] = bytes[tail + 1];
+        Put(bytes, tail, 0xa55a, 2);
+    }
+    return bytes;
+}
+
+static void Test4Kn()
+{
+    ParsedRecord parsed;
+    std::vector<MftStreamPart> parts;
+    std::vector<std::uint64_t> references;
+    const auto raw = Record4Kn({Nonresident()});
+    assert(ParseRecord(raw.data(), raw.size(), 4096, 0, parsed));
+    assert(parsed.sizeKnown && parsed.logicalBytes == 12500);
+    assert(ParseMftStreamParts(raw.data(), raw.size(), 4096, parts, references));
+    assert(parts.size() == 1 && parts[0].extents[0].startLcn == 20);
+    const auto logical = FsctlRecord(raw);
+    assert(ParseRecord(logical.data(), logical.size(), 4096, 0, parsed, RecordFormat::FileSystemControl));
+    assert(ParseMftStreamParts(logical.data(), logical.size(), 4096, parts, references, RecordFormat::FileSystemControl));
+    assert(parts.size() == 1 && parts[0].extents[0].startLcn == 20);
+    for (const std::size_t tail : {510U, 1022U, 4094U})
+    {
+        auto torn = raw;
+        Put(torn, tail, 0, 2);
+        assert(!ParseRecord(torn.data(), torn.size(), 4096, 0, parsed));
+        assert(!ParseMftStreamParts(torn.data(), torn.size(), 4096, parts, references));
+    }
+    auto falseStorageStride = raw;
+    Put(falseStorageStride, 6, 2, 2); // A single 4 KiB tail is not the NTFS USA layout.
+    for (const auto format : {RecordFormat::RawDisk, RecordFormat::FileSystemControl})
+    {
+        assert(!ParseRecord(falseStorageStride.data(), falseStorageStride.size(), 4096, 0, parsed, format));
+        assert(!ParseMftStreamParts(falseStorageStride.data(), falseStorageStride.size(), 4096, parts, references, format));
+    }
+    // The array may end at 510, before the first 512-byte stride's last word.
+    const auto boundary = Record4Kn({Nonresident()}, 492);
+    assert(ParseMftStreamParts(boundary.data(), boundary.size(), 4096, parts, references));
+    const auto logicalBoundary = FsctlRecord(boundary);
+    assert(ParseMftStreamParts(logicalBoundary.data(), logicalBoundary.size(), 4096,
+        parts, references, RecordFormat::FileSystemControl));
+    const auto overlappingArray = Record4Kn({Nonresident()}, 494);
+    for (const auto format : {RecordFormat::RawDisk, RecordFormat::FileSystemControl})
+    {
+        assert(!ParseRecord(overlappingArray.data(), overlappingArray.size(), 4096, 0, parsed, format));
+        assert(!ParseMftStreamParts(overlappingArray.data(), overlappingArray.size(), 4096, parts, references, format));
+    }
+    std::u16string name(240, u'a');
+    const auto namedRaw = Record4Kn({Resident(0x30, Name(5, name)), Resident(0x80, Bytes(17))});
+    assert(ParseRecord(namedRaw.data(), namedRaw.size(), 4096, 1, parsed) && parsed.names[0].name == name);
+    auto cachedName = FsctlRecord(namedRaw);
+    Put(cachedName, 510, u'新', 2); // Cached FILE_NAME data can change after fixup.
+    name[174] = u'新';
+    assert(ParseRecord(cachedName.data(), cachedName.size(), 4096, 1, parsed, RecordFormat::FileSystemControl));
+    assert(parsed.names[0].name == name);
+    Put(cachedName, 510, 0xa55a, 2); Put(cachedName, 4094, 0xa55a, 2);
+    name[174] = static_cast<char16_t>(0xa55a);
+    assert(ParseRecord(cachedName.data(), cachedName.size(), 4096, 1, parsed, RecordFormat::FileSystemControl));
+    assert(parsed.names[0].name == name); // A logical marker must not restore stale USA data.
+    auto mappingAttribute = Nonresident();
+    mappingAttribute.resize(80); Put(mappingAttribute, 4, 80, 4);
+    Put(mappingAttribute, 32, 68, 2); Put(mappingAttribute, 64, 0, 4);
+    Put(mappingAttribute, 68, 0x31, 1); Put(mappingAttribute, 69, 4, 1);
+    Put(mappingAttribute, 70, 20, 3); Put(mappingAttribute, 73, 0, 1);
+    auto cachedMapping = FsctlRecord(Record4Kn({Resident(0x70, Bytes(344)), mappingAttribute}));
+    Put(cachedMapping, 510, 30, 2); // Mapping LCN crosses the first USA stride.
+    assert(ParseMftStreamParts(cachedMapping.data(), cachedMapping.size(), 4096, parts, references, RecordFormat::FileSystemControl));
+    assert(parts.size() == 1 && parts[0].extents[0].startLcn == 30);
+    Put(cachedMapping, 510, 0xa55a, 2);
+    assert(ParseMftStreamParts(cachedMapping.data(), cachedMapping.size(), 4096, parts, references, RecordFormat::FileSystemControl));
+    assert(parts[0].extents[0].startLcn == 0xa55a);
+}
+
 int main()
 {
     ParsedRecord parsed;
@@ -387,6 +486,7 @@ int main()
     Put(standard, 32, 0x2020, 4);
     b = Record({Resident(0x10, standard), Resident(0x30, Name(5, u"flags")), data});
     assert(ParseRecord(b.data(), b.size(), 512, 1, parsed) && parsed.attributes == 0x2020);
+    Test4Kn();
     std::mt19937 generator(0x1234);
     for (unsigned i = 0; i < 5000; ++i)
     {

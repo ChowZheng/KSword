@@ -2,6 +2,7 @@
 
 - 文件 → MFT 搜索与空间分布（`file.tab.ntfs_index`）由 `FileDock/NtfsSearchPage` 承载，使用 `ParameterWorkspace`；搜索与空间分布共用 `NtfsFastIndex` 不可变快照。查询/卷探测/汇总/排序在后台，表格使用共享 ResultTableHost，定位走 FileDock 原异步导航并显示隐藏/系统项。
 - `NtfsIndexRecord` 是 Qt/Windows 无关的 FILE/USA/属性和 MFT 映射解析器；raw 记录严格验证 USA，FSCTL 返回格式有显式入口。默认 DATA 的逻辑/分配大小与实际卷已用空间不同；硬链接以完整文件引用去重，扩展名称按基础记录身份合并，无法计量的大小显式报告。
+- FILE 的 USA 格式步长固定512字节，不能用卷的逻辑扇区大小计算 count、tail 或首块边界。4096B FILE 在4Kn卷上仍有9个 USA 项；raw I/O 长度、偏移和缓冲对齐继续按真实卷几何处理。
 - `FSCTL_GET_NTFS_FILE_RECORD` 返回 NTFS 已恢复的逻辑记录；缓存修改后 sector tail 可与旧 USA 数组不同，甚至恰好等于保护标记。`FileSystemControl` 入口保留逻辑字节，不再依赖旧 USA 判断一致性或二次恢复；`RawDisk` 才严格验证并恢复 USA。`ParseMftStreamParts` 必须遵守同一格式边界，受控 FSCTL 夹具也必须返回真实的已恢复表示。
 - 索引只读，不创建/删除 Journal。扫描前取 USN 游标，扫描后核对 MFT 布局并重放；日志身份/保留范围变化须重建，失败保留旧快照。活动卷不是 VSS 原子快照；不支持的 MFT 映射/属性列表明确失败，不能以部分结果冒充完整成功。
 - `$MFT` 自身的非驻留 `$ATTRIBUTE_LIST` 按完整有界映射读取（最多16MiB）并核对扩展记录身份；不能因属性列表非驻留而直接拒绝普通卷。扫描前后只比较真实 runlist、记录身份和有效长度，不能把整条 FILE 的 LSN/USA/时间变化误报为映射变化。raw 卷句柄可能隐式 noncached，MFT/属性列表读取须对齐缓冲；碎片化 extent 的后续目标地址也要经对齐 scratch 再拼接。

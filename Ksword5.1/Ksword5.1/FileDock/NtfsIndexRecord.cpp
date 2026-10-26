@@ -9,6 +9,10 @@ namespace ks::files::ntfs
 {
     namespace
     {
+        // NTFS multi-sector protection uses 512-byte strides, independently of
+        // the volume's logical/physical sector size used for raw device I/O.
+        constexpr std::size_t kUsaStride = 512;
+
         // Byte-wise loads also work on unaligned fields and non-little-endian hosts.
         std::uint64_t Load(const std::vector<std::byte>& bytes,
             const std::size_t offset, const std::size_t width)
@@ -132,17 +136,17 @@ namespace ks::files::ntfs
             return false;
         const auto usaOffset = static_cast<std::size_t>(Load(bytes, 4, 2));
         const auto usaCount = static_cast<std::size_t>(Load(bytes, 6, 2));
-        const auto sectors = length / bytesPerSector;
+        const auto sectors = length / kUsaStride;
         if (usaCount != sectors + 1 || usaOffset < 42 || (usaOffset & 1U)
             || !Within(usaOffset, usaCount * 2, length)
-            || usaOffset + usaCount * 2 > bytesPerSector - 2)
+            || usaOffset + usaCount * 2 > kUsaStride - 2)
             return false;
         if (format == RecordFormat::RawDisk)
         {
             const auto updateSequence = Load(bytes, usaOffset, 2);
             for (std::size_t sector = 0; sector < sectors; ++sector)
             {
-                const auto tail = (sector + 1) * bytesPerSector - 2;
+                const auto tail = (sector + 1) * kUsaStride - 2;
                 if (Load(bytes, tail, 2) != updateSequence) return false;
                 bytes[tail] = bytes[usaOffset + (sector + 1) * 2];
                 bytes[tail + 1] = bytes[usaOffset + (sector + 1) * 2 + 1];
@@ -347,9 +351,9 @@ namespace ks::files::ntfs
         if (format == RecordFormat::RawDisk)
         {
             const auto usa = static_cast<std::size_t>(Load(bytes, 4, 2));
-            for (std::size_t sector = 0; sector < length / bytesPerSector; ++sector)
+            for (std::size_t sector = 0; sector < length / kUsaStride; ++sector)
             {
-                const auto tail = (sector + 1) * bytesPerSector - 2;
+                const auto tail = (sector + 1) * kUsaStride - 2;
                 bytes[tail] = bytes[usa + (sector + 1) * 2];
                 bytes[tail + 1] = bytes[usa + (sector + 1) * 2 + 1];
             }

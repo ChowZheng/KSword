@@ -35,7 +35,8 @@ namespace ks::files::ntfs
         bool attributeListResident = true;
     };
 
-    // Parses one FILE record. RawDisk strictly verifies and restores USA tails.
+    // Parses one FILE record. RawDisk strictly verifies/restores 512-byte USA
+    // strides; bytesPerSector is volume I/O geometry, never the fixup stride.
     // FileSystemControl requires NTFS's already-fixed-up logical API output:
     // preserve its tail bytes, which may have changed since the USA was built.
     // False means malformed/torn data; output is reset on failure. Valid unused
