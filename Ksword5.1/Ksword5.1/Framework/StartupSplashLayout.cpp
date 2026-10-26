@@ -71,28 +71,79 @@ namespace ks::splash
                 (2.0f * static_cast<float>(emHeight));
         }
 
-        // MeasureString使用与DrawString相同的GenericTypographic格式，返回逻辑宽度。
+        // 字体单元包含不可见留白；对齐必须使用随后实际填充的同一份字形轮廓。
+        bool textOutline(const std::wstring& value, const Gdiplus::Font& font,
+            const Gdiplus::StringFormat& format, Gdiplus::GraphicsPath& path,
+            Gdiplus::RectF& ink)
+        {
+            if (value.empty())
+                return false;
+            Gdiplus::FontFamily family; // 当前三个字号均为UnitPixel，轮廓坐标与页脚逻辑像素一致。
+            if (font.GetFamily(&family) != Gdiplus::Ok ||
+                path.AddString(value.c_str(), -1, &family, font.GetStyle(), font.GetSize(),
+                    Gdiplus::PointF(0.0f, 0.0f), &format) != Gdiplus::Ok ||
+                path.GetPointCount() == 0 || path.GetBounds(&ink) != Gdiplus::Ok)
+                return false;
+            return ink.Width > 0.0f && ink.Height > 0.0f;
+        }
+
+        // 测量和绘制共用字形边界，不再把GDI+附加的前后留白当成片段宽度。
         float textWidth(Gdiplus::Graphics& graphics, const std::wstring& value,
             const Gdiplus::Font& font, const Gdiplus::StringFormat& format)
         {
             if (value.empty())
                 return 0.0f;
-            Gdiplus::RectF measured;
+            Gdiplus::GraphicsPath path;
+            Gdiplus::RectF ink;
+            if (textOutline(value, font, format, path, ink))
+                return ink.Width;
+            Gdiplus::RectF measured; // 字体异常或无轮廓时保留既有原生文本回退。
             if (graphics.MeasureString(value.c_str(), -1, &font,
                     Gdiplus::PointF(0.0f, 0.0f), &format, &measured) != Gdiplus::Ok)
                 return 0.0f;
             return std::max(0.0f, measured.Width);
         }
 
-        // 文本顶点由实际字体上升量反推，使不同字重的可见基线一致。
+        // 元信息保持共同基线，横向起点则精确落在可见字形左沿。
         void drawAtBaseline(Gdiplus::Graphics& graphics, const std::wstring& value,
             const Gdiplus::Font& font, const Gdiplus::StringFormat& format,
             const Gdiplus::Brush& brush, float x, float baseline)
         {
             if (value.empty())
                 return;
+            Gdiplus::GraphicsPath path;
+            Gdiplus::RectF ink;
+            if (textOutline(value, font, format, path, ink))
+            {
+                Gdiplus::Matrix placement(1.0f, 0.0f, 0.0f, 1.0f,
+                    x - ink.X, baseline - fontAscent(font)); // 保留字体基线，不把下伸部挤进同一黑框。
+                path.Transform(&placement);
+                graphics.FillPath(&brush, &path);
+                return;
+            }
             graphics.DrawString(value.c_str(), -1, &font,
                 Gdiplus::PointF(x, baseline - fontAscent(font)), &format, &brush);
+        }
+
+        // 品牌与状态按可见墨迹中心定位；CJK与百分比字高不同也能真正居中。
+        void drawAtVisualCenter(Gdiplus::Graphics& graphics, const std::wstring& value,
+            const Gdiplus::Font& font, const Gdiplus::StringFormat& format,
+            const Gdiplus::Brush& brush, float x, float center)
+        {
+            if (value.empty())
+                return;
+            Gdiplus::GraphicsPath path;
+            Gdiplus::RectF ink;
+            if (textOutline(value, font, format, path, ink))
+            {
+                Gdiplus::Matrix placement(1.0f, 0.0f, 0.0f, 1.0f,
+                    x - ink.X, center - ink.Y - ink.Height * 0.5f);
+                path.Transform(&placement);
+                graphics.FillPath(&brush, &path);
+                return;
+            }
+            drawAtBaseline(graphics, value, font, format, brush, x,
+                centeredBaseline(font, center)); // 仅字体无法提供轮廓时使用字体单元回退。
         }
 
         // 对Unicode代理项边界做保护，省略符不会拆开一个补充平面字符。
@@ -216,7 +267,7 @@ namespace ks::splash
             else
                 drawLogoFallback(graphics);
 
-            Gdiplus::Font font(L"Segoe UI", 44.0f, Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
+            Gdiplus::Font font(L"Segoe UI", 44.0f, Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
             Gdiplus::StringFormat format(Gdiplus::StringFormat::GenericTypographic());
             configureOneLine(format);
             const float titleWidth = std::max(0.0f, width * 0.5f - 16.0f - 112.0f); // 随窗口宽度收缩，而非侵入状态组。
@@ -225,8 +276,8 @@ namespace ks::splash
             graphics.SetClip(Gdiplus::RectF(112.0f, kBrandRowTop, titleWidth, kBrandRowHeight),
                 Gdiplus::CombineModeIntersect);
             Gdiplus::SolidBrush brush(Gdiplus::Color(255, 245, 248, 253));
-            drawAtBaseline(graphics, visible, font, format, brush,
-                112.0f, centeredBaseline(font, kBrandCenter));
+            drawAtVisualCenter(graphics, visible, font, format, brush,
+                112.0f, kBrandCenter);
             graphics.Restore(state);
         }
     }
@@ -294,8 +345,12 @@ namespace ks::splash
             const float currentWidth = pieceWidth(graphics, piece, font, format);
             if (piece.kind == PieceKind::Badge)
             {
-                const float top = kMetadataBaseline - fontAscent(font) - 3.0f;
-                const float height = fontSize + 7.0f;
+                Gdiplus::GraphicsPath glyphs; // 标签边框围住实际PRE墨迹，而不是整块字体单元。
+                Gdiplus::RectF ink;
+                const bool measured = textOutline(piece.value, font, format, glyphs, ink);
+                const float inkTop = kMetadataBaseline - fontAscent(font) + (measured ? ink.Y : 0.0f);
+                const float top = inkTop - 3.0f;
+                const float height = (measured ? ink.Height : fontSize) + 6.0f;
                 Gdiplus::Pen border(accent, 0.8f);
                 Gdiplus::GraphicsPath shape;
                 const float diameter = 6.0f;
@@ -334,12 +389,11 @@ namespace ks::splash
     void drawStatus(Gdiplus::Graphics& graphics, float width,
         const std::wstring& status, bool showPercent, int percent)
     {
-        // 百分比仅在确定模式存在；状态与数字同14px常规字体，并与品牌行共用垂直中心。
+        // 百分比仅在确定模式存在；状态与数字同14px常规字体、同前景色，并按真实可见字形与品牌行共用中心。
         Gdiplus::Font font(L"Microsoft YaHei UI", 14.0f,
             Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
         Gdiplus::StringFormat format(Gdiplus::StringFormat::GenericTypographic());
         configureOneLine(format);
-        const float baseline = centeredBaseline(font, kBrandCenter); // 上下两种字号按同一中心对齐。
         const std::wstring percentText = showPercent
             ? std::to_wstring(std::clamp(percent, 0, 100)) + L"%" : std::wstring();
         const float percentWidth = textWidth(graphics, percentText, font, format);
@@ -356,12 +410,11 @@ namespace ks::splash
         const Gdiplus::GraphicsState state = graphics.Save();
         graphics.SetClip(statusBounds(width), Gdiplus::CombineModeIntersect);
         Gdiplus::SolidBrush statusBrush(Gdiplus::Color(255, 211, 220, 233));
-        Gdiplus::SolidBrush percentBrush(Gdiplus::Color(255, 169, 184, 205));
-        drawAtBaseline(graphics, visibleStatus, font, format,
-            statusBrush, x, baseline);
+        drawAtVisualCenter(graphics, visibleStatus, font, format,
+            statusBrush, x, kBrandCenter);
         x += statusWidth + visibleGap;
-        drawAtBaseline(graphics, percentText, font, format,
-            percentBrush, x, baseline);
+        drawAtVisualCenter(graphics, percentText, font, format,
+            statusBrush, x, kBrandCenter);
         graphics.Restore(state);
     }
 }

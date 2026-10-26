@@ -67,7 +67,7 @@ namespace
     };
 
     const std::array<ContributorEntry, 2> contributorEntries = {{
-        {QStringLiteral("WangWei_CM."), QStringLiteral("一个臭写C++的"),
+        {QStringLiteral("WangWei_CM"), QStringLiteral("一个臭写C++的"),
          QStringLiteral(":/Image/Resource/Logo/WangWei_CM..jpg"),
          {QStringLiteral("网站 ->"), QString()}, {QStringLiteral("Bilibili ->"), QString("https://space.bilibili.com/1627165457?spm_id_from=333.337.0.0")}},
         {QStringLiteral("OB_BUFF"), QString(),
