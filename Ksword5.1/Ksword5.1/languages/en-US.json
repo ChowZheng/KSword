@@ -3385,7 +3385,7 @@
     "main.startup.legal.third_party": "Third-party components are listed in the third_party/ directory.",
     "main.startup.link.website": "https://ksword.dev",
     "main.startup.link.repository": "https://github.com/KSwordDEV/KSword",
-    "main.startup.brand.build_compact": "Build %1",
+    "main.startup.brand.build_compact": "Built on %1",
     "main.startup.legal.copyright_compact": "© 2023–2026 KSword contributors",
     "main.startup.progress.completed": "Startup complete",
     "main.startup.progress.starting": "Starting...",
@@ -7328,7 +7328,7 @@
     "notification.copy.log_template": "%1\n%2\n%3\nFile: %4\nFunction: %5\nGUID: %6"
   },
   "source_translations": {
-    "构建 %1": "Build %1",
+    "构建于 %1": "Built on %1",
     "© 2023–2026 KSword contributors": "© 2023–2026 KSword contributors",
     "查看内存": "View memory",
     "转到入口点": "Go to entry point",

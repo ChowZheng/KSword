@@ -27,7 +27,7 @@ namespace
 {
     constexpr wchar_t kWindowClass[] = L"KswordFrameworkSplashWindow";
     // 画布高度跟随原图比例；简洁信息区贴底，外沿方角且底轨与窗口同宽。
-    constexpr int kBaseWidth = 896; // 当前16:9原图对应整数逻辑尺寸896×504。
+    constexpr int kBaseWidth = 832; // 当前16:9原图对应832×468，比上一版缩小一档。
     constexpr float kTrackX = 0.0f;
     constexpr float kTrackWidth = static_cast<float>(kBaseWidth);
     constexpr float kTrackHeight = 4.0f; // 加粗底轨与填充，仍使用同一高度计算恢复和裁剪区域。
@@ -518,7 +518,6 @@ private:
             footer.buildTime = m_buildTime;
             footer.authors = m_authors;
             footer.copyright = m_copyright;
-            footer.website = m_website;
             mode = m_mode;
             accentRgb = m_accentRgb;
             footer.accentRgb = accentRgb;
@@ -779,7 +778,7 @@ private:
     int m_imageHeight = 0;
     int m_width = kBaseWidth;
     float m_canvasHeight = static_cast<float>(kBaseWidth) * 9.0f / 16.0f; // 加载后由实际图片宽高覆盖。
-    int m_height = 504; // 图片加载成功后立即按真实比例更新，先于工作区布局。
+    int m_height = 468; // 图片加载成功后立即按真实比例更新，先于工作区布局。
     int m_x = 0;
     int m_y = 0;
     UINT m_dpi = 96;

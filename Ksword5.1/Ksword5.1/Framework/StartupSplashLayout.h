@@ -20,7 +20,6 @@ namespace ks::splash
         std::wstring buildTime; // 已本地化的构建标签、日期与时间。
         std::wstring authors; // 两位作者沿发行元数据的分隔符传入。
         std::wstring copyright; // 右侧短版权说明。
-        std::wstring website; // 右侧站点地址，绘制时只显示域名或路径。
         unsigned int accentRgb = 0x4C8DEBU; // 阶段徽标与主进度共用的RGB强调色。
     };
 

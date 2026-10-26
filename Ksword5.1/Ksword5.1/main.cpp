@@ -1588,7 +1588,7 @@ int main(int argc, char* argv[])
     kSplash.setBrandingText(
         L"KSword",
         localizedStartupText(QStringLiteral("main.startup.brand.build_compact"),
-            QStringLiteral("构建 %1")).arg(ks::app::releaseBuildTimeText()).toStdWString(),
+            QStringLiteral("构建于 %1")).arg(ks::app::releaseBuildTimeText()).toStdWString(),
         ks::app::releaseAuthorsText().toStdWString());
     kSplash.setLegalText(
         localizedStartupText(QStringLiteral("main.startup.legal.copyright_compact"),
