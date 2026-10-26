@@ -156,10 +156,10 @@ void exercise(const QString& root, const QString& work)
     const QString link = native(directory.filePath(QStringLiteral("b/payload-link.bin")));
     const QString secondLink = native(directory.filePath(QStringLiteral("a/payload-second.bin")));
     const QString removed = native(directory.filePath(QStringLiteral("delete-me.bin")));
-    const QString small = native(directory.filePath(QStringLiteral("small.txt")));
+    const QString smallFilePath = native(directory.filePath(QStringLiteral("small.txt")));
     const QString duringScan = native(directory.filePath(QStringLiteral("during-scan.bin")));
     const QByteArray payload(128 * 1024 + 73, 'Q');
-    writeFile(original, payload); writeFile(removed, QByteArray(8192, 'D')); writeFile(small, QByteArray(17, 's'));
+    writeFile(original, payload); writeFile(removed, QByteArray(8192, 'D')); writeFile(smallFilePath, QByteArray(17, 's'));
     require(::CreateHardLinkW(link.toStdWString().c_str(), original.toStdWString().c_str(), nullptr)
         && ::CreateHardLinkW(secondLink.toStdWString().c_str(), original.toStdWString().c_str(), nullptr),
         QStringLiteral("Cannot create real NTFS hard links"));
