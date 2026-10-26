@@ -30,7 +30,7 @@ public:
         const std::wstring& thirdParty, const std::wstring& website,
         const std::wstring& repository);
     void setProgressMode(SplashProgressMode mode);
-    // RGB value in 0xRRGGBB form. Defaults to Ksword's #43A0FF.
+    // RGB value in 0xRRGGBB form. Defaults to #4C8DEB.
     void setAccentColorRgb(unsigned int rgb);
     bool show(const std::string& initialStatusText = std::string());
     void hide();

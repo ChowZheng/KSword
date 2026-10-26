@@ -1922,6 +1922,9 @@
     <ClCompile Include="Framework\StartupSplash.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="Framework\StartupSplashLayout.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="ksword\file\file_handle_tools.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -3346,6 +3349,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="Framework\StartupSplash.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Framework\StartupSplashLayout.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="Framework\ReleaseMetadata.h">

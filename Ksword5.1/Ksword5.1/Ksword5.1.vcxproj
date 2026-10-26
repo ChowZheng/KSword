@@ -224,6 +224,7 @@
     <ClCompile Include="Framework\ProgressDockWidget.cpp" />
     <ClCompile Include="Framework\CustomTitleBar.cpp" />
     <ClCompile Include="Framework\StartupSplash.cpp" />
+    <ClCompile Include="Framework\StartupSplashLayout.cpp" />
     <ClCompile Include="ksword\file\file_handle_tools.cpp" />
     <ClCompile Include="ksword\file\file_metadata_transaction.cpp" />
     <ClCompile Include="ksword\file\pe_analyzer.cpp" />
@@ -913,6 +914,7 @@
     <ClInclude Include="Framework\ProgressDockWidget.h" />
     <ClInclude Include="Framework\TaskSnapshotFeed.h" />
     <ClInclude Include="Framework\StartupSplash.h" />
+    <ClInclude Include="Framework\StartupSplashLayout.h" />
     <ClInclude Include="Framework\ReleaseMetadata.h" />
     <ClInclude Include="KernelDock\KernelDockAtomWorker.h" />
     <ClInclude Include="KernelDock\KernelKnowledgeCatalog.h" />

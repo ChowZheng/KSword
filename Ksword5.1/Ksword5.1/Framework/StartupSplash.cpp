@@ -7,6 +7,7 @@
 #include <objidl.h>
 #include <propidl.h>
 #include <gdiplus.h>
+#include "StartupSplashLayout.h"
 
 #include <algorithm>
 #include <atomic>
@@ -27,15 +28,9 @@ namespace
     constexpr wchar_t kWindowClass[] = L"KswordFrameworkSplashWindow";
     // 画布高度跟随原图比例；简洁信息区贴底，外沿方角且底轨与窗口同宽。
     constexpr int kBaseWidth = 896; // 当前16:9原图对应整数逻辑尺寸896×504。
-    constexpr float kFooterHeight = 270.0f; // 只约束信息区编排，不约束背景或窗口比例。
-    constexpr float kContentX = 44.0f; // 品牌与元信息共用左对齐线。
     constexpr float kTrackX = 0.0f;
     constexpr float kTrackWidth = static_cast<float>(kBaseWidth);
-    constexpr float kTrackHeight = 2.0f;
-    constexpr float kStatusY = 166.0f;
-    constexpr float kPercentWidth = 46.0f;
-    constexpr float kPercentX = kBaseWidth - kContentX - kPercentWidth; // 保留与左侧相同的44px边距。
-    constexpr float kStatusHeight = 24.0f;
+    constexpr float kTrackHeight = 4.0f; // 加粗底轨与填充，仍使用同一高度计算恢复和裁剪区域。
     constexpr UINT kShowMessage = WM_APP + 1;
     constexpr UINT kHideMessage = WM_APP + 2;
     constexpr UINT kRedrawMessage = WM_APP + 3;
@@ -104,86 +99,6 @@ namespace
         const UINT dpi = screen != nullptr ? static_cast<UINT>(GetDeviceCaps(screen, LOGPIXELSX)) : 96;
         if (screen != nullptr) ReleaseDC(nullptr, screen);
         return std::max(96U, dpi);
-    }
-
-    void roundedRectangle(Gdiplus::GraphicsPath& outline, float x, float y,
-        float width, float height, float radius)
-    {
-        const float diameter = 2.0f * std::min(radius, std::min(width, height) * 0.5f);
-        outline.AddArc(x, y, diameter, diameter, 180.0f, 90.0f);
-        outline.AddArc(x + width - diameter, y, diameter, diameter, 270.0f, 90.0f);
-        outline.AddArc(x + width - diameter, y + height - diameter,
-            diameter, diameter, 0.0f, 90.0f);
-        outline.AddArc(x, y + height - diameter, diameter, diameter, 90.0f, 90.0f);
-        outline.CloseFigure();
-    }
-
-    void fillRoundedRectangle(Gdiplus::Graphics& graphics, const Gdiplus::Brush& brush,
-        float x, float y, float width, float height, float radius)
-    {
-        if (width <= 0.0f || height <= 0.0f) return;
-        Gdiplus::GraphicsPath outline;
-        roundedRectangle(outline, x, y, width, height, radius);
-        graphics.FillPath(&brush, &outline);
-    }
-
-    // 统一原生文本度量与省略行为；多行元信息只在静态缓存重建时排版。
-    void drawSplashText(Gdiplus::Graphics& graphics, const std::wstring& text,
-        const Gdiplus::Font& font, const Gdiplus::RectF& bounds,
-        const Gdiplus::Brush& brush, Gdiplus::StringAlignment alignment,
-        bool multiline = false)
-    {
-        Gdiplus::StringFormat format(Gdiplus::StringFormat::GenericTypographic()); // 使用同一字体测量模型。
-        format.SetAlignment(alignment);
-        format.SetLineAlignment(multiline ? Gdiplus::StringAlignmentNear : Gdiplus::StringAlignmentCenter);
-        if (!multiline)
-            format.SetFormatFlags(format.GetFormatFlags() | Gdiplus::StringFormatFlagsNoWrap);
-        format.SetTrimming(Gdiplus::StringTrimmingEllipsisCharacter);
-        graphics.DrawString(text.c_str(), -1, &font, bounds, &format, &brush);
-    }
-
-    // 版本直接取发行元数据；数字与阶段后缀分开显示，不解析本地化产品标题。
-    struct SplashVersion final
-    {
-        std::wstring number; // 发行数字部分。
-        std::wstring stage; // PRE/RC等原版本后缀，空值不显示徽标。
-    };
-
-    SplashVersion splitSplashVersion(const std::wstring& version)
-    {
-        const size_t suffix = version.find_first_not_of(L"0123456789."); // 只处理标准数字版本前缀。
-        if (suffix == 0 || suffix == std::wstring::npos)
-            return {version, {}};
-        SplashVersion result{version.substr(0, suffix), version.substr(suffix)};
-        const size_t first = result.stage.find_first_not_of(L" -+"); // 分隔符不是阶段名的一部分。
-        result.stage = first == std::wstring::npos ? std::wstring() : result.stage.substr(first);
-        for (wchar_t& letter : result.stage)
-            if (letter >= L'a' && letter <= L'z') letter = static_cast<wchar_t>(letter - L'a' + L'A');
-        return result;
-    }
-
-    // 只做展示换行：编译时间保留日期/时间两行，两个作者按原分隔符折行。
-    std::wstring splashBuildLines(std::wstring text)
-    {
-        const size_t separator = text.find_last_of(L' '); // 末尾空格后应是hh:mm:ss，而不是本地化标签。
-        if (separator != std::wstring::npos && text.find(L':', separator) != std::wstring::npos)
-            text[separator] = L'\n';
-        return text;
-    }
-
-    std::wstring splashAuthorLines(std::wstring text)
-    {
-        const size_t separator = text.find(L" · "); // 与ReleaseMetadata共用的作者列表分隔符。
-        if (separator != std::wstring::npos) text.replace(separator, 3, L"\n");
-        return text;
-    }
-
-    std::wstring splashWebsiteLabel(std::wstring text)
-    {
-        const size_t scheme = text.find(L"://"); // 启动摘要仅显示域名/路径，完整URL仍由调用方保存。
-        if (scheme != std::wstring::npos) text.erase(0, scheme + 3);
-        while (!text.empty() && text.back() == L'/') text.pop_back();
-        return text;
     }
 
     // Own selected DIBs for the splash UI thread; pixels stay premultiplied.
@@ -367,7 +282,6 @@ public:
         {
             std::lock_guard<std::mutex> lock(m_stateMutex);
             const std::wstring nextStatus = status.empty() ? L"Ksword" : status;
-            if (m_status != nextStatus) ++m_staticRevision;
             m_status = nextStatus;
             m_percent = 0;
             ++m_stateRevision;
@@ -413,8 +327,7 @@ public:
             if ((status.empty() || m_status == status) && m_percent == clamped) return;
             if (!status.empty() && m_status != status)
             {
-                m_status = status;
-                ++m_staticRevision;
+                m_status = status; // 状态改由动态组缓存，不使整张背景重新采样。
             }
             m_percent = clamped;
             ++m_stateRevision;
@@ -521,6 +434,7 @@ private:
         if (!GetMonitorInfoW(monitor, &info)) return;
         const int oldX = m_x, oldY = m_y, oldWidth = m_width, oldHeight = m_height;
         const UINT oldDpi = m_dpi;
+        const float oldScale = m_scale; // 物理尺寸取整不变时，字体/恢复矩形也需跟随真实比例更新。
         m_dpi = windowDpi(window);
         const int workWidth = info.rcWork.right - info.rcWork.left;
         const int workHeight = info.rcWork.bottom - info.rcWork.top;
@@ -531,7 +445,7 @@ private:
         m_height = std::max(1, static_cast<int>(std::lround(m_canvasHeight * m_scale)));
         m_x = info.rcWork.left + (workWidth - m_width) / 2;
         m_y = info.rcWork.top + (workHeight - m_height) / 2;
-        if (oldX != m_x || oldY != m_y || oldWidth != m_width || oldHeight != m_height || oldDpi != m_dpi)
+        if (oldX != m_x || oldY != m_y || oldWidth != m_width || oldHeight != m_height || oldDpi != m_dpi || oldScale != m_scale)
             ++m_geometryRevision;
         if (window != nullptr)
             SetWindowPos(window, HWND_TOPMOST, m_x, m_y, m_width, m_height,
@@ -591,12 +505,7 @@ private:
     bool paint(HDC target, bool force = false)
     {
         std::wstring status;
-        std::wstring title;
-        std::wstring version; // 原始数字版本与阶段标签，不含本地化产品标题。
-        std::wstring buildTime;
-        std::wstring authors;
-        std::wstring copyright;
-        std::wstring website;
+        ks::splash::FooterText footer; // 品牌/版本/日期/作者及版权作为同一份静态页脚数据。
         SplashProgressMode mode;
         unsigned int accentRgb;
         int percent;
@@ -604,14 +513,15 @@ private:
         {
             std::lock_guard<std::mutex> lock(m_stateMutex);
             status = m_status;
-            title = m_title;
-            version = m_version;
-            buildTime = m_buildTime;
-            authors = m_authors;
-            copyright = m_copyright;
-            website = m_website;
+            footer.title = m_title;
+            footer.version = m_version;
+            footer.buildTime = m_buildTime;
+            footer.authors = m_authors;
+            footer.copyright = m_copyright;
+            footer.website = m_website;
             mode = m_mode;
             accentRgb = m_accentRgb;
+            footer.accentRgb = accentRgb;
             percent = m_percent;
             revision = m_stateRevision;
             staticRevision = m_staticRevision;
@@ -623,17 +533,20 @@ private:
             return true;
 
         // 原图很宽时信息区整体等比缩小，仍完整留在图内；普通底图只需平移到底部。
-        const float footerScale = std::min(1.0f, m_canvasHeight / kFooterHeight);
+        const float footerScale = std::min(1.0f, m_canvasHeight / ks::splash::FooterHeight);
         const float footerX = static_cast<float>(kBaseWidth) * (1.0f - footerScale) * 0.5f;
-        const float footerY = m_canvasHeight - kFooterHeight * footerScale;
+        const float footerY = m_canvasHeight - ks::splash::FooterHeight * footerScale;
         const float trackY = m_canvasHeight - kTrackHeight; // 静态轨道、恢复、裁剪与动态填充共用此位置。
-        const Gdiplus::RectF percentBounds(footerX + kPercentX * footerScale,
-            footerY + kStatusY * footerScale, kPercentWidth * footerScale, kStatusHeight * footerScale);
+        const Gdiplus::RectF localStatusBounds = ks::splash::statusBounds(static_cast<float>(kBaseWidth));
+        const Gdiplus::RectF statusBounds(footerX + localStatusBounds.X * footerScale,
+            footerY + localStatusBounds.Y * footerScale,
+            localStatusBounds.Width * footerScale, localStatusBounds.Height * footerScale); // 恢复区覆盖同一行的状态与百分比。
         const bool resized = m_staticSurface.width != m_width || m_staticSurface.height != m_height ||
             m_frame.width != m_width || m_frame.height != m_height;
         if (!m_staticSurface.ensure(m_width, m_height) || !m_frame.ensure(m_width, m_height)) return false;
         const bool rebuildStatic = resized || staticRevision != m_cachedStaticRevision ||
             m_geometryRevision != m_cachedStaticGeometryRevision;
+        const bool redrawStatus = rebuildStatic || force || revision != m_paintedRevision; // 静止动画帧不重复测量或绘制文字。
         if (rebuildStatic)
         {
             // UpdateLayeredWindow requires premultiplied RGB and per-pixel alpha.
@@ -655,68 +568,9 @@ private:
             graphics.TranslateTransform(footerX, footerY, Gdiplus::MatrixOrderPrepend);
             graphics.ScaleTransform(footerScale, footerScale, Gdiplus::MatrixOrderPrepend);
 
-            // 品牌下移到画布下半部，保留上方背景留白；图标与标题共用中线。
-            if (m_logo)
-                graphics.DrawImage(m_logo.get(), Gdiplus::RectF(kContentX, 136.0f, 52.0f, 52.0f));
-            else
-            {
-                Gdiplus::SolidBrush fallback(Gdiplus::Color(255, 28, 70, 125)); // 图标缺失沿用既有回退能力。
-                fillRoundedRectangle(graphics, fallback, kContentX, 136.0f, 52.0f, 52.0f, 10.0f);
-            }
-            Gdiplus::SolidBrush heading(Gdiplus::Color(255, 245, 248, 253)); // 品牌文字保持不透明。
-            Gdiplus::Font headingFont(L"Segoe UI", 44.0f, Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
-            drawSplashText(graphics, title, headingFont,
-                Gdiplus::RectF(112.0f, 128.0f, 420.0f, 68.0f), heading, Gdiplus::StringAlignmentNear);
-
-            // 版本、阶段、编译日期/时间和两位作者使用一排紧凑列，避免堆叠法律正文。
-            const SplashVersion release = splitSplashVersion(version); // 数字与PRE后缀有独立身份。
-            Gdiplus::Font metadataFont(L"Consolas", 12.5f, Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
-            Gdiplus::SolidBrush metadata(Gdiplus::Color(255, 174, 187, 205));
-            Gdiplus::SolidBrush separator(Gdiplus::Color(255, 93, 108, 130));
-            Gdiplus::StringFormat measureFormat(Gdiplus::StringFormat::GenericTypographic());
-            Gdiplus::RectF measured; // 根据版本实际宽度推进后续列，不依赖当前版本位数。
-            graphics.MeasureString(release.number.c_str(), -1, &metadataFont,
-                Gdiplus::PointF(0.0f, 0.0f), &measureFormat, &measured);
-            const float numberWidth = std::clamp(measured.Width + 2.0f, 56.0f, 100.0f);
-            drawSplashText(graphics, release.number, metadataFont,
-                Gdiplus::RectF(kContentX, 209.0f, numberWidth, 20.0f), metadata, Gdiplus::StringAlignmentNear);
-            float nextX = kContentX + numberWidth + 10.0f; // 阶段为空时不保留空徽标。
-            if (!release.stage.empty())
-            {
-                const Gdiplus::Color accent(255, static_cast<BYTE>((accentRgb >> 16) & 0xffU),
-                    static_cast<BYTE>((accentRgb >> 8) & 0xffU), static_cast<BYTE>(accentRgb & 0xffU));
-                Gdiplus::SolidBrush stageBrush(accent); // 阶段框与真实进度共用主题强调色。
-                Gdiplus::Pen stagePen(accent, 0.8f);
-                Gdiplus::GraphicsPath badge; // 小徽标可圆角，窗口和底轨仍为方角。
-                roundedRectangle(badge, nextX, 209.0f, 38.0f, 19.0f, 3.0f);
-                graphics.DrawPath(&stagePen, &badge);
-                drawSplashText(graphics, release.stage, metadataFont,
-                    Gdiplus::RectF(nextX + 2.0f, 209.0f, 34.0f, 19.0f), stageBrush, Gdiplus::StringAlignmentCenter);
-                nextX += 50.0f;
-            }
-            drawSplashText(graphics, L"/", metadataFont, Gdiplus::RectF(nextX, 209.0f, 10.0f, 20.0f),
-                separator, Gdiplus::StringAlignmentCenter);
-            const float buildX = nextX + 18.0f; // 日期和时间占同一列的两行。
-            Gdiplus::Font bodyFont(L"Microsoft YaHei UI", 12.0f, Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
-            drawSplashText(graphics, splashBuildLines(buildTime), bodyFont,
-                Gdiplus::RectF(buildX, 208.0f, 150.0f, 38.0f), metadata, Gdiplus::StringAlignmentNear, true);
-            drawSplashText(graphics, L"/", metadataFont, Gdiplus::RectF(buildX + 158.0f, 209.0f, 10.0f, 20.0f),
-                separator, Gdiplus::StringAlignmentCenter);
-            drawSplashText(graphics, splashAuthorLines(authors), metadataFont,
-                Gdiplus::RectF(buildX + 178.0f, 208.0f, 162.0f, 38.0f), metadata, Gdiplus::StringAlignmentNear, true);
-
-            // 状态与百分比分槽；精简版权和域名在同一右对齐线，不再显示段落与双链接。
-            Gdiplus::Font statusFont(L"Microsoft YaHei UI", 14.0f, Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
-            Gdiplus::SolidBrush statusBrush(Gdiplus::Color(255, 211, 220, 233));
-            drawSplashText(graphics, status, statusFont,
-                Gdiplus::RectF(kPercentX - 236.0f, kStatusY, 224.0f, kStatusHeight), statusBrush, Gdiplus::StringAlignmentFar);
-            Gdiplus::SolidBrush legalBrush(Gdiplus::Color(255, 153, 168, 188));
-            drawSplashText(graphics, copyright, bodyFont,
-                Gdiplus::RectF(kBaseWidth - kContentX - 288.0f, 205.0f, 288.0f, 19.0f), legalBrush, Gdiplus::StringAlignmentFar);
-            drawSplashText(graphics, splashWebsiteLabel(website), bodyFont,
-                Gdiplus::RectF(kBaseWidth - kContentX - 288.0f, 225.0f, 288.0f, 19.0f), legalBrush, Gdiplus::StringAlignmentFar);
+            ks::splash::drawFooter(graphics, static_cast<float>(kBaseWidth), m_logo.get(), footer);
             graphics.Restore(footerState); // 底轨不随信息区缩窄，始终覆盖完整窗口宽度。
-            Gdiplus::SolidBrush track(Gdiplus::Color(105, 159, 177, 202)); // 全宽细底轨不描窗口外沿。
+            Gdiplus::SolidBrush track(Gdiplus::Color(20, 255, 255, 255)); // 全宽细底轨不描窗口外沿。
             graphics.FillRectangle(&track, kTrackX, trackY, kTrackWidth, kTrackHeight);
             graphics.Flush(Gdiplus::FlushIntentionSync);
             m_cachedStaticRevision = staticRevision;
@@ -727,10 +581,11 @@ private:
             std::memcpy(m_frame.pixels, m_staticSurface.pixels, stride * m_height);
         else
         {
-            // 百分比和底轨各自恢复完整预乘像素；其余背景和文字复用原静态缓存。
+            // 底轨每帧恢复；状态组仅在数据变化或强制重画时恢复，滑动动画不重绘文字。
             restoreSplashRectangle(m_frame, m_staticSurface,
                 Gdiplus::RectF(kTrackX, trackY, kTrackWidth, kTrackHeight), m_scale);
-            restoreSplashRectangle(m_frame, m_staticSurface, percentBounds, m_scale);
+            if (redrawStatus)
+                restoreSplashRectangle(m_frame, m_staticSurface, statusBounds, m_scale);
         }
         {
             Gdiplus::Bitmap surface(m_width, m_height, m_width * 4,
@@ -741,21 +596,17 @@ private:
             const int accentRed = static_cast<int>((accentRgb >> 16) & 0xFFU);
             const int accentGreen = static_cast<int>((accentRgb >> 8) & 0xFFU);
             const int accentBlue = static_cast<int>(accentRgb & 0xFFU);
-            Gdiplus::SolidBrush indicator(Gdiplus::Color(240,
+            Gdiplus::SolidBrush indicator(Gdiplus::Color(255,
                 static_cast<BYTE>(accentRed), static_cast<BYTE>(accentGreen),
                 static_cast<BYTE>(accentBlue)));
-            // 仅确定模式显示真实百分比；不定进度阶段不制造假的完成数值。
-            if (mode == SplashProgressMode::Determinate)
+            // 状态与真实百分比作为一组绘制；不确定模式省略数字，整体仍右对齐。
+            if (redrawStatus)
             {
-                const Gdiplus::GraphicsState footerState = graphics.Save(); // 数字与静态状态采用相同贴底变换。
+                const Gdiplus::GraphicsState footerState = graphics.Save();
                 graphics.TranslateTransform(footerX, footerY, Gdiplus::MatrixOrderPrepend);
                 graphics.ScaleTransform(footerScale, footerScale, Gdiplus::MatrixOrderPrepend);
-                const std::wstring percentage = std::to_wstring(percent) + L"%";
-                Gdiplus::Font percentFont(L"Consolas", 12.5f, Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
-                Gdiplus::SolidBrush percentBrush(Gdiplus::Color(255, 169, 184, 205));
-                drawSplashText(graphics, percentage, percentFont,
-                    Gdiplus::RectF(kPercentX, kStatusY, kPercentWidth, kStatusHeight),
-                    percentBrush, Gdiplus::StringAlignmentFar);
+                ks::splash::drawStatus(graphics, static_cast<float>(kBaseWidth), status,
+                    mode == SplashProgressMode::Determinate, percent);
                 graphics.Restore(footerState);
             }
             graphics.SetClip(Gdiplus::RectF(kTrackX, trackY, kTrackWidth, kTrackHeight));
@@ -776,7 +627,7 @@ private:
                     const float fadeIn = std::min(1.0f, phase / 90.0f);
                     const float fadeOut = std::min(1.0f, (kTravelMs - phase) / 90.0f);
                     Gdiplus::SolidBrush movingIndicator(Gdiplus::Color(
-                        static_cast<BYTE>(240.0f * std::min(fadeIn, fadeOut)),
+                        static_cast<BYTE>(255.0f * std::min(fadeIn, fadeOut)),
                         static_cast<BYTE>(accentRed), static_cast<BYTE>(accentGreen),
                         static_cast<BYTE>(accentBlue)));
                     graphics.FillRectangle(&movingIndicator, segmentX, trackY, segmentWidth, kTrackHeight);
@@ -908,10 +759,10 @@ private:
     std::wstring m_website;
     std::wstring m_repository;
     SplashProgressMode m_mode = SplashProgressMode::Determinate;
-    unsigned int m_accentRgb = 0x43A0FFU;
+    unsigned int m_accentRgb = 0x4C8DEBU; // 默认采用用户指定的进度蓝。
     int m_percent = 0;
     std::uint64_t m_stateRevision = 1; // Protected by m_stateMutex.
-    std::uint64_t m_staticRevision = 1; // Background/text inputs only, under the same mutex.
+    std::uint64_t m_staticRevision = 1; // 仅背景/品牌/元信息输入，加载状态由动态组绘制。
     std::uint64_t m_paintedRevision = 0; // Splash UI thread only.
     std::uint64_t m_geometryRevision = 1;
     std::uint64_t m_paintedGeometryRevision = 0;
