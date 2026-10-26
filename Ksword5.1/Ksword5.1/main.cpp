@@ -1582,6 +1582,8 @@ int main(int argc, char* argv[])
     applyQtScaleFactorEnvironment(startupSettings.startupWindowScaleFactor);
     startupTraceRaw("after applyQtScaleFactorEnvironment");
 
+    // 在原生线程创建前读取已保存的样式，运行期复用不重新加载图片。
+    kSplash.setPresentation(startupSettings.startupSplashLayout, startupSettings.startupSplashBackground);
     kSplash.setProgressMode(SplashProgressMode::Determinate);
     // 简版横幅独立呈现产品名称、版本阶段和紧凑元信息，继续共用唯一发行元数据。
     kSplash.setVersionText(ks::app::releaseVersionText().toStdWString());

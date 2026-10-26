@@ -743,6 +743,16 @@ void SettingsDock::applySettingsToUi(const ks::settings::AppearanceSettings& set
         m_startupWindowScaleSpin->setValue(
             windowScalePercentFromFactor(settings.startupWindowScaleFactor));
     }
+    if (m_startupSplashLayoutCombo != nullptr)
+    {
+        m_startupSplashLayoutCombo->setCurrentIndex(m_startupSplashLayoutCombo->findData(
+            static_cast<int>(normalizeSplashLayout(static_cast<int>(settings.startupSplashLayout)))));
+    }
+    if (m_startupSplashBackgroundCombo != nullptr)
+    {
+        m_startupSplashBackgroundCombo->setCurrentIndex(m_startupSplashBackgroundCombo->findData(
+            static_cast<int>(normalizeSplashBackground(static_cast<int>(settings.startupSplashBackground)))));
+    }
 
     if (m_detailSchemeCombo != nullptr)
     {
@@ -852,6 +862,12 @@ ks::settings::AppearanceSettings SettingsDock::collectSettingsFromUi() const
         (m_preventMultipleInstancesCheckBox == nullptr) || m_preventMultipleInstancesCheckBox->isChecked();
     collectMcpSettingsFromUi(collectedSettings);
     collectedSettings.startupWindowScaleFactor = parseWindowScaleFactorFromUi();
+    collectedSettings.startupSplashLayout = m_startupSplashLayoutCombo != nullptr
+        ? normalizeSplashLayout(m_startupSplashLayoutCombo->currentData().toInt())
+        : m_currentAppearanceSettings.startupSplashLayout;
+    collectedSettings.startupSplashBackground = m_startupSplashBackgroundCombo != nullptr
+        ? normalizeSplashBackground(m_startupSplashBackgroundCombo->currentData().toInt())
+        : m_currentAppearanceSettings.startupSplashBackground;
     // 该开关来自启动前弹窗，不在设置页编辑；这里保留内存值，避免保存时被覆盖。
     collectedSettings.startupScaleRecommendPromptDisabled =
         m_currentAppearanceSettings.startupScaleRecommendPromptDisabled;
@@ -1229,6 +1245,8 @@ void SettingsDock::saveAndEmitFromUi(const QString& triggerReason)
         && nextSettings.mcpAutoStart == m_currentAppearanceSettings.mcpAutoStart
         && nextSettings.mcpPythonCommand == m_currentAppearanceSettings.mcpPythonCommand
         && nextSettings.mcpSidecarScriptPath == m_currentAppearanceSettings.mcpSidecarScriptPath
+        && nextSettings.startupSplashLayout == m_currentAppearanceSettings.startupSplashLayout
+        && nextSettings.startupSplashBackground == m_currentAppearanceSettings.startupSplashBackground
         && sameScaleFactor
         && nextSettings.startupScaleRecommendPromptDisabled == m_currentAppearanceSettings.startupScaleRecommendPromptDisabled
         && nextSettings.unlockerShellContextMenuEnabled == m_currentAppearanceSettings.unlockerShellContextMenuEnabled

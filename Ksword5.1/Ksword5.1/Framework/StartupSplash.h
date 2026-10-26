@@ -9,6 +9,31 @@ enum class SplashProgressMode
     Indeterminate
 };
 
+// 枚举值写入设置文件，保持稳定；旧配置默认沿用当前的简化居中样式。
+enum class SplashLayoutStyle
+{
+    LeftRight = 0,
+    Vertical = 1,
+    VerticalCompact = 2
+};
+
+enum class SplashBackgroundStyle
+{
+    Code = 0,
+    BlueParticles = 1
+};
+
+// 配置、下拉框及原生入口共用同一合法值归一规则，非法值回到默认选项。
+constexpr SplashLayoutStyle normalizeSplashLayout(int value)
+{
+    return value == 0 ? SplashLayoutStyle::LeftRight
+        : value == 1 ? SplashLayoutStyle::Vertical : SplashLayoutStyle::VerticalCompact;
+}
+constexpr SplashBackgroundStyle normalizeSplashBackground(int value)
+{
+    return value == 1 ? SplashBackgroundStyle::BlueParticles : SplashBackgroundStyle::Code;
+}
+
 // The splash owns its Win32 UI thread so animation continues during startup work.
 // The API deliberately matches the existing kStartupSplash call sites.
 class kStartupSplash final
@@ -22,6 +47,8 @@ public:
     // If unset, loads the bundled Style\StartupLandscape.png next to the host executable.
     // Set before show(); the complete image determines the canvas aspect ratio without cropping or tinting.
     void setBackgroundImagePath(const std::wstring& path);
+    // 启动前设置布局与内置底图；设置页保存后在下次启动应用，不改变运行中窗口的图片句柄。
+    void setPresentation(SplashLayoutStyle layout, SplashBackgroundStyle background);
     // 发行版本独立于产品名称，数字和PRE/RC后缀在紧凑信息行显示。
     void setVersionText(const std::wstring& version);
     void setBrandingText(const std::wstring& title, const std::wstring& buildTime,

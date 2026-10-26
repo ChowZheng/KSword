@@ -9,6 +9,7 @@
 // ============================================================
 
 #include <QString>
+#include "../Framework/StartupSplash.h"
 
 namespace ks::settings
 {
@@ -134,6 +135,8 @@ namespace ks::settings
         bool mcpAutoStart = false; // 下次启动时是否自动开放本地对象桥。
         QString mcpPythonCommand = QStringLiteral("python"); // MCP 客户端使用的 Python 命令。
         QString mcpSidecarScriptPath; // 留空时根据当前程序位置寻找随源码提供的 sidecar。
+        SplashLayoutStyle startupSplashLayout = SplashLayoutStyle::VerticalCompact; // 启动图的三种排版，重启后生效。
+        SplashBackgroundStyle startupSplashBackground = SplashBackgroundStyle::Code; // 两张内置底图独立选择。
         double startupWindowScaleFactor = 1.0;
         bool startupScaleRecommendPromptDisabled = false;
         bool unlockerShellContextMenuEnabled = false;

@@ -219,6 +219,9 @@
     <None Include="Resource\Splash\StartupLandscape.png">
       <Filter>Resource Files</Filter>
     </None>
+    <None Include="Resource\Splash\StartupWindows.png">
+      <Filter>Resource Files</Filter>
+    </None>
     <QtRcc Include="Ksword5.qrc">
       <Filter>Resource Files</Filter>
     </QtRcc>
@@ -1155,6 +1158,9 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="SettingsDock\SettingsDock.Pages.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="SettingsDock\SettingsDock.StartupSplash.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="SettingsDock\SettingsDock.OnlineScan.cpp">

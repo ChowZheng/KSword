@@ -516,6 +516,7 @@
     <ClCompile Include="SettingsDock\SettingsDock.cpp" />
     <ClCompile Include="SettingsDock\SettingsDock.Appearance.cpp" />
     <ClCompile Include="SettingsDock\SettingsDock.Pages.cpp" />
+    <ClCompile Include="SettingsDock\SettingsDock.StartupSplash.cpp" />
     <ClCompile Include="ServerDock\ServiceDock.cpp" />
     <ClCompile Include="ServerDock\ServiceDock.Actions.cpp" />
     <ClCompile Include="ServerDock\ServiceDock.Advanced.cpp" />
@@ -1462,6 +1463,7 @@
     <None Include="languages\zh-CN.json" />
     <None Include="Resource\Logo\KswordLogo.png" />
     <None Include="Resource\Splash\StartupLandscape.png" />
+    <None Include="Resource\Splash\StartupWindows.png" />
   </ItemGroup>
   <Target Name="AuditKswordLanguagePacks" BeforeTargets="ClCompile" Condition="'$(KswordSkipI18nAudit)'!='true'">
     <PropertyGroup>
@@ -1492,14 +1494,16 @@
   <Target Name="CopyKswordSplashAssets" AfterTargets="Build">
     <PropertyGroup>
       <KswordSplashArt>$(MSBuildProjectDirectory)\Resource\Splash\StartupLandscape.png</KswordSplashArt>
+      <KswordSplashBlue>$(MSBuildProjectDirectory)\Resource\Splash\StartupWindows.png</KswordSplashBlue>
       <KswordSplashLogo>$(MSBuildProjectDirectory)\Resource\Logo\KswordLogo.png</KswordSplashLogo>
       <KswordSplashTargetDir>$(TargetDir)Style\</KswordSplashTargetDir>
     </PropertyGroup>
     <Error Condition="!Exists('$(KswordSplashArt)')" Text="KSword splash artwork was not found: $(KswordSplashArt)" />
+    <Error Condition="!Exists('$(KswordSplashBlue)')" Text="KSword blue splash artwork was not found: $(KswordSplashBlue)" />
     <Error Condition="!Exists('$(KswordSplashLogo)')" Text="KSword splash logo was not found: $(KswordSplashLogo)" />
     <MakeDir Directories="$(KswordSplashTargetDir)" />
-    <Copy SourceFiles="$(KswordSplashArt);$(KswordSplashLogo)"
-          DestinationFiles="$(KswordSplashTargetDir)StartupLandscape.png;$(KswordSplashTargetDir)KswordLogo.png"
+    <Copy SourceFiles="$(KswordSplashArt);$(KswordSplashLogo);$(KswordSplashBlue)"
+          DestinationFiles="$(KswordSplashTargetDir)StartupLandscape.png;$(KswordSplashTargetDir)KswordLogo.png;$(KswordSplashTargetDir)StartupWindows.png"
           SkipUnchangedFiles="true" />
   </Target>
   <!-- Qt Advanced Docking System 必须与 MSVC/Qt 运行时保持同一 ABI，并放在 exe 同目录，避免 PATH 捡到 MinGW 同名 DLL。 -->

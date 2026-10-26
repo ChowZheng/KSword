@@ -210,6 +210,67 @@ namespace ks::splash
             drawAtVisualCenter(graphics, visible, font, format, brush,
                 (width - visibleWidth) * 0.5f, centerY);
         }
+        // 单行元信息按真实字宽省略；日期时间和姓名不插入斜杠或硬换行。
+        void drawLeftLine(Gdiplus::Graphics& graphics, const std::wstring& text,
+            const Gdiplus::Font& font, const Gdiplus::StringFormat& format,
+            const Gdiplus::Brush& brush, float left, float center, float width)
+        {
+            const std::wstring visible = ellipsize(graphics, oneLine(text), font, format, width);
+            drawAtVisualCenter(graphics, visible, font, format, brush, left, center);
+        }
+
+        // 左右版复用完整源图作为右侧视觉区；文字集中于左列，不加半透明底板。
+        void drawLeftRight(Gdiplus::Graphics& graphics, float width, float height,
+            Gdiplus::Image* logo, const SplashText& text, float scale)
+        {
+            const float left = 64.0f * scale; // 与其它布局相同的参考稿外边距。
+            const float columnWidth = std::min(600.0f * scale, width * 0.43f - left);
+            const float logoSize = 96.0f * scale;
+            const Gdiplus::RectF logoBounds(left, 60.0f * scale, logoSize, logoSize);
+            if (logo != nullptr)
+                graphics.DrawImage(logo, logoBounds);
+            else
+                drawLogoFallback(graphics, logoBounds);
+            Gdiplus::StringFormat format(Gdiplus::StringFormat::GenericTypographic());
+            configureOneLine(format);
+            Gdiplus::Font titleFont(L"Segoe UI", 50.0f * scale,
+                Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
+            Gdiplus::SolidBrush titleBrush(Gdiplus::Color(255, 241, 243, 245));
+            drawLeftLine(graphics, text.title, titleFont, format, titleBrush,
+                left + 120.0f * scale, 108.0f * scale, columnWidth - 120.0f * scale);
+
+            Gdiplus::Font metadataFont(L"Microsoft YaHei UI", 24.0f * scale,
+                Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
+            Gdiplus::SolidBrush metadata(Gdiplus::Color(255, 174, 184, 198));
+            drawLeftLine(graphics, versionLabel(text.version), metadataFont, format, metadata,
+                left, 220.0f * scale, columnWidth);
+            drawLeftLine(graphics, text.buildTime, metadataFont, format, metadata,
+                left, 260.0f * scale, columnWidth);
+            drawLeftLine(graphics, text.authors, metadataFont, format, metadata,
+                left, 300.0f * scale, columnWidth);
+
+            // 许可正文有独立段落宽度和自然高度，不改变下方状态区的可用高度。
+            Gdiplus::StringFormat paragraph(Gdiplus::StringFormat::GenericTypographic());
+            paragraph.SetAlignment(Gdiplus::StringAlignmentNear);
+            paragraph.SetLineAlignment(Gdiplus::StringAlignmentNear);
+            paragraph.SetFormatFlags(paragraph.GetFormatFlags() & ~Gdiplus::StringFormatFlagsNoWrap);
+            paragraph.SetTrimming(Gdiplus::StringTrimmingEllipsisWord);
+            float top = 380.0f * scale;
+            for (const std::wstring* body : {&text.license, &text.thirdParty})
+            {
+                if (body->empty()) continue;
+                const float available = std::max(0.0f, height - 160.0f * scale - top);
+                if (available <= 0.0f) break;
+                const Gdiplus::RectF area(left, top, columnWidth, available);
+                Gdiplus::RectF measured;
+                graphics.MeasureString(body->c_str(), -1, &metadataFont, area, &paragraph, &measured);
+                const float bodyHeight = std::min(available, measured.Height + 2.0f * scale);
+                graphics.DrawString(body->c_str(), -1, &metadataFont,
+                    Gdiplus::RectF(left, top, columnWidth, bodyHeight), &paragraph, &metadata);
+                top += bodyHeight + 18.0f * scale;
+            }
+        }
+
     }
 
     Gdiplus::RectF drawStatic(Gdiplus::Graphics& graphics, float width, float height,
@@ -223,26 +284,44 @@ namespace ks::splash
         Gdiplus::StringFormat format(Gdiplus::StringFormat::GenericTypographic());
         configureOneLine(format);
 
-        // 参考稿中央图标位于297/900高度，完整显示原有透明Logo资源。
-        const float logoSize = 168.0f * scale;
-        const Gdiplus::RectF logoBounds((width - logoSize) * 0.5f,
-            height * (297.0f / kReferenceHeight) - logoSize * 0.5f, logoSize, logoSize);
-        if (logo != nullptr)
-            graphics.DrawImage(logo, logoBounds);
+        if (text.layout == SplashLayoutStyle::LeftRight)
+        {
+            drawLeftRight(graphics, width, height, logo, text, scale);
+        }
         else
-            drawLogoFallback(graphics, logoBounds);
+        {
+            // 参考稿中央图标位于297/900高度，完整显示原有透明Logo资源。
+            const float logoSize = 168.0f * scale;
+            const Gdiplus::RectF logoBounds((width - logoSize) * 0.5f,
+                height * (297.0f / kReferenceHeight) - logoSize * 0.5f, logoSize, logoSize);
+            if (logo != nullptr)
+                graphics.DrawImage(logo, logoBounds);
+            else
+                drawLogoFallback(graphics, logoBounds);
 
-        // 品牌与版本纵向居中排列；字体和色值取自用户提供的参考布局。
-        Gdiplus::Font titleFont(L"Segoe UI", 88.0f * scale,
-            Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
-        Gdiplus::SolidBrush titleBrush(Gdiplus::Color(255, 241, 243, 245));
-        drawCenteredLine(graphics, text.title, titleFont, format, titleBrush,
-            width, height * (487.5f / kReferenceHeight), margin);
-        Gdiplus::Font versionFont(L"Consolas", 28.0f * scale,
-            Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
-        Gdiplus::SolidBrush versionBrush(Gdiplus::Color(255, 140, 147, 158));
-        drawCenteredLine(graphics, versionLabel(text.version), versionFont, format, versionBrush,
-            width, height * (578.5f / kReferenceHeight), margin);
+            // 品牌与版本纵向居中排列；字体和色值取自用户提供的参考布局。
+            Gdiplus::Font titleFont(L"Segoe UI", 88.0f * scale,
+                Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
+            Gdiplus::SolidBrush titleBrush(Gdiplus::Color(255, 241, 243, 245));
+            drawCenteredLine(graphics, text.title, titleFont, format, titleBrush,
+                width, height * (487.5f / kReferenceHeight), margin);
+            Gdiplus::Font versionFont(L"Consolas", 28.0f * scale,
+                Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
+            Gdiplus::SolidBrush versionBrush(Gdiplus::Color(255, 140, 147, 158));
+            drawCenteredLine(graphics, versionLabel(text.version), versionFont, format, versionBrush,
+                width, height * (578.5f / kReferenceHeight), margin);
+
+            if (text.layout == SplashLayoutStyle::Vertical)
+            {
+                Gdiplus::Font metadataFont(L"Microsoft YaHei UI", 24.0f * scale,
+                    Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
+                Gdiplus::SolidBrush metadata(Gdiplus::Color(255, 140, 147, 158));
+                drawCenteredLine(graphics, text.buildTime, metadataFont, format, metadata,
+                    width, height * (660.0f / kReferenceHeight), margin);
+                drawCenteredLine(graphics, text.authors, metadataFont, format, metadata,
+                    width, height * (710.0f / kReferenceHeight), margin);
+            }
+        }
 
         // 版权右对齐并与状态共用可见中心线；动态状态区域按其真实宽度避让。
         Gdiplus::Font copyrightFont(L"Microsoft YaHei UI", 24.0f * scale,

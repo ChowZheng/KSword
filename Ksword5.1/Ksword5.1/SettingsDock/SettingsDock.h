@@ -99,6 +99,7 @@ private:
     // 各页只创建与排列控件；全部建立后统一连接待应用信号。
     void initializeLanguageTab();
     void initializeStartupTab();
+    void initializeStartupSplashSection(QVBoxLayout* layout); // 使用共享设置分区创建三种布局和两张底图选择。
     void initializeAppearanceSupplement(QVBoxLayout* appearanceRootLayout);
 
     // initializeFeaturesTab 作用：
@@ -478,6 +479,8 @@ private:
     QCheckBox* m_sliderWheelAdjustCheckBox = nullptr;
 
     // m_startupWindowScaleSpin 作用：设置下次启动主窗口的缩放百分比（50~200，重启生效）。
+    QComboBox* m_startupSplashLayoutCombo = nullptr; // 下次启动使用的布局，itemData保存稳定枚举值。
+    QComboBox* m_startupSplashBackgroundCombo = nullptr; // 下次启动使用的内置底图，与布局独立。
     QSpinBox* m_startupWindowScaleSpin = nullptr;
 
     // m_startupWindowScaleHintLabel 作用：说明缩放的生效时机与系统缩放的叠加关系。

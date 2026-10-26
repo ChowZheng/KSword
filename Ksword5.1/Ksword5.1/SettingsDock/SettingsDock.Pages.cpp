@@ -1,4 +1,4 @@
-﻿#include "SettingsDock.h"
+#include "SettingsDock.h"
 #include "./SettingsDock.Layout.h"
 #include "../Framework.h"
 #include "../Internationalization/LanguageManager.h"
@@ -223,6 +223,8 @@ void SettingsDock::initializeStartupTab()
 
     ks::settings::ui::Section(startupGroupBox);
     startupRootLayout->addWidget(startupGroupBox);
+    initializeStartupSplashSection(startupRootLayout);
+    startupRootLayout->setSpacing(20); // 分区留白大于区内行距，沿用外观页分区密度。
     startupRootLayout->addStretch();
 
     m_startupTab = ks::settings::ui::ScrollPage(m_startupTab);

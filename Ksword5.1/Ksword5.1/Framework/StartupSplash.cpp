@@ -203,6 +203,17 @@ public:
         if (!m_thread.joinable()) m_imagePath = path;
     }
 
+    // 内置资源选择只在首次show前接收，避免切换配置时与GDI+文件句柄并发。
+    void setPresentation(SplashLayoutStyle layout, SplashBackgroundStyle background)
+    {
+        std::lock_guard<std::mutex> lock(m_stateMutex);
+        if (m_thread.joinable()) return;
+        m_layout = normalizeSplashLayout(static_cast<int>(layout));
+        m_background = normalizeSplashBackground(static_cast<int>(background));
+        ++m_stateRevision;
+        ++m_staticRevision;
+    }
+
     void setBrandingText(const std::wstring& title, const std::wstring& buildTime,
         const std::wstring& authors)
     {
@@ -365,7 +376,9 @@ private:
         std::wstring path;
         {
             std::lock_guard<std::mutex> lock(m_stateMutex);
-            path = m_imagePath.empty() ? splashAssetPath(L"StartupLandscape.png") : m_imagePath;
+            const wchar_t* builtin = m_background == SplashBackgroundStyle::BlueParticles
+                ? L"StartupWindows.png" : L"StartupLandscape.png"; // 两个选项都从exe旁Style目录读取。
+            path = m_imagePath.empty() ? splashAssetPath(builtin) : m_imagePath;
         }
         m_image.reset(Gdiplus::Image::FromFile(path.c_str(), FALSE));
         if (!m_image || m_image->GetLastStatus() != Gdiplus::Ok ||
@@ -516,6 +529,17 @@ private:
             text.title = m_title;
             text.version = m_version;
             text.copyright = m_copyright;
+            text.layout = m_layout;
+            if (m_layout != SplashLayoutStyle::VerticalCompact)
+            {
+                text.buildTime = m_buildTime;
+                text.authors = m_authors;
+                if (m_layout == SplashLayoutStyle::LeftRight)
+                {
+                    text.license = m_license;
+                    text.thirdParty = m_thirdParty;
+                }
+            }
             mode = m_mode;
             accentRgb = m_accentRgb;
             percent = m_percent;
@@ -737,6 +761,8 @@ private:
     std::wstring m_thirdParty;
     std::wstring m_website;
     std::wstring m_repository;
+    SplashLayoutStyle m_layout = SplashLayoutStyle::VerticalCompact; // 此实例首次显示前固定的排版。
+    SplashBackgroundStyle m_background = SplashBackgroundStyle::Code; // 此实例首次显示前固定的内置背景。
     SplashProgressMode m_mode = SplashProgressMode::Determinate;
     unsigned int m_accentRgb = 0x4C8DEBU; // 默认采用用户指定的进度蓝。
     int m_percent = 0;
@@ -771,6 +797,10 @@ private:
 kStartupSplash::kStartupSplash() : m_impl(std::make_unique<Impl>()) {}
 kStartupSplash::~kStartupSplash() = default;
 void kStartupSplash::setBackgroundImagePath(const std::wstring& path) { m_impl->setBackgroundImagePath(path); }
+void kStartupSplash::setPresentation(SplashLayoutStyle layout, SplashBackgroundStyle background)
+{
+    m_impl->setPresentation(layout, background);
+}
 void kStartupSplash::setVersionText(const std::wstring& version) { m_impl->setVersionText(version); }
 void kStartupSplash::setBrandingText(const std::wstring& title, const std::wstring& buildTime,
     const std::wstring& authors) { m_impl->setBrandingText(title, buildTime, authors); }

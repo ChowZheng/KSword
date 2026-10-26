@@ -763,6 +763,12 @@ ks::settings::AppearanceSettings ks::settings::loadAppearanceSettings()
     loadedSettings.mcpSidecarScriptPath = rootObject.value(QStringLiteral("mcp_sidecar_script_path"))
         .toString().trimmed();
 
+    // 布局和底图独立持久化；缺项或非法值保留简化居中/汇编底图默认行为。
+    loadedSettings.startupSplashLayout = normalizeSplashLayout(rootObject
+        .value(QStringLiteral("startup_splash_layout")).toInt(static_cast<int>(loadedSettings.startupSplashLayout)));
+    loadedSettings.startupSplashBackground = normalizeSplashBackground(rootObject
+        .value(QStringLiteral("startup_splash_background")).toInt(static_cast<int>(loadedSettings.startupSplashBackground)));
+
     // startupWindowScaleFactor 作用：读取“启动窗口缩放因子”，兼容旧字段 window_scale_factor。
     double rawWindowScaleFactor = loadedSettings.startupWindowScaleFactor;
     if (rootObject.contains(QStringLiteral("startup_window_scale_factor")))
@@ -988,6 +994,10 @@ bool ks::settings::saveAppearanceSettings(const AppearanceSettings& settings, QS
     rootObject.insert(QStringLiteral("startup_auto_request_admin"), settings.autoRequestAdminOnStartup);
     rootObject.insert(QStringLiteral("startup_auto_install_r0_driver"), settings.startupAutoInstallR0Driver);
     rootObject.insert(QStringLiteral("prevent_multiple_instances"), settings.preventMultipleInstances);
+    rootObject.insert(QStringLiteral("startup_splash_layout"),
+        static_cast<int>(normalizeSplashLayout(static_cast<int>(settings.startupSplashLayout))));
+    rootObject.insert(QStringLiteral("startup_splash_background"),
+        static_cast<int>(normalizeSplashBackground(static_cast<int>(settings.startupSplashBackground))));
     // 客户端路径只生成可复制配置，不由主程序启动 Python 或修改客户端设置。
     rootObject.insert(QStringLiteral("mcp_auto_start"), settings.mcpAutoStart);
     rootObject.insert(QStringLiteral("mcp_python_command"), settings.mcpPythonCommand.trimmed());
