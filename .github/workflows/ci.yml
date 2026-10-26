@@ -414,6 +414,18 @@ jobs:
           }
           "KSWORD_QT_MSBUILD=$($targets.Directory.FullName)" | Add-Content -Path $env:GITHUB_ENV
 
+      - name: Check native NTFS indexing on an isolated scratch volume
+        shell: pwsh
+        run: |
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+          $vsPath = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath |
+            Select-Object -First 1
+          if (-not $vsPath) { throw 'Could not locate the x64 MSVC toolset.' }
+          $vcvars = Join-Path $vsPath 'VC\Auxiliary\Build\vcvars64.bat'
+          # The script only formats a new, verified temporary VHD and detaches it in finally.
+          cmd /c "`"$vcvars`" >nul && python -B tools\test_ntfs_backend_io.py --qt-root `"$env:QT_ROOT_DIR`" && pwsh -NoLogo -NoProfile -File tools\test_ntfs_volume_integration.ps1 -QtRoot `"$env:QT_ROOT_DIR`""
+          if ($LASTEXITCODE -ne 0) { throw 'Native NTFS index integration tests failed.' }
+
       - name: Check shared UI defaults and first-paint behavior
         shell: pwsh
         run: |

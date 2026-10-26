@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <limits>
 #include <utility>
+#include <unordered_set>
 
 namespace ks::files::ntfs
 {
@@ -35,6 +36,7 @@ namespace ks::files::ntfs
             const std::size_t start, const std::size_t end,
             const bool unnamedDataOnly, std::vector<std::uint64_t>& references)
         {
+            std::unordered_set<std::uint64_t> seen(references.begin(), references.end());
             auto entry = start;
             while (entry < end)
             {
@@ -50,7 +52,7 @@ namespace ks::files::ntfs
                 if (!unnamedDataOnly || (Load(bytes, entry, 4) == 0x80U && entryNameLength == 0))
                 {
                     const auto reference = Load(bytes, entry + 16, 8);
-                    if (std::find(references.begin(), references.end(), reference) == references.end())
+                    if (seen.insert(reference).second)
                         references.push_back(reference);
                 }
                 entry += entryLength;
@@ -339,10 +341,12 @@ namespace ks::files::ntfs
 
     bool ParseMftStreamParts(const std::byte* const input, const std::size_t length,
         const std::uint32_t bytesPerSector, std::vector<MftStreamPart>& parts,
-        std::vector<std::uint64_t>& extensionReferences, const RecordFormat format)
+        std::vector<std::uint64_t>& extensionReferences, const RecordFormat format,
+        std::vector<MftStreamPart>* const attributeListParts)
     {
         parts.clear();
         extensionReferences.clear();
+        if (attributeListParts) attributeListParts->clear();
         ParsedRecord record;
         if (!ParseRecord(input, length, bytesPerSector, 0, record, format) || !record.inUse)
             return false;
@@ -355,6 +359,7 @@ namespace ks::files::ntfs
             bytes[tail + 1] = bytes[usa + (sector + 1) * 2 + 1];
         }
         std::vector<MftStreamPart> foundParts;
+        std::vector<MftStreamPart> foundAttributeListParts;
         std::vector<std::uint64_t> foundReferences;
         auto position = static_cast<std::size_t>(Load(bytes, 20, 2));
         const auto used = static_cast<std::size_t>(Load(bytes, 24, 4));
@@ -382,16 +387,59 @@ namespace ks::files::ntfs
             }
             else if (type == 0x20U)
             {
+                if (nameLength != 0) return false;
                 if (nonresident)
-                    return false;
-                const auto value = position + static_cast<std::size_t>(Load(bytes, position + 20, 2));
-                const auto end = value + static_cast<std::size_t>(Load(bytes, position + 16, 4));
-                if (!ParseAttributeList(bytes, value, end, true, foundReferences))
-                    return false;
+                {
+                    if (!attributeListParts || Load(bytes, position + 12, 2) != 0
+                        || Load(bytes, position + 34, 2) != 0)
+                        return false;
+                    MftStreamPart part;
+                    part.lowestVcn = Load(bytes, position + 16, 8);
+                    part.highestVcn = Load(bytes, position + 24, 8);
+                    part.logicalBytes = Load(bytes, position + 48, 8);
+                    const auto allocated = Load(bytes, position + 40, 8);
+                    const auto initialized = Load(bytes, position + 56, 8);
+                    if (!ValidSize(part.lowestVcn) || !ValidSize(part.highestVcn)
+                        || part.highestVcn < part.lowestVcn
+                        || !ValidSize(part.logicalBytes) || !ValidSize(allocated)
+                        || !ValidSize(initialized) || initialized > part.logicalBytes
+                        || (part.lowestVcn == 0
+                            && (part.logicalBytes == 0 || initialized != part.logicalBytes))
+                        || !ParseMappingPairs(bytes,
+                            position + static_cast<std::size_t>(Load(bytes, position + 32, 2)),
+                            position + attributeLength, part)
+                        || std::any_of(part.extents.begin(), part.extents.end(),
+                            [](const DataExtent& extent) { return extent.sparse; }))
+                        return false;
+                    foundAttributeListParts.push_back(std::move(part));
+                }
+                else
+                {
+                    const auto value = position + static_cast<std::size_t>(Load(bytes, position + 20, 2));
+                    const auto end = value + static_cast<std::size_t>(Load(bytes, position + 16, 4));
+                    if (!ParseAttributeList(bytes, value, end, true, foundReferences))
+                        return false;
+                }
             }
             position += attributeLength;
         }
         parts = std::move(foundParts);
+        extensionReferences = std::move(foundReferences);
+        if (attributeListParts) *attributeListParts = std::move(foundAttributeListParts);
+        return true;
+    }
+
+    bool ParseMftAttributeList(const std::byte* const input, const std::size_t length,
+        std::vector<std::uint64_t>& extensionReferences)
+    {
+        extensionReferences.clear();
+        // The caller reads the complete bounded stream, never an allocation
+        // rounded to clusters whose tail may contain unrelated old bytes.
+        if (!input || length < 26 || length > 16U * 1024U * 1024U)
+            return false;
+        const std::vector<std::byte> bytes(input, input + length);
+        std::vector<std::uint64_t> foundReferences;
+        if (!ParseAttributeList(bytes, 0, length, true, foundReferences)) return false;
         extensionReferences = std::move(foundReferences);
         return true;
     }

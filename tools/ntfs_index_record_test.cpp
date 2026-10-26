@@ -174,9 +174,94 @@ int main()
     assert(parsed.hasAttributeList && !parsed.attributeListResident && !parsed.sizeKnown);
     assert(parsed.attributeReferences.empty());
     assert(!ParseMftStreamParts(b.data(), b.size(), 512, parts, refs));
+
+    // Mature/fragmented MFTs can store their attribute list in its own stream.
+    // The parser exposes its runs only when the caller opts into reading it.
+    Put(externalList, 48, 64, 8);
+    Put(externalList, 56, 64, 8);
+    b = Record({Nonresident(), externalList});
+    std::vector<MftStreamPart> listParts;
+    assert(!ParseMftStreamParts(b.data(), b.size(), 512, parts, refs));
+    assert(ParseMftStreamParts(b.data(), b.size(), 512, parts, refs,
+        RecordFormat::RawDisk, &listParts));
+    assert(parts.size() == 1 && refs.empty() && listParts.size() == 1);
+    assert(listParts[0].logicalBytes == 64 && listParts[0].lowestVcn == 0);
+    assert(listParts[0].extents.size() == 1
+        && listParts[0].extents[0].startLcn == 20
+        && listParts[0].extents[0].clusterCount == 4);
+    auto externalValue = list;
+    Put(externalValue, 0, 0x80, 4);
+    assert(ParseMftAttributeList(externalValue.data(), externalValue.size(), refs));
+    assert(refs.size() == 2 && refs[0] == 0x3000000000018ULL);
+    auto repeatedValue = externalValue;
+    Put(repeatedValue, 48, 0x3000000000018ULL, 8);
+    assert(ParseMftAttributeList(repeatedValue.data(), repeatedValue.size(), refs)
+        && refs.size() == 1);
+    auto filteredValue = externalValue;
+    Put(filteredValue, 0, 0x30, 4);
+    Put(filteredValue, 38, 1, 1); // Named $DATA is not the MFT stream.
+    Put(filteredValue, 39, 26, 1);
+    Put(filteredValue, 58, u'X', 2);
+    assert(ParseMftAttributeList(filteredValue.data(), filteredValue.size(), refs)
+        && refs.empty());
+    for (const std::size_t length : {0U, 1U, 25U, 31U, 33U, 63U})
+    {
+        refs.push_back(1);
+        assert(!ParseMftAttributeList(externalValue.data(), length, refs) && refs.empty());
+    }
+    auto badValue = externalValue;
+    Put(badValue, 36, 72, 2);
+    assert(!ParseMftAttributeList(badValue.data(), badValue.size(), refs) && refs.empty());
+    badValue = filteredValue;
+    Put(badValue, 39, 31, 1); // Name extends beyond the entry boundary.
+    assert(!ParseMftAttributeList(badValue.data(), badValue.size(), refs) && refs.empty());
+    for (const auto change : {0U, 1U, 2U, 3U, 4U, 5U, 6U, 7U})
+    {
+        auto invalidList = externalList;
+        if (change == 0) Put(invalidList, 12, 0x8000, 2); // Sparse lists are invalid.
+        if (change == 1) Put(invalidList, 34, 1, 2); // No compression unit.
+        if (change == 2) Put(invalidList, 24, 4, 8); // Mapping is too short for highest VCN.
+        if (change == 3) Put(invalidList, 48, UINT64_MAX, 8);
+        if (change == 4) Put(invalidList, 56, 63, 8); // No uninitialized list tail.
+        if (change == 5) Put(invalidList, 64, 0x01, 1); // A sparse mapping pair.
+        if (change == 6) Put(invalidList, 66, 0xff, 1); // LCN delta underflows zero.
+        if (change == 7) Put(invalidList, 67, 0xff, 1); // Missing mapping terminator.
+        b = Record({Nonresident(), invalidList});
+        refs.push_back(1);
+        assert(!ParseMftStreamParts(b.data(), b.size(), 512, parts, refs,
+            RecordFormat::RawDisk, &listParts));
+        assert(parts.empty() && refs.empty() && listParts.empty());
+    }
+    b = Record({Nonresident(), externalList});
+    auto brokenListRecord = b;
+    Put(brokenListRecord, 1022, 0, 2);
+    assert(!ParseMftStreamParts(brokenListRecord.data(), brokenListRecord.size(), 512,
+        parts, refs, RecordFormat::RawDisk, &listParts) && listParts.empty());
+    for (unsigned sector = 0; sector < 2; ++sector)
+    {
+        const auto tail = (sector + 1U) * 512U - 2;
+        b[tail] = b[50 + sector * 2];
+        b[tail + 1] = b[51 + sector * 2];
+    }
+    assert(!ParseMftStreamParts(b.data(), b.size(), 512, parts, refs,
+        RecordFormat::RawDisk, &listParts));
+    assert(ParseMftStreamParts(b.data(), b.size(), 512, parts, refs,
+        RecordFormat::FileSystemControl, &listParts) && listParts.size() == 1);
     Put(list, 4, 25, 2); // Every resident list entry is validated before publication.
     b = Record({data, Resident(0x20, list)});
     assert(!ParseRecord(b.data(), b.size(), 512, 1, parsed));
+
+    // External lists can span many clusters. Preserve reference order while
+    // deduplicating without quadratic work on the bounded on-disk stream.
+    Bytes largeList(32768 * 32);
+    for (std::size_t i = 0; i < 32768; ++i) {
+        Put(largeList, i * 32, 0x80, 4);
+        Put(largeList, i * 32 + 4, 32, 2);
+        Put(largeList, i * 32 + 16, (std::uint64_t{3} << 48) | (i % 16384), 8);
+    }
+    assert(ParseMftAttributeList(largeList.data(), largeList.size(), refs));
+    assert(refs.size() == 16384 && refs.front() == (std::uint64_t{3} << 48)
+        && refs.back() == ((std::uint64_t{3} << 48) | 16383));
 
     // A negative mapping-pair LCN delta is relative to the previous run.
     auto nonresident = Nonresident();

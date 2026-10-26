@@ -21,6 +21,7 @@ using WORD = std::uint16_t;
 constexpr int FALSE = 0;
 constexpr DWORD FSCTL_READ_USN_JOURNAL = 1;
 constexpr DWORD FILE_ATTRIBUTE_DIRECTORY = 16;
+constexpr DWORD ERROR_JOURNAL_NOT_ACTIVE = 1179, ERROR_JOURNAL_DELETE_IN_PROGRESS = 1178;
 struct READ_USN_JOURNAL_DATA_V0 {
     qint64 StartUsn = 0;
     DWORD ReasonMask = 0;
@@ -86,7 +87,7 @@ bool openVolume(const QString& requested, Volume& volume, QString& root, QString
     return true;
 }
 bool stopped(const NtfsFastIndex::Cancel& cancel) { return cancel && cancel->load(); }
-QString failure(const QString& operation) { return operation + QStringLiteral(" failed by fixture"); }
+QString failure(const QString& operation, DWORD code = 0) { return operation + QStringLiteral(" failed by fixture %1").arg(code); }
 enum class RecordResult { Present, Missing, Failed };
 RecordResult readRecord(Volume& volume, quint64 index, Bytes& bytes, QString& error)
 {
@@ -290,7 +291,8 @@ int main()
         if (mode == 5) io.pages = {Journal(100)};
         if (mode == 6) io.pages = {Bytes(4)};
         assert(!Replay(io, snapshot) && snapshot.nextUsn == 100 && !snapshot.error.isEmpty());
-        if (mode < 6) assert(snapshot.rebuildRequired);
+        if (mode < 6 && mode != 3) assert(snapshot.rebuildRequired);
+        if (mode == 3) assert(!snapshot.rebuildRequired && snapshot.error.contains(QStringLiteral("5")));
         ++scenarios;
     }
     {
