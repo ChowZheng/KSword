@@ -217,6 +217,8 @@ namespace
             m_statusText = ks::i18n::contextText(
                 QStringLiteral("handle.splash.render_list"),
                 QStringLiteral("渲染句柄列表到图形界面")).toUtf8().toStdString();
+            // 句柄行数已知，复用时显式恢复确定进度和数字百分比。
+            kSplash.setProgressMode(SplashProgressMode::Determinate);
             m_visible = kSplash.show(m_statusText);
             if (!m_visible)
             {

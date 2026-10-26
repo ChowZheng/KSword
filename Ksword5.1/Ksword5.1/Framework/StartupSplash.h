@@ -20,8 +20,10 @@ public:
     kStartupSplash& operator=(const kStartupSplash&) = delete;
 
     // If unset, loads the bundled Style\StartupLandscape.png next to the host executable.
-    // Set before show(); the image fills the 16:9 canvas beneath translucent panels.
+    // Set before show(); the image is cropped proportionally into the compact 10:3 canvas.
     void setBackgroundImagePath(const std::wstring& path);
+    // 发行版本独立于产品名称，数字和PRE/RC后缀在紧凑信息行显示。
+    void setVersionText(const std::wstring& version);
     void setBrandingText(const std::wstring& title, const std::wstring& buildTime,
         const std::wstring& authors);
     void setLegalText(const std::wstring& copyright, const std::wstring& license,

@@ -1327,7 +1327,9 @@ namespace
             startupTraceRaw("first_frame_painted");
             if (m_splashWindow != nullptr)
             {
-                m_splashWindow->progress("启动完成", 100);
+                m_splashWindow->progress(localizedStartupText(
+                    QStringLiteral("main.startup.progress.completed"),
+                    QStringLiteral("启动完成")).toUtf8().toStdString(), 100);
                 m_splashWindow->hide();
             }
             if (m_targetWindow != nullptr)
@@ -1581,16 +1583,16 @@ int main(int argc, char* argv[])
     startupTraceRaw("after applyQtScaleFactorEnvironment");
 
     kSplash.setProgressMode(SplashProgressMode::Determinate);
+    // 简版横幅独立呈现产品名称、版本阶段和紧凑元信息，继续共用唯一发行元数据。
+    kSplash.setVersionText(ks::app::releaseVersionText().toStdWString());
     kSplash.setBrandingText(
-        localizedStartupText(QStringLiteral("main.startup.brand.title"),
-            QStringLiteral("KSword %1")).arg(ks::app::releaseVersionText()).toStdWString(),
-        localizedStartupText(QStringLiteral("main.startup.brand.build_time"),
-            QStringLiteral("编译时间：%1")).arg(ks::app::releaseBuildTimeText()).toStdWString(),
-        localizedStartupText(QStringLiteral("main.startup.brand.authors"),
-            QStringLiteral("作者：%1")).arg(ks::app::releaseAuthorsText()).toStdWString());
+        L"KSword",
+        localizedStartupText(QStringLiteral("main.startup.brand.build_compact"),
+            QStringLiteral("构建 %1")).arg(ks::app::releaseBuildTimeText()).toStdWString(),
+        ks::app::releaseAuthorsText().toStdWString());
     kSplash.setLegalText(
-        localizedStartupText(QStringLiteral("main.startup.legal.copyright"),
-            QStringLiteral("Copyright © 2023-2026 KSword contributors and applicable copyright holders")).toStdWString(),
+        localizedStartupText(QStringLiteral("main.startup.legal.copyright_compact"),
+            QStringLiteral("© 2023–2026 KSword contributors")).toStdWString(),
         localizedStartupText(QStringLiteral("main.startup.legal.license"),
             QStringLiteral("Licensed under the KSword Community Source License 1.6 (source-available). See LICENSE for the full terms.")).toStdWString(),
         localizedStartupText(QStringLiteral("main.startup.legal.third_party"),

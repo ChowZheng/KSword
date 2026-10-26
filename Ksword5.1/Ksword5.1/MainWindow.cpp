@@ -2692,6 +2692,8 @@ namespace
                 return;
             }
 
+            // 运行期任务有真实百分比，不继承启动收尾遗留的不确定模式。
+            kSplash.setProgressMode(SplashProgressMode::Determinate);
             m_visible = kSplash.show(progressText(
                 QStringLiteral("main.runtime_appearance.progress.start"),
                 QStringLiteral("正在应用界面设置...")).toUtf8().toStdString());
