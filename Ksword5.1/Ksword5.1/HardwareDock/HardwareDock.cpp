@@ -1502,6 +1502,21 @@ namespace
         chartPointer->setMargins(QMargins(0, 0, 0, 0));
     }
 
+    // Let the native splitter allocate its initial left column from the real
+    // widget hint. A hidden tab must not consume a provisional constructor size.
+    class UtilizationSidebarList final : public QListWidget
+    {
+    public:
+        using QListWidget::QListWidget;
+
+        QSize sizeHint() const override
+        {
+            QSize hint = QListWidget::sizeHint();
+            hint.setWidth(300);
+            return hint;
+        }
+    };
+
     // configureCompressibleWidget 作用：
     // - 清掉控件默认最小尺寸，允许 Dock 窄宽/低高时继续压缩而不是请求外层滚动条；
     // - horizontalPolicy/verticalPolicy 用于按页面角色指定横纵向分配策略；
@@ -5077,19 +5092,8 @@ void HardwareDock::showEvent(QShowEvent* showEventPointer)
     ensureCurrentHardwarePageInitialized();
     refreshStaticHardwareTexts(false);
 
-    // splitter 在 Dock 首次显示前可能还没有最终宽度，因此分两轮尝试应用
-    // 300px 默认左栏；成功后不再覆盖用户后续拖动结果。
-    QTimer::singleShot(0, this, [this]()
-    {
-        applyInitialUtilizationSplitterSize();
-    });
-    QTimer::singleShot(80, this, [this]()
-    {
-        applyInitialUtilizationSplitterSize();
-    });
-
-    // 首次显示阶段分阶段重排，确保滚动区 viewport 高度已经稳定。
-    scheduleUtilizationLayoutRefresh();
+    // Native layout hints own the initial splitter width. Real resize, tab
+    // activation and device changes maintain chart geometry through their paths.
 }
 
 void HardwareDock::startPerformanceSampling(const SamplingScope scope)
@@ -5635,7 +5639,7 @@ void HardwareDock::initializeUtilizationTab()
         QSizePolicy::Expanding);
     m_utilizationLayout->addWidget(m_utilizationBodySplitter, 1);
 
-    m_utilizationSidebarList = new QListWidget(m_utilizationPage);
+    m_utilizationSidebarList = new UtilizationSidebarList(m_utilizationPage);
     m_utilizationSidebarList->setFrameShape(QFrame::NoFrame);
     m_utilizationSidebarList->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     // 设备数量较多时不能继续把缩略卡片压到不可读高度，改为保留卡片高度并允许左侧独立滚动。
@@ -5686,9 +5690,8 @@ void HardwareDock::initializeUtilizationTab()
         });
     m_utilizationBodySplitter->setStretchFactor(0, 0);
     m_utilizationBodySplitter->setStretchFactor(1, 1);
-    // 先给出可用的预置值；首次显示后 applyInitialUtilizationSplitterSize 会按实际
-    // splitter 可用宽度把左侧校准到 300px，之后完全保留用户拖动结果。
-    m_utilizationBodySplitter->setSizes({ 300, 360 });
+    // The sidebar's 300px preferred width and these stretch factors establish
+    // the first native allocation; later user sizes remain owned by QSplitter.
 
     // Keep the actual CPU/memory navigation identities without constructing detailed views.
     m_utilizationCpuSubPage = new QWidget(m_utilizationDetailStack);
@@ -6936,28 +6939,6 @@ void HardwareDock::saveUtilizationFloatingPreferences()
     preferences.utilizationFloatingFollowOffsetLogical = m_utilizationFollowOffsetLogical;
     preferences.utilizationFloatingFollowClickThrough = m_utilizationFollowClickThrough;
     ks::settings::saveAppearanceSettings(preferences);
-}
-
-void HardwareDock::applyInitialUtilizationSplitterSize()
-{
-    if (m_utilizationSplitterInitialSizeApplied
-        || m_utilizationBodySplitter == nullptr)
-    {
-        return;
-    }
-
-    const QList<int> currentSizes = m_utilizationBodySplitter->sizes();
-    const int availableWidth = currentSizes.value(0) + currentSizes.value(1);
-    if (availableWidth <= 0)
-    {
-        return;
-    }
-
-    const int maxLeftWidth = std::max(140, availableWidth - 360);
-    const int leftWidth = std::clamp(300, 140, maxLeftWidth);
-    m_utilizationBodySplitter->setSizes({ leftWidth, std::max(0, availableWidth - leftWidth) });
-    m_utilizationSplitterInitialSizeApplied = true;
-    syncUtilizationSidebarCardWidths();
 }
 
 void HardwareDock::syncUtilizationSidebarCardWidths()
@@ -8314,7 +8295,7 @@ void HardwareDock::initializeKeyboardMouseHidTab()
     m_keyboardMouseHidPage = createDeviceAuditPage(
         m_sideTabWidget,
         QStringLiteral("键盘、鼠标与其他输入设备"),
-        QStringLiteral("只读审计：键盘、鼠标、HID 与输入设备状态，默认不做消息截获与输入抓取。"),
+        QStringLiteral("查看键盘、鼠标、HID 与其他输入设备状态。"),
         &m_keyboardMouseHidEditor,
         &m_keyboardMouseHidTable);
     const int tabIndex = addHardwarePageTab(m_keyboardMouseHidPage, QStringLiteral("键盘与鼠标"));
@@ -8351,7 +8332,7 @@ void HardwareDock::initializeUsbTopologyTab()
     m_usbTopologyPage = createDeviceAuditPage(
         m_sideTabWidget,
         QStringLiteral("USB 设备关系"),
-        QStringLiteral("只读审计：USB 拓扑、控制器、Hub、端口与设备树关系。"),
+        QStringLiteral("查看 USB 控制器、Hub、端口与设备树关系。"),
         &m_usbTopologyEditor,
         &m_usbTopologyTable);
     const int tabIndex = addHardwarePageTab(m_usbTopologyPage, QStringLiteral("USB 设备"));
@@ -8578,16 +8559,16 @@ void HardwareDock::initializeConnections()
 
 void HardwareDock::scheduleUtilizationLayoutRefresh()
 {
+    if (m_utilizationLayoutRefreshPending) return;
+    m_utilizationLayoutRefreshPending = true;
+    const QPointer<HardwareDock> owner(this);
     // 当前事件循环先重排一次，确保新追加设备卡片能立即拿到稳定尺寸。
     adjustUtilizationChartHeights();
+    if (!owner) return;
     // 0ms 延迟用于等待 QListWidget 插入行后完成 viewport 尺寸更新。
     QTimer::singleShot(0, this, [this]()
     {
-        adjustUtilizationChartHeights();
-    });
-    // 80ms 延迟用于 ADS Dock 动画或首次显示链路完成后再校准一次。
-    QTimer::singleShot(80, this, [this]()
-    {
+        m_utilizationLayoutRefreshPending = false;
         adjustUtilizationChartHeights();
     });
 }

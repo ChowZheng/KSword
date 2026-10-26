@@ -1,9 +1,12 @@
 #include "WindowGlobalHotkeyTab.h"
+#include "WindowHotkeyClearUi.h"
+#include "../ProcessDock/HotkeyClearController.h"
 #include "WindowImmutableTableSupport.h"
 #include "WindowSnapshotSupport.h"
 #include "../UI/TableCompleteExport.h"
 #include "../UI/TableContextMenu.h"
 #include "../UI/FlatButtonTheme.h"
+#include "../UI/AsyncOperation.h"
 
 #include "../Framework.h"
 #include "../Internationalization/LanguageManager.h"
@@ -12,6 +15,7 @@
 #include "../UI/VisibleTableWidget.h"
 #include "../UI/PageControlStyle.h"
 #include "../UI/ToolbarMetrics.h"
+#include "../UI/ThemeStatusRole.h"
 #include "../ksword/process/process.h"
 #include "../theme.h"
 
@@ -22,11 +26,14 @@
 #include <QHeaderView>
 #include <QHBoxLayout>
 #include <QIcon>
+#include <QItemSelectionModel>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMenu>
+#include <QMessageBox>
 #include <QMetaObject>
 #include <QPointer>
+#include <QSet>
 #include <QPushButton>
 #include <QShowEvent>
 #include <QTimer>
@@ -48,6 +55,10 @@ namespace
 {
     // MaxRowsPerUiFlush：单次最多创建 128 行表格项，保证极端结果集也不会形成一次超长 UI 任务。
     constexpr qsizetype MaxRowsPerUiFlush = 128;
+    constexpr int HotkeyRowTokenRole = Qt::UserRole + 42;
+    constexpr int HotkeyScanTicketRole = Qt::UserRole + 43;
+    constexpr int HotkeyIdentityRole = Qt::UserRole + 44;
+    constexpr int HotkeyCanClearRole = Qt::UserRole + 45;
 
     enum AllHotkeyColumn : int
     {
@@ -75,13 +86,9 @@ namespace
             .toUpper();
     }
 
-    QVector<QStringList> formatRows(const std::vector<ks::process::UserModeHotkeyRecord>& records)
+    QStringList formatRow(const ks::process::UserModeHotkeyRecord& record)
     {
-        QVector<QStringList> rows;
-        rows.reserve(static_cast<qsizetype>(records.size()));
-        for (const ks::process::UserModeHotkeyRecord& record : records)
-        {
-            rows.push_back(QStringList{
+        return QStringList{
                 record.hotkeyText,
                 record.processName,
                 QString::number(record.processId),
@@ -93,10 +100,35 @@ namespace
                     .arg(record.modifiers, 4, 16, QLatin1Char('0'))
                     .toUpper(),
                 record.objectText,
-                record.detailText });
-        }
-        return rows;
+                record.detailText };
     }
+
+    struct ClearBatchTarget
+    {
+        ks::process::UserModeHotkeyRecord record;
+        QString identityKey;
+        QString display;
+    };
+    struct ClearBatchRequest
+    {
+        std::vector<ClearBatchTarget> targets;
+        std::uint64_t scanTicket = 0;
+        int skipped = 0;
+        QString skippedDetail;
+    };
+    struct ClearBatchEntry
+    {
+        QString display;
+        ks::process::HotkeySourceKind sourceKind = ks::process::HotkeySourceKind::Unknown;
+        ks::process::HotkeyClearReceipt receipt;
+    };
+    struct ClearBatchResult
+    {
+        QVector<ClearBatchEntry> entries;
+        std::uint64_t scanTicket = 0;
+        int skipped = 0;
+        QString skippedDetail;
+    };
 
     std::vector<ks::process::UserModeHotkeyProcessTarget> collectProcessTargets()
     {
@@ -116,7 +148,8 @@ namespace
             targets.push_back(ks::process::UserModeHotkeyProcessTarget{
                 processRecord.pid,
                 QString::fromStdString(processRecord.processName),
-                QString::fromStdString(processRecord.imagePath) });
+                QString::fromStdString(processRecord.imagePath),
+                processRecord.creationTime100ns });
         }
         return targets;
     }
@@ -129,7 +162,7 @@ struct WindowGlobalHotkeyTab::PendingRefreshState
     // mutex：保护下列跨线程共享字段，调用方只能在短临界区内持有。
     std::mutex mutex;
     // pendingRows：尚未合并到表格的数据行，由 UI 刷新定时器批量取走。
-    std::deque<QStringList> pendingRows;
+    std::deque<RowValue> pendingRows;
     // currentProcessName：最近完成扫描的进程名，用于展示实时进度。
     QString currentProcessName;
     // ticket：绑定发起本轮刷新的编号，防止旧任务结果污染新任务。
@@ -152,18 +185,20 @@ struct WindowGlobalHotkeyTab::PendingRefreshState
 
 struct WindowGlobalHotkeyTab::RowChunk
 {
-    QVector<QStringList> rows;
+    QVector<RowValue> rows;
     std::shared_ptr<const RowChunk> previous;
 };
 
 WindowGlobalHotkeyTab::~WindowGlobalHotkeyTab()
 {
+    if (m_clearOperation) m_clearOperation->close();
     ks::window::retireSnapshotValues(std::move(m_refreshState), std::move(m_rows));
 }
 
 WindowGlobalHotkeyTab::WindowGlobalHotkeyTab(QWidget* parent)
     : QWidget(parent)
 {
+    m_clearOperation = new ks::ui::AsyncOperation(this);
     initializeUi();
 }
 
@@ -180,29 +215,48 @@ void WindowGlobalHotkeyTab::showEvent(QShowEvent* event)
 void WindowGlobalHotkeyTab::initializeUi()
 {
     auto* rootLayout = new QVBoxLayout(this);
-    rootLayout->setContentsMargins(6, 6, 6, 6);
-    rootLayout->setSpacing(5);
+    // 本视图现在位于热键/钩子内页；外围6px由宿主页独占。
+    rootLayout->setContentsMargins(0, 0, 0, 0);
+    rootLayout->setSpacing(8);
 
     auto* toolbar = new QHBoxLayout();
     m_refreshButton = new QPushButton(
-        allHotkeyText("window.global_hotkey.refresh", QStringLiteral("刷新全部热键")),
+        allHotkeyText("window.global_hotkey.refresh", QStringLiteral("刷新程序快捷键")),
         this);
+    m_clearButton = new QPushButton(this);
+    ks::i18n::LanguageManager::instance().bindText(m_clearButton,
+        QStringLiteral("window.global_hotkey.clear.selected"), QStringLiteral("清除选中"));
+    m_clearButton->setToolTip(allHotkeyText("window.global_hotkey.clear.tooltip",
+        QStringLiteral("仅可清除窗口激活热键和快捷方式热键；菜单与程序资源快捷键不能在此清除。")));
+    m_clearButton->setEnabled(false);
+    ks::ui::ApplyFlatButtonTheme(m_clearButton, ks::ui::FlatButtonTone::Danger,
+        ks::ui::FlatButtonAppearance::Solid);
     m_filterEdit = new QLineEdit(this);
     ks::ui::StyleSearchField(m_filterEdit);
     m_filterEdit->setClearButtonEnabled(true);
     m_filterEdit->setPlaceholderText(allHotkeyText(
         "window.global_hotkey.filter.placeholder",
-        QStringLiteral("按热键、进程、PID/TID、来源、对象或详情筛选")));
+        QStringLiteral("按快捷键、进程、PID/TID、来源、对象或详情筛选")));
     toolbar->addWidget(m_refreshButton);
+    toolbar->addWidget(m_clearButton);
     toolbar->addWidget(m_filterEdit, 1);
     toolbar->setSpacing(8);
     ks::ui::NormalizeToolbarRow(toolbar);
     rootLayout->addLayout(toolbar);
 
+    auto* sourceNote = new QLabel(this);
+    ks::i18n::LanguageManager::instance().bindText(sourceNote,
+        QStringLiteral("window.hotkey_hook.shortcut_source_note"),
+        QStringLiteral("程序快捷键来自窗口、菜单、程序资源及快捷方式；程序资源中的快捷键不等于已注册的系统热键。"));
+    sourceNote->setWordWrap(true);
+    ks::ui::ApplyStatusRole(sourceNote, ks::ui::StatusRole::Idle);
+    rootLayout->addWidget(sourceNote);
+
     m_statusLabel = new QLabel(
         allHotkeyText("window.global_hotkey.summary.waiting", QStringLiteral("状态：等待刷新")),
         this);
     m_statusLabel->setWordWrap(true);
+    m_statusLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
     m_statusLabel->setStyleSheet(QStringLiteral("color:%1;font-weight:600;").arg(KswordTheme::TextSecondaryHex()));
     rootLayout->addWidget(m_statusLabel);
 
@@ -237,6 +291,10 @@ void WindowGlobalHotkeyTab::initializeUi()
     m_flushTimer->setTimerType(Qt::CoarseTimer);
 
     connect(m_refreshButton, &QPushButton::clicked, this, [this]() { refreshAsync(); });
+    connect(m_clearButton, &QPushButton::clicked, this, [this]() { clearSelectedHotkeys(); });
+    connect(m_table->selectionModel(), &QItemSelectionModel::selectionChanged, this,
+        [this]() { updateClearActionState(); });
+    m_table->sourceReady = [this]() { updateClearActionState(); };
     connect(m_filterEdit, &QLineEdit::textChanged, this, [this](const QString&) { rebuildTable(); });
     connect(m_table, &QTableView::customContextMenuRequested, this, [this](const QPoint& position) { showCopyMenu(position); });
     connect(m_flushTimer, &QTimer::timeout, this, [this]() { flushPendingSnapshot(); });
@@ -244,7 +302,7 @@ void WindowGlobalHotkeyTab::initializeUi()
 
 void WindowGlobalHotkeyTab::refreshAsync()
 {
-    if (m_refreshing)
+    if (m_refreshing || m_clearBusy)
     {
         return;
     }
@@ -267,6 +325,7 @@ void WindowGlobalHotkeyTab::refreshAsync()
     }
 
     m_refreshing = true;
+    if (m_clearButton) m_clearButton->setEnabled(false);
     m_firstRefreshStarted = true;
     const std::uint64_t ticket = ++m_refreshTicket;
     m_rows.reset();
@@ -285,12 +344,12 @@ void WindowGlobalHotkeyTab::refreshAsync()
     m_refreshButton->setEnabled(false);
     m_statusLabel->setText(allHotkeyText(
         "window.global_hotkey.summary.refreshing",
-        QStringLiteral("状态：正在扫描全部进程的热键...")));
+        QStringLiteral("状态：正在扫描各进程的程序快捷键...")));
     rebuildTable();
 
     m_progressTaskId = kPro.add(
         this,
-        allHotkeyText("window.global_hotkey.tab", QStringLiteral("全部热键")).toStdString(),
+        allHotkeyText("window.global_hotkey.tab", QStringLiteral("程序快捷键")).toStdString(),
         allHotkeyText(
             "window.global_hotkey.progress.enumerating",
             QStringLiteral("正在枚举进程")).toStdString());
@@ -322,13 +381,22 @@ void WindowGlobalHotkeyTab::refreshAsync()
             targets,
             [refreshState](ks::process::UserModeHotkeyBatchProgress progress)
             {
-                // rows：在工作线程完成字符串格式化，避免把转换成本转移给 UI。
-                QVector<QStringList> rows = formatRows(progress.records);
+                // 同一行保留原始身份与展示值，排序/筛选后仍能精确核对清除目标。
+                QVector<RowValue> rows;
+                rows.reserve(static_cast<qsizetype>(progress.records.size()));
+                for (auto& record : progress.records)
+                {
+                    RowValue row;
+                    row.cells = formatRow(record);
+                    row.identityKey = ks::process::HotkeyClearIdentityKey(record);
+                    row.record = std::move(record);
+                    rows.push_back(std::move(row));
+                }
                 const bool hasDiagnostic = progress.diagnosticText.contains(QLatin1Char('|'));
 
                 // stateLock：一次性合并本进程结果和进度，临界区内不执行任何 UI 操作。
                 const std::lock_guard<std::mutex> stateLock(refreshState->mutex);
-                for (QStringList& row : rows)
+                for (RowValue& row : rows)
                 {
                     refreshState->pendingRows.push_back(std::move(row));
                 }
@@ -387,7 +455,7 @@ void WindowGlobalHotkeyTab::flushPendingSnapshot()
         return;
     }
 
-    QVector<QStringList> rows;
+    QVector<RowValue> rows;
     QString currentProcessName;
     std::uint64_t ticket = 0;
     std::uint64_t revision = 0;
@@ -467,7 +535,7 @@ void WindowGlobalHotkeyTab::flushPendingSnapshot()
 
 void WindowGlobalHotkeyTab::appendSnapshotRows(
     const std::uint64_t ticket,
-    QVector<QStringList> rows,
+    QVector<RowValue> rows,
     const std::uint32_t completedProcessCount,
     const std::uint32_t totalProcessCount,
     const QString& processName,
@@ -485,6 +553,10 @@ void WindowGlobalHotkeyTab::appendSnapshotRows(
     if (!rows.isEmpty())
     {
         auto chunk = std::make_shared<RowChunk>();
+        for (qsizetype index = 0; index < rows.size(); ++index)
+            rows[index].rowToken = QStringLiteral("%1:%2")
+                .arg(static_cast<qulonglong>(ticket))
+                .arg(m_rowCount + index);
         m_rowCount += rows.size();
         chunk->rows = std::move(rows);
         chunk->previous = m_rows;
@@ -492,13 +564,25 @@ void WindowGlobalHotkeyTab::appendSnapshotRows(
         // Complete accepted batches remain canonical; only replaceable projections coalesce.
         m_rows = ks::ui::RetainCompleteExportSnapshot(accepted);
         const auto complete = m_rows;
-        m_table->setSourceFactory([complete](const auto& translator) {
+        m_table->setSourceFactory([complete, ticket](const auto& translator) {
             QVector<const RowChunk*> chunks;
             for (auto chunk = complete; chunk; chunk = chunk->previous) chunks.push_back(chunk.get());
-            QVector<QStringList> all;
+            QVector<ks::ui::ImmutableTableRow> all;
             for (auto it = chunks.crbegin(); it != chunks.crend(); ++it)
-                for (const auto& row : (*it)->rows) all.push_back(row);
-            const auto source = ks::window::makeWindowTableSource(std::move(all), {ColumnPid, ColumnTid, ColumnSource, ColumnHotkeyId, ColumnVkModifiers, ColumnObject});
+                for (const RowValue& row : (*it)->rows)
+                {
+                    ks::ui::ImmutableTableRow tableRow;
+                    tableRow.key = row.rowToken;
+                    tableRow.cells = row.cells;
+                    tableRow.searchText = row.cells.join(QLatin1Char(' '));
+                    tableRow.roles.insert(HotkeyRowTokenRole, row.rowToken);
+                    tableRow.roles.insert(HotkeyScanTicketRole, static_cast<qulonglong>(ticket));
+                    tableRow.roles.insert(HotkeyIdentityRole, row.identityKey);
+                    tableRow.roles.insert(HotkeyCanClearRole,
+                        ks::process::CanClearHotkey(row.record));
+                    all.push_back(std::move(tableRow));
+                }
+            const auto source = ks::ui::MakeImmutableTableSource(std::move(all));
             return ks::window::formatWindowTableSource(source, translator);
         });
     }
@@ -508,7 +592,7 @@ void WindowGlobalHotkeyTab::appendSnapshotRows(
         : processName;
     m_statusLabel->setText(allHotkeyText(
         "window.global_hotkey.summary.progress",
-        QStringLiteral("状态：已扫描 %1 / %2 个进程，已发现 %3 条热键。"))
+        QStringLiteral("状态：已扫描 %1 / %2 个进程，发现 %3 条快捷键记录。"))
         .arg(m_scannedProcessCount)
         .arg(m_totalProcessCount)
         .arg(m_rowCount));
@@ -543,14 +627,15 @@ void WindowGlobalHotkeyTab::finishRefresh(const std::uint64_t ticket, const qint
     m_refreshing = false;
     m_flushTimer->stop();
     m_refreshButton->setEnabled(true);
+    updateClearActionState();
     // 扫描结束后恢复用户原有排序状态，仅触发这一次全表排序。
     m_table->horizontalHeader()->setSortIndicator(m_sortColumnBeforeRefresh, m_sortOrderBeforeRefresh);
     m_table->setSortingEnabled(m_sortingEnabledBeforeRefresh);
     // 扫描期间不反复测量列宽；完成后仅基于有界样本调整一次。
     m_table->resizeColumnsToContents();
-    m_statusLabel->setText(allHotkeyText(
+    QString completedText = allHotkeyText(
         "window.global_hotkey.summary.completed",
-        QStringLiteral("状态：已扫描 %1 个进程，发现 %2 条热键，耗时 %3 ms。%4"))
+        QStringLiteral("状态：已扫描 %1 个进程，发现 %2 条快捷键记录，耗时 %3 ms。%4"))
         .arg(m_scannedProcessCount)
         .arg(m_rowCount)
         .arg(elapsedMs)
@@ -558,7 +643,10 @@ void WindowGlobalHotkeyTab::finishRefresh(const std::uint64_t ticket, const qint
             ? QString()
             : allHotkeyText(
                 "window.global_hotkey.summary.diagnostics",
-                QStringLiteral("%1 个进程的扫描包含诊断信息。")).arg(m_diagnosticProcessCount)));
+                QStringLiteral("%1 个进程的扫描包含诊断信息。")).arg(m_diagnosticProcessCount));
+    if (!m_lastClearSummary.isEmpty()) completedText += QLatin1Char('\n') + m_lastClearSummary;
+    m_statusLabel->setText(completedText);
+    m_statusLabel->setToolTip(m_lastClearDetails);
 
     const int progressTaskId = m_progressTaskId;
     m_progressTaskId = 0;
@@ -568,7 +656,7 @@ void WindowGlobalHotkeyTab::finishRefresh(const std::uint64_t ticket, const qint
             progressTaskId,
             allHotkeyText(
                 "window.global_hotkey.progress.completed",
-                QStringLiteral("全部热键扫描完成")).toStdString(),
+                QStringLiteral("程序快捷键扫描完成")).toStdString(),
             100,
             1.0f);
     }
@@ -578,6 +666,238 @@ void WindowGlobalHotkeyTab::finishRefresh(const std::uint64_t ticket, const qint
 void WindowGlobalHotkeyTab::rebuildTable()
 {
     m_table->setQuery(m_filterEdit->text().trimmed());
+    updateClearActionState();
+}
+
+void WindowGlobalHotkeyTab::updateClearActionState()
+{
+    if (!m_clearButton || !m_table) return;
+    bool hasCurrentSelection = false;
+    bool hasClearable = false;
+    const auto selection = m_table->selectionModel();
+    if (!m_refreshing && !m_clearBusy && !m_table->isPreparing() && selection)
+    {
+        for (const QModelIndex& index : selection->selectedRows(0))
+        {
+            if (index.data(HotkeyScanTicketRole).toULongLong() == m_refreshTicket)
+            {
+                hasCurrentSelection = true;
+                hasClearable = hasClearable || index.data(HotkeyCanClearRole).toBool();
+            }
+        }
+    }
+    if (m_clearButton->isEnabled() != hasCurrentSelection)
+        m_clearButton->setEnabled(hasCurrentSelection);
+    const QString hint = hasCurrentSelection && !hasClearable
+        ? allHotkeyText("window.global_hotkey.clear.explain_unsupported",
+            QStringLiteral("所选来源不能清除；点击查看原因。"))
+        : allHotkeyText("window.global_hotkey.clear.tooltip",
+            QStringLiteral("仅可清除窗口激活热键和快捷方式热键；菜单与程序资源快捷键不能在此清除。"));
+    if (m_clearButton->toolTip() != hint) m_clearButton->setToolTip(hint);
+}
+
+void WindowGlobalHotkeyTab::clearSelectedHotkeys()
+{
+    if (m_refreshing || m_clearBusy || !m_clearOperation || !m_table ||
+        m_table->isPreparing() || !m_table->selectionModel()) return;
+    const QModelIndexList selected = m_table->selectionModel()->selectedRows(0);
+    if (selected.isEmpty()) return;
+    const std::uint64_t scanTicket = m_refreshTicket;
+    const std::shared_ptr<const RowChunk> snapshot = m_rows;
+    QSet<QString> selectedTokens;
+    for (const QModelIndex& index : selected)
+    {
+        const QString token = index.data(HotkeyRowTokenRole).toString();
+        if (token.isEmpty() || index.data(HotkeyScanTicketRole).toULongLong() != scanTicket)
+        {
+            QMessageBox::warning(this,
+                allHotkeyText("window.global_hotkey.clear.title", QStringLiteral("清除快捷键")),
+                allHotkeyText("window.global_hotkey.clear.stale", QStringLiteral("所选记录已变化，请刷新后重试。")));
+            return;
+        }
+        selectedTokens.insert(token);
+    }
+    QHash<QString, const RowValue*> records;
+    for (auto chunk = snapshot; chunk && records.size() < selectedTokens.size(); chunk = chunk->previous)
+        for (const RowValue& row : chunk->rows)
+            if (selectedTokens.contains(row.rowToken)) records.insert(row.rowToken, &row);
+    if (records.size() != selectedTokens.size())
+    {
+        QMessageBox::warning(this,
+            allHotkeyText("window.global_hotkey.clear.title", QStringLiteral("清除快捷键")),
+            allHotkeyText("window.global_hotkey.clear.stale", QStringLiteral("所选记录已变化，请刷新后重试。")));
+        return;
+    }
+
+    ClearBatchRequest request;
+    request.scanTicket = scanTicket;
+    QSet<QString> distinctIdentities;
+    int menuCount = 0, resourceCount = 0, unavailableCount = 0, duplicateCount = 0;
+    bool containsShortcutFile = false;
+    for (const QModelIndex& index : selected)
+    {
+        const QString token = index.data(HotkeyRowTokenRole).toString();
+        const RowValue* const row = records.value(token, nullptr);
+        if (!row || row->identityKey != index.data(HotkeyIdentityRole).toString())
+        {
+            QMessageBox::warning(this,
+                allHotkeyText("window.global_hotkey.clear.title", QStringLiteral("清除快捷键")),
+                allHotkeyText("window.global_hotkey.clear.stale", QStringLiteral("所选记录已变化，请刷新后重试。")));
+            return;
+        }
+        if (!ks::process::CanClearHotkey(row->record) || row->identityKey.isEmpty())
+        {
+            using Kind = ks::process::HotkeySourceKind;
+            if (row->record.sourceKind == Kind::MenuShortcut) ++menuCount;
+            else if (row->record.sourceKind == Kind::PeAccelerator) ++resourceCount;
+            else ++unavailableCount;
+            continue;
+        }
+        if (distinctIdentities.contains(row->identityKey)) { ++duplicateCount; continue; }
+        distinctIdentities.insert(row->identityKey);
+        containsShortcutFile = containsShortcutFile ||
+            row->record.sourceKind == ks::process::HotkeySourceKind::ShellLink;
+        request.targets.push_back(ClearBatchTarget{row->record, row->identityKey,
+            QStringLiteral("%1 · %2").arg(row->record.processName, row->record.hotkeyText)});
+    }
+    const int skippedCount = menuCount + resourceCount + unavailableCount;
+    if (request.targets.empty())
+    {
+        QMessageBox::information(this,
+            allHotkeyText("window.global_hotkey.clear.title", QStringLiteral("清除快捷键")),
+            allHotkeyText("window.global_hotkey.clear.none",
+                QStringLiteral("所选快捷键无法在此清除：菜单 %1 条、程序资源 %2 条、身份不完整或其它来源 %3 条。"))
+                .arg(menuCount).arg(resourceCount).arg(unavailableCount));
+        return;
+    }
+    QString confirmation = allHotkeyText("window.global_hotkey.clear.confirm",
+        QStringLiteral("将清除 %1 个不同快捷键；跳过 %2 条（菜单 %3、程序资源 %4、身份不完整或其它来源 %5），合并重复目标 %6 条。确认继续？"))
+        .arg(request.targets.size()).arg(skippedCount).arg(menuCount).arg(resourceCount)
+        .arg(unavailableCount).arg(duplicateCount);
+    if (containsShortcutFile)
+        confirmation += QStringLiteral("\n\n") + allHotkeyText("window.global_hotkey.clear.shell_scope",
+            QStringLiteral("清除快捷方式热键只修改并读回 .lnk 文件设置；Explorer 更新后才可能反映该变更，当前不验证系统注册是否已移除。"));
+    const QPointer<WindowGlobalHotkeyTab> owner(this);
+    const auto confirmed = QMessageBox::warning(this,
+            allHotkeyText("window.global_hotkey.clear.title", QStringLiteral("清除快捷键")),
+            confirmation, QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+    if (!owner || confirmed != QMessageBox::Yes)
+        return;
+    if (m_refreshing || m_clearBusy || m_table->isPreparing() ||
+        scanTicket != m_refreshTicket || snapshot != m_rows || !m_table->selectionModel()) return;
+    QSet<QString> currentTokens;
+    for (const QModelIndex& index : m_table->selectionModel()->selectedRows(0))
+        currentTokens.insert(index.data(HotkeyRowTokenRole).toString());
+    if (currentTokens != selectedTokens) return;
+
+    request.skipped = skippedCount + duplicateCount;
+    if (request.skipped > 0)
+        request.skippedDetail = allHotkeyText("window.global_hotkey.clear.skipped_detail",
+            QStringLiteral("未提交：菜单 %1、程序资源 %2、身份不完整或其它 %3、重复目标 %4。"))
+            .arg(menuCount).arg(resourceCount).arg(unavailableCount).arg(duplicateCount);
+
+    // 已确认副作用只能由一个后台事务执行，旧表仍可复制但清除和刷新均锁定。
+    m_clearBusy = true;
+    updateClearActionState();
+    m_refreshButton->setEnabled(false);
+    m_statusLabel->setText(allHotkeyText("window.global_hotkey.clear.running",
+        QStringLiteral("正在清除 %1 个快捷键...")).arg(request.targets.size()));
+    const QPointer<WindowGlobalHotkeyTab> self(this);
+    const std::uint64_t clearTicket = m_clearOperation->submitTransaction<ClearBatchRequest, ClearBatchResult>(
+        std::move(request),
+        [](const ClearBatchRequest& batch)
+        {
+            ClearBatchResult result;
+            result.scanTicket = batch.scanTicket;
+            result.skipped = batch.skipped;
+            result.skippedDetail = batch.skippedDetail;
+            result.entries.reserve(static_cast<qsizetype>(batch.targets.size()));
+            for (const ClearBatchTarget& target : batch.targets)
+            {
+                ks::process::HotkeyClearReceipt receipt;
+                try { receipt = ks::process::ClearHotkey(target.record); }
+                catch (...)
+                {
+                    receipt.code = ks::process::HotkeyClearCode::Indeterminate;
+                    receipt.identityKey = target.identityKey;
+                }
+                result.entries.push_back(ClearBatchEntry{target.display,
+                    target.record.sourceKind, std::move(receipt)});
+            }
+            return result;
+        },
+        [self](const ClearBatchResult& result, const std::uint64_t operationTicket)
+        {
+            if (!self || !self->m_clearBusy || operationTicket != self->m_clearTicket) return true;
+            int cleared = 0, skipped = result.skipped, failed = 0;
+            QStringList detailLines;
+            if (!result.skippedDetail.isEmpty()) detailLines << result.skippedDetail;
+            for (const ClearBatchEntry& entry : result.entries)
+            {
+                const auto code = entry.receipt.code;
+                QString outcome = ks::window::HotkeyClearCodeText(code);
+                if (code == ks::process::HotkeyClearCode::Cleared &&
+                    entry.receipt.changed && entry.receipt.verified)
+                {
+                    ++cleared;
+                    if (entry.sourceKind == ks::process::HotkeySourceKind::ShellLink)
+                        outcome = allHotkeyText("window.global_hotkey.clear.shell_verified",
+                            QStringLiteral("快捷方式热键设置已清除并读回"));
+                }
+                else if (code == ks::process::HotkeyClearCode::Unsupported ||
+                    code == ks::process::HotkeyClearCode::InvalidTarget ||
+                    code == ks::process::HotkeyClearCode::StaleTarget) ++skipped;
+                else
+                {
+                    ++failed;
+                    if (code == ks::process::HotkeyClearCode::Cleared)
+                        outcome = allHotkeyText("window.global_hotkey.clear.code.unverified",
+                            QStringLiteral("更改未能确认"));
+                }
+                detailLines << allHotkeyText("window.global_hotkey.clear.detail_item",
+                    QStringLiteral("%1：%2")).arg(entry.display, outcome);
+            }
+            self->m_lastClearSummary = allHotkeyText("window.global_hotkey.clear.summary",
+                QStringLiteral("清除结果：成功 %1、跳过 %2、失败或未确认 %3。"))
+                .arg(cleared).arg(skipped).arg(failed);
+            self->m_lastClearDetails = detailLines.join(QLatin1Char('\n'));
+            QMessageBox resultBox(failed == 0 ? QMessageBox::Information : QMessageBox::Warning,
+                allHotkeyText("window.global_hotkey.clear.title", QStringLiteral("清除快捷键")),
+                self->m_lastClearSummary, QMessageBox::Ok, self.data());
+            resultBox.setDetailedText(self->m_lastClearDetails);
+            resultBox.exec();
+            if (!self) return true;
+            self->m_clearBusy = false;
+            self->m_clearTicket = 0;
+            self->m_refreshButton->setEnabled(true);
+            self->refreshAsync(); // 只做一次真实重采集，不乐观删除旧行。
+            return true;
+        },
+        [self](std::exception_ptr)
+        {
+            if (!self) return;
+            self->m_lastClearSummary = allHotkeyText("window.global_hotkey.clear.failed",
+                QStringLiteral("清除任务未能完成，目标状态可能已变化。"));
+            self->m_lastClearDetails.clear();
+            QMessageBox::warning(self.data(),
+                allHotkeyText("window.global_hotkey.clear.title", QStringLiteral("清除快捷键")),
+                self->m_lastClearSummary);
+            if (!self) return;
+            self->m_clearBusy = false;
+            self->m_clearTicket = 0;
+            self->m_refreshButton->setEnabled(true);
+            self->refreshAsync();
+        });
+    if (clearTicket == 0)
+    {
+        m_clearBusy = false;
+        m_refreshButton->setEnabled(true);
+        m_statusLabel->setText(allHotkeyText("window.global_hotkey.clear.busy",
+            QStringLiteral("清除任务暂不可用，请稍后重试。")));
+        updateClearActionState();
+        return;
+    }
+    m_clearTicket = clearTicket;
 }
 
 QString WindowGlobalHotkeyTab::rowClipboardText(

@@ -17,6 +17,7 @@ Environment:
 #include "ark/ark_driver.h"
 #include "ark/ark_storage_controller.h"
 #include "driver/KswordArkWindowBandIoctl.h"
+#include "driver/KswordArkWin32kIoctl.h" // 仅从共享协议目录取得原调用者热键查询IOCTL。
 #include "io_queue.tmh"
 
 #ifdef ALLOC_PRAGMA
@@ -93,6 +94,9 @@ KswordARKDriverEvtIoInCallerContext(
     WdfRequestGetParameters(Request, &parameters);
     if (parameters.Type == WdfRequestTypeDeviceControl &&
         (parameters.Parameters.DeviceIoControl.IoControlCode == IOCTL_KSWORD_ARK_MUTATE_KEYBOARD_HOTKEY ||
+         // 热键只读查询同样依赖调用者的 USER Session，不转到任意 WDF 工作者上下文。
+         parameters.Parameters.DeviceIoControl.IoControlCode == IOCTL_KSWORD_ARK_ENUM_KEYBOARD_HOTKEYS ||
+         parameters.Parameters.DeviceIoControl.IoControlCode == IOCTL_KSWORD_ARK_QUERY_WIN32K_HOTKEYS_PDB ||
          parameters.Parameters.DeviceIoControl.IoControlCode == IOCTL_KSWORD_ARK_WINDOW_BAND)) {
         KswordARKDriverDispatchDeviceControl(
             Device,

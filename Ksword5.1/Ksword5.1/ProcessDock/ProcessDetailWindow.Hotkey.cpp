@@ -1,6 +1,7 @@
 #include "ProcessDetailWindow.InternalCommon.h"
 #include "../UI/TableContextMenu.h"
 #include "ProcessHotkeyEnumerator.h"
+#include "HotkeyClearController.h"
 #include "../UI/TableInteractionSupport.h"
 #include "../UI/ImmutableValueTable.h"
 #include "../UI/ToolbarMetrics.h"
@@ -43,9 +44,40 @@ namespace
         QString processName;
         QString sourceText;
         QString detailText;
+        ks::process::HotkeySourceKind sourceKind = ks::process::HotkeySourceKind::Unknown;
+        std::uint64_t windowHandle = 0;
+        std::uint16_t expectedWindowHotkeyValue = 0;
+        std::uint16_t expectedShortcutHotkeyValue = 0;
+        QString shortcutTargetPath;
+        ks::process::HotkeyFileIdentity shortcutFileIdentity;
+        bool isRegisteredHotkey = false;
         bool hasR0MutationSnapshot = false;
         KSWORD_ARK_KEYBOARD_HOTKEY_ENTRY r0MutationSnapshot{};
     };
+
+    ks::process::UserModeHotkeyRecord clearRecordFromCandidate(
+        const HotkeyCandidate& candidate, const std::uint64_t processCreationTime100ns)
+    {
+        ks::process::UserModeHotkeyRecord record;
+        record.objectText = candidate.objectText;
+        record.hotkeyId = candidate.hotkeyId;
+        record.modifiers = candidate.modifiers;
+        record.virtualKey = candidate.virtualKey;
+        record.hotkeyText = candidate.hotkeyText;
+        record.processId = candidate.processId;
+        record.threadId = candidate.threadId;
+        record.processName = candidate.processName;
+        record.sourceText = candidate.sourceText;
+        record.detailText = candidate.detailText;
+        record.sourceKind = candidate.sourceKind;
+        record.processCreationTime100ns = processCreationTime100ns;
+        record.windowHandle = candidate.windowHandle;
+        record.expectedWindowHotkeyValue = candidate.expectedWindowHotkeyValue;
+        record.expectedShortcutHotkeyValue = candidate.expectedShortcutHotkeyValue;
+        record.shortcutTargetPath = candidate.shortcutTargetPath;
+        record.shortcutFileIdentity = candidate.shortcutFileIdentity;
+        return record;
+    }
 
     struct KeyboardHookCandidate
     {
@@ -135,6 +167,41 @@ namespace
             return translator.contextText(QStringLiteral("process.hotkey.r0.unknown_failure"), QStringLiteral("驱动返回未知变更状态：%1。"))
                 .arg(result.response.status);
         }
+    }
+
+    QString hotkeyClearFailureText(const ks::process::HotkeyClearReceipt& receipt,
+        const bool isR0Hotkey, const ks::i18n::SourceTextSnapshot& translator)
+    {
+        switch (receipt.code)
+        {
+        case ks::process::HotkeyClearCode::Unsupported:
+            return translator.contextText(QStringLiteral("process.hotkey.delete.unsupported"),
+                QStringLiteral("该热键来源不支持删除。"));
+        case ks::process::HotkeyClearCode::InvalidTarget:
+        case ks::process::HotkeyClearCode::StaleTarget:
+            return translator.contextText(QStringLiteral("process.hotkey.edit.stale"),
+                QStringLiteral("所选记录已失效，请刷新后重试。"));
+        case ks::process::HotkeyClearCode::ReadbackFailed:
+        case ks::process::HotkeyClearCode::Indeterminate:
+            return translator.contextText(QStringLiteral("process.hotkey.delete.unconfirmed"),
+                QStringLiteral("清除请求的最终状态未确认，请刷新后核对。"));
+        case ks::process::HotkeyClearCode::Conflict:
+            return translator.contextText(QStringLiteral("process.hotkey.r0.conflict"),
+                QStringLiteral("目标组合已由另一个 RegisterHotKey 项占用。"));
+        case ks::process::HotkeyClearCode::BackendRejected:
+            if (isR0Hotkey && receipt.backendStatus != KSWORD_ARK_KEYBOARD_MUTATION_STATUS_OK)
+            {
+                ksword::ark::KeyboardHotkeyMutationResult result{};
+                result.io.ok = true;
+                result.response.status = receipt.backendStatus;
+                return keyboardMutationFailureText(result, translator);
+            }
+            return translator.contextText(QStringLiteral("process.hotkey.delete.operation_failed"),
+                QStringLiteral("公开接口未能清除该热键。"));
+        case ks::process::HotkeyClearCode::Cleared:
+            break;
+        }
+        return {};
     }
 
     QString hex64Text(const std::uint64_t value)
@@ -648,6 +715,10 @@ namespace
             row.threadId = threadId;
             row.processName = processName;
             row.sourceText = QStringLiteral("窗口热键");
+            row.sourceKind = ks::process::HotkeySourceKind::WindowActivation;
+            row.windowHandle = static_cast<std::uint64_t>(
+                reinterpret_cast<std::uintptr_t>(windowHandle));
+            row.expectedWindowHotkeyValue = LOWORD(resultValue);
             row.detailText = windowTitleText(windowHandle);
             appendCandidate(rows, dedupeSet, std::move(row));
         }
@@ -712,6 +783,7 @@ namespace
                     row.threadId = threadId;
                     row.processName = processName;
                     row.sourceText = QStringLiteral("菜单快捷键");
+                    row.sourceKind = ks::process::HotkeySourceKind::MenuShortcut;
                     row.detailText = itemPath;
                     appendCandidate(rows, dedupeSet, std::move(row));
                 }
@@ -829,6 +901,8 @@ namespace
         QString targetPath;
         std::uint32_t modifiers = 0;
         std::uint32_t virtualKey = 0;
+        std::uint16_t expectedHotkeyValue = 0;
+        ks::process::HotkeyFileIdentity fileIdentity;
     };
 
     void collectShellShortcutHotkeyCandidates(
@@ -893,6 +967,8 @@ namespace
                             candidate.targetPath = targetPath;
                             candidate.modifiers = hotkeyModifiersFromHotkeyf(HIBYTE(hotkeyValue));
                             candidate.virtualKey = LOBYTE(hotkeyValue);
+                            candidate.expectedHotkeyValue = hotkeyValue;
+                            ks::process::CaptureHotkeyFileIdentity(shortcutPath, &candidate.fileIdentity);
                             candidates.push_back(std::move(candidate));
                         }
                     }
@@ -933,6 +1009,10 @@ namespace
             row.threadId = 0;
             row.processName = processName;
             row.sourceText = QStringLiteral("快捷方式热键");
+            row.sourceKind = ks::process::HotkeySourceKind::ShellLink;
+            row.expectedShortcutHotkeyValue = candidate.expectedHotkeyValue;
+            row.shortcutTargetPath = candidate.targetPath;
+            row.shortcutFileIdentity = candidate.fileIdentity;
             row.detailText = candidate.targetPath;
             appendCandidate(rows, dedupeSet, std::move(row));
         }
@@ -1100,6 +1180,7 @@ namespace
                 row.threadId = 0;
                 row.processName = context->processName;
                 row.sourceText = QStringLiteral("PE Accelerator");
+                row.sourceKind = ks::process::HotkeySourceKind::PeAccelerator;
                 row.detailText = QStringLiteral("entry=%1 flags=0x%2")
                     .arg(static_cast<qulonglong>(index))
                     .arg(static_cast<unsigned int>(acceleratorEntry.flags), 4, 16, QChar('0'))
@@ -1237,6 +1318,8 @@ namespace
             row.r0MutationSnapshot.snapshotHash = entry.snapshotHash;
             row.r0MutationSnapshot.objectSize = entry.objectSize;
             row.r0MutationSnapshot.entryFlags = entry.entryFlags;
+            row.r0MutationSnapshot.sessionId = entry.sessionId;
+            row.isRegisteredHotkey = true;
             row.hasR0MutationSnapshot =
                 (entry.entryFlags & KSWORD_ARK_KEYBOARD_HOTKEY_ENTRY_FLAG_MUTABLE) != 0UL;
             row.hotkeyText = hotkeyTextFromParts(entry.modifiers, entry.virtualKey);
@@ -1714,7 +1797,8 @@ std::vector<ks::process::UserModeHotkeyRecord> ks::process::EnumerateUserModeHot
     const std::uint32_t processId,
     QString processName,
     QString processImagePath,
-    QString* const diagnosticTextOut)
+    QString* const diagnosticTextOut,
+    const std::uint64_t processCreationTime100ns)
 {
     QString diagnosticText = QStringLiteral("R3 窗口/菜单/资源/.lnk");
     const std::vector<HotkeyCandidate> candidates = collectUserModeHotkeysForProcess(
@@ -1727,18 +1811,7 @@ std::vector<ks::process::UserModeHotkeyRecord> ks::process::EnumerateUserModeHot
     records.reserve(candidates.size());
     for (const HotkeyCandidate& candidate : candidates)
     {
-        UserModeHotkeyRecord record{};
-        record.objectText = candidate.objectText;
-        record.hotkeyId = candidate.hotkeyId;
-        record.modifiers = candidate.modifiers;
-        record.virtualKey = candidate.virtualKey;
-        record.hotkeyText = candidate.hotkeyText;
-        record.processId = candidate.processId;
-        record.threadId = candidate.threadId;
-        record.processName = candidate.processName;
-        record.sourceText = candidate.sourceText;
-        record.detailText = candidate.detailText;
-        records.push_back(std::move(record));
+        records.push_back(clearRecordFromCandidate(candidate, processCreationTime100ns));
     }
 
     if (diagnosticTextOut != nullptr)
@@ -1810,18 +1883,8 @@ void ks::process::EnumerateUserModeHotkeysForProcesses(
                 progress.records.reserve(candidates.size());
                 for (const HotkeyCandidate& candidate : candidates)
                 {
-                    UserModeHotkeyRecord record{};
-                    record.objectText = candidate.objectText;
-                    record.hotkeyId = candidate.hotkeyId;
-                    record.modifiers = candidate.modifiers;
-                    record.virtualKey = candidate.virtualKey;
-                    record.hotkeyText = candidate.hotkeyText;
-                    record.processId = candidate.processId;
-                    record.threadId = candidate.threadId;
-                    record.processName = candidate.processName;
-                    record.sourceText = candidate.sourceText;
-                    record.detailText = candidate.detailText;
-                    progress.records.push_back(std::move(record));
+                    progress.records.push_back(clearRecordFromCandidate(
+                        candidate, target.creationTime100ns));
                 }
 
                 if (progressCallback)
@@ -1983,7 +2046,7 @@ void ProcessDetailWindow::editSelectedHotkey()
             titleText,
             hotkeyUiText(
                 QStringLiteral("process.hotkey.edit.unsupported"),
-                QStringLiteral("此来源是只读审计数据。当前仅支持修改窗口激活热键、.lnk 快捷方式热键和通过安全快照验证的 R0 RegisterHotKey 项。")));
+                QStringLiteral("该热键来源不支持修改。当前仅支持修改窗口激活热键、.lnk 快捷方式热键和通过安全快照验证的 R0 RegisterHotKey 项。")));
         return;
     }
     if (isR0Hotkey && !row.hasR0MutationSnapshot)
@@ -2084,7 +2147,19 @@ void ProcessDetailWindow::editSelectedHotkey()
                 KSWORD_ARK_KEYBOARD_MUTATION_OPERATION_EDIT, modifiers, virtualKey);
             result.ok = native.io.ok && native.response.status == KSWORD_ARK_KEYBOARD_MUTATION_STATUS_OK &&
                 (native.response.responseFlags & KSWORD_ARK_KEYBOARD_MUTATION_RESPONSE_OTHER_BYTES_SAME) != 0UL;
-            if (!result.ok) result.detail = keyboardMutationFailureText(native, translator).toStdString();
+            const unsigned long responseFlags = native.response.responseFlags;
+            const bool rolledBack = (responseFlags & KSWORD_ARK_KEYBOARD_MUTATION_RESPONSE_ROLLED_BACK) != 0UL;
+            // 只有快照已验证或明确报告变化时，零hash才表示操作后的状态未确认。
+            result.outcomeUncertain = !result.ok && !rolledBack &&
+                (((responseFlags & KSWORD_ARK_KEYBOARD_MUTATION_RESPONSE_CHANGED) != 0UL) ||
+                    (native.io.ok &&
+                        (responseFlags & KSWORD_ARK_KEYBOARD_MUTATION_RESPONSE_SNAPSHOT_VALIDATED) != 0UL &&
+                        native.response.currentSnapshotHash == 0ULL));
+            if (result.outcomeUncertain)
+                result.detail = translator.contextText(QStringLiteral("process.hotkey.edit.unconfirmed"),
+                    QStringLiteral("修改请求的最终状态未确认，请刷新后核对。")).toStdString();
+            else if (!result.ok)
+                result.detail = keyboardMutationFailureText(native, translator).toStdString();
         }
         else
         {
@@ -2095,16 +2170,19 @@ void ProcessDetailWindow::editSelectedHotkey()
             result.detail = error.toStdString();
         }
         return result;
-    }, false, [this, titleText, resultText](const DetailActionResult& result)
+    }, false, [this, titleText, resultText, isR0Hotkey](const DetailActionResult& result)
     {
         const QPointer<ProcessDetailWindow> alive(this);
-        if (!result.ok)
+        if (result.outcomeUncertain)
+            QMessageBox::warning(this, titleText, QString::fromStdString(result.detail));
+        else if (!result.ok)
             QMessageBox::critical(this, titleText, hotkeyUiText(QStringLiteral("process.hotkey.edit.failed"),
                 QStringLiteral("热键修改失败：%1")).arg(QString::fromStdString(result.detail)));
         else
             QMessageBox::information(this, titleText, result.conflict ? resultText + QLatin1Char('\n') +
                 hotkeyUiText(QStringLiteral("process.hotkey.edit.window_conflict"), QStringLiteral("提示：系统报告另一个窗口使用了相同热键。")) : resultText);
-        if (alive && result.ok) QTimer::singleShot(0, alive, [alive] { if (alive) alive->requestAsyncHotkeyRefresh(); });
+        if (alive && (result.ok || result.outcomeUncertain || isR0Hotkey))
+            QTimer::singleShot(0, alive, [alive] { if (alive) alive->requestAsyncHotkeyRefresh(); });
     });
 }
 
@@ -2141,15 +2219,18 @@ void ProcessDetailWindow::deleteSelectedHotkey()
     }
 
     const HotkeyInspectItem row = m_hotkeyRows->at(static_cast<std::size_t>(rowIndexValue));
-    const bool isR0Hotkey = row.sourceText == QStringLiteral("R0 RegisterHotKey");
-    if (!isEditableHotkeySource(row.sourceText))
+    const bool isR0Hotkey = row.isRegisteredHotkey;
+    QString clearReason;
+    if (!isR0Hotkey && !ks::process::CanClearHotkey(row.clearTarget, &clearReason))
     {
         QMessageBox::information(
             this,
             titleText,
-            hotkeyUiText(
-                QStringLiteral("process.hotkey.delete.unsupported"),
-                QStringLiteral("该来源是只读审计数据，不能删除。")));
+            clearReason == QLatin1String("unsupported_source")
+                ? hotkeyUiText(QStringLiteral("process.hotkey.delete.unsupported"),
+                    QStringLiteral("该热键来源不支持删除。"))
+                : hotkeyUiText(QStringLiteral("process.hotkey.edit.stale"),
+                    QStringLiteral("所选记录已失效，请刷新后重试。")));
         return;
     }
     if (isR0Hotkey && !row.hasR0MutationSnapshot)
@@ -2163,6 +2244,21 @@ void ProcessDetailWindow::deleteSelectedHotkey()
         return;
     }
 
+    // 模态确认可能重入刷新、换进程或关闭窗口；确认前冻结完整行与宿主身份。
+    const QPointer<ProcessDetailWindow> aliveBeforeConfirm(this);
+    const std::uint32_t frozenPid = m_baseRecord.pid;
+    const std::uint64_t frozenCreationTime = m_baseRecord.creationTime100ns;
+    const std::uint64_t frozenTicket = m_hotkeyRefreshTicket;
+    const auto frozenRows = m_hotkeyRows;
+    const QString frozenRowKey = m_hotkeyTable->rowKey(m_hotkeyTable->currentRow());
+    if (frozenPid == 0U || frozenCreationTime == 0U || row.processId != frozenPid ||
+        row.clearTarget.processCreationTime100ns != frozenCreationTime)
+    {
+        QMessageBox::warning(this, titleText, hotkeyUiText(
+            QStringLiteral("process.hotkey.edit.stale"),
+            QStringLiteral("所选记录已失效，请刷新后重试。")));
+        return;
+    }
     const QString confirmText = isR0Hotkey
         ? hotkeyUiText(
             QStringLiteral("process.hotkey.r0.delete.confirm"),
@@ -2185,46 +2281,83 @@ void ProcessDetailWindow::deleteSelectedHotkey()
             confirmText,
             QMessageBox::Yes | QMessageBox::No,
             QMessageBox::No);
-    if (confirmed != QMessageBox::Yes)
+    if (!aliveBeforeConfirm || confirmed != QMessageBox::Yes)
     {
         return;
     }
+    bool selectedIndexOk = false;
+    const qulonglong selectedIndex = aliveBeforeConfirm->m_hotkeyTable &&
+        aliveBeforeConfirm->m_hotkeyTable->currentRow() >= 0
+        ? aliveBeforeConfirm->m_hotkeyTable->currentCell(0, kHotkeyRowIndexRole)
+            .toULongLong(&selectedIndexOk)
+        : 0ULL;
+    if (aliveBeforeConfirm->m_baseRecord.pid != frozenPid ||
+        aliveBeforeConfirm->m_baseRecord.creationTime100ns != frozenCreationTime ||
+        aliveBeforeConfirm->m_hotkeyRefreshTicket != frozenTicket ||
+        aliveBeforeConfirm->m_hotkeyRows != frozenRows ||
+        (aliveBeforeConfirm->m_detailActionOperation &&
+            aliveBeforeConfirm->m_detailActionOperation->isBusy()) ||
+        !aliveBeforeConfirm->m_hotkeyTable ||
+        !aliveBeforeConfirm->m_hotkeyTable->isEnabled() ||
+        aliveBeforeConfirm->m_hotkeyTable->isPreparing() ||
+        aliveBeforeConfirm->m_hotkeyTable->currentRow() < 0 ||
+        aliveBeforeConfirm->m_hotkeyTable->rowKey(
+            aliveBeforeConfirm->m_hotkeyTable->currentRow()) != frozenRowKey ||
+        !selectedIndexOk || selectedIndex != rowIndexValue)
+    {
+        QMessageBox::warning(aliveBeforeConfirm.data(), titleText, hotkeyUiText(
+            QStringLiteral("process.hotkey.edit.stale"),
+            QStringLiteral("所选记录已失效，请刷新后重试。")));
+        return;
+    }
 
+    ks::process::RegisteredHotkeyClearTarget registeredTarget;
+    if (isR0Hotkey)
+    {
+        const auto& snapshot = row.r0MutationSnapshot;
+        registeredTarget.hotkeyObject = snapshot.hotkeyObject;
+        registeredTarget.sessionGlobals = snapshot.sessionGlobals;
+        registeredTarget.expectedThreadInfo = snapshot.threadInfo;
+        registeredTarget.expectedWindowHandle = snapshot.windowHandle;
+        registeredTarget.expectedSnapshotHash = snapshot.snapshotHash;
+        registeredTarget.processId = snapshot.processId;
+        registeredTarget.processCreationTime100ns = frozenCreationTime;
+        registeredTarget.threadId = snapshot.threadId;
+        registeredTarget.hotkeyId = snapshot.hotkeyId;
+        registeredTarget.modifiers = snapshot.modifiers;
+        registeredTarget.virtualKey = snapshot.virtualKey;
+        registeredTarget.confirmedByUser = true;
+    }
     const auto translator = ks::i18n::LanguageManager::instance().sourceTextSnapshot();
     const kLogEvent actionEvent;
-    submitDetailAction(titleText, actionEvent, [row, isR0Hotkey, translator]
+    submitDetailAction(titleText, actionEvent, [row, isR0Hotkey, registeredTarget, translator]
     {
         DetailActionResult result;
-        if (isR0Hotkey)
-        {
-            MSG message{};
-            (void)::PeekMessageW(&message, nullptr, 0, 0, PM_NOREMOVE);
-            const auto native = ksword::ark::DriverClient().mutateKeyboardHotkey(row.r0MutationSnapshot,
-                KSWORD_ARK_KEYBOARD_MUTATION_OPERATION_DELETE);
-            result.ok = native.io.ok && native.response.status == KSWORD_ARK_KEYBOARD_MUTATION_STATUS_OK &&
-                (native.response.responseFlags & KSWORD_ARK_KEYBOARD_MUTATION_RESPONSE_CHANGED) != 0UL;
-            if (!result.ok) result.detail = keyboardMutationFailureText(native, translator).toStdString();
-        }
-        else
-        {
-            QString error;
-            result.ok = row.sourceText == QStringLiteral("窗口热键")
-                ? setWindowActivationHotkey(row.objectText, row.processId, 0U, 0U, error, result.conflict)
-                : setShellShortcutHotkey(row.objectText, 0U, 0U, error);
-            if (!result.ok && error.isEmpty()) error = translator.contextText(
-                QStringLiteral("process.hotkey.delete.operation_failed"), QStringLiteral("公开接口未能清除该热键。"));
-            result.detail = error.toStdString();
-        }
+        const ks::process::HotkeyClearReceipt receipt = isR0Hotkey
+            ? ks::process::ClearRegisteredHotkey(registeredTarget)
+            : ks::process::ClearHotkey(row.clearTarget);
+        result.ok = receipt.code == ks::process::HotkeyClearCode::Cleared &&
+            receipt.changed && receipt.verified;
+        result.outcomeUncertain = receipt.code == ks::process::HotkeyClearCode::Indeterminate ||
+            receipt.code == ks::process::HotkeyClearCode::ReadbackFailed ||
+            (receipt.changed && !receipt.verified);
+        if (result.outcomeUncertain)
+            result.detail = translator.contextText(QStringLiteral("process.hotkey.delete.unconfirmed"),
+                QStringLiteral("清除请求的最终状态未确认，请刷新后核对。")).toStdString();
+        else if (!result.ok)
+            result.detail = hotkeyClearFailureText(receipt, isR0Hotkey, translator).toStdString();
         return result;
     }, false, [this, titleText](const DetailActionResult& result)
     {
         const QPointer<ProcessDetailWindow> alive(this);
-        if (!result.ok)
+        if (result.outcomeUncertain)
+            QMessageBox::warning(this, titleText, QString::fromStdString(result.detail));
+        else if (!result.ok)
             QMessageBox::critical(this, titleText, hotkeyUiText(QStringLiteral("process.hotkey.delete.failed"),
                 QStringLiteral("热键删除失败：%1")).arg(QString::fromStdString(result.detail)));
         else QMessageBox::information(this, titleText,
             hotkeyUiText(QStringLiteral("process.hotkey.delete.success"), QStringLiteral("热键已删除。")));
-        if (alive && result.ok) QTimer::singleShot(0, alive, [alive] { if (alive) alive->requestAsyncHotkeyRefresh(); });
+        if (alive) QTimer::singleShot(0, alive, [alive] { if (alive) alive->requestAsyncHotkeyRefresh(); });
     });
 }
 void ProcessDetailWindow::showHotkeyTabAndRefresh()
@@ -2343,6 +2476,8 @@ void ProcessDetailWindow::requestAsyncHotkeyRefresh(const bool refreshExisting)
                 row.processName = candidate.processName;
                 row.sourceText = candidate.sourceText;
                 row.detailText = candidate.detailText;
+                row.clearTarget = clearRecordFromCandidate(candidate, creationTime);
+                row.isRegisteredHotkey = candidate.isRegisteredHotkey;
                 row.hasR0MutationSnapshot = candidate.hasR0MutationSnapshot;
                 row.r0MutationSnapshot = candidate.r0MutationSnapshot;
                 rows->push_back(std::move(row));
@@ -2690,6 +2825,8 @@ void ProcessDetailWindow::requestAsyncKeyboardRefresh(const bool refreshHotkeys)
                 row.processName = candidate.processName;
                 row.sourceText = candidate.sourceText;
                 row.detailText = candidate.detailText;
+                row.clearTarget = clearRecordFromCandidate(candidate, creationTime);
+                row.isRegisteredHotkey = candidate.isRegisteredHotkey;
                 row.hasR0MutationSnapshot = candidate.hasR0MutationSnapshot;
                 row.r0MutationSnapshot = candidate.r0MutationSnapshot;
                 hotkeys->push_back(std::move(row));

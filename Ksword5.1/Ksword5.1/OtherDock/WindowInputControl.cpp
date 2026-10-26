@@ -86,7 +86,7 @@ namespace ks::window_input
             int breakpoint_ = 1040; // 保证并列时每区仍有可读的正文宽度。
         };
 
-        // 分组在无外框的中性色面板内保留标题和轻分隔，四边均留16px。
+        // 外卡独占16px内距，内部分区复用统一标题，不再叠加标题边距。
         QWidget* SectionPanel(QGroupBox* group, QWidget* parent)
         {
             auto* panel = new QWidget(parent);
@@ -96,7 +96,6 @@ namespace ks::window_input
             layout->addWidget(group);
             ks::ui::StylePrimaryContentPanel(panel, false);
             ks::ui::StyleParameterSection(group);
-            group->layout()->setContentsMargins(0, 22, 0, 0);
             ks::ui::StyleParameterFields(group);
             return panel;
         }

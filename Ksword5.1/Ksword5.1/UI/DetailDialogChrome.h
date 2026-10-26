@@ -2,12 +2,15 @@
 #include "./FlatButtonTheme.h"
 #include "./DetailNavigationGroups.h"
 #include "./DetailPresentation.h"
+#include "./GroupBoxStyle.h"
 
 // 只共享详情外框；页面、模型、索引和业务动作继续由原控件持有。
 #include "../theme.h"
 #include <QButtonGroup>
+#include <QApplication>
 #include <QDialogButtonBox>
 #include <QEvent>
+#include <QFontMetrics>
 #include <QHBoxLayout>
 #include <QPointer>
 #include <QScrollArea>
@@ -30,17 +33,20 @@ namespace ks::ui
             "QWidget[ksword_detail_shell=\"true\"] QScrollArea > QWidget{background:%1;}"
             "QWidget[ksword_detail_shell=\"true\"] QWidget[ksword_detail_framework_body=\"true\"]{background:%1;border:0;}"
             "QWidget[ksword_detail_shell=\"true\"] QAbstractItemView{border:0;}"
-            // 标题放进无描边卡片内部，旧GroupBox也不再沿标题切开一圈线框。
-            "QWidget[ksword_detail_shell=\"true\"] QGroupBox{background:%3;border:0;border-radius:8px;margin-top:0;padding-top:28px;}"
-            "QWidget[ksword_detail_shell=\"true\"] QGroupBox::title{subcontrol-origin:padding;subcontrol-position:top left;left:16px;top:10px;padding:0;color:%2;background:transparent;font-weight:600;}"
-            "QWidget[ksword_detail_shell=\"true\"] QWidget[ksword_detail_header=\"true\"]{background:%1;border:0;border-bottom:1px solid %4;}"
+            // 详情壳保留原颜色拥有者，分组标题的几何与主程序其它卡片共用。
+            "__GROUP_BOX_STYLE__"
+            "QWidget[ksword_detail_shell=\"true\"] QWidget[ksword_detail_header=\"true\"]{background:%1;border:0;border-bottom:1px solid %3;}"
             "QWidget[ksword_detail_shell=\"true\"] QWidget[ksword_detail_sidebar=\"true\"],QWidget[ksword_detail_shell=\"true\"] QScrollArea[ksword_detail_sidebar=\"true\"],QWidget[ksword_detail_shell=\"true\"] QScrollArea[ksword_detail_sidebar=\"true\"] > QWidget,QWidget[ksword_detail_shell=\"true\"] QScrollArea[ksword_detail_sidebar=\"true\"] > QWidget > QWidget{background:%1;border:0;padding:0;margin:0;}"
             // 分界仅画在滚动区的外缘，导航项与 viewport 不重复描边。
-            "QWidget[ksword_detail_shell=\"true\"] QScrollArea[ksword_detail_sidebar=\"true\"]{border-right:1px solid %4;}"
+            "QWidget[ksword_detail_shell=\"true\"] QScrollArea[ksword_detail_sidebar=\"true\"]{border-right:1px solid %3;}"
             "QWidget[ksword_detail_shell=\"true\"] QWidget[ksword_detail_sidebar=\"true\"] QToolButton{border-radius:5px;padding:8px 10px;text-align:left;}"
-            "QWidget[ksword_detail_shell=\"true\"] QWidget#ks_detail_footer{background:%1;border:0;border-top:1px solid %4;}")
-            .arg(KswordTheme::WindowColorHex(), KswordTheme::TextPrimaryHex(), KswordTheme::SurfaceHex(),
+            "QWidget[ksword_detail_shell=\"true\"] QWidget#ks_detail_footer{background:%1;border:0;border-top:1px solid %3;}")
+            .arg(KswordTheme::WindowColorHex(), KswordTheme::TextPrimaryHex(),
                 KswordTheme::BlendColors(KswordTheme::WindowColor(), KswordTheme::BorderColor(), 96).name());
+        style.replace(QStringLiteral("__GROUP_BOX_STYLE__"), GroupBoxStyle(
+            QStringLiteral("QWidget[ksword_detail_shell=\"true\"] QGroupBox"),
+            KswordTheme::SurfaceHex(), KswordTheme::TextPrimaryHex(), KswordTheme::TextDisabledColorHex(),
+            QFontMetrics(QApplication::font()).height()));
         if (!rootObjectName.isEmpty())
             style.replace(QStringLiteral("QWidget[ksword_detail_shell=\"true\"]"),
                 QStringLiteral("QWidget#%1[ksword_detail_shell=\"true\"]").arg(rootObjectName));
@@ -82,7 +88,8 @@ namespace ks::ui
         // 单页详情的根layout也排列摘要、工具和状态，它们的业务间距不能被当作外框清掉。
         if (window->layout() != nullptr) window->layout()->setSpacing(spacing);
         if (window->property("ksword_global_dialog_theme").toBool()
-            || window->property("ksword_detail_theme_owner").toBool())
+            || window->property("ksword_detail_theme_owner").toBool()
+            || window->property("ksword_secondary_window").toBool())
         {
             return; // 已有根主题拥有者生成同一套Chrome，不能再追加第二份。
         }

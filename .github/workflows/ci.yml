@@ -256,7 +256,11 @@ jobs:
           --en-pack Ksword5.1/Ksword5.1/languages/en-US.json
 
       - name: Validate kernel knowledge research chain
-        run: python tools/validate_kernel_knowledge.py
+        shell: pwsh
+        run: |
+          python tools/test_validate_kernel_knowledge.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/validate_kernel_knowledge.py
 
       - name: Test QADS artifact validation
         run: python tools/test_verify_qads_runtime.py
@@ -409,6 +413,32 @@ jobs:
             throw 'Qt MSBuild archive did not contain qt.targets.'
           }
           "KSWORD_QT_MSBUILD=$($targets.Directory.FullName)" | Add-Content -Path $env:GITHUB_ENV
+
+      - name: Check native NTFS indexing on an isolated scratch volume
+        shell: pwsh
+        run: |
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+          $vsPath = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath |
+            Select-Object -First 1
+          if (-not $vsPath) { throw 'Could not locate the x64 MSVC toolset.' }
+          $vcvars = Join-Path $vsPath 'VC\Auxiliary\Build\vcvars64.bat'
+          # The script only formats a new, verified temporary VHD and detaches it in finally.
+          cmd /c "`"$vcvars`" >nul && python -B tools\test_ntfs_backend_io.py --qt-root `"$env:QT_ROOT_DIR`" && pwsh -NoLogo -NoProfile -File tools\test_ntfs_volume_integration.ps1 -QtRoot `"$env:QT_ROOT_DIR`""
+          if ($LASTEXITCODE -ne 0) { throw 'Native NTFS index integration tests failed.' }
+
+      - name: Check shared UI defaults and first-paint behavior
+        shell: pwsh
+        run: |
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+          $vsPath = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath |
+            Select-Object -First 1
+          if (-not $vsPath) { throw 'Could not locate the x64 MSVC toolset.' }
+          $vcvars = Join-Path $vsPath 'VC\Auxiliary\Build\vcvars64.bat'
+          $msbuild = Join-Path $vsPath 'MSBuild\Current\Bin\amd64\MSBuild.exe'
+          if (-not (Test-Path $msbuild)) { throw '64-bit MSBuild is required.' }
+          # Real offscreen Qt widgets and modeled page data; no driver or product GUI.
+          cmd /c "`"$vcvars`" >nul && python -B tools\run_shared_ui_regressions.py --qt-dir `"$env:QT_ROOT_DIR`" --msbuild `"$msbuild`""
+          if ($LASTEXITCODE -ne 0) { throw 'Shared UI input/default/first-paint regressions failed.' }
 
       - name: Build supported user-mode Release targets
         shell: pwsh

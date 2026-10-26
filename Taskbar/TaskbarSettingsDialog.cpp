@@ -2,6 +2,7 @@
 
 #include "TaskbarNotificationService.h"
 #include "TaskbarRestartCoordinator.h"
+#include "../Ksword5.1/Ksword5.1/UI/GroupBoxStyle.h"
 
 #include <QCheckBox>
 #include <QCoreApplication>
@@ -36,10 +37,9 @@ TaskbarSettingsDialog::TaskbarSettingsDialog(TaskbarNotificationService* notific
     setWindowFlags(windowFlags() | Qt::Tool);
     setModal(false);
     setMinimumWidth(430);
-    setStyleSheet(R"(
+    // 独立辅助窗沿用同一组框配方，正文内距只由共享QSS负责。
+    setStyleSheet(QStringLiteral(R"(
         QDialog { background: #111820; color: #dff8ff; }
-        QGroupBox { border: 1px solid #31566a; margin-top: 12px; padding: 10px; color: #91dfff; }
-        QGroupBox::title { subcontrol-origin: margin; left: 9px; padding: 0 4px; }
         QCheckBox { spacing: 7px; padding: 3px; color: #dff8ff; }
         QCheckBox:disabled { color: #6f8790; }
         QLabel { color: #dff8ff; }
@@ -48,15 +48,16 @@ TaskbarSettingsDialog::TaskbarSettingsDialog(TaskbarNotificationService* notific
         QPushButton { background: #153542; border: 1px solid #4fbed9; border-radius: 3px; padding: 6px 10px; color: #e9fbff; }
         QPushButton:hover { background: #1b4a5d; }
         QLabel#sourceStatus { color: #a8c9d2; background: #0b1015; border: 1px solid #263e49; padding: 8px; }
-    )");
+    )") + ks::ui::GroupBoxStyle(QStringLiteral("QGroupBox"), QStringLiteral("#151e28"),
+        QStringLiteral("#a8c9d2"), QStringLiteral("#6f8790"), fontMetrics().height()));
 
     QVBoxLayout* rootLayout = new QVBoxLayout(this);
-    rootLayout->setContentsMargins(14, 14, 14, 14);
-    rootLayout->setSpacing(10);
+    rootLayout->setContentsMargins(16, 16, 16, 16);
+    rootLayout->setSpacing(16);
 
     QGroupBox* notificationGroup = new QGroupBox(QStringLiteral("通知"), this);
     QVBoxLayout* notificationLayout = new QVBoxLayout(notificationGroup);
-    notificationLayout->setSpacing(5);
+    ks::ui::ConfigureGroupBoxLayout(notificationGroup);
     m_clipboardCheckBox = new QCheckBox(QStringLiteral("剪贴板文字变化"), notificationGroup);
     m_deviceCheckBox = new QCheckBox(QStringLiteral("设备接入"), notificationGroup);
     m_earthquakeCheckBox = new QCheckBox(QStringLiteral("地震预警"), notificationGroup);
@@ -79,6 +80,7 @@ TaskbarSettingsDialog::TaskbarSettingsDialog(TaskbarNotificationService* notific
 
     QGroupBox* earthquakeGroup = new QGroupBox(QStringLiteral("地震预警诊断"), this);
     QVBoxLayout* earthquakeLayout = new QVBoxLayout(earthquakeGroup);
+    ks::ui::ConfigureGroupBoxLayout(earthquakeGroup);
     m_sourceStatusLabel = new QLabel(earthquakeGroup);
     m_sourceStatusLabel->setObjectName(QStringLiteral("sourceStatus"));
     m_sourceStatusLabel->setWordWrap(true);
@@ -95,6 +97,7 @@ TaskbarSettingsDialog::TaskbarSettingsDialog(TaskbarNotificationService* notific
 
     QGroupBox* taskbarGroup = new QGroupBox(QStringLiteral("Taskbar"), this);
     QVBoxLayout* taskbarLayout = new QVBoxLayout(taskbarGroup);
+    ks::ui::ConfigureGroupBoxLayout(taskbarGroup);
     QLabel* restartDescriptionLabel = new QLabel(
         QStringLiteral("切换系统输出设备后，可重启 Taskbar 重新建立音频采集。"),
         taskbarGroup);

@@ -1314,6 +1314,8 @@ namespace ksword::ark
 
     Win32kHotkeysPdbResult DriverClient::queryWin32kHotkeysPdb(const unsigned long flags, const unsigned long sessionId, const unsigned long processId, const unsigned long threadId, const unsigned long maxEntries) const
     {
+        // 热键表属于调用者 USER Session；后台线程先准备图形子系统再进入只读 IOCTL。
+        (void)::GetDesktopWindow();
         const KSWORD_ARK_WIN32K_QUERY_REQUEST request = buildWin32kRequest(flags, sessionId, processId, threadId, maxEntries);
         return queryWin32kRows<Win32kHotkeysPdbResult, KSWORD_ARK_WIN32K_HOTKEY_SNAPSHOT_RESPONSE, KSWORD_ARK_WIN32K_HOTKEY_ENTRY>(*this, IOCTL_KSWORD_ARK_QUERY_WIN32K_HOTKEYS_PDB, request, "IOCTL_KSWORD_ARK_QUERY_WIN32K_HOTKEYS_PDB");
     }

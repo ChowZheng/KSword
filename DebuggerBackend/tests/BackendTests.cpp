@@ -83,6 +83,7 @@ namespace ksword::ark
     HANDLE DriverHandle::release() noexcept { HANDLE value = m_handle; m_handle = INVALID_HANDLE_VALUE; return value; }
     void DriverHandle::reset(HANDLE value) noexcept { if (isValid()) CloseHandle(m_handle); m_handle = value; }
     DriverHandle DriverClient::open(unsigned long) const { return DriverHandle(CreateEventW(nullptr, FALSE, FALSE, nullptr)); }
+    DriverHandle DriverClient::openSilently(unsigned long desiredAccess) const { return open(desiredAccess); }
     HvmStatusResult DriverClient::queryHvmStatus() const
     {
         HvmStatusResult result{}; result.io = success(sizeof(result.response));

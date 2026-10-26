@@ -20,7 +20,7 @@ namespace ks::ui
     // 对齐外轮廓圆角；没有独立主题绑定时补齐输入角色，保留命中区域和业务逻辑。
     void StyleStandaloneInput(QWidget* input);
 
-    // 普通分组采用无描边卡片与内部标题；参数分区复用标题/分隔线，不替换业务控件。
+    // 普通分组与嵌入参数分区共用无描边内部标题；表面只由所在层拥有，不替换业务控件。
     void StylePrimaryGroup(QGroupBox* group);
 
     // toolbar 是页面明确建立的操作区；圆角轻底面区分操作与结果，不遍历子控件。

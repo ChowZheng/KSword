@@ -307,7 +307,7 @@ namespace ks::ui
         // 自绘与普通工具按钮共用状态配方；透明常态露出父 Base，交互态填真实强调底。
         const QPalette colors = parentWidget() != nullptr ? parentWidget()->palette() : palette();
         FlatButtonState visualState = FlatButtonState::Normal; // 仅合成当前状态，不复制颜色公式。
-        if (underMouse() || hasFocus())
+        if (underMouse() || HasFlatButtonKeyboardFocus(this))
         {
             visualState = FlatButtonState::Hover;
         }

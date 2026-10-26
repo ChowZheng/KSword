@@ -15,6 +15,7 @@
 #include <QtWidgets/QWidget>
 
 #include "Framework.h"
+#include "Framework/ReleaseMetadata.h"
 #include "UI/ThemedMessageBox.h"
 #include "UI/GlobalDialogTheme.h"
 #include "UI/GlobalRefreshShortcut.h"
@@ -1580,13 +1581,24 @@ int main(int argc, char* argv[])
     startupTraceRaw("after applyQtScaleFactorEnvironment");
 
     kSplash.setProgressMode(SplashProgressMode::Determinate);
-    kSplash.setFooterText(
-        localizedStartupText(QStringLiteral("main.startup.footer.email"),
-            QStringLiteral("support@ksword.dev")).toStdWString(),
-        localizedStartupText(QStringLiteral("main.startup.footer.build_date"),
-            QStringLiteral("编译于 %1")).arg(QString::fromLatin1(__DATE__)).toStdWString(),
-        localizedStartupText(QStringLiteral("main.startup.footer.repository"),
-            QStringLiteral("Github.com/KswordDEV")).toStdWString());
+    kSplash.setBrandingText(
+        localizedStartupText(QStringLiteral("main.startup.brand.title"),
+            QStringLiteral("KSword %1")).arg(ks::app::releaseVersionText()).toStdWString(),
+        localizedStartupText(QStringLiteral("main.startup.brand.build_time"),
+            QStringLiteral("编译时间：%1")).arg(ks::app::releaseBuildTimeText()).toStdWString(),
+        localizedStartupText(QStringLiteral("main.startup.brand.authors"),
+            QStringLiteral("作者：%1")).arg(ks::app::releaseAuthorsText()).toStdWString());
+    kSplash.setLegalText(
+        localizedStartupText(QStringLiteral("main.startup.legal.copyright"),
+            QStringLiteral("Copyright © 2023-2026 KSword contributors and applicable copyright holders")).toStdWString(),
+        localizedStartupText(QStringLiteral("main.startup.legal.license"),
+            QStringLiteral("Licensed under the KSword Community Source License 1.6 (source-available). See LICENSE for the full terms.")).toStdWString(),
+        localizedStartupText(QStringLiteral("main.startup.legal.third_party"),
+            QStringLiteral("Third-party components are listed in the third_party/ directory.")).toStdWString(),
+        localizedStartupText(QStringLiteral("main.startup.link.website"),
+            QStringLiteral("https://ksword.dev")).toStdWString(),
+        localizedStartupText(QStringLiteral("main.startup.link.repository"),
+            QStringLiteral("https://github.com/KSwordDEV/KSword")).toStdWString());
     const bool splashReady = kSplash.show(
         localizedStartupText(
             QStringLiteral("main.startup.progress.starting"),

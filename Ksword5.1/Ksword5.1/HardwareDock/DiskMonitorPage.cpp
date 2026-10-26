@@ -3,14 +3,19 @@
 #include "../Internationalization/LanguageManager.h"
 #include "../UI/TableContextMenu.h"
 #include "../UI/PageControlStyle.h"
+#include "../UI/PrimaryPageStyle.h"
+#include "../UI/FlowLayout.h"
 #include "../UI/ToolbarMetrics.h"
 #include "../UI/FlatButtonTheme.h"
 #include "../Framework/PrivilegeElevationPrompt.h"
 #include "../UI/TableInteractionSupport.h"
 #include "../UI/VisibleTableWidget.h"
+#include "../UI/ResultTableHost.h"
+#include "../UI/TablePresentation.h"
 #include "../UI/TableRowFilterSupport.h"
 #include <QItemSelectionModel>
 #include <functional>
+#include <iterator>
 
 // ============================================================
 // DiskMonitorPage.cpp
@@ -27,9 +32,17 @@
 #include <QClipboard>
 #include <QCheckBox>
 #include <QDateTime>
+#include <QEvent>
+#include <QCryptographicHash>
+#include <QAbstractTableModel>
+#include <QSortFilterProxyModel>
+#include <QTabWidget>
+#include <QScrollBar>
+#include <QUuid>
 #include <QFileIconProvider>
 #include <QFileInfo>
 #include <QGuiApplication>
+#include <QGridLayout>
 #include <QHeaderView>
 #include <QHBoxLayout>
 #include <QIcon>
@@ -52,6 +65,8 @@
 #include <QVBoxLayout>
 
 #include <algorithm>
+#include <array>
+#include <deque>
 #include <chrono>
 #include <cmath>
 #include <cstddef>
@@ -85,7 +100,15 @@ struct DiskMonitorPage::SamplingState
     std::atomic<std::uint64_t> m_fileActivityEtwSessionHandle{ 0 };
     std::atomic<std::uint64_t> m_fileActivityEtwTraceHandle{ 0 };
     std::atomic<std::uint32_t> m_fileActivityEtwLastStatus{ 0 };
+    // One private name per page. Never stop another process/page's session.
+    std::wstring m_etwSessionName;
+    GUID m_etwSessionGuid{};
+    std::atomic_bool m_recordIoLog{false};
+    std::atomic<std::uint64_t> m_etwEventsLost{0};
+    std::atomic<std::uint64_t> m_etwBuffersLost{0};
     std::mutex m_fileActivityMutex;
+    std::deque<FileIoLogRecord> m_ioLogPending;
+    std::uint64_t m_ioLogOverwritten = 0;
     std::unordered_map<std::uint64_t, QString> m_filePathByObject;
     std::unordered_map<std::uint64_t, PendingFileIoOperation> m_pendingFileIoByIrp;
     QHash<QString, FileActivityAccumulator> m_fileActivityByKey;
@@ -95,12 +118,82 @@ struct DiskMonitorPage::SamplingState
 
 namespace
 {
+    QString diskMonitorSourceKey(const QString& source)
+    {
+        return QStringLiteral("source.") + QString::fromLatin1(
+            QCryptographicHash::hash(source.toUtf8(), QCryptographicHash::Sha1).toHex().left(16));
+    }
+    void bindDiskMonitorText(QObject* target, const QString& source)
+    {
+        ks::i18n::LanguageManager::instance().bindText(target, diskMonitorSourceKey(source), source);
+    }
+    void bindDiskMonitorTab(QTabWidget* tabs, QWidget* page, const QString& source)
+    {
+        ks::i18n::LanguageManager::instance().bindTab(tabs, page, diskMonitorSourceKey(source), source);
+    }
+    // Structured event log: append/remove notifications preserve selection and the
+    // shared table export/freeze workflow. No per-cell item allocation or reset.
+    class FileIoLogModel final : public QAbstractTableModel
+    {
+    public:
+        using Row = std::array<QString, 9>;
+        explicit FileIoLogModel(QObject* parent) : QAbstractTableModel(parent) {}
+        int rowCount(const QModelIndex& parent = {}) const override
+        { return parent.isValid() ? 0 : static_cast<int>(m_rows.size()); }
+        int columnCount(const QModelIndex& parent = {}) const override
+        { return parent.isValid() ? 0 : 9; }
+        QVariant data(const QModelIndex& index, int role) const override
+        {
+            if (!index.isValid() || index.row() < 0 || index.row() >= rowCount()
+                || index.column() < 0 || index.column() >= 9) return {};
+            if (role == Qt::DisplayRole || role == Qt::ToolTipRole)
+                return m_rows[static_cast<std::size_t>(index.row())][static_cast<std::size_t>(index.column())];
+            return {};
+        }
+        QVariant headerData(int section, Qt::Orientation orientation, int role) const override
+        {
+            if (orientation != Qt::Horizontal || role != Qt::DisplayRole || section < 0 || section >= 9) return {};
+            const QStringList labels{QStringLiteral("事件时间"), QStringLiteral("I/O 阶段"),
+                QStringLiteral("记录 PID"), QStringLiteral("文件"), QStringLiteral("请求字节"),
+                QStringLiteral("文件偏移"), QStringLiteral("IRP"), QStringLiteral("耗时(ms)"), QStringLiteral("NTSTATUS")};
+            return ks::i18n::sourceText(labels[section]);
+        }
+        std::uint64_t append(std::vector<Row> rows)
+        {
+            constexpr std::size_t capacity = 10000;
+            const std::size_t evicted = m_rows.size() + rows.size() > capacity
+                ? m_rows.size() + rows.size() - capacity : 0;
+            if (evicted != 0)
+            {
+                beginRemoveRows({}, 0, static_cast<int>(evicted) - 1);
+                m_rows.erase(m_rows.begin(), m_rows.begin() + static_cast<std::ptrdiff_t>(evicted));
+                endRemoveRows();
+            }
+            if (!rows.empty())
+            {
+                const int first = rowCount();
+                beginInsertRows({}, first, first + static_cast<int>(rows.size()) - 1);
+                for (auto& row : rows) m_rows.push_back(std::move(row));
+                endInsertRows();
+            }
+            return evicted;
+        }
+        void retranslateHeaders() { emit headerDataChanged(Qt::Horizontal, 0, 8); }
+        void clear()
+        {
+            if (m_rows.empty()) return;
+            beginRemoveRows({}, 0, rowCount() - 1);
+            m_rows.clear();
+            endRemoveRows();
+        }
+    private:
+        std::deque<Row> m_rows;
+    };
+
     constexpr double kActiveBytesPerSecondThreshold = 1.0; // kActiveBytesPerSecondThreshold：判定“活跃 IO”的最小 B/s。
     constexpr int kRefreshIntervalMs = 1000;               // kRefreshIntervalMs：页面刷新周期。
     constexpr std::uint64_t kFileActivityRetentionMs = 5000; // kFileActivityRetentionMs：活动停止后保留唯一逻辑行的时间。
-    constexpr wchar_t kDiskMonitorEtwSessionName[] = L"KswordDiskMonitorFileIo"; // kDiskMonitorEtwSessionName：ETW 会话名。
-    constexpr GUID kDiskMonitorEtwSessionGuid =
-        { 0x2b1f0d2a, 0x0d85, 0x4cd7, { 0xa5, 0x1e, 0xf5, 0x21, 0x5c, 0x48, 0x73, 0xe2 } };
+
     constexpr GUID kKernelFileProviderGuid =
         { 0xedd08927, 0x9cc4, 0x4e65, { 0xb9, 0x70, 0xc2, 0x56, 0x0f, 0xb5, 0xc2, 0x89 } };
     constexpr ULONGLONG kKernelFileKeywordFileName = 0x10ULL; // kKernelFileKeywordFileName：NameCreate/NameDelete 路径事件。
@@ -606,36 +699,7 @@ namespace
         return currentValue >= previousValue ? currentValue - previousValue : 0;
     }
 
-    // tableHeaderStyle：
-    // - 作用：生成硬盘监控表头样式；
-    // - 处理：直接使用项目主题色；
-    // - 返回：可赋给 QTableWidget 的样式片段。
-    QString tableHeaderStyle()
-    {
-        return QStringLiteral(
-            "QHeaderView::section{"
-            "  color:%1;"
-            "  background:transparent; /* %2 */"
-            "  border:1px solid %3;"
-            "  padding:4px;"
-            "  font-weight:600;"
-            "}"
-            "QTableWidget{"
-            "  gridline-color:%3;"
-            "  background:transparent;"
-            "  background-color:transparent;"
-            "  alternate-background-color:transparent;"
-            "  color:%1;"
-            "}"
-            "QTableWidget::viewport{"
-            "  background:transparent;"
-            "  background-color:transparent;"
-            "}"
-            "}")
-            .arg(KswordTheme::TextPrimaryHex())
-            .arg(KswordTheme::SurfaceAltHex())
-            .arg(KswordTheme::BorderHex());
-    }
+
 
     // trimWideString：
     // - 作用：把 ETW 属性中的 UTF-16 缓冲转成 QString；
@@ -730,18 +794,6 @@ namespace
             || normalizedName == QStringLiteral("length")
             || normalizedName == QStringLiteral("bytecount")
             || normalizedName == QStringLiteral("bytes");
-    }
-
-    // isDurationProperty：
-    // - 作用：识别 ETW 事件中可能表示耗时的属性；
-    // - 处理：不同 Provider 可能使用 ElapsedTime/Duration；
-    // - 返回：true 表示可用于响应时间估算。
-    bool isDurationProperty(const QString& normalizedName)
-    {
-        return normalizedName == QStringLiteral("duration")
-            || normalizedName == QStringLiteral("elapsedtime")
-            || normalizedName == QStringLiteral("responsetime")
-            || normalizedName == QStringLiteral("iotime");
     }
 
     // isIoPriorityProperty：
@@ -974,144 +1026,77 @@ namespace
 
     QWidget* createDiskMonitorSection(
         QWidget* parentWidget,
-        QToolButton** toggleButtonOut,
+        QLabel** titleLabelOut,
         const QString& titleText,
-        QWidget* contentWidget,
-        QWidget* firstHeaderControl = nullptr,
-        QWidget* secondHeaderControl = nullptr)
+        QWidget* contentWidget)
     {
-        // createDiskMonitorSection：
-        // - 输入：父控件、标题、内容控件和可选 A/B 控件；
-        // - 处理：创建资源监视器式可折叠区域，箭头和内容可见性保持同步；
-        // - 返回：可直接加入垂直 QSplitter 的区域控件。
         auto* sectionWidget = new QWidget(parentWidget);
+        sectionWidget->setProperty("ksword_disk_monitor_expanded", true);
         auto* sectionLayout = new QVBoxLayout(sectionWidget);
         sectionLayout->setContentsMargins(0, 0, 0, 0);
-        sectionLayout->setSpacing(0);
+        sectionLayout->setSpacing(6);
 
         auto* headerWidget = new QWidget(sectionWidget);
+        ks::ui::StylePrimaryToolbar(headerWidget);
         auto* headerLayout = new QHBoxLayout(headerWidget);
-        headerLayout->setContentsMargins(4, 2, 4, 2);
-        headerLayout->setSpacing(0);
-        headerWidget->setStyleSheet(QStringLiteral(
-            "QWidget{background:%1;border:1px solid %2;}")
-            .arg(KswordTheme::SurfaceAltHex(), KswordTheme::BorderHex()));
+        headerLayout->setContentsMargins(6, 0, 6, 0);
+        headerLayout->setSpacing(6);
+        auto* title = new QLabel(titleText, headerWidget);
+        title->setWordWrap(true);
+        ks::ui::StylePrimarySectionTitle(title);
+        headerLayout->addWidget(title, 1);
 
-        auto* toggleButton = new QToolButton(headerWidget);
-        toggleButton->setText(titleText);
-        toggleButton->setCheckable(true);
-        toggleButton->setChecked(true);
-        toggleButton->setArrowType(Qt::NoArrow);
-        toggleButton->setToolButtonStyle(Qt::ToolButtonTextOnly);
-        toggleButton->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
-        toggleButton->setStyleSheet(ks::ui::BuildFlatButtonStyle(ks::ui::FlatButtonTone::Neutral)
-            + QStringLiteral("QToolButton{font-size:14px;font-weight:700;text-align:left;padding:3px;}"));
-        toggleButton->setToolTip(QStringLiteral("展开或折叠该磁盘监控区域"));
-        headerLayout->addWidget(toggleButton, 1);
-
-        if (firstHeaderControl != nullptr)
-        {
-            headerLayout->addWidget(firstHeaderControl, 0);
-        }
-        if (secondHeaderControl != nullptr)
-        {
-            headerLayout->addWidget(secondHeaderControl, 0);
-        }
-
-        auto* arrowButton = new QToolButton(headerWidget);
-        arrowButton->setArrowType(Qt::DownArrow);
-        arrowButton->setAutoRaise(true);
-        arrowButton->setFocusPolicy(Qt::NoFocus);
-        arrowButton->setFixedWidth(24);
-        arrowButton->setToolTip(
-            QStringLiteral("展开或折叠该磁盘监控区域"));
-        arrowButton->setStyleSheet(ks::ui::BuildFlatButtonStyle(ks::ui::FlatButtonTone::Neutral)
-            + QStringLiteral("QToolButton{padding:2px;}"));
-        headerLayout->addWidget(arrowButton, 0);
-
-        sectionLayout->addWidget(headerWidget, 0);
+        // Expansion is layout state, not a selected action spanning the title.
+        auto* arrow = new QToolButton(headerWidget);
+        arrow->setArrowType(Qt::DownArrow);
+        arrow->setAutoRaise(true);
+        arrow->setToolTip(QStringLiteral("展开或折叠该磁盘监控区域"));
+        arrow->setAccessibleName(titleText);
+        KswordTheme::ApplyCompactIconButtonMetrics(arrow);
+        ks::ui::ApplyFlatButtonTheme(arrow, ks::ui::FlatButtonTone::Neutral, ks::ui::FlatButtonAppearance::Flat);
+        headerLayout->addWidget(arrow);
+        sectionLayout->addWidget(headerWidget);
         sectionLayout->addWidget(contentWidget, 1);
-        sectionWidget->setSizePolicy(
-            QSizePolicy::Preferred,
-            QSizePolicy::Expanding);
+        sectionWidget->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Expanding);
 
-        QObject::connect(
-            toggleButton,
-            &QToolButton::toggled,
-            sectionWidget,
-            [
-                toggleButton,
-                arrowButton,
-                contentWidget,
-                headerWidget,
-                sectionWidget
-            ](const bool expanded)
+        QObject::connect(arrow, &QToolButton::clicked, sectionWidget,
+            [arrow, contentWidget, headerWidget, sectionWidget]()
             {
-                auto* splitter =
-                    qobject_cast<QSplitter*>(sectionWidget->parentWidget());
-                const int splitterIndex =
-                    splitter != nullptr
-                    ? splitter->indexOf(sectionWidget)
-                    : -1;
-                QList<int> splitterSizes =
-                    splitter != nullptr
-                    ? splitter->sizes()
-                    : QList<int>{};
-
+                const bool expanded = !sectionWidget->property("ksword_disk_monitor_expanded").toBool();
+                auto* splitter = qobject_cast<QSplitter*>(sectionWidget->parentWidget());
+                const int index = splitter != nullptr ? splitter->indexOf(sectionWidget) : -1;
+                QList<int> sizes = splitter != nullptr ? splitter->sizes() : QList<int>{};
                 if (expanded)
                 {
                     sectionWidget->setMinimumHeight(0);
                     sectionWidget->setMaximumHeight(QWIDGETSIZE_MAX);
                     contentWidget->setVisible(true);
-                    const int previousExpandedHeight =
-                        sectionWidget->property(
-                            "kswordDiskMonitorExpandedHeight").toInt();
-                    if (splitterIndex >= 0 &&
-                        splitterIndex < splitterSizes.size() &&
-                        previousExpandedHeight > 0)
+                    const int previousHeight = sectionWidget->property("kswordDiskMonitorExpandedHeight").toInt();
+                    if (index >= 0 && index < sizes.size() && previousHeight > 0)
                     {
-                        splitterSizes[splitterIndex] =
-                            previousExpandedHeight;
-                        splitter->setSizes(splitterSizes);
+                        sizes[index] = previousHeight;
+                        splitter->setSizes(sizes);
                     }
                 }
                 else
                 {
-                    if (splitterIndex >= 0 &&
-                        splitterIndex < splitterSizes.size())
-                    {
-                        sectionWidget->setProperty(
-                            "kswordDiskMonitorExpandedHeight",
-                            splitterSizes[splitterIndex]);
-                    }
+                    if (index >= 0 && index < sizes.size())
+                        sectionWidget->setProperty("kswordDiskMonitorExpandedHeight", sizes[index]);
                     contentWidget->setVisible(false);
-                    const int collapsedHeight =
-                        std::max(1, headerWidget->sizeHint().height());
+                    const int collapsedHeight = std::max(1, headerWidget->sizeHint().height());
                     sectionWidget->setMinimumHeight(collapsedHeight);
                     sectionWidget->setMaximumHeight(collapsedHeight);
-                    if (splitterIndex >= 0 &&
-                        splitterIndex < splitterSizes.size())
+                    if (index >= 0 && index < sizes.size())
                     {
-                        splitterSizes[splitterIndex] = collapsedHeight;
-                        splitter->setSizes(splitterSizes);
+                        sizes[index] = collapsedHeight;
+                        splitter->setSizes(sizes);
                     }
                 }
+                sectionWidget->setProperty("ksword_disk_monitor_expanded", expanded);
+                arrow->setArrowType(expanded ? Qt::DownArrow : Qt::RightArrow);
                 sectionWidget->updateGeometry();
-                arrowButton->setArrowType(
-                    expanded ? Qt::DownArrow : Qt::RightArrow);
             });
-        QObject::connect(
-            arrowButton,
-            &QToolButton::clicked,
-            toggleButton,
-            [toggleButton]()
-            {
-                toggleButton->toggle();
-            });
-        if (toggleButtonOut != nullptr)
-        {
-            *toggleButtonOut = toggleButton;
-        }
+        if (titleLabelOut != nullptr) *titleLabelOut = title;
         return sectionWidget;
     }
 }
@@ -1121,6 +1106,14 @@ DiskMonitorPage::DiskMonitorPage(QWidget* parent)
       m_samplingState(std::make_shared<SamplingState>()),
       m_dispatcher(std::make_shared<ks::ui::AsyncUiDispatcher>(this))
 {
+    const QUuid sessionUuid = QUuid::createUuid();
+    m_samplingState->m_etwSessionName = QStringLiteral("KswordDiskMonitorFileIo-%1-%2")
+        .arg(GetCurrentProcessId()).arg(sessionUuid.toString(QUuid::WithoutBraces)).toStdWString();
+    m_samplingState->m_etwSessionGuid.Data1 = sessionUuid.data1;
+    m_samplingState->m_etwSessionGuid.Data2 = sessionUuid.data2;
+    m_samplingState->m_etwSessionGuid.Data3 = sessionUuid.data3;
+    std::copy(std::begin(sessionUuid.data4), std::end(sessionUuid.data4),
+        std::begin(m_samplingState->m_etwSessionGuid.Data4));
     // 构造顺序：先搭建 UI 和连接事件；ETW/进程枚举延迟到首帧后启动。
     initializeUi();
     initializeConnections();
@@ -1172,71 +1165,83 @@ void DiskMonitorPage::showEvent(QShowEvent* event)
     QWidget::showEvent(event);
     // 初次显示无缓存时直接跳过；之后恢复最新模型，避免先绘一帧过期数据。
     refreshProcessPresentation();
+    refreshIoLog();
+}
+
+void DiskMonitorPage::changeEvent(QEvent* event)
+{
+    QWidget::changeEvent(event);
+    if (event->type() == QEvent::LanguageChange && m_ioLogModel != nullptr)
+    {
+        static_cast<FileIoLogModel*>(m_ioLogModel)->retranslateHeaders();
+        refreshIoLog();
+    }
 }
 
 void DiskMonitorPage::initializeUi()
 {
     m_rootLayout = new QVBoxLayout(this);
-    m_rootLayout->setContentsMargins(6, 6, 6, 6);
-    m_rootLayout->setSpacing(6);
+    ks::ui::StyleWorkspacePage(this, 6);
+    m_rootLayout->setSpacing(0);
 
-    QHBoxLayout* headerLayout = new QHBoxLayout();
-    headerLayout->setContentsMargins(0, 0, 0, 0);
-    headerLayout->setSpacing(8);
-
-    m_titleLabel = new QLabel(QStringLiteral("硬盘监控"), this);
-    m_titleLabel->setStyleSheet(
-        QStringLiteral("font-size:18px;font-weight:700;color:%1;")
-        .arg(KswordTheme::TextPrimaryHex()));
-    headerLayout->addWidget(m_titleLabel, 0);
-
-    m_statusLabel = new QLabel(QStringLiteral("正在建立采样基线..."), this);
-    m_statusLabel->setStyleSheet(
-        QStringLiteral("font-size:13px;color:%1;").arg(KswordTheme::TextSecondaryHex()));
+    auto* header = new QWidget(this);
+    ks::ui::StylePrimaryToolbar(header);
+    auto* headerLayout = new QHBoxLayout(header);
+    headerLayout->setContentsMargins(6, 6, 6, 6);
+    headerLayout->setSpacing(6);
+    m_titleLabel = new QLabel(QStringLiteral("硬盘监控"), header);
+    ks::ui::StylePrimarySectionTitle(m_titleLabel);
+    headerLayout->addWidget(m_titleLabel);
+    m_statusLabel = new QLabel(QStringLiteral("正在建立采样基线..."), header);
+    m_statusLabel->setWordWrap(true);
     headerLayout->addWidget(m_statusLabel, 1);
-
-    m_refreshButton = new QPushButton(QStringLiteral("刷新"), this);
+    m_refreshButton = new QPushButton(QStringLiteral("刷新"), header);
     m_refreshButton->setToolTip(QStringLiteral("立即刷新进程磁盘 IO 计数器"));
-    m_refreshButton->setStyleSheet(KswordTheme::ThemedButtonStyle());
-    headerLayout->addWidget(m_refreshButton, 0);
+    headerLayout->addWidget(m_refreshButton);
     ks::ui::NormalizeToolbarRow(headerLayout);
-    m_rootLayout->addLayout(headerLayout, 0);
+    m_rootLayout->addWidget(header);
 
-    m_summaryLabel = new QLabel(QStringLiteral("读: 0 B/s    写: 0 B/s    勾选进程: 0"), this);
-    m_summaryLabel->setStyleSheet(
-        QStringLiteral("font-size:13px;font-weight:600;color:%1;")
-        .arg(KswordTheme::TextPrimaryHex()));
-    m_rootLayout->addWidget(m_summaryLabel, 0);
-
-    QHBoxLayout* filterLayout = new QHBoxLayout();
-    filterLayout->setContentsMargins(0, 0, 0, 0);
-    filterLayout->setSpacing(8);
-
-    m_filterEdit = new QLineEdit(this);
+    auto* resultTabs = new QTabWidget(this);
+    resultTabs->setObjectName(QStringLiteral("disk_monitor_result_tabs"));
+    m_rootLayout->addWidget(resultTabs, 1);
+    auto* activityPage = new QWidget(resultTabs);
+    activityPage->setObjectName(QStringLiteral("disk_monitor_activity_page"));
+    auto* activityLayout = new QVBoxLayout(activityPage);
+    activityLayout->setContentsMargins(0, 6, 0, 0);
+    activityLayout->setSpacing(6);
+    auto* filters = new QWidget(activityPage);
+    ks::ui::StylePrimaryToolbar(filters);
+    auto* filterLayout = new QGridLayout(filters);
+    filterLayout->setContentsMargins(6, 6, 6, 6);
+    filterLayout->setHorizontalSpacing(6);
+    filterLayout->setVerticalSpacing(6);
+    filterLayout->setColumnStretch(1, 1);
+    m_filterEdit = new QLineEdit(filters);
     ks::ui::StyleSearchField(m_filterEdit);
     m_filterEdit->setPlaceholderText(QStringLiteral("过滤进程名、PID 或路径"));
     m_filterEdit->setClearButtonEnabled(true);
-    filterLayout->addWidget(m_filterEdit, 1);
-
-    m_onlyActiveCheckBox = new QCheckBox(QStringLiteral("仅显示有磁盘 IO"), this);
+    filterLayout->addWidget(m_filterEdit, 0, 0, 1, 2);
+    m_onlyActiveCheckBox = new QCheckBox(QStringLiteral("仅显示有磁盘 IO"), filters);
     m_onlyActiveCheckBox->setToolTip(QStringLiteral("只显示当前采样周期读/写速率大于 0 的进程"));
-    filterLayout->addWidget(m_onlyActiveCheckBox, 0);
-
-    m_selectActiveButton = new QPushButton(QStringLiteral("勾选活跃进程"), this);
+    filterLayout->addWidget(m_onlyActiveCheckBox, 0, 2);
+    auto* selectionActions = new QWidget(filters);
+    auto* selectionLayout = new ks::ui::FlowLayout(selectionActions, 0, 6, 6);
+    m_selectActiveButton = new QPushButton(QStringLiteral("勾选活跃进程"), selectionActions);
     m_selectActiveButton->setToolTip(QStringLiteral("勾选当前采样周期存在读写活动的进程"));
-    m_selectActiveButton->setStyleSheet(KswordTheme::ThemedButtonStyle());
-    filterLayout->addWidget(m_selectActiveButton, 0);
-
-    m_clearSelectionButton = new QPushButton(QStringLiteral("清空勾选"), this);
+    selectionLayout->addWidget(m_selectActiveButton);
+    m_clearSelectionButton = new QPushButton(QStringLiteral("清空勾选"), selectionActions);
     m_clearSelectionButton->setToolTip(QStringLiteral("清空下方磁盘活动表的 PID 过滤条件"));
-    m_clearSelectionButton->setStyleSheet(KswordTheme::ThemedButtonStyle());
-    filterLayout->addWidget(m_clearSelectionButton, 0);
-    ks::ui::NormalizeToolbarRow(filterLayout);
-    m_rootLayout->addLayout(filterLayout, 0);
+    selectionLayout->addWidget(m_clearSelectionButton);
+    ks::ui::NormalizeToolbarLayout(selectionLayout);
+    filterLayout->addWidget(selectionActions, 1, 0);
+    m_summaryLabel = new QLabel(QStringLiteral("读: 0 B/s    写: 0 B/s    勾选进程: 0"), filters);
+    m_summaryLabel->setWordWrap(true);
+    filterLayout->addWidget(m_summaryLabel, 1, 1, 1, 2);
+    activityLayout->addWidget(filters);
 
-    m_splitter = new QSplitter(Qt::Vertical, this);
-    m_rootLayout->addWidget(m_splitter, 1);
-
+    m_splitter = new QSplitter(Qt::Vertical, activityPage);
+    m_splitter->setChildrenCollapsible(false);
+    activityLayout->addWidget(m_splitter, 1);
     m_processTable = new ks::ui::VisibleTableWidget(this);
     // 磁盘采样的进程选择器不占用快照条；对比保留在下方活动证据表。
     ks::ui::SetTableActionBarMode(m_processTable, ks::ui::TableActionBarMode::None);
@@ -1265,12 +1270,16 @@ void DiskMonitorPage::initializeUi()
         m_processTable->horizontalHeader()->visualIndex(ProcessColumnName),
         1);
     installProcessColumnMenu();
-    QWidget* processSection = createDiskMonitorSection(
-        m_splitter,
-        &m_processSectionButton,
-        QStringLiteral("磁盘活动的进程"),
-        m_processTable);
-    m_splitter->addWidget(processSection);
+    ks::ui::ResultTableCapabilities processCapabilities;
+    processCapabilities.actionBar = ks::ui::TableActionBarMode::None;
+    ks::ui::ResultTableHost::ensure(m_processTable)->bindModel(m_processTable->model(),
+        {{ProcessColumnChecked, QStringLiteral("selected")}, {ProcessColumnPid, QStringLiteral("pid")},
+         {ProcessColumnName, QStringLiteral("process")}, {ProcessColumnReadRate, QStringLiteral("read_rate")},
+         {ProcessColumnWriteRate, QStringLiteral("write_rate")}, {ProcessColumnTotalRate, QStringLiteral("total_rate")},
+         {ProcessColumnResponse, QStringLiteral("response")}, {ProcessColumnReadOps, QStringLiteral("read_iops")},
+         {ProcessColumnWriteOps, QStringLiteral("write_iops")}, {ProcessColumnPath, QStringLiteral("image_path")}}, processCapabilities);
+    m_splitter->addWidget(createDiskMonitorSection(m_splitter, &m_processSectionTitle,
+        QStringLiteral("磁盘活动的进程"), m_processTable));
 
     m_activityTable = new ks::ui::VisibleTableWidget(this);
     // 文件 I/O 现场变化值得留存对比，保留完整证据操作栏。
@@ -1300,26 +1309,170 @@ void DiskMonitorPage::initializeUi()
         m_activityTable->horizontalHeader()->visualIndex(
             ActivityColumnProcess),
         0);
-    QWidget* activitySection = createDiskMonitorSection(
-        m_splitter,
-        &m_activitySectionButton,
-        QStringLiteral("磁盘活动"),
-        m_activityTable);
-    m_splitter->addWidget(activitySection);
-
-    // “存储”区域补齐资源监视器第三层视图。容量和性能计数器与进程采样
-    // 在同一后台线程读取，页面不会增加额外刷新定时器。
-    m_storagePanel = new DiskMonitorStoragePanel(this);
-    QWidget* storageSection = createDiskMonitorSection(
-        m_splitter,
-        &m_storageSectionButton,
-        QStringLiteral("存储"),
-        m_storagePanel);
-    m_splitter->addWidget(storageSection);
-    m_splitter->setStretchFactor(0, 2);
+    ks::ui::ResultTableCapabilities activityCapabilities;
+    activityCapabilities.actionBar = ks::ui::TableActionBarMode::Full;
+    ks::ui::ResultTableHost::ensure(m_activityTable)->bindModel(m_activityTable->model(),
+        {{ActivityColumnPid, QStringLiteral("pid")}, {ActivityColumnProcess, QStringLiteral("process")},
+         {ActivityColumnFile, QStringLiteral("path")}, {ActivityColumnReadRate, QStringLiteral("read_rate")},
+         {ActivityColumnWriteRate, QStringLiteral("write_rate")}, {ActivityColumnTotalRate, QStringLiteral("total_rate")},
+         {ActivityColumnIoPriority, QStringLiteral("io_priority")}, {ActivityColumnResponse, QStringLiteral("response")}}, activityCapabilities);
+    m_splitter->addWidget(createDiskMonitorSection(m_splitter, &m_activitySectionTitle,
+        QStringLiteral("磁盘活动"), m_activityTable));
+    m_splitter->setStretchFactor(0, 1);
     m_splitter->setStretchFactor(1, 2);
-    m_splitter->setStretchFactor(2, 1);
-    m_splitter->setSizes({ 300, 300, 170 });
+    resultTabs->addTab(activityPage, ks::i18n::sourceText(QStringLiteral("磁盘活动")));
+    bindDiskMonitorTab(resultTabs, activityPage, QStringLiteral("磁盘活动"));
+
+    initializeIoLogUi(resultTabs);
+    auto* storagePage = new QWidget(resultTabs);
+    storagePage->setObjectName(QStringLiteral("disk_monitor_queue_page"));
+    auto* storageLayout = new QVBoxLayout(storagePage);
+    storageLayout->setContentsMargins(0, 6, 0, 0);
+    storageLayout->setSpacing(6);
+    // The existing panel owns the single Compact copy/export bar. Sampling still
+    // uses its shared backend on the same worker, independently of the visible tab.
+    m_storagePanel = new DiskMonitorStoragePanel(storagePage);
+    storageLayout->addWidget(m_storagePanel, 1);
+    m_storageSummaryLabel = new QLabel(m_storagePanel->summaryText(), storagePage);
+    m_storageSummaryLabel->setWordWrap(true);
+    storageLayout->addWidget(m_storageSummaryLabel);
+    resultTabs->addTab(storagePage, ks::i18n::sourceText(QStringLiteral("卷队列与性能")));
+    bindDiskMonitorTab(resultTabs, storagePage, QStringLiteral("卷队列与性能"));
+    ks::ui::StyleJoinedResultTabs(resultTabs, header);
+    connect(resultTabs, &QTabWidget::currentChanged, this, [this](int) { refreshProcessPresentation(); refreshIoLog(); });
+}
+
+void DiskMonitorPage::initializeIoLogUi(QTabWidget* tabs)
+{
+    auto* page = new QWidget(tabs);
+    page->setObjectName(QStringLiteral("disk_monitor_io_log_page"));
+    auto* layout = new QVBoxLayout(page);
+    layout->setContentsMargins(0, 6, 0, 0);
+    layout->setSpacing(6);
+    auto* toolbar = new QWidget(page);
+    ks::ui::StylePrimaryToolbar(toolbar);
+    auto* toolbarLayout = new QVBoxLayout(toolbar);
+    toolbarLayout->setContentsMargins(6, 6, 6, 6);
+    toolbarLayout->setSpacing(6);
+    auto* controls = new QHBoxLayout;
+    controls->setContentsMargins(0, 0, 0, 0);
+    controls->setSpacing(6);
+    m_recordIoLog = new QCheckBox(ks::i18n::sourceText(QStringLiteral("记录文件 I/O")), page);
+    bindDiskMonitorText(m_recordIoLog, QStringLiteral("记录文件 I/O"));
+    controls->addWidget(m_recordIoLog);
+    auto* clear = new QPushButton(ks::i18n::sourceText(QStringLiteral("清空日志")), page);
+    bindDiskMonitorText(clear, QStringLiteral("清空日志"));
+    auto* filter = new QLineEdit(page);
+    ks::ui::StyleSearchField(filter);
+    filter->setPlaceholderText(ks::i18n::sourceText(QStringLiteral("过滤文件、记录 PID、阶段或 IRP")));
+    ks::i18n::LanguageManager::instance().bindPlaceholder(filter, diskMonitorSourceKey(QStringLiteral("过滤文件、记录 PID、阶段或 IRP")), QStringLiteral("过滤文件、记录 PID、阶段或 IRP"));
+    controls->addWidget(filter, 1);
+    controls->addWidget(clear);
+    ks::ui::NormalizeToolbarRow(controls);
+    toolbarLayout->addLayout(controls);
+    layout->addWidget(toolbar);
+    m_ioLogTable = new ks::ui::TableActionTableView(page);
+    auto* model = new FileIoLogModel(m_ioLogTable);
+    m_ioLogModel = model;
+    m_ioLogFilter = new QSortFilterProxyModel(m_ioLogTable);
+    m_ioLogFilter->setSourceModel(model);
+    m_ioLogFilter->setFilterKeyColumn(-1);
+    m_ioLogFilter->setFilterCaseSensitivity(Qt::CaseInsensitive);
+    m_ioLogTable->setModel(m_ioLogFilter);
+    m_ioLogTable->setSelectionBehavior(QAbstractItemView::SelectRows);
+    m_ioLogTable->setSelectionMode(QAbstractItemView::ExtendedSelection);
+    m_ioLogTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    m_ioLogTable->setAlternatingRowColors(true);
+    m_ioLogTable->verticalHeader()->hide();
+    m_ioLogTable->horizontalHeader()->setSectionResizeMode(QHeaderView::Interactive);
+    m_ioLogTable->setColumnWidth(0, 190);
+    m_ioLogTable->setColumnWidth(3, 350);
+    ks::ui::ApplyTablePresentation(m_ioLogTable);
+    ks::ui::ResultTableCapabilities capabilities;
+    capabilities.actionBar = ks::ui::TableActionBarMode::Full;
+    capabilities.headerClickSorting = false; // Arrival order is evidence, even with reused IRPs.
+    ks::ui::ResultTableHost::ensure(m_ioLogTable)->bindModel(m_ioLogFilter,
+        {{0, QStringLiteral("time")}, {1, QStringLiteral("phase")}, {2, QStringLiteral("header_pid")},
+         {3, QStringLiteral("path")}, {4, QStringLiteral("requested_bytes")}, {5, QStringLiteral("offset")},
+         {6, QStringLiteral("irp")}, {7, QStringLiteral("duration")}, {8, QStringLiteral("ntstatus")}}, capabilities);
+    auto* columnControls = new QHBoxLayout;
+    columnControls->setContentsMargins(0, 0, 0, 0);
+    disk_monitor_ui::InstallColumnPresets(columnControls, m_ioLogTable,
+        {0, 1, 2, 3, 4}, {0, 1, 2, 5, 6, 7, 8},
+        QStringLiteral("A：文件请求"), QStringLiteral("B：完成与关联"));
+    columnControls->addStretch();
+    ks::ui::NormalizeToolbarRow(columnControls);
+    toolbarLayout->addLayout(columnControls);
+    layout->addWidget(m_ioLogTable, 1);
+    auto* scope = new QLabel(ks::i18n::sourceText(QStringLiteral("Kernel-File 请求日志；请求字节不代表落盘量，最多保留 10000 条。")), page);
+    bindDiskMonitorText(scope, QStringLiteral("Kernel-File 请求日志；请求字节不代表落盘量，最多保留 10000 条。"));
+    scope->setWordWrap(true);
+    const QString scopeDetails = QStringLiteral("Kernel-File 文件请求日志；请求字节不代表实际落盘量。记录 PID 为事件头上下文，完成事件可能由系统线程记录。最多保留 10000 条，取消勾选暂停记录，卷队列采样继续。");
+    ks::i18n::LanguageManager::instance().bindToolTip(scope, diskMonitorSourceKey(scopeDetails), scopeDetails);
+    ks::i18n::LanguageManager::instance().bindToolTip(m_recordIoLog, diskMonitorSourceKey(scopeDetails), scopeDetails);
+    layout->addWidget(scope);
+    m_ioLogStatus = new QLabel(page);
+    m_ioLogStatus->setWordWrap(true);
+    layout->addWidget(m_ioLogStatus);
+    tabs->addTab(page, ks::i18n::sourceText(QStringLiteral("文件 I/O 日志")));
+    bindDiskMonitorTab(tabs, page, QStringLiteral("文件 I/O 日志"));
+    connect(filter, &QLineEdit::textChanged, m_ioLogFilter, &QSortFilterProxyModel::setFilterFixedString);
+    connect(m_recordIoLog, &QCheckBox::toggled, this, [this](bool capture) {
+        m_samplingState->m_recordIoLog.store(capture);
+        refreshIoLog();
+    });
+    connect(clear, &QPushButton::clicked, this, [this, model]() {
+        if (ks::ui::IsTableUiCommitBlockedByContextMenu({m_ioLogTable})) return;
+        {
+            std::lock_guard<std::mutex> lock(m_samplingState->m_fileActivityMutex);
+            m_samplingState->m_ioLogPending.clear();
+            m_samplingState->m_ioLogOverwritten = 0;
+        }
+        model->clear();
+        m_displayLogEvicted = 0;
+        refreshIoLog();
+    });
+}
+
+void DiskMonitorPage::refreshIoLog()
+{
+    if (m_ioLogTable == nullptr || !m_ioLogTable->isVisible()
+        || ks::ui::IsTableUiCommitBlockedByContextMenu({m_ioLogTable})) return;
+    std::deque<FileIoLogRecord> pending;
+    std::uint64_t overwritten = 0;
+    {
+        std::lock_guard<std::mutex> lock(m_samplingState->m_fileActivityMutex);
+        pending.swap(m_samplingState->m_ioLogPending);
+        overwritten = m_samplingState->m_ioLogOverwritten;
+    }
+    std::vector<FileIoLogModel::Row> rows;
+    rows.reserve(pending.size());
+    constexpr std::uint64_t unixEpoch100ns = 116444736000000000ULL;
+    for (const auto& event : pending)
+    {
+        const QString time = event.time100ns >= unixEpoch100ns
+            ? QDateTime::fromMSecsSinceEpoch(static_cast<qint64>((event.time100ns - unixEpoch100ns) / 10000)).toString(QStringLiteral("yyyy-MM-dd HH:mm:ss.zzz"))
+            : QStringLiteral("N/A");
+        const QString phase = !event.operationKnown ? QStringLiteral("Operation/End") : event.write ? (event.completed ? QStringLiteral("Write/End") : QStringLiteral("Write/Start"))
+            : (event.completed ? QStringLiteral("Read/End") : QStringLiteral("Read/Start"));
+        rows.push_back({time, phase, QString::number(event.headerPid), event.path.isEmpty() ? QStringLiteral("N/A") : event.path,
+            event.requestedBytesAvailable ? QString::number(event.requestedBytes) : QStringLiteral("N/A"), event.offsetAvailable ? QString::number(event.offset) : QStringLiteral("N/A"),
+            event.irp != 0 ? QStringLiteral("0x%1").arg(event.irp, 0, 16) : QStringLiteral("N/A"),
+            event.durationAvailable ? QString::number(event.durationMs, 'f', 3) : QStringLiteral("N/A"),
+            event.statusAvailable ? QStringLiteral("0x%1").arg(event.status, 8, 16, QLatin1Char('0')) : QStringLiteral("N/A")});
+    }
+    const bool followTail = m_ioLogTable->verticalScrollBar()->value() == m_ioLogTable->verticalScrollBar()->maximum();
+    auto* model = static_cast<FileIoLogModel*>(m_ioLogModel);
+    m_displayLogEvicted += model->append(std::move(rows));
+    if (followTail) m_ioLogTable->scrollToBottom();
+    const QString capture = m_samplingState->m_recordIoLog.load()
+        ? ks::i18n::sourceText(QStringLiteral("记录中")) : ks::i18n::sourceText(QStringLiteral("已暂停记录"));
+    const QString etw = m_samplingState->m_fileActivityEtwRunning.load()
+        ? ks::i18n::sourceText(QStringLiteral("ETW 运行中"))
+        : ks::i18n::sourceText(QStringLiteral("ETW 不可用（错误 %1），请以管理员权限重新启动 KSword")).arg(m_samplingState->m_fileActivityEtwLastStatus.load());
+    m_ioLogStatus->setText(ks::i18n::sourceText(QStringLiteral("%1；%2；保留 %3 条；显示淘汰 %4 条；缓冲覆盖 %5 条；ETW 丢失事件 %6 / 缓冲 %7"))
+        .arg(capture, etw).arg(model->rowCount()).arg(m_displayLogEvicted).arg(overwritten)
+        .arg(m_samplingState->m_etwEventsLost.load()).arg(m_samplingState->m_etwBuffersLost.load()));
 }
 
 void DiskMonitorPage::startInitialSampling()
@@ -1438,7 +1591,7 @@ void DiskMonitorPage::configureTableWidget(QTableWidget* tableWidget, const int 
     tableWidget->verticalHeader()->setVisible(false);
     tableWidget->verticalHeader()->setDefaultSectionSize(24);
     tableWidget->horizontalHeader()->setStretchLastSection(false);
-    tableWidget->setStyleSheet(tableHeaderStyle());
+    ks::ui::ApplyTablePresentation(tableWidget);
     installDiskMonitorTableCopyMenu(tableWidget, processIdColumn);
 }
 
@@ -1507,6 +1660,7 @@ void DiskMonitorPage::installProcessColumnMenu()
 
 void DiskMonitorPage::refreshNow()
 {
+    refreshIoLog();
     if (m_samplingState->m_processSamplingStopRequested.load(std::memory_order_acquire)) return;
     if (m_samplingState->m_processSamplingInProgress.exchange(true)) return;
     if (m_processSamplingThread != nullptr && m_processSamplingThread->joinable()) m_processSamplingThread->join();
@@ -1623,7 +1777,7 @@ void DiskMonitorPage::applyProcessDiskSamples(
 
 void DiskMonitorPage::refreshProcessPresentation()
 {
-    if (!m_processPresentationDirty || !isVisible())
+    if (!m_processPresentationDirty || !isVisible() || (m_splitter != nullptr && !m_splitter->isVisible()))
     {
         return;
     }
@@ -2239,28 +2393,28 @@ void DiskMonitorPage::updateSummaryLabels(const std::vector<ProcessDiskSample>& 
             .arg(modeText));
     }
 
-    // 折叠标题在区域关闭时仍保留关键指标，对齐资源监视器的分区摘要。
-    if (m_processSectionButton != nullptr)
+    // 中性分区标题在折叠后仍保留关键指标；队列摘要属于独立结果页。
+    if (m_processSectionTitle != nullptr)
     {
-        m_processSectionButton->setText(
+        m_processSectionTitle->setText(
             QStringLiteral("磁盘活动的进程    读: %1    写: %2")
             .arg(formatBytesPerSecond(totalReadBytesPerSec))
             .arg(formatBytesPerSecond(totalWriteBytesPerSec)));
     }
-    if (m_activitySectionButton != nullptr)
+    if (m_activitySectionTitle != nullptr)
     {
         const int activityRowCount = m_activityTable != nullptr
-            ? std::max(1,m_visibleActivityCount)
+            ? std::max(0, m_visibleActivityCount)
             : 0;
-        m_activitySectionButton->setText(
+        m_activitySectionTitle->setText(
             QStringLiteral("磁盘活动    当前行: %1    勾选进程: %2")
             .arg(activityRowCount)
             .arg(static_cast<int>(m_selectedPidSet.size())));
     }
-    if (m_storageSectionButton != nullptr &&
+    if (m_storageSummaryLabel != nullptr &&
         m_storagePanel != nullptr)
     {
-        m_storageSectionButton->setText(m_storagePanel->summaryText());
+        m_storageSummaryLabel->setText(m_storagePanel->summaryText());
     }
 }
 
@@ -2309,7 +2463,7 @@ void DiskMonitorPage::startFileActivityEtw()
 
     m_fileActivityEtwThread = std::make_unique<std::thread>([state = m_samplingState]()
     {
-        const std::wstring sessionNameWide(kDiskMonitorEtwSessionName);
+        const std::wstring sessionNameWide(state->m_etwSessionName);
         const ULONG traceNameBytes =
             static_cast<ULONG>((sessionNameWide.size() + 1) * sizeof(wchar_t));
         const ULONG propertyBufferSize =
@@ -2320,7 +2474,7 @@ void DiskMonitorPage::startFileActivityEtw()
         properties->Wnode.ClientContext = 2;
         properties->Wnode.Flags = WNODE_FLAG_TRACED_GUID;
         // 私有实时会话只作为承载容器，Kernel-File provider 通过 EnableTraceEx2 显式启用。
-        properties->Wnode.Guid = kDiskMonitorEtwSessionGuid;
+        properties->Wnode.Guid = state->m_etwSessionGuid;
         properties->LogFileMode = EVENT_TRACE_REAL_TIME_MODE;
         properties->LoggerNameOffset = sizeof(EVENT_TRACE_PROPERTIES);
         properties->FlushTimer = 1;
@@ -2334,11 +2488,6 @@ void DiskMonitorPage::startFileActivityEtw()
 
         TRACEHANDLE sessionHandle = 0;
         ULONG startStatus = ::StartTraceW(&sessionHandle, loggerNamePointer, properties);
-        if (startStatus == ERROR_ALREADY_EXISTS)
-        {
-            ::ControlTraceW(0, loggerNamePointer, properties, EVENT_TRACE_CONTROL_STOP);
-            startStatus = ::StartTraceW(&sessionHandle, loggerNamePointer, properties);
-        }
         if (startStatus != ERROR_SUCCESS)
         {
             state->m_fileActivityEtwLastStatus.store(startStatus);
@@ -2407,6 +2556,7 @@ void DiskMonitorPage::startFileActivityEtw()
         traceLogFile.LoggerName = loggerNamePointer;
         traceLogFile.ProcessTraceMode = PROCESS_TRACE_MODE_REAL_TIME | PROCESS_TRACE_MODE_EVENT_RECORD;
         traceLogFile.EventRecordCallback = &DiskMonitorPage::fileActivityEtwCallback;
+        traceLogFile.BufferCallback = &DiskMonitorPage::fileActivityEtwBufferCallback;
         traceLogFile.Context = state.get();
 
         TRACEHANDLE traceHandle = ::OpenTraceW(&traceLogFile);
@@ -2481,7 +2631,7 @@ void DiskMonitorPage::stopFileActivityEtw()
     const std::uint64_t ownedSessionHandle = m_samplingState->m_fileActivityEtwSessionHandle.exchange(0);
     if (ownedSessionHandle != 0)
     {
-        const std::wstring sessionNameWide(kDiskMonitorEtwSessionName);
+        const std::wstring sessionNameWide(m_samplingState->m_etwSessionName);
         std::vector<unsigned char> propertyBuffer(
             sizeof(EVENT_TRACE_PROPERTIES) + (sessionNameWide.size() + 1) * sizeof(wchar_t),
             0);
@@ -2508,6 +2658,24 @@ void DiskMonitorPage::stopFileActivityEtw()
     m_fileActivityEtwThread->join();
     m_fileActivityEtwThread.reset();
     m_samplingState->m_fileActivityEtwRunning.store(false);
+}
+
+ULONG WINAPI DiskMonitorPage::fileActivityEtwBufferCallback(EVENT_TRACE_LOGFILEW* logFile)
+{
+    if (logFile != nullptr && logFile->Context != nullptr)
+    {
+        auto* state = static_cast<SamplingState*>(logFile->Context);
+        const auto oldEvents = state->m_etwEventsLost.exchange(logFile->EventsLost);
+        const auto oldBuffers = state->m_etwBuffersLost.exchange(logFile->LogfileHeader.BuffersLost);
+        if (logFile->EventsLost > oldEvents || logFile->LogfileHeader.BuffersLost > oldBuffers)
+        {
+            std::lock_guard<std::mutex> lock(state->m_fileActivityMutex);
+            // Missing close/end events invalidate object and IRP associations.
+            state->m_pendingFileIoByIrp.clear();
+            state->m_filePathByObject.clear();
+        }
+    }
+    return TRUE;
 }
 
 void WINAPI DiskMonitorPage::fileActivityEtwCallback(struct _EVENT_RECORD* eventRecordPointer)
@@ -2552,7 +2720,11 @@ void DiskMonitorPage::handleFileActivityEtwEvent(
     std::uint64_t fileKeyValue = 0;
     std::uint64_t irpValue = 0;
     std::uint64_t transferSize = 0;
-    std::uint64_t durationValue = 0;
+    bool transferAvailable = false;
+    std::uint64_t offsetValue = 0;
+    std::uint32_t statusValue = 0;
+    bool offsetAvailable = false;
+    bool statusAvailable = false;
     std::uint64_t ioPriorityValue = 0;
     QString filePathText;
     QString ioPriorityText;
@@ -2621,11 +2793,19 @@ void DiskMonitorPage::handleFileActivityEtwEvent(
         }
 
         std::uint64_t numericValue = 0;
+        bool numericAvailable = false;
+        if ((propertyInfo.Flags & PropertyParamCount) != 0 || propertyInfo.count > 1) continue;
         if (inTypeValue == TDH_INTYPE_POINTER
             || inTypeValue == TDH_INTYPE_HEXINT64
             || inTypeValue == TDH_INTYPE_UINT64)
         {
-            readScalar(propertyBuffer, &numericValue);
+            if (propertyBuffer.size() == sizeof(std::uint32_t))
+            {
+                std::uint32_t value32 = 0;
+                numericAvailable = readScalar(propertyBuffer, &value32);
+                numericValue = value32;
+            }
+            else numericAvailable = readScalar(propertyBuffer, &numericValue);
         }
         else if (inTypeValue == TDH_INTYPE_UINT32 || inTypeValue == TDH_INTYPE_HEXINT32)
         {
@@ -2633,6 +2813,7 @@ void DiskMonitorPage::handleFileActivityEtwEvent(
             if (readScalar(propertyBuffer, &value32))
             {
                 numericValue = value32;
+                numericAvailable = true;
             }
         }
         else if (inTypeValue == TDH_INTYPE_UINT16)
@@ -2641,8 +2822,10 @@ void DiskMonitorPage::handleFileActivityEtwEvent(
             if (readScalar(propertyBuffer, &value16))
             {
                 numericValue = value16;
+                numericAvailable = true;
             }
         }
+        if (!numericAvailable) continue;
 
         if (isFileObjectProperty(normalizedName))
         {
@@ -2662,10 +2845,17 @@ void DiskMonitorPage::handleFileActivityEtwEvent(
         else if (isTransferSizeProperty(normalizedName))
         {
             transferSize = numericValue;
+            transferAvailable = true;
         }
-        else if (isDurationProperty(normalizedName))
+        else if (normalizedName == QStringLiteral("offset") || normalizedName == QStringLiteral("byteoffset"))
         {
-            durationValue = numericValue;
+            offsetValue = numericValue;
+            offsetAvailable = true;
+        }
+        else if (normalizedName == QStringLiteral("ntstatus") || normalizedName == QStringLiteral("status"))
+        {
+            statusValue = static_cast<std::uint32_t>(numericValue);
+            statusAvailable = true;
         }
         else if (isIoPriorityProperty(normalizedName))
         {
@@ -2675,45 +2865,68 @@ void DiskMonitorPage::handleFileActivityEtwEvent(
     }
 
     std::lock_guard<std::mutex> lock(state.m_fileActivityMutex);
+    const auto appendLog = [&state](FileIoLogRecord record) {
+        if (!state.m_recordIoLog.load(std::memory_order_relaxed)) return;
+        constexpr std::size_t pendingCapacity = 2048;
+        if (state.m_ioLogPending.size() == pendingCapacity)
+        {
+            state.m_ioLogPending.pop_front();
+            ++state.m_ioLogOverwritten;
+        }
+        state.m_ioLogPending.push_back(std::move(record));
+    };
     if (isOperationEndEvent)
     {
-        if (irpValue == 0)
-        {
-            return;
-        }
-
         const auto pendingIt = state.m_pendingFileIoByIrp.find(irpValue);
         if (pendingIt == state.m_pendingFileIoByIrp.end())
         {
+            // End may belong to another file operation or a lost/evicted start.
+            // Preserve the raw completion; never invent its operation or path.
+            FileIoLogRecord log;
+            log.time100ns = eventRecord->EventHeader.TimeStamp.QuadPart > 0
+                ? static_cast<std::uint64_t>(eventRecord->EventHeader.TimeStamp.QuadPart) : 0;
+            log.irp = irpValue;
+            log.headerPid = eventRecord->EventHeader.ProcessId;
+            log.completed = true;
+            log.operationKnown = false;
+            log.status = statusValue;
+            log.statusAvailable = statusAvailable;
+            appendLog(std::move(log));
             return;
         }
 
         const PendingFileIoOperation pendingOperation = pendingIt->second;
         state.m_pendingFileIoByIrp.erase(pendingIt);
-        if (pendingOperation.filePath.isEmpty())
-        {
-            return;
-        }
-
         double responseTimeMs = 0.0;
         bool responseAvailable = false;
-        if (durationValue > 0)
+        // ProcessTrace normalizes both event timestamps to FILETIME because
+        // PROCESS_TRACE_MODE_RAW_TIMESTAMP is not set. Do not guess payload units.
+        if (pendingOperation.startTime100ns != 0
+            && eventRecord->EventHeader.TimeStamp.QuadPart >= static_cast<LONGLONG>(pendingOperation.startTime100ns))
         {
-            // 部分系统版本直接提供 Duration/IoTime，按 100ns 转毫秒。
-            responseTimeMs = static_cast<double>(durationValue) / 10000.0;
-            responseAvailable = true;
-        }
-        else if (pendingOperation.startTime100ns != 0
-            && eventRecord->EventHeader.TimeStamp.QuadPart > static_cast<LONGLONG>(pendingOperation.startTime100ns))
-        {
-            // Kernel-File 开始/完成事件同属当前实时会话，ClientContext=2 时 TimeStamp 为 100ns。
-            const std::uint64_t delta100ns =
-                static_cast<std::uint64_t>(eventRecord->EventHeader.TimeStamp.QuadPart)
+            const std::uint64_t delta100ns = static_cast<std::uint64_t>(eventRecord->EventHeader.TimeStamp.QuadPart)
                 - pendingOperation.startTime100ns;
             responseTimeMs = static_cast<double>(delta100ns) / 10000.0;
             responseAvailable = true;
         }
-        if (responseAvailable)
+        FileIoLogRecord log;
+        log.time100ns = eventRecord->EventHeader.TimeStamp.QuadPart > 0
+            ? static_cast<std::uint64_t>(eventRecord->EventHeader.TimeStamp.QuadPart) : 0;
+        log.irp = irpValue;
+        log.path = pendingOperation.filePath;
+        log.headerPid = eventRecord->EventHeader.ProcessId;
+        log.write = pendingOperation.write;
+        log.requestedBytes = pendingOperation.requestedBytes;
+        log.requestedBytesAvailable = pendingOperation.requestedBytesAvailable;
+        log.offset = pendingOperation.offset;
+        log.offsetAvailable = pendingOperation.offsetAvailable;
+        log.completed = true;
+        log.durationMs = responseTimeMs;
+        log.durationAvailable = responseAvailable;
+        log.status = statusValue;
+        log.statusAvailable = statusAvailable;
+        appendLog(std::move(log));
+        if (responseAvailable && !pendingOperation.filePath.isEmpty())
         {
             const QString keyText = fileActivityIdentityKey(
                 pendingOperation.pid,
@@ -2779,12 +2992,46 @@ void DiskMonitorPage::handleFileActivityEtwEvent(
             }
         }
     }
-    if (filePathText.isEmpty() || (!isReadEvent && !isWriteEvent))
+    if (!isReadEvent && !isWriteEvent)
     {
         return;
     }
 
     const std::uint32_t pid = static_cast<std::uint32_t>(eventRecord->EventHeader.ProcessId);
+    FileIoLogRecord log;
+    log.time100ns = eventRecord->EventHeader.TimeStamp.QuadPart > 0
+            ? static_cast<std::uint64_t>(eventRecord->EventHeader.TimeStamp.QuadPart) : 0;
+    log.irp = irpValue;
+    log.path = filePathText;
+    log.headerPid = pid;
+    log.write = isWriteEvent;
+    log.requestedBytes = transferSize;
+    log.requestedBytesAvailable = transferAvailable;
+    log.offset = offsetValue;
+    log.offsetAvailable = offsetAvailable;
+    appendLog(std::move(log));
+    if (irpValue != 0)
+    {
+        PendingFileIoOperation& pendingOperation = state.m_pendingFileIoByIrp[irpValue];
+        pendingOperation.pid = pid;
+        pendingOperation.write = isWriteEvent;
+        pendingOperation.requestedBytes = transferSize;
+        pendingOperation.requestedBytesAvailable = transferAvailable;
+        pendingOperation.offset = offsetValue;
+        pendingOperation.offsetAvailable = offsetAvailable;
+        pendingOperation.filePath = filePathText;
+        pendingOperation.ioPriorityText = ioPriorityText;
+        pendingOperation.startTime100ns =
+            eventRecord->EventHeader.TimeStamp.QuadPart > 0
+            ? static_cast<std::uint64_t>(eventRecord->EventHeader.TimeStamp.QuadPart)
+            : 0;
+        if (state.m_pendingFileIoByIrp.size() > 65536)
+        {
+            // OperationEnd 丢失或系统负载很高时避免未完成 IRP 缓存无限增长。
+            state.m_pendingFileIoByIrp.clear();
+        }
+    }
+    if (filePathText.isEmpty()) return;
     // Read/Write 本身就是独立 I/O 请求的开始证据，立即计入当前窗口。
     // OperationEnd 仅补充响应时间，避免长请求或丢失完成事件导致吞吐长期不可见。
     const QString keyText = fileActivityIdentityKey(pid, filePathText);
@@ -2809,23 +3056,7 @@ void DiskMonitorPage::handleFileActivityEtwEvent(
     }
     ++accumulator.eventCount;
 
-    if (irpValue != 0)
-    {
-        PendingFileIoOperation& pendingOperation = state.m_pendingFileIoByIrp[irpValue];
-        pendingOperation.pid = pid;
-        pendingOperation.filePath = filePathText;
-        pendingOperation.ioPriorityText = ioPriorityText;
-        pendingOperation.startTime100ns =
-            eventRecord->EventHeader.TimeStamp.QuadPart > 0
-            ? static_cast<std::uint64_t>(eventRecord->EventHeader.TimeStamp.QuadPart)
-            : 0;
-        if (state.m_pendingFileIoByIrp.size() > 65536)
-        {
-            // OperationEnd 丢失或系统负载很高时避免未完成 IRP 缓存无限增长。
-            state.m_pendingFileIoByIrp.clear();
-        }
-        return;
-    }
+
 }
 
 QTableWidgetItem* DiskMonitorPage::createReadOnlyItem(const QString& text) const

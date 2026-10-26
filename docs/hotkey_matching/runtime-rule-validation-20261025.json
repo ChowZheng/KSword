@@ -1,0 +1,1110 @@
+{
+  "schemaVersion": 3,
+  "generatedAtUtc": "2026-10-25T20:53:15.726356+00:00",
+  "sourceSha256": "2103a32e11b6d520b2ae12ad63df858afcadbb599f5e3915d6fdfbce80c1537d",
+  "sourceFiles": [
+    "tools/hotkey_rule_probe.c",
+    "KswordARKDriver/src/features/keyboard/keyboard_rule_match.c",
+    "KswordARKDriver/src/features/keyboard/keyboard_rule_register.c",
+    "KswordARKDriver/src/features/keyboard/keyboard_rule_insert.c",
+    "KswordARKDriver/src/features/keyboard/keyboard_rule_remove.c",
+    "KswordARKDriver/src/features/keyboard/keyboard_rule_slot.c",
+    "KswordARKDriver/src/features/keyboard/keyboard_rule_loop.c",
+    "KswordARKDriver/src/features/keyboard/keyboard_rule_assignment.c",
+    "KswordARKDriver/src/features/keyboard/keyboard_rule_owner.c",
+    "KswordARKDriver/src/features/keyboard/keyboard_rule_flow.c",
+    "KswordARKDriver/src/features/keyboard/keyboard_rule_values.c",
+    "KswordARKDriver/src/features/keyboard/keyboard_rule_pe.c",
+    "KswordARKDriver/src/features/keyboard/keyboard_rule_decode.c",
+    "third_party/zydis/Zydis.c",
+    "KswordARKDriver/src/features/keyboard/keyboard_rule_ir.h",
+    "KswordARKDriver/src/features/keyboard/keyboard_rule_match.h",
+    "KswordARKDriver/src/features/keyboard/keyboard_rule_flow.h",
+    "KswordARKDriver/src/features/keyboard/keyboard_rule_proof.h",
+    "third_party/zydis/Zydis.h"
+  ],
+  "testProbe": {
+    "path": ".codex-build-logs/hotkey-rule-host/hotkey_rule_probe-f59f8b54bf70c175.exe",
+    "sha256": "7dc4e2df38d8cee8464a8ebb19927cf46016f39869c5bcabb90a08e795ca73a6"
+  },
+  "cliProbe": {
+    "path": ".codex-build-logs/hotkey-rule-host/rule-probe-4140931d9b328b850765.exe",
+    "sha256": "c1a4228fddf3dbe07269f8593070589806ec05c0a11a0d26b667f1331fac0dd7"
+  },
+  "toolSha256": {
+    "tools/test_win32k_hotkey_matching.py": "bc20d1470fba5b18cadcdba0c3ace37986e388bf0fccbe67b4ece14b2b9b6913",
+    "tools/test_hotkey_runtime_rules.py": "b647e41f5e50f779ab673c9212379b22227bba2484989c8e5abf99b502428a1b",
+    "tools/pdb_offset_generator/match_win32k_hotkeys.py": "b253f3b573ab90259b5b55df6ddff78a764fe82931afcc89acd1aaa93ad6e560",
+    "tools/pdb_offset_generator/win32k_rule_host.py": "ad8cc49e5812f6728ebac594d95952d0b8bf192bdca9563e521273994f4282c6"
+  },
+  "tests": {
+    "command": "python tools/test_win32k_hotkey_matching.py",
+    "exitCode": 0,
+    "caseCount": 22,
+    "result": "PASS"
+  },
+  "cli": {
+    "entry": "tools/pdb_offset_generator/match_win32k_hotkeys.py",
+    "method": "same_production_c_semantic_rules",
+    "exitCode": 0,
+    "matchedPairs": 6,
+    "unmatchedPairs": 0,
+    "fullReport": ".codex-build-logs/hotkey-rule-host/final-cli-report-2103a32e11b6d520.json"
+  },
+  "pairs": [
+    {
+      "label": "22621.900",
+      "status": "matched",
+      "full": {
+        "file": "win32kfull.sys",
+        "sha256": "C9FE8812FCF6E84133562104F1604858F64DDA31FA57E89F5E13B36CE879ACB4",
+        "size": 3821568,
+        "machine": 34404,
+        "timestamp": 3647365691,
+        "sizeOfImage": 3842048,
+        "rsds": [
+          {
+            "guid": "1b68a248-248a-7eec-76f8-e8f8a0afa20b",
+            "age": 1
+          }
+        ]
+      },
+      "base": {
+        "file": "win32kbase.sys",
+        "sha256": "8261A8804867EDE7E4F114D0BB25B30778D0569E41B1965EA6DF92DC01D7BC46",
+        "size": 3575808,
+        "machine": 34404,
+        "timestamp": 109854895,
+        "sizeOfImage": 3604480,
+        "rsds": [
+          {
+            "guid": "b2f5baa3-8ecf-3975-8e9c-95d8a1a10564",
+            "age": 1
+          }
+        ]
+      },
+      "rules": {
+        "Matched": true,
+        "ErrorName": "ok",
+        "Error": 0,
+        "RuleVersion": 1,
+        "TableOffset": 12712,
+        "TableRva": 0,
+        "CacheOffset": 13760,
+        "CacheRva": 0,
+        "BucketCount": 128,
+        "ObjectSize": 64,
+        "OwnerOffset": 0,
+        "CallbackOffset": 8,
+        "WindowOffset": 16,
+        "WindowRepresentation": 1,
+        "DestinationOffset": 0,
+        "DestinationWidth": 0,
+        "ModifiersOffset": 24,
+        "FlagsOffset": 26,
+        "VkOffset": 28,
+        "IdOffset": 32,
+        "NextOffset": 40,
+        "ChildOffset": 48,
+        "ModifiersWidth": 2,
+        "FlagsWidth": 2,
+        "VkWidth": 4,
+        "IdWidth": 4,
+        "WindowObjectHandleOffset": 0,
+        "RemoveRva": 1579456,
+        "ScanRva": 591504,
+        "UnregisterRva": 1583056,
+        "RegisterRva": 1582036,
+        "InsertRva": 1579372,
+        "OwnerGetterRva": 3513000,
+        "OwnerGetterIndirect": 2,
+        "OwnerGetterDepth": 0,
+        "EnterCritRva": 416688,
+        "LeaveCritRva": 268112,
+        "ValidateHwndRva": 278240,
+        "AssignmentRva": 251024,
+        "SessionGetterSlotRva": 3498112,
+        "SessionGetterProvider": 1,
+        "AnalyzedFunctionCount": 15,
+        "EvidenceCount": 15,
+        "AnalyzedFunctions": [
+          1701760,
+          1582036,
+          412704,
+          284104,
+          294612,
+          880932,
+          1005948,
+          1580024,
+          1579088,
+          1578952,
+          1579372,
+          1732960,
+          1583056,
+          591504,
+          1579456
+        ],
+        "Evidence": [
+          {
+            "Rva": 1579413,
+            "Length": 4,
+            "Bytes": "48895728"
+          },
+          {
+            "Rva": 1579429,
+            "Length": 8,
+            "Bytes": "4889BCD8A8310000"
+          },
+          {
+            "Rva": 1582644,
+            "Length": 7,
+            "Bytes": "48FF152D751D00"
+          },
+          {
+            "Rva": 1582862,
+            "Length": 5,
+            "Bytes": "E859F2FFFF"
+          },
+          {
+            "Rva": 1582990,
+            "Length": 7,
+            "Bytes": "4C89A0C0350000"
+          },
+          {
+            "Rva": 1701964,
+            "Length": 5,
+            "Bytes": "E8832BFEFF"
+          },
+          {
+            "Rva": 1579611,
+            "Length": 1,
+            "Bytes": "C3"
+          },
+          {
+            "Rva": 1579620,
+            "Length": 3,
+            "Bytes": "488917"
+          },
+          {
+            "Rva": 1579623,
+            "Length": 7,
+            "Bytes": "48FF1512811D00"
+          },
+          {
+            "Rva": 976128,
+            "Length": 5,
+            "Bytes": "E8BB340900"
+          },
+          {
+            "Rva": 591578,
+            "Length": 4,
+            "Bytes": "488D3CF0"
+          },
+          {
+            "Rva": 1583120,
+            "Length": 8,
+            "Bytes": "4883B8C035000000"
+          },
+          {
+            "Rva": 1583142,
+            "Length": 8,
+            "Bytes": "4883A0C035000000"
+          },
+          {
+            "Rva": 1583085,
+            "Length": 5,
+            "Bytes": "E89EDEF0FF"
+          },
+          {
+            "Rva": 1733043,
+            "Length": 5,
+            "Bytes": "E818B6FDFF"
+          }
+        ]
+      }
+    },
+    {
+      "label": "22621.6133",
+      "status": "matched",
+      "full": {
+        "file": "win32kfull.sys",
+        "sha256": "D4FE25352D5E64CE2466DDC3C20969EA0131F1BEAB9B80EDEA082CD3A03D7AC0",
+        "size": 4005888,
+        "machine": 34404,
+        "timestamp": 107211990,
+        "sizeOfImage": 4026368,
+        "rsds": [
+          {
+            "guid": "341f4273-d592-5437-1651-52de0da972c8",
+            "age": 1
+          }
+        ]
+      },
+      "base": {
+        "file": "win32kbase.sys",
+        "sha256": "023C38B6C2357EB328D842FD51C01BD966DB1F78EF90E78C29560C54C60DF9E4",
+        "size": 3260416,
+        "machine": 34404,
+        "timestamp": 258189541,
+        "sizeOfImage": 3293184,
+        "rsds": [
+          {
+            "guid": "25a9d932-6f85-6dda-51b5-287f5ca24f10",
+            "age": 1
+          }
+        ]
+      },
+      "rules": {
+        "Matched": true,
+        "ErrorName": "ok",
+        "Error": 0,
+        "RuleVersion": 1,
+        "TableOffset": 12736,
+        "TableRva": 0,
+        "CacheOffset": 13784,
+        "CacheRva": 0,
+        "BucketCount": 128,
+        "ObjectSize": 72,
+        "OwnerOffset": 0,
+        "CallbackOffset": 8,
+        "WindowOffset": 16,
+        "WindowRepresentation": 1,
+        "DestinationOffset": 24,
+        "DestinationWidth": 8,
+        "ModifiersOffset": 32,
+        "FlagsOffset": 34,
+        "VkOffset": 36,
+        "IdOffset": 40,
+        "NextOffset": 48,
+        "ChildOffset": 56,
+        "ModifiersWidth": 2,
+        "FlagsWidth": 2,
+        "VkWidth": 4,
+        "IdWidth": 4,
+        "WindowObjectHandleOffset": 0,
+        "RemoveRva": 261644,
+        "ScanRva": 256976,
+        "UnregisterRva": 257700,
+        "RegisterRva": 264968,
+        "InsertRva": 266284,
+        "OwnerGetterRva": 3689280,
+        "OwnerGetterIndirect": 2,
+        "OwnerGetterDepth": 0,
+        "EnterCritRva": 295536,
+        "LeaveCritRva": 314928,
+        "ValidateHwndRva": 286400,
+        "AssignmentRva": 327504,
+        "SessionGetterSlotRva": 3674240,
+        "SessionGetterProvider": 1,
+        "AnalyzedFunctionCount": 15,
+        "EvidenceCount": 15,
+        "AnalyzedFunctions": [
+          267296,
+          264968,
+          266608,
+          682140,
+          973404,
+          266092,
+          620376,
+          266368,
+          648404,
+          266284,
+          1288068,
+          257808,
+          257700,
+          256976,
+          261644
+        ],
+        "Evidence": [
+          {
+            "Rva": 266325,
+            "Length": 4,
+            "Bytes": "48895730"
+          },
+          {
+            "Rva": 266341,
+            "Length": 8,
+            "Bytes": "4889BCD8C0310000"
+          },
+          {
+            "Rva": 265672,
+            "Length": 7,
+            "Bytes": "48FF15313E3400"
+          },
+          {
+            "Rva": 265891,
+            "Length": 5,
+            "Bytes": "E884010000"
+          },
+          {
+            "Rva": 266022,
+            "Length": 7,
+            "Bytes": "4889B0D8350000"
+          },
+          {
+            "Rva": 267465,
+            "Length": 5,
+            "Bytes": "E83AF6FFFF"
+          },
+          {
+            "Rva": 261786,
+            "Length": 1,
+            "Bytes": "C3"
+          },
+          {
+            "Rva": 261749,
+            "Length": 3,
+            "Bytes": "488917"
+          },
+          {
+            "Rva": 261752,
+            "Length": 7,
+            "Bytes": "48FF15994D3400"
+          },
+          {
+            "Rva": 257181,
+            "Length": 5,
+            "Bytes": "E86A110000"
+          },
+          {
+            "Rva": 257046,
+            "Length": 4,
+            "Bytes": "488D3CF0"
+          },
+          {
+            "Rva": 257750,
+            "Length": 8,
+            "Bytes": "4883B8D835000000"
+          },
+          {
+            "Rva": 1498964,
+            "Length": 8,
+            "Bytes": "4883A0D835000000"
+          },
+          {
+            "Rva": 257729,
+            "Length": 5,
+            "Bytes": "E80AFDFFFF"
+          },
+          {
+            "Rva": 257886,
+            "Length": 5,
+            "Bytes": "E841FFFFFF"
+          }
+        ]
+      }
+    },
+    {
+      "label": "22621.7079",
+      "status": "matched",
+      "full": {
+        "file": "win32kfull.sys",
+        "sha256": "E634648C1356AA928EB2AD117D7C21B1B4936CBADDB842B95B9D3CE610C75295",
+        "size": 4009984,
+        "machine": 34404,
+        "timestamp": 4224994868,
+        "sizeOfImage": 4030464,
+        "rsds": [
+          {
+            "guid": "c889c590-ad6f-1af0-77f8-a2877e7e0ac7",
+            "age": 1
+          }
+        ]
+      },
+      "base": {
+        "file": "win32kbase.sys",
+        "sha256": "B4721EDC66321FA2B2DAA024BA2C2D39D7025B8845481DA59602D0B0B7CA0F5F",
+        "size": 3219456,
+        "machine": 34404,
+        "timestamp": 3651878072,
+        "sizeOfImage": 3260416,
+        "rsds": [
+          {
+            "guid": "09811d70-fbd0-906d-c8ec-b6dcb1e0ef49",
+            "age": 1
+          }
+        ]
+      },
+      "rules": {
+        "Matched": true,
+        "ErrorName": "ok",
+        "Error": 0,
+        "RuleVersion": 1,
+        "TableOffset": 12736,
+        "TableRva": 0,
+        "CacheOffset": 13784,
+        "CacheRva": 0,
+        "BucketCount": 128,
+        "ObjectSize": 72,
+        "OwnerOffset": 0,
+        "CallbackOffset": 8,
+        "WindowOffset": 16,
+        "WindowRepresentation": 1,
+        "DestinationOffset": 24,
+        "DestinationWidth": 8,
+        "ModifiersOffset": 32,
+        "FlagsOffset": 34,
+        "VkOffset": 36,
+        "IdOffset": 40,
+        "NextOffset": 48,
+        "ChildOffset": 56,
+        "ModifiersWidth": 2,
+        "FlagsWidth": 2,
+        "VkWidth": 4,
+        "IdWidth": 4,
+        "WindowObjectHandleOffset": 0,
+        "RemoveRva": 154228,
+        "ScanRva": 153504,
+        "UnregisterRva": 153404,
+        "RegisterRva": 155076,
+        "InsertRva": 156392,
+        "OwnerGetterRva": 3693544,
+        "OwnerGetterIndirect": 2,
+        "OwnerGetterDepth": 0,
+        "EnterCritRva": 283952,
+        "LeaveCritRva": 243792,
+        "ValidateHwndRva": 254656,
+        "AssignmentRva": 232688,
+        "SessionGetterSlotRva": 3678336,
+        "SessionGetterProvider": 1,
+        "AnalyzedFunctionCount": 15,
+        "EvidenceCount": 15,
+        "AnalyzedFunctions": [
+          154800,
+          155076,
+          156720,
+          168556,
+          1094636,
+          156200,
+          859784,
+          156476,
+          887872,
+          156392,
+          1301588,
+          153264,
+          153404,
+          153504,
+          154228
+        ],
+        "Evidence": [
+          {
+            "Rva": 156433,
+            "Length": 4,
+            "Bytes": "48895730"
+          },
+          {
+            "Rva": 156449,
+            "Length": 8,
+            "Bytes": "4889BCD8C0310000"
+          },
+          {
+            "Rva": 155780,
+            "Length": 7,
+            "Bytes": "48FF151DFC3500"
+          },
+          {
+            "Rva": 155999,
+            "Length": 5,
+            "Bytes": "E884010000"
+          },
+          {
+            "Rva": 156130,
+            "Length": 7,
+            "Bytes": "4889B0D8350000"
+          },
+          {
+            "Rva": 154969,
+            "Length": 5,
+            "Bytes": "E866000000"
+          },
+          {
+            "Rva": 154370,
+            "Length": 1,
+            "Bytes": "C3"
+          },
+          {
+            "Rva": 154333,
+            "Length": 3,
+            "Bytes": "488917"
+          },
+          {
+            "Rva": 154336,
+            "Length": 7,
+            "Bytes": "48FF15D9013600"
+          },
+          {
+            "Rva": 153709,
+            "Length": 5,
+            "Bytes": "E802020000"
+          },
+          {
+            "Rva": 153574,
+            "Length": 4,
+            "Bytes": "488D3CF0"
+          },
+          {
+            "Rva": 153454,
+            "Length": 8,
+            "Bytes": "4883B8D835000000"
+          },
+          {
+            "Rva": 1491370,
+            "Length": 8,
+            "Bytes": "4883A0D835000000"
+          },
+          {
+            "Rva": 153433,
+            "Length": 5,
+            "Bytes": "E842000000"
+          },
+          {
+            "Rva": 153342,
+            "Length": 5,
+            "Bytes": "E839000000"
+          }
+        ]
+      }
+    },
+    {
+      "label": "26100.1",
+      "status": "matched",
+      "full": {
+        "file": "win32kfull.sys",
+        "sha256": "548EE0D9398DF083D8647CF6A1169C906EBD8ABC2DB485500F9E02A58CCF2C73",
+        "size": 4169728,
+        "machine": 34404,
+        "timestamp": 168045522,
+        "sizeOfImage": 4173824,
+        "rsds": [
+          {
+            "guid": "09f93d19-40b1-da24-fb84-a539da77e060",
+            "age": 1
+          }
+        ]
+      },
+      "base": {
+        "file": "win32kbase.sys",
+        "sha256": "4C26EBA315D6097ADF23A0F50ED1C94C6E306AA5A0F4F1BF84FE9DDE78B3F4E4",
+        "size": 3395584,
+        "machine": 34404,
+        "timestamp": 238930564,
+        "sizeOfImage": 3407872,
+        "rsds": [
+          {
+            "guid": "c51d129d-a254-50c5-b3dc-820885a37a64",
+            "age": 1
+          }
+        ]
+      },
+      "rules": {
+        "Matched": true,
+        "ErrorName": "ok",
+        "Error": 0,
+        "RuleVersion": 1,
+        "TableOffset": 12480,
+        "TableRva": 0,
+        "CacheOffset": 13528,
+        "CacheRva": 0,
+        "BucketCount": 128,
+        "ObjectSize": 72,
+        "OwnerOffset": 0,
+        "CallbackOffset": 8,
+        "WindowOffset": 16,
+        "WindowRepresentation": 0,
+        "DestinationOffset": 24,
+        "DestinationWidth": 8,
+        "ModifiersOffset": 32,
+        "FlagsOffset": 34,
+        "VkOffset": 36,
+        "IdOffset": 40,
+        "NextOffset": 48,
+        "ChildOffset": 56,
+        "ModifiersWidth": 2,
+        "FlagsWidth": 2,
+        "VkWidth": 4,
+        "IdWidth": 4,
+        "WindowObjectHandleOffset": 0,
+        "RemoveRva": 2720116,
+        "ScanRva": 1875312,
+        "UnregisterRva": 1875312,
+        "RegisterRva": 477892,
+        "InsertRva": 479284,
+        "OwnerGetterRva": 3817104,
+        "OwnerGetterIndirect": 1,
+        "OwnerGetterDepth": 1,
+        "EnterCritRva": 296464,
+        "LeaveCritRva": 783088,
+        "ValidateHwndRva": 204912,
+        "AssignmentRva": 1288656,
+        "SessionGetterSlotRva": 3813496,
+        "SessionGetterProvider": 0,
+        "AnalyzedFunctionCount": 14,
+        "EvidenceCount": 16,
+        "AnalyzedFunctions": [
+          477600,
+          477892,
+          349152,
+          443920,
+          479100,
+          479284,
+          447712,
+          481852,
+          479900,
+          2631544,
+          2719980,
+          1875168,
+          1875312,
+          2720116
+        ],
+        "Evidence": [
+          {
+            "Rva": 479325,
+            "Length": 4,
+            "Bytes": "48895730"
+          },
+          {
+            "Rva": 479341,
+            "Length": 8,
+            "Bytes": "4889BCD8C0300000"
+          },
+          {
+            "Rva": 478200,
+            "Length": 7,
+            "Bytes": "48FF15911A3300"
+          },
+          {
+            "Rva": 478347,
+            "Length": 5,
+            "Bytes": "E8A4030000"
+          },
+          {
+            "Rva": 478444,
+            "Length": 7,
+            "Bytes": "4889B8D8340000"
+          },
+          {
+            "Rva": 477761,
+            "Length": 5,
+            "Bytes": "E87E000000"
+          },
+          {
+            "Rva": 2720106,
+            "Length": 1,
+            "Bytes": "C3"
+          },
+          {
+            "Rva": 2720089,
+            "Length": 7,
+            "Bytes": "48FF1548E51000"
+          },
+          {
+            "Rva": 2720310,
+            "Length": 1,
+            "Bytes": "C3"
+          },
+          {
+            "Rva": 2720319,
+            "Length": 3,
+            "Bytes": "498906"
+          },
+          {
+            "Rva": 2720322,
+            "Length": 5,
+            "Bytes": "E8A5FEFFFF"
+          },
+          {
+            "Rva": 1875580,
+            "Length": 5,
+            "Bytes": "E8F3E20C00"
+          },
+          {
+            "Rva": 1875377,
+            "Length": 7,
+            "Bytes": "488DB0C0300000"
+          },
+          {
+            "Rva": 1875615,
+            "Length": 8,
+            "Bytes": "4883B8D834000000"
+          },
+          {
+            "Rva": 1875641,
+            "Length": 8,
+            "Bytes": "4883A0D834000000"
+          },
+          {
+            "Rva": 1875239,
+            "Length": 5,
+            "Bytes": "E844000000"
+          }
+        ]
+      }
+    },
+    {
+      "label": "26100.5074",
+      "status": "matched",
+      "full": {
+        "file": "win32kfull.sys",
+        "sha256": "915C583412ACB2C4BFAD0727A1F2A797B559375278AE6CCE2111772EB473DB89",
+        "size": 4272128,
+        "machine": 34404,
+        "timestamp": 934952211,
+        "sizeOfImage": 4276224,
+        "rsds": [
+          {
+            "guid": "4966ca71-dc56-c918-9743-7744c89ffdb1",
+            "age": 1
+          }
+        ]
+      },
+      "base": {
+        "file": "win32kbase.sys",
+        "sha256": "553A601F9DBA6A2E0092A4C11C37B10E6E4CF143A9DFBF8D87FB070DEB77FD28",
+        "size": 3342336,
+        "machine": 34404,
+        "timestamp": 1031370365,
+        "sizeOfImage": 3362816,
+        "rsds": [
+          {
+            "guid": "316ad544-6bcd-6ae7-c392-0e3d6f513c86",
+            "age": 1
+          }
+        ]
+      },
+      "rules": {
+        "Matched": true,
+        "ErrorName": "ok",
+        "Error": 0,
+        "RuleVersion": 1,
+        "TableOffset": 12952,
+        "TableRva": 0,
+        "CacheOffset": 14000,
+        "CacheRva": 0,
+        "BucketCount": 128,
+        "ObjectSize": 72,
+        "OwnerOffset": 0,
+        "CallbackOffset": 8,
+        "WindowOffset": 16,
+        "WindowRepresentation": 0,
+        "DestinationOffset": 24,
+        "DestinationWidth": 8,
+        "ModifiersOffset": 32,
+        "FlagsOffset": 34,
+        "VkOffset": 36,
+        "IdOffset": 40,
+        "NextOffset": 48,
+        "ChildOffset": 56,
+        "ModifiersWidth": 2,
+        "FlagsWidth": 2,
+        "VkWidth": 4,
+        "IdWidth": 4,
+        "WindowObjectHandleOffset": 0,
+        "RemoveRva": 2664280,
+        "ScanRva": 1578556,
+        "UnregisterRva": 1578556,
+        "RegisterRva": 2665652,
+        "InsertRva": 1995988,
+        "OwnerGetterRva": 3919504,
+        "OwnerGetterIndirect": 1,
+        "OwnerGetterDepth": 1,
+        "EnterCritRva": 1471488,
+        "LeaveCritRva": 606496,
+        "ValidateHwndRva": 765728,
+        "AssignmentRva": 1001344,
+        "SessionGetterSlotRva": 3915888,
+        "SessionGetterProvider": 0,
+        "AnalyzedFunctionCount": 15,
+        "EvidenceCount": 16,
+        "AnalyzedFunctions": [
+          1426032,
+          2665652,
+          223312,
+          392960,
+          1736664,
+          107188,
+          1661416,
+          2162368,
+          2556072,
+          2664144,
+          1995988,
+          2559284,
+          1578416,
+          1578556,
+          2664280
+        ],
+        "Evidence": [
+          {
+            "Rva": 1996029,
+            "Length": 4,
+            "Bytes": "48895730"
+          },
+          {
+            "Rva": 1996045,
+            "Length": 8,
+            "Bytes": "4889BCD898320000"
+          },
+          {
+            "Rva": 2666348,
+            "Length": 7,
+            "Bytes": "48FF153D481300"
+          },
+          {
+            "Rva": 2666555,
+            "Length": 5,
+            "Bytes": "E894C4F5FF"
+          },
+          {
+            "Rva": 2666682,
+            "Length": 7,
+            "Bytes": "4889B8B0360000"
+          },
+          {
+            "Rva": 1426196,
+            "Length": 5,
+            "Bytes": "E89BE91200"
+          },
+          {
+            "Rva": 2664270,
+            "Length": 1,
+            "Bytes": "C3"
+          },
+          {
+            "Rva": 2664253,
+            "Length": 7,
+            "Bytes": "48FF1584501300"
+          },
+          {
+            "Rva": 2664474,
+            "Length": 1,
+            "Bytes": "C3"
+          },
+          {
+            "Rva": 2664483,
+            "Length": 3,
+            "Bytes": "498906"
+          },
+          {
+            "Rva": 2664486,
+            "Length": 5,
+            "Bytes": "E8A5FEFFFF"
+          },
+          {
+            "Rva": 1578823,
+            "Length": 5,
+            "Bytes": "E80C901000"
+          },
+          {
+            "Rva": 1578627,
+            "Length": 7,
+            "Bytes": "488DB898320000"
+          },
+          {
+            "Rva": 1578866,
+            "Length": 8,
+            "Bytes": "4883B8B036000000"
+          },
+          {
+            "Rva": 1578892,
+            "Length": 8,
+            "Bytes": "4883A0B036000000"
+          },
+          {
+            "Rva": 1578494,
+            "Length": 5,
+            "Bytes": "E839000000"
+          }
+        ]
+      }
+    },
+    {
+      "label": "local-26100.9022",
+      "status": "matched",
+      "full": {
+        "file": "win32kfull.sys",
+        "sha256": "A8C75A11C28E54B62BC86E5566872241A94D6C485E0A93DE1B39D89D57D40445",
+        "size": 4354048,
+        "machine": 34404,
+        "timestamp": 1557177519,
+        "sizeOfImage": 4358144,
+        "rsds": [
+          {
+            "guid": "80db0813-4711-330d-d706-8d826ff8e1b0",
+            "age": 1
+          }
+        ]
+      },
+      "base": {
+        "file": "win32kbase.sys",
+        "sha256": "ADA11DB7B97AC5D3ACA370A988C8655E24BED2B4DAD2D1C38E034AF00B9BF517",
+        "size": 3407872,
+        "machine": 34404,
+        "timestamp": 1862120862,
+        "sizeOfImage": 3420160,
+        "rsds": [
+          {
+            "guid": "45d0067d-cac4-0108-52e2-b643f02d42bf",
+            "age": 1
+          }
+        ]
+      },
+      "rules": {
+        "Matched": true,
+        "ErrorName": "ok",
+        "Error": 0,
+        "RuleVersion": 1,
+        "TableOffset": 12944,
+        "TableRva": 0,
+        "CacheOffset": 13992,
+        "CacheRva": 0,
+        "BucketCount": 128,
+        "ObjectSize": 72,
+        "OwnerOffset": 0,
+        "CallbackOffset": 8,
+        "WindowOffset": 16,
+        "WindowRepresentation": 0,
+        "DestinationOffset": 24,
+        "DestinationWidth": 8,
+        "ModifiersOffset": 32,
+        "FlagsOffset": 34,
+        "VkOffset": 36,
+        "IdOffset": 40,
+        "NextOffset": 48,
+        "ChildOffset": 56,
+        "ModifiersWidth": 2,
+        "FlagsWidth": 2,
+        "VkWidth": 4,
+        "IdWidth": 4,
+        "WindowObjectHandleOffset": 0,
+        "RemoveRva": 2644896,
+        "ScanRva": 1868040,
+        "UnregisterRva": 1867916,
+        "RegisterRva": 2607244,
+        "InsertRva": 2147964,
+        "OwnerGetterRva": 3993288,
+        "OwnerGetterIndirect": 1,
+        "OwnerGetterDepth": 1,
+        "EnterCritRva": 77632,
+        "LeaveCritRva": 200688,
+        "ValidateHwndRva": 385568,
+        "AssignmentRva": 490992,
+        "SessionGetterSlotRva": 3989616,
+        "SessionGetterProvider": 0,
+        "AnalyzedFunctionCount": 15,
+        "EvidenceCount": 17,
+        "AnalyzedFunctions": [
+          2056864,
+          2607244,
+          393792,
+          489968,
+          127960,
+          99008,
+          2021972,
+          2330096,
+          2669080,
+          2736016,
+          2147964,
+          1867760,
+          1867916,
+          1868040,
+          2644896
+        ],
+        "Evidence": [
+          {
+            "Rva": 2148005,
+            "Length": 4,
+            "Bytes": "48895730"
+          },
+          {
+            "Rva": 2148021,
+            "Length": 8,
+            "Bytes": "4889BCD890320000"
+          },
+          {
+            "Rva": 2607945,
+            "Length": 7,
+            "Bytes": "48FF15784C1500"
+          },
+          {
+            "Rva": 2608139,
+            "Length": 5,
+            "Bytes": "E86CFAF8FF"
+          },
+          {
+            "Rva": 2608266,
+            "Length": 7,
+            "Bytes": "4889B8A8360000"
+          },
+          {
+            "Rva": 2057043,
+            "Length": 5,
+            "Bytes": "E834650800"
+          },
+          {
+            "Rva": 2736142,
+            "Length": 1,
+            "Bytes": "C3"
+          },
+          {
+            "Rva": 2736125,
+            "Length": 7,
+            "Bytes": "48FF15DC571300"
+          },
+          {
+            "Rva": 2645090,
+            "Length": 1,
+            "Bytes": "C3"
+          },
+          {
+            "Rva": 2645099,
+            "Length": 3,
+            "Bytes": "498906"
+          },
+          {
+            "Rva": 2645102,
+            "Length": 5,
+            "Bytes": "E81D630100"
+          },
+          {
+            "Rva": 1868288,
+            "Length": 5,
+            "Bytes": "E89BD90B00"
+          },
+          {
+            "Rva": 1868101,
+            "Length": 7,
+            "Bytes": "488DB090320000"
+          },
+          {
+            "Rva": 1867996,
+            "Length": 8,
+            "Bytes": "4883B8A836000000"
+          },
+          {
+            "Rva": 1868022,
+            "Length": 8,
+            "Bytes": "4883A0A836000000"
+          },
+          {
+            "Rva": 1867951,
+            "Length": 5,
+            "Bytes": "E854000000"
+          },
+          {
+            "Rva": 1867856,
+            "Length": 5,
+            "Bytes": "E837000000"
+          }
+        ]
+      }
+    }
+  ],
+  "boundary": "Offline PE byte mapping only. Input PE files, driver, and GUI were not executed.",
+  "annotatedSourceSha256": "b306fdac83ca602d8e899a59625d62ef2329d9a3cbd6fd8badc9ebe3d15411ab",
+  "postValidationChanges": {
+    "kind": "comments_only",
+    "codeChanged": false,
+    "review": "Chinese comments and three field descriptions added after validation. Agents verified unchanged non-comment tokens or unchanged original line bytes for every new production rule module. No product rebuild or repeated execution was required for comment-only changes.",
+    "testedSourceSha256": "2103a32e11b6d520b2ae12ad63df858afcadbb599f5e3915d6fdfbce80c1537d",
+    "annotatedSourceSha256": "b306fdac83ca602d8e899a59625d62ef2329d9a3cbd6fd8badc9ebe3d15411ab"
+  }
+}

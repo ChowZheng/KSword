@@ -1,0 +1,91 @@
+# 磁盘监控与 MFT 索引
+
+本次功能覆盖硬盘监控的队列指标与文件 I/O 事件日志，以及文件页的 NTFS 快速搜索和文件空间分布。
+
+## 数据口径
+
+- 硬盘监控的进程传输计数、Kernel-File ETW 文件请求与卷性能计数是不同来源，不能将文件请求字节解释为物理落盘字节。
+- 队列深度是查询瞬间的值；平均队列使用相邻有效性能样本的累计服务时间差计算。响应时间以实际请求计数差为分母。首份样本只建立基线，设备身份或计数器重置后重新建立基线。
+- MFT 索引只读本地 NTFS 卷，通常需要管理员权限。索引与查询均不创建、删除或重置 USN Journal。
+- USN Journal 用于更新已建立的 MFT 索引。日志被删除、重新创建或截断时，旧索引不能冒充已更新的数据，应重建索引。
+- 文件尺寸来自未命名 `$DATA`。硬链接共享同一个文件引用，容量只统计一次；驻留数据没有独立的数据簇分配。未知尺寸、属性列表未解析等情形须单独报告，不可当作零字节。
+- 文件名称会合并基础记录与所属扩展记录中的非 DOS 名称，并校验完整文件引用的序列号。容量归入一个确定的规范名称所在目录，不把同一硬链接文件重复分摊到每个目录。搜索结果定位会打开所属目录、显示隐藏及系统项，并沿原异步导航选中目标。
+- 文件分布是索引中的默认文件数据流分布，不等于卷全部已用空间。可计量的 `$MFT`、`$LogFile` 等系统文件默认数据流也会纳入；目录索引等其他元数据、备用数据流、驻留记录自身空间及未能解析的部分可能使它与系统容量显示不同。活动卷也不是某一时刻的原子快照。
+- 普通文件的非驻留属性列表尚不解析，页面会报告名称覆盖不完整的文件数量；这类文件可能漏掉扩展名称，大小仍按未知处理。
+- `$MFT` 自身的非驻留属性列表按完整映射有界读取，最多16MiB，并验证扩展记录序列与所属基础记录；不能仅因其非驻留就拒绝卷。扫描期间真实 MFT 映射、身份或有效长度改变仍会失败并提示重试，正常 LSN/USA 等记录更新不会被误报为映射变化。增量更新遇到变更普通文件的非驻留属性列表时仍要求重建，不返回半份成功结果。
+
+## 页面与共享结构
+
+| 导航入口 | 页面类型 | 共享入口 |
+| --- | --- | --- |
+| 硬件 → 硬盘监控 → 活动 | 监控、现场表格 | `PrimaryToolbar`、`JoinedResultTabs`；进程选择 None、文件活动 Full，两个可折叠结果面保留模型与选择 |
+| 硬件 → 硬盘监控 → 文件 I/O 日志 | 结构化事件表格 | `ResultTableHost`、`TablePresentation`、Full 操作条及原 ETW 会话 |
+| 硬件 → 硬盘监控 → 卷队列 | 卷性能现场表格 | 独立同级结果页，保留卷性能 lease 与唯一 Compact 操作条 |
+| 文件 → MFT 搜索与空间分布 | 参数执行、搜索结果、图表 | `ParameterWorkspace`、`JoinedResultTabs`、`PrimaryToolbar`、`TableActionTableView`；搜索和分布共用只读索引 |
+
+卷性能表提供容量/吞吐与队列/延迟两组互补列，默认显示队列诊断；日志提供请求与完成关联两组。表头右键可逐列选择或显示全部列，自定义后清除预设选中态；需要导出全部字段时先显示全部列。
+
+矩形树图保留专业图表布局，其外围页面、输入、动作和表格仍使用项目共享组件。图中面积依赖当前选用的尺寸口径，不能据颜色判断文件风险。
+
+日志保留开始/完成阶段、事件头 PID、路径、请求字节、文件偏移、IRP、耗时和 NTSTATUS。事件头 PID 表示记录上下文；完成事件可能来自系统线程。无法解析的路径仍保留为 `N/A`。待显示缓冲上限 2,048 条、显示历史上限 10,000 条；缓冲覆盖、显示淘汰和 ETW 丢失计数分别显示。取消“记录文件 I/O”暂停日志捕获，不停止卷队列采样。
+
+## Windows 验收
+
+1. 使用仓库 `tools/Invoke-KSwordBuildCheck.ps1` 在 HostX64 MSVC 与 Qt 6.9.3 环境构建主程序，检查新源码登记、双语和主题门禁。
+2. 在管理员权限下对测试 NTFS 卷建索引，核对普通、空、驻留、非驻留、稀疏/压缩、硬链接、重解析点及长文件名。不要将目录联接遍历至另一卷。
+3. 创建、扩展、重命名、移动、删除文件和目录后执行增量更新，核对搜索路径和空间分布；同一文件的多个硬链接不重复计量。
+4. 在独立测试卷测试 USN Journal 不可用、换代与旧游标超出保留范围，确认状态明确并要求重建，失败时保留旧结果身份。
+5. 测试索引/搜索期间取消、重复请求、卷切换与关闭页面；过期结果不能覆盖当前卷和查询，UI 保持可操作。
+6. 对真实磁盘负载观察卷队列、读写 IOPS 和响应时间；计数器不可用时必须显示原因。核对日志暂停/恢复、筛选、清空和导出，区分应用内覆盖数量与 ETW 丢失。
+7. 在深浅主题、背景模式、窄窗口、长中英文和不同 DPI 下检查留白、Tab 层级、文字/图标、表格复制/导出及首帧。源码检查不能代替这些 GUI 验收。
+
+## 本次验证边界
+
+本地开发环境为 Linux，没有 Windows MSVC、真实 NTFS 卷和 ETW 内核会话。以下首轮本地记录使用 Qt 6.8.2 开发头及环境中的 QtCore 运行库，不等于项目的 Windows Qt 6.9.3/MSVC 工具链；后续原生 CI 验证另列于文末。
+
+本次可重复执行的验证：
+
+```bash
+python tools/disk_monitor_queue_log_test.py
+python tools/disk_monitor_columns_test.py --qt-root /path/to/qt6/prefix
+python tools/ntfs_index_record_test.py
+ASAN_OPTIONS=detect_leaks=0 python tools/ntfs_index_record_test.py --sanitize
+python tools/ntfs_index_projection_test.py --qt-include /path/to/qt6/include
+python tools/ntfs_space_map_test.py
+python tools/ntfs_journal_replay_test.py --qt-root /path/to/qt6/prefix
+python tools/theme_token_audit.py --source-root Ksword5.1/Ksword5.1 --theme-header Ksword5.1/Ksword5.1/theme.h
+python tools/i18n_language_pack.py audit --source-root Ksword5.1/Ksword5.1 --zh-pack Ksword5.1/Ksword5.1/languages/zh-CN.json --en-pack Ksword5.1/Ksword5.1/languages/en-US.json
+```
+
+队列/日志测试编译实际生产数值及有界日志模型；NTFS 解析测试编译实际解析器并运行 5,000 组突变输入；QtCore 投影测试提取实际 `project`、`fullPath` 与 `finish`，覆盖 32 项目录汇总、序列身份、扩展名称、硬链接、未知计量、溢出和取消检查。生产 USN 增量与 `refresh` 替身测试另有 32 个场景，覆盖删除、重命名、记录复用、日志失效及失败/取消回滚；Win32 I/O 用可控替身，记录解析与 QtCore 使用真实实现。普通版、ASan/UBSan（禁用 LSan）及投影测试均已通过。此环境的 LeakSanitizer 因 ptrace 限制无法运行，未完成泄漏检查。
+
+新搜索页、矩形树图和卷性能页还通过了临时 Qt 6.8.2 头文件的 C++ 类型检查；Windows 分支使用 MinGW 头文件/编译器作语法检查，未生成或替换项目发行产物。磁盘主监控页的此项检查受 MinGW TDH 头文件与 MSVC 线程句柄差异阻断，不能报告全页编译通过。
+
+列组交互夹具提取生产 helper 并运行真实 QtWidgets offscreen，覆盖 A/B 切换、表头逐列自定义、显示全部列和菜单中销毁视图；共享主题、翻译和分段绘制入口为替身，因此不证明实际主程序样式。
+
+矩形树图测试提取生产布局函数，在 100 组固定 seed、最多 100,000 项下检查覆盖、面积比例、边界和 20,000 绘制块预算；几何容器为轻量替身，不是 QtWidgets GUI 验收。
+
+主题门禁通过（1,231 个源码文件、14 个动态 token），双语门禁通过（29,688 条源码文本）。
+
+这些结果不代表主程序已构建、原生 USN/ETW 已实测或真实 GUI 已验收。
+
+## 后续功能与界面修复
+
+截图中的索引失败有实际后端原因：原实现拒绝 `$MFT` 非驻留属性列表，且把整条 FILE 记录字节相等作为布局稳定条件。现在读取完整有界属性列表并比较实际映射/身份；保留真实 Win32 错误。raw 读取还使用对齐缓冲，并处理碎片化映射中后续 extent 的目标地址对齐，避免卷句柄隐式 noncached 时返回无效参数。
+
+真实 Windows NTFS 卷进一步暴露了首次 USN 刷新的记录校验缺陷：`FSCTL_GET_NTFS_FILE_RECORD` 已返回经过 NTFS 恢复的逻辑记录，缓存写入后 sector tail 不必等于旧 USA 数组。解析器现在保留这类逻辑字节，只有原始磁盘记录才校验并恢复 USA；MFT 映射提取遵循同一格式边界。回归覆盖跨 sector 的文件名、runlist，以及逻辑尾字节恰好等于保护标记的情况，防止二次恢复悄悄改写有效内容。
+
+另修正 USA 格式步长与磁盘 I/O 扇区的混用：4096字节 FILE 仍按512字节保护步长解析9项 USA，卷几何与原始读取对齐继续使用真实扇区大小。专门用例覆盖4K记录的恢复、损坏拒绝及 FSCTL 映射提取；该格式回归不等于已在真实4Kn设备上完成验收。
+
+磁盘页不再把三块结果挤在同一竖分隔器中，也不再用全宽 checked 按钮作为标题；活动、日志、卷队列各有适合自身的工具面和表格操作。采样、过滤、选择、日志留存和队列数值口径保持原语义。MFT 页共同状态、Tab、独立工具行与表格槽由共享入口负责，索引失败有重试和明确依赖说明，异步取消不再把旧空间图和新目录身份混用。
+
+后续可重复验证：
+
+```bash
+python tools/test_ntfs_backend_io.py --qt-root "$KSWORD_QT_DIR"
+python tools/run_shared_ui_regressions.py --qt-root "$KSWORD_QT_DIR"
+```
+
+完整后端受控 I/O 回归使用实际 FastIndex/Record TU，仅替换 Win32 I/O，覆盖33项；旧版负控分别复现属性列表拒绝、LSN 误判和 FSCTL 缓存尾字节处理错误。解析器另有5000组突变及 ASan/UBSan 检查，USN 回归有32个场景。
+
+Windows CI 从 HostX64 环境调用 `tools/test_ntfs_volume_integration.ps1 -QtRoot <Qt根目录>`：只在唯一新建、经过映射身份检查的128MiB临时VHD上创建NTFS和测试Journal，执行真实生产索引器的建索引、扫描期间变化、硬链接、空间计量、USN改名/写入/删除与取消恢复。C++进一步拒绝系统卷和重解析工作目录，脚本在 finally 卸载并清理自己的镜像。生产索引器仍为只读。这一自动化不代替用户现场卷、ETW采集、实际多屏/DPI或完整产品GUI验收。

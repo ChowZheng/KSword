@@ -1,6 +1,30 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003" ToolsVersion="4.0">
   <ItemGroup>
+    <ClCompile Include="FileDock\NtfsFastIndex.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="FileDock\NtfsIndexRecord.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="FileDock\NtfsSearchPage.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="FileDock\NtfsSpaceMapWidget.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClInclude Include="FileDock\NtfsFastIndex.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="FileDock\NtfsIndexRecord.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="FileDock\NtfsSpaceMapWidget.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <QtMoc Include="FileDock\NtfsSearchPage.h">
+      <Filter>Header Files</Filter>
+    </QtMoc>
     <Filter Include="Source Files">
       <UniqueIdentifier>{4FC737F1-C7A5-4376-A066-2A32D752A2FF}</UniqueIdentifier>
       <Extensions>qml;cpp;c;cc;cxx;def;odl;idl;hpj;bat;asm;asmx</Extensions>
@@ -189,6 +213,12 @@
     <ResourceCompile Include="AppIcon.rc">
       <Filter>Resource Files</Filter>
     </ResourceCompile>
+    <None Include="Resource\Logo\KswordLogo.png">
+      <Filter>Resource Files</Filter>
+    </None>
+    <None Include="Resource\Splash\StartupLandscape.png">
+      <Filter>Resource Files</Filter>
+    </None>
     <QtRcc Include="Ksword5.qrc">
       <Filter>Resource Files</Filter>
     </QtRcc>
@@ -1065,6 +1095,9 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="ProcessDock\ProcessDetailWindow.Hotkey.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="ProcessDock\HotkeyClearController.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="ProcessDock\ProcessDetailWindow.PdbCatalog.cpp">
@@ -2668,6 +2701,9 @@
     <ClInclude Include="ProcessDock\ProcessHotkeyEnumerator.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="ProcessDock\HotkeyClearController.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="PluginHost.h">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -3153,6 +3189,9 @@
     <ClInclude Include="UI\PrimaryPageStyle.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="UI\GroupBoxStyle.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="UI\ParameterWorkspace.h">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -3307,6 +3346,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="Framework\StartupSplash.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Framework\ReleaseMetadata.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="KernelDock\KernelDockQueryWorker.h">
@@ -3607,6 +3649,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="WindowDock\WindowGlobalHotkeyTab.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="WindowDock\WindowHotkeyClearUi.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="WindowDock\WindowTimerTab.h">

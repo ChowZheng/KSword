@@ -43,6 +43,11 @@ Environment:
 
 #define KSWORD_ARK_WIN32K_BRIDGE_TAG 'B3WK'
 
+NTSYSAPI NTSTATUS NTAPI PsLookupProcessByProcessId( // 通过公开PID查询取得会话访问所需的稳定进程引用。
+    _In_ HANDLE ProcessId,
+    _Outptr_ PEPROCESS* Process
+    );
+
 static NTSTATUS
 KswordARKWin32kPrepareProfileHeader(
     _Out_writes_bytes_(OutputBufferLength) PVOID OutputBuffer,
@@ -163,10 +168,53 @@ Return Value:
     KeyboardRequest->maxEntries = KSWORD_ARK_WIN32K_DEFAULT_MAX_ENTRIES;
     if (Request != NULL) {
         KeyboardRequest->processId = Request->processId;
+        KeyboardRequest->flags &= ~KSWORD_ARK_KEYBOARD_ENUM_FLAG_INCLUDE_DIAGNOSTICS; // 两个协议的位值不同，不能直接复制Win32k flags。
+        if ((Request->flags & KSWORD_ARK_WIN32K_QUERY_FLAG_INCLUDE_DIAGNOSTICS) != 0UL) { // 显式翻译诊断位。
+            KeyboardRequest->flags |= KSWORD_ARK_KEYBOARD_ENUM_FLAG_INCLUDE_DIAGNOSTICS; // 仅请求诊断时让后端投影诊断行。
+        }
+        if (Request->processId != 0UL) { // 非零PID既选择会话，也必须限制返回行归属。
+            KeyboardRequest->flags |= KSWORD_ARK_KEYBOARD_ENUM_FLAG_FILTER_PROCESS; // 不再将同一会话其它进程混入结果。
+        }
         if (Request->maxEntries != 0UL) {
             KeyboardRequest->maxEntries = KswordARKWin32kNormalizeMaxEntries(Request->maxEntries);
         }
     }
+}
+
+// 确认后端实际可选择的单个会话；不把无法到达的指定会话伪装为空成功。
+static NTSTATUS
+KswordARKWin32kResolveHotkeyBridgeSession(
+    _In_opt_ const KSWORD_ARK_WIN32K_QUERY_REQUEST* Request,
+    _Out_ ULONG* SessionIdOut
+    )
+{
+    KSWORD_WIN32K_PS_GET_PROCESS_SESSION_ID_FN getSessionId = KswordARKWin32kResolvePsGetProcessSessionId(); // 复用既有公开导出解析入口。
+    PEPROCESS process = NULL; // 指定PID的进程引用只在本函数持有。
+    ULONG callerSessionId = 0UL; // CURRENT_SESSION_ONLY始终以原调用者会话为准。
+    ULONG selectedSessionId = 0UL; // 后端将查询此进程上下文里的热键表。
+    ULONG requestedSessionId = Request != NULL ? Request->sessionId : 0UL; // 零值沿用协议的未指定语义。
+    BOOLEAN sessionFiltered = requestedSessionId != 0UL; // 会话零仍可通过CURRENT_SESSION_ONLY明确选择。
+    NTSTATUS status = STATUS_SUCCESS; // 公开PID查询失败码直接返回调用者。
+    *SessionIdOut = 0UL; // 未确认前不发布会话身份。
+    if (KeGetCurrentIrql() != PASSIVE_LEVEL || getSessionId == NULL) { // 无法安全确认上下文时不继续枚举。
+        return getSessionId == NULL ? STATUS_PROCEDURE_NOT_FOUND : STATUS_INVALID_DEVICE_STATE; // 区分能力缺失与调用级别错误。
+    }
+    callerSessionId = getSessionId(PsGetCurrentProcess()); // IOCTL沿原InCallerContext调用者获取会话。
+    selectedSessionId = callerSessionId; // PID未指定时只查询调用者会话。
+    if (Request != NULL && Request->processId != 0UL) { // 非零PID必须能取得真实对象。
+        status = PsLookupProcessByProcessId(ULongToHandle(Request->processId), &process); // 不依赖裸进程地址。
+        if (!NT_SUCCESS(status)) return status; // 指定PID失效不得换成当前会话。
+        selectedSessionId = getSessionId(process); // 只在引用存活期间读取目标会话。
+        ObDereferenceObject(process); // 释放本函数取得的唯一进程引用。
+    }
+    if (Request != NULL && (Request->flags & KSWORD_ARK_WIN32K_QUERY_FLAG_CURRENT_SESSION_ONLY) != 0UL) { // 当前会话位必须真实生效。
+        if (sessionFiltered && requestedSessionId != callerSessionId) return STATUS_NOT_SUPPORTED; // 冲突的两个会话约束不能同时满足。
+        requestedSessionId = callerSessionId; // 显式固定为原调用者会话。
+        sessionFiltered = TRUE; // 同时支持调用者属于session0的情况。
+    }
+    if (sessionFiltered && requestedSessionId != selectedSessionId) return STATUS_NOT_SUPPORTED; // 单会话后端不能默默查询另一个会话。
+    *SessionIdOut = selectedSessionId; // 只有实际可查询的会话身份才交给投影层。
+    return STATUS_SUCCESS; // PID/TID行筛选在canonical结果投影阶段继续执行。
 }
 
 static VOID
@@ -415,6 +463,7 @@ Return Value:
     size_t keyboardBufferLength = 0U;
     size_t keyboardBytesWritten = 0U;
     NTSTATUS status = STATUS_SUCCESS;
+    ULONG selectedSessionId = 0UL; // canonical热键表所属的实际进程会话。
 
     if (BytesWrittenOut == NULL) {
         return STATUS_INVALID_PARAMETER;
@@ -436,6 +485,13 @@ Return Value:
     response->lastStatus = STATUS_SUCCESS;
     response->capabilityMask = KSWORD_ARK_WIN32K_CAP_HOTKEY_PROFILE;
     KswordARKWin32kInitializeOffsets(&response->fieldOffsets);
+    status = KswordARKWin32kResolveHotkeyBridgeSession(Request, &selectedSessionId); // 会话选择失败必须在读取其它会话前返回。
+    if (!NT_SUCCESS(status)) { // 不支持的会话约束与PID查找失败分别保留真实状态。
+        response->status = status == STATUS_NOT_SUPPORTED || status == STATUS_PROCEDURE_NOT_FOUND ? KSWORD_ARK_WIN32K_STATUS_UNSUPPORTED : KSWORD_ARK_WIN32K_STATUS_ENUM_FAILED; // 不返回假成功空表。
+        response->lastStatus = status; // 供R3展示可恢复的会话或进程错误。
+        *BytesWrittenOut = KSWORD_ARK_WIN32K_HOTKEY_RESPONSE_HEADER_SIZE; // 失败响应只包含规范头。
+        return STATUS_SUCCESS; // 业务错误沿原协议状态返回。
+    }
 
     entryCapacity = (ULONG)((OutputBufferLength - KSWORD_ARK_WIN32K_HOTKEY_RESPONSE_HEADER_SIZE) /
         sizeof(KSWORD_ARK_WIN32K_HOTKEY_ENTRY));
@@ -474,25 +530,50 @@ Return Value:
         return STATUS_SUCCESS;
     }
 
-    response->totalCount = keyboardResponse->totalCount;
+    response->totalCount = Request != NULL && Request->threadId != 0UL ? 0UL : keyboardResponse->totalCount; // TID过滤后的数量必须来自实际匹配行。
     response->returnedCount = 0UL;
     response->status = KswordARKWin32kMapKeyboardStatus(keyboardResponse->status);
     response->lastStatus = keyboardResponse->lastStatus;
+    if (Request != NULL && Request->processId == 0UL && Request->sessionId == 0UL && // 无明确会话选择的宽查询只能得到当前会话子集。
+        (Request->flags & KSWORD_ARK_WIN32K_QUERY_FLAG_CURRENT_SESSION_ONLY) == 0UL && // 后端没有跨会话遍历能力。
+        response->status == KSWORD_ARK_WIN32K_STATUS_OK) { // 保留已有更具体的后端失败或截断状态。
+        response->status = KSWORD_ARK_WIN32K_STATUS_PARTIAL; // 返回有用子集并明确能力边界。
+        response->lastStatus = STATUS_NOT_SUPPORTED; // 不声称完成所有会话查询。
+    }
     response->fieldOffsets.hotkeyNext = keyboardResponse->hotkeyNextOffset;
     response->fieldOffsets.hotkeyModifiers = keyboardResponse->hotkeyModifiersOffset;
     response->fieldOffsets.hotkeyVirtualKey = keyboardResponse->hotkeyVkOffset;
     response->fieldOffsets.hotkeyId = keyboardResponse->hotkeyIdOffset;
 
     copyCount = keyboardResponse->returnedCount;
-    if (copyCount > entryCapacity) {
-        copyCount = entryCapacity;
-        response->status = KSWORD_ARK_WIN32K_STATUS_BUFFER_TRUNCATED;
-        response->missingCapabilityMask |= KSWORD_ARK_WIN32K_CAP_HOTKEY_PROFILE;
-    }
-
     for (index = 0UL; index < copyCount; ++index) {
         const KSWORD_ARK_KEYBOARD_HOTKEY_ENTRY* sourceEntry = &keyboardResponse->entries[index];
-        KSWORD_ARK_WIN32K_HOTKEY_ENTRY* targetEntry = &response->entries[index];
+        KSWORD_ARK_WIN32K_HOTKEY_ENTRY* targetEntry = NULL; // 先筛选canonical行，再分配输出槽位。
+        if (sourceEntry->sessionId != selectedSessionId) { // PID在预检与实际查询之间退出/复用时，不给另一会话贴旧标签。
+            if (response->status == KSWORD_ARK_WIN32K_STATUS_OK) response->status = KSWORD_ARK_WIN32K_STATUS_PARTIAL;
+            if (NT_SUCCESS(response->lastStatus)) response->lastStatus = STATUS_REVISION_MISMATCH;
+            continue;
+        }
+        if (Request != NULL && // PID与TID筛选都要求明确归属，未知身份不能穿透。
+            ((Request->processId != 0UL && sourceEntry->processId == 0UL) || // 后端未知PID仍防御性拒绝。
+                (Request->threadId != 0UL && sourceEntry->threadId == 0UL))) { // 未知TID不属于任何已确认线程筛选结果。
+            if (response->status == KSWORD_ARK_WIN32K_STATUS_OK) response->status = KSWORD_ARK_WIN32K_STATUS_PARTIAL; // 归属无法确认时保留不完整状态。
+            if (NT_SUCCESS(response->lastStatus)) response->lastStatus = STATUS_NOT_FOUND; // 不能把身份缺失藏成正常零行。
+            continue; // 诊断状态保留在响应头，未知归属行不展示为匹配项。
+        }
+        if (Request != NULL && // 普通不匹配行只影响投影，不改变查询成功语义。
+            ((Request->processId != 0UL && sourceEntry->processId != Request->processId) || // 显式PID筛选。
+                (Request->threadId != 0UL && sourceEntry->threadId != Request->threadId))) { // 显式TID筛选。
+            continue; // 同会话其它线程不得混入结果。
+        }
+        if (Request != NULL && Request->threadId != 0UL) response->totalCount += 1UL; // 统计所有已读取的匹配线程项。
+        if (response->returnedCount >= entryCapacity) { // 容量检查放在过滤后，避免提前丢弃后续匹配行。
+            response->status = KSWORD_ARK_WIN32K_STATUS_BUFFER_TRUNCATED; // 结果确实超出输出空间时明确截断。
+            response->missingCapabilityMask |= KSWORD_ARK_WIN32K_CAP_HOTKEY_PROFILE; // 沿用原截断能力回执。
+            if (NT_SUCCESS(response->lastStatus)) response->lastStatus = STATUS_BUFFER_OVERFLOW; // 保留首个失败原因。
+            continue; // 继续计数，不写越界槽位。
+        }
+        targetEntry = &response->entries[response->returnedCount]; // 输出按筛选后的连续槽位写入。
 
         RtlZeroMemory(targetEntry, sizeof(*targetEntry));
         targetEntry->source = sourceEntry->source;
@@ -500,6 +581,7 @@ Return Value:
         targetEntry->flags = sourceEntry->flags;
         targetEntry->processId = sourceEntry->processId;
         targetEntry->threadId = sourceEntry->threadId;
+        targetEntry->sessionId = sourceEntry->sessionId; // v4使用实际查询持有进程的SID，不依赖较早的预检快照。
         targetEntry->modifiers = sourceEntry->modifiers;
         targetEntry->virtualKey = sourceEntry->virtualKey;
         targetEntry->hotkeyId = sourceEntry->hotkeyId;
@@ -516,8 +598,8 @@ Return Value:
             sourceEntry->detail,
             KSWORD_ARK_KEYBOARD_DETAIL_CHARS,
             L"keyboard bridge: ");
+        response->returnedCount += 1UL; // 只有成功投影的匹配行才增加返回数量。
     }
-    response->returnedCount = copyCount;
 
     ExFreePoolWithTag(keyboardResponse, KSWORD_ARK_WIN32K_BRIDGE_TAG);
     *BytesWrittenOut = KSWORD_ARK_WIN32K_HOTKEY_RESPONSE_HEADER_SIZE +

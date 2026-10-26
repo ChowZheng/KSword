@@ -2682,6 +2682,7 @@ namespace ksword::ark
         std::uint64_t snapshotHash = 0;
         std::uint32_t objectSize = 0;
         std::uint32_t entryFlags = 0;
+        std::uint32_t sessionId = 0; // v4会话身份，不从进程名或显示串推断。
         std::wstring detail;
     };
 

@@ -251,6 +251,24 @@ namespace
                 const QString block = owner->property(blockName).toString();
                 if (!block.isEmpty()) style.remove(block);
             }
+            // 共享弹窗根皮肤不是业务组框外观：仅组框可穿过这些完整已知块，
+            // 从而按自身标题/字体配置内距；其余业务QSS仍保持原来的接管边界。
+            if (qobject_cast<QGroupBox*>(widget) && owner->isWindow())
+            {
+                for (const char* name : {"GLOBAL_DIALOG_THEME", "DETAIL_FRAMEWORK"})
+                {
+                    const QString begin = QStringLiteral("/* KSWORD_%1_BEGIN */").arg(QLatin1String(name));
+                    const QString end = QStringLiteral("/* KSWORD_%1_END */").arg(QLatin1String(name));
+                    qsizetype first = style.indexOf(begin);
+                    while (first >= 0)
+                    {
+                        const qsizetype last = style.indexOf(end, first + begin.size());
+                        if (last < 0) break; // 不完整或非本框架拥有的块继续按业务外观处理。
+                        style.remove(first, last + end.size() - first);
+                        first = style.indexOf(begin);
+                    }
+                }
+            }
             if (!style.trimmed().isEmpty()) return false;
             if (owner->isWindow()) break;
         }
@@ -316,7 +334,8 @@ namespace
             // 只有可见的忙进度动画需要刷新；确定进度只随业务value更新重绘。
             const bool busy = m_bar->minimum() == 0 && m_bar->maximum() == 0;
             BOOL animations = TRUE;
-            SystemParametersInfoW(SPI_GETCLIENTAREAANIMATION, 0, &animations, 0);
+            // 确定进度不使用动画设置；忙进度继续逐帧读取系统偏好。
+            if (busy) SystemParametersInfoW(SPI_GETCLIENTAREAANIMATION, 0, &animations, 0);
             if (busy && animations && m_bar->isVisible())
             {
                 const qreal rate = m_bar->screen() ? m_bar->screen()->refreshRate() : 60.0;

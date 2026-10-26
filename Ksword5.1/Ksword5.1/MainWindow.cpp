@@ -119,6 +119,7 @@
 #include "UI/DockTabInteraction.h"
 #include "UI/GlobalDialogTheme.h"
 #include "UI/GlobalUiBaseStyle.h"
+#include "UI/GroupBoxStyle.h"
 #include "UI/StandardWidgetTheme.h"
 #include "UI/ThemedSlider.h"
 #include "UI/GlobalUiSearch.h"
@@ -11207,6 +11208,7 @@ void MainWindow::ensureDockContentInitialized(ads::CDockWidget* dockWidget, cons
         // 扫描器 / 转储分析 / 插件已并入杂项页，不再各自占用顶层 Dock，
         // 它们随杂项页内部的页签懒加载，这里只需构造杂项容器本身。
         if (m_miscWidget == nullptr) { m_miscWidget = new MiscDock(this, !useColdBodies); }
+        attachMiscHotkeyManagerLink(m_miscWidget);
         m_miscWidget->setBugcheckDiagnosticsVisible(
             m_currentAppearanceSettings.bugcheckDiagnosticsAutoInstallEnabled ||
             m_bugcheckDiagnosticsInstalledForSession ||
@@ -11830,6 +11832,7 @@ void MainWindow::initDockWidgets()
     if (shouldEagerLoad(QStringLiteral("misc")))
     {
         m_miscWidget = new MiscDock(this);
+        attachMiscHotkeyManagerLink(m_miscWidget);
         updateBugcheckDiagnosticsEntryVisibility();
     }
 
@@ -12794,6 +12797,38 @@ MiscDock* MainWindow::activateMiscDockForMergedTab(const QString& tabDisplayName
             << eol;
     }
     return m_miscWidget;
+}
+
+void MainWindow::attachMiscHotkeyManagerLink(MiscDock* miscDock)
+{
+    if (!miscDock || miscDock->property("ksword_misc_hotkey_manager_linked").toBool()) return;
+    const QPointer<MainWindow> owner(this);
+    const QPointer<MiscDock> target(miscDock);
+    const QMetaObject::Connection connection = connect(miscDock,
+        &MiscDock::hotkeyManagementRequested, this, [owner, target]()
+    {
+        if (!owner || !target) return;
+        const bool opened = owner->activateWindowHotkeyManagement();
+        if (target) target->finishHotkeyManagementNavigation(opened);
+    });
+    if (connection) miscDock->setProperty("ksword_misc_hotkey_manager_linked", true);
+}
+
+bool MainWindow::activateWindowHotkeyManagement()
+{
+    if (!m_dockWindow) return false;
+    const QPointer<MainWindow> owner(this);
+    const QPointer<ads::CDockWidget> dock(m_dockWindow);
+    ensureDockContentInitialized(dock.data());
+    if (!owner || !dock || !m_windowWidget) return false;
+    const QPointer<WindowDock> page(m_windowWidget);
+    dock->toggleView(true);
+    if (!owner || !dock || !page) return false;
+    withTemporaryNonTopMostForDockSwitch([dock]() { if (dock) dock->raise(); });
+    if (!owner || !dock || !page) return false;
+    dock->setAsCurrentTab();
+    if (!owner || !dock || !page) return false;
+    return page->activateHotkeyManagement() != nullptr;
 }
 
 void MainWindow::checkRecentCrashDumps()
@@ -14167,21 +14202,6 @@ QString MainWindow::buildAppearanceOverlayStyleSheet(
         "  background:%1;"
         "  margin-top:12px;"
         "}"
-        // 默认组框与卡片共用无描边标准面，明确的专业分组仍可用自己的共享角色。
-        "QGroupBox{"
-        "  border:0;"
-        "  border-radius:8px;"
-        "  background:%1;"
-        "  margin:0;padding:32px 10px 10px 10px;"
-        "}"
-        "QGroupBox::title{"
-        "  subcontrol-origin:padding;"
-        "  subcontrol-position:top left;"
-        "  left:16px;top:10px;"
-        "  padding:0;"
-        "  background:transparent;"
-        "  color:%2;"
-        "}"
         "QTabWidget::pane{"
         "  border:none !important;"
         "  border-radius:8px;"
@@ -14189,7 +14209,8 @@ QString MainWindow::buildAppearanceOverlayStyleSheet(
         "  top:0px;"
         "}")
         .arg(panelBackgroundColor)
-        .arg(primaryTextColor);
+        + ks::ui::GroupBoxStyle(QStringLiteral("QGroupBox"), panelBackgroundColor,
+            primaryTextColor, KswordTheme::TextDisabledColorHex(), QFontMetrics(QApplication::font()).height());
 
     // sharedOverlayStyle 作用：
     // - 统一 hover/pressed 与 Tab 高亮；

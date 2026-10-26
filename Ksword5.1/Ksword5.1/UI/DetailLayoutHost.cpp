@@ -16,6 +16,7 @@
 #include <QHBoxLayout>
 #include <QIcon>
 #include <QScreen>
+#include <QScopeGuard>
 #include <QSplitter>
 #include <QTableWidget>
 #include <QTableView>
@@ -166,40 +167,67 @@ void ks::ui::DetailLayoutHost::initializeHostUi()
     m_splitter->insertWidget(1, m_toggleBar.data());
 }
 
+void ks::ui::DetailLayoutHost::prepareHostUi()
+{
+    if (m_constructing || m_preparingHostUi) return;
+    const QPointer<DetailLayoutHost> self(this);
+    m_preparingHostUi = true;
+    const auto finished = qScopeGuard([self]() { if (self) self->m_preparingHostUi = false; });
+    if (m_splitter.isNull() || m_detailPane.isNull()) initializeHostUi();
+    if (self.isNull()) return;
+    if (!m_splitter.isNull() && !m_detailPane.isNull())
+    {
+        initializeConnections();
+        if (self.isNull() || !isBound()) return;
+        const QPointer<QSplitter> preparedSplitter = m_splitter;
+        const QPointer<QWidget> preparedMainPane = m_tablePane;
+        const QPointer<QWidget> preparedDetailPane = m_detailPane;
+        // applyScheme advances this generation once for its own scheme change;
+        // any other advance means a synchronous callback rebound the host.
+        const quint64 generation = m_bindingGeneration;
+        const auto previousScheme = m_scheme;
+        applyScheme(m_requestedScheme);
+        if (self.isNull() || !isBound() || m_splitter != preparedSplitter
+            || m_tablePane != preparedMainPane || m_detailPane != preparedDetailPane
+            || m_bindingGeneration != generation + (m_scheme != previousScheme ? 1u : 0u)) return;
+        const quint64 appliedGeneration = m_bindingGeneration;
+        updateEmbeddedEditorGeometries();
+        if (self.isNull() || !isBound() || m_bindingGeneration != appliedGeneration
+            || m_splitter != preparedSplitter || m_tablePane != preparedMainPane
+            || m_detailPane != preparedDetailPane) return;
+        // A compatibility wrapper created under an already visible parent is
+        // auto-shown later by Qt. Finish only that pending implicit show now;
+        // an explicitly hidden or explicitly bound splitter keeps its owner.
+        const QPointer<QWidget> parent = m_splitter->parentWidget();
+        if (!m_explicitBinding && parent && parent->isVisible() && m_splitter->isHidden()
+            && !m_splitter->testAttribute(Qt::WA_WState_ExplicitShowHide))
+        {
+            if (!applyLayoutStep([this]() { m_splitter->show(); })) return;
+            if (parent && parent->layout()
+                && !applyLayoutStep([parent]() { if (parent && parent->layout()) parent->layout()->activate(); })) return;
+        }
+        m_hostUiInitializationScheduled = false;
+        ++m_hostUiInitializationGeneration;
+    }
+}
+
 void ks::ui::DetailLayoutHost::scheduleHostUiInitialization()
 {
+    // Compatibility hosts also observe their real layout/show boundary. Child
+    // construction still only schedules work until the full panels are mounted.
+    if (!m_ownerWidget.isNull()) m_ownerWidget->installEventFilter(this);
     if (m_hostUiInitializationScheduled || m_ownerWidget.isNull())
     {
         return;
     }
     m_hostUiInitializationScheduled = true;
+    const quint64 generation = ++m_hostUiInitializationGeneration;
     QTimer::singleShot(0, this,
-        [this]()
+        [this, generation]()
         {
-            const QPointer<DetailLayoutHost> self(this);
+            if (!m_hostUiInitializationScheduled || generation != m_hostUiInitializationGeneration) return;
             m_hostUiInitializationScheduled = false;
-            if (m_splitter.isNull() || m_detailPane.isNull())
-            {
-                initializeHostUi();
-            }
-            if (self.isNull())
-            {
-                return;
-            }
-            if (!m_splitter.isNull() && !m_detailPane.isNull())
-            {
-                initializeConnections();
-                if (self.isNull())
-                {
-                    return;
-                }
-                applyScheme(m_requestedScheme);
-                if (self.isNull())
-                {
-                    return;
-                }
-                updateEmbeddedEditorGeometries();
-            }
+            prepareHostUi();
         });
 }
 
@@ -947,6 +975,7 @@ void ks::ui::DetailLayoutHost::destroyFloatingWindow()
 bool ks::ui::DetailLayoutHost::eventFilter(QObject* watchedObject, QEvent* eventObject)
 {
     const QPointer<DetailLayoutHost> self(this);
+    const QPointer<QObject> watched(watchedObject);
     if (eventObject != nullptr)
     {
         if (watchedObject == m_tableView.data())
@@ -958,15 +987,27 @@ bool ks::ui::DetailLayoutHost::eventFilter(QObject* watchedObject, QEvent* event
                     refreshEmbeddedIndicators();
                 if (self.isNull())
                 {
-                    return true;
+                    return watched.isNull();
                 }
             }
         }
         if ((watchedObject == m_requestedSplitter.data() || watchedObject == m_ownerWidget.data())
             && (eventObject->type() == QEvent::ChildAdded || eventObject->type() == QEvent::LayoutRequest
-                || eventObject->type() == QEvent::Show) && !isBound())
+                || eventObject->type() == QEvent::Show || eventObject->type() == QEvent::ShowToParent) && !isBound())
         {
-            scheduleHostUiInitialization();
+            // Show runs inside QWidgetPrivate::showChildren: changing this
+            // subtree there can invalidate Qt's traversal. The owner's
+            // ShowToParent follows show_helper; visible LayoutRequest is the
+            // corresponding safe boundary for dynamically mounted panels.
+            if (!m_constructing && ((watchedObject == m_ownerWidget.data()
+                && eventObject->type() == QEvent::ShowToParent)
+                || (eventObject->type() == QEvent::LayoutRequest && m_ownerWidget
+                    && m_ownerWidget->isVisible())))
+            {
+                prepareHostUi();
+                if (self.isNull()) return watched.isNull();
+            }
+            if (!isBound()) scheduleHostUiInitialization();
         }
     }
     if (!m_tableView.isNull() && watchedObject == m_tableView->viewport() && eventObject != nullptr)
@@ -981,7 +1022,7 @@ bool ks::ui::DetailLayoutHost::eventFilter(QObject* watchedObject, QEvent* event
             updateEmbeddedEditorGeometries();
             if (self.isNull())
             {
-                return true;
+                return watched.isNull();
             }
             break;
         default:
@@ -999,5 +1040,6 @@ bool ks::ui::DetailLayoutHost::eventFilter(QObject* watchedObject, QEvent* event
             m_floatingWindow->setWindowOpacity(0.30);
         }
     }
-    return self.isNull() || QObject::eventFilter(watchedObject, eventObject);
+    if (watched.isNull()) return true;
+    return !self.isNull() && QObject::eventFilter(watchedObject, eventObject);
 }

@@ -85,6 +85,16 @@ namespace
 
     constexpr char kInstalledProperty[] = "KSWORD_TABLE_INTERACTION_SUPPORT_INSTALLED";
     constexpr char kActionBarProperty[] = "KSWORD_TABLE_INTERACTION_ACTION_BAR";
+    constexpr char kConfigurationPendingProperty[] = "ksword_table_interaction_configuration_pending";
+    constexpr char kInitialConfigurationProperty[] = "ksword_table_interaction_initial_configuration_done";
+    constexpr char kInitialPaintWaitingProperty[] = "ksword_table_interaction_initial_paint_waiting";
+    constexpr char kInitialPaintReleasedProperty[] = "ksword_table_interaction_initial_paint_released";
+
+    QEvent::Type initialTablePaintReadyEventType()
+    {
+        static const auto type = static_cast<QEvent::Type>(QEvent::registerEventType());
+        return type;
+    }
     constexpr char kStandardContextMenuProperty[] = "KSWORD_TABLE_INTERACTION_STANDARD_CONTEXT_MENU";
     constexpr char kComparisonActiveProperty[] = "KSWORD_TABLE_INTERACTION_COMPARISON_ACTIVE";
     constexpr char kSearchTargetPrefixProperty[] = "ksword_compact_search_target_prefix";
@@ -2523,21 +2533,6 @@ namespace
         }
     }
 
-    // Coalesce discovery and resize work outside QWidget's Show/repolish recursion.
-    void scheduleTableConfiguration(QTableView* tableView)
-    {
-        constexpr char pending[] = "ksword_table_interaction_configuration_pending";
-        if (tableView == nullptr || tableView->property(pending).toBool()) return;
-        tableView->setProperty(pending, true);
-        const QPointer<QTableView> guardedTable(tableView);
-        QTimer::singleShot(0, tableView, [guardedTable]()
-        {
-            if (guardedTable.isNull()) return;
-            guardedTable->setProperty("ksword_table_interaction_configuration_pending", false);
-            configureTable(guardedTable.data());
-        });
-    }
-
     class GlobalTableInteractionSupportFilter final : public QObject
     {
     public:
@@ -2546,12 +2541,64 @@ namespace
         {
         }
 
+        // Keep discovery and later resize work outside Show/repolish recursion.
+        // The ordinary-window paint gate below lets this original queue finish
+        // before drawing a newly visible table with its final reserved space.
+        void scheduleTableConfiguration(QTableView* tableView)
+        {
+            if (!tableView) return;
+            if (!tableView->property(kInitialConfigurationProperty).toBool()) m_hasInitialPending = true;
+            const auto previous = m_pendingTables.constFind(tableView);
+            if (previous != m_pendingTables.cend() && previous.value()) return;
+            const QPointer<QTableView> guardedTable(tableView);
+            m_pendingTables.insert(tableView, guardedTable);
+            tableView->setProperty(kConfigurationPendingProperty, true);
+            if (!guardedTable)
+            {
+                m_pendingTables.remove(tableView);
+                return;
+            }
+            QTimer::singleShot(0, this, [this, guardedTable, tableView]()
+            {
+                const auto pending = m_pendingTables.constFind(tableView);
+                if (pending == m_pendingTables.cend() || pending.value() != guardedTable) return;
+                m_pendingTables.remove(tableView);
+                if (!guardedTable) return;
+                guardedTable->setProperty(kConfigurationPendingProperty, false);
+                if (guardedTable) configureTable(guardedTable.data());
+            });
+        }
+
     protected:
         bool eventFilter(QObject* watchedObject, QEvent* eventObject) override
         {
             if (eventObject == nullptr)
             {
                 return QObject::eventFilter(watchedObject, eventObject);
+            }
+
+            if (eventObject->type() == initialTablePaintReadyEventType())
+            {
+                const QPointer<QWidget> window(qobject_cast<QWidget*>(watchedObject));
+                if (window)
+                {
+                    window->setProperty(kInitialPaintWaitingProperty, false);
+                    if (window) window->setProperty(kInitialPaintReleasedProperty, true);
+                    if (window && window->isWindow() && window->isVisible())
+                        QCoreApplication::postEvent(window.data(), new QEvent(QEvent::UpdateRequest),
+                            Qt::LowEventPriority);
+                }
+                return true;
+            }
+
+            if (eventObject->type() == QEvent::UpdateRequest)
+            {
+                auto* window = qobject_cast<QWidget*>(watchedObject);
+                if (window && window->isWindow() && window->isVisible()
+                    && window->windowType() != Qt::Popup && window->windowType() != Qt::ToolTip)
+                {
+                    if (deferPendingConfigurations(window)) return true;
+                }
             }
 
             if (eventObject->type() == QEvent::Show)
@@ -2738,6 +2785,55 @@ namespace
         }
 
     private:
+        bool deferPendingConfigurations(QWidget* window)
+        {
+            bool initialPending = false;
+            bool unfinished = false;
+            if (m_hasInitialPending)
+            {
+                for (const auto& table : m_pendingTables)
+                {
+                    if (!table || table->property(kInitialConfigurationProperty).toBool()) continue;
+                    unfinished = true;
+                    if (table->isVisible() && table->window() == window && table->model()
+                        && ks::ui::TableActionBarHostFor(table.data())
+                        && ks::ui::EffectiveTableActionBarMode(table.data()) != TableActionBarMode::None
+                        && !table->property("KSWORD_TABLE_INTERACTION_FROZEN_PANE_AUXILIARY").toBool()
+                        && !table->property("ksword_detail_keep_layout").toBool()
+                        && !ks::ui::PreservesCustomTablePresentation(table.data()))
+                    {
+                        initialPending = true;
+                        break;
+                    }
+                }
+            }
+            m_hasInitialPending = unfinished;
+            const QPointer<QWidget> scope(window);
+            if (!initialPending)
+            {
+                if (window->property(kInitialPaintWaitingProperty).toBool())
+                    window->setProperty(kInitialPaintWaitingProperty, false);
+                if (scope && window->property(kInitialPaintReleasedProperty).toBool())
+                    window->setProperty(kInitialPaintReleasedProperty, false);
+                return scope.isNull();
+            }
+            // Never wait for business/model results or keep delaying a refused
+            // configuration. One queue boundary releases this batch even if a
+            // callback leaves a new discovery request pending.
+            if (window->property(kInitialPaintReleasedProperty).toBool()) return false;
+            if (!window->property(kInitialPaintWaitingProperty).toBool())
+            {
+                window->setProperty(kInitialPaintWaitingProperty, true);
+                if (scope)
+                    QCoreApplication::postEvent(scope.data(), new QEvent(initialTablePaintReadyEventType()),
+                        Qt::LowEventPriority);
+            }
+            return true;
+        }
+
+        QHash<QTableView*, QPointer<QTableView>> m_pendingTables; // Existing requests only; no widget-tree scan.
+        bool m_hasInitialPending = false; // Hot refresh queues do not scan on every window update.
+
         // m_pendingContextItemView 用途：保存当前业务右键菜单应绑定的表格或树来源。
         QPointer<QAbstractItemView> m_pendingContextItemView;
         QPersistentModelIndex m_pendingContextCell; // 本次正文右键的单元格身份。
@@ -2785,6 +2881,7 @@ namespace ks::ui
         {
             return;
         }
+        const QPointer<QTableView> target(tableView);
         ApplyTablePresentation(tableView, capabilities.normalizeHeader);
         auto* const tableWidget = qobject_cast<QTableWidget*>(tableView);
         if (capabilities.headerClickSorting.has_value())
@@ -2799,6 +2896,7 @@ namespace ks::ui
         installActionBar(tableView);
         InstallTableSearchSupport(tableView);
         RefreshTableSearchSupport(tableView);
+        if (target) target->setProperty(kInitialConfigurationProperty, true);
     }
 
     void OpenProcessDetailByPid(const quint32 pid)
@@ -2863,7 +2961,7 @@ namespace ks::ui
 
         for (QWidget* widget : appInstance->allWidgets())
         {
-            scheduleTableConfiguration(qobject_cast<QTableView*>(widget));
+            filter->scheduleTableConfiguration(qobject_cast<QTableView*>(widget));
         }
     }
 

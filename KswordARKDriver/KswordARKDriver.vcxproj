@@ -347,6 +347,32 @@
     <ClCompile Include="src\features\keyboard\keyboard_query.c" />
     <ClCompile Include="src\features\keyboard\keyboard_ioctl.c" />
     <ClCompile Include="src\features\keyboard\keyboard_mutation.c" />
+    <ClCompile Include="src\features\keyboard\keyboard_rule_runtime.c" />
+    <ClCompile Include="src\features\keyboard\keyboard_rule_match.c" />
+    <ClCompile Include="src\features\keyboard\keyboard_rule_register.c" />
+    <ClCompile Include="src\features\keyboard\keyboard_rule_remove.c" />
+    <ClCompile Include="src\features\keyboard\keyboard_rule_insert.c" />
+    <ClCompile Include="src\features\keyboard\keyboard_rule_assignment.c" />
+    <ClCompile Include="src\features\keyboard\keyboard_rule_owner.c" />
+    <ClCompile Include="src\features\keyboard\keyboard_rule_slot.c" />
+    <ClCompile Include="src\features\keyboard\keyboard_rule_loop.c" />
+    <ClCompile Include="src\features\keyboard\keyboard_rule_flow.c" />
+    <ClCompile Include="src\features\keyboard\keyboard_rule_values.c" />
+    <ClCompile Include="src\features\keyboard\keyboard_rule_pe.c" />
+    <ClCompile Include="src\features\keyboard\keyboard_rule_decode.c">
+      <LanguageStandard_C>stdc11</LanguageStandard_C>
+      <PreprocessorDefinitions>ZYAN_NO_LIBC;ZYDIS_STATIC_BUILD;ZYCORE_STATIC_BUILD;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\third_party\zydis\Zydis.c">
+      <LanguageStandard_C>stdc11</LanguageStandard_C>
+      <AdditionalIncludeDirectories>$(ProjectDir)..\third_party\zydis;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <DisableSpecificWarnings>4201;%(DisableSpecificWarnings)</DisableSpecificWarnings>
+      <PreprocessorDefinitions>ZYAN_NO_LIBC;ZYDIS_STATIC_BUILD;ZYCORE_STATIC_BUILD;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <CompileAs>CompileAsC</CompileAs>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <FunctionLevelLinking>true</FunctionLevelLinking>
+    </ClCompile>
     <ClCompile Include="src\features\storage\storage_audit.c" />
     <ClCompile Include="src\features\storage\storage_ioctl.c" />
     <ClCompile Include="src\features\storage\storage_forensics.c" />
@@ -520,6 +546,10 @@
     <ClInclude Include="include\ark\ark_network.h" />
     <ClInclude Include="include\ark\ark_keyboard.h" />
     <ClInclude Include="src\features\keyboard\keyboard_internal.h" />
+    <ClInclude Include="src\features\keyboard\keyboard_rule_ir.h" />
+    <ClInclude Include="src\features\keyboard\keyboard_rule_match.h" />
+    <ClInclude Include="src\features\keyboard\keyboard_rule_flow.h" />
+    <ClInclude Include="src\features\keyboard\keyboard_rule_proof.h" />
     <ClInclude Include="include\ark\ark_storage.h" />
     <ClInclude Include="include\ark\ark_mutation.h" />
     <ClInclude Include="..\shared\driver\KswordArkKernelObjectIoctl.h" />

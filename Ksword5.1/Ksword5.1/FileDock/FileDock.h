@@ -231,6 +231,7 @@ private:
     static const std::vector<NavigationPageDefinition>& navigationPageDefinitions();
     void initializeManagerPage();
     void initializeStorageControllerPage();
+    void initializeNtfsIndexPage();
 
     // initializeRecoveryPage：
     // - 作用：初始化“文件恢复”竖排 Tab 页面。
@@ -286,7 +287,8 @@ private:
     // - 参数 panel：目标面板。
     // - 参数 pathText：目标目录路径。
     // - 参数 recordHistory：是否写入导航历史。
-    void navigateToPath(FilePanelWidgets& panel, const QString& pathText, bool recordHistory);
+    void navigateToPath(FilePanelWidgets& panel, const QString& pathText, bool recordHistory,
+        const QString& selectionPath = QString());
 
     // refreshPanel：
     // - 作用：刷新当前目录并重新应用过滤/排序。
@@ -554,7 +556,7 @@ private:
     void openMappedProcessScanWindow(const std::vector<QString>& scanPaths);
 
     void commitFileNavigation(FilePanelWidgets& panel, const QString& normalizedPath,
-        const QString& parentOfPrevious, bool recordHistory);
+        const QString& parentOfPrevious, bool recordHistory, const QString& selectionPath);
 
     void submitFileMutation(FilePanelWidgets& panel, std::vector<QString> paths,
         const QString& destination, unsigned long integrityRid, const QString& displayText,
@@ -622,6 +624,7 @@ private:
     QVBoxLayout* m_rootLayout = nullptr;       // FileDock 根布局。
     QTabWidget* m_rootTabWidget = nullptr;     // 竖排根 Tab（文件管理 / 文件恢复 / IRP 构造）。
     QWidget* m_fileManagerPage = nullptr;      // 文件管理页容器。
+    QWidget* m_ntfsIndexPage = nullptr;        // MFT/USN search and shared space distribution.
     QWidget* m_storageControllerPage = nullptr; // 直接从文件侧边栏打开的控制器页。
     QWidget* m_fileRecoveryPage = nullptr;     // 文件恢复页容器。
     QWidget* m_irpBuilderPage = nullptr;       // IRP 构造页容器。

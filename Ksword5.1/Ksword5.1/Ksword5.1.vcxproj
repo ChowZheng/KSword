@@ -169,6 +169,10 @@
     <ClCompile Include="DriverDock\DriverDock.Evidence.cpp" />
     <ClCompile Include="DriverDock\DriverDock.Integrity.cpp" />
     <ClCompile Include="DriverDock\DriverDock.Unloaded.cpp" />
+    <ClCompile Include="FileDock\NtfsFastIndex.cpp" />
+    <ClCompile Include="FileDock\NtfsIndexRecord.cpp" />
+    <ClCompile Include="FileDock\NtfsSearchPage.cpp" />
+    <ClCompile Include="FileDock\NtfsSpaceMapWidget.cpp" />
     <ClCompile Include="FileDock\FileDock.cpp" />
     <ClCompile Include="FileDock\FileDock.HandleUsage.cpp" />
     <ClCompile Include="FileDock\FileDock.IrpBuilder.cpp" />
@@ -485,6 +489,7 @@
     <ClCompile Include="ProcessDock\ProcessDetailWindow.InjectionTrace.cpp" />
     <ClCompile Include="ProcessDock\ProcessDetailWindow.Module.cpp" />
     <ClCompile Include="ProcessDock\ProcessDetailWindow.Hotkey.cpp" />
+    <ClCompile Include="ProcessDock\HotkeyClearController.cpp" />
     <ClCompile Include="ProcessDock\ProcessDetailWindow.PdbCatalog.cpp" />
     <ClCompile Include="ProcessDock\ProcessDetailWindow.ActionAndUtil.cpp" />
     <ClCompile Include="ProcessDock\ProcessDetailWindow.Privilege.cpp" />
@@ -889,6 +894,9 @@
     <ClInclude Include="PluginHost.h" />
     <ClInclude Include="..\..\DebuggerBackend\KswordPluginTheme.h" />
     <ClInclude Include="Internationalization\LanguageManager.h" />
+    <ClInclude Include="FileDock\NtfsFastIndex.h" />
+    <ClInclude Include="FileDock\NtfsIndexRecord.h" />
+    <ClInclude Include="FileDock\NtfsSpaceMapWidget.h" />
     <ClInclude Include="FileDock\ManualFileSystemParser.h" />
     <ClInclude Include="FileDock\NtfsRunListDecode.h" />
     <ClInclude Include="FileDock\DriverFileSystemParser.h" />
@@ -905,6 +913,7 @@
     <ClInclude Include="Framework\ProgressDockWidget.h" />
     <ClInclude Include="Framework\TaskSnapshotFeed.h" />
     <ClInclude Include="Framework\StartupSplash.h" />
+    <ClInclude Include="Framework\ReleaseMetadata.h" />
     <ClInclude Include="KernelDock\KernelDockAtomWorker.h" />
     <ClInclude Include="KernelDock\KernelKnowledgeCatalog.h" />
     <ClInclude Include="KernelDock\KernelKnowledgeTab.h" />
@@ -1035,6 +1044,7 @@
     <ClInclude Include="UI\RoundedViewSurface.h" />
     <ClInclude Include="UI\SecondaryPageLayout.h" />
     <ClInclude Include="UI\PrimaryPageStyle.h" />
+    <ClInclude Include="UI\GroupBoxStyle.h" />
     <ClInclude Include="UI\ParameterWorkspace.h" />
     <ClInclude Include="UI\MainSurfaceStyle.h" />
     <ClInclude Include="UI\PageNavigationCatalog.h" />
@@ -1081,6 +1091,7 @@
     <QtMoc Include="DriverDock\DriverDock.h" />
     <ClInclude Include="DriverDock\DriverDock.Internal.h" />
     <ClInclude Include="DriverDock\DriverDock.ModuleDumpFile.h" />
+    <QtMoc Include="FileDock\NtfsSearchPage.h" />
     <QtMoc Include="FileDock\FileDock.h" />
     <ClInclude Include="ScannerDock\ScannerDock.h" />
     <QtMoc Include="句柄\HandleDock.h" />
@@ -1390,6 +1401,7 @@
     <ClInclude Include="StartupDock\StartupDock.Internal.h" />
     <ClInclude Include="ProcessDock\Process_Tool.h" />
     <ClInclude Include="ProcessDock\ProcessHotkeyEnumerator.h" />
+    <ClInclude Include="ProcessDock\HotkeyClearController.h" />
     <ClInclude Include="UI\UI.css\UI_css.h" />
     <ClInclude Include="MonitorDock\WinAPIEventArchive.h" />
     <ClInclude Include="MonitorDock\WinAPISessionBackend.h" />
@@ -1398,6 +1410,7 @@
     <ClInclude Include="WindowDock\WindowDock.h" />
     <ClInclude Include="WindowDock\WindowEventHookTab.h" />
     <ClInclude Include="WindowDock\WindowGlobalHotkeyTab.h" />
+    <ClInclude Include="WindowDock\WindowHotkeyClearUi.h" />
     <ClInclude Include="WindowDock\WindowGuiHandleTab.h" />
     <ClInclude Include="WindowDock\WindowTimerTab.h" />
     <QtMoc Include="WelcomeDock\WelcomeDock.h" />
@@ -1445,6 +1458,8 @@
     <None Include="ArkDriverClient\ArkRuntimeDynDataCatalog.inc" />
     <None Include="languages\en-US.json" />
     <None Include="languages\zh-CN.json" />
+    <None Include="Resource\Logo\KswordLogo.png" />
+    <None Include="Resource\Splash\StartupLandscape.png" />
   </ItemGroup>
   <Target Name="AuditKswordLanguagePacks" BeforeTargets="ClCompile" Condition="'$(KswordSkipI18nAudit)'!='true'">
     <PropertyGroup>
@@ -1471,6 +1486,19 @@
     <MakeDir Directories="$(TargetDir)languages\" Condition="'@(KswordLanguagePack)' != ''" />
     <Copy SourceFiles="@(KswordLanguagePack)" DestinationFolder="$(TargetDir)languages\" SkipUnchangedFiles="true" Condition="'@(KswordLanguagePack)' != ''" />
     <Warning Condition="'@(KswordLanguagePack)' == ''" Text="No KSword language packs were found under $(MSBuildProjectDirectory)\languages." />
+  </Target>
+  <Target Name="CopyKswordSplashAssets" AfterTargets="Build">
+    <PropertyGroup>
+      <KswordSplashArt>$(MSBuildProjectDirectory)\Resource\Splash\StartupLandscape.png</KswordSplashArt>
+      <KswordSplashLogo>$(MSBuildProjectDirectory)\Resource\Logo\KswordLogo.png</KswordSplashLogo>
+      <KswordSplashTargetDir>$(TargetDir)Style\</KswordSplashTargetDir>
+    </PropertyGroup>
+    <Error Condition="!Exists('$(KswordSplashArt)')" Text="KSword splash artwork was not found: $(KswordSplashArt)" />
+    <Error Condition="!Exists('$(KswordSplashLogo)')" Text="KSword splash logo was not found: $(KswordSplashLogo)" />
+    <MakeDir Directories="$(KswordSplashTargetDir)" />
+    <Copy SourceFiles="$(KswordSplashArt);$(KswordSplashLogo)"
+          DestinationFiles="$(KswordSplashTargetDir)StartupLandscape.png;$(KswordSplashTargetDir)KswordLogo.png"
+          SkipUnchangedFiles="true" />
   </Target>
   <!-- Qt Advanced Docking System 必须与 MSVC/Qt 运行时保持同一 ABI，并放在 exe 同目录，避免 PATH 捡到 MinGW 同名 DLL。 -->
   <Target Name="CopyQtAdvancedDockingRuntime" AfterTargets="Build">

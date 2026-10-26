@@ -119,6 +119,15 @@ public:
     // - 供进程详情的独立“内存扫描”Tab 复用完整搜索能力。
     void focusProcessForSearch(std::uint32_t pid, bool showMessage = false);
 
+    // ProcessMemoryDestination：模块跨页操作的落点，复用工作台、区域表和搜索参数页。
+    enum class ProcessMemoryDestination { Workbench, Regions, Search };
+    // openProcessMemoryRange：按 PID/创建时间核验后附加同一进程实例并定位地址。
+    // address/size 固定调用方模块范围；Search 只预填参数，不发起扫描。
+    // completion 在同步或异步附加及页面准备结束后仅调用一次，false 表示拒绝或失败。
+    void openProcessMemoryRange(std::uint32_t pid, std::uint64_t creationTime,
+        std::uint64_t address, std::uint64_t size, ProcessMemoryDestination destination,
+        ks::ui::LeaveCompletion completion = {});
+
     // setProcessDetailMemoryScope：
     // - 供进程详情窗口内嵌时使用；
     // - 仅保留进程与模块、内存区域、内存搜索、内存工作台四个页面。
@@ -153,6 +162,17 @@ public:
     //   （工作台跟随 Dock；若它钉在别的进程上会被带回跟随）；
     // - 返回：true=已跳转；false=工作台不可用或被拒绝（原因在工作台状态条里）。
     bool openAddressInWorkbench(std::uint64_t address, bool kernelAddress = false);
+
+    // requestDumpProcessModule：进程 DLL 菜单复用区域导出的异步、取消与原子保存流程。
+    // 输入 PID/创建时间固定进程实例，moduleBase/moduleSize 固定完整映像范围，moduleName 仅供命名。
+    // backend 必须为 R3/R0；输出原始内存布局 .bin，不重建 PE，不补零或保留失败的部分文件。
+    void requestDumpProcessModule(
+        std::uint32_t pid,
+        std::uint64_t creationTime,
+        std::uint64_t moduleBase,
+        std::uint64_t moduleSize,
+        const QString& moduleName,
+        ksword::memory_backend::MemoryAccessBackend backend);
     // prepareNavigationPages：按需准备工作台与内存调试页的真实控件树，供全局导航索引。
     // singleStep limits full search preparation to one existing page factory.
     // Complete cold bodies can skip an unvisited factory; compatibility callers
@@ -639,6 +659,16 @@ private:
     void refreshMemoryRegionList(bool forceRequery);
     void requestFirstScanRegions();
 
+    // applyPendingModuleRegionFocus：区域异步模型发布后定位模块地址；不扫描或重建业务数据。
+    void applyPendingModuleRegionFocus();
+    struct ModuleRegionFocus
+    {
+        std::uint64_t address = 0; // 要显示的模块地址。
+        std::uint64_t attachmentGeneration = 0; // 只允许当前附加上下文消费请求。
+    };
+    std::optional<ModuleRegionFocus> m_pendingModuleRegionFocus;
+    std::uint64_t m_processMemoryNavigationGeneration = 0; // 后到跨页请求使旧异步回调失效。
+
     // requestDumpMemoryRegion：菜单前冻结进程句柄/创建时间和区域，选择路径后异步导出。
     // pid/processName 用于身份和提示；targetProcess 为独立租约；region/backend 固定导出范围和通道。
     void requestDumpMemoryRegion(
@@ -647,7 +677,8 @@ private:
         const std::shared_ptr<void>& targetProcess,
         std::uint64_t creationTime,
         const RegionEntry& region,
-        ksword::memory_backend::MemoryAccessBackend backend);
+        ksword::memory_backend::MemoryAccessBackend backend,
+        bool moduleImage = false);
 
     // tryCancelMemoryRegionDump：提交前原子接受取消；已进入提交阶段时返回 false。
     bool tryCancelMemoryRegionDump();
@@ -668,7 +699,8 @@ private:
         const std::function<bool()>& canceled,
         QString& errorTextOut,
         const std::function<bool()>& beginCommit = {},
-        const std::function<void(std::uint64_t, std::uint64_t)>& progress = {});
+        const std::function<void(std::uint64_t, std::uint64_t)>& progress = {},
+        bool moduleImage = false);
 
     // enumerateMemoryRegionsByVirtualQuery：
     // - 作用：对附加进程执行 VirtualQueryEx 遍历。

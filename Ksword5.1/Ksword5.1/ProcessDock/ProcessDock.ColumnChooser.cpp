@@ -23,9 +23,9 @@
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QIcon>
-#include <QInputDialog>
 #include <QLabel>
 #include <QLineEdit>
+#include <QMessageBox>
 #include <QPushButton>
 #include <QScrollArea>
 #include <QSettings>
@@ -41,6 +41,19 @@
 
 namespace
 {
+    // The cached dialog owns all state captured by its callbacks.
+    class ProcessColumnChooserDialog final : public QDialog
+    {
+    public:
+        explicit ProcessColumnChooserDialog(QWidget* parent) : QDialog(parent) {}
+
+        QString languageId;
+        std::vector<QCheckBox*> columnCheckBoxes;
+        std::vector<QLabel*> groupLabels;
+        QLineEdit* searchEdit = nullptr;
+        QPushButton* deleteViewButton = nullptr;
+    };
+
     // ProcessColumnLayoutSettingsGroup：
     // - QSettings 中保存进程表列布局的分组名；
     // - 只存“与视图默认不同”的项，默认列集合调整后不会被旧配置钉死。
@@ -393,7 +406,7 @@ void ProcessDock::loadCustomViewsFromSettings()
     settings.endGroup();
 }
 
-void ProcessDock::saveCustomViewsToSettings() const
+bool ProcessDock::saveCustomViewsToSettings() const
 {
     QSettings settings;
     settings.beginGroup(QString::fromLatin1(ProcessCustomViewSettingsGroup));
@@ -409,6 +422,8 @@ void ProcessDock::saveCustomViewsToSettings() const
         settings.setValue(customView.name, columnTexts.join(QChar(',')));
     }
     settings.endGroup();
+    settings.sync();
+    return settings.status() == QSettings::NoError;
 }
 
 void ProcessDock::rebuildViewModeComboItems()
@@ -490,8 +505,11 @@ int ProcessDock::saveCurrentColumnsAsCustomView(const QString& viewName)
             break;
         }
     }
-    if (targetIndex >= 0)
+    ProcessCustomView previousView;
+    const bool replacing = targetIndex >= 0;
+    if (replacing)
     {
+        previousView = m_customViews[static_cast<std::size_t>(targetIndex)];
         m_customViews[static_cast<std::size_t>(targetIndex)] = std::move(customView);
     }
     else
@@ -500,7 +518,14 @@ int ProcessDock::saveCurrentColumnsAsCustomView(const QString& viewName)
         targetIndex = static_cast<int>(m_customViews.size()) - 1;
     }
 
-    saveCustomViewsToSettings();
+    if (!saveCustomViewsToSettings())
+    {
+        if (replacing)
+            m_customViews[static_cast<std::size_t>(targetIndex)] = std::move(previousView);
+        else
+            m_customViews.pop_back();
+        return -1;
+    }
     rebuildViewModeComboItems();
 
     // 选中刚保存的视图，让用户立刻看到它已经生效。
@@ -622,7 +647,46 @@ void ProcessDock::showColumnChooserDialog()
         return;
     }
 
-    QDialog columnDialog(this);
+    auto* chooser = static_cast<ProcessColumnChooserDialog*>(m_columnChooserDialog.data());
+    if (chooser && chooser->isVisible())
+    {
+        chooser->raise();
+        chooser->activateWindow();
+        return;
+    }
+
+    const QString languageId = ks::i18n::LanguageManager::instance().currentLanguageId();
+    if (chooser && chooser->languageId != languageId)
+    {
+        delete chooser; // Only a language change invalidates the cached captions.
+        chooser = nullptr;
+    }
+    if (!chooser)
+    {
+        m_columnChooserDialog = createColumnChooserDialog();
+        chooser = static_cast<ProcessColumnChooserDialog*>(m_columnChooserDialog.data());
+    }
+    if (!chooser) return;
+
+    // Refresh business state without rebuilding widgets or accumulating connections.
+    chooser->searchEdit->clear();
+    chooser->deleteViewButton->setEnabled(currentCustomViewIndex() >= 0);
+    for (std::size_t index = 0; index < chooser->columnCheckBoxes.size(); ++index)
+    {
+        QCheckBox* const check = chooser->columnCheckBoxes[index];
+        if (!check) continue;
+        const QSignalBlocker blocker(check);
+        check->setChecked(static_cast<int>(index) == toColumnIndex(TableColumn::Name)
+            || !m_processTable->isColumnHidden(static_cast<int>(index)));
+    }
+    chooser->exec();
+}
+
+QDialog* ProcessDock::createColumnChooserDialog()
+{
+    auto* const chooser = new ProcessColumnChooserDialog(this);
+    chooser->languageId = ks::i18n::LanguageManager::instance().currentLanguageId();
+    QDialog& columnDialog = *chooser;
     columnDialog.setObjectName(QStringLiteral("ProcessColumnChooserDialog"));
     columnDialog.setWindowTitle(
         processColumnChooserText("process.columns.dialog.title", QStringLiteral("选择列")));
@@ -642,6 +706,7 @@ void ProcessDock::showColumnChooserDialog()
     dialogLayout->addWidget(hintLabel);
 
     auto* const searchEdit = new QLineEdit(&columnDialog);
+    chooser->searchEdit = searchEdit;
     searchEdit->setClearButtonEnabled(true);
     searchEdit->setPlaceholderText(
         processColumnChooserText("process.columns.dialog.search", QStringLiteral("搜索列名...")));
@@ -656,9 +721,11 @@ void ProcessDock::showColumnChooserDialog()
     scrollLayout->setSpacing(8);
 
     // columnCheckBoxes：按列索引保存复选框，便于搜索过滤与批量勾选。
-    std::vector<QCheckBox*> columnCheckBoxes(static_cast<std::size_t>(TableColumn::Count), nullptr);
+    auto& columnCheckBoxes = chooser->columnCheckBoxes;
+    columnCheckBoxes.resize(static_cast<std::size_t>(TableColumn::Count), nullptr);
     // groupLabels：分组标题控件，用于在搜索时隐藏没有命中项的整组。
-    std::vector<QLabel*> groupLabels(static_cast<std::size_t>(ProcessColumnGroup::Count), nullptr);
+    auto& groupLabels = chooser->groupLabels;
+    groupLabels.resize(static_cast<std::size_t>(ProcessColumnGroup::Count), nullptr);
 
     for (int groupIndex = 0; groupIndex < static_cast<int>(ProcessColumnGroup::Count); ++groupIndex)
     {
@@ -729,6 +796,7 @@ void ProcessDock::showColumnChooserDialog()
     auto* const deleteViewButton = new QPushButton(
         processColumnChooserText("process.columns.dialog.delete_view", QStringLiteral("删除当前视图")),
         &columnDialog);
+    chooser->deleteViewButton = deleteViewButton;
     // 只有当前选中的就是自定义视图时才允许删除，内置预设不可删除。
     deleteViewButton->setEnabled(currentCustomViewIndex() >= 0);
     quickActionLayout->addWidget(selectAllButton);
@@ -754,8 +822,10 @@ void ProcessDock::showColumnChooserDialog()
 
     // 搜索过滤：命中列名的项保留，整组无命中时连标题一起隐藏。
     QObject::connect(searchEdit, &QLineEdit::textChanged, &columnDialog,
-        [&columnCheckBoxes, &groupLabels](const QString& filterText)
+        [chooser](const QString& filterText)
         {
+            const auto& columnCheckBoxes = chooser->columnCheckBoxes;
+            const auto& groupLabels = chooser->groupLabels;
             const QString normalizedFilter = filterText.trimmed();
             std::vector<bool> groupHasVisibleItem(
                 static_cast<std::size_t>(ProcessColumnGroup::Count),
@@ -791,9 +861,9 @@ void ProcessDock::showColumnChooserDialog()
 
     // 全选 / 全不选只作用于当前搜索结果中可见的项，符合用户对筛选结果的直觉。
     const auto applyBulkCheckState =
-        [&columnCheckBoxes](const bool checkedState) -> void
+        [chooser](const bool checkedState) -> void
         {
-            for (QCheckBox* const columnCheck : columnCheckBoxes)
+            for (QCheckBox* const columnCheck : chooser->columnCheckBoxes)
             {
                 if (columnCheck == nullptr || !columnCheck->isVisibleTo(columnCheck->parentWidget()))
                 {
@@ -813,8 +883,9 @@ void ProcessDock::showColumnChooserDialog()
 
     // 恢复默认：先清空用户覆盖并重新套用视图预设，再按结果回填对话框勾选状态。
     QObject::connect(restoreDefaultButton, &QPushButton::clicked, &columnDialog,
-        [this, &columnCheckBoxes]()
+        [this, chooser]()
         {
+            const auto& columnCheckBoxes = chooser->columnCheckBoxes;
             resetProcessColumnsToViewDefault();
             for (std::size_t columnIndex = 0; columnIndex < columnCheckBoxes.size(); ++columnIndex)
             {
@@ -831,8 +902,9 @@ void ProcessDock::showColumnChooserDialog()
     // applyCheckedColumnsToTable：把对话框里的勾选状态写入表格，返回实际变更的列数。
     // 逐列写入时不立即持久化，由调用方在批量结束后统一保存并只做一次刷新判定。
     const auto applyCheckedColumnsToTable =
-        [this, &columnCheckBoxes]() -> int
+        [this, chooser]() -> int
         {
+            const auto& columnCheckBoxes = chooser->columnCheckBoxes;
             int changedCount = 0;
             for (std::size_t columnIndex = 0; columnIndex < columnCheckBoxes.size(); ++columnIndex)
             {
@@ -848,8 +920,9 @@ void ProcessDock::showColumnChooserDialog()
                 {
                     continue;
                 }
+                const bool wasVisible = !m_processTable->isColumnHidden(targetColumn);
                 setProcessColumnVisible(targetColumn, shouldShow, false);
-                ++changedCount;
+                if (wasVisible != !m_processTable->isColumnHidden(targetColumn)) ++changedCount;
             }
             return changedCount;
         };
@@ -873,30 +946,62 @@ void ProcessDock::showColumnChooserDialog()
 
     // 保存为视图：先把当前勾选落到表格，再以该组合创建/覆盖同名自定义视图。
     QObject::connect(saveViewButton, &QPushButton::clicked, &columnDialog,
-        [this, &columnDialog, applyCheckedColumnsToTable, commitColumnLayoutChanges]()
+        [this, chooser, applyCheckedColumnsToTable, commitColumnLayoutChanges]()
         {
-            bool inputOk = false;
-            const QString viewName = QInputDialog::getText(
-                &columnDialog,
-                processColumnChooserText("process.columns.dialog.save_view_title", QStringLiteral("保存为视图")),
-                processColumnChooserText("process.columns.dialog.save_view_prompt", QStringLiteral("视图名称：")),
-                QLineEdit::Normal,
-                QString(),
-                &inputOk);
-            if (!inputOk || viewName.trimmed().isEmpty())
+            QDialog& columnDialog = *chooser;
+            QDialog nameDialog(&columnDialog);
+            nameDialog.setObjectName(QStringLiteral("ProcessColumnViewNameDialog"));
+            nameDialog.setWindowTitle(processColumnChooserText(
+                "process.columns.dialog.save_view_title", QStringLiteral("保存为视图")));
+            ks::ui::StyleSecondaryWindow(&nameDialog);
+            auto* const nameLayout = new QVBoxLayout(&nameDialog);
+            ks::ui::StyleSecondaryContentLayout(nameLayout);
+            auto* const nameLabel = new QLabel(processColumnChooserText(
+                "process.columns.dialog.save_view_prompt", QStringLiteral("视图名称：")), &nameDialog);
+            auto* const nameEdit = new QLineEdit(&nameDialog);
+            nameEdit->setObjectName(QStringLiteral("ProcessColumnViewNameEdit"));
+            nameLabel->setBuddy(nameEdit);
+            nameLayout->addWidget(nameLabel);
+            nameLayout->addWidget(nameEdit);
+            auto* const nameButtons = new QDialogButtonBox(
+                QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &nameDialog);
+            nameLayout->addWidget(nameButtons);
+            ks::ui::StyleSecondaryButtonBox(nameButtons);
+            auto* const nameOk = nameButtons->button(QDialogButtonBox::Ok);
+            nameOk->setDefault(true);
+            nameOk->setEnabled(false);
+            QObject::connect(nameEdit, &QLineEdit::textChanged, &nameDialog,
+                [nameOk](const QString& text) { nameOk->setEnabled(!text.trimmed().isEmpty()); });
+            const auto acceptName = [&nameDialog, nameEdit]()
+            {
+                if (!nameEdit->text().trimmed().isEmpty()) nameDialog.accept();
+            };
+            QObject::connect(nameButtons, &QDialogButtonBox::accepted, &nameDialog, acceptName);
+            QObject::connect(nameEdit, &QLineEdit::returnPressed, &nameDialog, acceptName);
+            QObject::connect(nameButtons, &QDialogButtonBox::rejected, &nameDialog, &QDialog::reject);
+            nameEdit->setFocus();
+            if (nameDialog.exec() != QDialog::Accepted)
             {
                 return;
             }
+            const QString viewName = nameEdit->text().trimmed();
 
-            applyCheckedColumnsToTable();
-            commitColumnLayoutChanges();
-            saveCurrentColumnsAsCustomView(viewName);
+            const int changedColumnCount = applyCheckedColumnsToTable();
+            if (changedColumnCount > 0) commitColumnLayoutChanges();
+            const int savedViewIndex = saveCurrentColumnsAsCustomView(viewName);
+            if (savedViewIndex < 0)
+            {
+                QMessageBox::warning(&columnDialog, columnDialog.windowTitle(),
+                    processColumnChooserText("process.columns.dialog.save_failed",
+                        QStringLiteral("无法保存当前列视图，请重试。")));
+                return;
+            }
             columnDialog.accept();
         });
 
     // 删除当前自定义视图：删除后视图下拉会回落到监视视图。
     QObject::connect(deleteViewButton, &QPushButton::clicked, &columnDialog,
-        [this, &columnDialog]()
+        [this, chooser]()
         {
             const int customIndex = currentCustomViewIndex();
             if (customIndex < 0)
@@ -904,30 +1009,25 @@ void ProcessDock::showColumnChooserDialog()
                 return;
             }
             removeCustomView(customIndex);
-            columnDialog.reject();
+            chooser->reject();
         });
 
-    QObject::connect(buttonBox, &QDialogButtonBox::accepted, &columnDialog, &QDialog::accept);
+    QObject::connect(buttonBox, &QDialogButtonBox::accepted, &columnDialog,
+        [this, chooser, applyCheckedColumnsToTable, commitColumnLayoutChanges]()
+        {
+            const int changedColumnCount = applyCheckedColumnsToTable();
+            if (changedColumnCount > 0)
+            {
+                commitColumnLayoutChanges();
+                kLogEvent logEvent;
+                info << logEvent
+                    << "[ProcessDock] 选择列已应用, changedColumnCount=" << changedColumnCount
+                    << ", demandFlags=" << m_lastProcessDetailDemandFlags
+                    << eol;
+            }
+            chooser->accept();
+        });
     QObject::connect(buttonBox, &QDialogButtonBox::rejected, &columnDialog, &QDialog::reject);
 
-    if (columnDialog.exec() != QDialog::Accepted)
-    {
-        return;
-    }
-
-    // 批量应用：逐列写入覆盖但不立即持久化，最后统一保存并只做一次刷新判定。
-    // “保存为视图”分支已经提交过一次，这里的 changedColumnCount 会是 0 并直接返回。
-    const int changedColumnCount = applyCheckedColumnsToTable();
-    if (changedColumnCount == 0)
-    {
-        return;
-    }
-
-    commitColumnLayoutChanges();
-
-    kLogEvent logEvent;
-    info << logEvent
-        << "[ProcessDock] 选择列已应用, changedColumnCount=" << changedColumnCount
-        << ", demandFlags=" << m_lastProcessDetailDemandFlags
-        << eol;
+    return chooser;
 }

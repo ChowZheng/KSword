@@ -10,6 +10,7 @@
 
 #include "../Framework.h"
 #include "ProcessAffinityModel.h"
+#include "ProcessHotkeyEnumerator.h"
 #include "../UI/AsyncOperation.h"
 #include "../UI/ImmutableValueTable.h"
 #include <QImage>
@@ -296,6 +297,8 @@ private:
         QString processName;             // 所属进程名。
         QString sourceText;              // 来源：窗口热键/菜单/Accelerator/.lnk 等。
         QString detailText;              // 额外上下文。
+        ks::process::UserModeHotkeyRecord clearTarget; // 采集时的类型化清除身份，不从表格文本反解析。
+        bool isRegisteredHotkey = false; // R0 RegisterHotKey 来源由采集器直接标记。
         bool hasR0MutationSnapshot = false; // 是否携带可提交的完整 R0 tagHOTKEY 快照。
         KSWORD_ARK_KEYBOARD_HOTKEY_ENTRY r0MutationSnapshot{}; // 编辑/删除的预期值快照。
     };
@@ -654,6 +657,18 @@ private:
     void requestAsyncInjectionTraceScan(bool deepMode);
 
     // ======== 模块表右键 ========
+    // 模块跨页请求持有菜单时的值快照，等待内存页惰性构造后仅消费一次。
+    enum class ModuleMemoryAction { Base, EntryPoint, Regions, Search, DumpR3, DumpR0 };
+    struct ModuleMemoryRequest
+    {
+        std::uint32_t pid = 0; // 菜单所属 PID。
+        std::uint64_t creationTime = 0; // 防止惰性加载期间 PID 被复用。
+        ks::process::ProcessModuleRecord module; // 模块基址、范围及路径快照。
+        ModuleMemoryAction action = ModuleMemoryAction::Base; // 内存页中的目标动作。
+    };
+    // 请求入口负责切到现有内存 Tab；消费入口由惰性构造收尾调用，无返回值。
+    void requestModuleMemoryAction(const ks::process::ProcessModuleRecord& module, ModuleMemoryAction action);
+    void applyPendingModuleMemoryAction();
     void showModuleContextMenu(const QPoint& localPosition);
     void copyCurrentModuleCell();
     void copyCurrentModuleRow();
@@ -669,7 +684,7 @@ private:
     void terminateCurrentModuleThread();
 
     // ======== 操作页动作 ========
-    struct DetailActionResult { bool ok = false; std::string detail; bool conflict = false; };
+    struct DetailActionResult { bool ok = false; std::string detail; bool conflict = false; bool outcomeUncertain = false; };
     void submitDetailAction(const QString& title, const kLogEvent& actionEvent,
         std::function<DetailActionResult()> action, bool refreshModules = false,
         std::function<void(const DetailActionResult&)> completed = {});
@@ -957,6 +972,7 @@ private:
     QVBoxLayout* m_embeddedMemoryLayout = nullptr;
     QLabel* m_embeddedMemoryPlaceholder = nullptr;
     MemoryDock* m_embeddedMemoryDock = nullptr;
+    std::unique_ptr<ModuleMemoryRequest> m_pendingModuleMemoryRequest; // 最新一次待消费的模块跨页请求。
 
     // ======== 内嵌网络连接页 ========
     QVBoxLayout* m_embeddedNetworkLayout = nullptr;

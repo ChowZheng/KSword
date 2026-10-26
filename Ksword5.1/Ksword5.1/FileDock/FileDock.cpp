@@ -1,5 +1,6 @@
 #include "FileDock.h"
 #include "FilePropertyTableModel.h"
+#include "NtfsSearchPage.h"
 #include "../UI/TableContextMenu.h"
 #include "../UI/FlatButtonTheme.h"
 #include "../UI/ThemeBinding.h"
@@ -14671,6 +14672,10 @@ const std::vector<FileDock::NavigationPageDefinition>& FileDock::navigationPageD
               QStringLiteral("选中: 0"),
               QStringLiteral("磁盘: -"),
               QStringLiteral("解析器: Windows API") }, &FileDock::m_fileManagerPage, &FileDock::initializeManagerPage },
+        { QStringLiteral("file.tab.ntfs_index"), QString(), QStringLiteral("file.tab.ntfs_index"), QStringLiteral("MFT 搜索与空间分布"),
+          { QStringLiteral("快速文件搜索"), QStringLiteral("USN 增量更新"),
+            QStringLiteral("文件空间分布"), QStringLiteral("WinDirStat"), QStringLiteral("NTFS") },
+          &FileDock::m_ntfsIndexPage, &FileDock::initializeNtfsIndexPage },
         { QStringLiteral("file.tab.storage_controller"), QString(), QStringLiteral("file.tab.storage_controller"), QStringLiteral("存储控制器"),
           { QStringLiteral("KSword Controller / 存储控制器"),
               QStringLiteral("持续风险提示：此页直接驱动专用控制器的 BAR、DMA/队列或 IDE task-file。写入可立即破坏文件系统、分区表和启动数据；控制器重置可使设备离线。仅允许手动绑定的非启动、无挂载卷控制器。expected-hash 条件比较与写后复读不是硬件原子操作，不能消除设备并发写、固件缓存或掉电风险。"),
@@ -15157,6 +15162,24 @@ void FileDock::initializeManagerPage()
     m_mainSplitter->setStretchFactor(0, 1);
     m_mainSplitter->setStretchFactor(1, 1);
 
+}
+
+void FileDock::initializeNtfsIndexPage()
+{
+    auto* page = new NtfsSearchPage(m_rootTabWidget);
+    m_ntfsIndexPage = page;
+    connect(page, &NtfsSearchPage::locatePathRequested, this, [this](const QString& path) {
+        const QString target = QDir::cleanPath(QDir::fromNativeSeparators(path));
+        if (target.isEmpty()) return;
+        // QFileInfo path decomposition does not query the filesystem. Native existence
+        // probing remains in the existing asynchronous navigation worker.
+        const QString parent = QFileInfo(target).absolutePath();
+        m_rootTabWidget->setCurrentWidget(m_fileManagerPage);
+        m_leftPanel.filterEdit->clear();
+        m_leftPanel.showHiddenCheck->setChecked(true);
+        m_leftPanel.showSystemCheck->setChecked(true);
+        navigateToPath(m_leftPanel, parent, true, target);
+    });
 }
 
 void FileDock::initializeStorageControllerPage()
@@ -15776,7 +15799,8 @@ void FileDock::initializeConnections(FilePanelWidgets& panel)
 
 }
 
-void FileDock::navigateToPath(FilePanelWidgets& panel, const QString& pathText, bool recordHistory)
+void FileDock::navigateToPath(FilePanelWidgets& panel, const QString& pathText, bool recordHistory,
+    const QString& selectionPath)
 {
     {
         kLogEvent event;
@@ -15818,12 +15842,12 @@ void FileDock::navigateToPath(FilePanelWidgets& panel, const QString& pathText, 
     panel.pathStatusLabel->setText(ks::i18n::displayText(QStringLiteral("正在加载...")));
     panel.navigationOperation->submit<FileNavigationRequest, FileNavigationResult>(
         { normalizedPath, panel.currentPath }, probeFileNavigation,
-        [this, left, recordHistory, generation](const FileNavigationResult& result, std::uint64_t ticket)
+        [this, left, recordHistory, generation, selectionPath](const FileNavigationResult& result, std::uint64_t ticket)
         {
             FilePanelWidgets& target = left ? m_leftPanel : m_rightPanel;
             if (target.navigationGeneration != generation) return true;
             const QPointer<FileDock> self(this);
-            const auto commit = [self, left, recordHistory, generation, ticket, result]()
+            const auto commit = [self, left, recordHistory, generation, ticket, result, selectionPath]()
             {
                 if (!self) return;
                 FilePanelWidgets& current = left ? self->m_leftPanel : self->m_rightPanel;
@@ -15834,7 +15858,7 @@ void FileDock::navigateToPath(FilePanelWidgets& panel, const QString& pathText, 
                         self->updatePanelStatus(current);
                         QMessageBox::warning(self, QStringLiteral("路径无效"), QStringLiteral("目录不存在：%1").arg(result.path));
                     }
-                    else self->commitFileNavigation(current, result.path, result.parentOfPrevious, recordHistory);
+                    else self->commitFileNavigation(current, result.path, result.parentOfPrevious, recordHistory, selectionPath);
                 }
                 if (self) current.navigationOperation->completeDeferred(ticket);
             };
@@ -15853,12 +15877,15 @@ void FileDock::navigateToPath(FilePanelWidgets& panel, const QString& pathText, 
 }
 
 void FileDock::commitFileNavigation(FilePanelWidgets& panel, const QString& normalizedPath,
-    const QString& parentOfPrevious, const bool recordHistory)
+    const QString& parentOfPrevious, const bool recordHistory, const QString& selectionPath)
 {
     const QString previousPath = panel.currentPath;
     panel.pendingSelectionPath.clear();
     if (!previousPath.isEmpty() && pathEqualsCaseInsensitive(parentOfPrevious, normalizedPath))
         panel.pendingSelectionPath = previousPath;
+    if (!selectionPath.isEmpty()
+        && pathEqualsCaseInsensitive(QFileInfo(selectionPath).absolutePath(), normalizedPath))
+        panel.pendingSelectionPath = selectionPath;
 
     // 根据当前读取模式更新模型根路径。
     if (currentModeIsManual(panel))

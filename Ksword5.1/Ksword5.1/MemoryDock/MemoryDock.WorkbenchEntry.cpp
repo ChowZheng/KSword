@@ -10,6 +10,9 @@
 #include "../UI/MemoryWorkbench/WorkbenchShared.h"
 #include "../UI/MemoryWorkbench/WorkbenchTarget.h"
 
+#include <QItemSelectionModel>
+#include <limits>
+
 
 // ============================================================
 // MemoryDock.WorkbenchEntry.cpp
@@ -24,6 +27,21 @@
 
 namespace
 {
+    // processHandleMatchesModuleTarget：验证附加句柄仍属于调用方冻结的进程实例。
+    // 输入句柄、PID 和创建时间；输出是否身份完整且仍存活，不接受弱身份。
+    bool processHandleMatchesModuleTarget(HANDLE handle, std::uint32_t pid, std::uint64_t creationTime)
+    {
+        if (handle == nullptr || ::GetProcessId(handle) != pid)
+        {
+            return false;
+        }
+        const auto anchor = ks::ui::AcquireAnchorFromDockHandle(handle); // 仅用于本次身份核对。
+        const bool matches = !anchor.identityWeak && anchor.createTime100ns == creationTime
+            && ks::ui::QueryAnchorAlive(anchor.handle) == std::optional<bool>(true);
+        ks::ui::ReleaseAnchorHandle(anchor.handle);
+        return matches;
+    }
+
     // parseHexAddress：解析证据表地址列的 "0x0000..." 文本。
     // 传入：text 单元格文本；address 解析结果。传出：是否为合法十六进制（带不带 0x 前缀都收）。
     bool parseHexAddress(QString text, std::uint64_t& address)
@@ -79,6 +97,211 @@ bool MemoryDock::openAddressInWorkbench(const std::uint64_t address, const bool 
     request.origin = ks::ui::NavOrigin::Evidence;
     // 进程地址不指定 pid：证据页属于本 Dock 附加的进程，工作台跟随 Dock 即可。
     return navigateWorkbench(request);
+}
+
+// openProcessMemoryRange：模块菜单携带明确实例与范围，附加和页面切换共用原离开守卫。
+void MemoryDock::openProcessMemoryRange(const std::uint32_t pid, const std::uint64_t creationTime,
+    const std::uint64_t address, const std::uint64_t size, const ProcessMemoryDestination destination,
+    ks::ui::LeaveCompletion completion)
+{
+    const QPointer<MemoryDock> owner(this); // 模态错误提示和离开守卫期间允许宿主销毁。
+    const auto navigation = ++m_processMemoryNavigationGeneration; // 后到请求覆盖旧目标页意图。
+    m_pendingModuleRegionFocus.reset();
+    const auto reject = [owner, completion](const QString& message)
+    {
+        if (owner)
+        {
+            QMessageBox::warning(owner, ks::i18n::packedSourceText(QStringLiteral("模块内存导航")), message);
+        }
+        if (owner && completion)
+        {
+            completion(false);
+        }
+    };
+
+    // 保留降权锚点直到附加完成，禁止零创建时间和溢出范围悄悄指向复用 PID。
+    if (pid == 0 || creationTime == 0 || size == 0
+        || size - 1 > std::numeric_limits<std::uint64_t>::max() - address)
+    {
+        reject(ks::i18n::packedSourceText(QStringLiteral("模块地址范围或进程身份无效。")));
+        return;
+    }
+    const auto anchor = std::shared_ptr<ks::ui::AnchorInfo>(new ks::ui::AnchorInfo(ks::ui::AcquireAnchorForPid(pid)),
+        [](ks::ui::AnchorInfo* value)
+        {
+            ks::ui::ReleaseAnchorHandle(value->handle);
+            delete value;
+        });
+    if (anchor->identityWeak || anchor->createTime100ns != creationTime
+        || ks::ui::QueryAnchorAlive(anchor->handle) != std::optional<bool>(true))
+    {
+        reject(ks::i18n::packedSourceText(QStringLiteral("目标进程已退出、身份已变化或无法校验，请刷新模块列表。")));
+        return;
+    }
+
+    // 同步和异步附加都进入这一收口；一次性值门禁防止完成回调重复执行后续动作。
+    const auto completed = std::make_shared<bool>(false); // 回调仅在 GUI 线程消费。
+    const auto attached = [owner, anchor, navigation, pid, creationTime, address, size,
+        destination, completion, reject, completed](const bool allowed)
+    {
+        if (!owner || *completed)
+        {
+            return;
+        }
+        *completed = true;
+        if (owner->m_processMemoryNavigationGeneration != navigation)
+        {
+            if (completion)
+            {
+                completion(false);
+            }
+            return;
+        }
+        if (!allowed)
+        {
+            if (completion)
+            {
+                completion(false);
+            }
+            return;
+        }
+        if (owner->m_attachedPid != pid
+            || !processHandleMatchesModuleTarget(owner->m_attachedProcessHandle, pid, creationTime)
+            || ks::ui::QueryAnchorAlive(anchor->handle) != std::optional<bool>(true))
+        {
+            reject(ks::i18n::packedSourceText(QStringLiteral("未能附加原进程实例，模块内存操作已取消。")));
+            return;
+        }
+
+        // 工作台固定使用当前附加进程的虚拟地址，不沿用内核或钉住其它进程的范围。
+        bool accepted = false; // 只有目标页完成准备才允许调用方继续 dump 等后续动作。
+        if (destination == ProcessMemoryDestination::Workbench)
+        {
+            accepted = owner->openAddressInWorkbench(address);
+        }
+        else if (destination == ProcessMemoryDestination::Regions)
+        {
+            if (owner->ensureLazyPage(QStringLiteral("regions")) && owner)
+            {
+                owner->m_pendingModuleRegionFocus = ModuleRegionFocus{
+                    address, owner->m_processAttachmentGeneration.load() };
+                owner->m_regionFilterEdit->clear();
+                if (!owner) { return; }
+                owner->m_regionCommittedOnlyCheck->setChecked(false);
+                if (!owner) { return; }
+                owner->m_regionImageOnlyCheck->setChecked(false);
+                if (!owner) { return; }
+                owner->m_regionReadableOnlyCheck->setChecked(false);
+                if (!owner) { return; }
+                owner->m_tabWidget->setCurrentWidget(owner->m_tabRegions);
+                if (owner)
+                {
+                    owner->applyRegionFilterAndRebuildTable();
+                    if (!owner) { return; }
+                    // 显式跨页定位刷新一次现场；冷附加已在枚举时直接等待既有任务。
+                    if (!owner->m_regionRefreshJob && !owner->m_regionRefreshPendingJob)
+                    {
+                        owner->refreshMemoryRegionList(true);
+                    }
+                    if (!owner) { return; }
+                    owner->applyPendingModuleRegionFocus();
+                    accepted = true;
+                }
+            }
+        }
+        else if (destination == ProcessMemoryDestination::Search)
+        {
+            if (owner->m_scanInProgress.load())
+            {
+                reject(ks::i18n::packedSourceText(QStringLiteral("内存扫描正在运行，请先停止扫描后再切换模块搜索范围。")));
+                return;
+            }
+            if (owner->ensureLazyPage(QStringLiteral("search")) && owner)
+            {
+                owner->m_searchRangeCombo->setCurrentIndex(1);
+                if (!owner) { return; }
+                owner->m_searchRangeStartEdit->setText(MemoryDock::formatAddress(address));
+                if (!owner) { return; }
+                owner->m_searchRangeEndEdit->setText(MemoryDock::formatAddress(address + size - 1));
+                if (!owner) { return; }
+                owner->m_searchImageOnlyCheck->setChecked(true);
+                if (!owner) { return; }
+                owner->m_searchHeapOnlyCheck->setChecked(false);
+                if (!owner) { return; }
+                owner->m_searchStackOnlyCheck->setChecked(false);
+                if (!owner) { return; }
+                owner->m_tabWidget->setCurrentWidget(owner->m_tabSearch);
+                accepted = true;
+            }
+        }
+        if (owner && completion)
+        {
+            completion(accepted && owner->m_processMemoryNavigationGeneration == navigation);
+        }
+    };
+
+    // 已附加同一实例时不分离，保留工作台当前补丁、搜索结果与会话配置。
+    if (m_attachedPid == pid && processHandleMatchesModuleTarget(m_attachedProcessHandle, pid, creationTime))
+    {
+        attached(true);
+        return;
+    }
+    const QString processName = QFileInfo(QString::fromStdString(ks::process::QueryProcessPathByPid(pid))).fileName();
+    const auto status = attachToProcess(pid, processName, false, attached);
+    if (owner && status != ks::ui::LeaveEntryStatus::Pending)
+    {
+        attached(status == ks::ui::LeaveEntryStatus::Completed);
+    }
+}
+
+// applyPendingModuleRegionFocus：在最新区域模型中按数值范围匹配，排序后不借用缓存行号。
+void MemoryDock::applyPendingModuleRegionFocus()
+{
+    // 刷新期间不能消费旧投影：区域可能拆分或改大小，最终按地址重新定位。
+    if (m_regionRefreshJob || m_regionRefreshPendingJob)
+    {
+        return;
+    }
+    if (!m_pendingModuleRegionFocus || !m_regionTable || !coreProjectionIsCurrent(CoreKind::Regions))
+    {
+        return;
+    }
+    const auto request = *m_pendingModuleRegionFocus; // 选择回调可能重入，先固定这次范围。
+    if (request.attachmentGeneration != m_processAttachmentGeneration.load())
+    {
+        m_pendingModuleRegionFocus.reset();
+        return;
+    }
+    const QPointer<MemoryDock> owner(this); // 选中和滚动信号允许关闭宿主。
+    for (int row = 0; row < m_regionTable->model()->rowCount(); ++row)
+    {
+        const QModelIndex baseItem = m_regionTable->model()->index(row, 0); // 模型中的真实基址。
+        const auto base = baseItem.data(Qt::UserRole).toULongLong();
+        const auto length = m_regionTable->model()->index(row, 1).data(Qt::UserRole).toULongLong();
+        if (request.address >= base && request.address - base < length)
+        {
+            m_pendingModuleRegionFocus.reset();
+            m_regionTable->setCurrentIndex(baseItem);
+            if (owner)
+            {
+                m_regionTable->selectionModel()->select(baseItem, QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
+            }
+            if (owner)
+            {
+                m_regionTable->scrollTo(baseItem, QAbstractItemView::PositionAtCenter);
+            }
+            return;
+        }
+    }
+    // 冷附加的空投影先等待区域枚举；最终没有落点时不在以后刷新中意外抢回选区。
+    if (!m_regionRefreshJob && !m_regionRefreshPendingJob)
+    {
+        m_pendingModuleRegionFocus.reset();
+        if (m_regionStatusLabel)
+        {
+            m_regionStatusLabel->setText(ks::i18n::packedSourceText(QStringLiteral("未找到包含模块地址的内存区域，请刷新后重试。")));
+        }
+    }
 }
 
 // jumpToModuleBase：模块表双击/右键的跳转。

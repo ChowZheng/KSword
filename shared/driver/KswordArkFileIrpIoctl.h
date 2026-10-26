@@ -18,7 +18,10 @@
 
 #define KSWORD_ARK_FILE_IRP_PROTOCOL_VERSION 1UL
 
-#define KSWORD_ARK_IOCTL_FUNCTION_FILE_IRP_ENUM_DIRECTORY 0x90AUL
+// Function IDs are globally unique; 0x90A is reserved for RXPF SET_HOOK_POINT.
+// Directory enumeration moved from the old read-access selector to 0x932;
+// rebuild and deploy the driver and callers together (payload ABI is unchanged).
+#define KSWORD_ARK_IOCTL_FUNCTION_FILE_IRP_ENUM_DIRECTORY 0x932UL
 #define KSWORD_ARK_IOCTL_FUNCTION_FILE_IRP_SUBMIT         0x90BUL
 
 #define IOCTL_KSWORD_ARK_FILE_IRP_ENUM_DIRECTORY \

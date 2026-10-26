@@ -828,9 +828,11 @@ namespace
         return document;
     }
 
-    // 窗口缩略图抓取：优先按句柄抓图，失败时返回占位图。
+    // 保存截图只接受真实像素；失败时不得把占位提示保存为成功截图。
     QPixmap grabWindowPreviewPixmap(const quint64 hwndValue, const QSize& targetSize)
     {
+        const HWND window = reinterpret_cast<HWND>(static_cast<quintptr>(hwndValue));
+        if (!::IsWindow(window) || !::IsWindowVisible(window) || ::IsIconic(window)) return {};
         QPixmap sourcePixmap;
         QScreen* primaryScreen = QGuiApplication::primaryScreen();
         if (primaryScreen != nullptr)
@@ -838,25 +840,8 @@ namespace
             sourcePixmap = primaryScreen->grabWindow(static_cast<WId>(hwndValue));
         }
 
-        if (!sourcePixmap.isNull())
-        {
-            return sourcePixmap.scaled(
-                targetSize,
-                Qt::KeepAspectRatio,
-                Qt::SmoothTransformation);
-        }
-
-        QPixmap fallbackPixmap(targetSize);
-        fallbackPixmap.fill(KswordTheme::SurfaceColor());
-        QPainter painter(&fallbackPixmap);
-        painter.setPen(KswordTheme::TextSecondaryColor());
-        painter.drawRect(fallbackPixmap.rect().adjusted(0, 0, -1, -1));
-        painter.drawText(
-            fallbackPixmap.rect(),
-            Qt::AlignCenter,
-            ks::i18n::contextText(QStringLiteral("other.thumbnail.none"), QStringLiteral("无可用缩略图")));
-        painter.end();
-        return fallbackPixmap;
+        return sourcePixmap.isNull() ? QPixmap() : sourcePixmap.scaled(
+            targetSize, Qt::KeepAspectRatio, Qt::SmoothTransformation);
     }
 
     // 通过 PID 打开进程详情窗口：复用现有 ProcessDetailWindow，便于跳转联动。
@@ -4015,36 +4000,29 @@ void OtherDock::initializeUi()
 
     m_previewWidget = new QWidget(m_mainSplitter);
     m_previewLayout = new QVBoxLayout(m_previewWidget);
-    m_previewLayout->setContentsMargins(6, 6, 6, 6);
+    m_previewLayout->setContentsMargins(0, 0, 0, 0);
     m_previewLayout->setSpacing(6);
 
     m_thumbnailLabel = new QLabel(m_previewWidget);
-    m_thumbnailLabel->setMinimumSize(320, 220);
-    // The pixmap is a projection into this layout slot, never a new size hint.
-    // QLabel otherwise adds its frame to each captured size on every refresh,
-    // steadily enlarging the preview and taking height from the properties.
-    m_thumbnailLabel->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Ignored);
+    m_thumbnailLabel->setMinimumSize(0, 0);
+    // Image previews have a bounded height; unavailable text uses its wrapped natural height.
+    m_thumbnailLabel->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Maximum);
     m_thumbnailLabel->setAlignment(Qt::AlignCenter);
+    m_thumbnailLabel->setWordWrap(true);
+    m_thumbnailLabel->setMargin(8);
     m_thumbnailLabel->setStyleSheet(QStringLiteral(
         "border:1px solid %1;background:%2;")
         .arg(KswordTheme::BorderHex(), KswordTheme::SurfaceAltHex()));
+    m_thumbnailLabel->hide();
 
     m_captureButton = new QPushButton(QIcon(":/Icon/process_details.svg"), QString(), m_previewWidget);
     m_captureButton->setToolTip(QStringLiteral("保存当前窗口截图"));
     m_captureButton->setStyleSheet(blueButtonStyle());
     m_captureButton->setFixedWidth(34);
 
-    m_quickInfoText = new ks::ui::StructuredFieldView(m_previewWidget);
-
-    m_quickInfoText->setStyleSheet(blueInputStyle());
-
-    QHBoxLayout* captureLayout = new QHBoxLayout();
-    captureLayout->addStretch(1);
-    captureLayout->addWidget(m_captureButton, 0);
-    ks::ui::NormalizeToolbarRow(captureLayout);
+    m_quickInfoText = new ks::ui::StructuredFieldView(m_previewWidget, m_captureButton);
 
     m_previewLayout->addWidget(m_thumbnailLabel, 0);
-    m_previewLayout->addLayout(captureLayout);
     m_previewLayout->addWidget(m_quickInfoText, 1);
 
     // 默认把左侧窗口列表区域放宽，避免窗口标题被截断。
@@ -4306,6 +4284,15 @@ void OtherDock::initializeConnections()
         }
 
         const quint64 hwndValue = item.data(Qt::UserRole).toULongLong();
+        const auto selected = selectedWindowSnapshots();
+        if (selected.size() != 1 || selected.front().hwndValue != hwndValue ||
+            !selected.front().valid || !selected.front().visible || selected.front().minimized ||
+            selected.front().windowRect.isEmpty() ||
+            (selected.front().displayAffinityKnown && selected.front().displayAffinityValue != WDA_NONE))
+        {
+            QMessageBox::warning(this, QStringLiteral("窗口截图"), QStringLiteral("抓图失败。"));
+            return;
+        }
         const QPixmap pixmap = grabWindowPreviewPixmap(hwndValue, QSize(900, 600));
         if (pixmap.isNull())
         {
@@ -4587,7 +4574,7 @@ void OtherDock::updateStatusBar()
 void OtherDock::updatePreviewPanel(const WindowInfo* info)
 {
     // 隐藏只延后预览投影，不影响窗口枚举及其新增/退出状态。
-    if (!m_previewWidget->isVisible() || !m_thumbnailLabel->isVisible())
+    if (!m_previewWidget->isVisible())
     {
         m_previewCaptureDue = true;
         return;
@@ -4599,7 +4586,8 @@ void OtherDock::updatePreviewPanel(const WindowInfo* info)
         if (!m_previewIdentity.isEmpty() || m_previewSummaryKey.isEmpty())
         {
             if (m_previewScaleOperation) m_previewScaleOperation->cancel();
-            m_thumbnailLabel->setPixmap(QPixmap());
+            m_thumbnailLabel->clear();
+            m_thumbnailLabel->hide();
             m_quickInfoText->setDocument(ks::ui::FieldDocument{}.note(QStringLiteral("请选择左侧窗口项查看预览。")));
         }
         m_previewIdentity.clear();
@@ -4614,60 +4602,105 @@ void OtherDock::updatePreviewPanel(const WindowInfo* info)
         m_previewCaptureDue = true;
         m_thumbnailLabel->setPixmap(QPixmap());
     }
-    const QSize targetSize = m_thumbnailLabel->contentsRect().size();
-    const qreal dpr = m_thumbnailLabel->devicePixelRatioF();
-    if (targetSize != m_previewSize || dpr != m_previewDpr)
-        m_previewCaptureDue = true;
-    if (m_previewCaptureDue && m_previewScaleOperation &&
-        (targetChanged || !m_previewScaleOperation->isBusy()))
+    const auto showUnavailable = [this](const QString& message)
     {
-        // QScreen/QPixmap remain on their GUI thread. Only owned QImage pixels
-        // and size/DPR values cross the worker boundary.
-        QPixmap source;
-        if (info->valid && !info->windowRect.isEmpty())
-            if (auto* screen = QGuiApplication::primaryScreen())
-                source = screen->grabWindow(static_cast<WId>(info->hwndValue));
-        m_previewCaptureDue = false;
-        m_previewSize = targetSize;
-        m_previewDpr = dpr;
-        if (source.isNull())
+        if (m_previewScaleOperation && m_previewScaleOperation->isBusy()) m_previewScaleOperation->cancel();
+        if (m_thumbnailLabel->margin() != 8) m_thumbnailLabel->setMargin(8);
+        m_thumbnailLabel->show();
+        if (m_thumbnailLabel->minimumHeight() != 0 || m_thumbnailLabel->maximumHeight() != QWIDGETSIZE_MAX)
         {
-            m_previewScaleOperation->cancel();
-            QPixmap fallback(targetSize);
-            fallback.fill(KswordTheme::SurfaceColor());
-            QPainter painter(&fallback);
-            painter.setPen(KswordTheme::TextSecondaryColor());
-            painter.drawRect(fallback.rect().adjusted(0, 0, -1, -1));
-            painter.drawText(fallback.rect(), Qt::AlignCenter,
-                ks::i18n::contextText(QStringLiteral("other.thumbnail.none"), QStringLiteral("无可用缩略图")));
-            painter.end();
-            m_thumbnailLabel->setPixmap(fallback);
+            m_thumbnailLabel->setMinimumHeight(0);
+            m_thumbnailLabel->setMaximumHeight(QWIDGETSIZE_MAX);
         }
-        else
+        if (m_thumbnailLabel->sizePolicy().verticalPolicy() != QSizePolicy::Maximum)
+            m_thumbnailLabel->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Maximum);
+        if (m_previewSize.isValid() || m_thumbnailLabel->text() != message)
         {
-            struct ScaleRequest { QImage image; QSize size; qreal dpr; QString identity; };
-            struct ScaleResult { QImage image; QSize size; qreal dpr; QString identity; };
-            m_previewScaleOperation->submit<ScaleRequest, ScaleResult>(
-                {source.toImage(), targetSize, dpr, identity},
-                [](const ScaleRequest& value, const ks::ui::AsyncOperationToken&) {
-                    QImage scaled = value.image.scaled(value.size * value.dpr,
-                        Qt::KeepAspectRatio, Qt::SmoothTransformation);
-                    scaled.setDevicePixelRatio(value.dpr);
-                    return ScaleResult{std::move(scaled), value.size, value.dpr, value.identity};
-                },
-                [this](const ScaleResult& result, std::uint64_t) {
-                    const auto current = m_windowTree->currentIndex();
-                    if (!current.isValid() || !m_windowTree->selectionModel()->isSelected(current) || ks::window::windowItemIdentity(current) != result.identity ||
-                        result.identity != m_previewIdentity || !m_thumbnailLabel->isVisible() ||
-                        result.size != m_thumbnailLabel->contentsRect().size() || result.dpr != m_thumbnailLabel->devicePixelRatioF())
-                    {
-                        m_previewCaptureDue = true;
+            m_thumbnailLabel->clear();
+            m_thumbnailLabel->setText(message);
+        }
+        m_previewSize = QSize();
+        m_previewDpr = 0.0;
+        m_previewCaptureDue = false;
+    };
+    const HWND targetWindow = reinterpret_cast<HWND>(static_cast<quintptr>(info->hwndValue));
+    const WId hostWindowId = m_previewWidget->window()->effectiveWinId();
+    QString unavailable;
+    if (!info->valid || info->windowRect.isEmpty() || !::IsWindow(targetWindow))
+        unavailable = ks::i18n::contextText(QStringLiteral("other.thumbnail.none"), QStringLiteral("无可用缩略图"));
+    else if (!info->visible || !::IsWindowVisible(targetWindow))
+        unavailable = ks::i18n::contextText(QStringLiteral("other.thumbnail.hidden"), QStringLiteral("隐藏窗口无法预览"));
+    else if (info->minimized || ::IsIconic(targetWindow))
+        unavailable = ks::i18n::contextText(QStringLiteral("other.thumbnail.minimized"), QStringLiteral("最小化窗口无法预览"));
+    else if (info->displayAffinityKnown && info->displayAffinityValue != WDA_NONE)
+        unavailable = ks::i18n::contextText(QStringLiteral("other.thumbnail.restricted"), QStringLiteral("窗口限制截图"));
+    else if (hostWindowId != 0 && info->hwndValue == static_cast<quint64>(hostWindowId))
+        unavailable = ks::i18n::contextText(QStringLiteral("other.thumbnail.current"), QStringLiteral("当前窗口无法预览"));
+    if (!unavailable.isEmpty())
+    {
+        showUnavailable(unavailable);
+    }
+    else
+    {
+        if (m_thumbnailLabel->margin() != 0) m_thumbnailLabel->setMargin(0);
+        m_thumbnailLabel->show();
+        const int previewHeight = std::clamp(m_previewWidget->height() / 3, 120, 220);
+        if (m_thumbnailLabel->minimumHeight() != previewHeight || m_thumbnailLabel->maximumHeight() != 220)
+        {
+            m_thumbnailLabel->setMaximumHeight(220);
+            m_thumbnailLabel->setMinimumHeight(previewHeight);
+        }
+        if (m_thumbnailLabel->sizePolicy().verticalPolicy() != QSizePolicy::Ignored)
+            m_thumbnailLabel->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Ignored);
+        if (!m_thumbnailLabel->text().isEmpty()) m_thumbnailLabel->setText(QString());
+        m_previewLayout->activate();
+        const QSize targetSize = m_thumbnailLabel->contentsRect().size();
+        const qreal dpr = m_thumbnailLabel->devicePixelRatioF();
+        if (targetSize != m_previewSize || dpr != m_previewDpr)
+            m_previewCaptureDue = true;
+        if (!targetSize.isEmpty() && m_previewCaptureDue && m_previewScaleOperation &&
+            (targetChanged || !m_previewScaleOperation->isBusy()))
+        {
+            // QScreen/QPixmap remain on their GUI thread. Only owned QImage pixels
+            // and size/DPR values cross the worker boundary.
+            QPixmap source;
+            if (info->valid && !info->windowRect.isEmpty())
+                if (auto* screen = QGuiApplication::primaryScreen())
+                    source = screen->grabWindow(static_cast<WId>(info->hwndValue));
+            m_previewCaptureDue = false;
+            m_previewSize = targetSize;
+            m_previewDpr = dpr;
+            if (source.isNull())
+            {
+                showUnavailable(ks::i18n::contextText(
+                    QStringLiteral("other.thumbnail.none"), QStringLiteral("无可用缩略图")));
+            }
+            else
+            {
+                struct ScaleRequest { QImage image; QSize size; qreal dpr; QString identity; };
+                struct ScaleResult { QImage image; QSize size; qreal dpr; QString identity; };
+                m_previewScaleOperation->submit<ScaleRequest, ScaleResult>(
+                    {source.toImage(), targetSize, dpr, identity},
+                    [](const ScaleRequest& value, const ks::ui::AsyncOperationToken&) {
+                        QImage scaled = value.image.scaled(value.size * value.dpr,
+                            Qt::KeepAspectRatio, Qt::SmoothTransformation);
+                        scaled.setDevicePixelRatio(value.dpr);
+                        return ScaleResult{std::move(scaled), value.size, value.dpr, value.identity};
+                    },
+                    [this](const ScaleResult& result, std::uint64_t) {
+                        const auto current = m_windowTree->currentIndex();
+                        if (!current.isValid() || !m_windowTree->selectionModel()->isSelected(current) || ks::window::windowItemIdentity(current) != result.identity ||
+                            result.identity != m_previewIdentity || !m_thumbnailLabel->isVisible() ||
+                            result.size != m_thumbnailLabel->contentsRect().size() || result.dpr != m_thumbnailLabel->devicePixelRatioF())
+                        {
+                            m_previewCaptureDue = true;
+                            return true;
+                        }
+                        m_thumbnailLabel->setPixmap(QPixmap::fromImage(result.image));
                         return true;
-                    }
-                    m_thumbnailLabel->setPixmap(QPixmap::fromImage(result.image));
-                    return true;
-                },
-                [this](std::exception_ptr) { m_previewCaptureDue = true; });
+                    },
+                    [this](std::exception_ptr) { m_previewCaptureDue = true; });
+            }
         }
     }
     QByteArray summaryKey;
@@ -4874,7 +4907,21 @@ void OtherDock::updateWindowSelectionUi()
     else m_selectedLabel->setText(QStringLiteral("选中: %1 个窗口").arg(windows.size()));
     m_protectCaptureButton->setEnabled(!windows.empty() && !windowTransactionBusy());
     m_unprotectCaptureButton->setEnabled(!windows.empty() && !windowTransactionBusy());
-    m_captureButton->setEnabled(windows.size() == 1 && preview);
+    const HWND previewWindow = preview
+        ? reinterpret_cast<HWND>(static_cast<quintptr>(preview->hwndValue)) : nullptr;
+    const bool previewCapturable = preview && preview->valid && preview->visible &&
+        !preview->minimized && !preview->windowRect.isEmpty() &&
+        !(preview->displayAffinityKnown && preview->displayAffinityValue != WDA_NONE) &&
+        ::IsWindow(previewWindow) && ::IsWindowVisible(previewWindow) && !::IsIconic(previewWindow);
+    const bool captureEnabled = windows.size() == 1 && previewCapturable;
+    m_captureButton->setEnabled(captureEnabled);
+    const QString captureHint = captureEnabled ? QStringLiteral("保存当前窗口截图")
+        : (windows.size() != 1 || !preview)
+            ? ks::i18n::contextText(QStringLiteral("other.thumbnail.select_one"), QStringLiteral("请选择一个窗口以保存截图"))
+            : m_thumbnailLabel->text().isEmpty()
+                ? ks::i18n::contextText(QStringLiteral("other.thumbnail.none"), QStringLiteral("无可用缩略图"))
+                : m_thumbnailLabel->text();
+    if (m_captureButton->toolTip() != captureHint) m_captureButton->setToolTip(captureHint);
     m_windowInputButton->setEnabled(windows.size() == 1);
 }
 

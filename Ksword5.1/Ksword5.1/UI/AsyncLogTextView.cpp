@@ -94,6 +94,20 @@ namespace
 
     SourceReply prepareSource(const SourceRequest& request)
     {
+        if (std::all_of(request.commands->cbegin(), request.commands->cend(),
+            [](const Command& command) { return command.kind == CommandKind::Snapshot; }))
+        {
+            // 排队读取仍指向已发布的规范源；纯快照不重建全文、不复制修剪历史。
+            SourceReply reply;
+            reply.source = request.before;
+            reply.snapshots.reserve(request.commands->size());
+            // 只共享 raw 的字符串数据，不让长寿命快照保活整份源的 plain/history。
+            const auto text = retained(std::make_shared<QString>(request.before->raw));
+            for (const Command& command : *request.commands)
+                reply.snapshots.push_back({command.snapshot, request.before->revision,
+                    text, request.before->origin, request.before->lastEmptyRevision});
+            return reply;
+        }
         auto next = std::make_shared<LogSource>(*request.before);
         QTextDocument document;
         document.setLayoutEnabled(false);

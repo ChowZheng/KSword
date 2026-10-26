@@ -132,6 +132,9 @@
     <ClInclude Include="TaskbarRestartCoordinator.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="..\Ksword5.1\Ksword5.1\UI\GroupBoxStyle.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Function.h">

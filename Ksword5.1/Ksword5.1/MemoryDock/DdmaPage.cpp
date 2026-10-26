@@ -2,6 +2,7 @@
 #include "DdmaPhysicalWriteTransaction.h"
 #include "../ksword/log/log.h"
 #include "../UI/ToolbarMetrics.h"
+#include "../UI/FlowLayout.h"
 #include "../UI/FlatButtonTheme.h"
 #include "../UI/ParameterWorkspace.h"
 #include "../UI/PrimaryPageStyle.h"
@@ -321,6 +322,7 @@ void DdmaPage::initializeUi()
     // 根布局建在壳的内容容器上；放不下时在页内滚动，不再撑高整个 Dock。
     QWidget* content = ks::ui::EnablePageInnerScroll(this);
     QVBoxLayout* rootLayout = new QVBoxLayout(content);
+    ks::ui::StyleWorkspacePage(content, 6);
     rootLayout->setSpacing(16);
     // 专业通道、编辑器和复核各自保留，只用明确的无描边色块建立层次。
     const auto addSection = [rootLayout, content](QGroupBox* group, int stretch = 0)
@@ -337,7 +339,6 @@ void DdmaPage::initializeUi()
     addSection(buildAccessGroup(), 1);
     addSection(buildCompareGroup());
     ks::ui::StyleWorkspacePage(this, 0);
-    ks::ui::StyleWorkspacePage(content);
     ks::ui::StyleWorkspaceTextViews(content);
 
     applySemanticStyles();
@@ -346,10 +347,8 @@ void DdmaPage::initializeUi()
 QGroupBox* DdmaPage::buildIntroGroup()
 {
     QGroupBox* group = new QGroupBox("DDMA 是什么", this);
-    ks::ui::StyleParameterSection(group);
     QVBoxLayout* layout = new QVBoxLayout(group);
-    layout->setContentsMargins(8, 8, 8, 8);
-    layout->setSpacing(4);
+    ks::ui::StyleParameterSection(group);
 
     QLabel* introLabel = new QLabel(group);
     introLabel->setWordWrap(true);
@@ -373,17 +372,14 @@ QGroupBox* DdmaPage::buildIntroGroup()
 QGroupBox* DdmaPage::buildChannelGroup()
 {
     QGroupBox* group = new QGroupBox("通道配置", this);
-    ks::ui::StyleParameterSection(group);
     QVBoxLayout* outerLayout = new QVBoxLayout(group);
-    outerLayout->setContentsMargins(8, 8, 8, 8);
-    outerLayout->setSpacing(6);
+    ks::ui::StyleParameterSection(group);
 
     // 仅登记通道参数及其说明，磁盘选择表仍保留全宽交互空间。
     QWidget* parameterPanel = new QWidget(group);
-    QGridLayout* formLayout = new QGridLayout(parameterPanel);
+    QVBoxLayout* formLayout = new QVBoxLayout(parameterPanel);
     formLayout->setContentsMargins(0, 0, 0, 0);
-    formLayout->setHorizontalSpacing(8);
-    formLayout->setVerticalSpacing(6);
+    formLayout->setSpacing(8);
 
     m_scratchLbaEdit = new QLineEdit(group);
     m_scratchLbaEdit->setPlaceholderText("必填，例如 0x100000 或 1048576");
@@ -420,7 +416,7 @@ QGroupBox* DdmaPage::buildChannelGroup()
     // 扇区上下文：候选定下来之后把"这块扇区现在是什么"摊开，供再确认一次。
     // 上下文直接接受结构字段；原始磁盘字节在独立字节预览中保留。
     m_scratchContextView = new ks::ui::StructuredFieldView(group);
-    m_scratchContextView->setMinimumHeight(150);
+    m_scratchContextView->setMinimumHeight(180);
     m_scratchContextView->setDocument(ks::ui::FieldDocument{}.note(
         QStringLiteral("尚未侦测。选中一块磁盘后点击“侦测候选扇区”。")));
 
@@ -435,15 +431,15 @@ QGroupBox* DdmaPage::buildChannelGroup()
         QIcon(QStringLiteral(":/Icon/log_clear.svg")), "清除通道配置", group);
     m_clearButton->setToolTip("清空 DDMA 会话，所有页面立刻退回标准驱动通道。本页创建过专属暂存文件时会问你是否一并删除。");
 
-    // LBA 独占输入行；探测动作单独成行，窄窗口不压缩地址输入。
-    formLayout->addWidget(new QLabel("暂存扇区 LBA", group), 0, 0, 1, 2);
-    formLayout->addWidget(m_scratchLbaEdit, 1, 0, 1, 2);
-    formLayout->addWidget(m_detectScratchButton, 2, 0);
-    formLayout->addWidget(m_probeButton, 2, 1);
-    ks::ui::NormalizeToolbarControl(m_detectScratchButton);
-    ks::ui::NormalizeToolbarControl(m_probeButton);
-    formLayout->addWidget(m_scratchDetectLabel, 3, 0, 1, 2);
-    formLayout->addWidget(m_scratchContextView, 4, 0, 1, 2);
+    // 表单只承载 LBA 与探测动作，复合结果控件在下方独立占位。
+    formLayout->addWidget(new QLabel("暂存扇区 LBA", parameterPanel));
+    m_scratchLbaEdit->setMaximumWidth(460);
+    formLayout->addWidget(m_scratchLbaEdit);
+    auto* probeActions = new ks::ui::FlowLayout(nullptr, 0, 8, 8);
+    probeActions->addWidget(m_detectScratchButton);
+    probeActions->addWidget(m_probeButton);
+    ks::ui::NormalizeToolbarLayout(probeActions);
+    formLayout->addLayout(probeActions);
     m_scratchBytesView = new CodeTextEdit(group);
     m_scratchBytesView->setReadOnly(true);
     m_scratchBytesView->setToolTip(QStringLiteral("前 128 字节十六进制预览："));
@@ -453,11 +449,6 @@ QGroupBox* DdmaPage::buildChannelGroup()
     m_scratchBytesView->setMinimumHeight(100);
     m_scratchBytesView->setMaximumHeight(180);
     m_scratchBytesView->hide();
-    formLayout->addWidget(m_scratchBytesView, 5, 0, 1, 2);
-    formLayout->addWidget(m_scratchImpactLabel, 6, 0, 1, 2);
-    formLayout->addWidget(m_scratchAckCheck, 7, 0, 1, 2);
-    formLayout->setColumnStretch(0, 1);
-    formLayout->setColumnStretch(1, 1);
     outerLayout->addWidget(parameterPanel);
     ks::ui::StyleParameterFields(parameterPanel);
 
@@ -476,13 +467,29 @@ QGroupBox* DdmaPage::buildChannelGroup()
     m_diskTable->setMinimumHeight(120);
     outerLayout->addWidget(m_diskTable);
 
-    QHBoxLayout* actionLayout = new QHBoxLayout();
-    actionLayout->setContentsMargins(0, 0, 0, 0);
-    actionLayout->setSpacing(6);
+    // 候选扇区详情是带搜索与树的完整结果视图，不交给参数字段样式扫描。
+    auto* candidatePanel = new QWidget(group);
+    auto* candidateLayout = new QVBoxLayout(candidatePanel);
+    candidateLayout->setContentsMargins(0, 0, 0, 0);
+    candidateLayout->setSpacing(8);
+    candidateLayout->addWidget(m_scratchDetectLabel);
+    candidateLayout->addWidget(m_scratchContextView);
+    candidateLayout->addWidget(m_scratchBytesView);
+    outerLayout->addWidget(candidatePanel);
+
+    auto* confirmationPanel = new QWidget(group);
+    auto* confirmationLayout = new QVBoxLayout(confirmationPanel);
+    confirmationLayout->setContentsMargins(0, 0, 0, 0);
+    confirmationLayout->setSpacing(8);
+    confirmationLayout->addWidget(m_scratchImpactLabel);
+    confirmationLayout->addWidget(m_scratchAckCheck);
+    ks::ui::StyleParameterFields(confirmationPanel);
+    outerLayout->addWidget(confirmationPanel);
+
+    auto* actionLayout = new ks::ui::FlowLayout(nullptr, 0, 8, 8);
     actionLayout->addWidget(m_activateButton);
     actionLayout->addWidget(m_clearButton);
-    actionLayout->addStretch(1);
-    ks::ui::NormalizeToolbarRow(actionLayout);
+    ks::ui::NormalizeToolbarLayout(actionLayout);
     outerLayout->addLayout(actionLayout);
 
     m_capabilityLabel = new QLabel("尚未探测。", group);
@@ -527,16 +534,14 @@ QGroupBox* DdmaPage::buildChannelGroup()
 QGroupBox* DdmaPage::buildAccessGroup()
 {
     QGroupBox* group = new QGroupBox("DDMA 物理读写", this);
-    ks::ui::StyleParameterSection(group);
     QVBoxLayout* outerLayout = new QVBoxLayout(group);
-    outerLayout->setContentsMargins(8, 8, 8, 8);
-    outerLayout->setSpacing(6);
+    ks::ui::StyleParameterSection(group);
 
     // 内存编辑器保留专业主视图，只统一明确的地址/长度输入区域。
     QWidget* parameterPanel = new QWidget(group);
-    QGridLayout* barLayout = new QGridLayout(parameterPanel);
+    QVBoxLayout* barLayout = new QVBoxLayout(parameterPanel);
     barLayout->setContentsMargins(0, 0, 0, 0);
-    barLayout->setSpacing(6);
+    barLayout->setSpacing(8);
 
     m_accessAddressEdit = new QLineEdit(group);
     m_accessAddressEdit->setPlaceholderText("物理地址，例如 0x1000");
@@ -559,16 +564,17 @@ QGroupBox* DdmaPage::buildAccessGroup()
         "把下方编辑器中改动过的字节用 DDMA 写回物理内存。"
         "非整页写入时驱动会做读-改-写，同页其它字节存在覆盖窗口。");
 
-    barLayout->addWidget(new QLabel("物理地址", group), 0, 0, 1, 2);
-    barLayout->addWidget(m_accessAddressEdit, 1, 0, 1, 2);
-    barLayout->addWidget(new QLabel("长度", group), 2, 0, 1, 2);
-    barLayout->addWidget(m_accessLengthSpin, 3, 0, 1, 2);
-    barLayout->addWidget(m_accessReadButton, 4, 0);
-    barLayout->addWidget(m_accessWriteButton, 4, 1);
-    barLayout->setColumnStretch(0, 1);
-    barLayout->setColumnStretch(1, 1);
-    ks::ui::NormalizeToolbarControl(m_accessReadButton);
-    ks::ui::NormalizeToolbarControl(m_accessWriteButton);
+    barLayout->addWidget(new QLabel("物理地址", parameterPanel));
+    m_accessAddressEdit->setMaximumWidth(460);
+    barLayout->addWidget(m_accessAddressEdit);
+    barLayout->addWidget(new QLabel("长度", parameterPanel));
+    m_accessLengthSpin->setMaximumWidth(180);
+    barLayout->addWidget(m_accessLengthSpin);
+    auto* accessActions = new ks::ui::FlowLayout(nullptr, 0, 8, 8);
+    accessActions->addWidget(m_accessReadButton);
+    accessActions->addWidget(m_accessWriteButton);
+    ks::ui::NormalizeToolbarLayout(accessActions);
+    barLayout->addLayout(accessActions);
     outerLayout->addWidget(parameterPanel);
     ks::ui::StyleParameterFields(parameterPanel);
 
@@ -599,10 +605,8 @@ QGroupBox* DdmaPage::buildAccessGroup()
 QGroupBox* DdmaPage::buildCompareGroup()
 {
     QGroupBox* group = new QGroupBox("标准通道 vs DDMA 同址复核", this);
-    ks::ui::StyleParameterSection(group);
     QVBoxLayout* outerLayout = new QVBoxLayout(group);
-    outerLayout->setContentsMargins(8, 8, 8, 8);
-    outerLayout->setSpacing(6);
+    ks::ui::StyleParameterSection(group);
 
     QLabel* hintLabel = new QLabel(group);
     hintLabel->setWordWrap(true);
@@ -624,10 +628,14 @@ QGroupBox* DdmaPage::buildCompareGroup()
     m_compareButton = new QPushButton(
         QIcon(QStringLiteral(":/Icon/file_find.svg")), "复核这一页", group);
 
-    barLayout->addWidget(new QLabel("物理地址", group));
+    barLayout->addWidget(new QLabel("物理地址", parameterPanel));
+    m_compareAddressEdit->setMaximumWidth(460);
     barLayout->addWidget(m_compareAddressEdit);
-    barLayout->addWidget(m_compareButton);
-    ks::ui::NormalizeToolbarControl(m_compareButton);
+    auto* compareActions = new QHBoxLayout();
+    compareActions->addWidget(m_compareButton);
+    compareActions->addStretch(1);
+    ks::ui::NormalizeToolbarRow(compareActions);
+    barLayout->addLayout(compareActions);
     outerLayout->addWidget(parameterPanel);
     ks::ui::StyleParameterFields(parameterPanel);
 

@@ -1,5 +1,9 @@
 # Memory Index
 
+- [默认 UI 状态与首帧](ksword-ui-input-first-frame.md) — 鼠标/键盘焦点区分、默认几何、首次主题准备、原生分栏及安全队列边界
+
+- [磁盘队列、I/O 日志与 MFT 索引](ksword-ntfs-index.md) — 只读 MFT/USN 快照、硬链接与尺寸口径、卷队列和有界 Kernel-File 日志
+
 - [未跟踪文件审查与原生回归补齐](../../docs/未跟踪文件审查-20261014.md) — 生成夹具与规范源区分、真实进程目录/受控 R3 目标、完整文件 UTF-8 解码须结束流状态
 
 - [MCP 设置与本次启停](ksword-mcp-settings.md) — 二级设置布局、会话状态与自动启动偏好分离、PID 配置预览及关闭后重新创建桥
@@ -50,6 +54,7 @@
 - [FileDock 大目录响应性](ksword-filedock-latency.md) — 快照模型、缓存排序、后台重解析标记与状态查询、十万项全选回归
 - [R0 文件删除边界](ksword-file-delete.md) — POSIX 路径移除、共享检查高风险模式、回执兼容与 Win10 动态入口
 - [Win32k 消息 Hook 筛选](ksword-message-hook-filtering.md) — 同侧原子筛选、目标/所有者 UI 范围、异步旧结果抑制、Hook 独立预算与诊断
+- [快捷键清除与跨版本规则匹配](ksword-hotkey-clear-matching.md) — 规范目标与逐项回执、USER会话及EnterCrit ABI、当前映像通用C规则和v4变更门禁；六组静态证据见[跨版本记录](../../docs/快捷键跨版本规则匹配-20261025.md)
 - [Win32k 窗口 Band 事务](ksword-window-band-control.md) — 跨 UIAccess 原生顺序、精确版本 ABI、GUI 调用线程、恢复及未完成的实机验收
 - [R0-only 进程身份校验](ksword-process-r0-identity.md) — 内核枚举创建时间、驱动对象校验、普通进程与仅 R0 可见进程的动作分流
 - [进程列表 R0 字段显示](ksword-process-list-fields.md) — 保护来源提示、PS_PROTECTION 名称解码与 HandleTable 空值/不可用区别

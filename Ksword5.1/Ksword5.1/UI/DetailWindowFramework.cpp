@@ -548,9 +548,10 @@ namespace
             // 根窗口仍可刷新业务主题；共享外框只维护自己的末尾块，避免旧QSS覆盖卡片间底色。
             // 自有主题根（进程详情）已生成同一套Chrome，不能追加后再被业务StyleChange删除。
             if (m_window->property("ksword_global_dialog_theme").toBool()
-                || m_window->property("ksword_detail_theme_owner").toBool())
+                || m_window->property("ksword_detail_theme_owner").toBool()
+                || m_window->property("ksword_secondary_window").toBool())
             {
-                return;
+                return; // Explicit secondary roots already have one theme/QSS owner.
             }
             const QString begin = QStringLiteral("/* KSWORD_DETAIL_FRAMEWORK_BEGIN */");
             const QString end = QStringLiteral("/* KSWORD_DETAIL_FRAMEWORK_END */");

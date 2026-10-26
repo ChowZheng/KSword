@@ -29,6 +29,10 @@
 #include <unordered_set>  // std::unordered_set：保存用户勾选 PID 集合。
 #include <vector>         // std::vector：承载采样结果并排序展示。
 
+class QAbstractTableModel;
+class QSortFilterProxyModel;
+class QTabWidget;
+class QTableView;
 class QCheckBox;
 class QLabel;
 class QLineEdit;
@@ -41,6 +45,7 @@ class QTimer;
 class QToolButton;
 class QVBoxLayout;
 struct _EVENT_RECORD;
+struct _EVENT_TRACE_LOGFILEW;
 namespace ks::ui { class AsyncUiDispatcher; }
 
 // DiskMonitorPage 说明：
@@ -65,9 +70,28 @@ public:
 protected:
     // 重新显示时提交隐藏期间的最新缓存；不重启采集，不重置速率基线。
     void showEvent(QShowEvent* event) override;
+    void changeEvent(QEvent* event) override;
 
 private:
     struct SamplingState;
+    struct FileIoLogRecord
+    {
+        std::uint64_t time100ns = 0;
+        std::uint64_t irp = 0;
+        std::uint64_t requestedBytes = 0;
+        std::uint64_t offset = 0;
+        std::uint32_t headerPid = 0;
+        std::uint32_t status = 0;
+        QString path;
+        double durationMs = 0;
+        bool write = false;
+        bool completed = false;
+        bool operationKnown = true;
+        bool requestedBytesAvailable = false;
+        bool offsetAvailable = false;
+        bool statusAvailable = false;
+        bool durationAvailable = false;
+    };
     // ProcessDiskSample：
     // - 作用：保存单进程本轮磁盘 IO 采样与相邻两轮差值；
     // - 处理：raw* 字段来自 GetProcessIoCounters，rate* 字段由历史样本换算；
@@ -167,12 +191,19 @@ private:
         std::uint32_t pid = 0;                  // pid：发起 I/O 的进程 ID。
         QString filePath;                       // filePath：发起 I/O 时解析到的文件路径。
         QString ioPriorityText;                 // ioPriorityText：发起 I/O 时解析到的优先级文本。
+        bool write = false;
+        std::uint64_t requestedBytes = 0;
+        std::uint64_t offset = 0;
+        bool requestedBytesAvailable = false;
+        bool offsetAvailable = false;
         std::uint64_t startTime100ns = 0;       // startTime100ns：ETW 时间戳，ClientContext=2 时为 100ns。
     };
 
     // ===================== UI 初始化 =====================
     void initializeUi();
     void initializeConnections();
+    void initializeIoLogUi(QTabWidget* tabs);
+    void refreshIoLog();
     void configureTableWidget(QTableWidget* tableWidget, int processIdColumn = -1) const;
 
     // startInitialSampling 作用：
@@ -210,6 +241,7 @@ private:
     // ===================== ETW 文件活动采集 =====================
     void startFileActivityEtw();
     void stopFileActivityEtw();
+    static ULONG WINAPI fileActivityEtwBufferCallback(struct _EVENT_TRACE_LOGFILEW* logFile);
     static void WINAPI fileActivityEtwCallback(struct _EVENT_RECORD* eventRecordPointer);
     static void handleFileActivityEtwEvent(
         SamplingState& state, const struct _EVENT_RECORD* eventRecordPointer);
@@ -237,6 +269,12 @@ private:
 private:
     std::shared_ptr<SamplingState> m_samplingState;
     std::shared_ptr<ks::ui::AsyncUiDispatcher> m_dispatcher;
+    QTableView* m_ioLogTable = nullptr;
+    QAbstractTableModel* m_ioLogModel = nullptr;
+    QSortFilterProxyModel* m_ioLogFilter = nullptr;
+    QLabel* m_ioLogStatus = nullptr;
+    QCheckBox* m_recordIoLog = nullptr;
+    std::uint64_t m_displayLogEvicted = 0;
     QVBoxLayout* m_rootLayout = nullptr;           // m_rootLayout：根布局。
     QLabel* m_titleLabel = nullptr;                // m_titleLabel：标题标签。
     QLabel* m_statusLabel = nullptr;               // m_statusLabel：刷新状态标签。
@@ -247,9 +285,9 @@ private:
     QPushButton* m_selectActiveButton = nullptr;   // m_selectActiveButton：勾选当前活跃进程。
     QPushButton* m_clearSelectionButton = nullptr; // m_clearSelectionButton：清空勾选按钮。
     QSplitter* m_splitter = nullptr;               // m_splitter：上下表格分割器。
-    QToolButton* m_processSectionButton = nullptr; // m_processSectionButton：进程活动折叠标题。
-    QToolButton* m_activitySectionButton = nullptr;// m_activitySectionButton：文件活动折叠标题。
-    QToolButton* m_storageSectionButton = nullptr; // m_storageSectionButton：存储折叠标题。
+    QLabel* m_processSectionTitle = nullptr;      // 进程选择区实时摘要。
+    QLabel* m_activitySectionTitle = nullptr;     // 文件活动区实时摘要。
+    QLabel* m_storageSummaryLabel = nullptr;      // 独立卷队列页实时摘要。
     QTableWidget* m_processTable = nullptr;        // m_processTable：进程级磁盘速率表。
     QTableWidget* m_activityTable = nullptr;       // m_activityTable：全部或按勾选 PID 过滤的磁盘活动表。
     DiskMonitorStoragePanel* m_storagePanel = nullptr; // m_storagePanel：固定卷容量与性能区。

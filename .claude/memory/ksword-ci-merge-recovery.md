@@ -7,6 +7,8 @@ metadata:
 
 # CI 合并回归恢复
 
+- 调试器后端隔离测试在 `DebuggerBackend/tests/BackendTests.cpp` 内手写 `DriverClient` 桩，不链接真实 `ArkDriverClient.cpp`。生产后端改用 `openSilently()` 后，测试桩也必须提供相同签名；否则 x96dbg CI 在 `BackendTests` 链接时出现 LNK2019。静默入口复用测试事件句柄实现，不能为补符号引入真实设备访问；须继续执行后续完整契约测试，不能仅凭源码门禁通过判定整条 CI 成功。
+- `validate_kernel_knowledge.py` 的站内路由边界必须按 `openKnowledgeRoute` 自身花括号提取，复用现有源码门禁的注释/字面量感知 helper；不能用下一函数的固定返回类型作结束哨兵。`ensureTabInitialized` 改为 `bool` 后，旧 `void ...` 哨兵会把真实存在的路由误报为缺失。回归入口 `python tools/test_validate_kernel_knowledge.py` 与完整验证在 CI 同一步运行；缺失/额外/重复路由仍必须拒绝。
 - 先看最新提交对应的 `Source integrity`、用户态构建和 `Driver CI` 日志；`git diff --check` 失败会跳过后续 JSON、i18n 与 IOCTL 审计，修完空白后必须单独补跑这些检查。
 - 跟踪 JSON 路径用 `git ls-files -z` 的原始字节按 NUL 分隔，再用 `utf-8-sig` 严格读取内容。逐行解析默认 Git 输出会把中文路径的 C 风格引号/八进制转义当成文件名，导致文件打开失败；不能靠跳过这些 JSON 或全局改 `core.quotePath` 绕过检查。
 - 共享启动项后端拆出 `StartupHidden.cpp`、`StartupText.cpp` 后，CLI、Light 和 `KswordARKLightTests` 都须登记实现及对应 filters/内部头。生产工程能链接不代表测试工程完整；测试仅保留 `StartupEnumerator.cpp` 会缺失隐藏项枚举及 UTF-8/UTF-16、Trim 辅助符号。
@@ -27,3 +29,4 @@ metadata:
 - 身份敏感的异步进程操作必须冻结 `PID + creationTime100ns`。R3 优先复用已校验并持续持有的进程句柄；R0 调整协议必须拒绝零创建时间，并由客户端复核响应中的创建时间与批量应用计数。仅在 UI 状态里保存 PID、稍后重新打开会把操作落到复用后的新进程。
 - `TOKEN_PRIVILEGES` 是变长结构。R3 `GetTokenInformation` 和 R0 `ZwQueryInformationToken` 的第二次查询后，都要用实际返回字节数验证 `PrivilegeCount` 能被完整缓冲区覆盖，再遍历条目。
 - 合并恢复崩溃处理时必须一起恢复共享 handler、Launcher reporter、两个工程引用、主程序启动挂钩和中英语言键；重复崩溃只能提供退出，不能继续暴露重启按钮形成崩溃循环。内部等待 PID 参数只有在新进程是该 PID 的直接子进程、双方映像路径相同，且确实观察到前一进程退出后，才能绕过单实例检查。
+- 2026-10-25 全量 IOCTL 审计发现 FILE_IRP_ENUM_DIRECTORY 与 RXPF_SET_HOOK_POINT 复用 function `0x90A`。旧完整控制码分别为 `0x00226428`（READ）与 `0x0022A428`（WRITE），因此并非完整控制码冲突或错分发；仍违反 function 全局唯一规范。FILE_IRP 枚举迁至已确认空闲的 `0x932`／`0x002264C8`，RXPF 与 FILE_IRP_SUBMIT 编号、请求布局及协议版本保持原样。所有在仓库构建的 R0/R3 调用与注册均引用唯一共享宏，必须配套重建/部署客户端和驱动；不加旧魔数别名规避门禁。历史 `tools/ioctl_audit/out` 是带生成日期的快照，当前结果由 CI 全量扫描确定。

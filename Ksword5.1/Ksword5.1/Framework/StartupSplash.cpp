@@ -25,7 +25,13 @@
 namespace
 {
     constexpr wchar_t kWindowClass[] = L"KswordFrameworkSplashWindow";
-    constexpr int kBaseWidth = 640;
+    constexpr int kBaseWidth = 800;
+    constexpr int kBaseHeight = 450;
+    constexpr float kContentX = 20.0f;
+    constexpr float kTrackX = kContentX;
+    constexpr float kTrackY = 426.0f;
+    constexpr float kTrackWidth = 280.0f;
+    constexpr float kTrackHeight = 4.0f;
     constexpr UINT kShowMessage = WM_APP + 1;
     constexpr UINT kHideMessage = WM_APP + 2;
     constexpr UINT kRedrawMessage = WM_APP + 3;
@@ -44,7 +50,7 @@ namespace
         return result;
     }
 
-    std::wstring defaultImagePath()
+    std::wstring splashAssetPath(const wchar_t* name)
     {
         std::vector<wchar_t> buffer(MAX_PATH);
         for (;;)
@@ -57,7 +63,7 @@ namespace
                 std::wstring path(buffer.data(), copied);
                 const size_t slash = path.find_last_of(L"\\/");
                 if (slash == std::wstring::npos) return {};
-                return path.substr(0, slash + 1) + L"Style\\KswordHome_2.png";
+                return path.substr(0, slash + 1) + L"Style\\" + name;
             }
             if (buffer.size() >= 32768) return {};
             buffer.resize(buffer.size() * 2);
@@ -96,18 +102,24 @@ namespace
         return std::max(96U, dpi);
     }
 
-    void fillRoundedRectangle(Gdiplus::Graphics& graphics, const Gdiplus::Brush& brush,
-        float x, float y, float width, float height)
+    void roundedRectangle(Gdiplus::GraphicsPath& outline, float x, float y,
+        float width, float height, float radius)
     {
-        if (width <= 0.0f || height <= 0.0f) return;
-        const float diameter = std::min(width, height);
-        Gdiplus::GraphicsPath outline;
+        const float diameter = 2.0f * std::min(radius, std::min(width, height) * 0.5f);
         outline.AddArc(x, y, diameter, diameter, 180.0f, 90.0f);
         outline.AddArc(x + width - diameter, y, diameter, diameter, 270.0f, 90.0f);
         outline.AddArc(x + width - diameter, y + height - diameter,
             diameter, diameter, 0.0f, 90.0f);
         outline.AddArc(x, y + height - diameter, diameter, diameter, 90.0f, 90.0f);
         outline.CloseFigure();
+    }
+
+    void fillRoundedRectangle(Gdiplus::Graphics& graphics, const Gdiplus::Brush& brush,
+        float x, float y, float width, float height, float radius)
+    {
+        if (width <= 0.0f || height <= 0.0f) return;
+        Gdiplus::GraphicsPath outline;
+        roundedRectangle(outline, x, y, width, height, radius);
         graphics.FillPath(&brush, &outline);
     }
 
@@ -195,14 +207,34 @@ public:
         if (!m_thread.joinable()) m_imagePath = path;
     }
 
-    void setFooterText(const std::wstring& email, const std::wstring& buildDate,
+    void setBrandingText(const std::wstring& title, const std::wstring& buildTime,
+        const std::wstring& authors)
+    {
+        {
+            std::lock_guard<std::mutex> lock(m_stateMutex);
+            if (m_title == title && m_buildTime == buildTime && m_authors == authors) return;
+            m_title = title;
+            m_buildTime = buildTime;
+            m_authors = authors;
+            ++m_stateRevision;
+            ++m_staticRevision;
+        }
+        requestRedraw();
+    }
+
+    void setLegalText(const std::wstring& copyright, const std::wstring& license,
+        const std::wstring& thirdParty, const std::wstring& website,
         const std::wstring& repository)
     {
         {
             std::lock_guard<std::mutex> lock(m_stateMutex);
-            if (m_email == email && m_buildDate == buildDate && m_repository == repository) return;
-            m_email = email;
-            m_buildDate = buildDate;
+            if (m_copyright == copyright && m_license == license &&
+                m_thirdParty == thirdParty && m_website == website &&
+                m_repository == repository) return;
+            m_copyright = copyright;
+            m_license = license;
+            m_thirdParty = thirdParty;
+            m_website = website;
             m_repository = repository;
             ++m_stateRevision;
             ++m_staticRevision;
@@ -326,7 +358,7 @@ private:
         std::wstring path;
         {
             std::lock_guard<std::mutex> lock(m_stateMutex);
-            path = m_imagePath.empty() ? defaultImagePath() : m_imagePath;
+            path = m_imagePath.empty() ? splashAssetPath(L"StartupLandscape.png") : m_imagePath;
         }
         m_image.reset(Gdiplus::Image::FromFile(path.c_str(), FALSE));
         if (!m_image || m_image->GetLastStatus() != Gdiplus::Ok ||
@@ -340,6 +372,9 @@ private:
         }
         m_imageWidth = static_cast<int>(m_image->GetWidth());
         m_imageHeight = static_cast<int>(m_image->GetHeight());
+        const std::wstring logoPath = splashAssetPath(L"KswordLogo.png");
+        m_logo.reset(Gdiplus::Image::FromFile(logoPath.c_str(), FALSE));
+        if (m_logo && m_logo->GetLastStatus() != Gdiplus::Ok) m_logo.reset();
 
         WNDCLASSEXW windowClass = {};
         windowClass.cbSize = sizeof(windowClass);
@@ -373,6 +408,7 @@ private:
         m_frame.reset();
         m_staticSurface.reset();
         m_image.reset();
+        m_logo.reset();
         Gdiplus::GdiplusShutdown(m_gdiplusToken);
         m_gdiplusToken = 0;
     }
@@ -388,13 +424,15 @@ private:
         const int oldX = m_x, oldY = m_y, oldWidth = m_width, oldHeight = m_height;
         const UINT oldDpi = m_dpi;
         m_dpi = windowDpi(window);
-        m_scale = static_cast<float>(m_dpi) / 96.0f;
-        m_width = MulDiv(kBaseWidth, static_cast<int>(m_dpi), 96);
-        m_height = std::max(1, static_cast<int>(std::lround(
-            static_cast<double>(m_width) * m_imageHeight / m_imageWidth)));
-        m_canvasHeight = m_height / m_scale;
-        m_x = info.rcMonitor.left + ((info.rcMonitor.right - info.rcMonitor.left) - m_width) / 2;
-        m_y = info.rcMonitor.top + ((info.rcMonitor.bottom - info.rcMonitor.top) - m_height) / 2;
+        const int workWidth = info.rcWork.right - info.rcWork.left;
+        const int workHeight = info.rcWork.bottom - info.rcWork.top;
+        m_scale = std::min({static_cast<float>(m_dpi) / 96.0f,
+            static_cast<float>(workWidth) * 0.90f / kBaseWidth,
+            static_cast<float>(workHeight) * 0.88f / kBaseHeight});
+        m_width = std::max(1, static_cast<int>(std::lround(kBaseWidth * m_scale)));
+        m_height = std::max(1, static_cast<int>(std::lround(kBaseHeight * m_scale)));
+        m_x = info.rcWork.left + (workWidth - m_width) / 2;
+        m_y = info.rcWork.top + (workHeight - m_height) / 2;
         if (oldX != m_x || oldY != m_y || oldWidth != m_width || oldHeight != m_height || oldDpi != m_dpi)
             ++m_geometryRevision;
         if (window != nullptr)
@@ -452,36 +490,16 @@ private:
         return window != nullptr && paint(nullptr, force);
     }
 
-    Gdiplus::Color backgroundTextColor(const void* pixels, const Gdiplus::RectF& area) const
-    {
-        // Sample only the resized background, before text or progress is drawn.
-        // Any transparent sample uses white: the desktop behind it is unknown.
-        const auto* bytes = static_cast<const BYTE*>(pixels);
-        unsigned int brightness = 0;
-        constexpr int columns = 5;
-        constexpr int rows = 3;
-        for (int row = 0; row < rows; ++row)
-        {
-            for (int column = 0; column < columns; ++column)
-            {
-                const int x = std::clamp(static_cast<int>(
-                    (area.X + area.Width * (column + 0.5f) / columns) * m_scale), 0, m_width - 1);
-                const int y = std::clamp(static_cast<int>(
-                    (area.Y + area.Height * (row + 0.5f) / rows) * m_scale), 0, m_height - 1);
-                const BYTE* pixel = bytes + (static_cast<size_t>(y) * m_width + x) * 4;
-                if (pixel[3] < 255) return Gdiplus::Color(255, 255, 255, 255);
-                brightness += 299U * pixel[2] + 587U * pixel[1] + 114U * pixel[0];
-            }
-        }
-        return brightness >= 150U * 1000U * columns * rows
-            ? Gdiplus::Color(255, 0, 0, 0) : Gdiplus::Color(255, 255, 255, 255);
-    }
-
     bool paint(HDC target, bool force = false)
     {
         std::wstring status;
-        std::wstring email;
-        std::wstring buildDate;
+        std::wstring title;
+        std::wstring buildTime;
+        std::wstring authors;
+        std::wstring copyright;
+        std::wstring license;
+        std::wstring thirdParty;
+        std::wstring website;
         std::wstring repository;
         SplashProgressMode mode;
         unsigned int accentRgb;
@@ -490,8 +508,13 @@ private:
         {
             std::lock_guard<std::mutex> lock(m_stateMutex);
             status = m_status;
-            email = m_email;
-            buildDate = m_buildDate;
+            title = m_title;
+            buildTime = m_buildTime;
+            authors = m_authors;
+            copyright = m_copyright;
+            license = m_license;
+            thirdParty = m_thirdParty;
+            website = m_website;
             repository = m_repository;
             mode = m_mode;
             accentRgb = m_accentRgb;
@@ -510,10 +533,6 @@ private:
         if (!m_staticSurface.ensure(m_width, m_height) || !m_frame.ensure(m_width, m_height)) return false;
         const bool rebuildStatic = resized || staticRevision != m_cachedStaticRevision ||
             m_geometryRevision != m_cachedStaticGeometryRevision;
-        constexpr float trackX = 260.0f;
-        constexpr float trackWidth = 354.0f;
-        const float trackY = m_canvasHeight - 32.0f;
-        constexpr float trackHeight = 8.0f;
         if (rebuildStatic)
         {
             // UpdateLayeredWindow requires premultiplied RGB and per-pixel alpha.
@@ -526,57 +545,107 @@ private:
             graphics.Clear(Gdiplus::Color(0, 0, 0, 0));
             graphics.ScaleTransform(m_scale, m_scale);
 
-            // Scale directly from source pixels at the monitor's resolution.
-            // No 640px intermediate bitmap is enlarged at high DPI.
-            graphics.DrawImage(m_image.get(), Gdiplus::RectF(0.0f, 0.0f,
-                static_cast<float>(kBaseWidth), m_canvasHeight),
+            // Composite the information panel over the complete 16:9 artwork.
+            // Only the backing colors are translucent; text stays fully opaque.
+            graphics.DrawImage(m_image.get(), Gdiplus::RectF(
+                0.0f, 0.0f, static_cast<float>(kBaseWidth), static_cast<float>(kBaseHeight)),
                 0.0f, 0.0f, static_cast<float>(m_imageWidth),
                 static_cast<float>(m_imageHeight), Gdiplus::UnitPixel);
+            Gdiplus::SolidBrush panel(Gdiplus::Color(190, 10, 20, 34));
+            graphics.FillRectangle(&panel, Gdiplus::RectF(
+                0.0f, 0.0f, 320.0f, static_cast<float>(kBaseHeight)));
+            if (m_logo)
+                graphics.DrawImage(m_logo.get(), Gdiplus::RectF(kContentX, 20.0f, 40.0f, 40.0f));
+            else
+            {
+                Gdiplus::SolidBrush fallback(Gdiplus::Color(255, 12, 25, 84));
+                fillRoundedRectangle(graphics, fallback, kContentX, 20.0f, 40.0f, 40.0f, 8.0f);
+            }
+            Gdiplus::SolidBrush heading(Gdiplus::Color(255, 247, 250, 255));
+            Gdiplus::StringFormat headingFormat(Gdiplus::StringFormat::GenericTypographic());
+            headingFormat.SetFormatFlags(headingFormat.GetFormatFlags() |
+                Gdiplus::StringFormatFlagsNoWrap);
+            headingFormat.SetLineAlignment(Gdiplus::StringAlignmentCenter);
+            float headingSize = 26.0f;
+            for (; headingSize > 22.0f; headingSize -= 1.0f)
+            {
+                Gdiplus::Font candidate(L"Segoe UI", headingSize,
+                    Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
+                Gdiplus::RectF bounds;
+                graphics.MeasureString(title.c_str(), -1, &candidate,
+                    Gdiplus::RectF(0.0f, 0.0f, 1000.0f, 40.0f),
+                    &headingFormat, &bounds);
+                if (bounds.Width <= 228.0f) break;
+            }
+            Gdiplus::Font headingFont(L"Segoe UI", headingSize,
+                Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
+            graphics.DrawString(title.c_str(), -1, &headingFont,
+                Gdiplus::RectF(kContentX + 52.0f, 20.0f, 228.0f, 40.0f),
+                &headingFormat, &heading);
 
-            graphics.Flush(Gdiplus::FlushIntentionSync);
-            const Gdiplus::Color footerColor = backgroundTextColor(m_staticSurface.pixels,
-                Gdiplus::RectF(28.0f, m_canvasHeight - 63.0f, 188.0f, 60.0f));
-            const Gdiplus::Color statusColor = backgroundTextColor(m_staticSurface.pixels,
-                Gdiplus::RectF(260.0f, m_canvasHeight - 60.0f, 354.0f, 24.0f));
-            Gdiplus::SolidBrush footerForeground(footerColor);
-            Gdiplus::SolidBrush statusForeground(statusColor);
-            Gdiplus::Font footerFont(L"Microsoft YaHei UI", 14.0f,
+            Gdiplus::SolidBrush body(Gdiplus::Color(255, 228, 234, 242));
+            Gdiplus::Font bodyFont(L"Microsoft YaHei UI", 14.0f,
                 Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
-            Gdiplus::StringFormat singleLine;
-            singleLine.SetFormatFlags(Gdiplus::StringFormatFlagsNoWrap);
-            singleLine.SetTrimming(Gdiplus::StringTrimmingEllipsisCharacter);
-            const float footerX = 28.0f;
-            constexpr float footerLineHeight = 20.0f;
-            float footerY = m_canvasHeight - 63.0f;
-            const std::wstring* footerLines[] = { &email, &buildDate, &repository };
-            for (const std::wstring* line : footerLines)
+            Gdiplus::StringFormat paragraphFormat(Gdiplus::StringFormat::GenericTypographic());
+            paragraphFormat.SetTrimming(Gdiplus::StringTrimmingNone);
+            Gdiplus::SolidBrush metadata(Gdiplus::Color(255, 188, 201, 218));
+            graphics.DrawString(buildTime.c_str(), -1, &bodyFont,
+                Gdiplus::RectF(kContentX, 70.0f, 280.0f, 20.0f), &paragraphFormat, &metadata);
+            graphics.DrawString(authors.c_str(), -1, &bodyFont,
+                Gdiplus::RectF(kContentX, 92.0f, 280.0f, 20.0f), &paragraphFormat, &metadata);
+            // 仅版权与许可正文略缩小；品牌、元信息及加载进度沿用原字号。
+            Gdiplus::Font legalFont(L"Microsoft YaHei UI", 13.0f,
+                Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
+            const std::wstring* paragraphs[] = {&copyright, &license, &thirdParty};
+            float paragraphHeights[3] = {};
+            float legalHeight = 0.0f;
+            int paragraphCount = 0;
+            for (int index = 0; index < 3; ++index)
             {
-                graphics.DrawString(line->c_str(), -1, &footerFont,
-                    Gdiplus::RectF(footerX, footerY, 188.0f, footerLineHeight),
-                    &singleLine, &footerForeground);
-                footerY += footerLineHeight;
+                const std::wstring* paragraph = paragraphs[index];
+                if (paragraph->empty()) continue;
+                Gdiplus::RectF bounds;
+                graphics.MeasureString(paragraph->c_str(), -1, &legalFont,
+                    Gdiplus::RectF(0.0f, 0.0f, 280.0f, 220.0f),
+                    &paragraphFormat, &bounds);
+                paragraphHeights[index] = bounds.Height + 2.0f;
+                legalHeight += paragraphHeights[index];
+                ++paragraphCount;
+            }
+            legalHeight += std::max(0, paragraphCount - 1) * 6.0f;
+            // Keep metadata below the brand and anchor legal text above the
+            // bottom links/loading area, leaving the middle space unoccupied.
+            float paragraphY = 328.0f - legalHeight;
+            for (int index = 0; index < 3; ++index)
+            {
+                const std::wstring* paragraph = paragraphs[index];
+                if (paragraph->empty()) continue;
+                graphics.DrawString(paragraph->c_str(), -1, &legalFont,
+                    Gdiplus::RectF(kContentX, paragraphY, 280.0f, paragraphHeights[index]),
+                    &paragraphFormat, &body);
+                paragraphY += paragraphHeights[index] + 6.0f;
             }
 
-            // Inset the status/progress area from the divider, keeping the right margin.
-            float statusSize = 12.0f;
-            Gdiplus::RectF bounds;
-            for (; statusSize > 9.0f; statusSize -= 1.0f)
-            {
-                Gdiplus::Font candidate(L"Microsoft YaHei UI", statusSize,
-                    Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
-                graphics.MeasureString(status.c_str(), -1, &candidate,
-                    Gdiplus::PointF(0.0f, 0.0f), &bounds);
-                if (bounds.Width <= trackWidth) break;
-            }
-            Gdiplus::Font statusFont(L"Microsoft YaHei UI", statusSize,
+            Gdiplus::StringFormat oneLine(Gdiplus::StringFormat::GenericTypographic());
+            oneLine.SetFormatFlags(oneLine.GetFormatFlags() |
+                Gdiplus::StringFormatFlagsNoWrap);
+            oneLine.SetTrimming(Gdiplus::StringTrimmingEllipsisCharacter);
+            Gdiplus::Font statusFont(L"Microsoft YaHei UI", 12.0f,
                 Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
             graphics.DrawString(status.c_str(), -1, &statusFont,
-                Gdiplus::RectF(trackX, m_canvasHeight - 60.0f, trackWidth, 24.0f),
-                &singleLine, &statusForeground);
+                Gdiplus::RectF(kTrackX, 398.0f, kTrackWidth, 20.0f),
+                &oneLine, &body);
+            Gdiplus::SolidBrush track(Gdiplus::Color(100, 180, 200, 225));
+            fillRoundedRectangle(graphics, track,
+                kTrackX, kTrackY, kTrackWidth, kTrackHeight, 3.0f);
 
-            Gdiplus::SolidBrush track(Gdiplus::Color(130,
-                statusColor.GetR(), statusColor.GetG(), statusColor.GetB()));
-            fillRoundedRectangle(graphics, track, trackX, trackY, trackWidth, trackHeight);
+            Gdiplus::SolidBrush link(Gdiplus::Color(255, 150, 204, 255));
+            Gdiplus::Font linkFont(L"Segoe UI", 14.0f,
+                Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
+            graphics.DrawString(website.c_str(), -1, &linkFont,
+                Gdiplus::RectF(kContentX, 342.0f, 280.0f, 20.0f), &oneLine, &link);
+            graphics.DrawString(repository.c_str(), -1, &linkFont,
+                Gdiplus::RectF(kContentX, 364.0f, 280.0f, 20.0f), &oneLine, &link);
             graphics.Flush(Gdiplus::FlushIntentionSync);
             m_cachedStaticRevision = staticRevision;
             m_cachedStaticGeometryRevision = m_geometryRevision;
@@ -588,8 +657,8 @@ private:
         {
             // Restore only the progress strip from the cached premultiplied
             // background. This replaces alpha as well, avoiding animation trails.
-            const int top = std::clamp(static_cast<int>(std::floor(trackY * m_scale)) - 2, 0, m_height);
-            const int bottom = std::clamp(static_cast<int>(std::ceil((trackY + trackHeight) * m_scale)) + 2, top, m_height);
+            const int top = std::clamp(static_cast<int>(std::floor(kTrackY * m_scale)) - 2, 0, m_height);
+            const int bottom = std::clamp(static_cast<int>(std::ceil((kTrackY + kTrackHeight) * m_scale)) + 2, top, m_height);
             const size_t offset = static_cast<size_t>(top) * stride;
             std::memcpy(static_cast<BYTE*>(m_frame.pixels) + offset,
                 static_cast<const BYTE*>(m_staticSurface.pixels) + offset,
@@ -607,7 +676,7 @@ private:
             Gdiplus::SolidBrush indicator(Gdiplus::Color(240,
                 static_cast<BYTE>(accentRed), static_cast<BYTE>(accentGreen),
                 static_cast<BYTE>(accentBlue)));
-            graphics.SetClip(Gdiplus::RectF(trackX, trackY, trackWidth, trackHeight));
+            graphics.SetClip(Gdiplus::RectF(kTrackX, kTrackY, kTrackWidth, kTrackHeight));
             if (mode == SplashProgressMode::Indeterminate)
             {
                 constexpr ULONGLONG kCycleMs = 1150;
@@ -620,22 +689,22 @@ private:
                         static_cast<double>(phase) / kTravelMs));
                     const float segmentWidth = 30.0f +
                         70.0f * 4.0f * progress * (1.0f - progress);
-                    const float segmentX = trackX +
-                        (trackWidth - segmentWidth) * progress;
+                    const float segmentX = kTrackX +
+                        (kTrackWidth - segmentWidth) * progress;
                     const float fadeIn = std::min(1.0f, phase / 90.0f);
                     const float fadeOut = std::min(1.0f, (kTravelMs - phase) / 90.0f);
                     Gdiplus::SolidBrush movingIndicator(Gdiplus::Color(
                         static_cast<BYTE>(240.0f * std::min(fadeIn, fadeOut)),
                         static_cast<BYTE>(accentRed), static_cast<BYTE>(accentGreen),
                         static_cast<BYTE>(accentBlue)));
-                    fillRoundedRectangle(graphics, movingIndicator, segmentX, trackY,
-                        segmentWidth, trackHeight);
+                    fillRoundedRectangle(graphics, movingIndicator, segmentX, kTrackY,
+                        segmentWidth, kTrackHeight, 3.0f);
                 }
             }
             else if (percent > 0)
             {
-                fillRoundedRectangle(graphics, indicator, trackX, trackY,
-                    trackWidth * percent / 100.0f, trackHeight);
+                fillRoundedRectangle(graphics, indicator, kTrackX, kTrackY,
+                    kTrackWidth * percent / 100.0f, kTrackHeight, 3.0f);
             }
             graphics.ResetClip();
             graphics.Flush(Gdiplus::FlushIntentionSync);
@@ -748,8 +817,13 @@ private:
     bool m_threadSucceeded = false;
     std::wstring m_imagePath;
     std::wstring m_status = L"Ksword";
-    std::wstring m_email;
-    std::wstring m_buildDate;
+    std::wstring m_title = L"KSword";
+    std::wstring m_buildTime;
+    std::wstring m_authors;
+    std::wstring m_copyright;
+    std::wstring m_license;
+    std::wstring m_thirdParty;
+    std::wstring m_website;
     std::wstring m_repository;
     SplashProgressMode m_mode = SplashProgressMode::Determinate;
     unsigned int m_accentRgb = 0x43A0FFU;
@@ -767,11 +841,11 @@ private:
     bool m_animationsEnabled = true;
     ULONG_PTR m_gdiplusToken = 0;
     std::unique_ptr<Gdiplus::Image> m_image;
+    std::unique_ptr<Gdiplus::Image> m_logo;
     int m_imageWidth = 0;
     int m_imageHeight = 0;
-    float m_canvasHeight = 360.0f;
     int m_width = kBaseWidth;
-    int m_height = 360;
+    int m_height = kBaseHeight;
     int m_x = 0;
     int m_y = 0;
     UINT m_dpi = 96;
@@ -782,8 +856,12 @@ private:
 kStartupSplash::kStartupSplash() : m_impl(std::make_unique<Impl>()) {}
 kStartupSplash::~kStartupSplash() = default;
 void kStartupSplash::setBackgroundImagePath(const std::wstring& path) { m_impl->setBackgroundImagePath(path); }
-void kStartupSplash::setFooterText(const std::wstring& email, const std::wstring& buildDate,
-    const std::wstring& repository) { m_impl->setFooterText(email, buildDate, repository); }
+void kStartupSplash::setBrandingText(const std::wstring& title, const std::wstring& buildTime,
+    const std::wstring& authors) { m_impl->setBrandingText(title, buildTime, authors); }
+void kStartupSplash::setLegalText(const std::wstring& copyright, const std::wstring& license,
+    const std::wstring& thirdParty, const std::wstring& website,
+    const std::wstring& repository)
+{ m_impl->setLegalText(copyright, license, thirdParty, website, repository); }
 void kStartupSplash::setProgressMode(SplashProgressMode mode) { m_impl->setProgressMode(mode); }
 void kStartupSplash::setAccentColorRgb(unsigned int rgb) { m_impl->setAccentColorRgb(rgb); }
 bool kStartupSplash::show(const std::string& initialStatusText) { return m_impl->show(initialStatusText); }

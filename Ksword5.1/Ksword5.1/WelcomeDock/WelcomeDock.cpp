@@ -1,4 +1,5 @@
 #include "WelcomeDock.h"
+#include "../Framework/ReleaseMetadata.h"
 #include "../UI/FlatButtonTheme.h"
 #include "../UI/ToolbarMetrics.h"
 #include "../UI/PrimaryPageStyle.h"
@@ -20,6 +21,7 @@
 #include <QGridLayout>
 #include <QGroupBox>
 #include <QLabel>
+#include <QLocale>
 #include <QPainter>
 #include <QPainterPath>
 #include <QPaintEvent>
@@ -30,6 +32,7 @@
 #include <QScrollArea>
 #include <QShowEvent>
 #include <QStorageInfo>
+#include <QStringList>
 #include <QSysInfo>
 #include <QTimer>
 #include <QToolButton>
@@ -83,7 +86,11 @@ namespace
     }};
 
     const QString kReleaseVersionText = QStringLiteral("5.2.1.0Pre"); // RELEASE_META_VERSION_MARKER
-    const QString kReleaseBuildTimeText = QStringLiteral("2026-10-22 11:21:43.336 -04:00"); // RELEASE_META_BUILD_TIME_MARKER
+    const QString kReleaseBuildTimeText = [] { // RELEASE_META_BUILD_TIME_MARKER
+        const QDate buildDate = QLocale(QLocale::English).toDate(
+            QString::fromLatin1(__DATE__).simplified(), QStringLiteral("MMM d yyyy"));
+        return buildDate.toString(Qt::ISODate) + QLatin1Char(' ') + QString::fromLatin1(__TIME__);
+    }();
     const QString kQQGroupInviteUrl = QStringLiteral("https://qm.qq.com/q/5tWNPfIxkk");
     const QString kPplControlRepositoryUrl = QStringLiteral("https://github.com/itm4n/PPLcontrol");
     const QString kSystemInformerRepositoryUrl = QStringLiteral("https://github.com/winsiderss/systeminformer");
@@ -170,6 +177,24 @@ namespace
     }
 
 
+}
+
+QString ks::app::releaseVersionText()
+{
+    return kReleaseVersionText;
+}
+
+QString ks::app::releaseBuildTimeText()
+{
+    return kReleaseBuildTimeText;
+}
+
+QString ks::app::releaseAuthorsText()
+{
+    QStringList names;
+    for (const ContributorEntry& contributor : contributorEntries)
+        names.append(contributor.displayName);
+    return names.join(QStringLiteral(" · "));
 }
 
 WelcomeDock::WelcomeDock(QWidget* parent)
@@ -268,7 +293,7 @@ WelcomeDock::WelcomeDock(QWidget* parent)
 
     QHBoxLayout* lowerLayout = new QHBoxLayout();
     lowerLayout->setContentsMargins(0, 0, 0, 0);
-    lowerLayout->setSpacing(18);
+    lowerLayout->setSpacing(16);
 
     // 兼容旧字段但不再用一段换行文本排版；系统摘要改为项目名/内容两列网格。
     m_systemInfoPanel = new QWidget(this);
@@ -290,7 +315,6 @@ WelcomeDock::WelcomeDock(QWidget* parent)
     ks::i18n::LanguageManager::instance().bindText(systemGroup,
         QStringLiteral("welcome.system_info.group"), QStringLiteral("系统信息"));
     auto* systemLayout = new QVBoxLayout(systemGroup);
-    systemLayout->setContentsMargins(10, 10, 10, 8);
     systemLayout->addWidget(m_systemInfoPanel, 1);
     ks::ui::StylePrimaryGroup(systemGroup);
     lowerLayout->addWidget(systemGroup, 1);
@@ -299,7 +323,6 @@ WelcomeDock::WelcomeDock(QWidget* parent)
     ks::i18n::LanguageManager::instance().bindText(communityGroup,
         QStringLiteral("welcome.community.group"), QStringLiteral("项目与社区"));
     QVBoxLayout* rightLayout = new QVBoxLayout(communityGroup);
-    rightLayout->setContentsMargins(10, 10, 10, 8);
     rightLayout->setSpacing(8);
     rightLayout->addLayout(m_btnLayout);
     rightLayout->addLayout(m_referenceLayout);

@@ -6,7 +6,7 @@ namespace ks::ui
 {
     // InstallGlobalMessageBoxTheme 作用：
     // - 给 QApplication 安装全局 QMessageBox 主题器；
-    // - 让后续所有 QMessageBox 在显示时自动套用统一深浅色与按钮样式。
+    // - 后续 QMessageBox 在 Show 与首个窗口更新边界自动完成样式/布局，首帧不再依赖页面主动补写。
     // 调用方式：main.cpp 在 QApplication 构造完成后调用一次。
     // 参数 appInstance：当前应用对象；为空时忽略。
     // 返回值：无。

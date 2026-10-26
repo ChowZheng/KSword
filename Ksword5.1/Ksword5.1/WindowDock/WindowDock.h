@@ -12,12 +12,14 @@
 #include "../Framework.h"
 #include "../UI/StructuredFieldView.h"
 #include "../UI/ImmutableValueTable.h"
+#include "../ProcessDock/HotkeyClearController.h"
 
 #include <QWidget>
 #include <QStringList>
 #include <QVector>
 
 #include <atomic> // std::atomic_bool：控制后台刷新任务互斥。
+#include <cstdint>
 
 namespace ks::ui { class AsyncOperation; }
 
@@ -51,6 +53,9 @@ public:
 
     void focusWindowsByPids(const QVector<quint32>& processIds);
 
+    // 从杂项等入口进入唯一的热键管理页；仅切页，不启动第二份扫描。
+    QWidget* activateHotkeyManagement();
+
     // refreshThemeVisuals 作用：
     // - 重新生成审计表格、现有单元格和列预设按钮依赖主题颜色的视觉状态；
     // - 保留透明表格策略、行模型、排序和列显隐，不触发任何 R0/R3 查询。
@@ -80,6 +85,8 @@ private:
     // - 结果通过 queued connection 回投 UI。
     void reconcileAuditRefreshState();
     void requestAsyncRefresh();
+    void updateRegisteredHotkeyClearAction();
+    void clearSelectedRegisteredHotkeys();
 
     // setRefreshingPlaceholderRows 作用：
     // - 在后台采集开始前写入“正在采集”诊断行；
@@ -118,6 +125,8 @@ private:
     OtherDock* m_windowManagementDock = nullptr; // m_windowManagementDock：内嵌窗口管理（窗口列表 / 桌面）。
     QWidget* m_sessionPage = nullptr;       // m_sessionPage：win32k GUI/session 页。
     QWidget* m_hotkeyHookPage = nullptr;    // m_hotkeyHookPage：热键/钩子页。
+    QTabWidget* m_hotkeyHookInnerTabs = nullptr; // 唯一热键页内的程序快捷键/注册热键/消息钩子导航。
+    QWidget* m_programShortcutPage = nullptr; // 杂项直达的真实视图身份，不依赖内层索引。
     QWidget* m_clipboardPage = nullptr;     // m_clipboardPage：剪贴板/message-only 页。
     QWidget* m_displayPage = nullptr;       // m_displayPage：GPU/显示/watchdog 页。
 
@@ -132,11 +141,20 @@ private:
     ks::ui::ImmutableValueTable* m_guiThreadsTable = nullptr;  // m_guiThreadsTable：GUI 线程表。
     ks::ui::ImmutableValueTable* m_sessionTable = nullptr;     // m_sessionTable：Win32K session 表。
     ks::ui::ImmutableValueTable* m_hotkeysTable = nullptr;     // m_hotkeysTable：热键表。
+    QPushButton* m_clearRegisteredHotkeysButton = nullptr;
+    QLabel* m_registeredHotkeyActionStatus = nullptr;
     ks::ui::ImmutableValueTable* m_hooksTable = nullptr;       // m_hooksTable：Hook 表。
     ks::ui::ImmutableValueTable* m_clipboardTable = nullptr;   // m_clipboardTable：剪贴板属性/值表。
     ks::ui::ImmutableValueTable* m_deviceTable = nullptr;      // m_deviceTable：GPU/显示/watchdog 设备审计表。
 
     ks::ui::AsyncOperation* m_auditOperation = nullptr;
+    ks::ui::AsyncOperation* m_registeredHotkeyClearOperation = nullptr;
+    QVector<ks::process::RegisteredHotkeyClearTarget> m_cachedHotkeyTargets;
+    quint64 m_hotkeyTargetGeneration = 0;
+    bool m_registeredHotkeyClearBusy = false;
+    std::uint64_t m_registeredHotkeyClearTicket = 0;
+    QString m_lastRegisteredClearSummary;
+    QString m_lastRegisteredClearDetails;
     ks::ui::AsyncOperation* m_windowDetailOperation = nullptr;
     quint64 m_auditViewRevision = 0, m_summaryViewRevision = ~quint64(0);
 

@@ -7,6 +7,8 @@ metadata:
 
 KSword 主程序位于 `Ksword5.1/Ksword5.1`（Qt 6.9.3 Widgets + Qt Advanced Docking System，MSVC vcxproj 构建）。
 
+- 2026-10-25 默认 UI 与首帧收口见 [默认 UI 状态与首帧](ksword-ui-input-first-frame.md)：普通按钮按真实输入来源显示焦点，通用几何在共享入口准备，原生 heightForWidth/sizeHint 参与首次布局；无变化 Show、颜色或焦点不重复归一。必须用首个实际 Paint 对比稳定后几何验证，不能见到 singleShot 就直接前移到 Show/UpdateRequest，Qt 子树遍历与私有视口布局可能因此新增崩溃或抖动。
+
 - 2026-10-01 虚拟化 Dock 按驱动后端适配：AMD 使用“准备 → 全核 SVM 自检 → 常驻”，隐藏 EPT watch/分离视图/执行域/Hook/VMCS 策略/SOAK，保留通用内存、事件、停止和释放。第三方 VM 页为四步嵌套 SVM 流程，Intel 仍五步；实际启用必须读取驱动位，不能从本地开关或 VMware 服务 Running 推断。证据页校验 metrics 版本/长度/行数、代次与 CPU 身份，raw/general/hotspots 各自检查有效位与偶数序列，无效显示暂不可用。
 - 离屏 UI 回归入口 `tools/hvm_lab/build-ui-tests.cmd`：链接实际 Dock、Guest、Evidence、KvmControl 与 DriverClient，仅替换 IOCTL 传输、确认和 SCM。测试源码由该独立构建清单登记，不进入主程序 vcxproj。Windows Qt offscreen 需显式加载中文字体，配合 `SetDarkModeEnabled` 与完整 palette（包括 PlaceholderText/AlternateBase/disabled roles）；否则缺字或默认浅色 palette 会制造错误的窄窗口/深色截图。Qt DLL 需部署到测试 exe 目录。
 
@@ -77,6 +79,8 @@ KSword 主程序位于 `Ksword5.1/Ksword5.1`（Qt 6.9.3 Widgets + Qt Advanced Do
 - 跨 Dock 的进程详情入口仍可调用 `ensureDockContentInitialized(m_dockProcess)` 来复用 `ProcessDock` 的详情窗口管理与 identity 校验，但不得随后 `raise()` 或 `setVisible(true)` 激活进程 Dock；`ProcessDetailWindow` 是独立顶层窗口，打开它时应保留用户当前页签。
 
 ## 启动单实例与权限切换
+
+- 2026-10-24 当前启动页使用16:9 的 800×450 逻辑画布，完整显示用户提供的背景图，左侧文字底板为深色 RGB(10,20,34)、alpha=190，从窗口左沿铺至 x=320，右侧与图片直边衔接；不绘外框，窗口外轮廓使用方角（不对全画幅做圆角裁剪）；仅底色参与半透明合成，文字与图标保持不透明。主工程 CopyKswordSplashAssets 将 Resource/Splash/StartupLandscape.png 与 Resource/Logo/KswordLogo.png 复制到 exe 同目录的 Style/；画面缺失时 show=false，Logo 缺失则画回退标志。标题采用 KSword + 版本号，并显示本次编译时间与两位作者；Framework/ReleaseMetadata.h 提供轻量访问接口，值仍由 WelcomeDock.cpp 的发行标记和 contributorEntries 维护，编译时间由该翻译单元的 __DATE__/__TIME__ 生成。新增标签和法律说明均接入中英文；正文为浅色，标题/元数据下移并保留中间留白。用户最新要求恢复两倍字号：正文/元数据/链接14px、状态12px；顶部标题按可用宽度在26px至22px间适配并与40px图标居中对齐。编译时间与作者继续位于顶部标题下方（时间 y=70、作者 y=92，按14px字号保留行距）；仅法律段落按真实文字高度向下锚定到链接上方，链接及加载区固定在底部，中间剩余空间留白。底图按用户提供的 PNG 原样保存。法律文案、网址和实时状态由 GDI+ 绘制，不烘焙进图。窗口按 GetDpiForWindow 和监视器工作区 90% 宽、88% 高共同限制大小，直接从源图采样到目标物理像素。独立线程、调用方桌面、确定/不定进度、缓存和 UpdateLayeredWindow 机制仍沿用。发行包从旧包搭建时还需覆盖这两项 Style 素材，步骤见仓库根 AGENTS.md。下方 2026-10-11 段落记录旧版 640 宽图片方案，不再描述当前默认资源。用户自行验收实际 GUI。
 
 - 2026-10-11 原生启动页以独立 Win32 UI 线程播放伸缩不定进度条，仍使用 `Framework/StartupSplash` 的 `kSplash` 接口。背景仅从 exe 同目录的 `Style/KswordHome_2.png` 读取，缺失时 `show=false`，暂不回退嵌入资源。图片按 640 逻辑像素宽度等比绘制，200% 为 1280 物理像素（用户已确认采用标准倍率），不能先生成 640px 中间位图再放大；底部文本和进度条按图片实际高度定位；用户确认右移24逻辑像素后，又要求状态字更小且整体远离分割线；最终状态字号上限12逻辑像素（先23→18→16，用户要求恢复旧字体后回到原12）；与替换前相同的Microsoft YaHei UI常规体，移除新增的AntiAliasGridFit文字渲染设置，使用GDI+默认渲染，状态布局顶点为画布高度减60、文本框高24，较原高度减83下移23，更靠近进度条，右侧状态/进度区域起点260、宽354，较首次右移结果再右移16，保留26逻辑像素右边距；底轨、不定滑块和百分比填充均按半条高绘制圆角（8高/4半径，短填充按宽度收小半径）。线程在创建窗口前绑定调用方 `GetThreadDesktop` 并设置自身 Per-Monitor DPI awareness，以保留 SOS 私有桌面和 QApplication 创建前的真实 DPI；窗口创建后通过 `GetDpiForWindow` 取缩放，不能依赖 DPI-unaware 进程的 `GetDpiForMonitor`。`hide` 停止动画定时器；启动状态及编译日期在主线程先完成双语解析；左下角三行统一14逻辑像素常规体，无邮箱下划线，统一20逻辑像素行高绘制；颜色随后改为区域背景自适应。`.codex-build-logs/startup-splash/splash_fixture.cpp` 在不切换输入桌面的私有桌面调用生产实现，42 项检查通过，覆盖 exe 相对路径、非 16:9/正方形图、96/144/192 DPI、阻塞调用方时动画刷新、重复显隐及图片缺失；192 DPI 为夹具注入，不等于实机修改缩放验收。
 
@@ -298,7 +302,7 @@ KSword 主程序位于 `Ksword5.1/Ksword5.1`（Qt 6.9.3 Widgets + Qt Advanced Do
 ## 共享详情框架统一安装（2026-10-11）
 
 - 用户纠正实现方式：详情必须使用共享框架，不逐窗复制/维护摘要、导航或卡片布局。统一入口 `InstallDetailWindowFramework` 只登记控制器；`PrepareDetailWindowForShow` 在构造结束后的首个Show、首帧绘制前完成窗口摘要/原Tab导航/文档卡片/自适应字段及滚动区安装。各模块只提供实际身份、字段和动作配置，业务模型不由框架复制。
-- `GlobalDialogTheme` 为普通业务QDialog安装结构，已登记二级工具同样装结构但保留Secondary颜色所有权。Qt文件/颜色/字体/单项输入选择器和带 `ksword_detail_keep_layout` 的共享设置页保留已有结构。ProcessDetailWindow为QWidget，明确从ConfigureDetailDialogRoot接入。
+- `GlobalDialogTheme` 为普通业务QDialog安装结构，已登记二级工具同样装结构，但根QSS只由Secondary拥有，详情框架不得追加根配色块。Qt文件/颜色/字体/单项输入选择器和带 `ksword_detail_keep_layout` 的共享设置页保留已有结构。ProcessDetailWindow为QWidget，明确从ConfigureDetailDialogRoot接入。
 - `DetailFieldProjection` 直接复用原StructuredFieldView搜索/复制/导出控件，原source仍持规范文档。详情固定分组卡片，`setDocumentOnly()` 删除旧树与格式下拉，停止隐藏树重建、列测量和其排队回调。字段分组匹配时保留整组搜索语义；数值刷新原位更新，只有结构变化重建卡片。
 - 卡片实底由DetailCard绘制，正文间隔和滚动Canvas走Window层，避免QSS对子面板再次铺矩形实底导致错误色块/黑色角缝。共享框架根QSS必须让GlobalDialogTheme保持唯一所有权，否则双方增删末尾块会产生StyleChange循环。
 - 只有投影自身有滚动区才关闭多余外滚动壳；自然高卡片scrollBody=false必须保留唯一外层纵向滚动。QSplitter替换使用占位并保留非零用户比例，隐藏页首次布局前全零sizes不应恢复为显式折叠。
@@ -558,3 +562,13 @@ KSword 主程序位于 `Ksword5.1/Ksword5.1`（Qt 6.9.3 Widgets + Qt Advanced Do
 - 透明主宿主的数据衬底统一由MainSurfaceStyle的TransparentMainDataSurfaceAlpha控制（192/255），表头节与工具带同入口；表头画布不再额外叠同色alpha层，前景按同一alpha的黑/白极端背板校准。独立窗和无背景模式保留原不透明配方，不用setWindowOpacity淡化文字。亮暗/主题色/背景模式热切换和GPU/普通表格实际合成仍由用户验收。
 
 - 同日用户要求可调控件背景：原固定192由AppearanceSettings::controlBackgroundOpacityPercent（默认75，0..100，control_background_opacity_percent）替代。设置→外观→背景的共享滑块只改待应用值；应用/取消/重载沿原流程。MainSurfaceStyle维护GUI线程运行值，变化时只失效原颜色/QSS代次、主/浮动宿主样式和已登记ThemeBinding，单改alpha不走业务枚举、背景文件重读或全局旧色扫描。表格/表头/工具带/标准按钮与输入/页签/ADS/监控时间轴复用现有绘制；Collapse与页根外壳透明，参数滚动三层由现有外板负责底面，避免重复同色铺底。参数正文只有实际alpha255才保留opaque快路径。下拉popup/独立窗和原生插件边界保持原实底，控件文字图标与语义颜色不整体淡化。82项实际alpha/cache/Combo弹层/ADS QSS纯值检查通过，无QApplication/QWidget；实际GUI与性能仍由用户测。
+
+- 2026-10-24 进程列选择器：导航为进程列表→选择列（字段选择二级工具，SecondaryPageLayout）→保存为视图（名称输入二级工具，同共享入口）。ProcessDock 懒建并复用同语言下的唯一列选择窗口，重开只同步复选框/搜索/删除动作，语言变化才重建；回调状态由窗口拥有，禁止捕获已返回构造函数的临时变量。保存名称使用显式输入/OK/回车连接，空白名禁用确认，只有保存函数成功才关闭选择器；QSettings 同步状态失败返回错误并恢复原内存视图，列未实际变化时不额外枚举。源码与构建验证不等于实际确认点击、保存后重开或性能验收，真实GUI由用户测试。
+
+- 2026-10-24 二级弹窗根QSS双拥有者：SecondaryPageLayout::SetOwnedStyle 与 DetailWindowFramework::applyStyle 都采用移除自身块再追加末尾的算法，会把 A+B 与 B+A 来回改写；Qt 6.9.3 的 polish 先 unsetPalette 再 setPalette，进而让根 ThemeBinding 的 PaletteChange 与详情控制器的 StyleChange 互相排队。选择列/保存名称的卡顿与按钮失效不能只修业务连线。详情框架及 ApplyDetailDialogChrome 必须让出 ksword_secondary_window 的根QSS；StyleSecondaryWindow 首次接管时移除既有详情块，仍保留共享结构与标准控件主题。独立弹窗点击不属于 ProcessDock 页面空白点击，不得清空进程选区及刷新图表。纯静态分析和构建不代表已完成用户实际点击验收；不保留事件日志、轮询或诊断观察器。
+
+- 2026-10-24 用户已确认前述选择列/保存弹窗修复解决实际问题。启动画面方角调整按用户明确要求仅源码核对、提交和推送，不重新编译。
+
+- 2026-10-25 截图布局复核：启动品牌组顶部与进度条底部统一20px，GDI+文字使用同一GenericTypographic测绘以消除额外侧向留白。StyleParameterSection共扫描37文件87处调用，DDMA之外21处构造顺序依赖由StylePrimaryGroup既有首帧主题回调补布局（当时标题top22、无标题top4；后续统一标题配方已替代layout标题边距），不加observer/timer；StyleParameterFields不得侵入StructuredFieldView、CodeEditorWidget及专业视口内部。四个Memory ParameterWorkspace页面去掉整页外层滚动，DDMA仍保留专业主体例外并把候选字段从参数grid分离，多动作行复用FlowLayout，ToolbarRowMetrics通过NormalizeToolbarLayout复用到Flow/grid并保留字号变化同高更新。StructuredFieldView工具行按宽度多行重排并保护documentOnly转移；窗口预览的不可用空态不得占固定黑图，失败占位图不得作为成功截图保存。自动列宽保留实际表头尺寸下限及Fixed/手动语义，动态表头只失效headers缓存。覆盖与验证边界见docs/UI布局扫描与修复-20261025.md，GUI仍由用户验收。
+
+- 2026-10-25 分区标题默认值：GroupBoxStyle统一普通/参数/设置/弹窗/详情的卡片内部标题与字号预留；组框layout归零，QSS独占正文padding。独立卡片左右16、标题left16/top10；embedded借外卡16、left0/top0，区内8/参数分区16，无标题top4保留。StylePrimaryGroup已绑定后改变参数角色也要替换同一ThemeBinding回调；字体事件沿现有队列且!m_applying。默认组框可忽略完整共享GLOBAL_DIALOG_THEME/DETAIL_FRAMEWORK根块，但残余业务QSS仍阻止接管。不要再从finish/Fold写layout标题top22/8。热键/钩子的程序快捷键复用唯一WindowGlobalHotkeyTab首显后台枚举，PE Accelerator资源与R0注册热键保持分表，不能用资源填充掩盖驱动失败。详见docs/UI分区标题与热键页面修复-20261025.md；启动法律正文独立legalFont13，其余字号不变。

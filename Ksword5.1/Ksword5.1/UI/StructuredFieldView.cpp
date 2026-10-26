@@ -12,10 +12,10 @@
 #include <QComboBox>
 #include <QEvent>
 #include <QFileDialog>
+#include <QGridLayout>
 #include <QSaveFile>
 #include <QMessageBox>
 #include <QHeaderView>
-#include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMenu>
@@ -281,7 +281,8 @@ namespace ks::ui
         if (m_valueTree) m_valueTree->setObjectName(initialSearchTarget(targetPrefix, InitialSearchText::Name));
     }
 
-    StructuredFieldView::StructuredFieldView(QWidget* parent) : QWidget(parent)
+    StructuredFieldView::StructuredFieldView(QWidget* parent, QWidget* toolbarLeadingWidget)
+        : QWidget(parent), m_toolbarLeadingWidget(toolbarLeadingWidget)
     {
         setMinimumSize(0, 0);
         setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Ignored);
@@ -295,26 +296,28 @@ namespace ks::ui
         m_title->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
         m_title->hide();
         layout->addWidget(m_title);
-        auto* toolbar = new QHBoxLayout;
-        toolbar->setSpacing(6);
+        auto* toolbar = new QGridLayout;
+        m_toolbarLayout = toolbar;
+        toolbar->setContentsMargins(0, 0, 0, 0);
+        toolbar->setHorizontalSpacing(8);
+        toolbar->setVerticalSpacing(8);
         m_search = new QLineEdit(this);
         // 结构属性树搜索是结果过滤，不属于代码编辑器查找/替换输入。
         StyleSearchField(m_search);
         m_search->setClearButtonEnabled(true);
         m_search->setMinimumWidth(0);
         m_search->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
-        toolbar->addWidget(m_search, 1);
         m_style = new QComboBox(this);
         m_style->setSizeAdjustPolicy(QComboBox::AdjustToContents);
+        m_style->setMinimumWidth(0);
+        m_style->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
         m_style->addItem(QString());
         m_style->addItem(QString());
-        toolbar->addWidget(m_style);
         m_copy = new QToolButton(this);
-        toolbar->addWidget(m_copy);
+        m_copy->setMinimumWidth(0);
+        m_copy->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
         m_export = new QToolButton(this);
         m_export->setIcon(QIcon(QStringLiteral(":/Icon/log_export.svg")));
-        toolbar->addWidget(m_export);
-        NormalizeToolbarRow(toolbar);
         layout->addLayout(toolbar);
         m_tree = new QTreeWidget(this);
         m_tree->setColumnCount(2);
@@ -435,8 +438,9 @@ namespace ks::ui
             [this](const QPoint& position) { showValueCopyMenu(position); });
         const auto recordExpansion = [this](const QModelIndex& index, bool expanded)
         {
+            if (m_valueApplying) return; // 程序化回填不记录用户展开，也不借用发布快照。
             const auto displayed = m_valueModel->snapshot();
-            if (!m_valueApplying && displayed && displayed->query.isEmpty())
+            if (displayed && displayed->query.isEmpty())
             {
                 ++m_valueReadingRevision;
                 m_valueExpansion.insert(index.data(KeyRole).toString(), expanded);
@@ -1217,12 +1221,82 @@ namespace ks::ui
             m_style->setItemText(0, initialSearchText(InitialSearchText::Sections));
             m_style->setItemText(1, initialSearchText(InitialSearchText::Tree));
             m_style->setAccessibleName(translated(QStringLiteral("显示样式")));
+            m_style->setToolTip(translated(QStringLiteral("显示样式")));
         }
         m_copy->setText(initialSearchText(InitialSearchText::Copy));
+        m_copy->setToolTip(m_copy->text());
+        updateToolbarLayout();
         if (m_tree)
         {
             m_tree->setHeaderLabels({initialSearchText(InitialSearchText::Name), initialSearchText(InitialSearchText::Value)});
         }
+    }
+
+    void StructuredFieldView::updateToolbarLayout()
+    {
+        if (!m_toolbarLayout || !m_search || !m_style || !m_copy || !m_export || m_documentOnly) return;
+        QWidget* actions[] = {m_toolbarLeadingWidget, m_style, m_copy, m_export};
+        QWidget* controls[] = {m_toolbarLeadingWidget, m_search, m_style, m_copy, m_export};
+        constexpr int spacing = 8;
+
+        QWidget* activeActions[4] = {};
+        int actionWidths[4] = {};
+        int actionCount = 0, actionWidth = 0;
+        for (QWidget* action : actions)
+        {
+            if (!action) continue;
+            activeActions[actionCount] = action;
+            actionWidths[actionCount] = std::max(action->sizeHint().width(), action->minimumSizeHint().width());
+            actionWidth += actionWidths[actionCount++];
+        }
+        const int available = std::max(1, width());
+        const bool compact = width() > 0 && available < 120 + actionWidth + actionCount * spacing;
+        int actionColumns = actionCount;
+        if (compact)
+        {
+            // QGridLayout columns share their widest item across rows. Count
+            // those widths before choosing columns so extreme narrow panes wrap.
+            for (; actionColumns > 1; --actionColumns)
+            {
+                int columnWidths[4] = {};
+                for (int index = 0; index < actionCount; ++index)
+                    columnWidths[index % actionColumns] =
+                        std::max(columnWidths[index % actionColumns], actionWidths[index]);
+                int needed = actionColumns * spacing; // Include the trailing stretch-column gap.
+                for (int column = 0; column < actionColumns; ++column)
+                    needed += columnWidths[column];
+                if (needed <= available) break;
+            }
+        }
+        if (m_toolbarLayout->count() != 0 && compact == m_toolbarCompact &&
+            actionColumns == m_toolbarActionColumns) return;
+        m_toolbarCompact = compact;
+        m_toolbarActionColumns = actionColumns;
+        for (QWidget* control : controls)
+            if (control) m_toolbarLayout->removeWidget(control);
+        for (int column = 0; column < 5; ++column) m_toolbarLayout->setColumnStretch(column, 0);
+        if (compact)
+        {
+            m_toolbarLayout->addWidget(m_search, 0, 0, 1, 5);
+            for (int index = 0; index < actionCount; ++index)
+                m_toolbarLayout->addWidget(activeActions[index],
+                    1 + index / actionColumns, index % actionColumns);
+            m_toolbarLayout->setColumnStretch(4, 1);
+        }
+        else
+        {
+            int column = 0;
+            if (m_toolbarLeadingWidget) m_toolbarLayout->addWidget(m_toolbarLeadingWidget, 0, column++);
+            const int searchColumn = column;
+            m_toolbarLayout->addWidget(m_search, 0, column++);
+            m_toolbarLayout->addWidget(m_style, 0, column++);
+            m_toolbarLayout->addWidget(m_copy, 0, column++);
+            m_toolbarLayout->addWidget(m_export, 0, column);
+            m_toolbarLayout->setColumnStretch(searchColumn, 1);
+        }
+        NormalizeToolbarLayout(m_toolbarLayout);
+        m_toolbarLayout->invalidate();
+        updateGeometry();
     }
 
     void StructuredFieldView::changeEvent(QEvent* event)
@@ -1237,6 +1311,8 @@ namespace ks::ui
             (event->type() == QEvent::FontChange || event->type() == QEvent::ApplicationFontChange ||
                 event->type() == QEvent::PaletteChange || event->type() == QEvent::ApplicationPaletteChange))
         {
+            if (event->type() == QEvent::FontChange || event->type() == QEvent::ApplicationFontChange)
+                updateToolbarLayout();
             if (shouldDeferHiddenTree())
             {
                 m_hiddenTreeLayoutDirty = true;
@@ -1318,6 +1394,7 @@ namespace ks::ui
     void StructuredFieldView::resizeEvent(QResizeEvent* event)
     {
         QWidget::resizeEvent(event);
+        updateToolbarLayout();
         if (m_valueTree) { updateValueColumns(); return; }
         if (m_documentOnly || !m_tree)
         {
