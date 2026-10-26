@@ -505,7 +505,7 @@ private:
     bool paint(HDC target, bool force = false)
     {
         std::wstring status;
-        ks::splash::FooterText footer; // 品牌/版本/日期/作者及版权作为同一份静态页脚数据。
+        ks::splash::SplashText text; // 中央品牌、版本与右下版权作为同一份静态展示数据。
         SplashProgressMode mode;
         unsigned int accentRgb;
         int percent;
@@ -513,14 +513,11 @@ private:
         {
             std::lock_guard<std::mutex> lock(m_stateMutex);
             status = m_status;
-            footer.title = m_title;
-            footer.version = m_version;
-            footer.buildTime = m_buildTime;
-            footer.authors = m_authors;
-            footer.copyright = m_copyright;
+            text.title = m_title;
+            text.version = m_version;
+            text.copyright = m_copyright;
             mode = m_mode;
             accentRgb = m_accentRgb;
-            footer.accentRgb = accentRgb;
             percent = m_percent;
             revision = m_stateRevision;
             staticRevision = m_staticRevision;
@@ -531,21 +528,13 @@ private:
             revision == m_paintedRevision && m_geometryRevision == m_paintedGeometryRevision)
             return true;
 
-        // 原图很宽时信息区整体等比缩小，仍完整留在图内；普通底图只需平移到底部。
-        const float footerScale = std::min(1.0f, m_canvasHeight / ks::splash::FooterHeight);
-        const float footerX = static_cast<float>(kBaseWidth) * (1.0f - footerScale) * 0.5f;
-        const float footerY = m_canvasHeight - ks::splash::FooterHeight * footerScale;
-        const float trackY = m_canvasHeight - kTrackHeight; // 静态轨道、恢复、裁剪与动态填充共用此位置。
-        const Gdiplus::RectF localStatusBounds = ks::splash::statusBounds(static_cast<float>(kBaseWidth));
-        const Gdiplus::RectF statusBounds(footerX + localStatusBounds.X * footerScale,
-            footerY + localStatusBounds.Y * footerScale,
-            localStatusBounds.Width * footerScale, localStatusBounds.Height * footerScale); // 恢复区覆盖同一行的状态与百分比。
+        const float trackY = m_canvasHeight - kTrackHeight; // 轨道始终贴合完整画布底部。
         const bool resized = m_staticSurface.width != m_width || m_staticSurface.height != m_height ||
             m_frame.width != m_width || m_frame.height != m_height;
         if (!m_staticSurface.ensure(m_width, m_height) || !m_frame.ensure(m_width, m_height)) return false;
         const bool rebuildStatic = resized || staticRevision != m_cachedStaticRevision ||
             m_geometryRevision != m_cachedStaticGeometryRevision;
-        const bool redrawStatus = rebuildStatic || force || revision != m_paintedRevision; // 静止动画帧不重复测量或绘制文字。
+        const bool redrawStatus = rebuildStatic || force || status != m_paintedStatus; // 数值进度更新不重复绘制同一字幕。
         if (rebuildStatic)
         {
             // UpdateLayeredWindow requires premultiplied RGB and per-pixel alpha.
@@ -563,12 +552,8 @@ private:
                 static_cast<float>(kBaseWidth), m_canvasHeight),
                 0.0f, 0.0f, static_cast<float>(m_imageWidth), static_cast<float>(m_imageHeight),
                 Gdiplus::UnitPixel);
-            const Gdiplus::GraphicsState footerState = graphics.Save(); // 信息区使用独立、统一的贴底变换。
-            graphics.TranslateTransform(footerX, footerY, Gdiplus::MatrixOrderPrepend);
-            graphics.ScaleTransform(footerScale, footerScale, Gdiplus::MatrixOrderPrepend);
-
-            ks::splash::drawFooter(graphics, static_cast<float>(kBaseWidth), m_logo.get(), footer);
-            graphics.Restore(footerState); // 底轨不随信息区缩窄，始终覆盖完整窗口宽度。
+            m_statusBounds = ks::splash::drawStatic(graphics, static_cast<float>(kBaseWidth),
+                m_canvasHeight, m_logo.get(), text); // 恢复区来自版权实测宽度，避免状态侵入版权。
             Gdiplus::SolidBrush track(Gdiplus::Color(20, 255, 255, 255)); // 全宽细底轨不描窗口外沿。
             graphics.FillRectangle(&track, kTrackX, trackY, kTrackWidth, kTrackHeight);
             graphics.Flush(Gdiplus::FlushIntentionSync);
@@ -584,7 +569,7 @@ private:
             restoreSplashRectangle(m_frame, m_staticSurface,
                 Gdiplus::RectF(kTrackX, trackY, kTrackWidth, kTrackHeight), m_scale);
             if (redrawStatus)
-                restoreSplashRectangle(m_frame, m_staticSurface, statusBounds, m_scale);
+                restoreSplashRectangle(m_frame, m_staticSurface, m_statusBounds, m_scale);
         }
         {
             Gdiplus::Bitmap surface(m_width, m_height, m_width * 4,
@@ -598,16 +583,9 @@ private:
             Gdiplus::SolidBrush indicator(Gdiplus::Color(255,
                 static_cast<BYTE>(accentRed), static_cast<BYTE>(accentGreen),
                 static_cast<BYTE>(accentBlue)));
-            // 状态与真实百分比作为一组绘制；不确定模式省略数字，整体仍右对齐。
+            // 底部字幕仅在文字改变或布局重建时绘制；百分比只由进度条表达。
             if (redrawStatus)
-            {
-                const Gdiplus::GraphicsState footerState = graphics.Save();
-                graphics.TranslateTransform(footerX, footerY, Gdiplus::MatrixOrderPrepend);
-                graphics.ScaleTransform(footerScale, footerScale, Gdiplus::MatrixOrderPrepend);
-                ks::splash::drawStatus(graphics, static_cast<float>(kBaseWidth), status,
-                    mode == SplashProgressMode::Determinate, percent);
-                graphics.Restore(footerState);
-            }
+                ks::splash::drawStatus(graphics, m_statusBounds, status);
             graphics.SetClip(Gdiplus::RectF(kTrackX, trackY, kTrackWidth, kTrackHeight));
             if (mode == SplashProgressMode::Indeterminate)
             {
@@ -654,6 +632,8 @@ private:
         {
             m_paintedRevision = revision;
             m_paintedGeometryRevision = m_geometryRevision;
+            if (redrawStatus)
+                m_paintedStatus = status;
         }
         return submitted;
     }
@@ -763,6 +743,8 @@ private:
     std::uint64_t m_stateRevision = 1; // Protected by m_stateMutex.
     std::uint64_t m_staticRevision = 1; // 仅背景/品牌/元信息输入，加载状态由动态组绘制。
     std::uint64_t m_paintedRevision = 0; // Splash UI thread only.
+    std::wstring m_paintedStatus; // 仅UI线程使用，分层提交成功后更新，避免滑动帧重复测量字幕。
+    Gdiplus::RectF m_statusBounds; // 静态排版返回的逻辑区域，已避让右侧版权。
     std::uint64_t m_geometryRevision = 1;
     std::uint64_t m_paintedGeometryRevision = 0;
 

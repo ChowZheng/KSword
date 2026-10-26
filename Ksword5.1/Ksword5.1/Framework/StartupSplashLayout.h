@@ -7,32 +7,23 @@
 #include <Windows.h>
 #include <objidl.h>
 #include <gdiplus.h>
-
 #include <string>
 
 namespace ks::splash
 {
-    // FooterText 只保存当前启动页需要显示的文字；调用方在进入UI线程前完成本地化。
-    struct FooterText final
+    // 静态展示数据只包含新设计实际显示的三项，其余发行资料仍由原公共接口保留。
+    struct SplashText final
     {
-        std::wstring title; // 产品名称由调用方提供，不从版本字符串中解析。
-        std::wstring version; // 原始发行版本，数字与PRE等阶段在页脚分别绘制。
-        std::wstring buildTime; // 已本地化的构建标签、日期与时间。
-        std::wstring authors; // 两位作者沿发行元数据的分隔符传入。
-        std::wstring copyright; // 右侧短版权说明。
-        unsigned int accentRgb = 0x4C8DEBU; // 阶段徽标与主进度共用的RGB强调色。
+        std::wstring title; // 中央粗体产品名称。
+        std::wstring version; // 名称下方的完整发行版本与原始阶段大小写。
+        std::wstring copyright; // 右下角精简版权。
     };
 
-    constexpr float FooterHeight = 270.0f; // 所有页脚坐标均相对这块逻辑区域。
+    // 在完整逻辑画布中绘制中央品牌及版权，返回避让版权后的动态状态恢复区域。
+    Gdiplus::RectF drawStatic(Gdiplus::Graphics& graphics, float width, float height,
+        Gdiplus::Image* logo, const SplashText& text);
 
-    // drawFooter 绘制静态文字与图标；Graphics 应已设置DPI和页脚贴底变换。
-    void drawFooter(Gdiplus::Graphics& graphics, float width, Gdiplus::Image* logo,
-        const FooterText& text);
-
-    // statusBounds 返回页脚局部坐标中的固定动态区域，供调用方恢复静态像素。
-    Gdiplus::RectF statusBounds(float width);
-
-    // drawStatus 只绘制本次状态与真实百分比；不可确定阶段由调用方传入false。
-    void drawStatus(Gdiplus::Graphics& graphics, float width, const std::wstring& status,
-        bool showPercent, int percent);
+    // 状态位于返回区域左侧；缩放、单行省略和可见中心线与静态布局保持一致。
+    void drawStatus(Gdiplus::Graphics& graphics, const Gdiplus::RectF& bounds,
+        const std::wstring& status);
 }

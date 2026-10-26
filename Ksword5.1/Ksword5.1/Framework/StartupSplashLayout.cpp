@@ -1,35 +1,14 @@
 #include "StartupSplashLayout.h"
 
 #include <algorithm>
-#include <cmath>
-#include <utility>
-#include <vector>
 
 namespace ks::splash
 {
     namespace
     {
-        constexpr float kLeft = 44.0f; // 品牌、信息行和窗口右侧采用相同边距。
-        constexpr float kPieceGap = 10.0f; // 信息片段之间只使用固定间距。
-        constexpr float kMetadataBaseline = FooterHeight - 30.0f; // 元信息与版权共用距底30px的基线。
-        constexpr float kGroupGap = 20.0f; // 底部左右两组之间留出明确间隔。
-        constexpr float kBrandRowTop = 128.0f; // 标题、图标和状态共用上行的垂直中心。
-        constexpr float kBrandRowHeight = 68.0f;
-        constexpr float kBrandCenter = kBrandRowTop + kBrandRowHeight * 0.5f;
-
-        enum class PieceKind
-        {
-            Text,
-            Badge,
-            Authors
-        };
-
-        // 每个片段的可见文字与绘制角色分开记录，避免在排版中猜测分隔符。
-        struct Piece final
-        {
-            PieceKind kind;
-            std::wstring value;
-        };
+        constexpr float kReferenceWidth = 1600.0f; // 用户设计稿宽度，所有字体与留白按同一尺度缩放。
+        constexpr float kReferenceHeight = 900.0f; // 用户设计稿高度，背景仍由宿主完整等比显示。
+        constexpr float kStatusBandHeight = 44.0f; // 动态状态区域在参考稿中的高度。
 
         // 格式对象在测量与绘制时复用同一排版规则，强制单行且不引入隐式缩排。
         void configureOneLine(Gdiplus::StringFormat& format)
@@ -191,230 +170,116 @@ namespace ks::splash
             return value;
         }
 
-        // 发行版本以数字前缀和阶段后缀组成；仅阶段标签转成大写。
-        std::pair<std::wstring, std::wstring> splitVersion(const std::wstring& raw)
+        // 中央版本是一行连续文本，阶段保留发行元数据原有大小写，不再画PRE徽标。
+        std::wstring versionLabel(const std::wstring& raw)
         {
-            const std::wstring version = oneLine(raw);
-            const size_t suffix = version.find_first_not_of(L"0123456789.");
+            const std::wstring value = oneLine(raw);
+            const size_t suffix = value.find_first_not_of(L"0123456789.");
             if (suffix == 0 || suffix == std::wstring::npos)
-                return {version, {}};
-            std::wstring stage = version.substr(suffix);
-            const size_t first = stage.find_first_not_of(L" -+");
-            stage = first == std::wstring::npos ? std::wstring() : stage.substr(first);
-            for (wchar_t& character : stage)
-                if (character >= L'a' && character <= L'z')
-                    character = static_cast<wchar_t>(character - L'a' + L'A');
-            return {version.substr(0, suffix), stage};
+                return value;
+            const size_t stage = value.find_first_not_of(L" -+", suffix);
+            return stage == std::wstring::npos ? value.substr(0, suffix)
+                : value.substr(0, suffix) + L" " + value.substr(stage);
         }
 
-        // 元信息只按内容和间距分组，不向日期、时间或作者中插入装饰性斜杠。
-        std::vector<Piece> makePieces(const FooterText& text)
+        // 图标缺失时保留既有蓝色回退，但不在背景上增加面板或遮罩。
+        void drawLogoFallback(Gdiplus::Graphics& graphics, const Gdiplus::RectF& bounds)
         {
-            const auto version = splitVersion(text.version);
-            std::vector<Piece> pieces;
-            if (!version.first.empty())
-                pieces.push_back({PieceKind::Text, version.first});
-            if (!version.second.empty())
-                pieces.push_back({PieceKind::Badge, version.second});
-            if (!text.buildTime.empty())
-                pieces.push_back({PieceKind::Text, oneLine(text.buildTime)});
-            if (!text.authors.empty())
-                pieces.push_back({PieceKind::Authors, oneLine(text.authors)});
-            return pieces;
-        }
-
-        // PRE徽标按当前字号的真实字宽加左右各6px，而非为某个版本写死宽度。
-        float pieceWidth(Gdiplus::Graphics& graphics, const Piece& piece,
-            const Gdiplus::Font& font, const Gdiplus::StringFormat& format)
-        {
-            const float width = textWidth(graphics, piece.value, font, format);
-            return piece.kind == PieceKind::Badge ? width + 12.0f : width;
-        }
-
-        // 测量整个元信息行，只有全行超出版权留下的空间才统一降至11px。
-        float piecesWidth(Gdiplus::Graphics& graphics, const std::vector<Piece>& pieces,
-            const Gdiplus::Font& font, const Gdiplus::StringFormat& format)
-        {
-            float width = 0.0f;
-            for (size_t index = 0; index < pieces.size(); ++index)
-            {
-                if (index != 0)
-                    width += kPieceGap;
-                width += pieceWidth(graphics, pieces[index], font, format);
-            }
-            return width;
-        }
-
-        // 缺失Logo的方块与原生页脚保持相同尺寸及轻微内部圆角。
-        void drawLogoFallback(Gdiplus::Graphics& graphics)
-        {
+            const float diameter = std::min(bounds.Width, bounds.Height) * 0.2f;
             Gdiplus::GraphicsPath shape;
-            shape.AddArc(kLeft, 136.0f, 20.0f, 20.0f, 180.0f, 90.0f);
-            shape.AddArc(kLeft + 32.0f, 136.0f, 20.0f, 20.0f, 270.0f, 90.0f);
-            shape.AddArc(kLeft + 32.0f, 168.0f, 20.0f, 20.0f, 0.0f, 90.0f);
-            shape.AddArc(kLeft, 168.0f, 20.0f, 20.0f, 90.0f, 90.0f);
+            shape.AddArc(bounds.X, bounds.Y, diameter, diameter, 180.0f, 90.0f);
+            shape.AddArc(bounds.X + bounds.Width - diameter, bounds.Y,
+                diameter, diameter, 270.0f, 90.0f);
+            shape.AddArc(bounds.X + bounds.Width - diameter, bounds.Y + bounds.Height - diameter,
+                diameter, diameter, 0.0f, 90.0f);
+            shape.AddArc(bounds.X, bounds.Y + bounds.Height - diameter,
+                diameter, diameter, 90.0f, 90.0f);
             shape.CloseFigure();
             Gdiplus::SolidBrush fill(Gdiplus::Color(255, 28, 70, 125));
             graphics.FillPath(&fill, &shape);
         }
 
-        // 标题宽度止于左半区，与右侧状态保留16px安全缝。
-        void drawBrand(Gdiplus::Graphics& graphics, Gdiplus::Image* logo,
-            const std::wstring& title, float width)
+        // 标题和版本使用实际可见字形宽度居中，长外部文本保持单行省略。
+        void drawCenteredLine(Gdiplus::Graphics& graphics, const std::wstring& value,
+            const Gdiplus::Font& font, const Gdiplus::StringFormat& format,
+            const Gdiplus::Brush& brush, float width, float centerY, float margin)
         {
-            if (logo != nullptr)
-                graphics.DrawImage(logo, Gdiplus::RectF(kLeft, 136.0f, 52.0f, 52.0f));
-            else
-                drawLogoFallback(graphics);
-
-            Gdiplus::Font font(L"Segoe UI", 44.0f, Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
-            Gdiplus::StringFormat format(Gdiplus::StringFormat::GenericTypographic());
-            configureOneLine(format);
-            const float titleWidth = std::max(0.0f, width * 0.5f - 16.0f - 112.0f); // 随窗口宽度收缩，而非侵入状态组。
-            const std::wstring visible = ellipsize(graphics, title, font, format, titleWidth);
-            const Gdiplus::GraphicsState state = graphics.Save(); // 保留标题左半区边界，长标题不侵入加载状态。
-            graphics.SetClip(Gdiplus::RectF(112.0f, kBrandRowTop, titleWidth, kBrandRowHeight),
-                Gdiplus::CombineModeIntersect);
-            Gdiplus::SolidBrush brush(Gdiplus::Color(255, 245, 248, 253));
+            const std::wstring visible = ellipsize(graphics, oneLine(value), font, format,
+                std::max(0.0f, width - 2.0f * margin));
+            const float visibleWidth = textWidth(graphics, visible, font, format);
             drawAtVisualCenter(graphics, visible, font, format, brush,
-                112.0f, kBrandCenter);
-            graphics.Restore(state);
+                (width - visibleWidth) * 0.5f, centerY);
         }
     }
 
-    void drawFooter(Gdiplus::Graphics& graphics, float width, Gdiplus::Image* logo,
-        const FooterText& text)
+    Gdiplus::RectF drawStatic(Gdiplus::Graphics& graphics, float width, float height,
+        Gdiplus::Image* logo, const SplashText& text)
     {
-        drawBrand(graphics, logo, oneLine(text.title), width);
-
-        // 元信息和版权属于同一底行，统一字体及基线，版权按实际字宽占据右侧。
+        if (width <= 0.0f || height <= 0.0f)
+            return {};
+        const float scale = std::min(width / kReferenceWidth, height / kReferenceHeight);
+        const float margin = 64.0f * scale; // 左下状态和右下版权采用相同的外边距。
+        const float footerCenter = height - 62.0f * scale;
         Gdiplus::StringFormat format(Gdiplus::StringFormat::GenericTypographic());
         configureOneLine(format);
-        const std::vector<Piece> originalPieces = makePieces(text);
-        const std::wstring rawCopyright = oneLine(text.copyright);
-        const float rightEdge = width - kLeft;
-        const float legalLimit = std::max(0.0f, width * 0.5f - kLeft);
-        float fontSize = 12.5f;
-        Gdiplus::Font normalFont(L"Microsoft YaHei UI", fontSize,
+
+        // 参考稿中央图标位于297/900高度，完整显示原有透明Logo资源。
+        const float logoSize = 168.0f * scale;
+        const Gdiplus::RectF logoBounds((width - logoSize) * 0.5f,
+            height * (297.0f / kReferenceHeight) - logoSize * 0.5f, logoSize, logoSize);
+        if (logo != nullptr)
+            graphics.DrawImage(logo, logoBounds);
+        else
+            drawLogoFallback(graphics, logoBounds);
+
+        // 品牌与版本纵向居中排列；字体和色值取自用户提供的参考布局。
+        Gdiplus::Font titleFont(L"Segoe UI", 88.0f * scale,
+            Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
+        Gdiplus::SolidBrush titleBrush(Gdiplus::Color(255, 241, 243, 245));
+        drawCenteredLine(graphics, text.title, titleFont, format, titleBrush,
+            width, height * (487.5f / kReferenceHeight), margin);
+        Gdiplus::Font versionFont(L"Consolas", 28.0f * scale,
             Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
-        std::wstring compactCopyright = ellipsize(graphics, rawCopyright, normalFont, format, legalLimit);
-        float copyrightWidth = textWidth(graphics, compactCopyright, normalFont, format);
-        float available = std::max(0.0f, rightEdge - kLeft - copyrightWidth -
-            (compactCopyright.empty() ? 0.0f : kGroupGap));
+        Gdiplus::SolidBrush versionBrush(Gdiplus::Color(255, 140, 147, 158));
+        drawCenteredLine(graphics, versionLabel(text.version), versionFont, format, versionBrush,
+            width, height * (578.5f / kReferenceHeight), margin);
 
-        // 首档放不下才对整行统一使用11px；换字号后重新测量左右两组。
-        if (piecesWidth(graphics, originalPieces, normalFont, format) > available)
-            fontSize = 11.0f;
-        Gdiplus::Font font(L"Microsoft YaHei UI", fontSize,
+        // 版权右对齐并与状态共用可见中心线；动态状态区域按其真实宽度避让。
+        Gdiplus::Font copyrightFont(L"Microsoft YaHei UI", 24.0f * scale,
             Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
-        compactCopyright = ellipsize(graphics, rawCopyright, font, format, legalLimit);
-        copyrightWidth = textWidth(graphics, compactCopyright, font, format);
-        available = std::max(0.0f, rightEdge - kLeft - copyrightWidth -
-            (compactCopyright.empty() ? 0.0f : kGroupGap));
-
-        // 优先保留版本、阶段和完整构建信息；最后的作者按剩余空间末尾省略。
-        std::vector<Piece> pieces = originalPieces;
-        if (!pieces.empty() && pieces.back().kind == PieceKind::Authors)
-        {
-            const Piece authors = pieces.back();
-            pieces.pop_back();
-            const float prefixWidth = piecesWidth(graphics, pieces, font, format);
-            const float authorRoom = available - prefixWidth - (pieces.empty() ? 0.0f : kPieceGap);
-            pieces.push_back({PieceKind::Authors,
-                ellipsize(graphics, authors.value, font, format, authorRoom)});
-            if (pieces.back().value.empty())
-            {
-                pieces.pop_back();
-            }
-        }
-
-        // 最后的裁剪保护极端外部版本输入；当前发行字段全宽显示且不侵入右侧版权。
-        const Gdiplus::GraphicsState metadataState = graphics.Save();
-        graphics.SetClip(Gdiplus::RectF(kLeft, 205.0f, available, 49.0f),
-            Gdiplus::CombineModeIntersect);
-        Gdiplus::SolidBrush metadata(Gdiplus::Color(255, 174, 187, 205));
-        const Gdiplus::Color accent(255,
-            static_cast<BYTE>((text.accentRgb >> 16) & 0xffU),
-            static_cast<BYTE>((text.accentRgb >> 8) & 0xffU),
-            static_cast<BYTE>(text.accentRgb & 0xffU));
-        Gdiplus::SolidBrush stageBrush(accent);
-        float x = kLeft;
-        for (size_t index = 0; index < pieces.size(); ++index)
-        {
-            const Piece& piece = pieces[index];
-            const float currentWidth = pieceWidth(graphics, piece, font, format);
-            if (piece.kind == PieceKind::Badge)
-            {
-                Gdiplus::GraphicsPath glyphs; // 标签边框围住实际PRE墨迹，而不是整块字体单元。
-                Gdiplus::RectF ink;
-                const bool measured = textOutline(piece.value, font, format, glyphs, ink);
-                const float inkTop = kMetadataBaseline - fontAscent(font) + (measured ? ink.Y : 0.0f);
-                const float top = inkTop - 3.0f;
-                const float height = (measured ? ink.Height : fontSize) + 6.0f;
-                Gdiplus::Pen border(accent, 0.8f);
-                Gdiplus::GraphicsPath shape;
-                const float diameter = 6.0f;
-                shape.AddArc(x, top, diameter, diameter, 180.0f, 90.0f);
-                shape.AddArc(x + currentWidth - diameter, top, diameter, diameter, 270.0f, 90.0f);
-                shape.AddArc(x + currentWidth - diameter, top + height - diameter,
-                    diameter, diameter, 0.0f, 90.0f);
-                shape.AddArc(x, top + height - diameter, diameter, diameter, 90.0f, 90.0f);
-                shape.CloseFigure();
-                graphics.DrawPath(&border, &shape);
-                drawAtBaseline(graphics, piece.value, font, format, stageBrush,
-                    x + 6.0f, kMetadataBaseline);
-            }
-            else
-            {
-                drawAtBaseline(graphics, piece.value, font, format, metadata,
-                    x, kMetadataBaseline);
-            }
-            x += currentWidth + (index + 1 < pieces.size() ? kPieceGap : 0.0f);
-        }
-        graphics.Restore(metadataState);
-
-        // 版权替代原网站位置，与左侧元信息共用最后一行；不再绘制任何网址。
-        Gdiplus::SolidBrush legal(Gdiplus::Color(255, 153, 168, 188));
-        drawAtBaseline(graphics, compactCopyright, font, format, legal,
-            rightEdge - copyrightWidth, kMetadataBaseline);
+        const std::wstring copyright = ellipsize(graphics, oneLine(text.copyright),
+            copyrightFont, format, width * 0.48f);
+        const float copyrightWidth = textWidth(graphics, copyright, copyrightFont, format);
+        const float copyrightX = width - margin - copyrightWidth;
+        Gdiplus::SolidBrush copyrightBrush(Gdiplus::Color(255, 125, 132, 143));
+        drawAtVisualCenter(graphics, copyright, copyrightFont, format,
+            copyrightBrush, copyrightX, footerCenter);
+        const float statusRight = copyright.empty() ? width - margin : copyrightX - 40.0f * scale;
+        return Gdiplus::RectF(margin, footerCenter - kStatusBandHeight * scale * 0.5f,
+            std::max(0.0f, statusRight - margin), kStatusBandHeight * scale);
     }
 
-    Gdiplus::RectF statusBounds(float width)
+    void drawStatus(Gdiplus::Graphics& graphics, const Gdiplus::RectF& bounds,
+        const std::wstring& status)
     {
-        // 以右半区固定矩形恢复状态与数字，不依赖当前文案的可见宽度。
-        return Gdiplus::RectF(width * 0.5f, kBrandRowTop,
-            std::max(0.0f, width * 0.5f - kLeft), kBrandRowHeight);
-    }
-
-    void drawStatus(Gdiplus::Graphics& graphics, float width,
-        const std::wstring& status, bool showPercent, int percent)
-    {
-        // 百分比仅在确定模式存在；状态与数字同14px常规字体、同前景色，并按真实可见字形与品牌行共用中心。
-        Gdiplus::Font font(L"Microsoft YaHei UI", 14.0f,
+        if (bounds.Width <= 0.0f || bounds.Height <= 0.0f)
+            return;
+        const float scale = bounds.Height / kStatusBandHeight; // 与静态版权共用参考稿尺度。
+        Gdiplus::Font font(L"Microsoft YaHei UI", 26.0f * scale,
             Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
         Gdiplus::StringFormat format(Gdiplus::StringFormat::GenericTypographic());
         configureOneLine(format);
-        const std::wstring percentText = showPercent
-            ? std::to_wstring(std::clamp(percent, 0, 100)) + L"%" : std::wstring();
-        const float percentWidth = textWidth(graphics, percentText, font, format);
-        const float groupLimit = std::max(0.0f, width * 0.5f - kLeft);
-        const float gap = !percentText.empty() && !status.empty() ? kPieceGap : 0.0f;
-        const float statusRoom = std::max(0.0f, groupLimit - percentWidth - gap);
-        const std::wstring visibleStatus = ellipsize(graphics, oneLine(status),
-            font, format, statusRoom);
-        const float statusWidth = textWidth(graphics, visibleStatus, font, format);
-        const float visibleGap = !visibleStatus.empty() && !percentText.empty() ? kPieceGap : 0.0f;
-        float x = width - kLeft - statusWidth - visibleGap - percentWidth;
+        std::wstring label = oneLine(status);
+        if (label.size() >= 3 && label.compare(label.size() - 3, 3, L"...") == 0)
+            label.replace(label.size() - 3, 3, L"\u2026");
+        label = ellipsize(graphics, label, font, format, bounds.Width);
 
-        // 裁剪固定动态区域，使极端长文本不会污染缓存之外的静态像素。
+        // 状态仅左对齐显示操作名称，不额外附加数字百分比或构建/作者信息。
         const Gdiplus::GraphicsState state = graphics.Save();
-        graphics.SetClip(statusBounds(width), Gdiplus::CombineModeIntersect);
-        Gdiplus::SolidBrush statusBrush(Gdiplus::Color(255, 211, 220, 233));
-        drawAtVisualCenter(graphics, visibleStatus, font, format,
-            statusBrush, x, kBrandCenter);
-        x += statusWidth + visibleGap;
-        drawAtVisualCenter(graphics, percentText, font, format,
-            statusBrush, x, kBrandCenter);
+        graphics.SetClip(bounds, Gdiplus::CombineModeIntersect);
+        Gdiplus::SolidBrush brush(Gdiplus::Color(255, 163, 170, 180));
+        drawAtVisualCenter(graphics, label, font, format, brush,
+            bounds.X, bounds.Y + bounds.Height * 0.5f);
         graphics.Restore(state);
     }
 }
