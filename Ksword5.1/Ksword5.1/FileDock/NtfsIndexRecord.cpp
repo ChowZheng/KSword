@@ -137,27 +137,20 @@ namespace ks::files::ntfs
             || !Within(usaOffset, usaCount * 2, length)
             || usaOffset + usaCount * 2 > bytesPerSector - 2)
             return false;
-        const auto updateSequence = Load(bytes, usaOffset, 2);
-        bool allProtected = true;
-        bool allRestored = true;
-        for (std::size_t sector = 0; sector < sectors; ++sector)
+        if (format == RecordFormat::RawDisk)
         {
-            const auto tail = (sector + 1) * bytesPerSector - 2;
-            const auto value = Load(bytes, tail, 2);
-            allProtected = allProtected && value == updateSequence;
-            allRestored = allRestored && value == Load(bytes, usaOffset + (sector + 1) * 2, 2);
+            const auto updateSequence = Load(bytes, usaOffset, 2);
+            for (std::size_t sector = 0; sector < sectors; ++sector)
+            {
+                const auto tail = (sector + 1) * bytesPerSector - 2;
+                if (Load(bytes, tail, 2) != updateSequence) return false;
+                bytes[tail] = bytes[usaOffset + (sector + 1) * 2];
+                bytes[tail + 1] = bytes[usaOffset + (sector + 1) * 2 + 1];
+            }
         }
-        // Filesystem-control output may have been fixed up by NTFS. Accept one
-        // consistent representation for the whole API record, never a mixture.
-        // Raw volume reads always require intact on-disk update sequence tails.
-        if (!allProtected && !(format == RecordFormat::FileSystemControl && allRestored))
-            return false;
-        for (std::size_t sector = 0; sector < sectors; ++sector)
-        {
-            const auto tail = (sector + 1) * bytesPerSector - 2;
-            bytes[tail] = bytes[usaOffset + (sector + 1) * 2];
-            bytes[tail + 1] = bytes[usaOffset + (sector + 1) * 2 + 1];
-        }
+        // FSCTL returns NTFS's logical, already-fixed-up cache record. Its tail
+        // bytes can change after fixup without updating the old USA array. Keep
+        // that content, even when a logical tail happens to equal the USN word.
 
         ParsedRecord parsed;
         parsed.reference = (Load(bytes, 16, 2) << 48) | recordIndex;
@@ -351,12 +344,15 @@ namespace ks::files::ntfs
         if (!ParseRecord(input, length, bytesPerSector, 0, record, format) || !record.inUse)
             return false;
         std::vector<std::byte> bytes(input, input + length);
-        const auto usa = static_cast<std::size_t>(Load(bytes, 4, 2));
-        for (std::size_t sector = 0; sector < length / bytesPerSector; ++sector)
+        if (format == RecordFormat::RawDisk)
         {
-            const auto tail = (sector + 1) * bytesPerSector - 2;
-            bytes[tail] = bytes[usa + (sector + 1) * 2];
-            bytes[tail + 1] = bytes[usa + (sector + 1) * 2 + 1];
+            const auto usa = static_cast<std::size_t>(Load(bytes, 4, 2));
+            for (std::size_t sector = 0; sector < length / bytesPerSector; ++sector)
+            {
+                const auto tail = (sector + 1) * bytesPerSector - 2;
+                bytes[tail] = bytes[usa + (sector + 1) * 2];
+                bytes[tail + 1] = bytes[usa + (sector + 1) * 2 + 1];
+            }
         }
         std::vector<MftStreamPart> foundParts;
         std::vector<MftStreamPart> foundAttributeListParts;

@@ -101,6 +101,12 @@ RecordResult readRecord(Volume& volume, quint64 index, Bytes& bytes, QString& er
     const auto record = simulation.records.find(index);
     if (record == simulation.records.end()) return RecordResult::Missing;
     bytes = record->second;
+    const auto usa = static_cast<std::size_t>(static_cast<unsigned>(bytes.at(4))
+        | (static_cast<unsigned>(bytes.at(5)) << 8));
+    for (std::size_t sector = 0; sector < bytes.size() / 512; ++sector) {
+        bytes[(sector + 1) * 512 - 2] = bytes.at(usa + (sector + 1) * 2);
+        bytes[(sector + 1) * 512 - 1] = bytes.at(usa + (sector + 1) * 2 + 1);
+    }
     return RecordResult::Present;
 }
 bool queryJournal(Volume& volume, USN_JOURNAL_DATA_V0& journal, DWORD& code)

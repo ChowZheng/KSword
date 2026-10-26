@@ -97,6 +97,18 @@ static Bytes Record(const std::vector<Bytes>& attributes, unsigned flags = 1)
     return b;
 }
 
+static Bytes FsctlRecord(Bytes bytes)
+{
+    const auto usa = static_cast<std::size_t>(static_cast<unsigned>(bytes.at(4))
+        | (static_cast<unsigned>(bytes.at(5)) << 8));
+    for (std::size_t sector = 0; sector < bytes.size() / 512; ++sector)
+    {
+        bytes[(sector + 1) * 512 - 2] = bytes.at(usa + (sector + 1) * 2);
+        bytes[(sector + 1) * 512 - 1] = bytes.at(usa + (sector + 1) * 2 + 1);
+    }
+    return bytes;
+}
+
 int main()
 {
     ParsedRecord parsed;
@@ -324,11 +336,43 @@ int main()
     assert(!ParseRecord(restored.data(), restored.size(), 512, 1, parsed));
     assert(ParseRecord(restored.data(), restored.size(), 512, 1, parsed, RecordFormat::FileSystemControl));
     assert(parsed.names.size() == 1 && parsed.names[0].name == longName);
-    auto mixed = restored;
-    Put(mixed, 1022, 0xa55a, 2);
-    assert(!ParseRecord(mixed.data(), mixed.size(), 512, 1, parsed, RecordFormat::FileSystemControl));
-    restored[1022] = std::byte{1};
-    assert(!ParseRecord(restored.data(), restored.size(), 512, 1, parsed, RecordFormat::FileSystemControl));
+    auto cachedData = FsctlRecord(Record({Resident(0x80, Bytes(700))}));
+    Put(cachedData, 510, 0x4243, 2); // Legal resident payload changed after fixup.
+    const auto unchangedInput = cachedData;
+    assert(!ParseRecord(cachedData.data(), cachedData.size(), 512, 1, parsed));
+    assert(ParseRecord(cachedData.data(), cachedData.size(), 512, 1, parsed, RecordFormat::FileSystemControl));
+    assert(parsed.sizeKnown && parsed.logicalBytes == 700 && cachedData == unchangedInput);
+    Put(cachedData, 60, 0xfffffff8U, 4); // API format still rejects malformed attribute lengths.
+    assert(!ParseRecord(cachedData.data(), cachedData.size(), 512, 1, parsed, RecordFormat::FileSystemControl));
+
+    auto cachedName = restored;
+    Put(cachedName, 510, u'新', 2); // FILE_NAME character 182 straddles a sector tail.
+    auto updatedName = longName; updatedName[182] = u'新';
+    assert(!ParseRecord(cachedName.data(), cachedName.size(), 512, 1, parsed));
+    assert(ParseRecord(cachedName.data(), cachedName.size(), 512, 1, parsed, RecordFormat::FileSystemControl));
+    assert(parsed.names.size() == 1 && parsed.names[0].name == updatedName);
+    // Both logical tails may happen to equal the update-sequence marker. The
+    // FSCTL entry must still preserve them rather than restoring old characters.
+    Put(cachedName, 510, 0xa55a, 2); Put(cachedName, 1022, 0xa55a, 2);
+    updatedName[182] = static_cast<char16_t>(0xa55a);
+    assert(ParseRecord(cachedName.data(), cachedName.size(), 512, 1, parsed, RecordFormat::FileSystemControl));
+    assert(parsed.names[0].name == updatedName);
+
+    auto cachedMappingAttribute = Nonresident();
+    cachedMappingAttribute.resize(80); Put(cachedMappingAttribute, 4, 80, 4);
+    Put(cachedMappingAttribute, 32, 68, 2);
+    Put(cachedMappingAttribute, 64, 0, 4);
+    Put(cachedMappingAttribute, 68, 0x31, 1); Put(cachedMappingAttribute, 69, 4, 1);
+    Put(cachedMappingAttribute, 70, 20, 3); Put(cachedMappingAttribute, 73, 0, 1);
+    // The LCN starts at absolute offset 510, behind a harmless resident attr.
+    auto cachedMapping = FsctlRecord(Record({Resident(0x70, Bytes(360)), cachedMappingAttribute}));
+    Put(cachedMapping, 510, 30, 2);
+    assert(!ParseMftStreamParts(cachedMapping.data(), cachedMapping.size(), 512, parts, refs));
+    assert(ParseMftStreamParts(cachedMapping.data(), cachedMapping.size(), 512, parts, refs, RecordFormat::FileSystemControl));
+    assert(parts.size() == 1 && parts[0].extents[0].startLcn == 30);
+    Put(cachedMapping, 510, 0xa55a, 2); Put(cachedMapping, 1022, 0xa55a, 2);
+    assert(ParseMftStreamParts(cachedMapping.data(), cachedMapping.size(), 512, parts, refs, RecordFormat::FileSystemControl));
+    assert(parts[0].extents[0].startLcn == 0xa55a); // Never overwrite an API mapping tail.
     b = Record({Nonresident()});
     for (unsigned sector = 0; sector < 2; ++sector)
     {

@@ -81,6 +81,16 @@ static Bytes record(std::initializer_list<Bytes> attributes, unsigned flags = 1,
     }
     return result;
 }
+static Bytes fsctlRecord(Bytes bytes) {
+    const auto usa = static_cast<std::size_t>(static_cast<unsigned>(bytes.at(4))
+        | (static_cast<unsigned>(bytes.at(5)) << 8));
+    for (std::size_t sector = 0; sector < bytes.size() / 512; ++sector) {
+        bytes[(sector + 1) * 512 - 2] = bytes.at(usa + (sector + 1) * 2);
+        bytes[(sector + 1) * 512 - 1] = bytes.at(usa + (sector + 1) * 2 + 1);
+    }
+    return bytes;
+}
+
 static Bytes file(const std::u16string& name, unsigned size = 17) {
     Bytes filename(66 + name.size() * 2);
     put(filename, 0, (std::uint64_t{1} << 48) | 5, 8);
@@ -95,7 +105,7 @@ struct Simulation {
     std::uint64_t offset = 0;
     DWORD error = 0, journalError = 0;
     bool journal = false, metadataChanges = false, mappingChanges = false, shortRead = false;
-    bool enforceAlignment = true;
+    bool enforceAlignment = true, cachedTailChanges = false;
     unsigned opens = 0, closes = 0, mappingReads = 0, listReads = 0;
     std::int64_t nextUsn = 100;
     std::vector<std::uint64_t> dirty;
@@ -152,7 +162,8 @@ static int DeviceIoControl(HANDLE, DWORD code, void* input, DWORD, void* output,
         const auto index = std::uint64_t(static_cast<NTFS_FILE_RECORD_INPUT_BUFFER*>(input)->FileReferenceNumber.QuadPart);
         auto found = state.records.find(index);
         if (found == state.records.end()) { state.error = ERROR_FILE_NOT_FOUND; return FALSE; }
-        Bytes bytes = found->second;
+        Bytes bytes = fsctlRecord(found->second);
+        if (index == 6 && state.cachedTailChanges) put(bytes, 510, u'新', 2);
         if (index == 0) {
             ++state.mappingReads;
             if (state.mappingReads > 1 && state.metadataChanges) put(bytes, 8, 991, 8); // FILE LSN only.
@@ -238,6 +249,21 @@ int main(int argc, char** argv) {
             const auto result = build(state);
             check(result->complete && Index::fullPath(*result, fileReference) == QStringLiteral("C:\\alpha.txt"),
                 "fragmented 512e MFT reads used an unaligned interior buffer");
+        }
+        {
+            Simulation state; state.seed(); state.journal = true;
+            const std::u16string name(230, u'文');
+            state.records[6] = file(name);
+            std::copy(state.records[6].begin(), state.records[6].end(), state.storage.begin() + 20 * 4096 + 6 * 1024);
+            const auto previous = build(state);
+            check(previous->complete, "cached-tail test baseline failed");
+            state.cachedTailChanges = true; state.nextUsn = 200; state.dirty = {fileReference};
+            const auto updated = Index::refresh(previous);
+            auto changedName = name; changedName[182] = u'新';
+            check(updated->complete && updated->entries.value(fileReference).name == QString::fromStdU16String(changedName),
+                "FSCTL cache tail content was rejected or replaced by an old USA word");
+            check(previous->entries.value(fileReference).name == QString::fromStdU16String(name),
+                "cached-tail refresh mutated its previous snapshot");
         }
         {
             Simulation state; state.seed(); state.mappingChanges = true;

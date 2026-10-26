@@ -24,6 +24,7 @@ def main() -> None:
     parser.add_argument('--qt-root', type=Path, default=Path('/usr'))
     parser.add_argument('--cxx', default=shutil.which('cl' if os.name == 'nt' else 'c++'))
     parser.add_argument('--source-ref')
+    parser.add_argument('--record-source-ref', help='Old record parser for the fixed-up cache-tail negative control')
     parser.add_argument('--scenario', choices=('all', 'metadata', 'attribute-list'), default='all')
     parser.add_argument('--sanitize', action='store_true')
     args = parser.parse_args()
@@ -46,18 +47,23 @@ def main() -> None:
         source = work / 'test.cpp'
         source.write_text(fixture.replace(marker, production), encoding='utf-8')
         binary = work / ('ntfs_backend.exe' if os.name == 'nt' else 'ntfs_backend')
+        record_source = APP / 'NtfsIndexRecord.cpp'
+        if args.record_source_ref:
+            record_source = work / 'NtfsIndexRecord.cpp'
+            record_source.write_bytes(subprocess.check_output(['git', 'show',
+                f'{args.record_source_ref}:Ksword5.1/Ksword5.1/FileDock/NtfsIndexRecord.cpp'], cwd=ROOT))
         paths = [APP, include, include / 'QtCore']
         if os.name == 'nt':
             if args.sanitize:
                 parser.error('--sanitize requires GNU/Clang')
             command = [args.cxx, '/nologo', '/std:c++20', '/permissive-', '/Zc:__cplusplus', '/utf-8', '/EHsc', '/MD', '/DNOMINMAX',
-                       *('/I' + str(p) for p in paths), str(source), str(APP / 'NtfsIndexRecord.cpp'), '/Fe:' + str(binary),
+                       *('/I' + str(p) for p in paths), str(source), str(record_source), '/Fe:' + str(binary),
                        '/link', '/LIBPATH:' + str(args.qt_root / 'lib'), 'Qt6Core.lib']
         else:
             libraries = [args.qt_root / 'lib', *sorted((args.qt_root / 'lib').glob('*-linux-gnu'))]
             command = [args.cxx, '-std=c++20', '-O1', '-g', '-Wall', '-Wextra', '-Werror', '-fPIC',
                        *('-I' + str(p) for p in paths), *('-L' + str(p) for p in libraries if p.is_dir()),
-                       str(source), str(APP / 'NtfsIndexRecord.cpp'), '-l:libQt6Core.so.6', '-o', str(binary)]
+                       str(source), str(record_source), '-l:libQt6Core.so.6', '-o', str(binary)]
             if args.sanitize:
                 command += ['-fsanitize=address,undefined', '-fno-omit-frame-pointer']
         subprocess.run(command, cwd=work, check=True, timeout=120)

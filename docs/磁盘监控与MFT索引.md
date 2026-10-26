@@ -73,6 +73,8 @@ python tools/i18n_language_pack.py audit --source-root Ksword5.1/Ksword5.1 --zh-
 
 截图中的索引失败有实际后端原因：原实现拒绝 `$MFT` 非驻留属性列表，且把整条 FILE 记录字节相等作为布局稳定条件。现在读取完整有界属性列表并比较实际映射/身份；保留真实 Win32 错误。raw 读取还使用对齐缓冲，并处理碎片化映射中后续 extent 的目标地址对齐，避免卷句柄隐式 noncached 时返回无效参数。
 
+真实 Windows NTFS 卷进一步暴露了首次 USN 刷新的记录校验缺陷：`FSCTL_GET_NTFS_FILE_RECORD` 已返回经过 NTFS 恢复的逻辑记录，缓存写入后 sector tail 不必等于旧 USA 数组。解析器现在保留这类逻辑字节，只有原始磁盘记录才校验并恢复 USA；MFT 映射提取遵循同一格式边界。回归覆盖跨 sector 的文件名、runlist，以及逻辑尾字节恰好等于保护标记的情况，防止二次恢复悄悄改写有效内容。
+
 磁盘页不再把三块结果挤在同一竖分隔器中，也不再用全宽 checked 按钮作为标题；活动、日志、卷队列各有适合自身的工具面和表格操作。采样、过滤、选择、日志留存和队列数值口径保持原语义。MFT 页共同状态、Tab、独立工具行与表格槽由共享入口负责，索引失败有重试和明确依赖说明，异步取消不再把旧空间图和新目录身份混用。
 
 后续可重复验证：
@@ -82,6 +84,6 @@ python tools/test_ntfs_backend_io.py --qt-root "$KSWORD_QT_DIR"
 python tools/run_shared_ui_regressions.py --qt-root "$KSWORD_QT_DIR"
 ```
 
-完整后端受控 I/O 回归使用实际 FastIndex/Record TU，仅替换 Win32 I/O，覆盖29项与ASan/UBSan；两个旧版负控分别复现属性列表拒绝与 LSN 误判。解析器另有5000组突变和32场景 USN 回归。
+完整后端受控 I/O 回归使用实际 FastIndex/Record TU，仅替换 Win32 I/O，覆盖33项；旧版负控分别复现属性列表拒绝、LSN 误判和 FSCTL 缓存尾字节处理错误。解析器另有5000组突变及 ASan/UBSan 检查，USN 回归有32个场景。
 
 Windows CI 从 HostX64 环境调用 `tools/test_ntfs_volume_integration.ps1 -QtRoot <Qt根目录>`：只在唯一新建、经过映射身份检查的128MiB临时VHD上创建NTFS和测试Journal，执行真实生产索引器的建索引、扫描期间变化、硬链接、空间计量、USN改名/写入/删除与取消恢复。C++进一步拒绝系统卷和重解析工作目录，脚本在 finally 卸载并清理自己的镜像。生产索引器仍为只读。这一自动化不代替用户现场卷、ETW采集、实际多屏/DPI或完整产品GUI验收。
