@@ -70,7 +70,7 @@ void SettingsDock::initializeStartupSplashSection(QVBoxLayout* layout)
     ks::ui::NormalizeToolbarRow(previewToolbar);
     content->addLayout(previewToolbar);
     m_startupSplashPreview = new ks::ui::StartupSplashPreview(section);
-    content->addWidget(m_startupSplashPreview, 0, Qt::AlignHCenter);
+    content->addWidget(m_startupSplashPreview, 0, Qt::AlignHCenter | Qt::AlignTop);
     connect(refreshPreview, &QToolButton::clicked, m_startupSplashPreview, &ks::ui::StartupSplashPreview::refresh);
 
     ks::settings::ui::Section(section);

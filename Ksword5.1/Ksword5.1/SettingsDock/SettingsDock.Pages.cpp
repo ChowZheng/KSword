@@ -80,6 +80,15 @@ void SettingsDock::initializeStartupTab()
     m_startupTab = new QWidget(m_tabWidget);
     auto* startupRootLayout = new QVBoxLayout(m_startupTab);
     ks::ui::StyleSecondaryContentLayout(startupRootLayout);
+    // 宽窗把启动行为和启动图/预览并列，窄窗由共享组件纵排，不把图像推到整页下方。
+    auto* behaviorColumn = new QWidget(m_startupTab);
+    auto* behaviorLayout = new QVBoxLayout(behaviorColumn);
+    behaviorLayout->setContentsMargins(0, 0, 0, 0);
+    behaviorLayout->setSpacing(20);
+    auto* splashColumn = new QWidget(m_startupTab);
+    auto* splashLayout = new QVBoxLayout(splashColumn);
+    splashLayout->setContentsMargins(0, 0, 0, 0);
+    splashLayout->setSpacing(20);
     auto& languageManager = ks::i18n::LanguageManager::instance();
     // ===== 启动行为分组 =====
     QGroupBox* startupGroupBox = new QGroupBox(QStringLiteral("启动行为"), m_startupTab);
@@ -222,9 +231,10 @@ void SettingsDock::initializeStartupTab()
     startupForm->addRow(QString(), m_startupWindowScaleHintLabel);
 
     ks::settings::ui::Section(startupGroupBox);
-    startupRootLayout->addWidget(startupGroupBox);
-    initializeStartupSplashSection(startupRootLayout);
-    startupRootLayout->setSpacing(20); // 分区留白大于区内行距，沿用外观页分区密度。
+    behaviorLayout->addWidget(startupGroupBox);
+    initializeStartupSplashSection(splashLayout);
+    startupRootLayout->addWidget(ks::ui::CreateSecondaryColumns(
+        behaviorColumn, splashColumn, m_startupTab, 900, 1, 1));
     startupRootLayout->addStretch();
 
     m_startupTab = ks::settings::ui::ScrollPage(m_startupTab);

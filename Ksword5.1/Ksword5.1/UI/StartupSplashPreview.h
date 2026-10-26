@@ -23,11 +23,13 @@ namespace ks::ui
         // 仅显示缓存；选择、语言或DPI变化才异步生成一次图片，缩放不重做解码。
         bool event(QEvent* event) override;
         void paintEvent(QPaintEvent* event) override;
+        void resizeEvent(QResizeEvent* event) override;
         void showEvent(QShowEvent* event) override;
         void changeEvent(QEvent* event) override;
 
     private:
         class Impl;
+        void syncPreviewHeight(); // 只同步本控件的自然高度，避免滚动页将画布压扁或居中到视口外。
         std::unique_ptr<Impl> m_impl; // 拥有本预览的异步状态和唯一图像缓存。
     };
 }

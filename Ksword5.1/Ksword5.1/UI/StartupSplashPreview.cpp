@@ -9,6 +9,7 @@
 #include <QFutureWatcher>
 #include <QImage>
 #include <QPainter>
+#include <QResizeEvent>
 #include <QShowEvent>
 #include <QTimer>
 #include <QtConcurrent/QtConcurrentRun>
@@ -106,6 +107,7 @@ namespace ks::ui
                     m_image = result.image;
                     m_renderedRevision = result.revision;
                     m_failed = m_image.isNull();
+                    m_owner.syncPreviewHeight();
                     m_owner.updateGeometry();
                     m_owner.update();
                 }
@@ -185,6 +187,7 @@ namespace ks::ui
         QSizePolicy policy(QSizePolicy::Expanding, QSizePolicy::Preferred);
         policy.setHeightForWidth(true);
         setSizePolicy(policy);
+        syncPreviewHeight(); // 首次显示前就提供非零画布，加载/错误状态同样可见。
     }
     StartupSplashPreview::~StartupSplashPreview() = default;
 
@@ -207,12 +210,21 @@ namespace ks::ui
     }
     QSize StartupSplashPreview::minimumSizeHint() const
     {
-        return QSize(0, 0);
+        return QSize(0, heightForWidth(qMax(1, width())));
     }
     int StartupSplashPreview::heightForWidth(int width) const
     {
         const QSize source = m_impl->m_image.isNull() ? QSize(832, 468) : m_impl->m_image.size();
-        return qRound(static_cast<qreal>(qMax(0, width)) * source.height() / source.width());
+        // 父布局可能按整页宽度询问；预览最多832宽，不能据此制造额外高度。
+        const int fittedWidth = qBound(0, width, maximumWidth());
+        return qRound(static_cast<qreal>(fittedWidth) * source.height() / source.width());
+    }
+
+    void StartupSplashPreview::syncPreviewHeight()
+    {
+        const int measured = heightForWidth(qMax(1, width())); // 高度来自实际分配宽度，窄窗仍可横向收缩。
+        if (minimumHeight() != measured || maximumHeight() != measured)
+            setFixedHeight(measured); // 值相同不重复改几何，避免resize/layout互相排队。
     }
 
     bool StartupSplashPreview::event(QEvent* event)
@@ -243,9 +255,16 @@ namespace ks::ui
         painter.drawText(rect().adjusted(12, 12, -12, -12), Qt::AlignCenter | Qt::TextWordWrap, label);
     }
 
+    void StartupSplashPreview::resizeEvent(QResizeEvent* event)
+    {
+        QWidget::resizeEvent(event);
+        syncPreviewHeight(); // 缩放只改变显示矩形，不重新解码或启动绘图任务。
+    }
+
     void StartupSplashPreview::showEvent(QShowEvent* event)
     {
         QWidget::showEvent(event);
+        syncPreviewHeight();
         m_impl->schedule();
     }
     void StartupSplashPreview::changeEvent(QEvent* event)
