@@ -38,6 +38,11 @@ def generated_source(taskbar: str, hud: str) -> str:
         return result
 
     replacements = {
+        "@@INPUT_TRACKER@@": extract_class(taskbar, "PageEntryInputTracker") if "class PageEntryInputTracker final" in taskbar else "",
+        "@@INPUT_ACCESSOR@@": ("static PageEntryInputTracker* pageEntryInputTracker() {" +
+            body(taskbar, r"PageEntryInputTracker\*\s+pageEntryInputTracker") + "}") if "class PageEntryInputTracker final" in taskbar else "",
+        "@@INPUT_FILTER@@": ("bool PageEntryInputTracker::eventFilter(QObject* watched, QEvent* event) {" +
+            body(taskbar, r"PageEntryInputTracker::eventFilter") + "}") if "class PageEntryInputTracker final" in taskbar else "",
         "@@ENTRY@@": extract_class(taskbar, "PageEntry"),
         "@@RAINBOW@@": body(taskbar, r"QColor\s+rainbow"),
         "@@SPARKLINE@@": extract_class(hud, "CpuCoreSparklineWidget"),
@@ -83,6 +88,8 @@ def generated_source(taskbar: str, hud: str) -> str:
 
 FIXTURE = r'''
 #include <QApplication>
+#include <QDialog>
+#include <QKeyEvent>
 #include <QFocusEvent>
 #include <QGridLayout>
 #include <QHideEvent>
@@ -100,6 +107,7 @@ FIXTURE = r'''
 #include <QShowEvent>
 #include <QStackedWidget>
 #include <QStyleFactory>
+#include <QStyleOption>
 #include <QTimer>
 #include <QVariantAnimation>
 #include <QVBoxLayout>
@@ -123,7 +131,10 @@ static void check(bool ok, const char* message) {
 static void flush() { for (int i = 0; i < 6; ++i) QApplication::processEvents(); }
 static void waitForOldCorrection() { QTest::qWait(110); flush(); }
 static QColor rainbow(qreal hue, int alpha = 255) { @@RAINBOW@@ }
+@@INPUT_TRACKER@@
+@@INPUT_ACCESSOR@@
 @@ENTRY@@
+@@INPUT_FILTER@@
 static void tick(PageEntry* entry) { @@TICK@@ }
 static void move(QWidget& target, QPoint point) {
     QTest::mouseMove(target.window()->windowHandle(), target.mapTo(target.window(), point), 1);
@@ -186,6 +197,91 @@ static void taskbarInput() {
     check(counter.paints > currentPaints, "Taskbar current route stopped animating");
     entry.current = false; entry.setEnabled(false);
     check(painted(entry) == normal, "Taskbar disabled mouse-focused entry retained highlight");
+}
+static void taskbarAutomaticFocusTransfers() {
+    QWidget host;
+    host.setAutoFillBackground(true);
+    QPalette palette = host.palette(); palette.setColor(QPalette::Window, QColor(13, 18, 28));
+    host.setPalette(palette); host.setFocusPolicy(Qt::StrongFocus); host.resize(560, 220);
+    PageEntry source(QStringLiteral("Source"), QStringLiteral("Root / Source"), 2, &host);
+    PageEntry target(QStringLiteral("Target"), QStringLiteral("Root / Target"), 2, &host);
+    source.setGeometry(12, 12, 220, 25); target.setGeometry(12, 52, 220, 25);
+    QLineEdit previous(&host); previous.setGeometry(12, 110, 200, 30);
+    QWidget::setTabOrder(&previous, &source); QWidget::setTabOrder(&source, &target);
+    host.show(); host.activateWindow(); flush(); host.setFocus(Qt::OtherFocusReason);
+    move(host, QPoint(500, 190));
+    const QColor normalSource = painted(source), normalTarget = painted(target);
+    for (bool hide : {false, true}) {
+        source.show(); source.setEnabled(true); click(source); move(host, QPoint(500, 190));
+        check(source.hasFocus() && !source.isHighlightActive(), "Taskbar transfer source did not retain plain mouse focus");
+        if (hide) source.hide(); else source.setEnabled(false);
+        flush();
+        check(target.hasFocus() && !target.underMouse(), "Taskbar automatic transfer did not reach the untouched entry");
+        check(!target.isHighlightActive() && painted(target) == normalTarget,
+              hide ? "Taskbar hiding a mouse-focused entry lit the untouched next entry"
+                   : "Taskbar disabling a mouse-focused entry lit the untouched next entry");
+    }
+    source.show(); source.setEnabled(true); previous.setFocus(Qt::OtherFocusReason);
+    QTest::keyClick(&previous, Qt::Key_Tab, Qt::NoModifier, 1); flush();
+    check(source.hasFocus() && source.isHighlightActive(), "Taskbar real Tab did not light its entry before mixed transfer");
+    click(source); move(host, QPoint(500, 190)); source.setEnabled(false); flush();
+    check(target.hasFocus() && !target.isHighlightActive() && painted(target) == normalTarget,
+          "Taskbar real Tab then same-focus mouse click left keyboard origin on automatic transfer");
+    source.setEnabled(true); previous.setFocus(Qt::OtherFocusReason);
+    QTest::keyClick(&previous, Qt::Key_Tab, Qt::NoModifier, 1); flush();
+    source.setEnabled(false); flush();
+    check(target.hasFocus() && target.isHighlightActive(), "Taskbar keyboard automatic transfer lost its genuine cue");
+    click(target); move(host, QPoint(500, 190));
+    for (const int key : {Qt::Key_Control, Qt::Key_Shift, Qt::Key_Alt, Qt::Key_Meta, Qt::Key_AltGr}) {
+        if (key == Qt::Key_AltGr) {
+            // QtTest's ASCII mapping does not support AltGr on this Qt version.
+            QKeyEvent press(QEvent::KeyPress, key, Qt::NoModifier);
+            QKeyEvent release(QEvent::KeyRelease, key, Qt::NoModifier);
+            QApplication::sendEvent(&target, &press); QApplication::sendEvent(&target, &release);
+        } else QTest::keyClick(&target, Qt::Key(key), Qt::NoModifier, 1);
+        flush();
+        check(target.hasFocus() && !target.isHighlightActive() && painted(target) == normalTarget,
+              "Taskbar pure modifier lit an existing mouse-focused entry");
+    }
+    source.setEnabled(true); source.setFocus(Qt::ShortcutFocusReason); flush();
+    check(source.hasFocus() && source.isHighlightActive(), "Taskbar explicit shortcut focus lost its keyboard intent");
+    QDialog dialog(&host);
+    auto* layout = new QVBoxLayout(&dialog);
+    auto* field = new QLineEdit(&dialog); auto* close = new QPushButton(QStringLiteral("Close"), &dialog);
+    layout->addWidget(field); layout->addWidget(close);
+    QObject::connect(close, &QPushButton::clicked, &dialog, &QDialog::close);
+    auto open = [&] {
+        // Complete the host's native leave before switching active windows; the
+        // offscreen platform does not generate cross-window pointer leave events.
+        move(host, QPoint(500, 190));
+        dialog.show(); dialog.activateWindow(); field->setFocus(Qt::ActiveWindowFocusReason); flush();
+    };
+    auto restore = [&] {
+        host.activateWindow(); source.setFocus(Qt::ActiveWindowFocusReason); flush();
+        // A window mouse-click does not advance the offscreen cursor backend.
+        // Move to a different point first, so this is an actual leave transition.
+        move(host, QPoint(450, 170)); move(host, QPoint(500, 190));
+        check(source.hasFocus() && !source.underMouse(), "Taskbar window restoration did not leave actual hover");
+    };
+    QObject::connect(&source, &QPushButton::clicked, &dialog, open);
+    QTest::keyClick(&source, Qt::Key_Space, Qt::NoModifier, 1); flush();
+    check(dialog.isVisible(), "Taskbar actual keyboard activation did not open its window");
+    QTest::mouseClick(close->window()->windowHandle(), Qt::LeftButton, Qt::NoModifier,
+        close->mapTo(close->window(), close->rect().center()), 1); flush();
+    restore();
+    check(!dialog.isVisible() && source.hasFocus() && !source.isHighlightActive() && painted(source) == normalSource,
+          "Taskbar mouse-closing another window restored an old keyboard cue");
+    click(source);
+    check(dialog.isVisible(), "Taskbar actual mouse activation did not open its window");
+    QTest::keyClick(field, Qt::Key_Escape, Qt::NoModifier, 1); flush(); restore();
+    check(!dialog.isVisible() && source.hasFocus() && source.isHighlightActive(),
+          "Taskbar Escape-closing a mouse-opened window lost the actual keyboard cue");
+    open(); dialog.close(); flush(); restore();
+    check(source.hasFocus() && source.isHighlightActive(), "Taskbar programmatic close changed the last real keyboard origin");
+    click(source); dialog.close(); flush(); restore();
+    check(source.hasFocus() && !source.isHighlightActive(), "Taskbar programmatic close changed the last real mouse origin");
+    source.current = true; source.update(); flush();
+    check(painted(source) != normalSource, "Taskbar focus transfers erased the actual current route selection");
 }
 static QColor textPrimaryColor() { return QColor(242, 246, 252); }
 @@SPARKLINE@@
@@ -340,7 +436,7 @@ static void hudTargetLifetime() {
 }
 int main(int argc, char** argv) {
     QApplication app(argc, argv); app.setStyle(QStyleFactory::create(QStringLiteral("Fusion")));
-    taskbarInput(); hudGeometry(); hudLifetime(); hudTargetLifetime();
+    taskbarInput(); taskbarAutomaticFocusTransfers(); hudGeometry(); hudLifetime(); hudTargetLifetime();
     std::printf("COMPANION_UI_DEFAULTS=%s CHECKS=%d FAILURES=%d\n", failures ? "FAIL" : "PASS", checks, failures);
     return failures ? 1 : 0;
 }

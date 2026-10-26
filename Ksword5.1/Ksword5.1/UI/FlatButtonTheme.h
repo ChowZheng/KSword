@@ -12,7 +12,8 @@ class QWidget;
 
 namespace ks::ui
 {
-    // The shared filter records input origin without changing the real Qt focus.
+    // The shared filter follows real application input, including automatic focus
+    // transfers and temporary windows, without changing the real Qt focus.
     inline constexpr char FlatButtonKeyboardFocusProperty[] = "ksword_flat_button_keyboard_focus";
     // Custom-painted abstract buttons opt into input tracking without a QSS owner.
     void TrackFlatButtonKeyboardFocus(QAbstractButton* button);

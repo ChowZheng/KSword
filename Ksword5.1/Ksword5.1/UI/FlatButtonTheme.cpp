@@ -9,6 +9,7 @@
 #include <QHash>
 #include <QEvent>
 #include <QFocusEvent>
+#include <QKeyEvent>
 #include <QPalette>
 #include <QPointer>
 #include <QPushButton>
@@ -401,7 +402,7 @@ namespace
     }
 
     // Dynamic selectors need a local repolish only when input origin changes.
-    // Keep the previous origin while a popup or inactive window temporarily owns focus.
+    // Focus ownership and the last real input source are tracked separately.
     bool setButtonKeyboardFocus(QAbstractButton* button, bool keyboard)
     {
         const QPointer<QAbstractButton> target(button);
@@ -420,6 +421,29 @@ namespace
         return true;
     }
 
+    bool tracksButtonKeyboardFocus(const QAbstractButton* button)
+    {
+        return button && !button->inherits("QLineEditIconButton")
+            && !button->property("ksword_segmented_button").toBool()
+            && (qobject_cast<const QPushButton*>(button) || qobject_cast<const QToolButton*>(button)
+                || button->property(ks::ui::FlatButtonKeyboardFocusProperty).isValid());
+    }
+
+    bool isKeyboardInput(const QKeyEvent* event)
+    {
+        switch (event->key())
+        {
+        case Qt::Key_Shift:
+        case Qt::Key_Control:
+        case Qt::Key_Alt:
+        case Qt::Key_Meta:
+        case Qt::Key_AltGr:
+            return false;
+        default:
+            return true;
+        }
+    }
+
     // 只对明确使用本组件标记的本地/父级样式登记绑定，不猜测未审核业务的动作色。
     class FlatButtonFilter final : public QObject
     {
@@ -431,25 +455,37 @@ namespace
             if (event == nullptr || (event->type() != QEvent::Polish
                 && event->type() != QEvent::Show && event->type() != QEvent::StyleChange
                 && event->type() != QEvent::FocusIn && event->type() != QEvent::KeyPress
+                && event->type() != QEvent::Shortcut
                 && event->type() != QEvent::MouseButtonPress && event->type() != QEvent::MouseButtonDblClick))
             {
                 return false;
             }
-            auto* button = qobject_cast<QAbstractButton*>(object);
-            if (button == nullptr || button->inherits("QLineEditIconButton")
-                || button->property("ksword_segmented_button").toBool())
+            const QPointer<QObject> watched(object);
+            const QPointer<FlatButtonFilter> self(this);
+            const bool pointerInput = event->type() == QEvent::MouseButtonPress
+                || event->type() == QEvent::MouseButtonDblClick;
+            if (pointerInput)
             {
-                return false;
+                m_lastInput = InputSource::Pointer;
+                // A click on an unfocusable surface can leave the old button focused.
+                // It still changes input source, as does a click in another window.
+                auto* focused = qobject_cast<QAbstractButton*>(QApplication::focusWidget());
+                if (tracksButtonKeyboardFocus(focused)) setButtonKeyboardFocus(focused, false);
+                if (!self || !watched) return watched.isNull();
             }
+            else if (event->type() == QEvent::Shortcut)
+            {
+                m_lastInput = InputSource::Keyboard;
+            }
+            else if (event->type() == QEvent::KeyPress)
+            {
+                if (!isKeyboardInput(static_cast<QKeyEvent*>(event))) return false;
+                m_lastInput = InputSource::Keyboard;
+            }
+            auto* button = qobject_cast<QAbstractButton*>(watched.data());
+            if (!tracksButtonKeyboardFocus(button)) return false;
             const bool styledButton = qobject_cast<QPushButton*>(button) || qobject_cast<QToolButton*>(button);
-            if (!styledButton && !button->property(ks::ui::FlatButtonKeyboardFocusProperty).isValid())
-            {
-                return false;
-            }
-            if (event->type() == QEvent::MouseButtonPress || event->type() == QEvent::MouseButtonDblClick)
-            {
-                return !setButtonKeyboardFocus(button, false);
-            }
+            if (pointerInput) return !setButtonKeyboardFocus(button, false);
             if (event->type() == QEvent::KeyPress)
             {
                 return button->hasFocus() && !setButtonKeyboardFocus(button, true);
@@ -457,10 +493,30 @@ namespace
             if (event->type() == QEvent::FocusIn)
             {
                 const Qt::FocusReason reason = static_cast<QFocusEvent*>(event)->reason();
-                const bool restored = reason == Qt::PopupFocusReason || reason == Qt::ActiveWindowFocusReason;
-                const bool keyboard = restored ? button->property(ks::ui::FlatButtonKeyboardFocusProperty).toBool()
-                    : reason == Qt::TabFocusReason || reason == Qt::BacktabFocusReason
-                        || reason == Qt::ShortcutFocusReason || reason == Qt::MenuBarFocusReason;
+                bool keyboard = false;
+                if (reason == Qt::ShortcutFocusReason || reason == Qt::MenuBarFocusReason)
+                {
+                    m_lastInput = InputSource::Keyboard;
+                    keyboard = true;
+                }
+                else if (reason == Qt::TabFocusReason || reason == Qt::BacktabFocusReason)
+                {
+                    // Qt also uses TabFocusReason when hide/disable/delete moves focus.
+                    // Its native flag can remain stale after a same-focus mouse click.
+                    QStyleOption option;
+                    option.initFrom(button);
+                    keyboard = m_lastInput == InputSource::Unknown
+                        ? option.state.testFlag(QStyle::State_KeyboardFocusChange)
+                        : m_lastInput == InputSource::Keyboard;
+                }
+                else if (reason == Qt::PopupFocusReason || reason == Qt::ActiveWindowFocusReason)
+                {
+                    // Programmatic close preserves the source; real input in the
+                    // temporary window replaces it before focus returns here.
+                    keyboard = m_lastInput == InputSource::Unknown
+                        ? button->property(ks::ui::FlatButtonKeyboardFocusProperty).toBool()
+                        : m_lastInput == InputSource::Keyboard;
+                }
                 return !setButtonKeyboardFocus(button, keyboard);
             }
             if (!button->property(ks::ui::FlatButtonKeyboardFocusProperty).isValid()
@@ -541,6 +597,10 @@ namespace
             }
             return false;
         }
+
+    private:
+        enum class InputSource { Unknown, Pointer, Keyboard };
+        InputSource m_lastInput = InputSource::Unknown;
     };
 }
 

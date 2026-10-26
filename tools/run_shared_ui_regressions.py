@@ -16,6 +16,7 @@ import sys
 
 TESTS = (
     ("button focus", "test_button_focus_ui.py", False),
+    ("button theme integration", "test_button_theme_integration_ui.py", False),
     ("toolbar defaults", "test_toolbar_first_frame_ui.py", False),
     ("parameter geometry", "test_parameter_geometry_first_frame_ui.py", False),
     ("secondary forms", "secondary_layout_first_frame_test.py", False),

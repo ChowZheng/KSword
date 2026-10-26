@@ -29,6 +29,7 @@
 #include <QScrollArea>
 #include <QShowEvent>
 #include <QSizeGrip>
+#include <QStyleOption>
 #include <QSlider>
 #include <QTimer>
 #include <QUuid>
@@ -50,12 +51,38 @@ namespace
         return color;
     }
 
+    class PageEntryInputTracker final : public QObject
+    {
+    public:
+        enum class InputSource { Unknown, Pointer, Keyboard };
+        explicit PageEntryInputTracker(QApplication* app) : QObject(app)
+        {
+            app->installEventFilter(this);
+        }
+        InputSource source() const { return m_source; }
+        void noteKeyboardIntent() { m_source = InputSource::Keyboard; }
+    protected:
+        bool eventFilter(QObject* watched, QEvent* event) override;
+    private:
+        InputSource m_source = InputSource::Unknown;
+    };
+
+    PageEntryInputTracker* pageEntryInputTracker()
+    {
+        if (!qApp || QCoreApplication::closingDown()) return nullptr;
+        static QPointer<PageEntryInputTracker> tracker;
+        if (!tracker) tracker = new PageEntryInputTracker(qApp);
+        return tracker.data();
+    }
+
     class PageEntry final : public QPushButton
     {
     public:
         PageEntry(const QString& text, const QString& path, int depth, QWidget* parent)
             : QPushButton(text, parent), searchPath(path), m_depth(depth)
         {
+            pageEntryInputTracker(); // One application-owned source tracker for all entries.
+            setProperty("ksword_taskbar_page_entry", true);
             setToolTip(path);
             setCursor(Qt::PointingHandCursor);
             setFixedHeight(depth < 0 ? 34 : 25);
@@ -85,21 +112,45 @@ namespace
             if (event->type() == QEvent::MouseButtonPress || event->type() == QEvent::MouseButtonDblClick)
                 keyboardFocus = false;
             else if (event->type() == QEvent::KeyPress && hasFocus())
-                keyboardFocus = true;
+            {
+                const int key = static_cast<QKeyEvent*>(event)->key();
+                if (key != Qt::Key_Shift && key != Qt::Key_Control && key != Qt::Key_Alt
+                    && key != Qt::Key_Meta && key != Qt::Key_AltGr)
+                    keyboardFocus = true;
+            }
             else if (event->type() == QEvent::FocusIn)
             {
+                auto* input = pageEntryInputTracker();
                 const auto reason = static_cast<QFocusEvent*>(event)->reason();
-                // Popup/window activation restores the existing input origin. A mouse
-                // click on an already focused item still clears the keyboard cue.
-                if (reason != Qt::PopupFocusReason && reason != Qt::ActiveWindowFocusReason)
-                    keyboardFocus = reason == Qt::TabFocusReason || reason == Qt::BacktabFocusReason
-                        || reason == Qt::ShortcutFocusReason || reason == Qt::MenuBarFocusReason;
+                using InputSource = PageEntryInputTracker::InputSource;
+                const InputSource source = input ? input->source() : InputSource::Unknown;
+                if (reason == Qt::ShortcutFocusReason || reason == Qt::MenuBarFocusReason)
+                {
+                    if (input) input->noteKeyboardIntent();
+                    keyboardFocus = true;
+                }
+                else if (reason == Qt::TabFocusReason || reason == Qt::BacktabFocusReason)
+                {
+                    // Qt also emits TabFocusReason when disabling/hiding the old
+                    // focus widget. Only actual input establishes keyboard origin.
+                    if (source != InputSource::Unknown)
+                        keyboardFocus = source == InputSource::Keyboard;
+                    else
+                    {
+                        QStyleOption option;
+                        option.initFrom(this);
+                        keyboardFocus = option.state.testFlag(QStyle::State_KeyboardFocusChange);
+                    }
+                }
+                else if (reason == Qt::PopupFocusReason || reason == Qt::ActiveWindowFocusReason)
+                {
+                    if (source != InputSource::Unknown)
+                        keyboardFocus = source == InputSource::Keyboard;
+                }
+                else
+                    keyboardFocus = false;
             }
-            if (m_keyboardFocus != keyboardFocus)
-            {
-                m_keyboardFocus = keyboardFocus;
-                update();
-            }
+            setKeyboardFocus(keyboardFocus);
             return QPushButton::event(event);
         }
         void paintEvent(QPaintEvent*) override
@@ -125,9 +176,45 @@ namespace
                 QFontMetrics(textFont).elidedText(text(), Qt::ElideRight, textRect.width()));
         }
     private:
+        friend class PageEntryInputTracker;
+        void setKeyboardFocus(bool keyboardFocus)
+        {
+            if (m_keyboardFocus != keyboardFocus)
+            {
+                m_keyboardFocus = keyboardFocus;
+                update();
+            }
+        }
         bool m_keyboardFocus = false;
         int m_depth; // 一级列标题为 -1，二级页为 1，后续每层缩进。
     };
+
+    bool PageEntryInputTracker::eventFilter(QObject* watched, QEvent* event)
+    {
+        if (event->type() == QEvent::MouseButtonPress || event->type() == QEvent::MouseButtonDblClick)
+        {
+            m_source = InputSource::Pointer;
+            // Same-focus clicks do not send FocusIn. Clear only the previously
+            // focused entry, including a click on another non-focusable control.
+            QWidget* focused = QApplication::focusWidget();
+            if (focused && focused->property("ksword_taskbar_page_entry").toBool())
+            {
+                const QPointer<QObject> target(watched);
+                static_cast<PageEntry*>(focused)->setKeyboardFocus(false);
+                return target.isNull();
+            }
+        }
+        else if (event->type() == QEvent::KeyPress)
+        {
+            const int key = static_cast<QKeyEvent*>(event)->key();
+            if (key != Qt::Key_Shift && key != Qt::Key_Control && key != Qt::Key_Alt
+                && key != Qt::Key_Meta && key != Qt::Key_AltGr)
+                m_source = InputSource::Keyboard;
+        }
+        else if (event->type() == QEvent::Shortcut)
+            m_source = InputSource::Keyboard;
+        return false;
+    }
 
     class PageColumn final : public QWidget
     {
@@ -531,6 +618,8 @@ struct PageOverviewWindow::State
 PageOverviewWindow::PageOverviewWindow(QWidget* owner)
     : QWidget(owner, Qt::Tool | Qt::FramelessWindowHint | Qt::WindowStaysOnTopHint), m_state(std::make_unique<State>())
 {
+    // Observe search/header input before the asynchronous catalog creates entries.
+    pageEntryInputTracker();
     m_state->owner = this;
     m_state->backdrop = std::make_unique<PageOverviewBackdrop>(this);
     setWindowTitle(QStringLiteral("KSword 页面平铺"));

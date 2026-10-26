@@ -208,7 +208,7 @@ void exercise(bool dark, bool tool, ks::ui::FlatButtonTone tone,
         check(!menu.isVisible() && !toolButton->isDown(), "mouse popup did not close and release its pressed state");
         check(background(*button) == normal, "mouse popup restoration kept a sticky hover fill");
         iconMatches(*button, normal);
-        previous.setFocus(Qt::OtherFocusReason); button->setFocus(Qt::TabFocusReason); flush();
+        previous.setFocus(Qt::OtherFocusReason); QTest::keyClick(&previous, Qt::Key_Tab, Qt::NoModifier, 1); flush();
         QTimer::singleShot(0, &menu, &QMenu::close);
         toolButton->showMenu(); flush();
         host.activateWindow(); flush(); button->setFocus(Qt::ActiveWindowFocusReason); flush();
@@ -218,6 +218,67 @@ void exercise(bool dark, bool tool, ks::ui::FlatButtonTone tone,
         check(TryGetFlatButtonBackground(button.get(), QIcon::Normal, QIcon::Off, &recipe) && recipe.rgb() == hover.rgb(),
             "keyboard popup changed the icon contrast recipe");
     }
+}
+
+void inputOriginTransfers(bool dark)
+{
+    using namespace ks::ui;
+    caseName = dark ? QStringLiteral("dark-input-transfers") : QStringLiteral("light-input-transfers");
+    KswordTheme::SetDarkModeEnabled(dark);
+    QWidget host;
+    host.resize(500, 180); host.setFocusPolicy(Qt::StrongFocus);
+    QPushButton first("First", &host), second("Second", &host), third("Third", &host);
+    first.setGeometry(20, 20, 100, 40); second.setGeometry(150, 20, 100, 40); third.setGeometry(280, 20, 100, 40);
+    for (auto* button : {&first, &second, &third})
+        ApplyFlatButtonTheme(button, FlatButtonTone::Neutral, FlatButtonAppearance::Solid);
+    QWidget::setTabOrder(&first, &second); QWidget::setTabOrder(&second, &third);
+    host.show(); host.activateWindow(); flush(); host.setFocus(Qt::OtherFocusReason);
+    move(host, QPoint(450, 150));
+    const QColor firstNormal = background(first), secondNormal = background(second), thirdNormal = background(third);
+    move(first, first.rect().center()); click(first); move(host, QPoint(450, 150));
+    for (Qt::Key modifier : {Qt::Key_Control, Qt::Key_Shift, Qt::Key_Alt, Qt::Key_Meta}) {
+        move(first, first.rect().center()); click(first); move(host, QPoint(450, 150));
+        QTest::keyClick(&first, modifier, Qt::NoModifier, 1); flush();
+        check(first.hasFocus() && !HasFlatButtonKeyboardFocus(&first) && background(first) == firstNormal,
+            "a modifier alone highlighted the mouse-focused button without navigation or activation");
+    }
+    first.setEnabled(false); flush();
+    check(second.hasFocus() && !HasFlatButtonKeyboardFocus(&second) && background(second) == secondNormal,
+        "disabling a mouse-focused button highlighted its untouched focus successor");
+    first.setEnabled(true); first.setFocus(Qt::OtherFocusReason);
+    QTest::keyClick(&first, Qt::Key_Tab, Qt::NoModifier, 1); flush();
+    check(second.hasFocus() && HasFlatButtonKeyboardFocus(&second) && background(second) != secondNormal,
+        "real Tab navigation lost its visible focus after an automatic transfer");
+    // Blank surfaces and temporary windows receive input too; the old focused
+    // button can remain focused without receiving that MouseButtonPress itself.
+    host.setFocusPolicy(Qt::NoFocus);
+    QTest::mouseClick(host.windowHandle(), Qt::LeftButton, Qt::NoModifier, QPoint(450, 150), 1); flush();
+    check(second.hasFocus() && !HasFlatButtonKeyboardFocus(&second) && background(second) == secondNormal,
+        "a click on unfocusable blank space left the old keyboard highlight active");
+    second.setEnabled(false); flush();
+    check(third.hasFocus() && !HasFlatButtonKeyboardFocus(&third) && background(third) == thirdNormal,
+        "automatic focus transfer reused the old native keyboard flag after a blank-space click");
+    second.setEnabled(true); first.setFocus(Qt::OtherFocusReason);
+    QTest::keyClick(&first, Qt::Key_Tab, Qt::NoModifier, 1); flush();
+    move(second, second.rect().center()); click(second); move(host, QPoint(450, 150));
+    second.setEnabled(false); flush();
+    check(third.hasFocus() && !HasFlatButtonKeyboardFocus(&third) && background(third) == thirdNormal,
+        "same-focus mouse activation left stale keyboard origin on the next automatic focus target");
+    second.setEnabled(true); first.setFocus(Qt::OtherFocusReason);
+    QTest::keyClick(&first, Qt::Key_Tab, Qt::NoModifier, 1); flush();
+    QWidget other;
+    other.resize(250, 120);
+    QLineEdit field(&other); field.setGeometry(15, 15, 160, 30);
+    other.show(); other.activateWindow(); flush();
+    move(field, field.rect().center());
+    QTest::mouseClick(other.windowHandle(), Qt::LeftButton, Qt::NoModifier, field.mapTo(&other, field.rect().center()), 1); flush();
+    other.hide(); host.activateWindow(); flush(); second.setFocus(Qt::ActiveWindowFocusReason); flush();
+    move(host, QPoint(450, 150));
+    check(second.hasFocus() && !HasFlatButtonKeyboardFocus(&second) && background(second) == secondNormal,
+        "mouse input in another window restored an obsolete keyboard highlight");
+    second.setEnabled(false); flush();
+    check(third.hasFocus() && !HasFlatButtonKeyboardFocus(&third) && background(third) == thirdNormal,
+        "a cross-window mouse interaction did not govern the next automatic focus transfer");
 }
 
 void settingsDialogRestoration(bool dark)
@@ -241,6 +302,8 @@ void settingsDialogRestoration(bool dark)
     QDialog dialog(&host);
     dialog.resize(220, 100);
     QLineEdit field(&dialog); field.setGeometry(10, 10, 180, 30);
+    QPushButton close("Close", &dialog); close.setGeometry(80, 55, 100, 30);
+    QObject::connect(&close, &QPushButton::clicked, &dialog, &QDialog::close);
     QObject::connect(&gear, &QPushButton::clicked, &dialog, [&] {
         dialog.show(); dialog.raise(); dialog.activateWindow(); field.setFocus(Qt::ActiveWindowFocusReason);
     });
@@ -264,6 +327,18 @@ void settingsDialogRestoration(bool dark)
     check(gear.hasFocus() && background(gear) != normal,
         "closing keyboard-opened settings lost the original keyboard focus hint");
     screenshot(host, QStringLiteral("-keyboard-restored"));
+    QTest::keyClick(&gear, Qt::Key_Space, Qt::NoModifier, 1); flush();
+    move(close, close.rect().center()); click(close); flush();
+    host.activateWindow(); flush(); gear.setFocus(Qt::ActiveWindowFocusReason); flush();
+    move(host, QPoint(300, 110));
+    check(!dialog.isVisible() && gear.hasFocus() && !HasFlatButtonKeyboardFocus(&gear) && background(gear) == normal,
+        "a real mouse close restored the settings action's obsolete keyboard highlight");
+    move(gear, gear.rect().center()); click(gear); flush();
+    QTest::keyClick(&field, Qt::Key_Escape, Qt::NoModifier, 1); flush();
+    host.activateWindow(); flush(); gear.setFocus(Qt::ActiveWindowFocusReason); flush();
+    move(host, QPoint(300, 110));
+    check(!dialog.isVisible() && gear.hasFocus() && HasFlatButtonKeyboardFocus(&gear) && background(gear) != normal,
+        "keyboard closing a mouse-opened settings dialog lost the current keyboard input hint");
 }
 
 void paintedGlyphFocus(bool dark, bool inspector)
@@ -317,6 +392,7 @@ int main(int argc, char** argv)
         exercise(dark, true, FlatButtonTone::Neutral, FlatButtonAppearance::Solid, false);
         exercise(dark, true, FlatButtonTone::Neutral, FlatButtonAppearance::Navigation, false);
         exercise(dark, false, FlatButtonTone::Neutral, FlatButtonAppearance::Auto, true);
+        inputOriginTransfers(dark);
         settingsDialogRestoration(dark);
         paintedGlyphFocus(dark, true);
         paintedGlyphFocus(dark, false);
