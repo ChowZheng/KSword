@@ -27,10 +27,10 @@ namespace
 {
     constexpr wchar_t kWindowClass[] = L"KswordFrameworkSplashWindow";
     // 画布高度跟随原图比例；简洁信息区贴底，外沿方角且底轨与窗口同宽。
-    constexpr int kBaseWidth = 832; // 当前16:9原图对应832×468，比上一版缩小一档。
+    constexpr int kBaseWidth = ks::splash::CanvasWidth; // 与设置预览共用原生画布尺寸。
     constexpr float kTrackX = 0.0f;
     constexpr float kTrackWidth = static_cast<float>(kBaseWidth);
-    constexpr float kTrackHeight = 4.0f; // 加粗底轨与填充，仍使用同一高度计算恢复和裁剪区域。
+    constexpr float kTrackHeight = ks::splash::TrackHeight; // 恢复区与两个宿主的进度共用高度。
     constexpr UINT kShowMessage = WM_APP + 1;
     constexpr UINT kHideMessage = WM_APP + 2;
     constexpr UINT kRedrawMessage = WM_APP + 3;
@@ -376,8 +376,7 @@ private:
         std::wstring path;
         {
             std::lock_guard<std::mutex> lock(m_stateMutex);
-            const wchar_t* builtin = m_background == SplashBackgroundStyle::BlueParticles
-                ? L"StartupWindows.png" : L"StartupLandscape.png"; // 两个选项都从exe旁Style目录读取。
+            const wchar_t* builtin = ks::splash::backgroundFileName(m_background);
             path = m_imagePath.empty() ? splashAssetPath(builtin) : m_imagePath;
         }
         m_image.reset(Gdiplus::Image::FromFile(path.c_str(), FALSE));
@@ -572,14 +571,10 @@ private:
             graphics.ScaleTransform(m_scale, m_scale);
 
             // 直接显示完整原图；目标画布与源图同宽高比，不裁切、不拉伸、不叠加颜色遮罩。
-            graphics.DrawImage(m_image.get(), Gdiplus::RectF(0.0f, 0.0f,
-                static_cast<float>(kBaseWidth), m_canvasHeight),
-                0.0f, 0.0f, static_cast<float>(m_imageWidth), static_cast<float>(m_imageHeight),
-                Gdiplus::UnitPixel);
+            ks::splash::drawBackground(graphics, static_cast<float>(kBaseWidth), m_canvasHeight, *m_image);
             m_statusBounds = ks::splash::drawStatic(graphics, static_cast<float>(kBaseWidth),
                 m_canvasHeight, m_logo.get(), text); // 恢复区来自版权实测宽度，避免状态侵入版权。
-            Gdiplus::SolidBrush track(Gdiplus::Color(20, 255, 255, 255)); // 全宽细底轨不描窗口外沿。
-            graphics.FillRectangle(&track, kTrackX, trackY, kTrackWidth, kTrackHeight);
+            ks::splash::drawTrack(graphics, static_cast<float>(kBaseWidth), m_canvasHeight);
             graphics.Flush(Gdiplus::FlushIntentionSync);
             m_cachedStaticRevision = staticRevision;
             m_cachedStaticGeometryRevision = m_geometryRevision;
@@ -604,9 +599,6 @@ private:
             const int accentRed = static_cast<int>((accentRgb >> 16) & 0xFFU);
             const int accentGreen = static_cast<int>((accentRgb >> 8) & 0xFFU);
             const int accentBlue = static_cast<int>(accentRgb & 0xFFU);
-            Gdiplus::SolidBrush indicator(Gdiplus::Color(255,
-                static_cast<BYTE>(accentRed), static_cast<BYTE>(accentGreen),
-                static_cast<BYTE>(accentBlue)));
             // 底部字幕仅在文字改变或布局重建时绘制；百分比只由进度条表达。
             if (redrawStatus)
                 ks::splash::drawStatus(graphics, m_statusBounds, status);
@@ -636,8 +628,8 @@ private:
             }
             else if (percent > 0)
             {
-                graphics.FillRectangle(&indicator, kTrackX, trackY,
-                    kTrackWidth * percent / 100.0f, kTrackHeight);
+                ks::splash::drawDeterminateProgress(graphics, static_cast<float>(kBaseWidth),
+                    m_canvasHeight, percent, accentRgb);
             }
             graphics.ResetClip();
             graphics.Flush(Gdiplus::FlushIntentionSync);
@@ -764,7 +756,7 @@ private:
     SplashLayoutStyle m_layout = SplashLayoutStyle::VerticalCompact; // 此实例首次显示前固定的排版。
     SplashBackgroundStyle m_background = SplashBackgroundStyle::Code; // 此实例首次显示前固定的内置背景。
     SplashProgressMode m_mode = SplashProgressMode::Determinate;
-    unsigned int m_accentRgb = 0x4C8DEBU; // 默认采用用户指定的进度蓝。
+    unsigned int m_accentRgb = ks::splash::DefaultAccent; // 两个宿主共用默认进度色。
     int m_percent = 0;
     std::uint64_t m_stateRevision = 1; // Protected by m_stateMutex.
     std::uint64_t m_staticRevision = 1; // 仅背景/品牌/元信息输入，加载状态由动态组绘制。

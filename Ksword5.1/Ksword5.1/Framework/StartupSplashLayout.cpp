@@ -273,6 +273,36 @@ namespace ks::splash
 
     }
 
+    const wchar_t* backgroundFileName(SplashBackgroundStyle background)
+    {
+        return background == SplashBackgroundStyle::BlueParticles
+            ? L"StartupWindows.png" : L"StartupLandscape.png";
+    }
+
+    void drawBackground(Gdiplus::Graphics& graphics, float width, float height, Gdiplus::Image& image)
+    {
+        graphics.DrawImage(&image, Gdiplus::RectF(0.0f, 0.0f, width, height),
+            0.0f, 0.0f, static_cast<float>(image.GetWidth()), static_cast<float>(image.GetHeight()),
+            Gdiplus::UnitPixel);
+    }
+
+    void drawTrack(Gdiplus::Graphics& graphics, float width, float height)
+    {
+        Gdiplus::SolidBrush track(Gdiplus::Color(20, 255, 255, 255)); // 8%白色沿用原轨道。
+        graphics.FillRectangle(&track, 0.0f, height - TrackHeight, width, TrackHeight);
+    }
+
+    void drawDeterminateProgress(Gdiplus::Graphics& graphics, float width, float height,
+        int percent, unsigned int accentRgb)
+    {
+        const auto red = static_cast<BYTE>((accentRgb >> 16) & 0xFFU); // 当前进度颜色三通道。
+        const auto green = static_cast<BYTE>((accentRgb >> 8) & 0xFFU);
+        const auto blue = static_cast<BYTE>(accentRgb & 0xFFU);
+        Gdiplus::SolidBrush indicator(Gdiplus::Color(255, red, green, blue));
+        graphics.FillRectangle(&indicator, 0.0f, height - TrackHeight,
+            width * std::clamp(percent, 0, 100) / 100.0f, TrackHeight);
+    }
+
     Gdiplus::RectF drawStatic(Gdiplus::Graphics& graphics, float width, float height,
         Gdiplus::Image* logo, const SplashText& text)
     {

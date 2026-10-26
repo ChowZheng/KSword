@@ -708,6 +708,7 @@
     <ClCompile Include="UI\ThemeColorRemap.cpp" />
     <ClCompile Include="UI\ThemeItemForeground.cpp" />
     <ClCompile Include="UI\ThemePreviewWidget.cpp" />
+    <ClCompile Include="UI\StartupSplashPreview.cpp" />
     <ClCompile Include="UI\ThemeStatusRole.cpp" />
     <ClCompile Include="UI\TableColumnAutoFit.cpp" />
     <ClCompile Include="UI\TableFreezeSupport.cpp" />
@@ -1395,6 +1396,7 @@
     <ClInclude Include="UI\ThemeColorRemap.h" />
     <ClInclude Include="UI\ThemeItemForeground.h" />
     <ClInclude Include="UI\ThemePreviewWidget.h" />
+    <ClInclude Include="UI\StartupSplashPreview.h" />
     <ClInclude Include="UI\ThemeStatusRole.h" />
     <ClInclude Include="UI\ThemedMessageBox.h" />
     <ClInclude Include="SettingsDock\AppearanceSettings.h" />

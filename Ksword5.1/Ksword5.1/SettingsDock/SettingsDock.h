@@ -22,6 +22,7 @@ class CodeEditorWidget;
 namespace ks::ui
 {
     class ThemePreviewWidget;
+    class StartupSplashPreview;
 }
 
 class SettingsDock : public QWidget
@@ -100,6 +101,7 @@ private:
     void initializeLanguageTab();
     void initializeStartupTab();
     void initializeStartupSplashSection(QVBoxLayout* layout); // 使用共享设置分区创建三种布局和两张底图选择。
+    void updateStartupSplashPreview(); // 从待应用下拉选项更新图像，不保存或弹出启动窗口。
     void initializeAppearanceSupplement(QVBoxLayout* appearanceRootLayout);
 
     // initializeFeaturesTab 作用：
@@ -478,9 +480,10 @@ private:
     // m_sliderWheelAdjustCheckBox 作用：设置滚轮是否可直接调值和切换标签页；默认只滚动。
     QCheckBox* m_sliderWheelAdjustCheckBox = nullptr;
 
-    // m_startupWindowScaleSpin 作用：设置下次启动主窗口的缩放百分比（50~200，重启生效）。
     QComboBox* m_startupSplashLayoutCombo = nullptr; // 下次启动使用的布局，itemData保存稳定枚举值。
     QComboBox* m_startupSplashBackgroundCombo = nullptr; // 下次启动使用的内置底图，与布局独立。
+    ks::ui::StartupSplashPreview* m_startupSplashPreview = nullptr; // 当前两个待应用选项的等比预览。
+    // m_startupWindowScaleSpin 作用：设置下次启动主窗口的缩放百分比（50~200，重启生效）。
     QSpinBox* m_startupWindowScaleSpin = nullptr;
 
     // m_startupWindowScaleHintLabel 作用：说明缩放的生效时机与系统缩放的叠加关系。

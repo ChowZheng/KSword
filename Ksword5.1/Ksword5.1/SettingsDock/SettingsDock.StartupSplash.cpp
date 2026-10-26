@@ -1,9 +1,14 @@
 #include "SettingsDock.h"
 #include "SettingsDock.Layout.h"
+#include "../UI/StartupSplashPreview.h"
+#include "../UI/FlatButtonTheme.h"
+#include "../UI/ThemeAccentIcon.h"
+#include "../theme.h"
 
 #include <QComboBox>
 #include <QGroupBox>
 #include <QLabel>
+#include <QToolButton>
 
 // 设置→启动→启动画面：复用SecondaryPageLayout的表单、分区和父页独立滚动。
 void SettingsDock::initializeStartupSplashSection(QVBoxLayout* layout)
@@ -41,11 +46,33 @@ void SettingsDock::initializeStartupSplashSection(QVBoxLayout* layout)
     form->addRow(ks::settings::ui::Label(section,
         QStringLiteral("settings.startup.splash.background.label"), QStringLiteral("底图")), m_startupSplashBackgroundCombo);
 
-    auto* hint = new QLabel(section); // 重启语义直接显示，避免把保存偏好误认为当前进度窗预览。
+    auto* hint = new QLabel(section); // 明确区分待应用预览和下一次实际启动。
     hint->setWordWrap(true);
     language.bindText(hint, QStringLiteral("settings.startup.splash.hint"),
-        QStringLiteral("布局和底图可分别选择，下次启动生效。"));
+        QStringLiteral("预览随选择更新；点击“应用”后，下次启动生效。"));
     content->addWidget(hint);
+
+    // 预览占自然高度，保留原生方角和原始比例；整个启动设置页共用外层纵向滚动。
+    content->addSpacing(8);
+    auto* previewToolbar = new QHBoxLayout();
+    previewToolbar->addWidget(ks::settings::ui::Label(section,
+        QStringLiteral("settings.startup.splash.preview.title"), QStringLiteral("预览")), 1);
+    auto* refreshPreview = new QToolButton(section); // 图片补回后的显式重试入口。
+    refreshPreview->setObjectName(QStringLiteral("startup_splash_preview_refresh"));
+    refreshPreview->setToolButtonStyle(Qt::ToolButtonIconOnly);
+    KswordTheme::ApplyStandardIconButtonMetrics(refreshPreview);
+    ks::ui::ApplyFlatButtonTheme(refreshPreview, ks::ui::FlatButtonTone::Neutral, ks::ui::FlatButtonAppearance::Solid);
+    refreshPreview->setIcon(ks::ui::MakeThemeButtonAccentIcon(
+        QIcon(QStringLiteral(":/Icon/process_refresh.svg")), QColor(), refreshPreview));
+    language.bindText(refreshPreview, QStringLiteral("settings.startup.splash.preview.refresh"), QStringLiteral("刷新预览"));
+    language.bindToolTip(refreshPreview, QStringLiteral("settings.startup.splash.preview.refresh"), QStringLiteral("刷新预览"));
+    previewToolbar->addWidget(refreshPreview);
+    ks::ui::NormalizeToolbarRow(previewToolbar);
+    content->addLayout(previewToolbar);
+    m_startupSplashPreview = new ks::ui::StartupSplashPreview(section);
+    content->addWidget(m_startupSplashPreview, 0, Qt::AlignHCenter);
+    connect(refreshPreview, &QToolButton::clicked, m_startupSplashPreview, &ks::ui::StartupSplashPreview::refresh);
+
     ks::settings::ui::Section(section);
     layout->addWidget(section);
 
@@ -56,4 +83,18 @@ void SettingsDock::initializeStartupSplashSection(QVBoxLayout* layout)
     connect(m_startupSplashBackgroundCombo, QOverload<int>::of(&QComboBox::activated), this, [this](int) {
         markPendingChanges(QStringLiteral("startup_splash_background_changed"));
     });
+    // 程序回填/恢复默认同样更新预览，但不制造待保存标记。
+    connect(m_startupSplashLayoutCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+        this, &SettingsDock::updateStartupSplashPreview);
+    connect(m_startupSplashBackgroundCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+        this, &SettingsDock::updateStartupSplashPreview);
+    updateStartupSplashPreview();
+}
+
+void SettingsDock::updateStartupSplashPreview()
+{
+    if (!m_startupSplashPreview || !m_startupSplashLayoutCombo || !m_startupSplashBackgroundCombo) return;
+    m_startupSplashPreview->setPresentation(
+        normalizeSplashLayout(m_startupSplashLayoutCombo->currentData().toInt()),
+        normalizeSplashBackground(m_startupSplashBackgroundCombo->currentData().toInt()));
 }

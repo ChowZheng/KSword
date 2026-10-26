@@ -12,6 +12,19 @@
 
 namespace ks::splash
 {
+    inline constexpr int CanvasWidth = 832; // 原生窗口与设置预览使用相同逻辑画布。
+    inline constexpr float TrackHeight = 4.0f; // 进度轨道的逻辑像素高度。
+    inline constexpr unsigned int DefaultAccent = 0x4C8DEBU; // 默认启动进度色。
+
+    // 返回内置底图文件名；原生窗口与预览只从exe同级Style目录加载。
+    const wchar_t* backgroundFileName(SplashBackgroundStyle background);
+    // 在调用方已经配置的逻辑坐标系中完整绘制底图，不裁切或叠加遮罩。
+    void drawBackground(Gdiplus::Graphics& graphics, float width, float height, Gdiplus::Image& image);
+    // 两个宿主共用底轨、确定进度及颜色规则；原生不确定动画仍由原窗口管理。
+    void drawTrack(Gdiplus::Graphics& graphics, float width, float height);
+    void drawDeterminateProgress(Gdiplus::Graphics& graphics, float width, float height,
+        int percent, unsigned int accentRgb = DefaultAccent);
+
     // 三种排版共享同一份原始展示数据，选择样式只改变投影，不另造发行元数据。
     struct SplashText final
     {

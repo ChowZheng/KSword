@@ -1757,6 +1757,9 @@
     <ClCompile Include="UI\ThemePreviewWidget.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="UI\StartupSplashPreview.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="UI\ThemeStatusRole.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -3799,6 +3802,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="UI\ThemePreviewWidget.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="UI\StartupSplashPreview.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="..\..\DebuggerBackend\KswordPluginTheme.h">
