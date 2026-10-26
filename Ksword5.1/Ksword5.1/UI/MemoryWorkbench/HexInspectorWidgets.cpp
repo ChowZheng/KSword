@@ -50,6 +50,7 @@ namespace ks::ui
     {
         // WA_Hover：鼠标进入/离开时让控件自动重绘，悬停底色才会出现与消失。
         setAttribute(Qt::WA_Hover, true);
+        TrackFlatButtonKeyboardFocus(this);
         setCheckable(true);
         setCursor(Qt::PointingHandCursor);
     }
@@ -108,8 +109,8 @@ namespace ks::ui
             painter.drawRoundedRect(plate, 4.0, 4.0);
         }
 
-        // 键盘焦点环：只在拥有焦点时画，颜色用强调色。
-        if (hasFocus())
+        // 鼠标焦点不绘键盘提示，保留键盘导航的可见焦点。
+        if (HasFlatButtonKeyboardFocus(this))
         {
             painter.setPen(QPen(accent, 1.0, Qt::DotLine));
             painter.setBrush(Qt::NoBrush);

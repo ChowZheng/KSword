@@ -16,6 +16,7 @@ namespace {
 constexpr wchar_t kIoctlDecoderViewClass[] = L"KswordARKLight.SysTools.IoctlDecoderView";
 constexpr int kInputEditId = 67501;
 constexpr int kCopyButtonId = 67502;
+constexpr int kExportButtonId = 67505;
 constexpr int kClearButtonId = 67503;
 constexpr int kReportEditId = 67504;
 constexpr int kGap = 8;
@@ -27,6 +28,7 @@ struct IoctlDecoderViewState final {
     HWND hwnd = nullptr;
     HWND inputEdit = nullptr;
     HWND copyButton = nullptr;
+    HWND exportButton = nullptr;
     HWND clearButton = nullptr;
     HWND reportEdit = nullptr;
     std::wstring reportText;
@@ -91,7 +93,8 @@ void LayoutView(IoctlDecoderViewState& state) {
     const int buttonWidth = 76;
     const int clearLeft = (std::max)(kGap, width - kGap - buttonWidth);
     const int copyLeft = (std::max)(kGap, clearLeft - kGap - buttonWidth);
-    const int inputWidth = (std::max)(80, copyLeft - inputLeft - kGap);
+    const int exportLeft = (std::max)(kGap, copyLeft - kGap - buttonWidth);
+    const int inputWidth = (std::max)(80, exportLeft - inputLeft - kGap);
 
     if (state.inputEdit) {
         ::MoveWindow(state.inputEdit, inputLeft, kGap + kRowHeight, inputWidth, kRowHeight, TRUE);
@@ -101,6 +104,9 @@ void LayoutView(IoctlDecoderViewState& state) {
     }
     if (state.clearButton) {
         ::MoveWindow(state.clearButton, clearLeft, kGap + kRowHeight, buttonWidth, kRowHeight, TRUE);
+    }
+    if (state.exportButton) {
+        ::MoveWindow(state.exportButton, exportLeft, kGap + kRowHeight, buttonWidth, kRowHeight, TRUE);
     }
     const int reportTop = kHeaderHeight;
     const int reportHeight = (std::max)(0, height - reportTop - kStatusHeight - kGap);
@@ -115,13 +121,14 @@ bool CreateChildControls(IoctlDecoderViewState& state) {
         0, 0, 0, 0, state.hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kInputEditId)),
         ::GetModuleHandleW(nullptr), nullptr);
     state.copyButton = Ksword::Ui::CreateButton(state.hwnd, kCopyButtonId, L"复制结果", 0, 0, 0, 0);
+    state.exportButton = Ksword::Ui::CreateButton(state.hwnd, kExportButtonId, L"导出报告", 0, 0, 0, 0);
     state.clearButton = Ksword::Ui::CreateButton(state.hwnd, kClearButtonId, L"清空", 0, 0, 0, 0);
     state.reportEdit = ::CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL | WS_HSCROLL |
             ES_MULTILINE | ES_AUTOVSCROLL | ES_AUTOHSCROLL | ES_READONLY,
         0, 0, 0, 0, state.hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kReportEditId)),
         ::GetModuleHandleW(nullptr), nullptr);
-    if (!state.inputEdit || !state.copyButton || !state.clearButton || !state.reportEdit) {
+    if (!state.inputEdit || !state.copyButton || !state.exportButton || !state.clearButton || !state.reportEdit) {
         return false;
     }
     ::SendMessageW(state.inputEdit, WM_SETFONT, reinterpret_cast<WPARAM>(Ksword::Ui::SystemUIFont()), TRUE);
@@ -166,6 +173,28 @@ LRESULT CALLBACK IoctlDecoderViewProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
             ::InvalidateRect(hwnd, nullptr, TRUE);
             return 0;
         }
+        if (HIWORD(wParam) == BN_CLICKED && LOWORD(wParam) == kExportButtonId) {
+            if (state->reportText.empty()) {
+                state->statusText = L"当前没有可导出的 IOCTL 解码结果。";
+            } else {
+                std::wstring error;
+                const Ksword::Ui::SaveTextFileResult result = Ksword::Ui::SaveUtf8TextFileWithDialog(
+                    hwnd,
+                    L"ioctl_decode.txt",
+                    L"导出 IOCTL 解码结果",
+                    L"文本文件 (*.txt)\0*.txt\0所有文件 (*.*)\0*.*\0",
+                    L"txt",
+                    state->reportText,
+                    &error);
+                if (result == Ksword::Ui::SaveTextFileResult::Failed) {
+                    state->statusText = error.empty() ? L"导出 IOCTL 解码结果失败。" : error;
+                } else if (result == Ksword::Ui::SaveTextFileResult::Saved) {
+                    state->statusText = L"已导出 IOCTL 解码结果，并已记录到证据会话。";
+                }
+            }
+            ::InvalidateRect(hwnd, nullptr, TRUE);
+            return 0;
+        }
         if (HIWORD(wParam) == BN_CLICKED && LOWORD(wParam) == kClearButtonId) {
             ::SetWindowTextW(state->inputEdit, L"");
             ::SetFocus(state->inputEdit);
@@ -207,10 +236,16 @@ LRESULT CALLBACK IoctlDecoderViewProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
         }
         break;
     case WM_CTLCOLORSTATIC: {
+        // Read-only EDIT controls report through this message too; leaving them
+        // transparent smears text while scrolling, so theme STATIC labels only.
         HDC dc = reinterpret_cast<HDC>(wParam);
-        ::SetBkMode(dc, TRANSPARENT);
-        ::SetTextColor(dc, Ksword::Ui::AppTheme().textColor);
-        return reinterpret_cast<LRESULT>(Ksword::Ui::AppTheme().windowBrush());
+        const LRESULT labelBrush = Ksword::Ui::PaintLabelBackground(dc,
+            reinterpret_cast<HWND>(lParam), Ksword::Ui::AppTheme().windowBrush(),
+            Ksword::Ui::AppTheme().textColor);
+        if (labelBrush != 0) {
+            return labelBrush;
+        }
+        break;
     }
     case WM_NCDESTROY:
         delete state;

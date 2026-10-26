@@ -7,8 +7,10 @@
 #include "../../Ui/AsyncTask.h"
 #include "../../Ui/Controls.h"
 #include "../../Ui/EntityNavigation.h"
+#include "../../Ui/ExportUtil.h"
 #include "../../Ui/FilterBar.h"
 #include "../../Ui/LoadingOverlay.h"
+#include "../../Ui/TableCompareActions.h"
 #include "../../Ui/Theme.h"
 #include "../../Ui/VirtualListView.h"
 
@@ -18,6 +20,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
+#include <sstream>
 #include <memory>
 #include <string>
 #include <utility>
@@ -36,6 +39,20 @@ constexpr int kEntryListId = 63006;
 constexpr int kDetailListId = 63007;
 constexpr int kFilterBarId = 63008;
 constexpr int kLoadingOverlayId = 63009;
+// kStartupColumnTitles feeds the header row and the TSV export from one list, so
+// a saved start-up inventory always carries the captions it was read from.
+constexpr const wchar_t* kStartupColumnTitles[6] = {
+    L"名称", L"类型", L"范围", L"状态", L"命令", L"位置"
+};
+
+// StartupColumnTitles 是 kStartupColumnTitles 的 vector 形态，给导出和快照比对用。
+// 两张表头必须来自同一个数组：快照只存显示文本，列序一分叉就比错列。
+const std::vector<std::wstring>& StartupColumnTitles() {
+    static const std::vector<std::wstring> titles(
+        std::begin(kStartupColumnTitles), std::end(kStartupColumnTitles));
+    return titles;
+}
+
 constexpr UINT kStartupMenuEnable = 63601;
 constexpr UINT kStartupMenuDisable = 63602;
 constexpr UINT kStartupMenuDelete = 63603;
@@ -46,6 +63,9 @@ constexpr UINT kStartupMenuCopyVisible = 63607;
 constexpr UINT kStartupMenuCopyDetail = 63608;
 constexpr UINT kStartupMenuRefresh = 63609;
 constexpr UINT kStartupMenuOpenProvenance = 63610;
+constexpr UINT kStartupMenuExportVisible = 63611;
+constexpr UINT kStartupMenuExportAll = 63612;
+constexpr UINT kStartupMenuExportDetail = 63613;
 constexpr UINT kMsgRefreshCompleted = WM_APP + 575;
 constexpr UINT kMsgFilterCompleted = WM_APP + 576;
 constexpr UINT kMsgActionCompleted = WM_APP + 577;
@@ -92,6 +112,9 @@ struct StartupViewState {
     StartupModel model;
     std::shared_ptr<const std::vector<Ksword::Ui::VirtualListRow>> filterRows;
     std::wstring statusText = L"正在等待启动项快照…";
+    // 启动项是持久化配置，两次扫描之间可能被安装程序或用户改动。列表只呈现
+    // 当前清单，比对才能指出这次多出/消失了哪一条自启动项。
+    Ksword::Ui::TableSnapshotEngine snapshotEngine;
     std::wstring filterQuery;
     bool filterUseRegex = false;
     std::uint64_t displayGeneration = 0;
@@ -133,31 +156,14 @@ std::wstring ListText(HWND list, int row, int column) {
 }
 
 bool CopyText(HWND owner, const std::wstring& text) {
-    if (text.empty() || !::OpenClipboard(owner)) {
+    // An empty payload stays a failure: the callers show "复制失败" and a
+    // clipboard that silently keeps its previous contents would contradict
+    // that message. Otherwise use the shared writer so the copied text also
+    // reaches the evidence session.
+    if (text.empty()) {
         return false;
     }
-    ::EmptyClipboard();
-    const SIZE_T bytes = (text.size() + 1) * sizeof(wchar_t);
-    HGLOBAL memory = ::GlobalAlloc(GMEM_MOVEABLE, bytes);
-    if (!memory) {
-        ::CloseClipboard();
-        return false;
-    }
-    void* target = ::GlobalLock(memory);
-    if (!target) {
-        ::GlobalFree(memory);
-        ::CloseClipboard();
-        return false;
-    }
-    std::memcpy(target, text.c_str(), bytes);
-    ::GlobalUnlock(memory);
-    if (!::SetClipboardData(CF_UNICODETEXT, memory)) {
-        ::GlobalFree(memory);
-        ::CloseClipboard();
-        return false;
-    }
-    ::CloseClipboard();
-    return true;
+    return Ksword::Ui::CopyTextToClipboard(owner, text, L"启动项导出");
 }
 
 std::wstring StableKeyForEntry(const StartupEntry& entry) {
@@ -333,7 +339,7 @@ void BuildRows(StartupViewState& state) {
         rows.push_back(std::move(row));
     }
     auto filterRows = std::make_shared<std::vector<Ksword::Ui::VirtualListRow>>(std::move(rows));
-    state.entryList.setRows(*filterRows);
+    state.entryList.setSharedRows(filterRows);
     state.filterRows = std::move(filterRows);
     ++state.displayGeneration;
 }
@@ -487,6 +493,73 @@ void CopyCurrentDetail(StartupViewState& state) {
         text += L"\r\n";
     }
     state.statusText = CopyText(state.hwnd, text) ? L"已复制启动项详细信息。" : L"复制启动项详细信息失败。";
+    ::InvalidateRect(state.hwnd, nullptr, TRUE);
+}
+
+// ExportEntryList writes one scope of the start-up inventory as TSV. The list is
+// what makes a machine "persistently configured", so the saved copy is meant to
+// be diffed against a later scan; a header row is what makes that readable.
+void ExportEntryList(StartupViewState& state, const Ksword::Ui::ExportRowScope scope) {
+    const std::vector<std::wstring>& titles = StartupColumnTitles();
+    Ksword::Ui::ExportRowCount count{};
+    std::wstring error;
+    const Ksword::Ui::SaveTextFileResult result = Ksword::Ui::ExportVirtualListTsvWithDialog(
+        state.hwnd,
+        state.entryList,
+        titles,
+        scope,
+        L"startup_items.tsv",
+        scope == Ksword::Ui::ExportRowScope::Visible
+            ? L"导出启动项（可见项）"
+            : L"导出启动项（全部项）",
+        L"启动项导出",
+        &count,
+        &error);
+    if (result == Ksword::Ui::SaveTextFileResult::Failed) {
+        state.statusText = error.empty() ? L"启动项导出失败。" : L"启动项导出失败：" + error;
+    } else if (result == Ksword::Ui::SaveTextFileResult::Saved) {
+        std::wostringstream summary;
+        summary << L"已导出 " << count.exportedRows << L" / " << count.totalRows << L" 个启动项";
+        if (count.filteredRows) {
+            summary << L"（筛选隐藏的 " << (count.totalRows - count.exportedRows) << L" 个未写入）";
+        }
+        summary << L"。";
+        state.statusText = summary.str();
+    }
+    ::InvalidateRect(state.hwnd, nullptr, TRUE);
+}
+
+// ExportCurrentDetail writes the selected entry's attribute table as a text
+// file. The detail pane is formatted for reading, so it keeps its .txt nature
+// rather than being flattened into two columns of TSV.
+void ExportCurrentDetail(StartupViewState& state) {
+    std::wstring text;
+    const int rows = state.detailList ? ListView_GetItemCount(state.detailList) : 0;
+    for (int row = 0; row < rows; ++row) {
+        text += ListText(state.detailList, row, 0);
+        text += L"：";
+        text += ListText(state.detailList, row, 1);
+        text += L"\r\n";
+    }
+    if (text.empty()) {
+        state.statusText = L"当前没有可导出的启动项详细信息。";
+        ::InvalidateRect(state.hwnd, nullptr, TRUE);
+        return;
+    }
+    std::wstring error;
+    const Ksword::Ui::SaveTextFileResult result = Ksword::Ui::SaveUtf8TextFileWithDialog(
+        state.hwnd,
+        L"startup_detail.txt",
+        L"导出启动项详细信息",
+        L"文本文件 (*.txt)\0*.txt\0所有文件 (*.*)\0*.*\0",
+        L"txt",
+        text,
+        &error);
+    if (result == Ksword::Ui::SaveTextFileResult::Failed) {
+        state.statusText = error.empty() ? L"启动项详细信息导出失败。" : L"启动项详细信息导出失败：" + error;
+    } else if (result == Ksword::Ui::SaveTextFileResult::Saved) {
+        state.statusText = L"已导出启动项详细信息。";
+    }
     ::InvalidateRect(state.hwnd, nullptr, TRUE);
 }
 
@@ -670,6 +743,21 @@ void ShowStartupContextMenu(StartupViewState& state, POINT screenPoint) {
         ::AppendMenuW(copyMenu, MF_STRING | (hasEntry ? 0U : MF_GRAYED), kStartupMenuCopyDetail, L"复制详细信息");
         ::AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(copyMenu), L"复制");
     }
+
+    HMENU exportMenu = ::CreatePopupMenu();
+    if (exportMenu) {
+        // Start-up entries are persistence: users want a copy of "what was set
+        // to run today" to diff against a later scan, and that copy has to be a
+        // file, not a clipboard paste.
+        const bool hasVisible = !state.entryList.visibleIndexes().empty();
+        ::AppendMenuW(exportMenu, MF_STRING | (hasVisible ? 0U : MF_GRAYED), kStartupMenuExportVisible, L"导出可见项为 TSV…");
+        ::AppendMenuW(exportMenu, MF_STRING | (hasVisible ? 0U : MF_GRAYED), kStartupMenuExportAll, L"导出全部项为 TSV…");
+        ::AppendMenuW(exportMenu, MF_SEPARATOR, 0, nullptr);
+        ::AppendMenuW(exportMenu, MF_STRING | (hasEntry ? 0U : MF_GRAYED), kStartupMenuExportDetail, L"导出详细信息…");
+        ::AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(exportMenu), L"导出");
+    }
+    ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    Ksword::Ui::AppendTableCompareMenuItems(menu, state.snapshotEngine);
     const UINT command = ::TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, screenPoint.x, screenPoint.y, 0, state.hwnd, nullptr);
     ::DestroyMenu(menu);
     switch (command) {
@@ -689,7 +777,21 @@ void ShowStartupContextMenu(StartupViewState& state, POINT screenPoint) {
         ::InvalidateRect(state.hwnd, nullptr, TRUE);
         break;
     case kStartupMenuCopyDetail: CopyCurrentDetail(state); break;
-    default: break;
+    case kStartupMenuExportVisible:
+        ExportEntryList(state, Ksword::Ui::ExportRowScope::Visible);
+        break;
+    case kStartupMenuExportAll:
+        ExportEntryList(state, Ksword::Ui::ExportRowScope::All);
+        break;
+    case kStartupMenuExportDetail:
+        ExportCurrentDetail(state);
+        break;
+    default:
+        if (Ksword::Ui::HandleTableCompareCommand(state.snapshotEngine, command,
+                state.entryList, StartupColumnTitles(), state.statusText, L"启动项")) {
+            ::InvalidateRect(state.hwnd, nullptr, TRUE);
+        }
+        break;
     }
 }
 
@@ -733,8 +835,9 @@ bool CreateChildControls(StartupViewState& state) {
     ListView_SetExtendedListViewStyle(state.entryList.hwnd(), LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER | LVS_EX_GRIDLINES | LVS_EX_LABELTIP);
     ListView_SetExtendedListViewStyle(state.detailList, LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER | LVS_EX_GRIDLINES | LVS_EX_LABELTIP);
     state.entryList.addColumns({
-        { 0, 230, LVCFMT_LEFT, L"名称" }, { 1, 130, LVCFMT_LEFT, L"类型" }, { 2, 120, LVCFMT_LEFT, L"范围" },
-        { 3, 90, LVCFMT_LEFT, L"状态" }, { 4, 360, LVCFMT_LEFT, L"命令" }, { 5, 360, LVCFMT_LEFT, L"位置" }
+        { 0, 230, LVCFMT_LEFT, kStartupColumnTitles[0] }, { 1, 130, LVCFMT_LEFT, kStartupColumnTitles[1] },
+        { 2, 120, LVCFMT_LEFT, kStartupColumnTitles[2] }, { 3, 90, LVCFMT_LEFT, kStartupColumnTitles[3] },
+        { 4, 360, LVCFMT_LEFT, kStartupColumnTitles[4] }, { 5, 360, LVCFMT_LEFT, kStartupColumnTitles[5] }
     });
     AddColumn(state.detailList, 0, L"属性", 170);
     AddColumn(state.detailList, 1, L"值", 760);
@@ -811,6 +914,14 @@ bool RegisterStartupViewClass() {
                 if (state->entryList.handleNotify(*notify, result)) {
                     return result;
                 }
+                if (notify->code == LVN_COLUMNCLICK) {
+                    const auto* clicked = reinterpret_cast<const NMLISTVIEW*>(lParam);
+                    const Ksword::Ui::SortSpec next =
+                        Ksword::Ui::NextSortSpec(state->entryList.sortSpec(), clicked->iSubItem);
+                    state->entryList.applySort(next);
+                    Ksword::Ui::ShowSortIndicator(state->entryList.hwnd(), next);
+                    return 0;
+                }
                 if (notify->code == LVN_ITEMCHANGED) {
                     const auto* changed = reinterpret_cast<const NMLISTVIEW*>(notify);
                     if ((changed->uNewState & LVIS_SELECTED) != 0) {
@@ -847,7 +958,10 @@ bool RegisterStartupViewClass() {
             RECT rc{};
             ::GetClientRect(hwnd, &rc);
             ::FillRect(dc, &rc, Ksword::Ui::AppTheme().panelBrush());
-            RECT textRc{ 430, 7, rc.right - kGap, 31 };
+            // 第一行按钮：kGap 起、步进 84、宽 78，最后一个「打开」宽 94，
+            // 右边界 = 6 + 84*4 + 94 = 436。这里原来从 430 起画，首字符被按钮
+            // 压掉 6px，改成 442 留 6px 间距。
+            RECT textRc{ 442, 7, rc.right - kGap, 31 };
             Ksword::Ui::DrawTextLine(dc, state ? state->statusText : L"启动项", textRc, Ksword::Ui::AppTheme().mutedTextColor,
                 Ksword::Ui::SystemUIFont(), DT_SINGLELINE | DT_LEFT | DT_VCENTER | DT_END_ELLIPSIS);
             ::EndPaint(hwnd, &ps);

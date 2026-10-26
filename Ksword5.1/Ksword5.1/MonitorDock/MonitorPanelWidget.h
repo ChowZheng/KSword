@@ -53,8 +53,8 @@ protected:
     void resizeEvent(QResizeEvent* resizeEventPointer) override;
 
     // showEvent 作用：
-    // - 首次展示后触发一次延迟重排；
-    // - 解决初始 geometry 尚未稳定时的高度估算偏差。
+    // - 首次展示前按当前真实尺寸准备四宫格；
+    // - 后续真实尺寸变化由 resizeEvent 继续更新。
     void showEvent(QShowEvent* showEventPointer) override;
     void hideEvent(QHideEvent* hideEventPointer) override;
 

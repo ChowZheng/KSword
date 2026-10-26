@@ -3,10 +3,25 @@
 #include "../Core/Win32Lean.h"
 
 #include <commctrl.h>
+#include <cstddef>
 #include <string>
 #include <vector>
 
 namespace Ksword::Ui {
+
+// kMaxDisplayRows bounds how many rows one ListView may receive in a single
+// bulk replace. Only the control content is bounded; callers keep their full
+// data containers so export and row lookup stay aligned.
+inline constexpr std::size_t kMaxDisplayRows = 5000;
+
+// RowCapResult reports how much of a row set reached the ListView. Input is the
+// pair of counts produced by ReplaceListViewRowsCapped; there is no owned
+// resource and truncated() is true when rows were withheld.
+struct RowCapResult {
+    std::size_t total = 0;
+    std::size_t shown = 0;
+    bool truncated() const noexcept { return shown < total; }
+};
 
 // ListViewColumn describes one report-mode ListView column. Inputs are plain
 // Win32 column attributes; processing happens in AddListViewColumn(s); there is
@@ -84,5 +99,51 @@ int InsertListViewTextRow(HWND listView, const std::vector<std::wstring>& cells,
 // ClearListViewRows removes all items from the ListView. Input is a ListView
 // HWND; processing sends LVM_DELETEALLITEMS; no value is returned.
 void ClearListViewRows(HWND listView);
+
+// ReplaceListViewRowsCapped replaces all items and stops at maxRows. Inputs are
+// a ListView, already-rendered rows and an optional cap; processing deletes the
+// existing items under a redraw lock and inserts at most maxRows rows, never a
+// placeholder "more rows" item (that would pollute selection/copy/export);
+// output is the total/shown pair used by RowCapNotice.
+RowCapResult ReplaceListViewRowsCapped(
+    HWND listView,
+    const std::vector<std::vector<std::wstring>>& rows,
+    std::size_t maxRows = kMaxDisplayRows);
+
+// RowCapNotice renders the truncation hint for status text. Input is a
+// RowCapResult; processing formats counts without a leading separator; output
+// is empty when nothing was truncated.
+std::wstring RowCapNotice(const RowCapResult& result);
+
+// SortDirection is the three-state column sort the tables cycle through. None
+// means "natural order as loaded", which is reachable by clicking a third time
+// so the user can get back to the original layout without a reset control.
+enum class SortDirection { None, Ascending, Descending };
+
+// SortSpec identifies the active sort. Input is a column index plus direction
+// produced by NextSortSpec; there is no owned resource. column is -1 when no
+// sort is active.
+struct SortSpec {
+    int column = -1;
+    SortDirection direction = SortDirection::None;
+
+    bool active() const noexcept {
+        return column >= 0 && direction != SortDirection::None;
+    }
+    bool descending() const noexcept {
+        return direction == SortDirection::Descending;
+    }
+};
+
+// NextSortSpec advances the click cycle for one column: unsorted -> ascending ->
+// descending -> unsorted. Inputs are the current spec and the clicked column;
+// clicking a different column restarts at ascending; output is the new spec.
+SortSpec NextSortSpec(SortSpec current, int clickedColumn);
+
+// ShowSortIndicator paints the arrow on the sorted header column. Inputs are a
+// report ListView and the active spec; processing clears HDF_SORTUP/DOWN from
+// every column and sets the one that matches; no value is returned. Requires
+// Common Controls v6, which the shell already links.
+void ShowSortIndicator(HWND listView, const SortSpec& spec);
 
 } // namespace Ksword::Ui

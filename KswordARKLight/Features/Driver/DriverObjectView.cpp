@@ -7,6 +7,7 @@
 #include "../../Ui/FilterBar.h"
 #include "../../Ui/ListViewUtil.h"
 #include "../../Ui/LoadingOverlay.h"
+#include "../../Ui/TableCompareActions.h"
 #include "../../Ui/TextFindSupport.h"
 #include "../../Ui/Theme.h"
 #include "../../Ui/VirtualListView.h"
@@ -26,6 +27,7 @@ constexpr wchar_t kDriverObjectClass[] = L"KswordARKLight.DriverObjectView";
 constexpr int kObjectListId = 64011;
 constexpr int kObjectFilterId = 64012;
 constexpr int kObjectLoadingOverlayId = 64013;
+constexpr int kObjectStatusId = 64014;
 constexpr UINT kObjectMenuDetail = 64201;
 constexpr UINT kObjectMenuCopyCell = 64202;
 constexpr UINT kObjectMenuCopyRow = 64203;
@@ -48,6 +50,7 @@ struct DriverObjectViewState {
     HWND filterBar = nullptr;
     HWND listView = nullptr;
     HWND loadingOverlay = nullptr;
+    HWND statusText = nullptr;
     DriverModel* model = nullptr;
     std::vector<DriverObjectRow> snapshotRows;
     std::vector<DriverObjectRow> visibleRows;
@@ -58,6 +61,9 @@ struct DriverObjectViewState {
     std::uint64_t snapshotGeneration = 0;
     std::uint64_t detailRequestId = 0;
     int contextColumn = 0;
+    // 驱动对象目录会在两次刷新之间增删对象、改引用计数和句柄计数。列表只呈现
+    // 当前这一份，比对才能说明这次刷新里哪个对象是新冒出来的。
+    Ksword::Ui::TableSnapshotEngine snapshotEngine;
     std::unique_ptr<Ksword::Ui::AsyncSnapshotTask<struct ObjectFilterResult>> filterTask;
     std::unique_ptr<Ksword::Ui::AsyncSnapshotTask<struct ObjectDetailResult>> detailTask;
 };
@@ -281,10 +287,16 @@ bool RegisterDetailDialogClass() {
             }
             break;
         case WM_CTLCOLORSTATIC: {
+            // Read-only EDIT controls report through this message too; leaving them
+            // transparent smears text while scrolling, so theme STATIC labels only.
             HDC dc = reinterpret_cast<HDC>(wParam);
-            ::SetBkMode(dc, TRANSPARENT);
-            ::SetTextColor(dc, Ksword::Ui::AppTheme().textColor);
-            return reinterpret_cast<LRESULT>(Ksword::Ui::AppTheme().windowBrush());
+            const LRESULT labelBrush = Ksword::Ui::PaintLabelBackground(dc,
+                reinterpret_cast<HWND>(lParam), Ksword::Ui::AppTheme().windowBrush(),
+                Ksword::Ui::AppTheme().textColor);
+            if (labelBrush != 0) {
+                return labelBrush;
+            }
+            break;
         }
         case WM_NCDESTROY:
             delete state;
@@ -385,6 +397,7 @@ void ShowObjectDetail(DriverObjectViewState& state) {
 }
 
 std::wstring BuildObjectTsv(const DriverObjectViewState& state);
+const std::vector<std::wstring>& ObjectColumnTitles();
 
 // ShowObjectContextMenu displays the object-info right-click menu and dispatches
 // retained commands. Inputs are view state and screen point; processing selects
@@ -423,6 +436,8 @@ void ShowObjectContextMenu(DriverObjectViewState& state, POINT screenPoint) {
         ::AppendMenuW(detailMenu, MF_STRING | (hasSelection ? 0U : MF_GRAYED), kObjectMenuDetail, L"详细信息/R0 DriverObject");
         ::AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(detailMenu), L"详细信息");
     }
+    ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    Ksword::Ui::AppendTableCompareMenuItems(menu, state.snapshotEngine);
 
     const UINT command = ::TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, screenPoint.x, screenPoint.y, 0, state.hwnd, nullptr);
     ::DestroyMenu(menu);
@@ -454,24 +469,41 @@ void ShowObjectContextMenu(DriverObjectViewState& state, POINT screenPoint) {
         } else {
             CopyObjectText(state, row.targetPathText, L"复制目标路径");
         }
+    } else {
+        std::wstring snapshotMessage;
+        if (Ksword::Ui::HandleTableCompareCommand(state.snapshotEngine, command,
+                state.virtualList, ObjectColumnTitles(), snapshotMessage) && state.statusText) {
+            ::SetWindowTextW(state.statusText, snapshotMessage.c_str());
+        }
     }
+}
+
+// ObjectColumnTitles 供表头、可见行导出和快照采集共用。快照只保存显示文本，
+// 一旦这里和 addColumns 的列序分叉，比对就会把路径和状态对调着比。
+const std::vector<std::wstring>& ObjectColumnTitles() {
+    static const std::vector<std::wstring> titles{
+        L"目录", L"对象名", L"类型", L"完整路径", L"目标路径",
+        L"引用计数", L"句柄计数", L"状态", L"能力提示"
+    };
+    return titles;
 }
 
 // ObjectColumns returns the report columns shown by the object page. There is
 // no input; processing returns static descriptors; output is consumed by the
 // ListView helper.
 std::vector<Ksword::Ui::ListViewColumn> ObjectColumns() {
-    return {
-        { 0, 140, LVCFMT_LEFT, L"目录" },
-        { 1, 180, LVCFMT_LEFT, L"对象名" },
-        { 2, 140, LVCFMT_LEFT, L"类型" },
-        { 3, 340, LVCFMT_LEFT, L"完整路径" },
-        { 4, 320, LVCFMT_LEFT, L"目标路径" },
-        { 5, 120, LVCFMT_RIGHT, L"引用计数" },
-        { 6, 120, LVCFMT_RIGHT, L"句柄计数" },
-        { 7, 220, LVCFMT_LEFT, L"状态" },
-        { 8, 300, LVCFMT_LEFT, L"能力提示" },
+    const std::vector<std::wstring>& titles = ObjectColumnTitles();
+    static const int widths[] = { 140, 180, 140, 340, 320, 120, 120, 220, 300 };
+    static const int formats[] = {
+        LVCFMT_LEFT, LVCFMT_LEFT, LVCFMT_LEFT, LVCFMT_LEFT, LVCFMT_LEFT,
+        LVCFMT_RIGHT, LVCFMT_RIGHT, LVCFMT_LEFT, LVCFMT_LEFT
     };
+    std::vector<Ksword::Ui::ListViewColumn> columns;
+    columns.reserve(titles.size());
+    for (std::size_t index = 0; index < titles.size(); ++index) {
+        columns.push_back({ static_cast<int>(index), widths[index], formats[index], titles[index] });
+    }
+    return columns;
 }
 
 // RequestObjectFilter filters a retained immutable object snapshot in the
@@ -527,7 +559,15 @@ void PopulateObjectList(DriverObjectViewState& state) {
     state.filterRows = std::make_shared<const std::vector<Ksword::Ui::VirtualListRow>>(
         BuildObjectVirtualRows(state.snapshotRows));
     ++state.snapshotGeneration;
-    state.virtualList.setRows(*state.filterRows);
+    state.virtualList.setSharedRows(state.filterRows);
+    // An empty snapshot must not look identical to a paused load: reuse the
+    // existing overlay so the zero-row result carries its own message. The
+    // spinner is off because nothing is pending any more.
+    if (!state.filterRows || state.filterRows->empty()) {
+        Ksword::Ui::SetLoadingOverlay(state.loadingOverlay, true, L"未获取到可展示的驱动对象详情记录。", false);
+    } else {
+        Ksword::Ui::SetLoadingOverlay(state.loadingOverlay, false);
+    }
     RequestObjectFilter(state, state.filterBar ? Ksword::Ui::GetFilterBarText(state.filterBar) : state.filterQuery);
 }
 
@@ -535,9 +575,7 @@ void PopulateObjectList(DriverObjectViewState& state) {
 // TSV text. Input is the view state; processing serializes its active visible
 // indexes so an in-flight filter cannot yield stale export data.
 std::wstring BuildObjectTsv(const DriverObjectViewState& state) {
-    return Ksword::Ui::BuildVisibleVirtualListTsv(
-        { L"目录", L"对象名", L"类型", L"完整路径", L"目标路径", L"引用计数", L"句柄计数", L"状态", L"能力提示" },
-        state.virtualList);
+    return Ksword::Ui::BuildVisibleVirtualListTsv(ObjectColumnTitles(), state.virtualList);
 }
 
 // RegisterDriverObjectClass installs the child window class once. There is no
@@ -572,6 +610,8 @@ bool RegisterDriverObjectClass() {
                 SetChildFont(state->listView);
                 state->virtualList.addColumns(ObjectColumns());
                 state->loadingOverlay = Ksword::Ui::CreateLoadingOverlay(hwnd, kObjectLoadingOverlayId, { 0, 0, 1, 1 });
+                // 快照采集/比对的结果只有一句话，本页原先没有可写的地方，补一条页脚状态行。
+                state->statusText = Ksword::Ui::CreateText(hwnd, kObjectStatusId, L"", 0, 0, 0, 0);
                 state->filterTask = std::make_unique<Ksword::Ui::AsyncSnapshotTask<ObjectFilterResult>>(hwnd, kMsgObjectFilterCompleted);
                 state->detailTask = std::make_unique<Ksword::Ui::AsyncSnapshotTask<ObjectDetailResult>>(hwnd, kMsgObjectDetailCompleted);
                 PopulateObjectList(*state);
@@ -599,6 +639,14 @@ bool RegisterDriverObjectClass() {
                 LRESULT virtualResult = 0;
                 if (header && state->virtualList.handleNotify(*header, virtualResult)) {
                     return virtualResult;
+                }
+                if (header && header->hwndFrom == state->listView && header->code == LVN_COLUMNCLICK) {
+                    const auto* clicked = reinterpret_cast<const NMLISTVIEW*>(lParam);
+                    const Ksword::Ui::SortSpec next =
+                        Ksword::Ui::NextSortSpec(state->virtualList.sortSpec(), clicked->iSubItem);
+                    state->virtualList.applySort(next);
+                    Ksword::Ui::ShowSortIndicator(state->virtualList.hwnd(), next);
+                    return 0;
                 }
                 if (header && header->hwndFrom == state->listView && header->code == NM_RCLICK) {
                     POINT pt{};
@@ -628,9 +676,16 @@ bool RegisterDriverObjectClass() {
                 const int height = rc.bottom - rc.top;
                 const int margin = 6;
                 const int filterHeight = 28;
+                const int statusHeight = 20;
+                const int listTop = filterHeight + margin * 2;
+                const int listHeight = std::max(40, height - listTop - statusHeight - margin);
                 ::MoveWindow(state->filterBar, margin, margin, std::max(80, width - margin * 2), filterHeight, TRUE);
-                ::MoveWindow(state->listView, 0, filterHeight + margin * 2, width, std::max(40, height - filterHeight - margin * 2), TRUE);
-                ::MoveWindow(state->loadingOverlay, 0, filterHeight + margin * 2, width, std::max(40, height - filterHeight - margin * 2), TRUE);
+                ::MoveWindow(state->listView, 0, listTop, width, listHeight, TRUE);
+                ::MoveWindow(state->loadingOverlay, 0, listTop, width, listHeight, TRUE);
+                if (state->statusText) {
+                    ::MoveWindow(state->statusText, margin, listTop + listHeight,
+                        std::max(80, width - margin * 2), statusHeight, TRUE);
+                }
             }
             return 0;
         case WM_NCDESTROY:

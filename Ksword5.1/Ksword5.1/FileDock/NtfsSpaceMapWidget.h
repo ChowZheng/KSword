@@ -44,6 +44,8 @@ public:
     // Zero-byte items do not occupy space; their rows remain in the page table.
     void setItems(QVector<Item> items);
     void setSelectedReference(quint64 reference);
+    // Distinguish unavailable/loading states from a successful empty directory.
+    void setEmptyMessage(const QString& source);
 
     std::function<void(quint64)> activated;
     std::function<void(quint64)> selected;
@@ -76,4 +78,5 @@ private:
     int m_selectedTile = -1;
     quint64 m_selectedReference = 0;
     bool m_hasSelection = false;
+    QString m_emptyMessage;
 };

@@ -2,6 +2,7 @@
 
 #include "AuditFormatting.h"
 #include "../../Ui/Controls.h"
+#include "../../Ui/ExportUtil.h"
 
 #include <commctrl.h>
 #include <utility>
@@ -12,6 +13,36 @@ namespace {
 constexpr UINT kCopyCellCommand = 72001;
 constexpr UINT kCopyRowCommand = 72002;
 constexpr UINT kCopyAllCommand = 72003;
+constexpr UINT kExportTsvCommand = 72004;
+
+// SuggestedExportFileName derives a file name from the page title so a user who
+// exports three different audit tables does not get three files all called
+// "audit_table.tsv". Input is the owner window; output is a sanitized name with
+// a .tsv extension, never empty.
+std::wstring SuggestedExportFileName(HWND owner) {
+    wchar_t title[160] = {};
+    if (owner) {
+        ::GetWindowTextW(owner, title, 160);
+    }
+    std::wstring name = title;
+    // Characters Windows forbids in a file name, plus the control characters a
+    // window title occasionally carries.
+    for (wchar_t& character : name) {
+        if (character == L'\\' || character == L'/' || character == L':' || character == L'*'
+            || character == L'?' || character == L'"' || character == L'<' || character == L'>'
+            || character == L'|' || character < 0x20) {
+            character = L'_';
+        }
+    }
+    while (!name.empty() && (name.back() == L' ' || name.back() == L'.')) {
+        name.pop_back();
+    }
+    if (name.empty()) {
+        name = L"audit_table";
+    }
+    name += L".tsv";
+    return name;
+}
 
 // Width returns a non-negative rectangle width. Input is a RECT; output is the
 // width used for CreateWindow/MoveWindow calls.
@@ -132,16 +163,17 @@ bool SetAuditTableColumns(HWND listView, const std::vector<AuditTableColumn>& co
     return Ksword::Ui::AddListViewColumns(listView, uiColumns);
 }
 
-void ReplaceAuditTableRows(HWND listView, const std::vector<std::vector<std::wstring>>& rows) {
+Ksword::Ui::RowCapResult ReplaceAuditTableRows(
+    HWND listView,
+    const std::vector<std::vector<std::wstring>>& rows) {
+    // Columns are preserved; only the row payload is replaced. The helper caps
+    // what enters the control at kMaxDisplayRows and reports the counts so a
+    // caller with status text can surface the truncation hint.
     if (!listView) {
-        return;
+        return Ksword::Ui::RowCapResult{ rows.size(), 0 };
     }
 
-    Ksword::Ui::ScopedListViewRedrawLock redrawLock(listView);
-    ListView_DeleteAllItems(listView);
-    for (const std::vector<std::wstring>& row : rows) {
-        Ksword::Ui::InsertListViewTextRow(listView, row);
-    }
+    return Ksword::Ui::ReplaceListViewRowsCapped(listView, rows);
 }
 
 std::wstring GetAuditTableCellText(HWND listView, const int row, const int column) {
@@ -235,6 +267,12 @@ void ShowAuditTableContextMenu(HWND owner, HWND listView, POINT screenPoint) {
     ::AppendMenuW(menu, MF_STRING | (hasSelection ? 0U : MF_GRAYED), kCopyRowCommand, L"复制整行");
     ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     ::AppendMenuW(menu, MF_STRING, kCopyAllCommand, L"复制全部 TSV");
+    // Every page that installs an AuditTable gets a file export from this one
+    // entry. Before this the shared menu could copy the whole table to the
+    // clipboard but never write it to disk, so each caller that wanted a file
+    // had to add its own export path.
+    const bool hasRows = ListView_GetItemCount(listView) > 0;
+    ::AppendMenuW(menu, MF_STRING | (hasRows ? 0U : MF_GRAYED), kExportTsvCommand, L"导出为 TSV…");
 
     const UINT command = ::TrackPopupMenu(
         menu,
@@ -252,6 +290,20 @@ void ShowAuditTableContextMenu(HWND owner, HWND listView, POINT screenPoint) {
         CopyTextToClipboard(owner, GetSelectedAuditTableRowText(listView));
     } else if (command == kCopyAllCommand) {
         CopyTextToClipboard(owner, BuildAuditTableTsv(listView));
+    } else if (command == kExportTsvCommand) {
+        // A cancelled save stays silent on purpose; only a real write failure
+        // is worth interrupting the user for, and this menu has no status line
+        // to report through.
+        const std::wstring suggested = SuggestedExportFileName(owner);
+        std::wstring error;
+        const Ksword::Ui::SaveTextFileResult result = Ksword::Ui::SaveUtf8TextFileWithDialog(
+            owner, suggested.c_str(), L"导出表格为 TSV",
+            L"制表符分隔文件 (*.tsv)\0*.tsv\0所有文件 (*.*)\0*.*\0", L"tsv",
+            BuildAuditTableTsv(listView), &error);
+        if (result == Ksword::Ui::SaveTextFileResult::Failed) {
+            const std::wstring message = error.empty() ? L"导出失败。" : error;
+            ::MessageBoxW(owner, message.c_str(), L"导出失败", MB_OK | MB_ICONWARNING);
+        }
     }
 }
 

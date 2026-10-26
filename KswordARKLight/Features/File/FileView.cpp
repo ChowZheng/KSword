@@ -6,6 +6,7 @@
 
 #include "../../Ui/Controls.h"
 #include "../../Ui/AsyncTask.h"
+#include "../../Ui/ExportUtil.h"
 #include "../../Ui/FilterBar.h"
 #include "../../Ui/ListViewUtil.h"
 #include "../../Ui/LoadingOverlay.h"
@@ -730,6 +731,96 @@ void OpenSelectedEntry(FileViewState& state) {
     BeginFileAction(state, FileActionId::OpenRun, std::move(context));
 }
 
+// BuildFileTableTsv serializes one scope of the file list with a header row.
+// Column visibility is deliberately ignored: hiding 完整路径 keeps the screen
+// readable, but an exported row without it cannot be traced back to a location,
+// and the file is the copy that leaves the program.
+std::wstring BuildFileTableTsv(const FileViewState& state, const bool visibleOnly) {
+    std::wstring text;
+    for (std::size_t index = 0; index < std::size(kFileColumns); ++index) {
+        if (index != 0) {
+            text += L'\t';
+        }
+        text += kFileColumns[index].title;
+    }
+    text += L"\r\n";
+
+    const auto appendRow = [&text](const std::vector<std::wstring>& cells) {
+        for (std::size_t column = 0; column < cells.size(); ++column) {
+            if (column != 0) {
+                text += L'\t';
+            }
+            text += Ksword::Ui::SanitizeTsvCell(cells[column]);
+        }
+        text += L"\r\n";
+    };
+
+    if (visibleOnly) {
+        for (const std::size_t entryIndex : state.visibleIndexes) {
+            if (entryIndex < state.presentationRows.size()) {
+                appendRow(state.presentationRows[entryIndex].cells);
+            }
+        }
+        return text;
+    }
+    for (const FilePresentationRow& row : state.presentationRows) {
+        appendRow(row.cells);
+    }
+    return text;
+}
+
+// SelectedRowTsv returns the focused row only, which is what the user means by
+// "copy this line" when the list has no multi-select.
+std::wstring SelectedRowTsv(const FileViewState& state) {
+    const int selected = state.list ? ListView_GetNextItem(state.list, -1, LVNI_SELECTED) : -1;
+    const std::size_t entryIndex = VisibleEntryIndex(state, selected);
+    if (entryIndex >= state.presentationRows.size()) {
+        return {};
+    }
+    std::wstring text;
+    const std::vector<std::wstring>& cells = state.presentationRows[entryIndex].cells;
+    for (std::size_t column = 0; column < cells.size(); ++column) {
+        if (column != 0) {
+            text += L'\t';
+        }
+        text += Ksword::Ui::SanitizeTsvCell(cells[column]);
+    }
+    return text;
+}
+
+// ExportFileTable writes the requested scope and reports how much of the listing
+// actually reached the file. A filter that hides rows must be visible in the
+// status line: a file named "导出" that holds 40 of 5000 rows is the failure this
+// message exists to prevent.
+void ExportFileTable(FileViewState& state, const bool visibleOnly) {
+    const std::size_t exportedRows = visibleOnly ? state.visibleIndexes.size() : state.presentationRows.size();
+    if (exportedRows == 0) {
+        SetStatus(state, L"当前没有可导出的文件行。");
+        return;
+    }
+    std::wstring error;
+    const Ksword::Ui::SaveTextFileResult result = Ksword::Ui::SaveUtf8TextFileWithDialog(
+        state.hwnd,
+        L"file_list.tsv",
+        visibleOnly ? L"导出文件列表（可见行）" : L"导出文件列表（全部行）",
+        L"制表符分隔文件 (*.tsv)\0*.tsv\0所有文件 (*.*)\0*.*\0",
+        L"tsv",
+        BuildFileTableTsv(state, visibleOnly),
+        &error);
+    if (result == Ksword::Ui::SaveTextFileResult::Failed) {
+        SetStatus(state, error.empty() ? L"文件列表导出失败。" : L"文件列表导出失败：" + error);
+        return;
+    }
+    if (result != Ksword::Ui::SaveTextFileResult::Saved) {
+        return;
+    }
+    std::wstring message = L"已导出 " + std::to_wstring(exportedRows) + L" 行文件列表。";
+    if (exportedRows < state.presentationRows.size()) {
+        message += L"筛选隐藏的 " + std::to_wstring(state.presentationRows.size() - exportedRows) + L" 行未写入。";
+    }
+    SetStatus(state, message);
+}
+
 // ShowContextMenu builds a context object, displays the FileActions menu, then
 // executes the selected command. Inputs are state and screen coordinate; no
 // value is returned.
@@ -743,9 +834,30 @@ void ShowContextMenu(FileViewState& state, POINT screenPoint) {
     context.currentDirectory = state.navigator.currentPath();
     context.hasSelection = SelectedEntry(state, &context.selectedEntry);
     const FileActionId action = FileActions::showContextMenu(state.hwnd, context, screenPoint);
-    if (action == FileActionId::SelectColumns) {
+    // Table export is not a filesystem operation and must not go through the
+    // background action queue, which would report it as a file change.
+    switch (action) {
+    case FileActionId::SelectColumns:
         ShowColumnMenu(state, screenPoint);
         return;
+    case FileActionId::CopySelectedRow:
+        SetStatus(state, FileActions::copyTextToClipboard(state.hwnd, SelectedRowTsv(state))
+            ? L"已复制所选文件行。" : L"复制文件行失败：剪贴板不可用。");
+        return;
+    case FileActionId::CopyVisibleRows:
+        SetStatus(state, FileActions::copyTextToClipboard(state.hwnd, BuildFileTableTsv(state, true))
+            ? L"已复制可见文件行。" : L"复制文件行失败：剪贴板不可用。");
+        return;
+    case FileActionId::ExportVisibleTsv:
+        ExportFileTable(state, true);
+        return;
+    case FileActionId::ExportAllTsv:
+        ExportFileTable(state, false);
+        return;
+    case FileActionId::None:
+        return;
+    default:
+        break;
     }
     BeginFileAction(state, action, std::move(context));
 }

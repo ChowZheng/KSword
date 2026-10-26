@@ -19,7 +19,8 @@ namespace ks::ui
 
     // BindWidgetTheme：登记控件完整的主题角色刷新函数；同一控件再次登记会替换旧函数。
     // widget 管理绑定生命周期，refresh 必须使用明确的主题角色，并完整刷新自身局部样式。
-    // 构造期登记及主题变化分片排队；完整页面挂载可局部消费首帧请求，Popup 保留延迟约束。
+    // 构造期只登记；普通窗口绘制同步前默认完成首次可见主题与布局准备。
+    // 后续主题变化仍分片排队；完整页面挂载可局部消费请求，Popup 保留延迟约束。
     // 返回 false 表示空参数、没有 QApplication 或调用线程不属于 GUI 线程。
     // PreserveLocal 会在重建 QSS 后恢复调用前的局部 palette，防止 Qt repolish 丢失独立底色。
     // Only input refreshers that compose the standalone geometry opt in; a

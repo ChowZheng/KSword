@@ -6,64 +6,89 @@ namespace {
 
 
 const std::vector<TopLevelTabSpec> kOriginalTopLevelTabs = {
-    { L"动态偏移", KernelFeatureId::PdbProfileStatus },
+    // 顶层顺序对齐 Ksword5.1(Qt) KernelDock 的 addTab 顺序：
+    // object -> atom -> misc -> io -> audit -> hal/wdf -> slat -> timers -> workers -> cid -> ipc。
+    // 只有 Qt 内核 Dock 里确实存在的分组留在这里；Qt 已搬到驱动/硬件/虚拟化 Dock
+    // 的页面放到末尾的补充分组，保证入口不丢。
     { L"对象命名空间", KernelFeatureId::ObjectNamespaceOverview },
-    { L"IPC", KernelFeatureId::IpcSummary },
     { L"原子表遍历", KernelFeatureId::AtomTable },
-    { L"历史NtQuery", KernelFeatureId::NtQueryLegacy },
-    { L"SSDT遍历", KernelFeatureId::Ssdt },
-    { L"SSSDT解析", KernelFeatureId::ShadowSsdt },
-    { L"Inline Hook 审计", KernelFeatureId::InlineHook },
-    { L"IAT/EAT 钩子检测", KernelFeatureId::IatEatHook },
-    { L"Hook审计", KernelFeatureId::HookAuditSummary },
-    { L"驱动回调", KernelFeatureId::CallbackIntercept },
-    { L"回调遍历", KernelFeatureId::CallbackEnumeration },
-    { L"内核可执行内存", KernelFeatureId::KernelExecutableMemory },
-    { L"CrossView", KernelFeatureId::ProcessCrossView },
+    { L"杂项", KernelFeatureId::NtQueryLegacy },
+    { L"I/O管理", KernelFeatureId::Ssdt },
+    { L"内核审计与回调", KernelFeatureId::HookAuditSummary },
+    { L"平台审计", KernelFeatureId::PlatformAudit },
+    { L"SLAT/IOMMU", KernelFeatureId::SlatIommuAudit },
     { L"定时器/DPC", KernelFeatureId::KernelTimerDpc },
-    { L"IOCTL 派遣表", KernelFeatureId::IoctlRegistry },
-    { L"内核修改审计", KernelFeatureId::MutationAudit },
+    { L"内核工作队列", KernelFeatureId::WorkQueueThreads },
+    { L"CID表", KernelFeatureId::CidTableSummary },
+    { L"IPC", KernelFeatureId::IpcSummary },
+    // 补充分组：Qt 侧对应页面已经迁到别的 Dock，Light 没有那些 Dock。
+    { L"PDB Profile", KernelFeatureId::PdbProfileStatus },
+    { L"虚拟化", KernelFeatureId::HvmStatus },
     { L"键盘", KernelFeatureId::KeyboardHotkeys },
 };
 
 const std::vector<ObjectNamespaceTabSpec> kObjectNamespaceTabs = {
+    // 对齐 Qt object 组顺序：总览/目录递归/BaseNamedObjects/符号链接/设备与驱动/
+    // IoTimer/IOCTL 派遣表/ObjectType 方法指针/对象类型。
+    // Light 没有独立的 IoTimer 页；命名管道与通信端点属于 Qt 的 IPC 组，已移出。
     { L"总览", KernelFeatureId::ObjectNamespaceOverview },
     { L"目录递归", KernelFeatureId::ObjectDirectoryRecursive },
-    { L"命名管道", KernelFeatureId::NamedPipe },
     { L"BaseNamedObjects", KernelFeatureId::BaseNamedObjects },
     { L"符号链接", KernelFeatureId::SymbolicLink },
     { L"设备与驱动", KernelFeatureId::DeviceDriverObjects },
+    { L"IOCTL 派遣表", KernelFeatureId::IoctlRegistry },
+    { L"ObjectType 方法指针", KernelFeatureId::ObjectTypeProcedures },
     { L"对象类型", KernelFeatureId::ObjectTypeMatrix },
-    { L"对象类型方法", KernelFeatureId::ObjectTypeProcedures },
-    { L"通信端点", KernelFeatureId::CommunicationEndpoint },
 };
 
-const std::vector<ObjectNamespaceTabSpec> kDynDataTabs = {
-    { L"PDB/Profile", KernelFeatureId::PdbProfileStatus },
-    { L"DynData字段", KernelFeatureId::DynData },
-    { L"Capability", KernelFeatureId::DynDataCapabilities },
-    { L"驱动状态", KernelFeatureId::DriverStatus },
+const std::vector<ObjectNamespaceTabSpec> kMiscTabs = {
+    // 对齐 Qt misc 组。Light 里只有历史 NtQuery 在 Qt 有直接对应页；
+    // 代码完整性/VBS/HVCI/HVCI 绕过/RXPF/知识中心在 Light 里没有实现。
+    // 内核可执行内存/内核内存证据/内核修改审计/PiDDB/逐包捕获是 Light 独有，
+    // 归到杂项而不是另开顶层页，避免顶层页数量和 Qt 越拉越远。
+    { L"历史 NtQuery", KernelFeatureId::NtQueryLegacy },
+    { L"内核可执行内存", KernelFeatureId::KernelExecutableMemory },
+    { L"内核内存证据", KernelFeatureId::KernelMemoryEvidence },
+    { L"内核修改审计", KernelFeatureId::MutationAudit },
+    { L"PiDDB 缓存", KernelFeatureId::PiDdbCache },
+    { L"网络逐包捕获", KernelFeatureId::NetworkTrafficPackets },
 };
 
-const std::vector<ObjectNamespaceTabSpec> kCrossViewTabs = {
-    { L"进程矩阵", KernelFeatureId::ProcessCrossView },
-    { L"线程矩阵", KernelFeatureId::ThreadCrossView },
-    { L"CID表", KernelFeatureId::CidTableSummary },
+const std::vector<ObjectNamespaceTabSpec> kIoManagementTabs = {
+    // 对齐 Qt io 组。IDT/GDT/IOCTLS/DriverStartIo 在 Light 里没有独立页。
+    { L"SSDT", KernelFeatureId::Ssdt },
+    { L"ShadowSSDT", KernelFeatureId::ShadowSsdt },
+};
+
+const std::vector<ObjectNamespaceTabSpec> kHookAuditTabs = {
+    // 对齐 Qt audit 组顺序：inline -> iat -> callbacks -> intercept -> unified。
+    // SSDT/ShadowSSDT 属于 I/O 管理组，不再在这里重复挂载。
+    { L"Inline Hook", KernelFeatureId::InlineHook },
+    { L"IAT/EAT", KernelFeatureId::IatEatHook },
+    { L"回调遍历", KernelFeatureId::CallbackEnumeration },
+    { L"驱动回调", KernelFeatureId::CallbackIntercept },
+    { L"统一审计", KernelFeatureId::HookAuditSummary },
+    { L"Minifilter 放行 PID", KernelFeatureId::MinifilterBypassPids },
+};
+
+const std::vector<ObjectNamespaceTabSpec> kCidTabs = {
+    // Qt 的 cid 组只有 CID 表一页；进程/线程 CrossView 是 Light 独有的交叉视图，
+    // 语义上同属 CID 聚合，挂在这里而不是单独占顶层页。
+    { L"CID 表", KernelFeatureId::CidTableSummary },
+    { L"进程 CrossView", KernelFeatureId::ProcessCrossView },
+    { L"线程 CrossView", KernelFeatureId::ThreadCrossView },
 };
 
 const std::vector<ObjectNamespaceTabSpec> kIpcTabs = {
-    { L"IPC汇总", KernelFeatureId::IpcSummary },
+    // 对齐 Qt ipc 组：NamedPipe / ALPC / 通信对象。
+    { L"IPC 汇总", KernelFeatureId::IpcSummary },
     { L"命名管道", KernelFeatureId::NamedPipe },
     { L"通信端点", KernelFeatureId::CommunicationEndpoint },
 };
 
-const std::vector<ObjectNamespaceTabSpec> kHookAuditTabs = {
-    { L"审计摘要", KernelFeatureId::HookAuditSummary },
-    { L"SSDT", KernelFeatureId::Ssdt },
-    { L"ShadowSSDT", KernelFeatureId::ShadowSsdt },
-    { L"Inline", KernelFeatureId::InlineHook },
-    { L"IAT/EAT", KernelFeatureId::IatEatHook },
-    { L"回调遍历", KernelFeatureId::CallbackEnumeration },
+const std::vector<ObjectNamespaceTabSpec> kVirtualizationTabs = {
+    { L"VT-x / EPT 状态", KernelFeatureId::HvmStatus },
+    { L"VM-exit 事件", KernelFeatureId::HvmEvents },
 };
 
 const std::vector<ObjectNamespaceTabSpec> kKeyboardTabs = {
@@ -89,16 +114,20 @@ const std::vector<ObjectNamespaceTabSpec>& SecondaryTabsForPrimary(const KernelF
     // static vector whose feature ids are resolved against the live catalog by
     // KernelPage before insertion.
     switch (primaryFeatureId) {
-    case KernelFeatureId::PdbProfileStatus:
-        return kDynDataTabs;
     case KernelFeatureId::ObjectNamespaceOverview:
         return kObjectNamespaceTabs;
-    case KernelFeatureId::IpcSummary:
-        return kIpcTabs;
-    case KernelFeatureId::ProcessCrossView:
-        return kCrossViewTabs;
+    case KernelFeatureId::NtQueryLegacy:
+        return kMiscTabs;
+    case KernelFeatureId::Ssdt:
+        return kIoManagementTabs;
     case KernelFeatureId::HookAuditSummary:
         return kHookAuditTabs;
+    case KernelFeatureId::CidTableSummary:
+        return kCidTabs;
+    case KernelFeatureId::IpcSummary:
+        return kIpcTabs;
+    case KernelFeatureId::HvmStatus:
+        return kVirtualizationTabs;
     case KernelFeatureId::KeyboardHotkeys:
         return kKeyboardTabs;
     default:
@@ -180,31 +209,35 @@ std::vector<std::wstring> CanonicalColumnNames(const KernelFeatureId featureId) 
     case KernelFeatureId::ObjectDirectoryRecursive:
         return { L"名称", L"类型", L"完整路径", L"深度", L"状态" };
     case KernelFeatureId::NamedPipe:
-        return { L"Pipe Name", L"NT Path", L"Attributes", L"LastWriteTime", L"Status", L"Source" };
+        // Qt 这一页的表头是英文硬编码，中文界面下会中英混杂；Light 是纯中文
+        // 产品，这里按同序同义统一译成中文。
+        return { L"管道名称", L"NT 路径", L"属性", L"最后写入时间", L"状态", L"来源" };
     case KernelFeatureId::BaseNamedObjects:
-        return { L"scope", L"directoryPath", L"objectName", L"objectType", L"fullPath", L"symbolicTarget", L"statusText" };
+        return { L"作用域", L"目录路径", L"对象名称", L"对象类型", L"完整路径", L"符号链接目标", L"状态" };
     case KernelFeatureId::SymbolicLink:
-        return { L"sourceDirectory", L"linkName", L"fullPath", L"targetPath", L"dosCandidate", L"statusText" };
+        return { L"来源目录", L"对象类型", L"链接名称", L"完整路径", L"目标路径", L"状态" };
     case KernelFeatureId::DeviceDriverObjects:
-        return { L"目录路径", L"对象名称", L"对象类型", L"完整路径", L"目标路径", L"状态", L"能力提示" };
+        return { L"目录路径", L"对象名称", L"对象类型", L"完整路径", L"目标路径", L"状态",
+            L"能力提示" };
     case KernelFeatureId::ObjectTypeMatrix:
-        return { L"类型编号", L"类型名", L"R0 对象地址", L"R0 交叉验证",
-            L"对象数", L"句柄数", L"访问掩码", L"枚举策略" };
+        return { L"类型编号", L"类型名", L"R0 类型地址", L"R0 交叉验证",
+            L"对象数", L"句柄数", L"枚举策略" };
     case KernelFeatureId::ObjectTypeProcedures:
         return { L"类型索引", L"类型名", L"方法", L"槽位地址", L"目标地址",
             L"归属模块", L"所在节", L"风险", L"状态" };
     case KernelFeatureId::CommunicationEndpoint:
         return { L"来源目录", L"名称", L"类型", L"完整路径", L"状态" };
     case KernelFeatureId::AtomTable:
-        return { L"Atom值", L"十六进制", L"名称", L"来源", L"状态" };
+        return { L"Atom值", L"名称", L"来源", L"状态" };
     case KernelFeatureId::NtQueryLegacy:
         return { L"类别", L"函数", L"查询项", L"状态", L"摘要" };
     case KernelFeatureId::Ssdt:
-        return { L"索引", L"服务名", L"Zw导出地址", L"表项地址", L"模块", L"状态" };
+        return { L"索引", L"服务名", L"Zw导出地址", L"服务例程", L"模块", L"状态" };
     case KernelFeatureId::ShadowSsdt:
         return { L"索引", L"服务名", L"Stub地址", L"服务例程", L"模块", L"状态" };
     case KernelFeatureId::InlineHook:
-        return { L"模块", L"函数", L"函数地址", L"类型", L"目标地址", L"目标模块", L"状态", L"内存字节", L"磁盘字节", L"差异状态" };
+        return { L"模块", L"函数", L"函数地址", L"类型", L"目标地址", L"目标模块", L"状态",
+            L"内存字节", L"磁盘字节", L"差异状态" };
     case KernelFeatureId::IatEatHook:
         return { L"类别", L"模块", L"导入模块", L"函数/序号", L"Thunk/EAT项", L"当前目标", L"期望目标", L"目标模块", L"状态" };
     case KernelFeatureId::DynData:
@@ -218,7 +251,7 @@ std::vector<std::wstring> CanonicalColumnNames(const KernelFeatureId featureId) 
     case KernelFeatureId::KernelExecutableMemory:
         return { L"VA", L"页数", L"页大小", L"权限", L"Owner", L"模块路径", L"风险标志" };
     case KernelFeatureId::KernelMemoryEvidence:
-        return { L"VA", L"大小", L"类型", L"Owner", L"PTE权限", L"风险", L"text hash/diff", L"Detail" };
+        return { L"VA", L"大小", L"类型", L"Owner", L"PTE权限", L"风险", L"Detail" };
     case KernelFeatureId::ProcessCrossView:
     case KernelFeatureId::ThreadCrossView:
         return { L"ID", L"对象", L"进程", L"PublicWalk", L"Active/ThreadList", L"CID", L"异常", L"置信度", L"Detail" };
@@ -227,31 +260,41 @@ std::vector<std::wstring> CanonicalColumnNames(const KernelFeatureId featureId) 
     case KernelFeatureId::KernelCpuIntegrity:
         return { L"类别", L"CPU/Vector", L"对象/寄存器", L"目标/入口", L"Owner模块", L"风险", L"置信度", L"Detail" };
     case KernelFeatureId::CpuHardwareSnapshot:
-        return { L"项目", L"值", L"摘要", L"Features", L"Leaves", L"状态" };
+        return { L"项目", L"值", L"摘要", L"状态" };
     case KernelFeatureId::PhysicalMemoryLayout:
         return { L"范围", L"总物理内存", L"最高物理地址", L"最大连续Range", L"状态" };
     case KernelFeatureId::MutationAudit:
-        return { L"Tx", L"Operation", L"Status", L"TargetKind", L"PID", L"Address", L"Bytes", L"Risk", L"Flags" };
+        return { L"Operation", L"Status", L"PID", L"Address", L"Bytes", L"Risk" };
     case KernelFeatureId::KeyboardHotkeys:
-        return { L"对象", L"热键ID", L"热键", L"进程ID", L"线程ID", L"进程名", L"来源", L"VK/Mod", L"详情" };
+        return { L"对象", L"热键", L"进程ID", L"线程ID", L"进程名", L"来源", L"详情" };
     case KernelFeatureId::KeyboardHooks:
-        return { L"对象", L"类型", L"范围", L"进程ID", L"线程ID", L"函数/偏移", L"模块", L"来源", L"Flags", L"详情" };
+        return { L"对象", L"类型", L"范围", L"进程ID", L"线程ID", L"函数/偏移", L"模块", L"来源", L"详情" };
     case KernelFeatureId::DynDataCapabilities:
         return { L"Capability", L"状态", L"字段", L"原因" };
     case KernelFeatureId::PdbProfileStatus:
-        return { L"模块", L"Class", L"Profile", L"状态", L"Capability", L"缺失", L"Identity/Detail" };
+        return { L"模块", L"Profile", L"状态", L"Capability", L"缺失" };
     case KernelFeatureId::CidTableSummary:
-        return { L"CID", L"对象", L"类型", L"状态", L"Flags", L"引用", L"Detail" };
+        return { L"CID", L"对象", L"类型", L"状态", L"引用", L"Detail" };
     case KernelFeatureId::IpcSummary:
-        return { L"类别", L"状态", L"进程", L"Handle/Object", L"Capability", L"来源", L"Detail" };
+        return { L"类别", L"状态", L"进程", L"Handle/Object", L"来源", L"Detail" };
     case KernelFeatureId::HookAuditSummary:
-        return { L"类别", L"入口", L"状态", L"Capability", L"Rows", L"风险/降级", L"Detail" };
+        return { L"类别", L"入口", L"状态", L"风险/降级", L"Detail" };
     case KernelFeatureId::MinifilterBypassPids:
         return { L"PID", L"进程", L"状态", L"来源" };
     case KernelFeatureId::KernelTimerDpc:
-        return { L"CPU", L"Bucket", L"Timer", L"DueTime", L"Period", L"类型", L"DPC", L"例程", L"上下文", L"标志", L"状态" };
+        return { L"CPU", L"Bucket", L"Timer", L"DueTime", L"Period", L"类型", L"DPC", L"例程", L"上下文", L"状态" };
     case KernelFeatureId::IoctlRegistry:
-        return { L"IOCTL", L"函数", L"Method/Access", L"Capability", L"Handler", L"名称", L"Flags", L"状态" };
+        return { L"IOCTL", L"函数", L"Method/Access", L"Capability", L"Handler", L"名称", L"状态" };
+    case KernelFeatureId::PlatformAudit:
+        // 对齐 Qt HAL/WDF 平台审计表：函数 / 回调 | 索引 | 当前地址 | 原始地址 |
+        // Hook | 模块 | 置信度。厂商、表地址、签名策略、备注在 Light 的协议里
+        // 没有逐行字段，不建空列。
+        return { L"函数 / 回调", L"索引", L"当前地址", L"原始地址", L"Hook", L"模块", L"置信度" };
+    case KernelFeatureId::WorkQueueThreads:
+        // 对齐 Qt 内核工作队列线程表中 Light 有数据的部分。线程状态、等待原因、
+        // 参数、模块基址、模块路径、R0 状态、管理保护在本协议里没有逐行字段。
+        return { L"线程ID", L"EThread", L"队列类型", L"优先级", L"Node", L"EX_WORK_QUEUE",
+            L"工作项", L"例程入口", L"入口模块", L"标志" };
     default:
         return {};
     }
@@ -276,29 +319,29 @@ std::vector<std::wstring> ColumnAliases(const KernelFeatureId featureId, const s
         if (columnName == L"状态") return { L"Status", L"statusText" };
     }
     if (featureId == KernelFeatureId::NamedPipe) {
-        if (columnName == L"Pipe Name") return { L"Pipe", L"Name", L"objectName" };
-        if (columnName == L"NT Path") return { L"NtPath", L"Path", L"fullPath" };
-        if (columnName == L"Attributes") return { L"Attributes" };
-        if (columnName == L"LastWriteTime") return { L"LastWriteTime", L"LastWrite" };
-        if (columnName == L"Status") return { L"Status", L"statusText" };
-        if (columnName == L"Source") return { L"Directory", L"Source", L"Parent", L"sourceDirectory" };
+        if (columnName == L"管道名称") return { L"Pipe Name", L"Pipe", L"Name", L"objectName" };
+        if (columnName == L"NT 路径") return { L"NT Path", L"NtPath", L"Path", L"fullPath" };
+        if (columnName == L"属性") return { L"Attributes" };
+        if (columnName == L"最后写入时间") return { L"LastWriteTime", L"LastWrite" };
+        if (columnName == L"状态") return { L"Status", L"statusText" };
+        if (columnName == L"来源") return { L"Source", L"Directory", L"Parent", L"sourceDirectory" };
     }
     if (featureId == KernelFeatureId::BaseNamedObjects) {
-        if (columnName == L"scope") return { L"Source", L"Scope" };
-        if (columnName == L"directoryPath") return { L"directoryPath", L"Parent", L"Directory", L"sourceDirectory" };
-        if (columnName == L"objectName") return { L"objectName", L"Name" };
-        if (columnName == L"objectType") return { L"objectType", L"Type" };
-        if (columnName == L"fullPath") return { L"fullPath", L"Path", L"NtPath" };
-        if (columnName == L"symbolicTarget") return { L"symbolicTarget", L"targetPath", L"Target" };
-        if (columnName == L"statusText") return { L"statusText", L"Status" };
+        if (columnName == L"作用域") return { L"Source", L"Scope", L"scope" };
+        if (columnName == L"目录路径") return { L"directoryPath", L"Parent", L"Directory", L"sourceDirectory" };
+        if (columnName == L"对象名称") return { L"objectName", L"Name" };
+        if (columnName == L"对象类型") return { L"objectType", L"Type" };
+        if (columnName == L"完整路径") return { L"fullPath", L"Path", L"NtPath" };
+        if (columnName == L"符号链接目标") return { L"symbolicTarget", L"targetPath", L"Target" };
+        if (columnName == L"状态") return { L"statusText", L"Status" };
     }
     if (featureId == KernelFeatureId::SymbolicLink) {
-        if (columnName == L"sourceDirectory") return { L"sourceDirectory", L"Source", L"Parent", L"Directory" };
-        if (columnName == L"linkName") return { L"linkName", L"Name", L"objectName" };
-        if (columnName == L"fullPath") return { L"fullPath", L"Path", L"NtPath" };
-        if (columnName == L"targetPath") return { L"targetPath", L"symbolicTarget", L"Target" };
-        if (columnName == L"dosCandidate") return { L"dosCandidate", L"DosCandidates", L"Win32Path" };
-        if (columnName == L"statusText") return { L"statusText", L"Status" };
+        if (columnName == L"来源目录") return { L"sourceDirectory", L"Source", L"Parent", L"Directory" };
+        if (columnName == L"对象类型") return { L"objectType", L"Type" };
+        if (columnName == L"链接名称") return { L"linkName", L"Name", L"objectName" };
+        if (columnName == L"完整路径") return { L"fullPath", L"Path", L"NtPath" };
+        if (columnName == L"目标路径") return { L"targetPath", L"symbolicTarget", L"Target" };
+        if (columnName == L"状态") return { L"statusText", L"Status" };
     }
     if (featureId == KernelFeatureId::DeviceDriverObjects) {
         if (columnName == L"目录路径") return { L"directoryPath", L"Parent", L"Directory", L"Source" };
@@ -307,7 +350,6 @@ std::vector<std::wstring> ColumnAliases(const KernelFeatureId featureId, const s
         if (columnName == L"完整路径") return { L"fullPath", L"Path", L"NtPath" };
         if (columnName == L"目标路径") return { L"targetPath", L"symbolicTarget", L"Target" };
         if (columnName == L"状态") return { L"statusText", L"Status" };
-        if (columnName == L"能力提示") return { L"capabilityHintText", L"Capability", L"Detail" };
     }
     if (featureId == KernelFeatureId::ObjectTypeMatrix) {
         if (columnName == L"类型编号") return { L"TypeIndex", L"Index" };
@@ -590,6 +632,27 @@ std::vector<std::wstring> ColumnAliases(const KernelFeatureId featureId, const s
         if (columnName == L"名称") return { L"名称", L"Name" };
         if (columnName == L"Flags") return { L"Flags" };
         if (columnName == L"状态") return { L"状态", L"Status" };
+    }
+    if (featureId == KernelFeatureId::PlatformAudit) {
+        if (columnName == L"函数 / 回调") return { L"函数 / 回调", L"Name" };
+        if (columnName == L"索引") return { L"Index" };
+        if (columnName == L"当前地址") return { L"Live" };
+        if (columnName == L"原始地址") return { L"Original" };
+        if (columnName == L"Hook") return { L"HookStatus" };
+        if (columnName == L"模块") return { L"Module" };
+        if (columnName == L"置信度") return { L"Confidence" };
+    }
+    if (featureId == KernelFeatureId::WorkQueueThreads) {
+        if (columnName == L"线程ID") return { L"ThreadId" };
+        if (columnName == L"EThread") return { L"Thread" };
+        if (columnName == L"队列类型") return { L"QueueType" };
+        if (columnName == L"优先级") return { L"Priority" };
+        if (columnName == L"Node") return { L"Node" };
+        if (columnName == L"EX_WORK_QUEUE") return { L"Queue" };
+        if (columnName == L"工作项") return { L"WorkItem" };
+        if (columnName == L"例程入口") return { L"Routine" };
+        if (columnName == L"入口模块") return { L"Module" };
+        if (columnName == L"标志") return { L"Flags" };
     }
     return { columnName };
 }

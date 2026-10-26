@@ -77,31 +77,7 @@ DiskActivityViewState* StateFromWindow(HWND hwnd) {
 }
 
 bool CopyText(HWND owner, const std::wstring& text) {
-    if (text.empty() || !::OpenClipboard(owner)) {
-        return false;
-    }
-    ::EmptyClipboard();
-    const SIZE_T bytes = (text.size() + 1) * sizeof(wchar_t);
-    HGLOBAL memory = ::GlobalAlloc(GMEM_MOVEABLE, bytes);
-    if (!memory) {
-        ::CloseClipboard();
-        return false;
-    }
-    void* target = ::GlobalLock(memory);
-    if (!target) {
-        ::GlobalFree(memory);
-        ::CloseClipboard();
-        return false;
-    }
-    std::memcpy(target, text.c_str(), bytes);
-    ::GlobalUnlock(memory);
-    if (!::SetClipboardData(CF_UNICODETEXT, memory)) {
-        ::GlobalFree(memory);
-        ::CloseClipboard();
-        return false;
-    }
-    ::CloseClipboard();
-    return true;
+    return Ksword::Ui::CopyTextToClipboard(owner, text, L"磁盘活动导出");
 }
 
 std::wstring StableKeyFromListItem(const DiskActivityViewState& state, int item) {
@@ -486,6 +462,14 @@ LRESULT CALLBACK DiskActivityViewProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
                 LRESULT result = 0;
                 if (state->diskList.handleNotify(*header, result)) {
                     return result;
+                }
+                if (header->hwndFrom == state->diskList.hwnd() && header->code == LVN_COLUMNCLICK) {
+                    const auto* clicked = reinterpret_cast<const NMLISTVIEW*>(lParam);
+                    const Ksword::Ui::SortSpec next =
+                        Ksword::Ui::NextSortSpec(state->diskList.sortSpec(), clicked ? clicked->iSubItem : -1);
+                    state->diskList.applySort(next);
+                    Ksword::Ui::ShowSortIndicator(state->diskList.hwnd(), next);
+                    return 0;
                 }
                 if (header->hwndFrom == state->diskList.hwnd() && header->code == NM_RCLICK) {
                     POINT point{};

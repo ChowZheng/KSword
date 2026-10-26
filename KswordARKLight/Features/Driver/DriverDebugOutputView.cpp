@@ -5,8 +5,11 @@
 #include "../../../Ksword5.1/Ksword5.1/ArkDriverClient/ArkDriverClient.h"
 #include "../../Ui/AsyncTask.h"
 #include "../../Ui/Controls.h"
+#include "../../Ui/ExportUtil.h"
 #include "../../Ui/FilterBar.h"
 #include "../../Ui/ListViewUtil.h"
+#include "../../Ui/NumericSortKey.h"
+#include "../../Ui/TableCompareActions.h"
 #include "../../Ui/Theme.h"
 #include "../../Ui/VirtualListView.h"
 
@@ -49,6 +52,8 @@ constexpr UINT kMsgFilterCompleted = WM_APP + 602;
 constexpr UINT kMenuCopyCell = 64351;
 constexpr UINT kMenuCopyRow = 64352;
 constexpr UINT kMenuCopyVisible = 64353;
+constexpr UINT kMenuExportVisible = 64354;
+constexpr UINT kMenuExportAll = 64355;
 
 struct DebugRecordRow {
     std::uint64_t sequence = 0;
@@ -102,6 +107,7 @@ struct DriverDebugOutputViewState {
     Ksword::Ui::VirtualListView virtualList;
     std::deque<std::shared_ptr<const DebugRecordRow>> records;
     std::vector<std::shared_ptr<const DebugRecordRow>> visibleRows;
+    Ksword::Ui::SortSpec sortSpec;
     std::uint64_t filteredThrough = 0;
     std::uint64_t filterSession = 0;
     std::uint64_t appliedFilterGeneration = 0;
@@ -116,6 +122,10 @@ struct DriverDebugOutputViewState {
     std::uint64_t nextSequence = 0;
     int contextColumn = 0;
     bool capturing = false;
+    // 调试输出是连续追加的流，"从这里往后又多打了什么"只能靠两份快照并排看。
+    // 序号随记录单调递增，环满后被挤掉的旧记录会显示成"移除"，那是缓存上限
+    // 不是系统变化，所以状态行同时给出 缓存 N/2000。
+    Ksword::Ui::TableSnapshotEngine snapshotEngine;
     std::shared_ptr<DebugControlLifetime> controlLifetime = std::make_shared<DebugControlLifetime>();
     std::shared_ptr<Ksword::Ui::BackgroundCleanup> retirement;
     bool retirementCancelled = false;
@@ -229,22 +239,70 @@ std::wstring ControlStatusText(const ksword::ark::DebugOutputControlResult& resu
         L"，累计丢弃=" + std::to_wstring(result.droppedCount) + L"。";
 }
 
+// AppendDebugTsvRow writes one record as a tab-separated line. The debug text
+// column is driver output and can carry tabs or newlines, so it goes through the
+// shared cell sanitizer rather than being pasted raw.
+void AppendDebugTsvRow(std::wstring& text, const DebugRecordRow& row) {
+    const auto& cells = DebugCells(row);
+    for (std::size_t cell = 0; cell < cells.size(); ++cell) {
+        if (cell != 0) {
+            text += L'\t';
+        }
+        text += DriverModel::sanitizeTsvCell(cells[cell]);
+    }
+    text += L"\r\n";
+}
+
 std::wstring BuildVisibleTsv(const DriverDebugOutputViewState& state, const bool selectedOnly) {
     std::wstring text = L"序号\t中断时间(100ns)\t组件\t级别\t标记\t文本\r\n";
     const int selected = ListView_GetNextItem(state.listView, -1, LVNI_SELECTED);
     const int start = selectedOnly ? selected : 0;
     const int end = selectedOnly ? selected + 1 : static_cast<int>(state.visibleRows.size());
     for (int index = start; index >= 0 && index < end; ++index) {
-        const auto& cells = DebugCells(*state.visibleRows[static_cast<std::size_t>(index)]);
-        for (std::size_t cell = 0; cell < cells.size(); ++cell) {
-            if (cell != 0) {
-                text += L'\t';
-            }
-            text += DriverModel::sanitizeTsvCell(cells[cell]);
-        }
-        text += L"\r\n";
+        AppendDebugTsvRow(text, *state.visibleRows[static_cast<std::size_t>(index)]);
     }
     return text;
+}
+
+// BuildAllTsv serializes the whole ring buffer, ignoring the active filter. The
+// buffer only holds the last kMaximumRecords records and the driver discards the
+// oldest as it wraps, so a filtered export can silently omit records that will
+// never be capturable again.
+std::wstring BuildAllTsv(const DriverDebugOutputViewState& state) {
+    std::wstring text = L"序号\t中断时间(100ns)\t组件\t级别\t标记\t文本\r\n";
+    for (const auto& row : state.records) {
+        AppendDebugTsvRow(text, *row);
+    }
+    return text;
+}
+
+// ExportRows writes an already serialized debug-output table to disk and
+// reports the outcome in the status line. Text arrives pre-built because the two
+// scopes walk different containers, and a cancelled save stays silent: the user
+// who pressed Esc should not be told the export failed.
+void ExportRows(DriverDebugOutputViewState& state, const std::wstring& text,
+    const std::size_t exportedRows, const std::size_t totalRows, const wchar_t* dialogTitle) {
+    std::wstring error;
+    const Ksword::Ui::SaveTextFileResult result = Ksword::Ui::SaveUtf8TextFileWithDialog(
+        state.hwnd,
+        L"driver_debug_output.tsv",
+        dialogTitle,
+        L"制表符分隔文件 (*.tsv)\0*.tsv\0所有文件 (*.*)\0*.*\0",
+        L"tsv",
+        text,
+        &error);
+    if (result == Ksword::Ui::SaveTextFileResult::Failed) {
+        SetStatus(state, error.empty() ? L"调试输出导出失败。" : L"调试输出导出失败：" + error);
+        return;
+    }
+    if (result != Ksword::Ui::SaveTextFileResult::Saved) {
+        return;
+    }
+    std::wstring message = L"已导出 " + std::to_wstring(exportedRows) + L" 条调试输出。";
+    if (exportedRows < totalRows) {
+        message += L"筛选隐藏的 " + std::to_wstring(totalRows - exportedRows) + L" 条未写入。";
+    }
+    SetStatus(state, message);
 }
 
 void CommitVisibleRows(DriverDebugOutputViewState& state, const std::wstring& selected, const std::wstring& top) {
@@ -257,6 +315,20 @@ void CommitVisibleRows(DriverDebugOutputViewState& state, const std::wstring& se
         return;
     }
     state.projectionDirty = false;
+    if (state.sortSpec.active()) {
+        const std::size_t column = static_cast<std::size_t>(state.sortSpec.column);
+        const bool descending = state.sortSpec.descending();
+        const auto cellAt = [column](const std::shared_ptr<const DebugRecordRow>& row) -> const std::wstring& {
+            static const std::wstring empty;
+            return column < row->cells.size() ? row->cells[column] : empty;
+        };
+        std::stable_sort(state.visibleRows.begin(), state.visibleRows.end(),
+            [&cellAt, descending](const std::shared_ptr<const DebugRecordRow>& left,
+                const std::shared_ptr<const DebugRecordRow>& right) {
+                const int order = Ksword::Ui::CompareCellsNumericAware(cellAt(left), cellAt(right));
+                return descending ? order > 0 : order < 0;
+            });
+    }
     ListView_SetItemCountEx(state.listView, static_cast<int>(state.visibleRows.size()),
         LVSICF_NOINVALIDATEALL | LVSICF_NOSCROLL);
     ListView_SetItemState(state.listView, -1, 0, LVIS_SELECTED | LVIS_FOCUSED);
@@ -542,6 +614,36 @@ std::vector<Ksword::Ui::ListViewColumn> Columns() {
     };
 }
 
+// DebugColumnTitles feeds the snapshot capture from the same schema the header
+// was built with.
+const std::vector<std::wstring>& DebugColumnTitles() {
+    static const std::vector<std::wstring> titles = [] {
+        std::vector<std::wstring> result;
+        for (const Ksword::Ui::ListViewColumn& column : Columns()) {
+            result.push_back(column.title);
+        }
+        return result;
+    }();
+    return titles;
+}
+
+// DebugCompareRows exposes the current visible projection to the shared snapshot
+// engine. The rows live in this page's own container (the ListView is a bare
+// LVS_OWNERDATA control), so they are described rather than copied.
+Ksword::Ui::TableCompareRows DebugCompareRows(const DriverDebugOutputViewState& state) {
+    Ksword::Ui::TableCompareRows rows;
+    rows.rowCount = state.visibleRows.size();
+    rows.cellText = [&state](int sourceRow, int column) -> std::wstring {
+        if (sourceRow < 0 || column < 0 ||
+            static_cast<std::size_t>(sourceRow) >= state.visibleRows.size()) {
+            return {};
+        }
+        const std::vector<std::wstring>& cells = state.visibleRows[static_cast<std::size_t>(sourceRow)]->cells;
+        return static_cast<std::size_t>(column) < cells.size() ? cells[static_cast<std::size_t>(column)] : std::wstring{};
+    };
+    return rows;
+}
+
 void ShowContextMenu(DriverDebugOutputViewState& state, POINT screenPoint) {
     POINT client = screenPoint;
     ::ScreenToClient(state.listView, &client);
@@ -561,6 +663,15 @@ void ShowContextMenu(DriverDebugOutputViewState& state, POINT screenPoint) {
     ::AppendMenuW(menu, MF_STRING | (selected >= 0 ? 0U : MF_GRAYED), kMenuCopyCell, L"复制单元格");
     ::AppendMenuW(menu, MF_STRING | (selected >= 0 ? 0U : MF_GRAYED), kMenuCopyRow, L"复制行");
     ::AppendMenuW(menu, MF_STRING | (!state.visibleRows.empty() ? 0U : MF_GRAYED), kMenuCopyVisible, L"复制可见结果");
+    ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    // Two scopes on purpose. "可见结果" follows the filter and matches what the
+    // user is looking at; "全部记录" ignores it because this is a 2000-record
+    // ring buffer fed by driver DbgPrint, so a filtered export would drop
+    // records that cannot be replayed.
+    ::AppendMenuW(menu, MF_STRING | (!state.visibleRows.empty() ? 0U : MF_GRAYED), kMenuExportVisible, L"导出可见结果为 TSV…");
+    ::AppendMenuW(menu, MF_STRING | (!state.records.empty() ? 0U : MF_GRAYED), kMenuExportAll, L"导出全部记录为 TSV…");
+    ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    Ksword::Ui::AppendTableCompareMenuItems(menu, state.snapshotEngine);
     const UINT command = ::TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, screenPoint.x, screenPoint.y, 0, state.hwnd, nullptr);
     ::DestroyMenu(menu);
     if (command == kMenuCopyCell && selected >= 0 && selected < static_cast<int>(state.visibleRows.size())) {
@@ -571,6 +682,19 @@ void ShowContextMenu(DriverDebugOutputViewState& state, POINT screenPoint) {
         DriverActions::CopyTextToClipboard(state.hwnd, BuildVisibleTsv(state, true));
     } else if (command == kMenuCopyVisible) {
         DriverActions::CopyTextToClipboard(state.hwnd, BuildVisibleTsv(state, false));
+    } else if (command == kMenuExportVisible) {
+        ExportRows(state, BuildVisibleTsv(state, false), state.visibleRows.size(), state.records.size(),
+            L"导出驱动调试输出（可见结果）");
+    } else if (command == kMenuExportAll) {
+        ExportRows(state, BuildAllTsv(state), state.records.size(), state.records.size(),
+            L"导出驱动调试输出（全部记录）");
+    } else {
+        // 快照命令 id 在所有表之间共用一段，不是本页的一律交给引擎判定。
+        std::wstring message;
+        if (Ksword::Ui::HandleTableCompareCommand(state.snapshotEngine, command, DebugCompareRows(state),
+                state.hwnd, DebugColumnTitles(), message, L"驱动调试输出")) {
+            SetStatus(state, message);
+        }
     }
 }
 
@@ -705,6 +829,16 @@ bool RegisterViewClass() {
         case WM_NOTIFY:
             if (state) {
                 const auto* header = reinterpret_cast<const NMHDR*>(lParam);
+                if (header && header->hwndFrom == state->listView && header->code == LVN_COLUMNCLICK) {
+                    const auto* clicked = reinterpret_cast<const NMLISTVIEW*>(lParam);
+                    state->sortSpec = Ksword::Ui::NextSortSpec(state->sortSpec, clicked->iSubItem);
+                    Ksword::Ui::ShowSortIndicator(state->virtualList.hwnd(), state->sortSpec);
+                    const std::wstring selectedKey =
+                        StableKeyAt(*state, ListView_GetNextItem(state->listView, -1, LVNI_SELECTED));
+                    const std::wstring topKey = StableKeyAt(*state, ListView_GetTopIndex(state->listView));
+                    CommitVisibleRows(*state, selectedKey, topKey);
+                    return 0;
+                }
                 if (header && header->hwndFrom == state->listView && header->code == LVN_GETDISPINFOW) {
                     auto* info = reinterpret_cast<NMLVDISPINFOW*>(lParam);
                     if ((info->item.mask & LVIF_TEXT) && info->item.iItem >= 0 && info->item.iSubItem >= 0 &&

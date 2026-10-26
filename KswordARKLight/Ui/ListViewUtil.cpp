@@ -2,6 +2,8 @@
 
 #include "Controls.h"
 
+#include <algorithm>
+
 namespace Ksword::Ui {
 
 ScopedWindowRedrawLock::ScopedWindowRedrawLock(HWND hwnd, bool invalidateOnExit) noexcept
@@ -151,6 +153,88 @@ void ClearListViewRows(HWND listView) {
     if (listView) {
         ScopedListViewRedrawLock redrawLock(listView);
         ListView_DeleteAllItems(listView);
+    }
+}
+
+RowCapResult ReplaceListViewRowsCapped(
+    HWND listView,
+    const std::vector<std::vector<std::wstring>>& rows,
+    const std::size_t maxRows) {
+    // The cap applies only to what enters the control. Callers keep the full
+    // data set, so index-based lookups and exports are unaffected by this
+    // helper. No synthetic "more rows" item is inserted because it would show
+    // up as a selectable/copyable/exportable record.
+    RowCapResult result;
+    result.total = rows.size();
+    result.shown = std::min(rows.size(), maxRows);
+    if (!listView) {
+        result.shown = 0;
+        return result;
+    }
+
+    ScopedListViewRedrawLock redrawLock(listView);
+    ListView_DeleteAllItems(listView);
+    for (std::size_t index = 0; index < result.shown; ++index) {
+        InsertListViewTextRow(listView, rows[index]);
+    }
+    return result;
+}
+
+std::wstring RowCapNotice(const RowCapResult& result) {
+    // The caller decides how to join this text with existing status content, so
+    // no prefix punctuation is added here.
+    if (!result.truncated()) {
+        return {};
+    }
+    return L"已显示前 " + std::to_wstring(result.shown) + L" / 共 " +
+        std::to_wstring(result.total) + L" 条，其余未载入列表";
+}
+
+// Cell comparison deliberately lives in Ui/NumericSortKey (CompareCellsNumericAware),
+// which already recovers the ordering value from rendered text including "4.0 MiB"
+// sized columns and codes followed by explanatory text. Keeping a second, weaker
+// number parser here would have made the two sort paths disagree.
+
+SortSpec NextSortSpec(const SortSpec current, const int clickedColumn) {
+    if (clickedColumn < 0) {
+        return current;
+    }
+    if (current.column == clickedColumn) {
+        if (current.direction == SortDirection::Ascending) {
+            return SortSpec{ clickedColumn, SortDirection::Descending };
+        }
+        if (current.direction == SortDirection::Descending) {
+            // Third click drops back to the order the data arrived in.
+            return SortSpec{};
+        }
+    }
+    return SortSpec{ clickedColumn, SortDirection::Ascending };
+}
+
+void ShowSortIndicator(HWND listView, const SortSpec& spec) {
+    if (!listView) {
+        return;
+    }
+    HWND header = ListView_GetHeader(listView);
+    if (!header) {
+        return;
+    }
+    const int columnCount = Header_GetItemCount(header);
+    for (int column = 0; column < columnCount; ++column) {
+        HDITEMW item{};
+        item.mask = HDI_FORMAT;
+        if (!Header_GetItem(header, column, &item)) {
+            continue;
+        }
+        const int cleared = item.fmt & ~(HDF_SORTUP | HDF_SORTDOWN);
+        int updated = cleared;
+        if (spec.active() && column == spec.column) {
+            updated |= spec.descending() ? HDF_SORTDOWN : HDF_SORTUP;
+        }
+        if (updated != item.fmt) {
+            item.fmt = updated;
+            Header_SetItem(header, column, &item);
+        }
     }
 }
 

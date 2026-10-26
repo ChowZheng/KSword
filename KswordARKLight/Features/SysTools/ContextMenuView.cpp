@@ -6,9 +6,11 @@
 #include "../../Ui/AsyncTask.h"
 #include "../../Ui/Controls.h"
 #include "../../Ui/EntityNavigation.h"
+#include "../../Ui/ExportUtil.h"
 #include "../../Ui/FilterBar.h"
 #include "../../Ui/ListViewUtil.h"
 #include "../../Ui/LoadingOverlay.h"
+#include "../../Ui/TableCompareActions.h"
 #include "../../Ui/TextFindSupport.h"
 #include "../../Ui/Theme.h"
 #include "../../Ui/VirtualListView.h"
@@ -18,7 +20,6 @@
 
 #include <algorithm>
 #include <cstdint>
-#include <cstring>
 #include <memory>
 #include <optional>
 #include <sstream>
@@ -46,6 +47,9 @@ constexpr UINT kMenuCopyVisible = 67624;
 constexpr UINT kMenuRefresh = 67625;
 constexpr UINT kMenuOpenRegistry = 67626;
 constexpr UINT kMenuOpenModuleDirectory = 67627;
+constexpr UINT kMenuExportVisible = 67628;
+constexpr UINT kMenuExportAll = 67629;
+constexpr UINT kMenuExportDetail = 67630;
 
 constexpr UINT kMsgScanCompleted = WM_APP + 710;
 constexpr UINT kMsgFilterCompleted = WM_APP + 711;
@@ -89,37 +93,27 @@ struct ContextMenuViewState final {
     bool filterUseRegex = false;
     bool actionInProgress = false;
     std::uint64_t displayGeneration = 0;
+    // 注册点会在安装/卸载 shell 扩展时增删，同名 CLSID 也可能被新模块接管，
+    // 单看一次枚举分不清"本来就有"和"刚刚被换掉"，需要两份快照并排看。
+    Ksword::Ui::TableSnapshotEngine snapshotEngine;
     std::unique_ptr<Ksword::Ui::AsyncSnapshotTask<ContextMenuScanResult>> scanTask;
     std::unique_ptr<Ksword::Ui::AsyncSnapshotTask<ContextMenuFilterResult>> filterTask;
     std::unique_ptr<Ksword::Ui::AsyncSnapshotTask<ContextMenuActionResult>> actionTask;
 };
 
+// ContextMenuColumnTitles feeds the header and the TSV export from one list, so
+// an exported registration table names the columns the user actually saw.
+const std::vector<std::wstring>& ContextMenuColumnTitles() {
+    static const std::vector<std::wstring> titles{
+        L"状态", L"作用域", L"类型", L"名称", L"CLSID", L"模块路径", L"模块"
+    };
+    return titles;
+}
+
+// CopyText forwards to the shared clipboard writer so a copied registration is
+// recorded in the evidence session like every other page's copy.
 bool CopyText(HWND owner, const std::wstring& text) {
-    if (text.empty() || !::OpenClipboard(owner)) {
-        return false;
-    }
-    ::EmptyClipboard();
-    const SIZE_T bytes = (text.size() + 1) * sizeof(wchar_t);
-    HGLOBAL memory = ::GlobalAlloc(GMEM_MOVEABLE, bytes);
-    if (!memory) {
-        ::CloseClipboard();
-        return false;
-    }
-    void* target = ::GlobalLock(memory);
-    if (!target) {
-        ::GlobalFree(memory);
-        ::CloseClipboard();
-        return false;
-    }
-    std::memcpy(target, text.c_str(), bytes);
-    ::GlobalUnlock(memory);
-    if (!::SetClipboardData(CF_UNICODETEXT, memory)) {
-        ::GlobalFree(memory);
-        ::CloseClipboard();
-        return false;
-    }
-    ::CloseClipboard();
-    return true;
+    return Ksword::Ui::CopyTextToClipboard(owner, text, L"右键菜单导出");
 }
 
 std::wstring KindText(const ContextMenuKind kind) {
@@ -289,7 +283,7 @@ void BuildRows(ContextMenuViewState& state) {
         rows.push_back(std::move(row));
     }
     auto filterRows = std::make_shared<std::vector<Ksword::Ui::VirtualListRow>>(std::move(rows));
-    state.list.setRows(*filterRows);
+    state.list.setSharedRows(filterRows);
     state.filterRows = std::move(filterRows);
     ++state.displayGeneration;
 }
@@ -431,6 +425,64 @@ std::wstring RowsAsText(const ContextMenuViewState& state, const bool allVisible
     return text;
 }
 
+// ExportRegistrationList writes one row scope of the registration table as TSV.
+// "Visible" follows the active filter; "all" keeps the whole snapshot, which is
+// what an evidence record needs when the operator has narrowed the table.
+void ExportRegistrationList(ContextMenuViewState& state, const Ksword::Ui::ExportRowScope scope) {
+    Ksword::Ui::ExportRowCount count{};
+    std::wstring error;
+    const Ksword::Ui::SaveTextFileResult result = Ksword::Ui::ExportVirtualListTsvWithDialog(
+        state.hwnd,
+        state.list,
+        ContextMenuColumnTitles(),
+        scope,
+        L"context_menu_handlers.tsv",
+        scope == Ksword::Ui::ExportRowScope::Visible
+            ? L"导出右键菜单项（可见项）"
+            : L"导出右键菜单项（全部项）",
+        L"右键菜单导出",
+        &count,
+        &error);
+    if (result == Ksword::Ui::SaveTextFileResult::Failed) {
+        state.statusText = error.empty() ? L"右键菜单项导出失败。" : L"右键菜单项导出失败：" + error;
+    } else if (result == Ksword::Ui::SaveTextFileResult::Saved) {
+        std::wostringstream summary;
+        summary << L"已导出 " << count.exportedRows << L" / " << count.totalRows << L" 项右键菜单注册";
+        if (count.filteredRows) {
+            summary << L"（筛选隐藏的 " << (count.totalRows - count.exportedRows) << L" 项未写入）";
+        }
+        summary << L"。";
+        state.statusText = summary.str();
+    }
+    ::InvalidateRect(state.hwnd, nullptr, TRUE);
+}
+
+// The detail pane is a formatted reading layout, so it is saved as plain text
+// instead of being flattened into columns.
+void ExportRegistrationDetail(ContextMenuViewState& state) {
+    const ContextMenuEntry* entry = SelectedEntry(state);
+    if (!entry) {
+        state.statusText = L"当前没有可导出的注册项详情。";
+        ::InvalidateRect(state.hwnd, nullptr, TRUE);
+        return;
+    }
+    std::wstring error;
+    const Ksword::Ui::SaveTextFileResult result = Ksword::Ui::SaveUtf8TextFileWithDialog(
+        state.hwnd,
+        L"context_menu_detail.txt",
+        L"导出右键菜单项详情",
+        L"文本文件 (*.txt)\0*.txt\0所有文件 (*.*)\0*.*\0",
+        L"txt",
+        DetailTextForEntry(*entry),
+        &error);
+    if (result == Ksword::Ui::SaveTextFileResult::Failed) {
+        state.statusText = error.empty() ? L"右键菜单项详情导出失败。" : L"右键菜单项详情导出失败：" + error;
+    } else if (result == Ksword::Ui::SaveTextFileResult::Saved) {
+        state.statusText = L"已导出所选右键菜单项的注册详情。";
+    }
+    ::InvalidateRect(state.hwnd, nullptr, TRUE);
+}
+
 // SelectRowAtPoint makes a right-click command apply to the row under the
 // pointer rather than a stale selection left by an earlier operation.
 void SelectRowAtPoint(ContextMenuViewState& state, const POINT screenPoint) {
@@ -523,7 +575,13 @@ void ShowContextMenu(ContextMenuViewState& state, POINT screenPoint) {
     ::AppendMenuW(menu, MF_STRING | (entry ? MF_ENABLED : MF_GRAYED), kMenuCopyRow, L"复制选中行");
     ::AppendMenuW(menu, MF_STRING, kMenuCopyVisible, L"复制可见行");
     ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    ::AppendMenuW(menu, MF_STRING, kMenuExportVisible, L"导出可见菜单项 TSV…");
+    ::AppendMenuW(menu, MF_STRING, kMenuExportAll, L"导出全部菜单项 TSV…");
+    ::AppendMenuW(menu, MF_STRING | (entry ? MF_ENABLED : MF_GRAYED), kMenuExportDetail, L"导出注册详情 TXT…");
+    ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     ::AppendMenuW(menu, MF_STRING, kMenuRefresh, L"刷新");
+    ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    Ksword::Ui::AppendTableCompareMenuItems(menu, state.snapshotEngine);
 
     const int command = ::TrackPopupMenu(
         menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, screenPoint.x, screenPoint.y, 0, state.hwnd, nullptr);
@@ -550,10 +608,24 @@ void ShowContextMenu(ContextMenuViewState& state, POINT screenPoint) {
         state.statusText = CopyText(state.hwnd, RowsAsText(state, true)) ? L"已复制可见行。" : L"复制失败。";
         ::InvalidateRect(state.hwnd, nullptr, TRUE);
         break;
+    case kMenuExportVisible:
+        ExportRegistrationList(state, Ksword::Ui::ExportRowScope::Visible);
+        break;
+    case kMenuExportAll:
+        ExportRegistrationList(state, Ksword::Ui::ExportRowScope::All);
+        break;
+    case kMenuExportDetail:
+        ExportRegistrationDetail(state);
+        break;
     case kMenuRefresh:
         BeginScan(state);
         break;
     default:
+        // 快照命令 id 在所有表之间共用一段，不是本页的一律交给引擎判定。
+        if (Ksword::Ui::HandleTableCompareCommand(state.snapshotEngine, static_cast<UINT>(command),
+                state.list, ContextMenuColumnTitles(), state.statusText, L"右键菜单注册项")) {
+            ::InvalidateRect(state.hwnd, nullptr, TRUE);
+        }
         break;
     }
 }
@@ -610,15 +682,15 @@ bool CreateChildControls(ContextMenuViewState& state) {
     if (!state.list.create(hwnd, kListId, 0, 0, 1, 1, LVS_SHOWSELALWAYS | LVS_SINGLESEL)) {
         return false;
     }
-    state.list.addColumns({
-        { 0, 70, LVCFMT_LEFT, L"状态" },
-        { 1, 80, LVCFMT_LEFT, L"作用域" },
-        { 2, 130, LVCFMT_LEFT, L"类型" },
-        { 3, 180, LVCFMT_LEFT, L"名称" },
-        { 4, 250, LVCFMT_LEFT, L"CLSID" },
-        { 5, 340, LVCFMT_LEFT, L"模块路径" },
-        { 6, 70, LVCFMT_LEFT, L"模块" },
-    });
+    {
+        const std::vector<std::wstring>& titles = ContextMenuColumnTitles();
+        static const int widths[] = { 70, 80, 130, 180, 250, 340, 70 };
+        std::vector<Ksword::Ui::ListViewColumn> columns;
+        for (std::size_t index = 0; index < titles.size(); ++index) {
+            columns.push_back({ static_cast<int>(index), widths[index], LVCFMT_LEFT, titles[index] });
+        }
+        state.list.addColumns(columns);
+    }
     if (HWND list = state.list.hwnd()) {
         ListView_SetExtendedListViewStyle(list,
             LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER | LVS_EX_GRIDLINES | LVS_EX_LABELTIP);
@@ -707,6 +779,17 @@ LRESULT CALLBACK ContextMenuViewProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
                 if (state->list.handleNotify(*header, result)) {
                     return result;
                 }
+                // The click cycle is unsorted -> ascending -> descending ->
+                // unsorted. The sort lives in VirtualListView, so the periodic
+                // refresh replays it instead of dropping it with the snapshot.
+                if (header->hwndFrom == state->list.hwnd() && header->code == LVN_COLUMNCLICK) {
+                    auto* clicked = reinterpret_cast<NMLISTVIEW*>(lParam);
+                    const Ksword::Ui::SortSpec next =
+                        Ksword::Ui::NextSortSpec(state->list.sortSpec(), clicked->iSubItem);
+                    state->list.applySort(next);
+                    Ksword::Ui::ShowSortIndicator(state->list.hwnd(), next);
+                    return 0;
+                }
                 if (header->hwndFrom == state->list.hwnd() && header->code == LVN_ITEMCHANGED) {
                     const auto* changed = reinterpret_cast<const NMLISTVIEW*>(lParam);
                     if (changed && (changed->uNewState & LVIS_SELECTED) != 0) {
@@ -741,10 +824,16 @@ LRESULT CALLBACK ContextMenuViewProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
         }
         break;
     case WM_CTLCOLORSTATIC: {
+        // Read-only EDIT controls report through this message too; leaving them
+        // transparent smears text while scrolling, so theme STATIC labels only.
         HDC dc = reinterpret_cast<HDC>(wParam);
-        ::SetBkMode(dc, TRANSPARENT);
-        ::SetTextColor(dc, Ksword::Ui::AppTheme().textColor);
-        return reinterpret_cast<LRESULT>(Ksword::Ui::AppTheme().windowBrush());
+        const LRESULT labelBrush = Ksword::Ui::PaintLabelBackground(dc,
+            reinterpret_cast<HWND>(lParam), Ksword::Ui::AppTheme().windowBrush(),
+            Ksword::Ui::AppTheme().textColor);
+        if (labelBrush != 0) {
+            return labelBrush;
+        }
+        break;
     }
     default:
         if (state) {

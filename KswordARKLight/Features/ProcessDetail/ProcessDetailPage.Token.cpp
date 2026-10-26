@@ -132,6 +132,9 @@ bool ProcessDetailPage::CreateTokenTab() {
     AddButton(tab, TokenPrivilegeApply, L"调整特权", 334, 44, 86, 28);
     AddLabel(tab, 0, L"优先使用 R3；令牌访问受限时按进程身份由 R0 兜底", 430, 48, -6, 24);
     AddEdit(tab, TokenOutput, L"令牌详细信息将在此处显示。", true, true, 6, 80, -6, -30);
+    // The token report is the artifact a privilege-escalation finding rests on,
+    // so the panel gets the same right-click export every other report has.
+    AttachTextActionsToTextPanel(Control(tab, TokenOutput), L"process_token.txt");
     AddLabel(tab, TokenEditorStatus, L"行:1 列:1 字符:0 文件:<未命名> 模式:只读 编码:未知", 6, -24, -6, 20);
     return Control(tab, TokenRefresh) && Control(tab, TokenOutput);
 }

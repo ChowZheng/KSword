@@ -20,6 +20,7 @@ namespace ks::ui
     void StyleSecondarySection(QGroupBox* section);
 
     // form 将标签左对齐，labelWidth 是同列标签的建议最小宽度；窄窗允许换行。
+    // 已有行立即获得默认几何，后续构造行在首显/布局前补齐，不在绘制后重排。
     void StyleSecondaryForm(QFormLayout* form, int labelWidth = 160);
 
     // footer 是已置于滚动内容之外的操作区；函数不会搬动或重复创建业务按钮。

@@ -671,6 +671,7 @@ void ProcessDetailPage::RebuildHotkeyList() {
         AddListColumn(list, index, columns[static_cast<std::size_t>(index)].first, columns[static_cast<std::size_t>(index)].second);
     }
     listColumnCounts_[list] = static_cast<int>(columns.size());
+    listExportLabels_[list] = L"hotkeys";
     listContextColumns_[list] = 0;
     for (std::size_t index = 0; index < hotkeyEntries_.size(); ++index) {
         const ProcessHotkeyEntry& entry = hotkeyEntries_[index];
@@ -701,6 +702,7 @@ void ProcessDetailPage::RebuildKeyboardList() {
             AddListColumn(list, index, columns[static_cast<std::size_t>(index)].first, columns[static_cast<std::size_t>(index)].second);
         }
         listColumnCounts_[list] = static_cast<int>(columns.size());
+        listExportLabels_[list] = L"keyboard_hooks";
         for (std::size_t index = 0; index < keyboardHookEntries_.size(); ++index) {
             const KeyboardHookEntry& entry = keyboardHookEntries_[index];
             AddListRow(list, static_cast<int>(index), {
@@ -718,6 +720,7 @@ void ProcessDetailPage::RebuildKeyboardList() {
             AddListColumn(list, index, columns[static_cast<std::size_t>(index)].first, columns[static_cast<std::size_t>(index)].second);
         }
         listColumnCounts_[list] = static_cast<int>(columns.size());
+        listExportLabels_[list] = L"keyboard_hotkeys";
         for (std::size_t index = 0; index < keyboardHotkeyEntries_.size(); ++index) {
             const ProcessHotkeyEntry& entry = keyboardHotkeyEntries_[index];
             AddListRow(list, static_cast<int>(index), {

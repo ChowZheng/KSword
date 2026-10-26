@@ -1,6 +1,7 @@
 #include "../../Core/Common.h"
 #include "../../Core/Win32Lean.h"
 #include "../../Ui/FilterBar.h"
+#include "../../Ui/TableCompareActions.h"
 
 #include "../../../Ksword5.1/Ksword5.1/ArkDriverClient/ArkDriverClient.h"
 #include "../../../shared/ThreadAffinityR3.h"
@@ -34,12 +35,23 @@ constexpr UINT kThreadTerminateCommand = 64107;
 constexpr UINT kThreadR0TerminateCommand = 64108;
 constexpr UINT kThreadR0SuspendCommand = 64109;
 constexpr UINT kThreadR0ResumeCommand = 64110;
+constexpr UINT kThreadExportCommand = 64111;
 constexpr UINT kThreadAffinityFollowProcessCommand = 50000;
 constexpr UINT kThreadAffinityProcessorBaseCommand = 50001;
 constexpr std::size_t kThreadAffinityMaxProcessorCommands = 15000U;
 
 constexpr UINT_PTR kThreadLayoutSubclassId = 0x54485244U; // "THRD"
 constexpr UINT_PTR kThreadLayoutTimerId = 0x54485245U;
+
+// ThreadColumnTitles 同时喂表头和快照采集。快照只存显示文本，列序一旦分叉，
+// 比对就会拿"寄存器"去比"R0 栈边界"。
+const std::vector<std::wstring>& ThreadColumnTitles() {
+    static const std::vector<std::wstring> titles{
+        L"ThreadID", L"状态", L"优先级", L"上下文切换", L"起始地址",
+        L"TEB地址", L"亲和性", L"寄存器", L"R0栈边界", L"R0详情"
+    };
+    return titles;
+}
 
 struct ThreadLayoutState {
     HWND group = nullptr;
@@ -50,6 +62,9 @@ struct ThreadLayoutState {
     HWND filter = nullptr;
     HWND list = nullptr;
     HWND output = nullptr;
+    // virtualList points at the page-owned thread table so the subclass can sort
+    // it without routing through ProcessDetailPage::HandlePageNotify.
+    Ksword::Ui::VirtualListView* virtualList = nullptr;
 };
 
 struct ThreadAffinityMenuState {
@@ -261,6 +276,17 @@ LRESULT CALLBACK ThreadLayoutSubclassProc(
         LayoutThreadControls(hwnd, *state);
         return 0;
     }
+    if (message == WM_NOTIFY && state->virtualList) {
+        const auto* header = reinterpret_cast<const NMHDR*>(lParam);
+        if (header && header->hwndFrom == state->list && header->code == LVN_COLUMNCLICK) {
+            const auto* clicked = reinterpret_cast<const NMLISTVIEW*>(lParam);
+            const Ksword::Ui::SortSpec next =
+                Ksword::Ui::NextSortSpec(state->virtualList->sortSpec(), clicked ? clicked->iSubItem : -1);
+            state->virtualList->applySort(next);
+            Ksword::Ui::ShowSortIndicator(state->list, next);
+            return 0;
+        }
+    }
     if (message == WM_NCDESTROY) {
         ::KillTimer(hwnd, kThreadLayoutTimerId);
         ::RemoveWindowSubclass(hwnd, ThreadLayoutSubclassProc, subclassId);
@@ -419,17 +445,15 @@ bool ProcessDetailPage::CreateThreadTab() {
         return false;
     }
 
-    AddListColumn(list, 0, L"ThreadID", 96);
-    AddListColumn(list, 1, L"状态", 82);
-    AddListColumn(list, 2, L"优先级", 72);
-    AddListColumn(list, 3, L"上下文切换", 96);
-    AddListColumn(list, 4, L"起始地址", 130);
-    AddListColumn(list, 5, L"TEB地址", 130);
-    AddListColumn(list, 6, L"亲和性", 108);
-    AddListColumn(list, 7, L"寄存器", 100);
-    AddListColumn(list, 8, L"R0栈边界", 260);
-    AddListColumn(list, 9, L"R0详情", 360);
+    {
+        static const int widths[] = { 96, 82, 72, 96, 130, 130, 108, 100, 260, 360 };
+        const std::vector<std::wstring>& titles = ThreadColumnTitles();
+        for (std::size_t index = 0; index < titles.size(); ++index) {
+            AddListColumn(list, static_cast<int>(index), titles[index].c_str(), widths[index]);
+        }
+    }
     listColumnCounts_[list] = 10;
+    listExportLabels_[list] = L"threads";
     if (threadFilterRows_) {
         threadVirtualList_.setSharedRows(threadFilterRows_);
         threadVirtualList_.setVisibleIndexes(threadVisibleIndexes_);
@@ -443,7 +467,8 @@ bool ProcessDetailPage::CreateThreadTab() {
         status,
         filter,
         list,
-        output
+        output,
+        &threadVirtualList_
     };
     if (!page || !::SetWindowSubclass(
             page,
@@ -590,8 +615,11 @@ bool ProcessDetailPage::HandleThreadCommand(int controlId) {
 
 bool ProcessDetailPage::HandleThreadContextMenu(POINT screenPoint) {
     HWND list = Control(TabIndex::Threads, ThreadList);
-    if (!list || SelectedListRow(list) < 0) {
+    if (!list) {
         return true;
+    }
+    if (SelectedListRow(list) < 0) {
+        return ShowListOnlyContextMenu(list, screenPoint, L"threads");
     }
 
     std::size_t selectedIndex = 0;
@@ -610,6 +638,10 @@ bool ProcessDetailPage::HandleThreadContextMenu(POINT screenPoint) {
     ::AppendMenuW(menu, MF_STRING, kThreadCopyRowCommand, L"复制当前行");
     ::AppendMenuW(menu, MF_STRING, kThreadCopyAllCommand, L"复制全部");
     ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    // Thread ownership and creation times are gone the moment the process exits,
+    // so the table has to be exportable as a file and not only to the clipboard.
+    ::AppendMenuW(menu, MF_STRING, kThreadExportCommand, L"导出线程表为 TSV…");
+    ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     ::AppendMenuW(menu, MF_STRING, kThreadShowDetailCommand, L"线程详细信息");
     ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     AppendThreadAffinitySubMenu(
@@ -625,6 +657,8 @@ bool ProcessDetailPage::HandleThreadContextMenu(POINT screenPoint) {
     ::AppendMenuW(menu, MF_STRING, kThreadR0ResumeCommand, L"R0恢复线程");
     ::AppendMenuW(menu, MF_STRING, kThreadTerminateCommand, L"终止线程");
     ::AppendMenuW(menu, MF_STRING, kThreadR0TerminateCommand, L"R0结束线程");
+    ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    Ksword::Ui::AppendTableCompareMenuItems(menu, threadSnapshotEngine_);
 
     const UINT command = ::TrackPopupMenu(
         menu,
@@ -680,6 +714,7 @@ bool ProcessDetailPage::HandleThreadContextMenu(POINT screenPoint) {
     case kThreadCopyCellCommand: CopyListCell(list); break;
     case kThreadCopyRowCommand: CopyListRow(list); break;
     case kThreadCopyAllCommand: CopyListAll(list); break;
+    case kThreadExportCommand: ExportListTsv(list, L"threads"); break;
     case kThreadShowDetailCommand: ShowSelectedThreadSummary(); break;
     case kThreadSuspendCommand: SuspendSelectedThread(); break;
     case kThreadResumeCommand: ResumeSelectedThread(); break;
@@ -687,7 +722,14 @@ bool ProcessDetailPage::HandleThreadContextMenu(POINT screenPoint) {
     case kThreadR0ResumeCommand: SetSelectedThreadSuspendedByR0(false); break;
     case kThreadTerminateCommand: TerminateSelectedThread(); break;
     case kThreadR0TerminateCommand: TerminateSelectedThreadByR0(); break;
-    default: break;
+    default: {
+        std::wstring snapshotMessage;
+        if (Ksword::Ui::HandleTableCompareCommand(threadSnapshotEngine_, command,
+                threadVirtualList_, ThreadColumnTitles(), snapshotMessage, L"线程")) {
+            SetPageStatus(TabIndex::Threads, ThreadStatus, snapshotMessage);
+        }
+        break;
+    }
     }
     return true;
 }

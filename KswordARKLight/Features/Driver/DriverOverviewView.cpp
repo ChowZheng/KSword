@@ -10,6 +10,7 @@
 #include "../../Ui/FilterBar.h"
 #include "../../Ui/ListViewUtil.h"
 #include "../../Ui/LoadingOverlay.h"
+#include "../../Ui/TableCompareActions.h"
 #include "../../Ui/TextFindSupport.h"
 #include "../../Ui/Theme.h"
 #include "../../Ui/VirtualListView.h"
@@ -29,6 +30,7 @@ constexpr wchar_t kDriverOverviewClass[] = L"KswordARKLight.DriverOverviewView";
 constexpr int kOverviewListId = 64001;
 constexpr int kOverviewFilterId = 64002;
 constexpr int kOverviewLoadingOverlayId = 64003;
+constexpr int kOverviewStatusId = 64004;
 constexpr UINT kOverviewMenuDetail = 64101;
 constexpr UINT kOverviewMenuCopyCell = 64102;
 constexpr UINT kOverviewMenuCopyRow = 64103;
@@ -51,6 +53,7 @@ struct DriverOverviewViewState {
     HWND filterBar = nullptr;
     HWND listView = nullptr;
     HWND loadingOverlay = nullptr;
+    HWND statusText = nullptr;
     DriverModel* model = nullptr;
     std::vector<DriverOverviewRow> snapshotRows;
     std::vector<DriverOverviewRow> visibleRows;
@@ -61,6 +64,9 @@ struct DriverOverviewViewState {
     std::uint64_t snapshotGeneration = 0;
     std::uint64_t detailRequestId = 0;
     int contextColumn = 0;
+    // 驱动列表在两次刷新之间会有模块加载/卸载，异常标记与签名来源也会跟着变。
+    // 只有把两份快照摆在一起，"这期间新挂了哪个驱动"才看得见。
+    Ksword::Ui::TableSnapshotEngine snapshotEngine;
     std::unique_ptr<Ksword::Ui::AsyncSnapshotTask<struct OverviewFilterResult>> filterTask;
     std::unique_ptr<Ksword::Ui::AsyncSnapshotTask<struct OverviewDetailResult>> detailTask;
 };
@@ -299,10 +305,16 @@ bool RegisterDetailDialogClass() {
             }
             break;
         case WM_CTLCOLORSTATIC: {
+            // Read-only EDIT controls report through this message too; leaving them
+            // transparent smears text while scrolling, so theme STATIC labels only.
             HDC dc = reinterpret_cast<HDC>(wParam);
-            ::SetBkMode(dc, TRANSPARENT);
-            ::SetTextColor(dc, Ksword::Ui::AppTheme().textColor);
-            return reinterpret_cast<LRESULT>(Ksword::Ui::AppTheme().windowBrush());
+            const LRESULT labelBrush = Ksword::Ui::PaintLabelBackground(dc,
+                reinterpret_cast<HWND>(lParam), Ksword::Ui::AppTheme().windowBrush(),
+                Ksword::Ui::AppTheme().textColor);
+            if (labelBrush != 0) {
+                return labelBrush;
+            }
+            break;
         }
         case WM_NCDESTROY:
             delete state;
@@ -432,6 +444,7 @@ void OpenOverviewDriverDirectory(DriverOverviewViewState& state) {
 }
 
 std::wstring BuildOverviewTsv(const DriverOverviewViewState& state);
+const std::vector<std::wstring>& OverviewColumnTitles();
 
 // ShowOverviewContextMenu displays the overview right-click menu. Inputs are
 // the view state and screen coordinate; processing selects the clicked row,
@@ -471,6 +484,8 @@ void ShowOverviewContextMenu(DriverOverviewViewState& state, POINT screenPoint) 
     }
     ::AppendMenuW(menu, MF_STRING | (hasNavigableDirectory ? 0U : MF_GRAYED),
         kOverviewMenuOpenDirectory, L"打开驱动所在目录");
+    ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    Ksword::Ui::AppendTableCompareMenuItems(menu, state.snapshotEngine);
 
     const UINT command = ::TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, screenPoint.x, screenPoint.y, 0, state.hwnd, nullptr);
     ::DestroyMenu(menu);
@@ -502,24 +517,41 @@ void ShowOverviewContextMenu(DriverOverviewViewState& state, POINT screenPoint) 
         } else {
             CopyOverviewText(state, row.pathText, L"复制驱动路径");
         }
+    } else {
+        std::wstring snapshotMessage;
+        if (Ksword::Ui::HandleTableCompareCommand(state.snapshotEngine, command,
+                state.virtualList, OverviewColumnTitles(), snapshotMessage) && state.statusText) {
+            ::SetWindowTextW(state.statusText, snapshotMessage.c_str());
+        }
     }
+}
+
+// OverviewColumnTitles 供表头、可见行导出和快照采集共用；三处列序一致，快照才
+// 不会把"签名/来源"当成"状态"来比。
+const std::vector<std::wstring>& OverviewColumnTitles() {
+    static const std::vector<std::wstring> titles{
+        L"驱动名称", L"基址", L"内存区间", L"大小", L"路径",
+        L"签名/来源", L"状态", L"异常标记", L"能力提示"
+    };
+    return titles;
 }
 
 // OverviewColumns returns the report columns shown by the overview page.
 // There is no input; processing returns static descriptors; output is consumed
 // by the ListView helper.
 std::vector<Ksword::Ui::ListViewColumn> OverviewColumns() {
-    return {
-        { 0, 190, LVCFMT_LEFT, L"驱动名称" },
-        { 1, 145, LVCFMT_LEFT, L"基址" },
-        { 2, 260, LVCFMT_LEFT, L"内存区间" },
-        { 3, 110, LVCFMT_RIGHT, L"大小" },
-        { 4, 420, LVCFMT_LEFT, L"路径" },
-        { 5, 160, LVCFMT_LEFT, L"签名/来源" },
-        { 6, 180, LVCFMT_LEFT, L"状态" },
-        { 7, 320, LVCFMT_LEFT, L"异常标记" },
-        { 8, 320, LVCFMT_LEFT, L"能力提示" },
+    const std::vector<std::wstring>& titles = OverviewColumnTitles();
+    static const int widths[] = { 190, 145, 260, 110, 420, 160, 180, 320, 320 };
+    static const int formats[] = {
+        LVCFMT_LEFT, LVCFMT_LEFT, LVCFMT_LEFT, LVCFMT_RIGHT, LVCFMT_LEFT,
+        LVCFMT_LEFT, LVCFMT_LEFT, LVCFMT_LEFT, LVCFMT_LEFT
     };
+    std::vector<Ksword::Ui::ListViewColumn> columns;
+    columns.reserve(titles.size());
+    for (std::size_t index = 0; index < titles.size(); ++index) {
+        columns.push_back({ static_cast<int>(index), widths[index], formats[index], titles[index] });
+    }
+    return columns;
 }
 
 std::wstring BuildOverviewTsv(const DriverOverviewViewState& state);
@@ -578,7 +610,15 @@ void PopulateOverviewList(DriverOverviewViewState& state) {
     state.filterRows = std::make_shared<const std::vector<Ksword::Ui::VirtualListRow>>(
         BuildOverviewVirtualRows(state.snapshotRows));
     ++state.snapshotGeneration;
-    state.virtualList.setRows(*state.filterRows);
+    state.virtualList.setSharedRows(state.filterRows);
+    // An empty snapshot must not look identical to a paused load: reuse the
+    // existing overlay so the zero-row result carries its own message. The
+    // spinner is off because nothing is pending any more.
+    if (!state.filterRows || state.filterRows->empty()) {
+        Ksword::Ui::SetLoadingOverlay(state.loadingOverlay, true, L"未获取到可展示的驱动对象记录。", false);
+    } else {
+        Ksword::Ui::SetLoadingOverlay(state.loadingOverlay, false);
+    }
     RequestOverviewFilter(state, state.filterBar ? Ksword::Ui::GetFilterBarText(state.filterBar) : state.filterQuery);
 }
 
@@ -586,9 +626,7 @@ void PopulateOverviewList(DriverOverviewViewState& state) {
 // into TSV text. Input is the view state; processing serializes its active
 // visible indexes so an in-flight filter cannot yield stale export data.
 std::wstring BuildOverviewTsv(const DriverOverviewViewState& state) {
-    return Ksword::Ui::BuildVisibleVirtualListTsv(
-        { L"驱动名称", L"基址", L"内存区间", L"大小", L"路径", L"签名/来源", L"状态", L"异常标记", L"能力提示" },
-        state.virtualList);
+    return Ksword::Ui::BuildVisibleVirtualListTsv(OverviewColumnTitles(), state.virtualList);
 }
 
 // RegisterDriverOverviewClass installs the child window class once. There is no
@@ -623,6 +661,8 @@ bool RegisterDriverOverviewClass() {
                 SetChildFont(state->listView);
                 state->virtualList.addColumns(OverviewColumns());
                 state->loadingOverlay = Ksword::Ui::CreateLoadingOverlay(hwnd, kOverviewLoadingOverlayId, { 0, 0, 1, 1 });
+                // 快照采集/比对只产出一句话，本页原先没有可写的位置，补一条页脚状态行。
+                state->statusText = Ksword::Ui::CreateText(hwnd, kOverviewStatusId, L"", 0, 0, 0, 0);
                 state->filterTask = std::make_unique<Ksword::Ui::AsyncSnapshotTask<OverviewFilterResult>>(hwnd, kMsgOverviewFilterCompleted);
                 state->detailTask = std::make_unique<Ksword::Ui::AsyncSnapshotTask<OverviewDetailResult>>(hwnd, kMsgOverviewDetailCompleted);
                 PopulateOverviewList(*state);
@@ -650,6 +690,14 @@ bool RegisterDriverOverviewClass() {
                 LRESULT virtualResult = 0;
                 if (header && state->virtualList.handleNotify(*header, virtualResult)) {
                     return virtualResult;
+                }
+                if (header && header->hwndFrom == state->listView && header->code == LVN_COLUMNCLICK) {
+                    const auto* clicked = reinterpret_cast<const NMLISTVIEW*>(lParam);
+                    const Ksword::Ui::SortSpec next =
+                        Ksword::Ui::NextSortSpec(state->virtualList.sortSpec(), clicked->iSubItem);
+                    state->virtualList.applySort(next);
+                    Ksword::Ui::ShowSortIndicator(state->virtualList.hwnd(), next);
+                    return 0;
                 }
                 if (header && header->hwndFrom == state->listView && header->code == NM_RCLICK) {
                     POINT pt{};
@@ -679,9 +727,16 @@ bool RegisterDriverOverviewClass() {
                 const int height = rc.bottom - rc.top;
                 const int margin = 6;
                 const int filterHeight = 28;
+                const int statusHeight = 20;
+                const int listTop = filterHeight + margin * 2;
+                const int listHeight = std::max(40, height - listTop - statusHeight - margin);
                 ::MoveWindow(state->filterBar, margin, margin, std::max(80, width - margin * 2), filterHeight, TRUE);
-                ::MoveWindow(state->listView, 0, filterHeight + margin * 2, width, std::max(40, height - filterHeight - margin * 2), TRUE);
-                ::MoveWindow(state->loadingOverlay, 0, filterHeight + margin * 2, width, std::max(40, height - filterHeight - margin * 2), TRUE);
+                ::MoveWindow(state->listView, 0, listTop, width, listHeight, TRUE);
+                ::MoveWindow(state->loadingOverlay, 0, listTop, width, listHeight, TRUE);
+                if (state->statusText) {
+                    ::MoveWindow(state->statusText, margin, listTop + listHeight,
+                        std::max(80, width - margin * 2), statusHeight, TRUE);
+                }
             }
             return 0;
         case WM_NCDESTROY:

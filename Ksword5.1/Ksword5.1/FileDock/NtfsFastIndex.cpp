@@ -36,6 +36,49 @@ struct Volume {
     ~Volume() { if (handle != INVALID_HANDLE_VALUE) ::CloseHandle(handle); }
 };
 
+// DASD volume handles can be noncached even without FILE_FLAG_NO_BUFFERING.
+// Every raw read needs a sector-aligned address as well as offset and length.
+class SectorBuffer final {
+public:
+    // 64 KiB also covers 512e drives' physical-sector alignment and every
+    // logical sector size admitted by openVolume's geometry validation.
+    explicit SectorBuffer(std::size_t length)
+        : m_storage(length + kAlignment - 1), m_length(length) {}
+    std::byte* data() {
+        const auto address = reinterpret_cast<std::uintptr_t>(m_storage.data());
+        const auto remainder = address % kAlignment;
+        return m_storage.data() + (remainder == 0 ? 0 : kAlignment - remainder);
+    }
+    std::size_t size() const { return m_length; }
+    static constexpr std::size_t alignment() { return kAlignment; }
+private:
+    static constexpr std::size_t kAlignment = 65536;
+    std::vector<std::byte> m_storage;
+    std::size_t m_length;
+};
+
+bool readRawVolume(Volume& volume, quint64 absolute, DWORD count, std::byte* target,
+    SectorBuffer& scratch, QString& error)
+{
+    if (absolute > static_cast<quint64>(std::numeric_limits<LONGLONG>::max())) {
+        error = QStringLiteral("MFT 物理偏移溢出。"); return false;
+    }
+    // Fragment boundaries may be only one logical cluster apart (including
+    // 512-byte clusters on 512e). Keep the I/O address aligned even then.
+    auto* destination = reinterpret_cast<std::uintptr_t>(target) % SectorBuffer::alignment() == 0
+        ? target : scratch.data();
+    LARGE_INTEGER offset{};
+    offset.QuadPart = static_cast<LONGLONG>(absolute);
+    DWORD read = 0;
+    if (!::SetFilePointerEx(volume.handle, offset, nullptr, FILE_BEGIN)
+        || !::ReadFile(volume.handle, destination, count, &read, nullptr)) {
+        error = failure(QStringLiteral("批量读取 MFT")); return false;
+    }
+    if (read != count) { error = failure(QStringLiteral("批量读取 MFT"), ERROR_HANDLE_EOF); return false; }
+    if (destination != target) std::memcpy(target, destination, count);
+    return true;
+}
+
 bool openVolume(const QString& requested, Volume& volume, QString& root, QString& error)
 {
     root = QDir::toNativeSeparators(requested.trimmed());
@@ -108,6 +151,162 @@ RecordResult readRecord(Volume& volume, quint64 index, std::vector<std::byte>& r
     }
     record.assign(buffer.begin() + header, buffer.begin() + header + output.FileRecordLength);
     return RecordResult::Present;
+}
+
+// Only the stream identity and run mapping govern a raw MFT scan. FILE headers,
+// USA values and timestamps can change while the same mapping remains valid.
+struct MftMapping {
+    quint64 baseReference = 0;
+    quint64 streamBytes = 0;
+    QSet<quint64> records;
+    std::vector<ntfs::MftStreamPart> parts;
+    std::vector<ntfs::DataExtent> extents;
+};
+
+bool readAttributeList(Volume& volume, const std::vector<ntfs::MftStreamPart>& parts,
+    std::vector<std::uint64_t>& references, QString& error, const NtfsFastIndex::Cancel& cancel)
+{
+    constexpr quint64 limit = 16U * 1024U * 1024U;
+    if (parts.size() != 1 || parts.front().lowestVcn != 0
+        || parts.front().logicalBytes == 0 || parts.front().logicalBytes > limit) {
+        error = QStringLiteral("MFT 数据段或属性列表不受支持，无法保证完整扫描。"); return false;
+    }
+    const auto& part = parts.front();
+    const quint64 sectorBytes = volume.info.BytesPerSector;
+    const quint64 clusterBytes = volume.info.BytesPerCluster;
+    const quint64 length = part.logicalBytes;
+    const quint64 padded = (length + sectorBytes - 1) / sectorBytes * sectorBytes;
+    SectorBuffer bytes(static_cast<std::size_t>(padded));
+    SectorBuffer scratch(static_cast<std::size_t>(std::min<quint64>(kChunkBytes, padded)));
+    quint64 filled = 0;
+    quint64 expectedVcn = 0;
+    for (const auto& extent : part.extents) {
+        if (stopped(cancel)) return false;
+        if (extent.startVcn != expectedVcn || extent.clusterCount == 0 || extent.sparse
+            || extent.startLcn >= static_cast<quint64>(volume.info.TotalClusters.QuadPart)
+            || extent.clusterCount > static_cast<quint64>(volume.info.TotalClusters.QuadPart) - extent.startLcn
+            || extent.clusterCount > std::numeric_limits<quint64>::max() / clusterBytes
+            || extent.clusterCount > std::numeric_limits<quint64>::max() - expectedVcn) {
+            error = QStringLiteral("MFT 数据段位置无效。"); return false;
+        }
+        expectedVcn += extent.clusterCount;
+        quint64 within = 0;
+        const quint64 extentBytes = extent.clusterCount * clusterBytes;
+        while (filled < padded && within < extentBytes) {
+            if (stopped(cancel)) return false;
+            const DWORD count = static_cast<DWORD>(std::min<quint64>(kChunkBytes,
+                std::min(padded - filled, extentBytes - within)));
+            const quint64 absolute = extent.startLcn * clusterBytes + within;
+            if (!readRawVolume(volume, absolute, count, bytes.data() + filled, scratch, error)) return false;
+            filled += count;
+            within += count;
+        }
+    }
+    if (filled != padded || part.highestVcn == std::numeric_limits<quint64>::max()
+        || expectedVcn != part.highestVcn + 1
+        || !ntfs::ParseMftAttributeList(bytes.data(), static_cast<std::size_t>(length), references)) {
+        error = QStringLiteral("MFT 数据段或属性列表不受支持，无法保证完整扫描。"); return false;
+    }
+    return true;
+}
+
+bool readMftMapping(Volume& volume, MftMapping& mapping, QString& error,
+    const NtfsFastIndex::Cancel& cancel)
+{
+    std::vector<std::byte> first;
+    if (readRecord(volume, 0, first, error) != RecordResult::Present) {
+        if (error.isEmpty()) error = QStringLiteral("无法读取 MFT 自身记录。");
+        return false;
+    }
+    ntfs::ParsedRecord base;
+    std::vector<std::uint64_t> references;
+    std::vector<ntfs::MftStreamPart> attributeListParts;
+    if (!ntfs::ParseRecord(first.data(), first.size(), volume.info.BytesPerSector,
+            0, base, ntfs::RecordFormat::FileSystemControl) || !base.baseRecord || !base.inUse
+        || !ntfs::ParseMftStreamParts(first.data(), first.size(), volume.info.BytesPerSector,
+            mapping.parts, references, ntfs::RecordFormat::FileSystemControl, &attributeListParts)) {
+        error = QStringLiteral("MFT 数据段或属性列表不受支持，无法保证完整扫描。"); return false;
+    }
+    mapping.baseReference = base.reference;
+    mapping.records.insert(base.reference);
+    if (!attributeListParts.empty()) {
+        std::vector<std::uint64_t> externalReferences;
+        if (!readAttributeList(volume, attributeListParts, externalReferences, error, cancel)) return false;
+        references.insert(references.end(), externalReferences.begin(), externalReferences.end());
+    }
+    for (std::size_t position = 0; position < references.size(); ++position) {
+        if (stopped(cancel)) return false;
+        const quint64 reference = references[position];
+        if ((reference & kRecordMask) == 0) {
+            if (reference != base.reference) {
+                error = QStringLiteral("MFT 属性列表中的基础记录身份无效。"); return false;
+            }
+            continue;
+        }
+        if (mapping.records.contains(reference)) continue;
+        if (mapping.records.size() >= 257) {
+            error = QStringLiteral("MFT 扩展记录过多。"); return false;
+        }
+        std::vector<std::byte> bytes;
+        if (readRecord(volume, reference & kRecordMask, bytes, error) != RecordResult::Present) {
+            if (error.isEmpty()) error = QStringLiteral("MFT 扩展记录已失效。");
+            return false;
+        }
+        ntfs::ParsedRecord parsed;
+        quint64 baseReference = 0;
+        std::memcpy(&baseReference, bytes.data() + 32, 8);
+        if (!ntfs::ParseRecord(bytes.data(), bytes.size(), volume.info.BytesPerSector,
+                reference & kRecordMask, parsed, ntfs::RecordFormat::FileSystemControl)
+            || parsed.reference != reference || !parsed.inUse || baseReference != base.reference) {
+            error = QStringLiteral("MFT 扩展记录身份校验失败。"); return false;
+        }
+        std::vector<ntfs::MftStreamPart> moreParts;
+        std::vector<std::uint64_t> moreReferences;
+        if (!ntfs::ParseMftStreamParts(bytes.data(), bytes.size(), volume.info.BytesPerSector,
+            moreParts, moreReferences, ntfs::RecordFormat::FileSystemControl)) {
+            error = QStringLiteral("MFT 扩展数据段解析失败。"); return false;
+        }
+        mapping.records.insert(reference);
+        mapping.parts.insert(mapping.parts.end(), moreParts.begin(), moreParts.end());
+        references.insert(references.end(), moreReferences.begin(), moreReferences.end());
+    }
+    std::sort(mapping.parts.begin(), mapping.parts.end(), [](const auto& a, const auto& b) { return a.lowestVcn < b.lowestVcn; });
+    quint64 expectedVcn = 0;
+    const quint64 clusterBytes = volume.info.BytesPerCluster;
+    for (const auto& part : mapping.parts) {
+        if (part.lowestVcn != expectedVcn || part.highestVcn < part.lowestVcn
+            || part.highestVcn == std::numeric_limits<quint64>::max()) {
+            error = QStringLiteral("MFT 数据段存在缺口或重叠。"); return false;
+        }
+        if (part.lowestVcn == 0) mapping.streamBytes = part.logicalBytes;
+        for (const auto& extent : part.extents) {
+            if (extent.sparse || extent.startLcn >= static_cast<quint64>(volume.info.TotalClusters.QuadPart)
+                || extent.clusterCount > static_cast<quint64>(volume.info.TotalClusters.QuadPart) - extent.startLcn) {
+                error = QStringLiteral("MFT 数据段位置无效。"); return false;
+            }
+            mapping.extents.push_back(extent);
+        }
+        expectedVcn = part.highestVcn + 1;
+    }
+    const quint64 validBytes = static_cast<quint64>(volume.info.MftValidDataLength.QuadPart);
+    if (mapping.streamBytes < validBytes || expectedVcn > std::numeric_limits<quint64>::max() / clusterBytes
+        || expectedVcn * clusterBytes < mapping.streamBytes) {
+        error = QStringLiteral("MFT 数据段不能覆盖有效数据长度。"); return false;
+    }
+    return true;
+}
+
+bool sameMftMapping(const MftMapping& left, const MftMapping& right)
+{
+    if (left.baseReference != right.baseReference || left.streamBytes != right.streamBytes
+        || left.records != right.records || left.extents.size() != right.extents.size()) return false;
+    for (std::size_t i = 0; i < left.extents.size(); ++i) {
+        const auto& a = left.extents[i];
+        const auto& b = right.extents[i];
+        if (a.startVcn != b.startVcn || a.startLcn != b.startLcn
+            || a.clusterCount != b.clusterCount || a.sparse != b.sparse) return false;
+    }
+    return true;
 }
 
 void insertRecord(NtfsIndexSnapshot& snapshot, const ntfs::ParsedRecord& parsed,
@@ -294,7 +493,12 @@ bool replay(Volume& volume, NtfsIndexSnapshot& snapshot, qint64 upper,
     }
     USN_JOURNAL_DATA_V0 after{};
     DWORD code = 0;
-    if (!queryJournal(volume, after, code) || after.UsnJournalID != snapshot.journalId
+    if (!queryJournal(volume, after, code)) {
+        snapshot.error = failure(QStringLiteral("查询 USN Journal"), code);
+        snapshot.rebuildRequired = code == ERROR_JOURNAL_NOT_ACTIVE || code == ERROR_JOURNAL_DELETE_IN_PROGRESS;
+        return false;
+    }
+    if (after.UsnJournalID != snapshot.journalId
         || cursor < std::max(after.FirstUsn, after.LowestValidUsn)) {
         snapshot.error = QStringLiteral("USN Journal 已重置或覆盖，请重建索引。");
         snapshot.rebuildRequired = true; return false;
@@ -364,6 +568,7 @@ NtfsFastIndex::Snapshot NtfsFastIndex::build(const QString& volumeRoot,
     const Cancel& cancel, const Progress& progress)
 {
     auto snapshot = std::make_shared<NtfsIndexSnapshot>();
+    if (stopped(cancel)) { snapshot->cancelled = true; return snapshot; }
     Volume volume;
     if (!openVolume(volumeRoot, volume, snapshot->volumeRoot, snapshot->error)) return snapshot;
     snapshot->volumeSerial = static_cast<quint64>(volume.info.VolumeSerialNumber.QuadPart);
@@ -383,86 +588,15 @@ NtfsFastIndex::Snapshot NtfsFastIndex::build(const QString& volumeRoot,
     if (validBytes % recordBytes != 0 || total == 0 || total > kRecordLimit) {
         snapshot->error = QStringLiteral("MFT 记录数超过索引上限或长度未对齐。"); return snapshot;
     }
-    std::vector<std::byte> first;
-    if (readRecord(volume, 0, first, snapshot->error) != RecordResult::Present) {
-        if (snapshot->error.isEmpty()) snapshot->error = QStringLiteral("无法读取 MFT 自身记录。");
+    MftMapping mapping;
+    if (!readMftMapping(volume, mapping, snapshot->error, cancel)) {
+        if (stopped(cancel)) snapshot->cancelled = true;
         return snapshot;
     }
-    std::vector<ntfs::MftStreamPart> parts;
-    QHash<quint64, std::vector<std::byte>> mappingRecords;
-    std::vector<std::uint64_t> extensions;
-    if (!ntfs::ParseMftStreamParts(first.data(), first.size(), volume.info.BytesPerSector,
-        parts, extensions, ntfs::RecordFormat::FileSystemControl)) {
-        snapshot->error = QStringLiteral("MFT 数据段或属性列表不受支持，无法保证完整扫描。"); return snapshot;
-    }
-    QSet<quint64> visited;
-    for (std::size_t position = 0; position < extensions.size(); ++position) {
-        if (stopped(cancel)) { snapshot->cancelled = true; return snapshot; }
-        const quint64 reference = extensions[position];
-        quint16 baseSequence = 0;
-        std::memcpy(&baseSequence, first.data() + 16, 2);
-        if ((reference & kRecordMask) == 0) {
-            if (reference != (static_cast<quint64>(baseSequence) << 48)) {
-                snapshot->error = QStringLiteral("MFT 属性列表中的基础记录身份无效。"); return snapshot;
-            }
-            continue; // Attribute lists also describe attributes in record zero.
-        }
-        if (visited.contains(reference)) continue;
-        if (visited.size() >= 256) { snapshot->error = QStringLiteral("MFT 扩展记录过多。"); return snapshot; }
-        visited.insert(reference);
-        std::vector<std::byte> bytes;
-        if (readRecord(volume, reference & kRecordMask, bytes, snapshot->error) != RecordResult::Present) {
-            if (snapshot->error.isEmpty()) snapshot->error = QStringLiteral("MFT 扩展记录已失效。");
-            return snapshot;
-        }
-        ntfs::ParsedRecord parsed;
-        if (!ntfs::ParseRecord(bytes.data(), bytes.size(), volume.info.BytesPerSector,
-            reference & kRecordMask, parsed, ntfs::RecordFormat::FileSystemControl)
-            || parsed.reference != reference || !parsed.inUse) {
-            snapshot->error = QStringLiteral("MFT 扩展记录身份校验失败。"); return snapshot;
-        }
-        quint64 baseReference = 0;
-        std::memcpy(&baseReference, bytes.data() + 32, 8);
-        quint16 sequence = 0;
-        std::memcpy(&sequence, first.data() + 16, 2);
-        if (baseReference != (static_cast<quint64>(sequence) << 48)) {
-            snapshot->error = QStringLiteral("MFT 扩展记录所属文件不匹配。"); return snapshot;
-        }
-        std::vector<ntfs::MftStreamPart> moreParts;
-        std::vector<std::uint64_t> moreReferences;
-        if (!ntfs::ParseMftStreamParts(bytes.data(), bytes.size(), volume.info.BytesPerSector,
-            moreParts, moreReferences, ntfs::RecordFormat::FileSystemControl)) {
-            snapshot->error = QStringLiteral("MFT 扩展数据段解析失败。"); return snapshot;
-        }
-        parts.insert(parts.end(), moreParts.begin(), moreParts.end());
-        mappingRecords.insert(reference, bytes);
-        extensions.insert(extensions.end(), moreReferences.begin(), moreReferences.end());
-    }
-    std::sort(parts.begin(), parts.end(), [](const auto& a, const auto& b) { return a.lowestVcn < b.lowestVcn; });
-    std::vector<ntfs::DataExtent> extents;
-    quint64 expectedVcn = 0;
-    quint64 streamLength = 0;
+    const auto& extents = mapping.extents;
     const quint64 clusterBytes = volume.info.BytesPerCluster;
-    for (const auto& part : parts) {
-        if (part.lowestVcn != expectedVcn || part.highestVcn < part.lowestVcn
-            || part.highestVcn == std::numeric_limits<quint64>::max()) {
-            snapshot->error = QStringLiteral("MFT 数据段存在缺口或重叠。"); return snapshot;
-        }
-        if (part.lowestVcn == 0) streamLength = part.logicalBytes;
-        for (const auto& extent : part.extents) {
-            if (extent.sparse || extent.startLcn >= static_cast<quint64>(volume.info.TotalClusters.QuadPart)
-                || extent.clusterCount > static_cast<quint64>(volume.info.TotalClusters.QuadPart) - extent.startLcn) {
-                snapshot->error = QStringLiteral("MFT 数据段位置无效。"); return snapshot;
-            }
-            extents.push_back(extent);
-        }
-        expectedVcn = part.highestVcn + 1;
-    }
-    if (streamLength < validBytes || expectedVcn > std::numeric_limits<quint64>::max() / clusterBytes
-        || expectedVcn * clusterBytes < streamLength) {
-        snapshot->error = QStringLiteral("MFT 数据段不能覆盖有效数据长度。"); return snapshot;
-    }
-    std::vector<std::byte> chunk(kChunkBytes);
+    SectorBuffer chunk(kChunkBytes);
+    SectorBuffer scratch(kChunkBytes);
     quint64 logical = 0;
     std::size_t extentIndex = 0;
     while (logical < validBytes) {
@@ -480,16 +614,7 @@ NtfsFastIndex::Snapshot NtfsFastIndex::build(const QString& volumeRoot,
             const quint64 within = location - extent.startVcn * clusterBytes;
             const DWORD count = static_cast<DWORD>(std::min<quint64>(wanted - filled, extent.clusterCount * clusterBytes - within));
             const quint64 absolute = extent.startLcn * clusterBytes + within;
-            if (absolute > static_cast<quint64>(std::numeric_limits<LONGLONG>::max())) {
-                snapshot->error = QStringLiteral("MFT 物理偏移溢出。"); return snapshot;
-            }
-            LARGE_INTEGER offset{};
-            offset.QuadPart = static_cast<LONGLONG>(absolute);
-            DWORD read = 0;
-            if (!::SetFilePointerEx(volume.handle, offset, nullptr, FILE_BEGIN)
-                || !::ReadFile(volume.handle, chunk.data() + filled, count, &read, nullptr) || read != count) {
-                snapshot->error = failure(QStringLiteral("批量读取 MFT")); return snapshot;
-            }
+            if (!readRawVolume(volume, absolute, count, chunk.data() + filled, scratch, snapshot->error)) return snapshot;
             filled += count;
         }
         for (DWORD offset = 0; offset < wanted; offset += recordBytes) {
@@ -512,26 +637,34 @@ NtfsFastIndex::Snapshot NtfsFastIndex::build(const QString& volumeRoot,
     if (snapshot->rootReference == 0) { snapshot->error = QStringLiteral("MFT 根目录记录不可用。"); return snapshot; }
     // Raw mapping must remain stable for the duration of the scan. A growing or
     // relocated MFT is retried; replaying names cannot repair a missed MFT run.
-    std::vector<std::byte> currentMapping;
+    MftMapping currentMapping;
     NTFS_VOLUME_DATA_BUFFER currentInfo{};
     DWORD currentInfoBytes = 0;
     if (!::DeviceIoControl(volume.handle, FSCTL_GET_NTFS_VOLUME_DATA, nullptr, 0,
-        &currentInfo, sizeof(currentInfo), &currentInfoBytes, nullptr)
-        || currentInfoBytes < sizeof(currentInfo)
-        || currentInfo.MftValidDataLength.QuadPart != volume.info.MftValidDataLength.QuadPart
-        || readRecord(volume, 0, currentMapping, snapshot->error) != RecordResult::Present
-        || currentMapping != first) {
+        &currentInfo, sizeof(currentInfo), &currentInfoBytes, nullptr)) {
+        snapshot->error = failure(QStringLiteral("查询 NTFS 元数据")); return snapshot;
+    }
+    if (currentInfoBytes < sizeof(currentInfo)
+        || currentInfo.VolumeSerialNumber.QuadPart != volume.info.VolumeSerialNumber.QuadPart
+        || currentInfo.BytesPerSector != volume.info.BytesPerSector
+        || currentInfo.BytesPerCluster != volume.info.BytesPerCluster
+        || currentInfo.BytesPerFileRecordSegment != volume.info.BytesPerFileRecordSegment
+        || currentInfo.MftValidDataLength.QuadPart != volume.info.MftValidDataLength.QuadPart) {
         snapshot->error = QStringLiteral("扫描期间 MFT 布局或长度已变化，请重试。"); return snapshot;
     }
-    for (auto it = mappingRecords.cbegin(); it != mappingRecords.cend(); ++it) {
-        if (readRecord(volume, it.key() & kRecordMask, currentMapping, snapshot->error) != RecordResult::Present
-            || currentMapping != it.value()) {
-            snapshot->error = QStringLiteral("扫描期间 MFT 扩展映射已变化，请重试。"); return snapshot;
-        }
+    if (!readMftMapping(volume, currentMapping, snapshot->error, cancel)) {
+        if (stopped(cancel)) snapshot->cancelled = true;
+        return snapshot;
+    }
+    if (!sameMftMapping(mapping, currentMapping)) {
+        snapshot->error = QStringLiteral("扫描期间 MFT 布局或长度已变化，请重试。"); return snapshot;
     }
     if (snapshot->journalAvailable) {
         USN_JOURNAL_DATA_V0 after{};
-        if (!queryJournal(volume, after, code) || after.UsnJournalID != snapshot->journalId
+        if (!queryJournal(volume, after, code)) {
+            snapshot->error = failure(QStringLiteral("查询 USN Journal"), code); return snapshot;
+        }
+        if (after.UsnJournalID != snapshot->journalId
             || snapshot->nextUsn < std::max(after.FirstUsn, after.LowestValidUsn)) {
             snapshot->error = QStringLiteral("扫描期间 USN Journal 已覆盖，请重建索引。"); snapshot->rebuildRequired = true; return snapshot;
         }
@@ -551,6 +684,7 @@ NtfsFastIndex::Snapshot NtfsFastIndex::refresh(const Snapshot& previous,
     output->status.clear();
     output->cancelled = false;
     output->rebuildRequired = false;
+    if (stopped(cancel)) { output->cancelled = true; return output; }
     if (!previous->complete || !previous->journalAvailable) {
         output->error = QStringLiteral("此索引没有可用的 USN 增量基线，请重建。"); output->rebuildRequired = true; return output;
     }
@@ -559,8 +693,15 @@ NtfsFastIndex::Snapshot NtfsFastIndex::refresh(const Snapshot& previous,
     if (!openVolume(previous->volumeRoot, volume, root, output->error)) return output;
     USN_JOURNAL_DATA_V0 journal{};
     DWORD code = 0;
-    if (static_cast<quint64>(volume.info.VolumeSerialNumber.QuadPart) != previous->volumeSerial
-        || !queryJournal(volume, journal, code) || journal.UsnJournalID != previous->journalId
+    if (static_cast<quint64>(volume.info.VolumeSerialNumber.QuadPart) != previous->volumeSerial) {
+        output->error = QStringLiteral("卷身份或 USN Journal 已变化，请重建索引。"); output->rebuildRequired = true; return output;
+    }
+    if (!queryJournal(volume, journal, code)) {
+        output->error = failure(QStringLiteral("查询 USN Journal"), code);
+        output->rebuildRequired = code == ERROR_JOURNAL_NOT_ACTIVE || code == ERROR_JOURNAL_DELETE_IN_PROGRESS;
+        return output;
+    }
+    if (journal.UsnJournalID != previous->journalId
         || previous->nextUsn < std::max(journal.FirstUsn, journal.LowestValidUsn)
         || previous->nextUsn > journal.NextUsn) {
         output->error = QStringLiteral("卷身份或 USN Journal 已变化，请重建索引。"); output->rebuildRequired = true; return output;

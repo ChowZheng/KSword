@@ -7,7 +7,12 @@
 #include "./GroupBoxStyle.h"
 #include "../theme.h"
 
+#include <QCoreApplication>
 #include <QDialogButtonBox>
+#include <QLineEdit>
+#include <QAbstractSpinBox>
+#include <QComboBox>
+#include <functional>
 #include <QFormLayout>
 #include <QGridLayout>
 #include <QGroupBox>
@@ -46,13 +51,16 @@ namespace
     }
 
     // 已登记底栏只处理布局中的普通动作，不扫描其它页面或重置业务按钮状态/颜色。
-    void styleFooterAction(QAbstractButton* button)
+    void styleFooterAction(QAbstractButton* button, QObject* observer = nullptr)
     {
         if (!qobject_cast<QPushButton*>(button) && !qobject_cast<QToolButton*>(button))
         {
             return;
         }
+        const QPointer<QAbstractButton> alive(button);
+        if (observer) button->installEventFilter(observer);
         ks::ui::NormalizeToolbarControl(button);
+        if (!alive) return;
         QString remaining = button->styleSheet();
         remaining.remove(ks::ui::ToolbarControlGeometryStyle().trimmed());
         remaining.remove(ks::ui::ToolbarIconGeometryStyle().trimmed());
@@ -88,27 +96,178 @@ namespace
         }
     }
 
-    void styleFooterLayout(QLayout* layout)
+    void collectFooterActions(QLayout* layout, QList<QPointer<QAbstractButton>>& actions)
     {
-        if (!layout)
-        {
-            return;
-        }
+        if (!layout) return;
         for (int index = 0; index < layout->count(); ++index)
         {
             QLayoutItem* item = layout->itemAt(index);
-            if (item->layout())
-            {
-                styleFooterLayout(item->layout());
-            }
+            if (item->layout()) collectFooterActions(item->layout(), actions);
             else if (auto* box = qobject_cast<QDialogButtonBox*>(item->widget()))
+                for (auto* button : box->buttons()) actions.append(button);
+            else if (auto* button = qobject_cast<QAbstractButton*>(item->widget())) actions.append(button);
+        }
+    }
+
+    void styleFooterLayout(QLayout* layout, QObject* observer = nullptr)
+    {
+        const QPointer<QLayout> alive(layout);
+        QList<QPointer<QAbstractButton>> actions;
+        collectFooterActions(layout, actions);
+        for (const auto& button : actions)
+        {
+            if (!alive) return;
+            if (button) styleFooterAction(button, observer);
+        }
+    }
+
+    struct SecondaryStructure
+    {
+        int rows = 0;
+        QList<QPointer<QAbstractButton>> actions;
+        bool operator==(const SecondaryStructure& other) const
+        { return rows == other.rows && actions == other.actions; }
+    };
+
+    // Only explicitly registered forms/footers participate. Geometry is ready
+    // before their first layout/Show; the old queued callback becomes a no-op
+    // when that work has already been consumed. No application-wide observer.
+    class SecondaryGeometryPreparation final : public QObject
+    {
+    public:
+        SecondaryGeometryPreparation(QObject* owner, std::function<QWidget*()> host,
+            std::function<void(QObject*)> apply, std::function<SecondaryStructure()> structure)
+            : QObject(owner), m_resolveHost(std::move(host)), m_apply(std::move(apply)),
+              m_structure(std::move(structure))
+        {
+            owner->installEventFilter(this);
+            refreshHost();
+            schedule();
+        }
+
+        void refresh(bool changed = true)
+        {
+            m_dirty = m_dirty || changed;
+            prepare();
+        }
+
+    protected:
+        bool eventFilter(QObject* watched, QEvent* event) override
+        {
+            const QPointer<QObject> alive(watched);
+            if (event->type() == QEvent::Show || event->type() == QEvent::Polish)
             {
-                for (auto* button : box->buttons()) styleFooterAction(button);
+                if (watched == m_host) prepare();
             }
-            else
+            else if (event->type() == QEvent::LayoutRequest)
             {
-                styleFooterAction(qobject_cast<QAbstractButton*>(item->widget()));
+                // Qt posts this outside resize/layout calculation, before the
+                // low-priority UpdateRequest which will paint the widget.
+                if (watched == m_host) prepare();
             }
+            else if (event->type() == QEvent::FontChange
+                || event->type() == QEvent::ApplicationFontChange
+                || event->type() == QEvent::ScreenChangeInternal)
+            {
+                if (!m_applying) schedule();
+            }
+            else if (event->type() == QEvent::ChildAdded || event->type() == QEvent::ChildRemoved)
+            {
+                if (!m_applying) schedule(); // A real child replacement can preserve rowCount().
+            }
+            return alive.isNull();
+        }
+
+    private:
+        void refreshHost()
+        {
+            QWidget* host = m_resolveHost();
+            if (host == m_host) return;
+            if (m_host) m_host->removeEventFilter(this);
+            m_host = host;
+            if (m_host) m_host->installEventFilter(this);
+        }
+
+        void schedule(bool changed = true)
+        {
+            m_dirty = m_dirty || changed;
+            if (m_pending) return;
+            m_pending = true;
+            QTimer::singleShot(0, this, [this]()
+            {
+                m_pending = false;
+                prepare(true);
+            });
+        }
+
+        void prepare(bool deferred = false)
+        {
+            if (m_applying) return;
+            refreshHost();
+            const SecondaryStructure structure = m_structure();
+            if (!m_structureReady || !(structure == m_lastStructure)) m_dirty = true;
+            if (!m_dirty) return;
+            if (!deferred && m_host && (m_host->window()->windowType() == Qt::Popup
+                || m_host->window()->windowType() == Qt::ToolTip))
+            {
+                schedule(); // Popup Show/Resize must not synchronously repolish.
+                return;
+            }
+            m_dirty = false;
+            m_lastStructure = structure;
+            m_structureReady = true;
+            m_applying = true;
+            const QPointer<SecondaryGeometryPreparation> alive(this);
+            const auto apply = m_apply;
+            apply(this);
+            if (alive) m_applying = false;
+        }
+
+        QPointer<QWidget> m_host;
+        std::function<QWidget*()> m_resolveHost;
+        std::function<void(QObject*)> m_apply;
+        std::function<SecondaryStructure()> m_structure;
+        SecondaryStructure m_lastStructure;
+        bool m_structureReady = false;
+        bool m_dirty = true;
+        bool m_pending = false;
+        bool m_applying = false;
+    };
+
+    QWidget* secondaryFormHost(const QFormLayout* form)
+    {
+        if (form->parentWidget()) return form->parentWidget();
+        // Forms are often styled just before addLayout(). Existing fields
+        // already belong to their final page even while the layout is unparented.
+        for (int row = 0; row < form->rowCount(); ++row)
+            for (const auto role : {QFormLayout::LabelRole, QFormLayout::FieldRole})
+                if (QLayoutItem* item = form->itemAt(row, role); item && item->widget())
+                    if (QWidget* host = item->widget()->parentWidget()) return host;
+        return nullptr;
+    }
+
+    void prepareSecondaryForm(QFormLayout* form, QObject* observer)
+    {
+        const QPointer<QFormLayout> alive(form);
+        const int labelWidth = form->property("ksword_secondary_label_width").toInt();
+        for (int row = 0; alive && row < form->rowCount(); ++row)
+        {
+            QLayoutItem* labelItem = form->itemAt(row, QFormLayout::LabelRole);
+            const QPointer<QLabel> label(labelItem ? qobject_cast<QLabel*>(labelItem->widget()) : nullptr);
+            if (label)
+            {
+                label->installEventFilter(observer);
+                if (label->minimumWidth() != labelWidth) label->setMinimumWidth(labelWidth);
+                if (!alive) return;
+                if (label && !label->wordWrap()) label->setWordWrap(true);
+                if (!alive) return;
+            }
+            QLayoutItem* field = form->itemAt(row, QFormLayout::FieldRole);
+            const QPointer<QWidget> control(field ? field->widget() : nullptr);
+            if (control) control->installEventFilter(observer);
+            if (qobject_cast<QLineEdit*>(control.data()) || qobject_cast<QComboBox*>(control.data())
+                || qobject_cast<QAbstractSpinBox*>(control.data()))
+                ks::ui::NormalizeToolbarControl(control);
         }
     }
 
@@ -207,6 +366,24 @@ namespace
             scheduleArrange();
         }
 
+        void showEvent(QShowEvent* event) override
+        {
+            QWidget::showEvent(event);
+            prepareArrangement();
+        }
+
+        bool event(QEvent* event) override
+        {
+            if (event->type() == QEvent::LayoutRequest)
+            {
+                m_pending = false;
+                const QPointer<SecondaryColumns> alive(this);
+                prepareArrangement();
+                if (!alive) return true;
+            }
+            return QWidget::event(event);
+        }
+
         void changeEvent(QEvent* event) override
         {
             QWidget::changeEvent(event);
@@ -217,24 +394,27 @@ namespace
         }
 
     private:
-        // 排列延后到当前布局计算结束，避免 resizeEvent 内嵌套修改布局。
+        // Normal-priority layout work precedes the low-priority paint request;
+        // resizing itself never rebuilds the layout recursively.
         void scheduleArrange()
         {
-            if (m_pending)
-            {
-                return;
-            }
+            if (m_pending) return;
             m_pending = true;
-            QTimer::singleShot(0, this, [this]()
-            {
-                m_pending = false;
-                const int threshold = m_breakpoint * std::max(14, fontMetrics().height()) / 14;
-                const bool wide = width() >= threshold;
-                if (wide != m_wide)
-                {
-                    arrange(wide);
-                }
-            });
+            QCoreApplication::postEvent(this, new QEvent(QEvent::LayoutRequest));
+        }
+
+        void prepareArrangement()
+        {
+            if (m_arranging) return;
+            const int threshold = m_breakpoint * std::max(14, fontMetrics().height()) / 14;
+            const bool wide = width() >= threshold;
+            if (wide == m_wide) return;
+            m_arranging = true;
+            const QPointer<SecondaryColumns> alive(this);
+            arrange(wide);
+            if (!alive) return;
+            m_grid->activate();
+            if (alive) m_arranging = false;
         }
 
         void arrange(bool wide)
@@ -257,6 +437,7 @@ namespace
         QGridLayout* m_grid; // 唯一布局，重新排列时不重建业务控件。
         bool m_wide = false; // 当前是否并列显示。
         bool m_pending = false; // 合并连续尺寸和字体变化。
+        bool m_arranging = false; // 不在布局激活产生的嵌套事件内重排。
     };
 }
 
@@ -432,44 +613,26 @@ namespace ks::ui
         {
             return;
         }
-        form->setHorizontalSpacing(18);
-        form->setVerticalSpacing(8);
-        form->setLabelAlignment(Qt::AlignLeft | Qt::AlignVCenter);
-        form->setFormAlignment(Qt::AlignLeft | Qt::AlignTop);
-        form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
-        form->setRowWrapPolicy(QFormLayout::WrapLongRows);
-        // 标签宽度统一但允许长翻译换行，不固定整个表单的高度。
-        for (int row = 0; row < form->rowCount(); ++row)
+        if (form->horizontalSpacing() != 18) form->setHorizontalSpacing(18);
+        if (form->verticalSpacing() != 8) form->setVerticalSpacing(8);
+        if (form->labelAlignment() != (Qt::AlignLeft | Qt::AlignVCenter)) form->setLabelAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+        if (form->formAlignment() != (Qt::AlignLeft | Qt::AlignTop)) form->setFormAlignment(Qt::AlignLeft | Qt::AlignTop);
+        if (form->fieldGrowthPolicy() != QFormLayout::AllNonFixedFieldsGrow) form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+        if (form->rowWrapPolicy() != QFormLayout::WrapLongRows) form->setRowWrapPolicy(QFormLayout::WrapLongRows);
+        const bool labelWidthChanged = form->property("ksword_secondary_label_width").toInt() != labelWidth;
+        if (labelWidthChanged) form->setProperty("ksword_secondary_label_width", labelWidth);
+        auto* metrics = static_cast<SecondaryGeometryPreparation*>(
+            form->property("ksword_secondary_form_metrics").value<QObject*>());
+        if (!metrics)
         {
-            QLayoutItem* item = form->itemAt(row, QFormLayout::LabelRole);
-            auto* label = item == nullptr ? nullptr : qobject_cast<QLabel*>(item->widget());
-            if (label != nullptr)
-            {
-                label->setMinimumWidth(labelWidth);
-                label->setWordWrap(true);
-            }
+            const QPointer<QFormLayout> target(form);
+            metrics = new SecondaryGeometryPreparation(form,
+                [target]() { return target ? secondaryFormHost(target) : nullptr; },
+                [target](QObject* observer) { if (target) prepareSecondaryForm(target, observer); },
+                [target]() { return SecondaryStructure{target ? target->rowCount() : 0, {}}; });
+            form->setProperty("ksword_secondary_form_metrics", QVariant::fromValue<QObject*>(metrics));
         }
-        // 页面常先创建表单再逐行加入控件；延后一轮补齐标签宽度及直接单行输入高度。
-        QTimer::singleShot(0, form, [form, labelWidth]()
-        {
-            for (int row = 0; row < form->rowCount(); ++row)
-            {
-                QLayoutItem* labelItem = form->itemAt(row, QFormLayout::LabelRole);
-                auto* label = labelItem == nullptr ? nullptr : qobject_cast<QLabel*>(labelItem->widget());
-                if (label != nullptr)
-                {
-                    label->setMinimumWidth(labelWidth);
-                    label->setWordWrap(true);
-                }
-                QLayoutItem* field = form->itemAt(row, QFormLayout::FieldRole);
-                QWidget* control = field == nullptr ? nullptr : field->widget();
-                if (qobject_cast<QLineEdit*>(control) || qobject_cast<QComboBox*>(control)
-                    || qobject_cast<QAbstractSpinBox*>(control))
-                {
-                    NormalizeToolbarControl(control);
-                }
-            }
-        });
+        metrics->refresh(labelWidthChanged);
     }
 
     void StyleSecondaryFooter(QWidget* footer)
@@ -485,27 +648,34 @@ namespace ks::ui
             footer->layout()->setContentsMargins(16, 8, 16, 8);
             footer->layout()->setSpacing(8);
         }
-        if (auto* box = qobject_cast<QDialogButtonBox*>(footer))
-        {
-            for (auto* button : box->buttons()) styleFooterAction(button);
-        }
-        else
-        {
-            styleFooterLayout(footer->layout());
-        }
-        // 常见构造顺序先登记底栏再加按钮；只补这一行的构造尾部，不建立全局遍历。
-        QTimer::singleShot(0, footer, [footer]()
-        {
-            if (auto* box = qobject_cast<QDialogButtonBox*>(footer))
+        const QPointer<QWidget> actions(footer);
+        auto* preparation = new SecondaryGeometryPreparation(footer,
+            [actions]() { return actions.data(); }, [actions](QObject* observer)
             {
-                for (auto* button : box->buttons()) styleFooterAction(button);
-            }
-            else
+                if (!actions) return;
+                if (auto* box = qobject_cast<QDialogButtonBox*>(actions.data()))
+                {
+                    QList<QPointer<QAbstractButton>> buttons;
+                    for (auto* button : box->buttons()) buttons.append(button);
+                    for (const auto& button : buttons)
+                    {
+                        if (button) styleFooterAction(button, observer);
+                        if (!actions) return;
+                    }
+                }
+                else styleFooterLayout(actions->layout(), observer);
+            }, [actions]()
             {
-                styleFooterLayout(footer->layout());
-            }
-        });
-        const QPointer<QWidget> target(footer);
+                SecondaryStructure structure;
+                if (!actions) return structure;
+                if (auto* box = qobject_cast<QDialogButtonBox*>(actions.data()))
+                    for (auto* button : box->buttons()) structure.actions.append(button);
+                else collectFooterActions(actions->layout(), structure.actions);
+                return structure;
+            });
+        preparation->refresh();
+        if (!actions) return;
+        const QPointer<QWidget> target(actions);
         BindWidgetTheme(footer, [target]()
         {
             if (target)

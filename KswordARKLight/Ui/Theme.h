@@ -23,6 +23,10 @@ public:
     HBRUSH windowBrush() const;
     HBRUSH panelBrush() const;
     HBRUSH accentBrush() const;
+    HBRUSH dangerBrush() const;
+    // One-pixel border pen shared by every panel frame; creating it per paint
+    // cost a GDI object per panel per frame.
+    HPEN borderPen() const;
 
     COLORREF windowColor = RGB(246, 247, 249);
     COLORREF panelColor = RGB(255, 255, 255);
@@ -31,11 +35,20 @@ public:
     COLORREF accentDarkColor = RGB(0, 76, 190);
     COLORREF textColor = RGB(31, 35, 40);
     COLORREF mutedTextColor = RGB(96, 103, 112);
+    // Danger marks destructive actions (end connection, wipe clipboard, unload a
+    // driver). It is deliberately a muted brick red rather than a saturated one:
+    // these buttons sit next to ordinary ones and must read as a warning, not as
+    // the primary action on the page.
+    COLORREF dangerColor = RGB(176, 58, 58);
+    COLORREF dangerPressedColor = RGB(138, 40, 40);
+    COLORREF dangerTextColor = RGB(255, 255, 255);
 
 private:
     HBRUSH windowBrush_;
     HBRUSH panelBrush_;
     HBRUSH accentBrush_;
+    HBRUSH dangerBrush_;
+    HPEN borderPen_;
 };
 
 // AppTheme returns the singleton palette. There is no input; output is the theme

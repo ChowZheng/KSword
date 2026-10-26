@@ -35,11 +35,12 @@ namespace ks::files::ntfs
         bool attributeListResident = true;
     };
 
-    // Parses one on-disk FILE record, including USA verification/restoration.
+    // Parses one FILE record. RawDisk strictly verifies/restores 512-byte USA
+    // strides; bytesPerSector is volume I/O geometry, never the fixup stride.
+    // FileSystemControl requires NTFS's already-fixed-up logical API output:
+    // preserve its tail bytes, which may have changed since the USA was built.
     // False means malformed/torn data; output is reset on failure. Valid unused
     // and extension records return true with inUse/baseRecord identifying them.
-    // FileSystemControl additionally accepts a record with every sector trailer
-    // already equal to its USA replacement; raw reads never use that exception.
     // Only unnamed $DATA contributes sizes. Resident data occupies no separate
     // clusters; attribute-list files have unknown sizes until extents are resolved.
     bool ParseRecord(const std::byte* bytes, std::size_t length,
@@ -63,10 +64,19 @@ namespace ks::files::ntfs
     };
 
     // Extracts $MFT's unnamed stream mapping pairs and extension-record refs.
-    // Nonresident attribute lists require an external stream reader and return
-    // false here. References include sequence numbers and must be revalidated.
+    // Nonresident attribute lists require an external stream reader. When
+    // attributeListParts is supplied their mapping is returned separately;
+    // otherwise they retain the unsupported/false result. References include
+    // sequence numbers and must be revalidated.
     bool ParseMftStreamParts(const std::byte* bytes, std::size_t length,
         std::uint32_t bytesPerSector, std::vector<MftStreamPart>& parts,
         std::vector<std::uint64_t>& extensionReferences,
-        RecordFormat format = RecordFormat::RawDisk);
+        RecordFormat format = RecordFormat::RawDisk,
+        std::vector<MftStreamPart>* attributeListParts = nullptr);
+
+    // Parses a complete externally read $ATTRIBUTE_LIST value and returns only
+    // unnamed $DATA references. Every entry is validated before publication;
+    // malformed/truncated input returns false and clears the output.
+    bool ParseMftAttributeList(const std::byte* bytes, std::size_t length,
+        std::vector<std::uint64_t>& extensionReferences);
 }

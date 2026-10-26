@@ -28,9 +28,6 @@ namespace Ksword::Features::ProcessDetail {
 namespace {
 using namespace ks::r3::process_detail::peb;
 
-constexpr UINT_PTR kCopySubclassId = 0x4B535745U;
-constexpr UINT kCopyTextCommand = 65101U;
-
 
 
 
@@ -113,60 +110,11 @@ const ProcessR0AuditInfo* FindAuditSource(
     return found == rows.end() ? nullptr : &*found;
 }
 
-bool CopyWindowTextToClipboard(HWND window) {
-    if (!window) {
-        return false;
-    }
-    const int length = ::GetWindowTextLengthW(window);
-    if (length <= 0) {
-        return false;
-    }
-    std::wstring text(static_cast<std::size_t>(length) + 1U, L'\0');
-    ::GetWindowTextW(window, text.data(), static_cast<int>(text.size()));
-    text.resize(std::wcslen(text.c_str()));
-    return Ksword::Ui::CopyTextToClipboard(window, text, L"进程 PEB 证据");
-}
-
-LRESULT CALLBACK CopyableTextSubclassProc(
-    HWND hwnd,
-    UINT message,
-    WPARAM wParam,
-    LPARAM lParam,
-    UINT_PTR subclassId,
-    DWORD_PTR) {
-    if (message == WM_CONTEXTMENU) {
-        POINT point{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
-        if (point.x == -1 && point.y == -1) {
-            RECT bounds{};
-            ::GetWindowRect(hwnd, &bounds);
-            point = { bounds.left + 16, bounds.top + 16 };
-        }
-        HMENU menu = ::CreatePopupMenu();
-        ::AppendMenuW(menu, MF_STRING, kCopyTextCommand, L"复制");
-        const UINT command = ::TrackPopupMenu(
-            menu,
-            TPM_RETURNCMD | TPM_RIGHTBUTTON,
-            point.x,
-            point.y,
-            0,
-            hwnd,
-            nullptr);
-        ::DestroyMenu(menu);
-        if (command == kCopyTextCommand) {
-            CopyWindowTextToClipboard(hwnd);
-        }
-        return 0;
-    }
-    if (message == WM_NCDESTROY) {
-        ::RemoveWindowSubclass(hwnd, CopyableTextSubclassProc, subclassId);
-    }
-    return ::DefSubclassProc(hwnd, message, wParam, lParam);
-}
-
+// MakeCopyable attaches the page-wide text panel menu (copy / export as text).
+// The implementation lives in ProcessDetailPage.cpp so the token and evidence
+// panels share one subclass instead of three near-identical ones.
 void MakeCopyable(HWND control) {
-    if (control) {
-        ::SetWindowSubclass(control, CopyableTextSubclassProc, kCopySubclassId, 0);
-    }
+    AttachTextActionsToTextPanel(control, L"process_evidence.txt");
 }
 
 

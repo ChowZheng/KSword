@@ -2,10 +2,14 @@
 #include "CallbackEnumeration.h"
 
 #include "KernelCatalog.h"
+#include "KernelColumnVisibility.h"
 #include "KernelPageLayout.h"
+#include "KernelValueSupport.h"
+#include "KernelProjectionBuilder.h"
 #include "../../Ui/Controls.h"
 #include "../../Ui/BackgroundWork.h"
 #include "../../Ui/EntityNavigation.h"
+#include "../../Ui/ExportUtil.h"
 #include "../../Ui/ListViewUtil.h"
 #include "../../Ui/NumericSortKey.h"
 #include "../../Ui/TextFindSupport.h"
@@ -36,13 +40,6 @@
 
 namespace Ksword::Features::Kernel {
 namespace {
-using KernelRawRows = std::vector<std::vector<std::wstring>>;
-
-std::shared_ptr<const KernelRawRows> EmptyKernelRawRows() {
-    static const auto empty = std::make_shared<const KernelRawRows>();
-    return empty;
-}
-
 constexpr wchar_t kKernelPageClass[] = L"KswordARKLight.KernelPage";
 constexpr int kIdPrimaryTab = 51001;
 constexpr int kIdSecondaryTab = 51002;
@@ -210,12 +207,6 @@ constexpr int kCallbackFileMonitorPathColumn = 3;
 constexpr int kCallbackFileMonitorPathStateColumn = 10;
 constexpr wchar_t kInlineHookForceRequiredStatusText[] = L"6";
 constexpr int kKernelSplitterThickness = 5;
-constexpr const wchar_t* kDeviceDriverFixedDirectories[] = {
-    L"\\Device",
-    L"\\Driver",
-    L"\\FileSystem",
-    L"\\FileSystem\\Filters",
-};
 
 // IsR0EvidenceFeature identifies the large snapshot pages that share the
 // generic R0 evidence projection. These pages use one debounced background
@@ -279,30 +270,6 @@ void EnsureKernelPageClass() {
     registered = true;
 }
 
-// BoolText converts metadata or result booleans into compact Chinese labels.
-// Input is a boolean value; output is "是" or "否".
-const wchar_t* BoolText(const bool value) {
-    return value ? L"是" : L"否";
-}
-
-// HexToUInt64 parses decimal or 0x-prefixed protocol numbers from cached rows.
-// Input is display text emitted by KernelFacade; processing uses wcstoull and
-// requires full-token consumption; output is false when the cell is missing or
-// not numeric.
-bool HexToUInt64(const std::wstring& text, std::uint64_t& valueOut) {
-    if (text.empty()) {
-        return false;
-    }
-    wchar_t* end = nullptr;
-    const int base = text.size() > 2 && text[0] == L'0' && (text[1] == L'x' || text[1] == L'X') ? 16 : 10;
-    const unsigned long long value = std::wcstoull(text.c_str(), &end, base);
-    if (end == text.c_str() || *end != L'\0') {
-        return false;
-    }
-    valueOut = static_cast<std::uint64_t>(value);
-    return true;
-}
-
 // CallbackGuidText formats the opaque callback event identifier for display and
 // for the strongly validated facade action. It does not reinterpret the bytes
 // as a Windows GUID, preserving the driver protocol's original byte order.
@@ -324,43 +291,6 @@ std::wstring FixedWideText(const wchar_t (&value)[Size]) {
     return std::wstring(value, length);
 }
 
-std::wstring RowFieldByName(const std::vector<std::wstring>& row,
-    const std::vector<std::wstring>& columns,
-    std::initializer_list<const wchar_t*> names);
-
-// FirstRowValue returns the first non-empty field with one of the supplied
-// aliases. Inputs are a row cache and column aliases; output is empty when no
-// matching cell is present.
-std::wstring FirstRowValue(
-    const std::vector<std::vector<std::wstring>>& rows,
-    const std::vector<std::wstring>& columns,
-    std::initializer_list<const wchar_t*> names) {
-    for (const std::vector<std::wstring>& row : rows) {
-        const std::wstring value = RowFieldByName(row, columns, names);
-        if (!value.empty()) {
-            return value;
-        }
-    }
-    return {};
-}
-
-// FirstRowUInt64 returns a numeric value from the first matching cached row.
-// Inputs are row data, columns and aliases; processing accepts hexadecimal and
-// decimal display forms; output uses fallback when no numeric value is found.
-std::uint64_t FirstRowUInt64(
-    const std::vector<std::vector<std::wstring>>& rows,
-    const std::vector<std::wstring>& columns,
-    std::initializer_list<const wchar_t*> names,
-    const std::uint64_t fallback = 0) {
-    for (const std::vector<std::wstring>& row : rows) {
-        std::uint64_t value = 0;
-        if (HexToUInt64(RowFieldByName(row, columns, names), value)) {
-            return value;
-        }
-    }
-    return fallback;
-}
-
 // FirstNonZeroField reads one numeric field from a single cached row. Inputs are
 // a raw row, its schema, and accepted column aliases; processing accepts decimal
 // and hexadecimal text; output is zero when the field is absent or zero.
@@ -374,64 +304,6 @@ std::uint64_t FirstNonZeroField(
     }
     return 0;
 }
-
-// FlagEnabled checks whether a numeric bitmask contains a requested flag. Inputs
-// are protocol flags and a flag value; output is true when all flag bits are set.
-bool FlagEnabled(const std::uint64_t flags, const std::uint64_t flag) {
-    return (flags & flag) == flag;
-}
-
-// IsZeroMaskText identifies empty dependency masks in their common display
-// forms. Input is a cell string; output is true for blank, decimal zero, or
-// hexadecimal zero variants.
-bool IsZeroMaskText(const std::wstring& text) {
-    std::uint64_t value = 0;
-    return text.empty() || (HexToUInt64(text, value) && value == 0);
-}
-
-// NamedMask describes one protocol bit with its C macro name and original
-// KernelDock Chinese title. Inputs are static constants; processing helpers use
-// it to render bitsets; no runtime ownership is stored here.
-struct NamedMask {
-    std::uint64_t mask;
-    const wchar_t* name;
-    const wchar_t* title;
-};
-
-constexpr NamedMask kDynCapabilityMasks[] = {
-    { KSW_CAP_DYN_NTOS_ACTIVE, L"KSW_CAP_DYN_NTOS_ACTIVE", L"ntoskrnl profile 已激活" },
-    { KSW_CAP_DYN_LXCORE_ACTIVE, L"KSW_CAP_DYN_LXCORE_ACTIVE", L"lxcore profile 已激活" },
-    { KSW_CAP_OBJECT_TYPE_FIELDS, L"KSW_CAP_OBJECT_TYPE_FIELDS", L"对象类型字段" },
-    { KSW_CAP_HANDLE_TABLE_DECODE, L"KSW_CAP_HANDLE_TABLE_DECODE", L"句柄表解码" },
-    { KSW_CAP_PROCESS_OBJECT_TABLE, L"KSW_CAP_PROCESS_OBJECT_TABLE", L"进程 ObjectTable" },
-    { KSW_CAP_THREAD_STACK_FIELDS, L"KSW_CAP_THREAD_STACK_FIELDS", L"线程栈字段" },
-    { KSW_CAP_THREAD_IO_COUNTERS, L"KSW_CAP_THREAD_IO_COUNTERS", L"线程 I/O 计数" },
-    { KSW_CAP_ALPC_FIELDS, L"KSW_CAP_ALPC_FIELDS", L"ALPC 字段" },
-    { KSW_CAP_SECTION_CONTROL_AREA, L"KSW_CAP_SECTION_CONTROL_AREA", L"Section/ControlArea" },
-    { KSW_CAP_PROCESS_PROTECTION_PATCH, L"KSW_CAP_PROCESS_PROTECTION_PATCH", L"进程保护修改" },
-    { KSW_CAP_WSL_LXCORE_FIELDS, L"KSW_CAP_WSL_LXCORE_FIELDS", L"WSL/lxcore 字段" },
-    { KSW_CAP_ETW_GUID_FIELDS, L"KSW_CAP_ETW_GUID_FIELDS", L"ETW GUID/Registration 字段" },
-    { KSW_CAP_CALLBACK_NOTIFY_GLOBALS, L"KSW_CAP_CALLBACK_NOTIFY_GLOBALS", L"Callback Notify 全局 RVA" },
-    { KSW_CAP_CALLBACK_REGISTRY_GLOBALS, L"KSW_CAP_CALLBACK_REGISTRY_GLOBALS", L"Registry Callback 全局 RVA" },
-    { KSW_CAP_CALLBACK_OBJECT_FIELDS, L"KSW_CAP_CALLBACK_OBJECT_FIELDS", L"Object Callback 结构偏移" },
-    { KSW_CAP_PROCESS_LIST_FIELDS, L"KSW_CAP_PROCESS_LIST_FIELDS", L"进程链表字段" },
-    { KSW_CAP_THREAD_LIST_FIELDS, L"KSW_CAP_THREAD_LIST_FIELDS", L"线程链表字段" },
-    { KSW_CAP_CID_TABLE_WALK, L"KSW_CAP_CID_TABLE_WALK", L"CID 表遍历" },
-    { KSW_CAP_KERNEL_MODULE_LIST_FIELDS, L"KSW_CAP_KERNEL_MODULE_LIST_FIELDS", L"内核模块链表字段" },
-    { KSW_CAP_DRIVER_OBJECT_FIELDS, L"KSW_CAP_DRIVER_OBJECT_FIELDS", L"驱动对象字段" },
-    { KSW_CAP_KERNEL_GLOBALS, L"KSW_CAP_KERNEL_GLOBALS", L"内核全局 RVA" },
-};
-
-constexpr NamedMask kSecurityPolicyMasks[] = {
-    { KSWORD_ARK_SECURITY_POLICY_FLAG_ACTIVE, L"POLICY_ACTIVE", L"安全策略启用" },
-    { KSWORD_ARK_SECURITY_POLICY_ALLOW_MUTATING_ACTIONS, L"ALLOW_MUTATING_ACTIONS", L"允许进程修改动作" },
-    { KSWORD_ARK_SECURITY_POLICY_ALLOW_CALLBACK_CONTROL, L"ALLOW_CALLBACK_CONTROL", L"允许回调控制" },
-    { KSWORD_ARK_SECURITY_POLICY_ALLOW_PROCESS_PROTECTION, L"ALLOW_PROCESS_PROTECTION", L"允许进程保护修改" },
-    { KSWORD_ARK_SECURITY_POLICY_ALLOW_KERNEL_SNAPSHOTS, L"ALLOW_KERNEL_SNAPSHOTS", L"允许内核快照" },
-    { KSWORD_ARK_SECURITY_POLICY_REQUIRE_CONFIRMATION, L"REQUIRE_CONFIRMATION", L"要求确认" },
-    { KSWORD_ARK_SECURITY_POLICY_DENY_CRITICAL_PROCESS, L"DENY_CRITICAL_PROCESS", L"拒绝关键进程" },
-    { KSWORD_ARK_SECURITY_POLICY_ADVANCED_MODE, L"ADVANCED_MODE", L"高级模式" },
-};
 
 constexpr NamedMask kFeatureFlagMasks[] = {
     { KSWORD_ARK_FEATURE_FLAG_REQUIRES_DYNDATA, L"Requires DynData", L"需要 DynData" },
@@ -448,39 +320,6 @@ std::wstring HexTextPadded(const std::uint64_t value, const int digits) {
     std::wostringstream stream;
     stream << L"0x" << std::uppercase << std::hex << std::setw(digits) << std::setfill(L'0') << value;
     return stream.str();
-}
-
-// NamedMaskText renders a protocol bitset as "MACRO (中文)" entries. Inputs are
-// a mask and table; processing preserves original KernelDock names; output is
-// "None" when no known bit is enabled.
-std::wstring NamedMaskText(const std::uint64_t mask, const NamedMask* items, const std::size_t count) {
-    std::wstring text;
-    for (std::size_t index = 0; index < count; ++index) {
-        const NamedMask& item = items[index];
-        if ((mask & item.mask) != item.mask) {
-            continue;
-        }
-        if (!text.empty()) {
-            text += L", ";
-        }
-        text += item.name;
-        text += L" (";
-        text += item.title;
-        text += L")";
-    }
-    return text.empty() ? L"None" : text;
-}
-
-// DynCapabilityNames renders KSW_CAP_* bits. Input is a 64-bit mask; output is
-// the original capability name list used by DynData and DriverStatus pages.
-std::wstring DynCapabilityNames(const std::uint64_t mask) {
-    return NamedMaskText(mask, kDynCapabilityMasks, std::size(kDynCapabilityMasks));
-}
-
-// SecurityPolicyNames renders KSWORD_ARK_SECURITY_POLICY_* bits. Input is a
-// 32-bit policy mask; output matches the original DriverStatus detail text.
-std::wstring SecurityPolicyNames(const std::uint32_t mask) {
-    return NamedMaskText(mask, kSecurityPolicyMasks, std::size(kSecurityPolicyMasks));
 }
 
 // FeatureFlagNames renders KSWORD_ARK_FEATURE_FLAG_* bits. Input is a 32-bit
@@ -504,26 +343,6 @@ std::wstring DisabledDynCapabilitySummary(const std::uint64_t mask) {
         text += item.title;
     }
     return text.empty() ? L"无" : text;
-}
-
-// DynDataStatusFlagsText renders KSW_DYN_STATUS_FLAG_* in the same English
-// badge style as the full KernelDock. Input is status flags; output is "None" if empty.
-std::wstring DynDataStatusFlagsText(const std::uint32_t flags) {
-    std::vector<std::wstring> parts;
-    if (FlagEnabled(flags, KSW_DYN_STATUS_FLAG_INITIALIZED)) { parts.push_back(L"Initialized"); }
-    if (FlagEnabled(flags, KSW_DYN_STATUS_FLAG_NTOS_ACTIVE)) { parts.push_back(L"NtosActive"); }
-    if (FlagEnabled(flags, KSW_DYN_STATUS_FLAG_LXCORE_ACTIVE)) { parts.push_back(L"LxcoreActive"); }
-    if (FlagEnabled(flags, KSW_DYN_STATUS_FLAG_EXTRA_ACTIVE)) { parts.push_back(L"ExtraActive"); }
-    if (FlagEnabled(flags, KSW_DYN_STATUS_FLAG_PDB_PROFILE_ACTIVE)) { parts.push_back(L"PdbProfileActive"); }
-    if (FlagEnabled(flags, KSW_DYN_STATUS_FLAG_CALLBACK_PROFILE_ACTIVE)) { parts.push_back(L"CallbackProfileActive"); }
-    std::wstring text;
-    for (const std::wstring& part : parts) {
-        if (!text.empty()) {
-            text += L", ";
-        }
-        text += part;
-    }
-    return text.empty() ? L"None" : text;
 }
 
 // FeatureStateText normalizes numeric driver feature states. Inputs are state
@@ -595,134 +414,14 @@ void SetEditCueBanner(HWND edit, const wchar_t* text) {
     ::SendMessageW(edit, EM_SETCUEBANNER, TRUE, reinterpret_cast<LPARAM>(text != nullptr ? text : L""));
 }
 
-// HasColumn reports whether a dynamic result column has already been added.
-// Inputs are the ordered column vector and a candidate name; output avoids
-// duplicate ListView columns while preserving first-seen order.
-bool HasColumn(const std::vector<std::wstring>& columns, const std::wstring& name) {
-    return std::find(columns.begin(), columns.end(), name) != columns.end();
-}
-
-// EmptyDetailTextForFeature returns the original KernelDock empty-detail text.
-// Input is the active feature; output is shown when the table has no visible
-// rows after a refresh or filter pass.
-const wchar_t* EmptyDetailTextForFeature(const KernelFeatureId featureId) {
-    switch (featureId) {
-    case KernelFeatureId::AtomTable:
-        return L"请选择一条原子记录查看详情。";
-    case KernelFeatureId::NtQueryLegacy:
-        return L"请选择一条 NtQuery 结果查看详情。";
-    case KernelFeatureId::Ssdt:
-        return L"当前环境未返回可见 SSDT 条目。";
-    case KernelFeatureId::ShadowSsdt:
-        return L"当前环境未返回 SSSDT stub 解析结果。";
-    case KernelFeatureId::InlineHook:
-        return L"当前过滤条件下未返回 Inline Hook 记录。";
-    case KernelFeatureId::IatEatHook:
-        return L"当前过滤条件下未返回 IAT/EAT 记录。";
-    case KernelFeatureId::CallbackEnumeration:
-        return L"当前环境未返回可见回调记录。";
-    case KernelFeatureId::NamedPipe:
-        return L"说明：命名管道属于 NPFS 文件系统目录枚举，本页使用 NtOpenFile + NtQueryDirectoryFile 读取 \\Device\\NamedPipe。\r\n这不是 NtQueryDirectoryObject 下钻，也不是系统句柄表枚举。";
-    case KernelFeatureId::ObjectDirectoryRecursive:
-        return L"输入根路径后点击刷新。";
-    case KernelFeatureId::DynData:
-        return L"请选择一条动态偏移字段查看详情。";
-    case KernelFeatureId::DriverStatus:
-        return L"当前筛选条件下没有驱动能力记录。";
-    default:
-        return L"";
-    }
-}
-
-// ContainsCaseInsensitive checks whether text contains a fragment without case
-// sensitivity. Inputs are display strings; output is true for empty fragments or
-// any case-insensitive substring match.
-bool ContainsCaseInsensitive(std::wstring text, std::wstring fragment) {
-    if (fragment.empty()) {
-        return true;
-    }
-    std::transform(text.begin(), text.end(), text.begin(), [](wchar_t ch) {
-        return static_cast<wchar_t>(std::towlower(ch));
-    });
-    std::transform(fragment.begin(), fragment.end(), fragment.begin(), [](wchar_t ch) {
-        return static_cast<wchar_t>(std::towlower(ch));
-    });
-    return text.find(fragment) != std::wstring::npos;
-}
-
-// ColumnWidth returns a practical default width for a kernel result column.
-// Input is a column title; output is a compact but readable ListView width.
-int ColumnWidth(const std::wstring& name) {
-    if (name == L"#") {
-        return 52;
-    }
-    if (name == L"字段" || name == L"功能") {
-        return 260;
-    }
-    if (name == L"Path" || name == L"NtPath" || name == L"Target" || name == L"Detail" || name == L"Module" || name == L"TargetModule" ||
-        name == L"路径/说明" || name == L"符号链接目标" || name == L"完整路径" || name == L"目标路径" ||
-        name == L"targetPath" || name == L"fullPath" || name == L"dosCandidate" || name == L"Win32Path" ||
-        name == L"模块" || name == L"目标模块" || name == L"原因" || name == L"导入模块") {
-        if (name == L"完整路径" || name == L"目标路径") {
-            return 320;
-        }
-        return 260;
-    }
-    if (name == L"服务名" || name == L"函数" || name == L"函数/序号") {
-        return 240;
-    }
-    if (name == L"Function" || name == L"Name" || name == L"objectName" || name == L"linkName" ||
-        name == L"Pipe" || name == L"Pipe Name" || name == L"Type" || name == L"objectType" || name == L"Status" ||
-        name == L"函数" || name == L"名称" || name == L"对象名称" || name == L"类型" || name == L"对象类型" ||
-        name == L"状态" || name == L"服务名") {
-        return 180;
-    }
-    if (name == L"Parent" || name == L"Source" || name == L"Directory" || name == L"directoryPath" ||
-        name == L"sourceDirectory" || name == L"目录路径" || name == L"来源目录") {
-        return name == L"目录路径" ? 190 : 220;
-    }
-    if (name == L"Address" || name == L"Target" || name == L"Service" || name == L"Zw" || name == L"Callback" ||
-        name == L"函数地址" || name == L"目标地址" || name == L"回调/对象地址" || name == L"表项地址" ||
-        name == L"Stub地址" || name == L"Zw导出地址" || name == L"服务例程" || name == L"当前目标" ||
-        name == L"期望目标" || name == L"Thunk/EAT项") {
-        return 180;
-    }
-    if (name == L"索引") {
-        return 90;
-    }
-    if (name == L"偏移" || name == L"类型" || name == L"类别" || name == L"状态" || name == L"策略" ||
-        name == L"所需DynData" || name == L"已满足DynData") {
-        return name == L"状态" ? 260 : 140;
-    }
-    if (name == L"能力提示") {
-        return 320;
-    }
-    return 130;
-}
-
 // SetClipboardText copies Unicode text to the process clipboard. Input is the
-// text to copy; processing owns the global memory after SetClipboardData; no
-// value is returned.
+// text to copy; no value is returned.
+//
+// This page used to own the clipboard write outright, which kept every kernel
+// copy out of the evidence session. It now goes through the shared writer; the
+// read side below stays local because it is a genuine paste path, not a copy.
 void SetClipboardText(HWND owner, const std::wstring& text) {
-    if (!::OpenClipboard(owner)) {
-        return;
-    }
-    ::EmptyClipboard();
-    const SIZE_T bytes = (text.size() + 1) * sizeof(wchar_t);
-    HGLOBAL memory = ::GlobalAlloc(GMEM_MOVEABLE, bytes);
-    if (memory) {
-        void* target = ::GlobalLock(memory);
-        if (target) {
-            std::memcpy(target, text.c_str(), bytes);
-            ::GlobalUnlock(memory);
-            ::SetClipboardData(CF_UNICODETEXT, memory);
-            memory = nullptr;
-        }
-        if (memory) {
-            ::GlobalFree(memory);
-        }
-    }
-    ::CloseClipboard();
+    Ksword::Ui::CopyTextToClipboard(owner, text, L"内核结果复制");
 }
 
 // GetClipboardText reads Unicode text from the process clipboard. Input is the
@@ -768,6 +467,43 @@ int HeaderColumnCount(HWND list) {
     return header ? Header_GetItemCount(header) : 0;
 }
 
+// HeaderColumnText returns one report column caption. Inputs are a ListView and
+// a column index; output is empty when the column is invalid. Exported files
+// are read by someone who was not looking at the screen, so a file without a
+// header row cannot be interpreted once the column order changes.
+std::wstring HeaderColumnText(HWND list, const int column) {
+    if (!list || column < 0) {
+        return {};
+    }
+    wchar_t headerText[256]{};
+    LVCOLUMNW lvColumn{};
+    lvColumn.mask = LVCF_TEXT;
+    lvColumn.pszText = headerText;
+    lvColumn.cchTextMax = static_cast<int>(std::size(headerText));
+    if (!ListView_GetColumn(list, column, &lvColumn)) {
+        return {};
+    }
+    return headerText;
+}
+
+// AppendTsvHeaderRow writes one tab-separated caption line. Inputs are a
+// ListView and the output text; processing reads every column caption; output
+// is true when a line was appended, so the caller can decide whether the first
+// data row still needs a leading CRLF.
+bool AppendTsvHeaderRow(HWND list, std::wstring& text) {
+    const int columns = HeaderColumnCount(list);
+    if (columns <= 0) {
+        return false;
+    }
+    for (int column = 0; column < columns; ++column) {
+        if (column > 0) {
+            text += L'\t';
+        }
+        text += HeaderColumnText(list, column);
+    }
+    return true;
+}
+
 // BuildListViewSelectionTsv serializes selected rows from any report ListView.
 // Inputs are the list and includeHeader flag; processing reads visible text
 // exactly as displayed; output is a tab-separated string suitable for clipboard
@@ -779,21 +515,7 @@ std::wstring BuildListViewSelectionTsv(HWND list, const bool includeHeader) {
     const int columns = HeaderColumnCount(list);
     const int rows = ListView_GetItemCount(list);
     std::wstring text;
-    if (includeHeader) {
-        for (int column = 0; column < columns; ++column) {
-            if (column > 0) {
-                text += L'\t';
-            }
-            wchar_t headerText[256]{};
-            LVCOLUMNW lvColumn{};
-            lvColumn.mask = LVCF_TEXT;
-            lvColumn.pszText = headerText;
-            lvColumn.cchTextMax = static_cast<int>(std::size(headerText));
-            ListView_GetColumn(list, column, &lvColumn);
-            text += headerText;
-        }
-    }
-    bool wroteRow = includeHeader;
+    bool wroteRow = includeHeader && AppendTsvHeaderRow(list, text);
     for (int row = 0; row < rows; ++row) {
         if (ListView_GetItemState(list, row, LVIS_SELECTED) == 0) {
             continue;
@@ -810,24 +532,6 @@ std::wstring BuildListViewSelectionTsv(HWND list, const bool includeHeader) {
         wroteRow = true;
     }
     return text;
-}
-
-
-// RowFieldByName reads a named value from a cached dynamic row. Inputs are a row,
-// the current column names and one or more accepted column aliases; processing is
-// case-insensitive and preserves the original display value; output is empty when
-// no alias is present or the selected cell is blank.
-std::wstring RowFieldByName(const std::vector<std::wstring>& row,
-    const std::vector<std::wstring>& columns,
-    std::initializer_list<const wchar_t*> names) {
-    for (const wchar_t* name : names) {
-        for (std::size_t column = 0; column < columns.size() && column < row.size(); ++column) {
-            if (_wcsicmp(columns[column].c_str(), name) == 0 && !row[column].empty()) {
-                return row[column];
-            }
-        }
-    }
-    return {};
 }
 
 // IsObjectNamespaceFeature reports whether a feature belongs to the original
@@ -856,16 +560,6 @@ bool IsObjectNamespaceFeature(const KernelFeatureId featureId) {
 bool UsesObjectNamespaceTreeIndexColumn(const KernelFeatureId featureId) {
     (void)featureId;
     return false;
-}
-
-// IsKernelHookFeature reports whether a feature uses the original KernelDock
-// SSDT/SSSDT/Inline/IAT hook split layout. Input is a feature id; output drives
-// the compact Win32 toolbar plus table/detail split.
-bool IsKernelHookFeature(const KernelFeatureId featureId) {
-    return featureId == KernelFeatureId::Ssdt ||
-        featureId == KernelFeatureId::ShadowSsdt ||
-        featureId == KernelFeatureId::InlineHook ||
-        featureId == KernelFeatureId::IatEatHook;
 }
 
 // IsR0TableDetailFeature reports pages that use the same vertical table/detail
@@ -928,86 +622,6 @@ bool IsOriginalDetailPreferredFeature(const KernelFeatureId featureId) {
         featureId == KernelFeatureId::NtQueryLegacy;
 }
 
-// KernelHookVisibleColumnIndices returns the ListView column indices that match
-// the original KernelDock SSDT/SSSDT/Inline/IAT-EAT table headers. Inputs are
-// the feature id and current dynamic column schema; processing skips synthetic
-// "#" and hidden diagnostic columns; output is used by Win32 copy/menu code.
-std::vector<int> KernelHookVisibleColumnIndices(
-    const KernelFeatureId featureId,
-    const std::vector<std::wstring>& columns) {
-    std::vector<int> indices;
-    if (!IsKernelHookFeature(featureId)) {
-        return indices;
-    }
-    const std::vector<std::wstring> canonical = CanonicalColumnNames(featureId);
-    indices.reserve(canonical.size());
-    for (const std::wstring& name : canonical) {
-        for (int index = 0; index < static_cast<int>(columns.size()); ++index) {
-            if (_wcsicmp(columns[static_cast<std::size_t>(index)].c_str(), name.c_str()) == 0) {
-                indices.push_back(index);
-                break;
-            }
-        }
-    }
-    return indices;
-}
-
-// CanonicalVisibleColumnIndices returns the original table columns for pages
-// whose Win32 rows also carry hidden protocol fields. Inputs are the feature id
-// and current dynamic schema; processing maps CanonicalColumnNames back to
-// actual ListView indices; output is empty for pages that should copy every
-// column.
-std::vector<int> CanonicalVisibleColumnIndices(
-    const KernelFeatureId featureId,
-    const std::vector<std::wstring>& columns) {
-    if (featureId != KernelFeatureId::CallbackEnumeration &&
-        featureId != KernelFeatureId::DynData &&
-        featureId != KernelFeatureId::DriverStatus) {
-        return {};
-    }
-
-    std::vector<int> indices;
-    const std::vector<std::wstring> canonical = CanonicalColumnNames(featureId);
-    indices.reserve(canonical.size());
-    for (const std::wstring& name : canonical) {
-        for (int index = 0; index < static_cast<int>(columns.size()); ++index) {
-            if (_wcsicmp(columns[static_cast<std::size_t>(index)].c_str(), name.c_str()) == 0) {
-                indices.push_back(index);
-                break;
-            }
-        }
-    }
-    return indices;
-}
-
-// PreferredCopyColumnIndices chooses the column set that should participate in
-// row/header copy operations. Inputs are the active feature and current schema;
-// output preserves the original KernelDock visible table contract while hidden
-// Win32 protocol fields remain available for context menu actions.
-std::vector<int> PreferredCopyColumnIndices(
-    const KernelFeatureId featureId,
-    const std::vector<std::wstring>& columns) {
-    std::vector<int> indices = KernelHookVisibleColumnIndices(featureId, columns);
-    if (!indices.empty()) {
-        return indices;
-    }
-    return CanonicalVisibleColumnIndices(featureId, columns);
-}
-
-// IsKernelHookVisibleColumn reports whether a dynamic column should be shown in
-// original hook tables. Inputs are the feature id and a display column name;
-// output hides R0 capability, hidden address/detail, and synthetic columns while
-// keeping the exact original KernelDock headers visible.
-bool IsKernelHookVisibleColumn(const KernelFeatureId featureId, const std::wstring& name) {
-    if (!IsKernelHookFeature(featureId)) {
-        return true;
-    }
-    const std::vector<std::wstring> canonical = CanonicalColumnNames(featureId);
-    return std::any_of(canonical.begin(), canonical.end(), [&name](const std::wstring& column) {
-        return _wcsicmp(column.c_str(), name.c_str()) == 0;
-    });
-}
-
 // HasKernelHookDisplayValues checks whether a row contains at least one value in
 // the original visible hook columns. Inputs are a row, feature id, and current
 // schema; output lets the UI hide injected R0 capability/status rows without
@@ -1034,64 +648,6 @@ bool HasNonEmptyField(const std::vector<std::wstring>& row,
     return !RowFieldByName(row, columns, names).empty();
 }
 
-// MergeRowText concatenates all non-empty fields of one cached result row.
-// Inputs are row cells; processing joins values with a stable separator; output
-// is used by local filter predicates without changing the backing result data.
-std::wstring MergeRowText(const std::vector<std::wstring>& row) {
-    std::wstring merged;
-    for (const std::wstring& value : row) {
-        if (value.empty()) {
-            continue;
-        }
-        if (!merged.empty()) {
-            merged += L" | ";
-        }
-        merged += value;
-    }
-    return merged;
-}
-
-// LowerInvariantKey normalizes object-manager paths for TreeView lookup. Inputs
-// are display strings from query rows; processing lowercases only for map keys
-// and leaves the original UI text untouched; output is empty when no key exists.
-std::wstring LowerInvariantKey(std::wstring text) {
-    std::transform(text.begin(), text.end(), text.begin(), [](wchar_t ch) {
-        return static_cast<wchar_t>(std::towlower(ch));
-    });
-    return text;
-}
-
-// ParentObjectPath derives a native parent path from a full object path when a
-// row lacks an explicit Parent field. Input is a path like "\Device\Foo";
-// output is "\Device", "\" for direct root children, or empty for invalid text.
-std::wstring ParentObjectPath(const std::wstring& path) {
-    if (path.empty() || path == L"\\") {
-        return {};
-    }
-    const std::size_t slash = path.find_last_of(L'\\');
-    if (slash == std::wstring::npos) {
-        return {};
-    }
-    if (slash == 0) {
-        return L"\\";
-    }
-    return path.substr(0, slash);
-}
-
-// LeafObjectName returns the display leaf for synthetic TreeView directory
-// nodes. Input is a native object path; output is "\" for the root, the last
-// component for normal paths, or the original text when no separator exists.
-std::wstring LeafObjectName(const std::wstring& path) {
-    if (path.empty() || path == L"\\") {
-        return L"\\";
-    }
-    const std::size_t slash = path.find_last_of(L'\\');
-    if (slash == std::wstring::npos || slash + 1 >= path.size()) {
-        return path;
-    }
-    return path.substr(slash + 1);
-}
-
 // ListViewInsertRow appends one row to a report ListView. Inputs are the target
 // control and ordered cells; processing fills subitems after inserting column 0;
 // there is no return value because the control stores the display state.
@@ -1110,15 +666,6 @@ void ListViewInsertRow(HWND list, const std::vector<std::wstring>& cells) {
     }
     for (int column = 1; column < static_cast<int>(cells.size()); ++column) {
         ListView_SetItemText(list, inserted, column, const_cast<LPWSTR>(cells[static_cast<std::size_t>(column)].c_str()));
-    }
-}
-
-// AppendReportLine appends one diagnostic key/value pair. Inputs are a stream,
-// a label and a value; processing skips empty values so copied reports stay
-// compact like the original diagnostic reports; there is no return value.
-void AppendReportLine(std::wostringstream& report, const wchar_t* label, const std::wstring& value) {
-    if (!value.empty()) {
-        report << label << L": " << value << L"\r\n";
     }
 }
 
@@ -1255,31 +802,6 @@ int ParseSigned(const std::wstring& text, const int fallback) {
     return end != text.c_str() ? static_cast<int>(value) : fallback;
 }
 
-// ParseUnsigned64Value converts decimal or 0x-prefixed text into a 64-bit value.
-// Inputs are an edit-control string and an output reference; processing trims
-// common whitespace and accepts the same address forms used by the original
-// MemoryDock pages; output is true only when the whole token parsed.
-bool ParseUnsigned64Value(const std::wstring& text, std::uint64_t& valueOut) {
-    std::wstring trimmed = text;
-    trimmed.erase(trimmed.begin(), std::find_if(trimmed.begin(), trimmed.end(), [](wchar_t ch) {
-        return !std::iswspace(ch);
-    }));
-    trimmed.erase(std::find_if(trimmed.rbegin(), trimmed.rend(), [](wchar_t ch) {
-        return !std::iswspace(ch);
-    }).base(), trimmed.end());
-    if (trimmed.empty()) {
-        return false;
-    }
-    wchar_t* end = nullptr;
-    const int base = trimmed.size() > 2 && trimmed[0] == L'0' && (trimmed[1] == L'x' || trimmed[1] == L'X') ? 16 : 10;
-    const unsigned long long value = std::wcstoull(trimmed.c_str(), &end, base);
-    if (end == trimmed.c_str() || *end != L'\0') {
-        return false;
-    }
-    valueOut = static_cast<std::uint64_t>(value);
-    return true;
-}
-
 // IsNavigableWin32OrUncPath accepts only unambiguous drive-rooted or UNC paths
 // from callback file-monitor rows. Kernel device paths and extended/device
 // namespaces deliberately stay display-only because this R3 browser must not
@@ -1337,67 +859,6 @@ std::wstring FileMonitorContainingDirectory(const std::wstring& path) {
     return lastSeparator > 0U ? normalized.substr(0U, lastSeparator) : std::wstring{};
 }
 
-// IsKernelMemoryHiddenColumn preserves R0/action fields while hiding them from
-// the original MemoryDock-style list. Inputs are fixed display/raw column names;
-// output is true when the ListView column width should be zero.
-bool IsKernelMemoryHiddenColumn(const std::wstring& name) {
-    return name == L"RegionSize" ||
-        name == L"Perm" ||
-        name == L"Risk" ||
-        name == L"OwnerKind" ||
-        name == L"OwnerKindText" ||
-        name == L"OwnerAddress" ||
-        name == L"ModuleBase" ||
-        name == L"ModuleSize" ||
-        name == L"ModuleSizeText" ||
-        name == L"Status" ||
-        name == L"LastStatus" ||
-        name == L"Kind" ||
-        name == L"PageSize" ||
-        name == L"Confidence" ||
-        name == L"BigPoolTag" ||
-        name == L"BigPoolFlags" ||
-        name == L"SectionRva" ||
-        name == L"SectionSize" ||
-        name == L"SectionSizeText" ||
-        name == L"Section" ||
-        name == L"HashAlgorithm" ||
-        name == L"SampleSize" ||
-        name == L"Hash" ||
-        name == L"HashText" ||
-        name == L"Sample";
-}
-
-// IsIntegrityHiddenColumn preserves raw R0 evidence fields while keeping the
-// DriverIntegrity and CPU/IDT grids visually close to the original KernelDock
-// tables. Input is a column name; output is true when the Win32 ListView column
-// should be retained for detail/actions but hidden with width zero.
-bool IsIntegrityHiddenColumn(const std::wstring& name) {
-    return name == L"Class" ||
-        name == L"ClassText" ||
-        name == L"Risk" ||
-        name == L"RiskText" ||
-        name == L"Source" ||
-        name == L"SourceMask" ||
-        name == L"SourceText" ||
-        name == L"Confidence" ||
-        name == L"Group" ||
-        name == L"CPU" ||
-        name == L"Vector" ||
-        name == L"CpuVector" ||
-        name == L"Object" ||
-        name == L"ObjectAddress" ||
-        name == L"Target" ||
-        name == L"TargetAddress" ||
-        name == L"OwnerBase" ||
-        name == L"OwnerModuleBase" ||
-        name == L"OwnerSize" ||
-        name == L"OwnerModuleSize" ||
-        name == L"OwnerModuleSizeText" ||
-        name == L"OwnerModule" ||
-        name == L"LastStatus";
-}
-
 // ReadWholeFileText reads a UTF-16LE-BOM or UTF-8 text file selected by the
 // user. Inputs are path and error sink; output is decoded Unicode text.
 std::wstring ReadWholeFileText(const std::wstring& path, std::wstring* errorText) {
@@ -1431,13 +892,23 @@ std::wstring ReadWholeFileText(const std::wstring& path, std::wstring* errorText
         const std::size_t wcharCount = (bytes.size() - 2) / sizeof(wchar_t);
         return std::wstring(wide, wide + wcharCount);
     }
-    const int needed = ::MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, reinterpret_cast<const char*>(bytes.data()), static_cast<int>(bytes.size()), nullptr, 0);
+    // Exports are UTF-8 with BOM, so the reader has to drop the same three bytes
+    // the writer adds. Without this the imported text starts with an invisible
+    // U+FEFF and every rule key stops matching -- a round trip that only breaks
+    // after the encoding was unified.
+    std::size_t offset = 0;
+    if (bytes.size() >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF) {
+        offset = 3;
+    }
+    const auto* payload = reinterpret_cast<const char*>(bytes.data() + offset);
+    const int payloadSize = static_cast<int>(bytes.size() - offset);
+    const int needed = ::MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, payload, payloadSize, nullptr, 0);
     if (needed > 0) {
         std::wstring text(static_cast<std::size_t>(needed), L'\0');
-        ::MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, reinterpret_cast<const char*>(bytes.data()), static_cast<int>(bytes.size()), text.data(), needed);
+        ::MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, payload, payloadSize, text.data(), needed);
         return text;
     }
-    const int ansiNeeded = ::MultiByteToWideChar(CP_ACP, 0, reinterpret_cast<const char*>(bytes.data()), static_cast<int>(bytes.size()), nullptr, 0);
+    const int ansiNeeded = ::MultiByteToWideChar(CP_ACP, 0, payload, payloadSize, nullptr, 0);
     if (ansiNeeded <= 0) {
         if (errorText) {
             *errorText = L"无法按 UTF-8/ANSI 解码配置文件。";
@@ -1445,54 +916,47 @@ std::wstring ReadWholeFileText(const std::wstring& path, std::wstring* errorText
         return {};
     }
     std::wstring text(static_cast<std::size_t>(ansiNeeded), L'\0');
-    ::MultiByteToWideChar(CP_ACP, 0, reinterpret_cast<const char*>(bytes.data()), static_cast<int>(bytes.size()), text.data(), ansiNeeded);
+    ::MultiByteToWideChar(CP_ACP, 0, payload, payloadSize, text.data(), ansiNeeded);
     return text;
 }
 
-// WriteWholeFileText writes UTF-16LE with BOM. Inputs are path and text; output
-// is success/failure and optional Win32 error message.
-bool WriteWholeFileText(const std::wstring& path, const std::wstring& text, std::wstring* errorText) {
-    HANDLE file = ::CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (file == INVALID_HANDLE_VALUE) {
-        if (errorText) {
-            *errorText = L"无法创建文件，Win32=" + std::to_wstring(::GetLastError());
-        }
-        return false;
+// WriteWholeFileText writes a text file through the shared export path, which
+// means UTF-8 with BOM like every other export in the product. The kernel page
+// used to emit UTF-16LE, so two .tsv files produced by two pages of the same
+// application opened differently in the same spreadsheet program. The shared
+// path also records the export in the evidence session, which the kernel page
+// previously skipped entirely -- the pages that most need an audit trail were
+// the only ones leaving none.
+//
+// evidenceSource is passed through so a configuration export can opt out: the
+// callback rule file is written for round-tripping, not as investigation
+// evidence, and an empty source suppresses the record.
+bool WriteWholeFileText(const std::wstring& path, const std::wstring& text,
+    const std::wstring& evidenceSource, std::wstring* errorText) {
+    return Ksword::Ui::WriteUtf8TextFile(path, text, evidenceSource, L"tsv", errorText)
+        == Ksword::Ui::SaveTextFileResult::Saved;
+}
+
+// ExportEvidenceSourceFor names the evidence record for one file-I/O operation.
+// Import and module-detail operations never reach the writer, so only the three
+// export verbs answer here.
+std::wstring ExportEvidenceSourceFor(CallbackFileIoOperation operation) {
+    switch (operation) {
+    case CallbackFileIoOperation::ExportConfig:
+        // Round-trip artifact, not evidence: keep it out of the session.
+        return {};
+    case CallbackFileIoOperation::ExportFileMonitor:
+        return L"回调文件监控导出";
+    case CallbackFileIoOperation::ExportResultTsv:
+        return L"内核结果导出";
+    default:
+        return L"内核导出";
     }
-    const std::uint8_t bom[] = { 0xFF, 0xFE };
-    DWORD written = 0;
-    BOOL ok = ::WriteFile(file, bom, sizeof(bom), &written, nullptr);
-    if (ok) {
-        ok = ::WriteFile(file, text.data(), static_cast<DWORD>(text.size() * sizeof(wchar_t)), &written, nullptr);
-    }
-    const DWORD error = ok ? ERROR_SUCCESS : ::GetLastError();
-    ::CloseHandle(file);
-    if (!ok && errorText) {
-        *errorText = L"写入文件失败，Win32=" + std::to_wstring(error);
-    }
-    return ok != FALSE;
 }
 
 } // namespace
 
-// KernelObjectNamespaceTreeNodeState is the per-TreeView node payload used by
-// the Win32 object namespace port. Inputs are copied from the current table
-// cache when the tree is rebuilt; processing stores this object behind
-// TVITEM::lParam; return behavior is pointer-based selection with ownership kept
-// by KernelPage::objectNamespaceTreeNodeStorage_.
-struct KernelObjectNamespaceTreeNodeState {
-    int rowIndex = -1;
-    std::wstring nodeKind;
-    std::wstring nodeName;
-    std::wstring nodeType;
-    std::wstring nodePath;
-    std::wstring nodeDescription;
-};
-
 namespace {
-std::wstring KernelTreeNodeKey(const KernelObjectNamespaceTreeNodeState& state) {
-    return LowerInvariantKey(state.nodeKind+L"\n"+state.nodeType+L"\n"+state.nodePath);
-}
 // The worker waits until the UI has dropped this last graph owner. A failed
 // thread launch stays queued in the visible shutdown registry and is retried.
 bool RetireKernelTreeValues(std::shared_ptr<KernelValueProjection>& value) {
@@ -1503,8 +967,6 @@ struct KernelProjectionReleaseGuard {
     ~KernelProjectionReleaseGuard(){RetireKernelTreeValues(value);}
 };
 } // namespace
-
-#include "KernelProjectionValues.inl"
 
 namespace {
 bool KernelUsesValueProjection(const KernelFeatureId featureId) {
@@ -1791,7 +1253,7 @@ LRESULT KernelPage::HandleMessage(HWND hwnd, const UINT msg, const WPARAM wParam
                 (!currentRawColumns_.empty() || pendingProjectionSources_.contains(descriptor->id))) {
                 if(KernelUsesValueProjection(descriptor->id)){RequestCachedValueProjection(descriptor->id);return 0;}
                 currentColumns_ = currentRawColumns_;
-                currentRows_ = *currentRawRows_;
+                currentRows_.adopt(currentRawRows_);
                 RebuildObjectNamespaceListFromCache(descriptor->id);
                 ConfigureVisibleLayout();
                 InvalidateCurrentFeatureViewCache();
@@ -1806,7 +1268,7 @@ LRESULT KernelPage::HandleMessage(HWND hwnd, const UINT msg, const WPARAM wParam
                 (!currentRawColumns_.empty() || pendingProjectionSources_.contains(descriptor->id))) {
                 if(KernelUsesValueProjection(descriptor->id)){RequestCachedValueProjection(descriptor->id);return 0;}
                 currentColumns_ = currentRawColumns_;
-                currentRows_ = *currentRawRows_;
+                currentRows_.adopt(currentRawRows_);
                 RebuildObjectNamespaceListFromCache(descriptor->id);
                 ConfigureVisibleLayout();
                 InvalidateCurrentFeatureViewCache();
@@ -1820,7 +1282,7 @@ LRESULT KernelPage::HandleMessage(HWND hwnd, const UINT msg, const WPARAM wParam
                 (!currentRawColumns_.empty() || pendingProjectionSources_.contains(descriptor->id))) {
                 if(KernelUsesValueProjection(descriptor->id)){RequestCachedValueProjection(descriptor->id);return 0;}
                 currentColumns_ = currentRawColumns_;
-                currentRows_ = *currentRawRows_;
+                currentRows_.adopt(currentRawRows_);
                 if (descriptor->id == KernelFeatureId::KernelExecutableMemory ||
                     descriptor->id == KernelFeatureId::KernelMemoryEvidence) {
                     RebuildKernelMemoryScanListFromCache(descriptor->id);
@@ -2424,7 +1886,7 @@ LRESULT KernelPage::HandleMessage(HWND hwnd, const UINT msg, const WPARAM wParam
                 LVHITTESTINFO hit{};
                 hit.pt = clientPoint;
                 const int row = ListView_HitTest(resultList_, &hit);
-                contextColumn_ = hit.iSubItem >= 0 ? hit.iSubItem : 0;
+                contextColumn_ = hit.iSubItem >= 0 ? DataColumnForSubItem(hit.iSubItem) : 0;
                 if (row >= 0) {
                     const UINT state = ListView_GetItemState(resultList_, row, LVIS_SELECTED);
                     if ((state & LVIS_SELECTED) == 0) {
@@ -2436,7 +1898,7 @@ LRESULT KernelPage::HandleMessage(HWND hwnd, const UINT msg, const WPARAM wParam
                 }
             } else {
                 const int selected = ListView_GetNextItem(resultList_, -1, LVNI_SELECTED);
-                contextColumn_ = HeaderColumnCount(resultList_) > 1 ? 1 : 0;
+                contextColumn_ = currentColumns_.size() > 1 ? 1 : 0;
                 if (selected >= 0) {
                     ListView_SetItemState(resultList_, selected, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
                     ListView_EnsureVisible(resultList_, selected, FALSE);
@@ -2469,7 +1931,7 @@ LRESULT KernelPage::HandleMessage(HWND hwnd, const UINT msg, const WPARAM wParam
             if (header->hwndFrom == resultList_ && header->code == LVN_GETDISPINFOW) {
                 auto* info = reinterpret_cast<NMLVDISPINFOW*>(lParam);
                 if (info && (info->item.mask & LVIF_TEXT) != 0 && info->item.pszText && info->item.cchTextMax > 0) {
-                    const std::wstring text = ResultCellText(info->item.iItem, info->item.iSubItem);
+                    const std::wstring text = ResultCellText(info->item.iItem, DataColumnForSubItem(info->item.iSubItem));
                     ::wcsncpy_s(info->item.pszText, static_cast<std::size_t>(info->item.cchTextMax), text.c_str(), _TRUNCATE);
                 }
                 if (info && (info->item.mask & LVIF_INDENT) != 0) {
@@ -2482,7 +1944,7 @@ LRESULT KernelPage::HandleMessage(HWND hwnd, const UINT msg, const WPARAM wParam
             }
             if (header->hwndFrom == resultList_ && header->code == LVN_COLUMNCLICK) {
                 const auto* click = reinterpret_cast<const NMLISTVIEW*>(lParam);
-                SortResultRowsByColumn(click->iSubItem);
+                SortResultRowsByColumn(DataColumnForSubItem(click->iSubItem));
                 return 0;
             }
             if (header->hwndFrom == resultList_ && header->code == NM_DBLCLK) {
@@ -2510,9 +1972,18 @@ LRESULT KernelPage::HandleMessage(HWND hwnd, const UINT msg, const WPARAM wParam
             }
         }
         break;
-    case WM_CTLCOLORSTATIC:
-        ::SetBkMode(reinterpret_cast<HDC>(wParam), TRANSPARENT);
-        return reinterpret_cast<LRESULT>(::GetSysColorBrush(COLOR_WINDOW));
+    case WM_CTLCOLORSTATIC: {
+        // Read-only EDIT controls report through this message too; leaving them
+        // transparent smears text while scrolling, so theme STATIC labels only.
+        // This page paints with system colors, so keep the system brushes.
+        const LRESULT labelBrush = Ksword::Ui::PaintLabelBackground(
+            reinterpret_cast<HDC>(wParam), reinterpret_cast<HWND>(lParam),
+            ::GetSysColorBrush(COLOR_WINDOW), ::GetSysColor(COLOR_WINDOWTEXT));
+        if (labelBrush != 0) {
+            return labelBrush;
+        }
+        break;
+    }
     case WM_PAINT:
     {
         PAINTSTRUCT paint{};
@@ -3216,10 +2687,11 @@ void KernelPage::Layout() {
         ::MoveWindow(refreshButton_, toolbarX, toolbarTop + 2, 34, buttonHeight, TRUE);
         toolbarX += 40;
         const int statusWidth = std::min(360, std::max(120, width / 3));
-        const int filterWidth = std::max(120, width - toolbarX - statusWidth - 6);
+        const int filterWidth = std::max(96, width - toolbarX - statusWidth - 6);
         ::MoveWindow(filterEdit_, toolbarX, toolbarTop + 3, filterWidth, 22, TRUE);
         toolbarX += filterWidth + 6;
-        ::MoveWindow(statusText_, toolbarX, toolbarTop + 4, std::max(0, width - toolbarX), 22, TRUE);
+        // 工具栏行右侧剩余宽度会被算成 0，状态文字整条消失；辅助函数给它一个可读下限。
+        Ksword::Ui::PlaceStatusLabel(statusText_, toolbarX, toolbarTop, width);
 
         const int panelTop = contentTop + infoHeight;
         const int availableHeight = std::max(0, height - panelTop);
@@ -3249,7 +2721,7 @@ void KernelPage::Layout() {
 
         const int toolbarTop = contentTop;
         ::MoveWindow(refreshButton_, 0, toolbarTop + 2, 34, buttonHeight, TRUE);
-        ::MoveWindow(statusText_, 40, toolbarTop + 4, std::max(0, width - 40), 22, TRUE);
+        Ksword::Ui::PlaceStatusLabel(statusText_, 40, toolbarTop, width);
 
         const int panelTop = contentTop + infoHeight;
         const int availableHeight = std::max(0, height - panelTop);
@@ -3293,10 +2765,11 @@ void KernelPage::Layout() {
             ::MoveWindow(refreshButton_, toolbarX, toolbarTop + 2, 34, buttonHeight, TRUE);
             toolbarX += 40;
             const int statusWidth = std::min(360, std::max(150, width / 3));
-            const int filterWidth = std::max(160, std::max(0, width - toolbarX - statusWidth - 6));
+            const int filterWidth = std::max(96, std::max(0, width - toolbarX - statusWidth - 6));
             ::MoveWindow(filterEdit_, toolbarX, toolbarTop + 3, filterWidth, 22, TRUE);
             toolbarX += filterWidth + 6;
-            ::MoveWindow(statusText_, toolbarX, toolbarTop + 4, std::max(0, width - toolbarX), 22, TRUE);
+            // 工具栏行右侧剩余宽度会被算成 0，状态文字整条消失；辅助函数给它一个可读下限。
+        Ksword::Ui::PlaceStatusLabel(statusText_, toolbarX, toolbarTop, width);
 
             const int objectTop = contentTop + infoHeight;
             const int availableHeight = std::max(0, height - objectTop);
@@ -3353,7 +2826,8 @@ void KernelPage::Layout() {
             toolbarX += depthEditWidth + 6;
             ::MoveWindow(refreshButton_, toolbarX, toolbarTop + 2, refreshWidth, buttonHeight, TRUE);
             toolbarX += refreshWidth + 6;
-            ::MoveWindow(statusText_, toolbarX, toolbarTop + 4, std::max(0, width - toolbarX), 22, TRUE);
+            // 工具栏行右侧剩余宽度会被算成 0，状态文字整条消失；辅助函数给它一个可读下限。
+        Ksword::Ui::PlaceStatusLabel(statusText_, toolbarX, toolbarTop, width);
 
             const int objectTop = contentTop + infoHeight;
             const int availableHeight = std::max(0, height - objectTop);
@@ -3396,10 +2870,11 @@ void KernelPage::Layout() {
             ::MoveWindow(copyDiagnosticButton_, toolbarX, toolbarTop + 2, 34, buttonHeight, TRUE);
             toolbarX += 38;
             const int statusWidth = std::min(360, std::max(180, width / 3));
-            const int filterWidth = std::max(140, std::max(0, width - toolbarX - statusWidth - 6));
+            const int filterWidth = std::max(96, std::max(0, width - toolbarX - statusWidth - 6));
             ::MoveWindow(filterEdit_, toolbarX, toolbarTop + 3, filterWidth, 22, TRUE);
             toolbarX += filterWidth + 6;
-            ::MoveWindow(statusText_, toolbarX, toolbarTop + 4, std::max(0, width - toolbarX), 22, TRUE);
+            // 工具栏行右侧剩余宽度会被算成 0，状态文字整条消失；辅助函数给它一个可读下限。
+        Ksword::Ui::PlaceStatusLabel(statusText_, toolbarX, toolbarTop, width);
 
             const int objectTop = contentTop + 28;
             const int objectDetailHeight = std::min(150, std::max(96, height / 4));
@@ -3446,7 +2921,8 @@ void KernelPage::Layout() {
             toolbarX += filterWidth + 6;
             ::MoveWindow(moduleFilterEdit_, toolbarX, toolbarTop + 3, filterWidth, 22, TRUE);
             toolbarX += filterWidth + 6;
-            ::MoveWindow(statusText_, toolbarX, toolbarTop + 4, std::max(0, width - toolbarX), 22, TRUE);
+            // 工具栏行右侧剩余宽度会被算成 0，状态文字整条消失；辅助函数给它一个可读下限。
+        Ksword::Ui::PlaceStatusLabel(statusText_, toolbarX, toolbarTop, width);
 
             const int noteTop = toolbarTop + 28;
             ::MoveWindow(symbolicLinkNoteText_, 0, noteTop + 2, width, 22, TRUE);
@@ -3491,10 +2967,11 @@ void KernelPage::Layout() {
             ::MoveWindow(baseNamedTypeCombo_, toolbarX, toolbarTop + 2, typeWidth, 240, TRUE);
             toolbarX += typeWidth + 6;
             const int statusWidth = std::min(360, std::max(150, width / 3));
-            const int keywordWidth = std::max(120, std::max(0, width - toolbarX - statusWidth - 6));
+            const int keywordWidth = std::max(96, std::max(0, width - toolbarX - statusWidth - 6));
             ::MoveWindow(filterEdit_, toolbarX, toolbarTop + 3, keywordWidth, 22, TRUE);
             toolbarX += keywordWidth + 6;
-            ::MoveWindow(statusText_, toolbarX, toolbarTop + 4, std::max(0, width - toolbarX), 22, TRUE);
+            // 工具栏行右侧剩余宽度会被算成 0，状态文字整条消失；辅助函数给它一个可读下限。
+        Ksword::Ui::PlaceStatusLabel(statusText_, toolbarX, toolbarTop, width);
 
             const int objectTop = contentTop + 28;
             ::MoveWindow(resultList_, 0, objectTop, width, std::max(0, height - objectTop), TRUE);
@@ -3530,7 +3007,8 @@ void KernelPage::Layout() {
             toolbarX += 60;
             ::MoveWindow(copyDiagnosticButton_, toolbarX, toolbarTop + 2, 76, buttonHeight, TRUE);
             toolbarX += 82;
-            ::MoveWindow(statusText_, toolbarX, toolbarTop + 4, std::max(0, width - toolbarX), 22, TRUE);
+            // 工具栏行右侧剩余宽度会被算成 0，状态文字整条消失；辅助函数给它一个可读下限。
+        Ksword::Ui::PlaceStatusLabel(statusText_, toolbarX, toolbarTop, width);
 
             const int filterTop = toolbarTop + 28;
             int filterX = 0;
@@ -3585,10 +3063,11 @@ void KernelPage::Layout() {
             ::MoveWindow(refreshButton_, toolbarX, toolbarTop + 2, 34, buttonHeight, TRUE);
             toolbarX += 38;
             const int statusWidth = std::min(320, std::max(150, width / 3));
-            const int filterWidth = std::max(120, std::max(0, width - toolbarX - statusWidth - 6));
+            const int filterWidth = std::max(96, std::max(0, width - toolbarX - statusWidth - 6));
             ::MoveWindow(filterEdit_, toolbarX, toolbarTop + 3, filterWidth, 22, TRUE);
             toolbarX += filterWidth + 6;
-            ::MoveWindow(statusText_, toolbarX, toolbarTop + 4, std::max(0, width - toolbarX), 22, TRUE);
+            // 工具栏行右侧剩余宽度会被算成 0，状态文字整条消失；辅助函数给它一个可读下限。
+        Ksword::Ui::PlaceStatusLabel(statusText_, toolbarX, toolbarTop, width);
 
             const int objectTop = contentTop + 28;
             ::MoveWindow(resultList_, 0, objectTop, width, std::max(0, height - objectTop), TRUE);
@@ -3651,7 +3130,8 @@ void KernelPage::Layout() {
             ::MoveWindow(copyDiagnosticButton_, toolbarX, toolbarTop + 2, actionWidthObject, buttonHeight, TRUE);
             toolbarX += actionWidthObject + 4;
         }
-        ::MoveWindow(statusText_, toolbarX, toolbarTop + 4, std::max(0, width - toolbarX), 22, TRUE);
+        // 工具栏行右侧剩余宽度会被算成 0，状态文字整条消失；辅助函数给它一个可读下限。
+        Ksword::Ui::PlaceStatusLabel(statusText_, toolbarX, toolbarTop, width);
 
         const int objectTop = contentTop + infoHeight;
         const int objectDetailHeight = std::min(160, std::max(96, height / 5));
@@ -3714,7 +3194,7 @@ void KernelPage::Layout() {
             toolbarX += filterWidth + 4;
         } else {
             const int statusWidth = std::min(420, std::max(160, width / 3));
-            const int filterWidth = std::max(180, std::max(0, width - toolbarX - statusWidth - 8));
+            const int filterWidth = std::max(96, std::max(0, width - toolbarX - statusWidth - 8));
             ::MoveWindow(filterEdit_, toolbarX, toolbarTop + 3, filterWidth, 22, TRUE);
             toolbarX += filterWidth + 4;
         }
@@ -3722,7 +3202,8 @@ void KernelPage::Layout() {
             ::MoveWindow(includeCombo_, toolbarX, toolbarTop + 2, 170, 240, TRUE);
             toolbarX += 174;
         }
-        ::MoveWindow(statusText_, toolbarX, toolbarTop + 4, std::max(0, width - toolbarX), 22, TRUE);
+        // 工具栏行右侧剩余宽度会被算成 0，状态文字整条消失；辅助函数给它一个可读下限。
+        Ksword::Ui::PlaceStatusLabel(statusText_, toolbarX, toolbarTop, width);
         const int hookTop = contentTop + infoHeight;
         moveResultDetailSplitter(hookTop, 88, 88);
         return;
@@ -3753,10 +3234,11 @@ void KernelPage::Layout() {
         toolbarX += 88;
         ::MoveWindow(filterLabel_, toolbarX, toolbarTop + 5, 0, 20, TRUE);
         const int statusWidth = std::min(420, std::max(160, width / 3));
-        const int diagnosticFilterWidth = std::max(180, std::max(0, width - toolbarX - statusWidth - 8));
+        const int diagnosticFilterWidth = std::max(96, std::max(0, width - toolbarX - statusWidth - 8));
         ::MoveWindow(filterEdit_, toolbarX, toolbarTop + 3, diagnosticFilterWidth, 22, TRUE);
         toolbarX += diagnosticFilterWidth + 8;
-        ::MoveWindow(statusText_, toolbarX, toolbarTop + 4, std::max(0, width - toolbarX), 22, TRUE);
+        // 工具栏行右侧剩余宽度会被算成 0，状态文字整条消失；辅助函数给它一个可读下限。
+        Ksword::Ui::PlaceStatusLabel(statusText_, toolbarX, toolbarTop, width);
 
         const int panelTop = contentTop + infoHeight;
         const int availableHeight = std::max(0, height - panelTop);
@@ -3796,7 +3278,8 @@ void KernelPage::Layout() {
         const int callbackFilterWidth = std::max(220, std::min(width / 2, std::max(0, width - toolbarX - 320)));
         ::MoveWindow(filterEdit_, toolbarX, toolbarTop + 3, callbackFilterWidth, 22, TRUE);
         toolbarX += callbackFilterWidth + 6;
-        ::MoveWindow(statusText_, toolbarX, toolbarTop + 4, std::max(0, width - toolbarX), 22, TRUE);
+        // 工具栏行右侧剩余宽度会被算成 0，状态文字整条消失；辅助函数给它一个可读下限。
+        Ksword::Ui::PlaceStatusLabel(statusText_, toolbarX, toolbarTop, width);
 
         const int panelTop = contentTop + infoHeight;
         moveResultDetailSplitter(panelTop, 120, 96);
@@ -3855,7 +3338,8 @@ void KernelPage::Layout() {
             ::MoveWindow(moduleFilterEdit_, toolbarX, toolbarTop + 3, moduleWidth, 22, TRUE);
             toolbarX += moduleWidth + 6;
         }
-        ::MoveWindow(statusText_, toolbarX, toolbarTop + 4, std::max(0, width - toolbarX), 22, TRUE);
+        // 工具栏行右侧剩余宽度会被算成 0，状态文字整条消失；辅助函数给它一个可读下限。
+        Ksword::Ui::PlaceStatusLabel(statusText_, toolbarX, toolbarTop, width);
 
         const int panelTop = contentTop + infoHeight;
         moveResultDetailSplitter(panelTop, 120, 96);
@@ -3889,7 +3373,8 @@ void KernelPage::Layout() {
         const int filterWidth = std::max(220, std::min(width / 2, std::max(0, width - toolbarX - 300)));
         ::MoveWindow(filterEdit_, toolbarX, toolbarTop + 3, filterWidth, 22, TRUE);
         toolbarX += filterWidth + 6;
-        ::MoveWindow(statusText_, toolbarX, toolbarTop + 4, std::max(0, width - toolbarX), 22, TRUE);
+        // 工具栏行右侧剩余宽度会被算成 0，状态文字整条消失；辅助函数给它一个可读下限。
+        Ksword::Ui::PlaceStatusLabel(statusText_, toolbarX, toolbarTop, width);
 
         const int panelTop = contentTop + infoHeight;
         moveResultDetailSplitter(panelTop, 120, 96);
@@ -3926,7 +3411,8 @@ void KernelPage::Layout() {
         const int filterWidth = std::max(220, std::min(width / 2, std::max(0, width - toolbarX - 320)));
         ::MoveWindow(filterEdit_, toolbarX, toolbarTop + 3, filterWidth, 22, TRUE);
         toolbarX += filterWidth + 6;
-        ::MoveWindow(statusText_, toolbarX, toolbarTop + 4, std::max(0, width - toolbarX), 22, TRUE);
+        // 工具栏行右侧剩余宽度会被算成 0，状态文字整条消失；辅助函数给它一个可读下限。
+        Ksword::Ui::PlaceStatusLabel(statusText_, toolbarX, toolbarTop, width);
 
         const int panelTop = contentTop + infoHeight;
         moveResultDetailSplitter(panelTop, 120, 96);
@@ -4005,7 +3491,8 @@ void KernelPage::Layout() {
                 std::max(0, remainingAfterTools - targetStatusWidth)));
         ::MoveWindow(filterEdit_, toolbarX, toolbarTop + 3, filterWidth, 22, TRUE);
         toolbarX += filterWidth + 6;
-        ::MoveWindow(statusText_, toolbarX, toolbarTop + 4, std::max(0, width - toolbarX), 22, TRUE);
+        // 工具栏行右侧剩余宽度会被算成 0，状态文字整条消失；辅助函数给它一个可读下限。
+        Ksword::Ui::PlaceStatusLabel(statusText_, toolbarX, toolbarTop, width);
 
         const int panelTop = contentTop + infoHeight;
         moveResultDetailSplitter(panelTop, 120, 96);
@@ -4527,6 +4014,15 @@ bool KernelPage::RestoreFeatureViewCache(const KernelFeatureId featureId) {
     ClearResultGridOnly();
     EnsureResultColumnsForCurrentFeature();
     SyncResultListVirtualRows();
+    // Restoring a cached projection also restores its sort, so the arrow has to
+    // follow; a -1 column clears it. This runs after the columns are recreated
+    // because ClearResultGridOnly discards the header items that carry the arrow.
+    Ksword::Ui::ShowSortIndicator(
+        resultList_,
+        Ksword::Ui::SortSpec{
+            SubItemForDataColumn(sortColumn_),
+            sortAscending_ ? Ksword::Ui::SortDirection::Ascending
+                           : Ksword::Ui::SortDirection::Descending });
     RestoreReportListRows(propertyList_, cache.propertyRows);
     RestoreReportListRows(summaryList_, cache.summaryRows);
     if (featureId == KernelFeatureId::ObjectNamespaceOverview || featureId == KernelFeatureId::ObjectDirectoryRecursive) {
@@ -4633,95 +4129,8 @@ void KernelPage::EnsureResultColumnsForCurrentFeature() {
         ListView_DeleteColumn(resultList_, index);
     }
 
-    const KernelFeatureDescriptor* descriptor = CurrentDescriptor();
-    const auto isObjectHiddenColumn = [](const std::wstring& name) {
-        return name == L"Parent" ||
-            name == L"Source" ||
-            name == L"Directory" ||
-            name == L"directoryPath" ||
-            name == L"sourceDirectory" ||
-            name == L"Depth" ||
-            name == L"Path" ||
-            name == L"NtPath" ||
-            name == L"Target" ||
-            name == L"Win32Path" ||
-            name == L"dosCandidate" ||
-            name == L"fullPath" ||
-            name == L"targetPath" ||
-            name == L"symbolicTarget" ||
-            name == L"objectName" ||
-            name == L"objectType" ||
-            name == L"linkName" ||
-            name == L"Handles" ||
-            name == L"Pointers" ||
-            name == L"EnumApi" ||
-            name == L"enumApi" ||
-            name == L"枚举 API" ||
-            name == L"EnumerationApi" ||
-            name == L"NodeKind" ||
-            name == L"Detail";
-    };
-    const auto isDiagnosticHiddenColumn = [](const std::wstring& name) {
-        return name == L"Id" ||
-            name == L"StateId" ||
-            name == L"SourceIndex" ||
-            name == L"StatusFlags" ||
-            name == L"CapabilityMask" ||
-            name == L"Version" ||
-            name == L"Protocol" ||
-            name == L"ExpectedProtocol" ||
-            name == L"SecurityPolicy" ||
-            name == L"DynDataStatus" ||
-            name == L"DynDataCapability" ||
-            name == L"FeatureTotal" ||
-            name == L"FeatureReturned" ||
-            name == L"LastError" ||
-            name == L"LastErrorSummary" ||
-            name == L"LastErrorStatus" ||
-            name == L"Class" ||
-            name == L"Source" ||
-            name == L"Callback" ||
-            name == L"Context" ||
-            name == L"Registration" ||
-            name == L"ModulePath" ||
-            name == L"Win32ModulePath" ||
-            name == L"ModuleBase" ||
-            name == L"ModuleSize" ||
-            name == L"OperationMask" ||
-            name == L"ObjectTypeMask" ||
-            name == L"FieldFlags" ||
-            name == L"Trust" ||
-            name == L"Remove" ||
-            name == L"RemoveFlags" ||
-            name == L"Generation" ||
-            name == L"IdentityHash" ||
-            name == L"RawStorageValue" ||
-            name == L"LastStatus" ||
-            name == L"Detail";
-    };
-
     for (std::size_t index = 0; index < currentColumns_.size(); ++index) {
-        const std::wstring& name = currentColumns_[index];
-        bool hidden = false;
-        if (descriptor != nullptr) {
-            if (IsObjectNamespaceFeature(descriptor->id)) {
-                hidden = isObjectHiddenColumn(name);
-            } else if (IsKernelHookFeature(descriptor->id)) {
-                hidden = !IsKernelHookVisibleColumn(descriptor->id, name);
-            } else if (descriptor->id == KernelFeatureId::DynData ||
-                descriptor->id == KernelFeatureId::DriverStatus ||
-                descriptor->id == KernelFeatureId::CallbackEnumeration) {
-                hidden = isDiagnosticHiddenColumn(name);
-            } else if (descriptor->id == KernelFeatureId::KernelExecutableMemory ||
-                descriptor->id == KernelFeatureId::KernelMemoryEvidence) {
-                hidden = IsKernelMemoryHiddenColumn(name);
-            } else if (descriptor->id == KernelFeatureId::DriverIntegrity ||
-                descriptor->id == KernelFeatureId::KernelCpuIntegrity) {
-                const bool canonicalColumn = HasColumn(CanonicalColumnNames(descriptor->id), name);
-                hidden = !canonicalColumn && IsIntegrityHiddenColumn(name);
-            }
-        }
-        AddResultTableColumn(static_cast<int>(index), name, hidden ? 0 : ColumnWidth(name));
+        AppendResultTableColumn(static_cast<int>(index), 0);
     }
 }
 
@@ -4753,7 +4162,7 @@ void KernelPage::LocateNextResult() {
         return;
     }
     const int rowCount = ListView_GetItemCount(resultList_);
-    const int columnCount = HeaderColumnCount(resultList_);
+    const int columnCount = static_cast<int>(currentColumns_.size());
     if (rowCount <= 0 || columnCount <= 0) {
         return;
     }
@@ -4997,7 +4406,7 @@ KernelActionRequest KernelPage::BuildCurrentActionRequest(const KernelActionId a
 
     const int row = resultList_ ? ListView_GetNextItem(resultList_, -1, LVNI_SELECTED) : -1;
     if (row >= 0) {
-        const int columns = HeaderColumnCount(resultList_);
+        const int columns = static_cast<int>(currentColumns_.size());
         for (int column = 0; column < columns; ++column) {
             const std::wstring name = column < static_cast<int>(currentColumns_.size())
                 ? currentColumns_[static_cast<std::size_t>(column)]
@@ -5385,6 +4794,7 @@ void KernelPage::RenderDescriptor(const KernelFeatureDescriptor& descriptor) {
     currentRawRows_ = EmptyKernelRawRows();
     sortColumn_ = -1;
     sortAscending_ = true;
+    Ksword::Ui::ShowSortIndicator(resultList_, Ksword::Ui::SortSpec{});
     ClearResultTable();
     ::SetWindowTextW(detailEdit_, EmptyDetailTextForFeature(descriptor.id));
     if (IsObjectNamespaceFeature(descriptor.id)) {
@@ -5411,13 +4821,14 @@ void KernelPage::RenderDescriptor(const KernelFeatureDescriptor& descriptor) {
 
     const std::vector<std::wstring> columns = CanonicalColumnNames(descriptor.id);
     if (columns.empty()) {
-        AddResultTableColumn(0, L"字段", 180);
-        AddResultTableColumn(1, L"值", 520);
+        currentColumns_ = { L"字段", L"值" };
+        AppendResultTableColumn(0, 180);
+        AppendResultTableColumn(1, 520);
         return;
     }
     currentColumns_ = columns;
     for (std::size_t index = 0; index < columns.size(); ++index) {
-        AddResultTableColumn(static_cast<int>(index), columns[index], ColumnWidth(columns[index]));
+        AppendResultTableColumn(static_cast<int>(index), 0);
     }
 
     switch (descriptor.id) {
@@ -5476,6 +4887,7 @@ void KernelPage::RenderResult(const KernelOperationResult& result, KernelDynamic
     currentRawRows_ = EmptyKernelRawRows();
     sortColumn_ = -1;
     sortAscending_ = true;
+    Ksword::Ui::ShowSortIndicator(resultList_, Ksword::Ui::SortSpec{});
 
     if (prepared) {
         currentColumns_ = std::move(prepared->columns);
@@ -5675,35 +5087,8 @@ void KernelPage::RebuildResultListFromCache() {
     const std::vector<int>& sourceIndents = currentRowIndents_;
     ClearResultTable();
     const KernelFeatureDescriptor* descriptor = CurrentDescriptor();
-    const bool objectNamespaceLayout = descriptor != nullptr && IsObjectNamespaceFeature(descriptor->id);
-    const auto isHiddenObjectColumn = [](const std::wstring& name) {
-        return name == L"Parent" ||
-            name == L"Source" ||
-            name == L"Directory" ||
-            name == L"directoryPath" ||
-            name == L"sourceDirectory" ||
-            name == L"Depth" ||
-            name == L"Path" ||
-            name == L"NtPath" ||
-            name == L"Target" ||
-            name == L"Win32Path" ||
-            name == L"dosCandidate" ||
-            name == L"fullPath" ||
-            name == L"targetPath" ||
-            name == L"symbolicTarget" ||
-            name == L"objectName" ||
-            name == L"objectType" ||
-            name == L"linkName" ||
-            name == L"Handles" ||
-            name == L"Pointers" ||
-            name == L"Detail";
-    };
     for (std::size_t index = 0; index < currentColumns_.size(); ++index) {
-        const bool hiddenColumn =
-            (objectNamespaceLayout && isHiddenObjectColumn(currentColumns_[index])) ||
-            (descriptor != nullptr && IsKernelHookFeature(descriptor->id) && !IsKernelHookVisibleColumn(descriptor->id, currentColumns_[index]));
-        const int width = hiddenColumn ? 0 : ColumnWidth(currentColumns_[index]);
-        AddResultTableColumn(static_cast<int>(index), currentColumns_[index], width);
+        AppendResultTableColumn(static_cast<int>(index), 0);
     }
     const std::wstring hookFilter = WindowText(filterEdit_);
     const std::wstring hookModuleFilter = WindowText(moduleFilterEdit_);
@@ -5865,12 +5250,13 @@ void KernelPage::ApplyCachedValueProjection(std::shared_ptr<KernelValueProjectio
     currentColumns_=std::move(projection->columns);currentRows_=std::move(projection->rows);
     currentRowIndents_=std::move(projection->indents);currentProjectionWidths_=std::move(projection->widths);
     if(newSource){sortColumn_=-1;sortAscending_=true;pendingSorts_.erase(descriptor->id);}
+    if(newSource) Ksword::Ui::ShowSortIndicator(resultList_, Ksword::Ui::SortSpec{});
     if(pending!=pendingProjectionSources_.end() && pending->second==source) pendingProjectionSources_.erase(pending);
     applyingCachedProjection_=true;
     Ksword::Ui::ScopedListViewRedrawLock resultLock(resultList_);
     if(schemaChanged) {
         ClearResultGridOnly();
-        for(std::size_t index=0;index<currentColumns_.size();++index) AddResultTableColumn(static_cast<int>(index),currentColumns_[index],index<currentProjectionWidths_.size()?currentProjectionWidths_[index]:ColumnWidth(currentColumns_[index]));
+        for(std::size_t index=0;index<currentColumns_.size();++index) AppendResultTableColumn(static_cast<int>(index),index<currentProjectionWidths_.size()?currentProjectionWidths_[index]:0);
     }
     if(propertyList_) ListView_DeleteAllItems(propertyList_);
     if(summaryList_){ListView_DeleteAllItems(summaryList_);for(const auto& row:projection->summary) ListViewInsertRow(summaryList_,row);}
@@ -6262,11 +5648,9 @@ void KernelPage::RebuildNtQueryLegacyListFromCache() {
     currentRows_ = std::move(displayRows);
     currentRowIndents_.clear();
     ClearResultTable();
-    const std::vector<std::wstring> canonical = CanonicalColumnNames(KernelFeatureId::NtQueryLegacy);
     for (std::size_t index = 0; index < currentColumns_.size(); ++index) {
         const std::wstring& name = currentColumns_[index];
-        const bool hidden = name == L"#" ? false : !HasColumn(canonical, name);
-        int width = hidden ? 0 : ColumnWidth(name);
+        int width = 0;
         if (name == L"类别") {
             width = 110;
         } else if (name == L"函数") {
@@ -6278,7 +5662,7 @@ void KernelPage::RebuildNtQueryLegacyListFromCache() {
         } else if (name == L"摘要") {
             width = 360;
         }
-        AddResultTableColumn(static_cast<int>(index), name, width);
+        AppendResultTableColumn(static_cast<int>(index), width);
     }
     SyncResultListVirtualRows();
 
@@ -6339,7 +5723,7 @@ void KernelPage::ApplyCachedFilter(const KernelFeatureId featureId) {
     }
     if(KernelUsesValueProjection(featureId)) { RequestCachedValueProjection(featureId); return; }
     currentColumns_ = currentRawColumns_;
-    currentRows_ = *currentRawRows_;
+    currentRows_.adopt(currentRawRows_);
     if (IsObjectNamespaceFeature(descriptor->id)) {
         RebuildObjectNamespaceListFromCache(descriptor->id);
     } else if (descriptor->id == KernelFeatureId::AtomTable) {
@@ -6477,6 +5861,16 @@ void KernelPage::RequestResultSort(const int columnIndex, const bool ascending) 
             pendingSorts_.erase(result->featureId);
             Ksword::Ui::ScopedListViewRedrawLock resultListLock(resultList_);
             SyncResultListVirtualRows();
+            // The applied result is the only place the visible order is known to
+            // match the request, so the arrow is updated here rather than when the
+            // click arrives: a superseded request is discarded above and must not
+            // move the arrow.
+            Ksword::Ui::ShowSortIndicator(
+                resultList_,
+                Ksword::Ui::SortSpec{
+                    SubItemForDataColumn(result->column),
+                    result->ascending ? Ksword::Ui::SortDirection::Ascending
+                                      : Ksword::Ui::SortDirection::Descending });
             ListView_SetItemState(resultList_, -1, 0, LVIS_SELECTED | LVIS_FOCUSED);
             if (newSelected >= 0) ListView_SetItemState(resultList_, newSelected,
                 LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
@@ -6514,7 +5908,7 @@ void KernelPage::UpdateSelectedRowDetail() {
             return;
         }
     }
-    const int columns = HeaderColumnCount(resultList_);
+    const int columns = static_cast<int>(currentColumns_.size());
     std::wstring detail;
     for (int column = 0; column < columns; ++column) {
         const std::wstring name = column < static_cast<int>(currentColumns_.size())
@@ -6562,7 +5956,7 @@ LRESULT KernelPage::HandleResultListCustomDraw(const LPARAM lParam) {
     }
 
     const int row = static_cast<int>(draw->nmcd.dwItemSpec);
-    const int column = draw->iSubItem;
+    const int column = DataColumnForSubItem(draw->iSubItem);
     if (row < 0 || column < 0 || column >= static_cast<int>(currentColumns_.size())) {
         return CDRF_DODEFAULT;
     }
@@ -8724,7 +8118,7 @@ void KernelPage::StartCallbackFileIo(
                         result.text = L"状态：已打开模块所在目录。";
                     }
                 }
-            } else if (!WriteWholeFileText(result.path, text, &result.errorText)) {
+            } else if (!WriteWholeFileText(result.path, text, ExportEvidenceSourceFor(operation), &result.errorText)) {
                 result.text.clear();
             }
             return result;
@@ -8885,8 +8279,12 @@ void KernelPage::OnCallbackExportFileMonitor() {
     std::wstring text;
     const int rows = callbackFileMonitorList_ ? ListView_GetItemCount(callbackFileMonitorList_) : 0;
     const int columns = callbackFileMonitorList_ ? HeaderColumnCount(callbackFileMonitorList_) : 0;
+    // The file-monitor export used to start at row 0, so a saved capture arrived
+    // with no column captions and only the on-screen order told a reader which
+    // field was the path and which was the verdict.
+    bool wroteRow = callbackFileMonitorList_ != nullptr && AppendTsvHeaderRow(callbackFileMonitorList_, text);
     for (int row = 0; row < rows; ++row) {
-        if (row > 0) {
+        if (wroteRow) {
             text += L"\r\n";
         }
         for (int column = 0; column < columns; ++column) {
@@ -8895,6 +8293,7 @@ void KernelPage::OnCallbackExportFileMonitor() {
             }
             text += ListViewText(callbackFileMonitorList_, row, column);
         }
+        wroteRow = true;
     }
     StartCallbackFileIo(CallbackFileIoOperation::ExportFileMonitor, path, std::move(text));
 }
@@ -9505,7 +8904,7 @@ void KernelPage::UpdatePropertyTableFromSelection() {
     appendProperty(L"isDirectory（是否目录）", safeText(cellAt(row, { L"isDirectory", L"IsDirectory" }), _wcsicmp(cellAt(row, { L"类型", L"Type", L"objectType" }).c_str(), L"Directory") == 0 ? L"true" : L"false"));
     appendProperty(L"isSymbolicLink（是否符号链接）", safeText(cellAt(row, { L"isSymbolicLink", L"IsSymbolicLink" }), _wcsicmp(cellAt(row, { L"类型", L"Type", L"objectType" }).c_str(), L"SymbolicLink") == 0 ? L"true" : L"false"));
     appendProperty(L"详情", safeText(cellAt(row, { L"Detail" }), L"<无>"));
-    const int columns = HeaderColumnCount(resultList_);
+    const int columns = static_cast<int>(currentColumns_.size());
     for (int column = 0; column < columns; ++column) {
         const std::wstring name = column < static_cast<int>(currentColumns_.size())
             ? currentColumns_[static_cast<std::size_t>(column)]
@@ -9649,7 +9048,7 @@ void KernelPage::ShowResultContextMenu(POINT screenPoint) {
     }
     const bool canCopyDiagnostic = descriptor != nullptr &&
         (descriptor->id == KernelFeatureId::DynData || descriptor->id == KernelFeatureId::DriverStatus);
-    const int visibleColumns = HeaderColumnCount(resultList_);
+    const int visibleColumns = static_cast<int>(currentColumns_.size());
     HMENU copyMenu = ::CreatePopupMenu();
     if (copyMenu != nullptr) {
         ::AppendMenuW(copyMenu, MF_STRING, kMenuCopyCell, L"复制当前列（选中行）");
@@ -10409,7 +9808,7 @@ bool KernelPage::ShowCallbackEnumerationContextMenu(POINT screenPoint, const Ker
         LVHITTESTINFO hit{};
         hit.pt = clientPoint;
         const int row = ListView_HitTest(resultList_, &hit);
-        contextColumn_ = hit.iSubItem >= 0 ? hit.iSubItem : 0;
+        contextColumn_ = hit.iSubItem >= 0 ? DataColumnForSubItem(hit.iSubItem) : 0;
         if (row >= 0) {
             const bool preserveMultiSelection = (::GetKeyState(VK_CONTROL) & 0x8000) != 0 ||
                 (::GetKeyState(VK_SHIFT) & 0x8000) != 0;
@@ -11140,7 +10539,7 @@ std::wstring KernelPage::BuildRowDetailText(const int row) const {
             return originalStyle;
         }
     }
-    const int columns = HeaderColumnCount(resultList_);
+    const int columns = static_cast<int>(currentColumns_.size());
     std::wstring detail;
     for (int column = 0; column < columns; ++column) {
         const std::wstring name = column < static_cast<int>(currentColumns_.size())
@@ -11226,7 +10625,7 @@ void KernelPage::CopySelectedCell() {
     if (row < 0) {
         return;
     }
-    const int columns = HeaderColumnCount(resultList_);
+    const int columns = static_cast<int>(currentColumns_.size());
     int column = contextColumn_;
     if (column < 0 || column >= columns) {
         column = 1;
@@ -11296,7 +10695,7 @@ void KernelPage::CopySelectedRow() {
         SetClipboardText(hwnd_, text);
         return;
     }
-    const int columns = HeaderColumnCount(resultList_);
+    const int columns = static_cast<int>(currentColumns_.size());
     std::vector<int> copyColumns;
     if (const KernelFeatureDescriptor* descriptor = CurrentDescriptor(); descriptor != nullptr) {
         copyColumns = PreferredCopyColumnIndices(descriptor->id, currentColumns_);
@@ -11329,7 +10728,7 @@ std::wstring KernelPage::BuildSelectedRowsTsv(const bool includeHeader) const {
     if (!resultList_) {
         return {};
     }
-    const int columns = HeaderColumnCount(resultList_);
+    const int columns = static_cast<int>(currentColumns_.size());
     std::vector<int> copyColumns;
     if (const KernelFeatureDescriptor* descriptor = CurrentDescriptor(); descriptor != nullptr) {
         copyColumns = PreferredCopyColumnIndices(descriptor->id, currentColumns_);
@@ -11423,7 +10822,7 @@ void KernelPage::CopySelectedColumn(const int columnIndex) {
     // CopySelectedColumn mirrors the original per-column copy submenu. Input is
     // a visible column index chosen from the popup menu; processing copies that
     // column for all selected rows, one value per line; output is clipboard text.
-    if (!resultList_ || columnIndex < 0 || columnIndex >= HeaderColumnCount(resultList_)) {
+    if (!resultList_ || columnIndex < 0 || columnIndex >= static_cast<int>(currentColumns_.size())) {
         return;
     }
     std::wstring text;
@@ -11449,7 +10848,7 @@ std::vector<int> KernelPage::CurrentCopyColumnIndices() const {
     // and export actions should include. Inputs are the active feature and
     // current dynamic schema; processing keeps hidden protocol columns out of
     // clipboard/TSV output; output falls back to every ListView column.
-    const int columns = resultList_ ? HeaderColumnCount(resultList_) : 0;
+    const int columns = resultList_ ? static_cast<int>(currentColumns_.size()) : 0;
     std::vector<int> copyColumns;
     if (const KernelFeatureDescriptor* descriptor = CurrentDescriptor(); descriptor != nullptr) {
         copyColumns = PreferredCopyColumnIndices(descriptor->id, currentColumns_);
@@ -11468,7 +10867,7 @@ void KernelPage::CopyAllRows() {
     // CopyAllRows serializes the whole result grid as tab-separated rows. There
     // is no input beyond the current ListView content; output is clipboard text.
     const int rows = ListView_GetItemCount(resultList_);
-    const int columns = HeaderColumnCount(resultList_);
+    const int columns = static_cast<int>(currentColumns_.size());
     const std::vector<int> copyColumns = CurrentCopyColumnIndices();
     std::wstring text;
     for (int row = 0; row < rows; ++row) {
@@ -11747,7 +11146,7 @@ void KernelPage::ExportAllRowsTsv() {
         return;
     }
     const int rows = resultList_ ? ListView_GetItemCount(resultList_) : 0;
-    const int columns = resultList_ ? HeaderColumnCount(resultList_) : 0;
+    const int columns = resultList_ ? static_cast<int>(currentColumns_.size()) : 0;
     const std::vector<int> copyColumns = CurrentCopyColumnIndices();
     std::wstring text;
     for (std::size_t position = 0; position < copyColumns.size(); ++position) {
@@ -11824,6 +11223,7 @@ void KernelPage::ClearResultGridOnly() {
     if (!resultList_) {
         return;
     }
+    resultColumnData_.clear();
     ListView_SetItemCountEx(resultList_, 0, LVSICF_NOINVALIDATEALL | LVSICF_NOSCROLL);
     HWND header = ListView_GetHeader(resultList_);
     const int count = header ? Header_GetItemCount(header) : 0;
@@ -11857,6 +11257,49 @@ void KernelPage::AddResultTableColumn(int index, const std::wstring& title, int 
     column.cx = width;
     column.pszText = const_cast<LPWSTR>(title.c_str());
     ListView_InsertColumn(resultList_, index, &column);
+}
+
+void KernelPage::AppendResultTableColumn(const int dataColumn, int width) {
+    // AppendResultTableColumn 只把决策相关列建成 ListView 列：证据列留在
+    // currentColumns_ 里供详情/复制/导出使用，但不占表头槽位。入参是数据列
+    // 下标与可选宽度（<=0 表示按列名取默认宽度），无返回值。
+    if (!resultList_ || dataColumn < 0 || dataColumn >= static_cast<int>(currentColumns_.size())) {
+        return;
+    }
+    const KernelFeatureDescriptor* descriptor = CurrentDescriptor();
+    const std::wstring& name = currentColumns_[static_cast<std::size_t>(dataColumn)];
+    // 功能未就绪时（首次布局、无选中页）不做过滤，保持旧行为，避免建出空表头。
+    if (descriptor != nullptr && !IsKernelTableColumn(descriptor->id, name)) {
+        return;
+    }
+    if (width <= 0) {
+        width = ColumnWidth(name);
+    }
+    AddResultTableColumn(static_cast<int>(resultColumnData_.size()), name, width);
+    resultColumnData_.push_back(dataColumn);
+}
+
+int KernelPage::DataColumnForSubItem(const int subItem) const {
+    // DataColumnForSubItem 把表头槽位换成 currentColumns_ 下标。入参是 ListView
+    // 子项号；没有映射时退回原值，保持旧行为。
+    if (subItem < 0) {
+        return -1;
+    }
+    if (static_cast<std::size_t>(subItem) < resultColumnData_.size()) {
+        return resultColumnData_[static_cast<std::size_t>(subItem)];
+    }
+    return subItem;
+}
+
+int KernelPage::SubItemForDataColumn(const int dataColumn) const {
+    // SubItemForDataColumn 把 currentColumns_ 下标换成表头槽位，供排序箭头使用。
+    // 入参是数据列下标；该列没有进表格时返回 -1。
+    for (std::size_t subItem = 0; subItem < resultColumnData_.size(); ++subItem) {
+        if (resultColumnData_[subItem] == dataColumn) {
+            return static_cast<int>(subItem);
+        }
+    }
+    return -1;
 }
 
 void KernelPage::AddResultTableRow(const std::vector<std::wstring>& cells) {

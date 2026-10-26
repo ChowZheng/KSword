@@ -3,6 +3,8 @@
 #include "../Internationalization/LanguageManager.h"
 #include "../UI/TableContextMenu.h"
 #include "../UI/PageControlStyle.h"
+#include "../UI/PrimaryPageStyle.h"
+#include "../UI/FlowLayout.h"
 #include "../UI/ToolbarMetrics.h"
 #include "../UI/FlatButtonTheme.h"
 #include "../Framework/PrivilegeElevationPrompt.h"
@@ -40,6 +42,7 @@
 #include <QFileIconProvider>
 #include <QFileInfo>
 #include <QGuiApplication>
+#include <QGridLayout>
 #include <QHeaderView>
 #include <QHBoxLayout>
 #include <QIcon>
@@ -696,36 +699,7 @@ namespace
         return currentValue >= previousValue ? currentValue - previousValue : 0;
     }
 
-    // tableHeaderStyle：
-    // - 作用：生成硬盘监控表头样式；
-    // - 处理：直接使用项目主题色；
-    // - 返回：可赋给 QTableWidget 的样式片段。
-    QString tableHeaderStyle()
-    {
-        return QStringLiteral(
-            "QHeaderView::section{"
-            "  color:%1;"
-            "  background:transparent; /* %2 */"
-            "  border:1px solid %3;"
-            "  padding:4px;"
-            "  font-weight:600;"
-            "}"
-            "QTableWidget{"
-            "  gridline-color:%3;"
-            "  background:transparent;"
-            "  background-color:transparent;"
-            "  alternate-background-color:transparent;"
-            "  color:%1;"
-            "}"
-            "QTableWidget::viewport{"
-            "  background:transparent;"
-            "  background-color:transparent;"
-            "}"
-            "}")
-            .arg(KswordTheme::TextPrimaryHex())
-            .arg(KswordTheme::SurfaceAltHex())
-            .arg(KswordTheme::BorderHex());
-    }
+
 
     // trimWideString：
     // - 作用：把 ETW 属性中的 UTF-16 缓冲转成 QString；
@@ -1052,144 +1026,77 @@ namespace
 
     QWidget* createDiskMonitorSection(
         QWidget* parentWidget,
-        QToolButton** toggleButtonOut,
+        QLabel** titleLabelOut,
         const QString& titleText,
-        QWidget* contentWidget,
-        QWidget* firstHeaderControl = nullptr,
-        QWidget* secondHeaderControl = nullptr)
+        QWidget* contentWidget)
     {
-        // createDiskMonitorSection：
-        // - 输入：父控件、标题、内容控件和可选 A/B 控件；
-        // - 处理：创建资源监视器式可折叠区域，箭头和内容可见性保持同步；
-        // - 返回：可直接加入垂直 QSplitter 的区域控件。
         auto* sectionWidget = new QWidget(parentWidget);
+        sectionWidget->setProperty("ksword_disk_monitor_expanded", true);
         auto* sectionLayout = new QVBoxLayout(sectionWidget);
         sectionLayout->setContentsMargins(0, 0, 0, 0);
-        sectionLayout->setSpacing(0);
+        sectionLayout->setSpacing(6);
 
         auto* headerWidget = new QWidget(sectionWidget);
+        ks::ui::StylePrimaryToolbar(headerWidget);
         auto* headerLayout = new QHBoxLayout(headerWidget);
-        headerLayout->setContentsMargins(4, 2, 4, 2);
-        headerLayout->setSpacing(0);
-        headerWidget->setStyleSheet(QStringLiteral(
-            "QWidget{background:%1;border:1px solid %2;}")
-            .arg(KswordTheme::SurfaceAltHex(), KswordTheme::BorderHex()));
+        headerLayout->setContentsMargins(6, 0, 6, 0);
+        headerLayout->setSpacing(6);
+        auto* title = new QLabel(titleText, headerWidget);
+        title->setWordWrap(true);
+        ks::ui::StylePrimarySectionTitle(title);
+        headerLayout->addWidget(title, 1);
 
-        auto* toggleButton = new QToolButton(headerWidget);
-        toggleButton->setText(titleText);
-        toggleButton->setCheckable(true);
-        toggleButton->setChecked(true);
-        toggleButton->setArrowType(Qt::NoArrow);
-        toggleButton->setToolButtonStyle(Qt::ToolButtonTextOnly);
-        toggleButton->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
-        toggleButton->setStyleSheet(ks::ui::BuildFlatButtonStyle(ks::ui::FlatButtonTone::Neutral)
-            + QStringLiteral("QToolButton{font-size:14px;font-weight:700;text-align:left;padding:3px;}"));
-        toggleButton->setToolTip(QStringLiteral("展开或折叠该磁盘监控区域"));
-        headerLayout->addWidget(toggleButton, 1);
-
-        if (firstHeaderControl != nullptr)
-        {
-            headerLayout->addWidget(firstHeaderControl, 0);
-        }
-        if (secondHeaderControl != nullptr)
-        {
-            headerLayout->addWidget(secondHeaderControl, 0);
-        }
-
-        auto* arrowButton = new QToolButton(headerWidget);
-        arrowButton->setArrowType(Qt::DownArrow);
-        arrowButton->setAutoRaise(true);
-        arrowButton->setFocusPolicy(Qt::NoFocus);
-        arrowButton->setFixedWidth(24);
-        arrowButton->setToolTip(
-            QStringLiteral("展开或折叠该磁盘监控区域"));
-        arrowButton->setStyleSheet(ks::ui::BuildFlatButtonStyle(ks::ui::FlatButtonTone::Neutral)
-            + QStringLiteral("QToolButton{padding:2px;}"));
-        headerLayout->addWidget(arrowButton, 0);
-
-        sectionLayout->addWidget(headerWidget, 0);
+        // Expansion is layout state, not a selected action spanning the title.
+        auto* arrow = new QToolButton(headerWidget);
+        arrow->setArrowType(Qt::DownArrow);
+        arrow->setAutoRaise(true);
+        arrow->setToolTip(QStringLiteral("展开或折叠该磁盘监控区域"));
+        arrow->setAccessibleName(titleText);
+        KswordTheme::ApplyCompactIconButtonMetrics(arrow);
+        ks::ui::ApplyFlatButtonTheme(arrow, ks::ui::FlatButtonTone::Neutral, ks::ui::FlatButtonAppearance::Flat);
+        headerLayout->addWidget(arrow);
+        sectionLayout->addWidget(headerWidget);
         sectionLayout->addWidget(contentWidget, 1);
-        sectionWidget->setSizePolicy(
-            QSizePolicy::Preferred,
-            QSizePolicy::Expanding);
+        sectionWidget->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Expanding);
 
-        QObject::connect(
-            toggleButton,
-            &QToolButton::toggled,
-            sectionWidget,
-            [
-                toggleButton,
-                arrowButton,
-                contentWidget,
-                headerWidget,
-                sectionWidget
-            ](const bool expanded)
+        QObject::connect(arrow, &QToolButton::clicked, sectionWidget,
+            [arrow, contentWidget, headerWidget, sectionWidget]()
             {
-                auto* splitter =
-                    qobject_cast<QSplitter*>(sectionWidget->parentWidget());
-                const int splitterIndex =
-                    splitter != nullptr
-                    ? splitter->indexOf(sectionWidget)
-                    : -1;
-                QList<int> splitterSizes =
-                    splitter != nullptr
-                    ? splitter->sizes()
-                    : QList<int>{};
-
+                const bool expanded = !sectionWidget->property("ksword_disk_monitor_expanded").toBool();
+                auto* splitter = qobject_cast<QSplitter*>(sectionWidget->parentWidget());
+                const int index = splitter != nullptr ? splitter->indexOf(sectionWidget) : -1;
+                QList<int> sizes = splitter != nullptr ? splitter->sizes() : QList<int>{};
                 if (expanded)
                 {
                     sectionWidget->setMinimumHeight(0);
                     sectionWidget->setMaximumHeight(QWIDGETSIZE_MAX);
                     contentWidget->setVisible(true);
-                    const int previousExpandedHeight =
-                        sectionWidget->property(
-                            "kswordDiskMonitorExpandedHeight").toInt();
-                    if (splitterIndex >= 0 &&
-                        splitterIndex < splitterSizes.size() &&
-                        previousExpandedHeight > 0)
+                    const int previousHeight = sectionWidget->property("kswordDiskMonitorExpandedHeight").toInt();
+                    if (index >= 0 && index < sizes.size() && previousHeight > 0)
                     {
-                        splitterSizes[splitterIndex] =
-                            previousExpandedHeight;
-                        splitter->setSizes(splitterSizes);
+                        sizes[index] = previousHeight;
+                        splitter->setSizes(sizes);
                     }
                 }
                 else
                 {
-                    if (splitterIndex >= 0 &&
-                        splitterIndex < splitterSizes.size())
-                    {
-                        sectionWidget->setProperty(
-                            "kswordDiskMonitorExpandedHeight",
-                            splitterSizes[splitterIndex]);
-                    }
+                    if (index >= 0 && index < sizes.size())
+                        sectionWidget->setProperty("kswordDiskMonitorExpandedHeight", sizes[index]);
                     contentWidget->setVisible(false);
-                    const int collapsedHeight =
-                        std::max(1, headerWidget->sizeHint().height());
+                    const int collapsedHeight = std::max(1, headerWidget->sizeHint().height());
                     sectionWidget->setMinimumHeight(collapsedHeight);
                     sectionWidget->setMaximumHeight(collapsedHeight);
-                    if (splitterIndex >= 0 &&
-                        splitterIndex < splitterSizes.size())
+                    if (index >= 0 && index < sizes.size())
                     {
-                        splitterSizes[splitterIndex] = collapsedHeight;
-                        splitter->setSizes(splitterSizes);
+                        sizes[index] = collapsedHeight;
+                        splitter->setSizes(sizes);
                     }
                 }
+                sectionWidget->setProperty("ksword_disk_monitor_expanded", expanded);
+                arrow->setArrowType(expanded ? Qt::DownArrow : Qt::RightArrow);
                 sectionWidget->updateGeometry();
-                arrowButton->setArrowType(
-                    expanded ? Qt::DownArrow : Qt::RightArrow);
             });
-        QObject::connect(
-            arrowButton,
-            &QToolButton::clicked,
-            toggleButton,
-            [toggleButton]()
-            {
-                toggleButton->toggle();
-            });
-        if (toggleButtonOut != nullptr)
-        {
-            *toggleButtonOut = toggleButton;
-        }
+        if (titleLabelOut != nullptr) *titleLabelOut = title;
         return sectionWidget;
     }
 }
@@ -1274,74 +1181,67 @@ void DiskMonitorPage::changeEvent(QEvent* event)
 void DiskMonitorPage::initializeUi()
 {
     m_rootLayout = new QVBoxLayout(this);
-    m_rootLayout->setContentsMargins(6, 6, 6, 6);
-    m_rootLayout->setSpacing(6);
+    ks::ui::StyleWorkspacePage(this, 6);
+    m_rootLayout->setSpacing(0);
 
-    QHBoxLayout* headerLayout = new QHBoxLayout();
-    headerLayout->setContentsMargins(0, 0, 0, 0);
-    headerLayout->setSpacing(8);
-
-    m_titleLabel = new QLabel(QStringLiteral("硬盘监控"), this);
-    m_titleLabel->setStyleSheet(
-        QStringLiteral("font-size:18px;font-weight:700;color:%1;")
-        .arg(KswordTheme::TextPrimaryHex()));
-    headerLayout->addWidget(m_titleLabel, 0);
-
-    m_statusLabel = new QLabel(QStringLiteral("正在建立采样基线..."), this);
-    m_statusLabel->setStyleSheet(
-        QStringLiteral("font-size:13px;color:%1;").arg(KswordTheme::TextSecondaryHex()));
+    auto* header = new QWidget(this);
+    ks::ui::StylePrimaryToolbar(header);
+    auto* headerLayout = new QHBoxLayout(header);
+    headerLayout->setContentsMargins(6, 6, 6, 6);
+    headerLayout->setSpacing(6);
+    m_titleLabel = new QLabel(QStringLiteral("硬盘监控"), header);
+    ks::ui::StylePrimarySectionTitle(m_titleLabel);
+    headerLayout->addWidget(m_titleLabel);
+    m_statusLabel = new QLabel(QStringLiteral("正在建立采样基线..."), header);
     m_statusLabel->setWordWrap(true);
     headerLayout->addWidget(m_statusLabel, 1);
-
-    m_refreshButton = new QPushButton(QStringLiteral("刷新"), this);
+    m_refreshButton = new QPushButton(QStringLiteral("刷新"), header);
     m_refreshButton->setToolTip(QStringLiteral("立即刷新进程磁盘 IO 计数器"));
-    m_refreshButton->setStyleSheet(KswordTheme::ThemedButtonStyle());
-    headerLayout->addWidget(m_refreshButton, 0);
+    headerLayout->addWidget(m_refreshButton);
     ks::ui::NormalizeToolbarRow(headerLayout);
-    m_rootLayout->addLayout(headerLayout, 0);
+    m_rootLayout->addWidget(header);
 
-    m_summaryLabel = new QLabel(QStringLiteral("读: 0 B/s    写: 0 B/s    勾选进程: 0"), this);
-    m_summaryLabel->setStyleSheet(
-        QStringLiteral("font-size:13px;font-weight:600;color:%1;")
-        .arg(KswordTheme::TextPrimaryHex()));
-    m_summaryLabel->setWordWrap(true);
-    m_rootLayout->addWidget(m_summaryLabel, 0);
-
-    QHBoxLayout* filterLayout = new QHBoxLayout();
-    filterLayout->setContentsMargins(0, 0, 0, 0);
-    filterLayout->setSpacing(8);
-
-    m_filterEdit = new QLineEdit(this);
+    auto* resultTabs = new QTabWidget(this);
+    resultTabs->setObjectName(QStringLiteral("disk_monitor_result_tabs"));
+    m_rootLayout->addWidget(resultTabs, 1);
+    auto* activityPage = new QWidget(resultTabs);
+    activityPage->setObjectName(QStringLiteral("disk_monitor_activity_page"));
+    auto* activityLayout = new QVBoxLayout(activityPage);
+    activityLayout->setContentsMargins(0, 6, 0, 0);
+    activityLayout->setSpacing(6);
+    auto* filters = new QWidget(activityPage);
+    ks::ui::StylePrimaryToolbar(filters);
+    auto* filterLayout = new QGridLayout(filters);
+    filterLayout->setContentsMargins(6, 6, 6, 6);
+    filterLayout->setHorizontalSpacing(6);
+    filterLayout->setVerticalSpacing(6);
+    filterLayout->setColumnStretch(1, 1);
+    m_filterEdit = new QLineEdit(filters);
     ks::ui::StyleSearchField(m_filterEdit);
     m_filterEdit->setPlaceholderText(QStringLiteral("过滤进程名、PID 或路径"));
     m_filterEdit->setClearButtonEnabled(true);
-    filterLayout->addWidget(m_filterEdit, 1);
-
-    m_onlyActiveCheckBox = new QCheckBox(QStringLiteral("仅显示有磁盘 IO"), this);
+    filterLayout->addWidget(m_filterEdit, 0, 0, 1, 2);
+    m_onlyActiveCheckBox = new QCheckBox(QStringLiteral("仅显示有磁盘 IO"), filters);
     m_onlyActiveCheckBox->setToolTip(QStringLiteral("只显示当前采样周期读/写速率大于 0 的进程"));
-    filterLayout->addWidget(m_onlyActiveCheckBox, 0);
-
-    m_selectActiveButton = new QPushButton(QStringLiteral("勾选活跃进程"), this);
+    filterLayout->addWidget(m_onlyActiveCheckBox, 0, 2);
+    auto* selectionActions = new QWidget(filters);
+    auto* selectionLayout = new ks::ui::FlowLayout(selectionActions, 0, 6, 6);
+    m_selectActiveButton = new QPushButton(QStringLiteral("勾选活跃进程"), selectionActions);
     m_selectActiveButton->setToolTip(QStringLiteral("勾选当前采样周期存在读写活动的进程"));
-    m_selectActiveButton->setStyleSheet(KswordTheme::ThemedButtonStyle());
-    filterLayout->addWidget(m_selectActiveButton, 0);
-
-    m_clearSelectionButton = new QPushButton(QStringLiteral("清空勾选"), this);
+    selectionLayout->addWidget(m_selectActiveButton);
+    m_clearSelectionButton = new QPushButton(QStringLiteral("清空勾选"), selectionActions);
     m_clearSelectionButton->setToolTip(QStringLiteral("清空下方磁盘活动表的 PID 过滤条件"));
-    m_clearSelectionButton->setStyleSheet(KswordTheme::ThemedButtonStyle());
-    filterLayout->addWidget(m_clearSelectionButton, 0);
-    ks::ui::NormalizeToolbarRow(filterLayout);
-    m_rootLayout->addLayout(filterLayout, 0);
+    selectionLayout->addWidget(m_clearSelectionButton);
+    ks::ui::NormalizeToolbarLayout(selectionLayout);
+    filterLayout->addWidget(selectionActions, 1, 0);
+    m_summaryLabel = new QLabel(QStringLiteral("读: 0 B/s    写: 0 B/s    勾选进程: 0"), filters);
+    m_summaryLabel->setWordWrap(true);
+    filterLayout->addWidget(m_summaryLabel, 1, 1, 1, 2);
+    activityLayout->addWidget(filters);
 
-    auto* resultTabs = new QTabWidget(this);
-    ks::ui::StylePageTabs(resultTabs);
-    m_rootLayout->addWidget(resultTabs, 1);
-    m_splitter = new QSplitter(Qt::Vertical, resultTabs);
-    resultTabs->addTab(m_splitter, ks::i18n::sourceText(QStringLiteral("活动与卷队列")));
-    bindDiskMonitorTab(resultTabs, m_splitter, QStringLiteral("活动与卷队列"));
-    initializeIoLogUi(resultTabs);
-    connect(resultTabs, &QTabWidget::currentChanged, this, [this](int) { refreshProcessPresentation(); refreshIoLog(); });
-
+    m_splitter = new QSplitter(Qt::Vertical, activityPage);
+    m_splitter->setChildrenCollapsible(false);
+    activityLayout->addWidget(m_splitter, 1);
     m_processTable = new ks::ui::VisibleTableWidget(this);
     // 磁盘采样的进程选择器不占用快照条；对比保留在下方活动证据表。
     ks::ui::SetTableActionBarMode(m_processTable, ks::ui::TableActionBarMode::None);
@@ -1370,12 +1270,16 @@ void DiskMonitorPage::initializeUi()
         m_processTable->horizontalHeader()->visualIndex(ProcessColumnName),
         1);
     installProcessColumnMenu();
-    QWidget* processSection = createDiskMonitorSection(
-        m_splitter,
-        &m_processSectionButton,
-        QStringLiteral("磁盘活动的进程"),
-        m_processTable);
-    m_splitter->addWidget(processSection);
+    ks::ui::ResultTableCapabilities processCapabilities;
+    processCapabilities.actionBar = ks::ui::TableActionBarMode::None;
+    ks::ui::ResultTableHost::ensure(m_processTable)->bindModel(m_processTable->model(),
+        {{ProcessColumnChecked, QStringLiteral("selected")}, {ProcessColumnPid, QStringLiteral("pid")},
+         {ProcessColumnName, QStringLiteral("process")}, {ProcessColumnReadRate, QStringLiteral("read_rate")},
+         {ProcessColumnWriteRate, QStringLiteral("write_rate")}, {ProcessColumnTotalRate, QStringLiteral("total_rate")},
+         {ProcessColumnResponse, QStringLiteral("response")}, {ProcessColumnReadOps, QStringLiteral("read_iops")},
+         {ProcessColumnWriteOps, QStringLiteral("write_iops")}, {ProcessColumnPath, QStringLiteral("image_path")}}, processCapabilities);
+    m_splitter->addWidget(createDiskMonitorSection(m_splitter, &m_processSectionTitle,
+        QStringLiteral("磁盘活动的进程"), m_processTable));
 
     m_activityTable = new ks::ui::VisibleTableWidget(this);
     // 文件 I/O 现场变化值得留存对比，保留完整证据操作栏。
@@ -1405,52 +1309,68 @@ void DiskMonitorPage::initializeUi()
         m_activityTable->horizontalHeader()->visualIndex(
             ActivityColumnProcess),
         0);
-    QWidget* activitySection = createDiskMonitorSection(
-        m_splitter,
-        &m_activitySectionButton,
-        QStringLiteral("磁盘活动"),
-        m_activityTable);
-    m_splitter->addWidget(activitySection);
-
-    // “存储”区域补齐资源监视器第三层视图。容量和性能计数器与进程采样
-    // 在同一后台线程读取，页面不会增加额外刷新定时器。
-    m_storagePanel = new DiskMonitorStoragePanel(this);
-    QWidget* storageSection = createDiskMonitorSection(
-        m_splitter,
-        &m_storageSectionButton,
-        QStringLiteral("存储"),
-        m_storagePanel);
-    m_splitter->addWidget(storageSection);
-    m_splitter->setStretchFactor(0, 2);
+    ks::ui::ResultTableCapabilities activityCapabilities;
+    activityCapabilities.actionBar = ks::ui::TableActionBarMode::Full;
+    ks::ui::ResultTableHost::ensure(m_activityTable)->bindModel(m_activityTable->model(),
+        {{ActivityColumnPid, QStringLiteral("pid")}, {ActivityColumnProcess, QStringLiteral("process")},
+         {ActivityColumnFile, QStringLiteral("path")}, {ActivityColumnReadRate, QStringLiteral("read_rate")},
+         {ActivityColumnWriteRate, QStringLiteral("write_rate")}, {ActivityColumnTotalRate, QStringLiteral("total_rate")},
+         {ActivityColumnIoPriority, QStringLiteral("io_priority")}, {ActivityColumnResponse, QStringLiteral("response")}}, activityCapabilities);
+    m_splitter->addWidget(createDiskMonitorSection(m_splitter, &m_activitySectionTitle,
+        QStringLiteral("磁盘活动"), m_activityTable));
+    m_splitter->setStretchFactor(0, 1);
     m_splitter->setStretchFactor(1, 2);
-    m_splitter->setStretchFactor(2, 1);
-    m_splitter->setSizes({ 300, 300, 170 });
+    resultTabs->addTab(activityPage, ks::i18n::sourceText(QStringLiteral("磁盘活动")));
+    bindDiskMonitorTab(resultTabs, activityPage, QStringLiteral("磁盘活动"));
+
+    initializeIoLogUi(resultTabs);
+    auto* storagePage = new QWidget(resultTabs);
+    storagePage->setObjectName(QStringLiteral("disk_monitor_queue_page"));
+    auto* storageLayout = new QVBoxLayout(storagePage);
+    storageLayout->setContentsMargins(0, 6, 0, 0);
+    storageLayout->setSpacing(6);
+    // The existing panel owns the single Compact copy/export bar. Sampling still
+    // uses its shared backend on the same worker, independently of the visible tab.
+    m_storagePanel = new DiskMonitorStoragePanel(storagePage);
+    storageLayout->addWidget(m_storagePanel, 1);
+    m_storageSummaryLabel = new QLabel(m_storagePanel->summaryText(), storagePage);
+    m_storageSummaryLabel->setWordWrap(true);
+    storageLayout->addWidget(m_storageSummaryLabel);
+    resultTabs->addTab(storagePage, ks::i18n::sourceText(QStringLiteral("卷队列与性能")));
+    bindDiskMonitorTab(resultTabs, storagePage, QStringLiteral("卷队列与性能"));
+    ks::ui::StyleJoinedResultTabs(resultTabs, header);
+    connect(resultTabs, &QTabWidget::currentChanged, this, [this](int) { refreshProcessPresentation(); refreshIoLog(); });
 }
 
 void DiskMonitorPage::initializeIoLogUi(QTabWidget* tabs)
 {
     auto* page = new QWidget(tabs);
+    page->setObjectName(QStringLiteral("disk_monitor_io_log_page"));
     auto* layout = new QVBoxLayout(page);
     layout->setContentsMargins(0, 6, 0, 0);
     layout->setSpacing(6);
+    auto* toolbar = new QWidget(page);
+    ks::ui::StylePrimaryToolbar(toolbar);
+    auto* toolbarLayout = new QVBoxLayout(toolbar);
+    toolbarLayout->setContentsMargins(6, 6, 6, 6);
+    toolbarLayout->setSpacing(6);
     auto* controls = new QHBoxLayout;
+    controls->setContentsMargins(0, 0, 0, 0);
+    controls->setSpacing(6);
     m_recordIoLog = new QCheckBox(ks::i18n::sourceText(QStringLiteral("记录文件 I/O")), page);
     bindDiskMonitorText(m_recordIoLog, QStringLiteral("记录文件 I/O"));
     controls->addWidget(m_recordIoLog);
     auto* clear = new QPushButton(ks::i18n::sourceText(QStringLiteral("清空日志")), page);
     bindDiskMonitorText(clear, QStringLiteral("清空日志"));
-    controls->addWidget(clear);
     auto* filter = new QLineEdit(page);
     ks::ui::StyleSearchField(filter);
     filter->setPlaceholderText(ks::i18n::sourceText(QStringLiteral("过滤文件、记录 PID、阶段或 IRP")));
     ks::i18n::LanguageManager::instance().bindPlaceholder(filter, diskMonitorSourceKey(QStringLiteral("过滤文件、记录 PID、阶段或 IRP")), QStringLiteral("过滤文件、记录 PID、阶段或 IRP"));
     controls->addWidget(filter, 1);
+    controls->addWidget(clear);
     ks::ui::NormalizeToolbarRow(controls);
-    layout->addLayout(controls);
-    auto* scope = new QLabel(ks::i18n::sourceText(QStringLiteral("Kernel-File 文件请求日志；请求字节不代表实际落盘量。记录 PID 为事件头上下文，完成事件可能由系统线程记录。最多保留 10000 条，取消勾选暂停记录，卷队列采样继续。")), page);
-    bindDiskMonitorText(scope, QStringLiteral("Kernel-File 文件请求日志；请求字节不代表实际落盘量。记录 PID 为事件头上下文，完成事件可能由系统线程记录。最多保留 10000 条，取消勾选暂停记录，卷队列采样继续。"));
-    scope->setWordWrap(true);
-    layout->addWidget(scope);
+    toolbarLayout->addLayout(controls);
+    layout->addWidget(toolbar);
     m_ioLogTable = new ks::ui::TableActionTableView(page);
     auto* model = new FileIoLogModel(m_ioLogTable);
     m_ioLogModel = model;
@@ -1482,8 +1402,15 @@ void DiskMonitorPage::initializeIoLogUi(QTabWidget* tabs)
         QStringLiteral("A：文件请求"), QStringLiteral("B：完成与关联"));
     columnControls->addStretch();
     ks::ui::NormalizeToolbarRow(columnControls);
-    layout->addLayout(columnControls);
+    toolbarLayout->addLayout(columnControls);
     layout->addWidget(m_ioLogTable, 1);
+    auto* scope = new QLabel(ks::i18n::sourceText(QStringLiteral("Kernel-File 请求日志；请求字节不代表落盘量，最多保留 10000 条。")), page);
+    bindDiskMonitorText(scope, QStringLiteral("Kernel-File 请求日志；请求字节不代表落盘量，最多保留 10000 条。"));
+    scope->setWordWrap(true);
+    const QString scopeDetails = QStringLiteral("Kernel-File 文件请求日志；请求字节不代表实际落盘量。记录 PID 为事件头上下文，完成事件可能由系统线程记录。最多保留 10000 条，取消勾选暂停记录，卷队列采样继续。");
+    ks::i18n::LanguageManager::instance().bindToolTip(scope, diskMonitorSourceKey(scopeDetails), scopeDetails);
+    ks::i18n::LanguageManager::instance().bindToolTip(m_recordIoLog, diskMonitorSourceKey(scopeDetails), scopeDetails);
+    layout->addWidget(scope);
     m_ioLogStatus = new QLabel(page);
     m_ioLogStatus->setWordWrap(true);
     layout->addWidget(m_ioLogStatus);
@@ -1664,7 +1591,7 @@ void DiskMonitorPage::configureTableWidget(QTableWidget* tableWidget, const int 
     tableWidget->verticalHeader()->setVisible(false);
     tableWidget->verticalHeader()->setDefaultSectionSize(24);
     tableWidget->horizontalHeader()->setStretchLastSection(false);
-    tableWidget->setStyleSheet(tableHeaderStyle());
+    ks::ui::ApplyTablePresentation(tableWidget);
     installDiskMonitorTableCopyMenu(tableWidget, processIdColumn);
 }
 
@@ -2466,28 +2393,28 @@ void DiskMonitorPage::updateSummaryLabels(const std::vector<ProcessDiskSample>& 
             .arg(modeText));
     }
 
-    // 折叠标题在区域关闭时仍保留关键指标，对齐资源监视器的分区摘要。
-    if (m_processSectionButton != nullptr)
+    // 中性分区标题在折叠后仍保留关键指标；队列摘要属于独立结果页。
+    if (m_processSectionTitle != nullptr)
     {
-        m_processSectionButton->setText(
+        m_processSectionTitle->setText(
             QStringLiteral("磁盘活动的进程    读: %1    写: %2")
             .arg(formatBytesPerSecond(totalReadBytesPerSec))
             .arg(formatBytesPerSecond(totalWriteBytesPerSec)));
     }
-    if (m_activitySectionButton != nullptr)
+    if (m_activitySectionTitle != nullptr)
     {
         const int activityRowCount = m_activityTable != nullptr
-            ? std::max(1,m_visibleActivityCount)
+            ? std::max(0, m_visibleActivityCount)
             : 0;
-        m_activitySectionButton->setText(
+        m_activitySectionTitle->setText(
             QStringLiteral("磁盘活动    当前行: %1    勾选进程: %2")
             .arg(activityRowCount)
             .arg(static_cast<int>(m_selectedPidSet.size())));
     }
-    if (m_storageSectionButton != nullptr &&
+    if (m_storageSummaryLabel != nullptr &&
         m_storagePanel != nullptr)
     {
-        m_storageSectionButton->setText(m_storagePanel->summaryText());
+        m_storageSummaryLabel->setText(m_storagePanel->summaryText());
     }
 }
 

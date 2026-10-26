@@ -284,6 +284,21 @@
     <ClCompile Include="Features\Kernel\KernelPageLayout.cpp">
       <Filter>Features\Kernel</Filter>
     </ClCompile>
+    <ClCompile Include="Features\Kernel\KernelProjectionBuilderCore.cpp">
+      <Filter>Features\Kernel</Filter>
+    </ClCompile>
+    <ClCompile Include="Features\Kernel\KernelProjectionBuilderDiagnostics.cpp">
+      <Filter>Features\Kernel</Filter>
+    </ClCompile>
+    <ClCompile Include="Features\Kernel\KernelProjectionBuilderEvidence.cpp">
+      <Filter>Features\Kernel</Filter>
+    </ClCompile>
+    <ClCompile Include="Features\Kernel\KernelProjectionBuilderHooks.cpp">
+      <Filter>Features\Kernel</Filter>
+    </ClCompile>
+    <ClCompile Include="Features\Kernel\KernelProjectionBuilderNamespace.cpp">
+      <Filter>Features\Kernel</Filter>
+    </ClCompile>
     <ClCompile Include="Features\Kernel\KernelR0ExtendedFeature.cpp">
       <Filter>Features\Kernel</Filter>
     </ClCompile>
@@ -294,6 +309,9 @@
       <Filter>Features\Kernel</Filter>
     </ClCompile>
     <ClCompile Include="Features\Kernel\KernelSymbolicLinkFeature.cpp">
+      <Filter>Features\Kernel</Filter>
+    </ClCompile>
+    <ClCompile Include="Features\Kernel\KernelValueSupport.cpp">
       <Filter>Features\Kernel</Filter>
     </ClCompile>
     <ClCompile Include="Features\Memory\DriverMemoryClient.cpp">
@@ -318,6 +336,9 @@
       <Filter>Features\Memory</Filter>
     </ClCompile>
     <ClCompile Include="Features\Misc\MiscFeature.cpp">
+      <Filter>Features\Misc</Filter>
+    </ClCompile>
+    <ClCompile Include="Features\Misc\MiscAuditCollectors.cpp">
       <Filter>Features\Misc</Filter>
     </ClCompile>
     <ClCompile Include="Features\Monitor\EtwFilterDialog.cpp">
@@ -534,6 +555,18 @@
     <ClCompile Include="Ui\NumericSortKey.cpp">
       <Filter>Ui</Filter>
     </ClCompile>
+    <ClCompile Include="Ui\TableCompareActions.cpp">
+      <Filter>Ui</Filter>
+    </ClCompile>
+    <ClCompile Include="Ui\TableCompareRowSource.cpp">
+      <Filter>Ui</Filter>
+    </ClCompile>
+    <ClCompile Include="Ui\TableCompareResultWindow.cpp">
+      <Filter>Ui</Filter>
+    </ClCompile>
+    <ClCompile Include="Ui\TableSnapshotCompare.cpp">
+      <Filter>Ui</Filter>
+    </ClCompile>
     <ClCompile Include="Ui\TextFindSupport.cpp">
       <Filter>Ui</Filter>
     </ClCompile>
@@ -547,6 +580,12 @@
       <Filter>Ui</Filter>
     </ClCompile>
     <ClCompile Include="Ui\Theme.cpp">
+      <Filter>Ui</Filter>
+    </ClCompile>
+    <ClCompile Include="Ui\Dpi.cpp">
+      <Filter>Ui</Filter>
+    </ClCompile>
+    <ClCompile Include="Ui\LazyTreeView.cpp">
       <Filter>Ui</Filter>
     </ClCompile>
     <ClCompile Include="Ui\TreeViewUtil.cpp">
@@ -866,10 +905,10 @@
     <ClInclude Include="Features\Kernel\KernelDynamicProjection.h">
       <Filter>Features\Kernel</Filter>
     </ClInclude>
-    <ClInclude Include="Features\Kernel\KernelProjectionValues.h">
+    <ClInclude Include="Features\Kernel\KernelProjectionBuilder.h">
       <Filter>Features\Kernel</Filter>
     </ClInclude>
-    <ClInclude Include="Features\Kernel\KernelProjectionValues.inl">
+    <ClInclude Include="Features\Kernel\KernelProjectionValues.h">
       <Filter>Features\Kernel</Filter>
     </ClInclude>
     <ClInclude Include="Features\Kernel\KernelPage.h">
@@ -888,6 +927,9 @@
       <Filter>Features\Kernel</Filter>
     </ClInclude>
     <ClInclude Include="Features\Kernel\KernelSymbolicLinkFeature.h">
+      <Filter>Features\Kernel</Filter>
+    </ClInclude>
+    <ClInclude Include="Features\Kernel\KernelValueSupport.h">
       <Filter>Features\Kernel</Filter>
     </ClInclude>
     <ClInclude Include="Features\Memory\DriverMemoryClient.h">
@@ -912,6 +954,9 @@
       <Filter>Features\Memory</Filter>
     </ClInclude>
     <ClInclude Include="Features\Misc\MiscFeature.h">
+      <Filter>Features\Misc</Filter>
+    </ClInclude>
+    <ClInclude Include="Features\Misc\MiscAuditPage.h">
       <Filter>Features\Misc</Filter>
     </ClInclude>
     <ClInclude Include="Features\Monitor\EtwEventModel.h">
@@ -1211,6 +1256,15 @@
     <ClInclude Include="Ui\NumericSortKey.h">
       <Filter>Ui</Filter>
     </ClInclude>
+    <ClInclude Include="Ui\TableCompareActions.h">
+      <Filter>Ui</Filter>
+    </ClInclude>
+    <ClInclude Include="Ui\TableCompareResultWindow.h">
+      <Filter>Ui</Filter>
+    </ClInclude>
+    <ClInclude Include="Ui\TableSnapshotCompare.h">
+      <Filter>Ui</Filter>
+    </ClInclude>
     <ClInclude Include="Ui\TextFindSupport.h">
       <Filter>Ui</Filter>
     </ClInclude>
@@ -1224,6 +1278,12 @@
       <Filter>Ui</Filter>
     </ClInclude>
     <ClInclude Include="Ui\Theme.h">
+      <Filter>Ui</Filter>
+    </ClInclude>
+    <ClInclude Include="Ui\Dpi.h">
+      <Filter>Ui</Filter>
+    </ClInclude>
+    <ClInclude Include="Ui\LazyTreeView.h">
       <Filter>Ui</Filter>
     </ClInclude>
     <ClInclude Include="Ui\TreeViewUtil.h">

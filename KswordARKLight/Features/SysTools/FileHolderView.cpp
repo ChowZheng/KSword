@@ -5,9 +5,11 @@
 #include "../../Ui/AsyncTask.h"
 #include "../../Ui/Controls.h"
 #include "../../Ui/EntityNavigation.h"
+#include "../../Ui/ExportUtil.h"
 #include "../../Ui/FilterBar.h"
 #include "../../Ui/ListViewUtil.h"
 #include "../../Ui/LoadingOverlay.h"
+#include "../../Ui/TableCompareActions.h"
 #include "../../Ui/Theme.h"
 #include "../../Ui/VirtualListView.h"
 
@@ -44,6 +46,8 @@ constexpr int kLoadingOverlayId = 67107;
 
 constexpr UINT kMenuCopyRow = 67601;
 constexpr UINT kMenuCopyVisible = 67602;
+constexpr UINT kMenuExportVisible = 67606;
+constexpr UINT kMenuExportAll = 67607;
 constexpr UINT kMenuOpenLocation = 67603;
 constexpr UINT kMenuRescan = 67604;
 constexpr UINT kMenuOpenProcessDetails = 67605;
@@ -56,6 +60,20 @@ constexpr int kRowHeight = 24;
 constexpr int kHeaderHeight = kGap * 3 + kRowHeight * 2;
 constexpr int kStatusHeight = 22;
 constexpr int kColumnCount = 6;
+
+// kColumnTitles backs both the header row and the TSV export. A "who is holding
+// this file" report is worthless if the exported file labels the 访问权限 column
+// as something the user has to guess.
+constexpr const wchar_t* kColumnTitles[kColumnCount] = {
+    L"进程", L"PID", L"句柄", L"访问权限", L"占用路径", L"进程映像"
+};
+
+// FileHolderColumnTitles feeds the TSV export and the snapshot capture from the
+// same captions as the header row.
+const std::vector<std::wstring>& FileHolderColumnTitles() {
+    static const std::vector<std::wstring> titles(std::begin(kColumnTitles), std::end(kColumnTitles));
+    return titles;
+}
 
 int Width(const RECT& rc) {
     return rc.right > rc.left ? static_cast<int>(rc.right - rc.left) : 0;
@@ -88,36 +106,22 @@ struct FileHolderViewState final {
     bool filterUseRegex = false;
     bool scanInProgress = false;
     std::uint64_t displayGeneration = 0;
+    // 句柄值在进程关掉句柄后会被系统重新分配给别的占用者，只有比对两份快照
+    // 才能看出某个句柄号是不是换了主人、占用方是不是换成了别的进程。
+    Ksword::Ui::TableSnapshotEngine snapshotEngine;
     std::unique_ptr<Ksword::Ui::AsyncSnapshotTask<FileHolderScanResult>> scanTask;
     std::unique_ptr<Ksword::Ui::AsyncSnapshotTask<FileHolderFilterResult>> filterTask;
 };
 
 bool CopyText(HWND owner, const std::wstring& text) {
-    if (text.empty() || !::OpenClipboard(owner)) {
+    // An empty payload stays a failure: the callers show "复制失败" and a
+    // clipboard that silently keeps its previous contents would contradict
+    // that message. Otherwise use the shared writer so the copied text also
+    // reaches the evidence session.
+    if (text.empty()) {
         return false;
     }
-    ::EmptyClipboard();
-    const SIZE_T bytes = (text.size() + 1) * sizeof(wchar_t);
-    HGLOBAL memory = ::GlobalAlloc(GMEM_MOVEABLE, bytes);
-    if (!memory) {
-        ::CloseClipboard();
-        return false;
-    }
-    void* target = ::GlobalLock(memory);
-    if (!target) {
-        ::GlobalFree(memory);
-        ::CloseClipboard();
-        return false;
-    }
-    std::memcpy(target, text.c_str(), bytes);
-    ::GlobalUnlock(memory);
-    if (!::SetClipboardData(CF_UNICODETEXT, memory)) {
-        ::GlobalFree(memory);
-        ::CloseClipboard();
-        return false;
-    }
-    ::CloseClipboard();
-    return true;
+    return Ksword::Ui::CopyTextToClipboard(owner, text, L"文件占用导出");
 }
 
 std::wstring WindowText(HWND control) {
@@ -213,7 +217,7 @@ void BuildRows(FileHolderViewState& state) {
         rows.push_back(std::move(row));
     }
     auto filterRows = std::make_shared<std::vector<Ksword::Ui::VirtualListRow>>(std::move(rows));
-    state.list.setRows(*filterRows);
+    state.list.setSharedRows(filterRows);
     state.filterRows = std::move(filterRows);
     ++state.displayGeneration;
 }
@@ -384,6 +388,39 @@ void OpenHoldingProcessDetails(FileHolderViewState& state) {
     ::InvalidateRect(state.hwnd, nullptr, TRUE);
 }
 
+// ExportRows writes one scope of the holder table to disk. A Restart Manager
+// answer is a snapshot of one instant: the lock is released as soon as the
+// holding program closes, so the clipboard is not a durable record of it.
+void ExportRows(FileHolderViewState& state, const Ksword::Ui::ExportRowScope scope) {
+    const std::vector<std::wstring>& titles = FileHolderColumnTitles();
+    Ksword::Ui::ExportRowCount count{};
+    std::wstring error;
+    const Ksword::Ui::SaveTextFileResult result = Ksword::Ui::ExportVirtualListTsvWithDialog(
+        state.hwnd,
+        state.list,
+        titles,
+        scope,
+        L"file_holders.tsv",
+        scope == Ksword::Ui::ExportRowScope::Visible
+            ? L"导出文件占用（可见行）"
+            : L"导出文件占用（全部行）",
+        L"文件占用导出",
+        &count,
+        &error);
+    if (result == Ksword::Ui::SaveTextFileResult::Failed) {
+        state.statusText = error.empty() ? L"文件占用导出失败。" : L"文件占用导出失败：" + error;
+    } else if (result == Ksword::Ui::SaveTextFileResult::Saved) {
+        std::wostringstream summary;
+        summary << L"已导出 " << count.exportedRows << L" / " << count.totalRows << L" 条占用记录";
+        if (count.filteredRows) {
+            summary << L"（筛选隐藏的 " << (count.totalRows - count.exportedRows) << L" 条未写入）";
+        }
+        summary << L"。";
+        state.statusText = summary.str();
+    }
+    ::InvalidateRect(state.hwnd, nullptr, TRUE);
+}
+
 void ShowContextMenu(FileHolderViewState& state, POINT screenPoint) {
     const HWND list = state.list.hwnd();
     int clickedItem = -1;
@@ -412,7 +449,12 @@ void ShowContextMenu(FileHolderViewState& state, POINT screenPoint) {
     ::AppendMenuW(menu, MF_STRING | (hasSelection ? MF_ENABLED : MF_GRAYED), kMenuOpenLocation, L"定位进程文件");
     ::AppendMenuW(menu, MF_STRING | (hasProcess ? MF_ENABLED : MF_GRAYED), kMenuOpenProcessDetails, L"查看进程详细信息");
     ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    ::AppendMenuW(menu, MF_STRING, kMenuExportVisible, L"导出可见行为 TSV…");
+    ::AppendMenuW(menu, MF_STRING, kMenuExportAll, L"导出全部行为 TSV…");
+    ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     ::AppendMenuW(menu, MF_STRING, kMenuRescan, L"重新扫描");
+    ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    Ksword::Ui::AppendTableCompareMenuItems(menu, state.snapshotEngine);
 
     const int command = ::TrackPopupMenu(
         menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, screenPoint.x, screenPoint.y, 0, state.hwnd, nullptr);
@@ -433,10 +475,21 @@ void ShowContextMenu(FileHolderViewState& state, POINT screenPoint) {
     case kMenuOpenProcessDetails:
         OpenHoldingProcessDetails(state);
         break;
+    case kMenuExportVisible:
+        ExportRows(state, Ksword::Ui::ExportRowScope::Visible);
+        break;
+    case kMenuExportAll:
+        ExportRows(state, Ksword::Ui::ExportRowScope::All);
+        break;
     case kMenuRescan:
         BeginScan(state);
         break;
     default:
+        // 快照命令 id 在所有表之间共用一段，不是本页的一律交给引擎判定。
+        if (Ksword::Ui::HandleTableCompareCommand(state.snapshotEngine, static_cast<UINT>(command),
+                state.list, FileHolderColumnTitles(), state.statusText, L"文件占用")) {
+            ::InvalidateRect(state.hwnd, nullptr, TRUE);
+        }
         break;
     }
 }
@@ -503,12 +556,12 @@ bool CreateChildControls(FileHolderViewState& state) {
         return false;
     }
     state.list.addColumns({
-        { 0, 180, LVCFMT_LEFT, L"进程" },
-        { 1, 70, LVCFMT_RIGHT, L"PID" },
-        { 2, 90, LVCFMT_LEFT, L"句柄" },
-        { 3, 220, LVCFMT_LEFT, L"访问权限" },
-        { 4, 320, LVCFMT_LEFT, L"占用路径" },
-        { 5, 320, LVCFMT_LEFT, L"进程映像" },
+        { 0, 180, LVCFMT_LEFT, kColumnTitles[0] },
+        { 1, 70, LVCFMT_RIGHT, kColumnTitles[1] },
+        { 2, 90, LVCFMT_LEFT, kColumnTitles[2] },
+        { 3, 220, LVCFMT_LEFT, kColumnTitles[3] },
+        { 4, 320, LVCFMT_LEFT, kColumnTitles[4] },
+        { 5, 320, LVCFMT_LEFT, kColumnTitles[5] },
     });
     if (HWND list = state.list.hwnd()) {
         ListView_SetExtendedListViewStyle(list,
@@ -581,6 +634,17 @@ LRESULT CALLBACK FileHolderViewProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                 LRESULT result = 0;
                 if (state->list.handleNotify(*header, result)) {
                     return result;
+                }
+                // The click cycle is unsorted -> ascending -> descending ->
+                // unsorted. The sort lives in VirtualListView, so the periodic
+                // refresh replays it instead of dropping it with the snapshot.
+                if (header->hwndFrom == state->list.hwnd() && header->code == LVN_COLUMNCLICK) {
+                    auto* clicked = reinterpret_cast<NMLISTVIEW*>(lParam);
+                    const Ksword::Ui::SortSpec next =
+                        Ksword::Ui::NextSortSpec(state->list.sortSpec(), clicked->iSubItem);
+                    state->list.applySort(next);
+                    Ksword::Ui::ShowSortIndicator(state->list.hwnd(), next);
+                    return 0;
                 }
                 if (header->hwndFrom == state->list.hwnd() && header->code == NM_RCLICK) {
                     POINT point{};

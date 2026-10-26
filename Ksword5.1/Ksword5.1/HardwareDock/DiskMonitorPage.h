@@ -285,9 +285,9 @@ private:
     QPushButton* m_selectActiveButton = nullptr;   // m_selectActiveButton：勾选当前活跃进程。
     QPushButton* m_clearSelectionButton = nullptr; // m_clearSelectionButton：清空勾选按钮。
     QSplitter* m_splitter = nullptr;               // m_splitter：上下表格分割器。
-    QToolButton* m_processSectionButton = nullptr; // m_processSectionButton：进程活动折叠标题。
-    QToolButton* m_activitySectionButton = nullptr;// m_activitySectionButton：文件活动折叠标题。
-    QToolButton* m_storageSectionButton = nullptr; // m_storageSectionButton：存储折叠标题。
+    QLabel* m_processSectionTitle = nullptr;      // 进程选择区实时摘要。
+    QLabel* m_activitySectionTitle = nullptr;     // 文件活动区实时摘要。
+    QLabel* m_storageSummaryLabel = nullptr;      // 独立卷队列页实时摘要。
     QTableWidget* m_processTable = nullptr;        // m_processTable：进程级磁盘速率表。
     QTableWidget* m_activityTable = nullptr;       // m_activityTable：全部或按勾选 PID 过滤的磁盘活动表。
     DiskMonitorStoragePanel* m_storagePanel = nullptr; // m_storagePanel：固定卷容量与性能区。

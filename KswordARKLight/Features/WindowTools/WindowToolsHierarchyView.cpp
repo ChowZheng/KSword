@@ -371,7 +371,7 @@ void BuildRows(HierarchyViewState& state) {
         rows.push_back(std::move(row));
     }
     auto shared = std::make_shared<std::vector<Ksword::Ui::VirtualListRow>>(std::move(rows));
-    state.windowList.setRows(*shared);
+    state.windowList.setSharedRows(shared);
     state.filterRows = std::move(shared);
     ++state.displayGeneration;
 }
@@ -644,6 +644,14 @@ LRESULT CALLBACK HierarchyViewProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
                 LRESULT result = 0;
                 if (state->windowList.handleNotify(*header, result)) {
                     return result;
+                }
+                if (header->hwndFrom == state->windowList.hwnd() && header->code == LVN_COLUMNCLICK) {
+                    const auto* clicked = reinterpret_cast<const NMLISTVIEW*>(lParam);
+                    const Ksword::Ui::SortSpec next =
+                        Ksword::Ui::NextSortSpec(state->windowList.sortSpec(), clicked->iSubItem);
+                    state->windowList.applySort(next);
+                    Ksword::Ui::ShowSortIndicator(state->windowList.hwnd(), next);
+                    return 0;
                 }
                 if (header->hwndFrom == state->windowList.hwnd() && header->code == LVN_ITEMCHANGED) {
                     const auto* changed = reinterpret_cast<const NMLISTVIEW*>(lParam);

@@ -16,6 +16,9 @@ constexpr UINT kSpinnerIntervalMilliseconds = 80;
 struct LoadingOverlayState final {
     std::wstring message = L"正在加载…";
     unsigned int phase = 0;
+    // spinner is false for settled non-results: the text still shows, the ring
+    // does not turn, and no timer runs.
+    bool spinner = true;
 };
 
 LRESULT CALLBACK LoadingOverlayProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) {
@@ -52,24 +55,32 @@ LRESULT CALLBACK LoadingOverlayProc(HWND hwnd, UINT message, WPARAM wParam, LPAR
         ::DeleteObject(border);
 
         const int centerX = (rect.left + rect.right) / 2;
-        const int centerY = std::max(rect.top + 22, (rect.top + rect.bottom) / 2 - 14);
-        for (unsigned int index = 0; index < 12U; ++index) {
-            const unsigned int age = (index + 12U - (state ? state->phase : 0U)) % 12U;
-            const int intensity = 70 + static_cast<int>((11U - age) * 14U);
-            HPEN dot = ::CreatePen(PS_SOLID, 3, RGB(intensity / 2, intensity, std::min(255, intensity + 35)));
-            const double angle = static_cast<double>(index) * 3.14159265358979323846 / 6.0;
-            const int x = centerX + static_cast<int>(std::cos(angle) * 12.0);
-            const int y = centerY + static_cast<int>(std::sin(angle) * 12.0);
-            HGDIOBJ old = ::SelectObject(dc, dot);
-            ::MoveToEx(dc, x, y, nullptr);
-            ::LineTo(dc, x + 1, y + 1);
-            ::SelectObject(dc, old);
-            ::DeleteObject(dot);
+        const bool spinning = state == nullptr || state->spinner;
+        const int centerY = spinning
+            ? std::max(rect.top + 22, (rect.top + rect.bottom) / 2 - 14)
+            : (rect.top + rect.bottom) / 2;
+        if (spinning) {
+            for (unsigned int index = 0; index < 12U; ++index) {
+                const unsigned int age = (index + 12U - (state ? state->phase : 0U)) % 12U;
+                const int intensity = 70 + static_cast<int>((11U - age) * 14U);
+                HPEN dot = ::CreatePen(PS_SOLID, 3, RGB(intensity / 2, intensity, std::min(255, intensity + 35)));
+                const double angle = static_cast<double>(index) * 3.14159265358979323846 / 6.0;
+                const int x = centerX + static_cast<int>(std::cos(angle) * 12.0);
+                const int y = centerY + static_cast<int>(std::sin(angle) * 12.0);
+                HGDIOBJ old = ::SelectObject(dc, dot);
+                ::MoveToEx(dc, x, y, nullptr);
+                ::LineTo(dc, x + 1, y + 1);
+                ::SelectObject(dc, old);
+                ::DeleteObject(dot);
+            }
         }
 
         const std::wstring text = state ? state->message : L"正在加载…";
-        const int textBottom = std::min(static_cast<int>(rect.bottom - 8), centerY + 52);
-        RECT textRect{ rect.left + 12, centerY + 24, rect.right - 12, textBottom };
+        // Without a ring the message owns the middle of the area instead of
+        // sitting below it, so an empty state reads as a statement.
+        RECT textRect = spinning
+            ? RECT{ rect.left + 12, centerY + 24, rect.right - 12, std::min(static_cast<int>(rect.bottom - 8), centerY + 52) }
+            : RECT{ rect.left + 12, centerY - 14, rect.right - 12, centerY + 14 };
         DrawTextLine(dc, text, textRect, AppTheme().mutedTextColor, SystemUIFont(), DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
         ::EndPaint(hwnd, &paint);
         return 0;
@@ -116,7 +127,7 @@ HWND CreateLoadingOverlay(HWND parent, const int id, const RECT& bounds) {
     return overlay;
 }
 
-void SetLoadingOverlay(HWND overlay, const bool visible, const std::wstring& message) {
+void SetLoadingOverlay(HWND overlay, const bool visible, const std::wstring& message, const bool spinner) {
     auto* state = overlay ? reinterpret_cast<LoadingOverlayState*>(::GetWindowLongPtrW(overlay, GWLP_USERDATA)) : nullptr;
     if (!overlay || !state) {
         return;
@@ -124,8 +135,15 @@ void SetLoadingOverlay(HWND overlay, const bool visible, const std::wstring& mes
     if (!message.empty()) {
         state->message = message;
     }
+    state->spinner = spinner;
     if (visible) {
-        ::SetTimer(overlay, kSpinnerTimer, kSpinnerIntervalMilliseconds, nullptr);
+        // The timer is the only thing that makes the ring move, so a settled
+        // state must not leave a stale one running.
+        if (spinner) {
+            ::SetTimer(overlay, kSpinnerTimer, kSpinnerIntervalMilliseconds, nullptr);
+        } else {
+            ::KillTimer(overlay, kSpinnerTimer);
+        }
         ::SetWindowPos(overlay, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
         ::InvalidateRect(overlay, nullptr, TRUE);
     } else {

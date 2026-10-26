@@ -158,7 +158,18 @@ void RefreshFeatureModel(DriverFeaturePageState& state) {
             state.model.setObjectRows(std::move(snapshot->objectRows));
             RefreshDriverOverviewView(state.overviewView);
             RefreshDriverObjectView(state.objectView);
-            SetStatus(state, snapshot->diagnosticText.empty() ? L"驱动数据已刷新。" : snapshot->diagnosticText);
+            // The refresh status keeps the per-tab counts so a zero-row
+            // snapshot is distinguishable from a successful non-empty one.
+            const std::size_t overviewCount = state.model.overviewRows().size();
+            const std::size_t objectCount = state.model.objectRows().size();
+            if (!snapshot->diagnosticText.empty()) {
+                SetStatus(state, snapshot->diagnosticText);
+            } else if (overviewCount == 0 && objectCount == 0) {
+                SetStatus(state, L"未获取到驱动数据。");
+            } else {
+                SetStatus(state, L"驱动数据已刷新：概览 " + std::to_wstring(overviewCount) +
+                    L" 项、对象 " + std::to_wstring(objectCount) + L" 项。");
+            }
         });
 }
 
@@ -203,7 +214,10 @@ void ExportCurrentTabTsv(DriverFeaturePageState& state) {
         suggestedFileName = L"ksword-arklight-system-threads.tsv";
         dialogTitle = L"导出系统线程 TSV";
     } else {
-        SetStatus(state, L"当前页不支持顶栏 TSV 导出。");
+        // The remaining tabs own live buffers rather than a table this feature
+        // can serialize, so the top bar has nothing to ask for. Say where the
+        // export actually lives instead of just declaring it unsupported.
+        SetStatus(state, L"当前页没有顶栏 TSV 导出；请在表格上右键选择「导出…」。");
         return;
     }
 

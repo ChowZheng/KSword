@@ -7,6 +7,7 @@
 #include "../../Ui/FilterBar.h"
 #include "../../Ui/ListViewUtil.h"
 #include "../../Ui/LoadingOverlay.h"
+#include "../../Ui/TableCompareActions.h"
 #include "../../Ui/Theme.h"
 #include "../../Ui/VirtualListView.h"
 
@@ -48,6 +49,20 @@ constexpr int kDetailHeight = 180;
 constexpr int kStatusHeight = 22;
 constexpr int kColumnCount = 11;
 
+// kColumnTitles 是表头和快照比对的唯一来源：比对按列名对齐两份快照，
+// 列名两处分叉会让 diff 结果错位。
+constexpr const wchar_t* kColumnTitles[kColumnCount] = {
+    L"设备", L"类型", L"VID", L"PID", L"序列号", L"端口",
+    L"驱动服务", L"设备类", L"状态", L"位置信息", L"实例 ID"
+};
+
+// UsbColumnTitles exposes the same captions as a vector for the export and the
+// snapshot capture.
+const std::vector<std::wstring>& UsbColumnTitles() {
+    static const std::vector<std::wstring> titles(kColumnTitles, kColumnTitles + kColumnCount);
+    return titles;
+}
+
 int Width(const RECT& rc) {
     return rc.right > rc.left ? static_cast<int>(rc.right - rc.left) : 0;
 }
@@ -79,6 +94,9 @@ struct UsbTopologyViewState final {
     std::wstring filterQuery;
     bool filterUseRegex = false;
     std::uint64_t displayGeneration = 0;
+    // USB 端口号在设备重插后会被重新分配，同一 VID/PID 的多台设备必须靠
+    // 端口与实例 ID 区分，两次枚举之间的换位只有并排比对才看得出来。
+    Ksword::Ui::TableSnapshotEngine snapshotEngine;
     std::unique_ptr<Ksword::Ui::AsyncSnapshotTask<UsbTopologySnapshot>> refreshTask;
     std::unique_ptr<Ksword::Ui::AsyncSnapshotTask<UsbFilterResult>> filterTask;
 };
@@ -110,31 +128,8 @@ void SetDetailText(HWND list, int row, int column, const std::wstring& text) {
 }
 
 bool CopyText(HWND owner, const std::wstring& text) {
-    if (text.empty() || !::OpenClipboard(owner)) {
-        return false;
-    }
-    ::EmptyClipboard();
-    const SIZE_T bytes = (text.size() + 1) * sizeof(wchar_t);
-    HGLOBAL memory = ::GlobalAlloc(GMEM_MOVEABLE, bytes);
-    if (!memory) {
-        ::CloseClipboard();
-        return false;
-    }
-    void* target = ::GlobalLock(memory);
-    if (!target) {
-        ::GlobalFree(memory);
-        ::CloseClipboard();
-        return false;
-    }
-    std::memcpy(target, text.c_str(), bytes);
-    ::GlobalUnlock(memory);
-    if (!::SetClipboardData(CF_UNICODETEXT, memory)) {
-        ::GlobalFree(memory);
-        ::CloseClipboard();
-        return false;
-    }
-    ::CloseClipboard();
-    return true;
+    // 共享实现同时负责证据会话记录，页面只关心是否复制成功。
+    return Ksword::Ui::CopyTextToClipboard(owner, text, L"USB 拓扑导出");
 }
 
 int SelectedNodeIndex(const UsbTopologyViewState& state) {
@@ -436,6 +431,8 @@ void ShowContextMenu(UsbTopologyViewState& state, POINT screenPoint) {
     ::AppendMenuW(menu, MF_STRING | (node ? MF_ENABLED : MF_GRAYED), kMenuCopyDetail, L"复制详情");
     ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     ::AppendMenuW(menu, MF_STRING, kMenuRefresh, L"刷新");
+    ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    Ksword::Ui::AppendTableCompareMenuItems(menu, state.snapshotEngine);
 
     const int command = ::TrackPopupMenu(
         menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, screenPoint.x, screenPoint.y, 0, state.hwnd, nullptr);
@@ -458,6 +455,11 @@ void ShowContextMenu(UsbTopologyViewState& state, POINT screenPoint) {
         BeginUsbRefresh(state);
         break;
     default:
+        // 快照命令 id 在所有表之间共用一段，不是本页的一律交给引擎判定。
+        if (Ksword::Ui::HandleTableCompareCommand(state.snapshotEngine, static_cast<UINT>(command),
+                state.nodeList, UsbColumnTitles(), state.statusText, L"USB 拓扑")) {
+            ::InvalidateRect(state.hwnd, nullptr, TRUE);
+        }
         break;
     }
 }
@@ -508,17 +510,17 @@ bool CreateChildControls(UsbTopologyViewState& state) {
         return false;
     }
     state.nodeList.addColumns({
-        { 0, 320, LVCFMT_LEFT, L"设备" },
-        { 1, 80, LVCFMT_LEFT, L"类型" },
-        { 2, 70, LVCFMT_LEFT, L"VID" },
-        { 3, 70, LVCFMT_LEFT, L"PID" },
-        { 4, 140, LVCFMT_LEFT, L"序列号" },
-        { 5, 70, LVCFMT_LEFT, L"端口" },
-        { 6, 110, LVCFMT_LEFT, L"驱动服务" },
-        { 7, 110, LVCFMT_LEFT, L"设备类" },
-        { 8, 90, LVCFMT_LEFT, L"状态" },
-        { 9, 180, LVCFMT_LEFT, L"位置信息" },
-        { 10, 300, LVCFMT_LEFT, L"实例 ID" },
+        { 0, 320, LVCFMT_LEFT, kColumnTitles[0] },
+        { 1, 80, LVCFMT_LEFT, kColumnTitles[1] },
+        { 2, 70, LVCFMT_LEFT, kColumnTitles[2] },
+        { 3, 70, LVCFMT_LEFT, kColumnTitles[3] },
+        { 4, 140, LVCFMT_LEFT, kColumnTitles[4] },
+        { 5, 70, LVCFMT_LEFT, kColumnTitles[5] },
+        { 6, 110, LVCFMT_LEFT, kColumnTitles[6] },
+        { 7, 110, LVCFMT_LEFT, kColumnTitles[7] },
+        { 8, 90, LVCFMT_LEFT, kColumnTitles[8] },
+        { 9, 180, LVCFMT_LEFT, kColumnTitles[9] },
+        { 10, 300, LVCFMT_LEFT, kColumnTitles[10] },
     });
     if (HWND list = state.nodeList.hwnd()) {
         ListView_SetExtendedListViewStyle(list,
@@ -610,6 +612,14 @@ LRESULT CALLBACK UsbTopologyViewProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
                 LRESULT result = 0;
                 if (state->nodeList.handleNotify(*header, result)) {
                     return result;
+                }
+                if (header->hwndFrom == state->nodeList.hwnd() && header->code == LVN_COLUMNCLICK) {
+                    const auto* clicked = reinterpret_cast<const NMLISTVIEW*>(lParam);
+                    const Ksword::Ui::SortSpec next =
+                        Ksword::Ui::NextSortSpec(state->nodeList.sortSpec(), clicked ? clicked->iSubItem : -1);
+                    state->nodeList.applySort(next);
+                    Ksword::Ui::ShowSortIndicator(state->nodeList.hwnd(), next);
+                    return 0;
                 }
                 if (header->hwndFrom == state->nodeList.hwnd() && header->code == LVN_ITEMCHANGED) {
                     const auto* changed = reinterpret_cast<const NMLISTVIEW*>(lParam);
@@ -721,7 +731,15 @@ std::wstring ExportUsbTopologyViewTsv(HWND view) {
     if (!state) {
         return {};
     }
-    std::wstring text = L"设备\t类型\tVID\tPID\t序列号\t端口\t驱动服务\t设备类\t状态\t位置信息\t实例 ID\r\n";
+    std::wstring text;
+    const std::vector<std::wstring>& titles = UsbColumnTitles();
+    for (std::size_t index = 0; index < titles.size(); ++index) {
+        if (index != 0) {
+            text += L'\t';
+        }
+        text += titles[index];
+    }
+    text += L"\r\n";
     text += RowsAsText(*state, true);
     return text;
 }

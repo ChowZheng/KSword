@@ -2,6 +2,7 @@
 
 #include "../AuditCommon/AuditTable.h"
 #include "../../Ui/AsyncTask.h"
+#include "../../Ui/ExportUtil.h"
 #include "../../Ui/Controls.h"
 #include "../../Ui/TextFindSupport.h"
 #include "../../Ui/Theme.h"
@@ -160,31 +161,10 @@ void CopyTextToWideField(const std::wstring& text, wchar_t* target, const std::s
 }
 
 bool WriteClipboardText(HWND owner, const std::wstring& text) {
-    if (text.empty() || !::OpenClipboard(owner)) {
-        return false;
-    }
-    const SIZE_T bytes = (text.size() + 1U) * sizeof(wchar_t);
-    HGLOBAL memory = ::GlobalAlloc(GMEM_MOVEABLE, bytes);
-    if (!memory) {
-        ::CloseClipboard();
-        return false;
-    }
-    void* target = ::GlobalLock(memory);
-    if (!target) {
-        ::GlobalFree(memory);
-        ::CloseClipboard();
-        return false;
-    }
-    std::memcpy(target, text.c_str(), bytes);
-    ::GlobalUnlock(memory);
-    ::EmptyClipboard();
-    if (!::SetClipboardData(CF_UNICODETEXT, memory)) {
-        ::GlobalFree(memory);
-        ::CloseClipboard();
-        return false;
-    }
-    ::CloseClipboard();
-    return true;
+    // Forward to the shared writer: one implementation means a copied
+    // value also lands in the evidence session, which the local copies
+    // never did.
+    return Ksword::Ui::CopyTextToClipboard(owner, text, L"硬件 HWID");
 }
 
 HWND CreateCheck(HWND parent, int id, const wchar_t* text, bool checked) {
@@ -382,7 +362,15 @@ void ApplyResponseToUi(HwidDispatchViewState& state, const ksword::ark::HwidDisp
             Hex64(entry.currentDispatchAddress)
         });
     }
-    Ksword::Features::AuditCommon::ReplaceAuditTableRows(state.statusTable, rows);
+    const Ksword::Ui::RowCapResult cap =
+        Ksword::Features::AuditCommon::ReplaceAuditTableRows(state.statusTable, rows);
+    // The status line above was written as a whole, so the truncation hint is
+    // appended right after it instead of being folded into that assignment.
+    const std::wstring capNotice = Ksword::Ui::RowCapNotice(cap);
+    if (state.statusText && !capNotice.empty()) {
+        const std::wstring currentStatus = TextFromWindow(state.statusText);
+        ::SetWindowTextW(state.statusText, (currentStatus + L"  " + capNotice).c_str());
+    }
     AppendLog(state, Utf8ToWide(result.io.message));
 }
 
@@ -719,10 +707,17 @@ bool RegisterHwidDispatchClass() {
             }
             break;
         case WM_CTLCOLORSTATIC: {
+            // Read-only EDIT controls report through this message too; leaving
+            // them transparent smears text while scrolling, so theme STATIC
+            // labels only.
             HDC dc = reinterpret_cast<HDC>(wParam);
-            ::SetBkMode(dc, TRANSPARENT);
-            ::SetTextColor(dc, Ksword::Ui::AppTheme().textColor);
-            return reinterpret_cast<LRESULT>(Ksword::Ui::AppTheme().windowBrush());
+            const LRESULT labelBrush = Ksword::Ui::PaintLabelBackground(dc,
+                reinterpret_cast<HWND>(lParam), Ksword::Ui::AppTheme().windowBrush(),
+                Ksword::Ui::AppTheme().textColor);
+            if (labelBrush != 0) {
+                return labelBrush;
+            }
+            break;
         }
         case WM_ERASEBKGND:
             return 1;

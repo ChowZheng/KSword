@@ -11,6 +11,7 @@
 #include "../../Ui/FilterBar.h"
 #include "../../Ui/ListViewUtil.h"
 #include "../../Ui/LoadingOverlay.h"
+#include "../../Ui/TableCompareActions.h"
 #include "../../Ui/Theme.h"
 #include "../../Ui/VirtualListView.h"
 
@@ -84,6 +85,9 @@ struct FirewallViewState final {
     FirewallModel model;
     std::shared_ptr<const std::vector<Ksword::Ui::VirtualListRow>> filterRows;
     std::wstring statusText = L"正在等待防火墙规则快照…";
+    // 防火墙规则会被安全软件、组策略或用户安装包改动，而页面只是只读审计视图。
+    // 两次快照比对是这里唯一能看出"这条放行规则是刚加的"的手段。
+    Ksword::Ui::TableSnapshotEngine snapshotEngine;
     std::wstring profileSummary;
     std::wstring filterQuery;
     bool filterUseRegex = false;
@@ -115,31 +119,7 @@ void SetDetailText(HWND list, int row, int column, const std::wstring& text) {
 }
 
 bool CopyText(HWND owner, const std::wstring& text) {
-    if (text.empty() || !::OpenClipboard(owner)) {
-        return false;
-    }
-    ::EmptyClipboard();
-    const SIZE_T bytes = (text.size() + 1) * sizeof(wchar_t);
-    HGLOBAL memory = ::GlobalAlloc(GMEM_MOVEABLE, bytes);
-    if (!memory) {
-        ::CloseClipboard();
-        return false;
-    }
-    void* target = ::GlobalLock(memory);
-    if (!target) {
-        ::GlobalFree(memory);
-        ::CloseClipboard();
-        return false;
-    }
-    std::memcpy(target, text.c_str(), bytes);
-    ::GlobalUnlock(memory);
-    if (!::SetClipboardData(CF_UNICODETEXT, memory)) {
-        ::GlobalFree(memory);
-        ::CloseClipboard();
-        return false;
-    }
-    ::CloseClipboard();
-    return true;
+    return Ksword::Ui::CopyTextToClipboard(owner, text, L"防火墙规则导出");
 }
 
 int SelectedModelIndex(const FirewallViewState& state) {
@@ -293,7 +273,7 @@ void BuildRows(FirewallViewState& state) {
         rows.push_back(std::move(row));
     }
     auto filterRows = std::make_shared<std::vector<Ksword::Ui::VirtualListRow>>(std::move(rows));
-    state.ruleList.setRows(*filterRows);
+    state.ruleList.setSharedRows(filterRows);
     state.filterRows = std::move(filterRows);
     ++state.displayGeneration;
 }
@@ -372,11 +352,17 @@ void BeginFirewallRefresh(FirewallViewState& state) {
         });
 }
 
-void ExportVisibleFirewallRules(FirewallViewState& state) {
-    static const std::vector<std::wstring> kColumnTitles = {
+// FirewallColumnTitles 供表头、导出与快照比对共用；快照只保存显示文本，列序
+// 一旦在这里和 addColumns 之间分叉，就会拿"动作"去比"启用"。
+const std::vector<std::wstring>& FirewallColumnTitles() {
+    static const std::vector<std::wstring> titles{
         L"规则名称", L"方向", L"动作", L"启用", L"协议", L"本地端口", L"远端端口", L"配置文件", L"程序"
     };
-    const std::wstring text = Ksword::Ui::BuildVisibleVirtualListTsv(kColumnTitles, state.ruleList);
+    return titles;
+}
+
+void ExportVisibleFirewallRules(FirewallViewState& state) {
+    const std::wstring text = Ksword::Ui::BuildVisibleVirtualListTsv(FirewallColumnTitles(), state.ruleList);
     if (text.empty()) {
         state.statusText = L"没有可导出的当前可见防火墙规则。";
         ::InvalidateRect(state.hwnd, nullptr, TRUE);
@@ -512,6 +498,8 @@ void ShowFirewallContextMenu(FirewallViewState& state, POINT screenPoint) {
         kMenuOpenApplicationDirectory, L"打开规则程序所在目录");
     ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     ::AppendMenuW(menu, MF_STRING, kMenuRefresh, L"刷新");
+    ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    Ksword::Ui::AppendTableCompareMenuItems(menu, state.snapshotEngine);
 
     const int command = ::TrackPopupMenu(
         menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, screenPoint.x, screenPoint.y, 0, state.hwnd, nullptr);
@@ -537,6 +525,10 @@ void ShowFirewallContextMenu(FirewallViewState& state, POINT screenPoint) {
         BeginFirewallRefresh(state);
         break;
     default:
+        if (Ksword::Ui::HandleTableCompareCommand(state.snapshotEngine, static_cast<UINT>(command),
+                state.ruleList, FirewallColumnTitles(), state.statusText, L"防火墙规则")) {
+            ::InvalidateRect(state.hwnd, nullptr, TRUE);
+        }
         break;
     }
 }
@@ -603,17 +595,16 @@ bool CreateChildControls(FirewallViewState& state) {
     if (!state.ruleList.create(hwnd, kRuleListId, 0, 0, 1, 1, LVS_SHOWSELALWAYS | LVS_SINGLESEL)) {
         return false;
     }
-    state.ruleList.addColumns({
-        { 0, 240, LVCFMT_LEFT, L"规则名称" },
-        { 1, 70, LVCFMT_LEFT, L"方向" },
-        { 2, 70, LVCFMT_LEFT, L"动作" },
-        { 3, 60, LVCFMT_LEFT, L"启用" },
-        { 4, 80, LVCFMT_LEFT, L"协议" },
-        { 5, 110, LVCFMT_LEFT, L"本地端口" },
-        { 6, 110, LVCFMT_LEFT, L"远端端口" },
-        { 7, 110, LVCFMT_LEFT, L"配置文件" },
-        { 8, 260, LVCFMT_LEFT, L"程序" },
-    });
+    {
+        const std::vector<std::wstring>& titles = FirewallColumnTitles();
+        static const int widths[] = { 240, 70, 70, 60, 80, 110, 110, 110, 260 };
+        std::vector<Ksword::Ui::ListViewColumn> columns;
+        columns.reserve(titles.size());
+        for (std::size_t index = 0; index < titles.size(); ++index) {
+            columns.push_back({ static_cast<int>(index), widths[index], LVCFMT_LEFT, titles[index] });
+        }
+        state.ruleList.addColumns(columns);
+    }
     if (HWND list = state.ruleList.hwnd()) {
         ListView_SetExtendedListViewStyle(list,
             LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER | LVS_EX_GRIDLINES | LVS_EX_LABELTIP);
@@ -714,6 +705,17 @@ LRESULT CALLBACK FirewallViewProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 LRESULT result = 0;
                 if (state->ruleList.handleNotify(*header, result)) {
                     return result;
+                }
+                // The click cycle is unsorted -> ascending -> descending ->
+                // unsorted. The sort lives in VirtualListView, so the periodic
+                // refresh replays it instead of dropping it with the snapshot.
+                if (header->hwndFrom == state->ruleList.hwnd() && header->code == LVN_COLUMNCLICK) {
+                    auto* clicked = reinterpret_cast<NMLISTVIEW*>(lParam);
+                    const Ksword::Ui::SortSpec next =
+                        Ksword::Ui::NextSortSpec(state->ruleList.sortSpec(), clicked->iSubItem);
+                    state->ruleList.applySort(next);
+                    Ksword::Ui::ShowSortIndicator(state->ruleList.hwnd(), next);
+                    return 0;
                 }
                 if (header->hwndFrom == state->ruleList.hwnd() && header->code == LVN_ITEMCHANGED) {
                     const auto* changed = reinterpret_cast<const NMLISTVIEW*>(lParam);

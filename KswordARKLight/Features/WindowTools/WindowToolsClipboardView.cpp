@@ -608,7 +608,8 @@ bool CreateChildControls(ClipboardViewState& state) {
     HWND hwnd = state.hwnd;
     state.refreshButton = Ksword::Ui::CreateButton(hwnd, kRefreshButtonId, L"刷新", 0, 0, 0, 0);
     state.exportButton = Ksword::Ui::CreateButton(hwnd, kExportButtonId, L"导出 TSV", 0, 0, 0, 0);
-    state.emptyButton = Ksword::Ui::CreateButton(hwnd, kEmptyButtonId, L"清空剪贴板", 0, 0, 0, 0);
+    state.emptyButton = Ksword::Ui::CreateButton(hwnd, kEmptyButtonId, L"清空剪贴板", 0, 0, 0, 0,
+        Ksword::Ui::ButtonRole::Danger);
     state.filterBar = Ksword::Ui::CreateFilterBar(hwnd, kFilterBarId, L"筛选格式 ID、名称、类别与说明", 0, 0, 0, 0);
     if (!state.refreshButton || !state.exportButton || !state.emptyButton || !state.filterBar) {
         return false;
@@ -711,6 +712,17 @@ LRESULT CALLBACK ClipboardViewProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
                 if (state->formatList.handleNotify(*header, result)) {
                     return result;
                 }
+                // The click cycle is unsorted -> ascending -> descending ->
+                // unsorted. The sort lives in VirtualListView, so the periodic
+                // refresh replays it instead of dropping it with the snapshot.
+                if (header->hwndFrom == state->formatList.hwnd() && header->code == LVN_COLUMNCLICK) {
+                    auto* clicked = reinterpret_cast<NMLISTVIEW*>(lParam);
+                    const Ksword::Ui::SortSpec next =
+                        Ksword::Ui::NextSortSpec(state->formatList.sortSpec(), clicked->iSubItem);
+                    state->formatList.applySort(next);
+                    Ksword::Ui::ShowSortIndicator(state->formatList.hwnd(), next);
+                    return 0;
+                }
                 if (header->hwndFrom == state->formatList.hwnd() && header->code == LVN_ITEMCHANGED) {
                     const auto* changed = reinterpret_cast<const NMLISTVIEW*>(lParam);
                     if (changed && (changed->uNewState & LVIS_SELECTED) != 0) {
@@ -739,6 +751,14 @@ LRESULT CALLBACK ClipboardViewProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
         }
         ::SetBkMode(dc, TRANSPARENT);
         return reinterpret_cast<LRESULT>(Ksword::Ui::AppTheme().windowBrush());
+    }
+    case WM_DRAWITEM: {
+        const auto* item = reinterpret_cast<const DRAWITEMSTRUCT*>(lParam);
+        if (item) {
+            Ksword::Ui::DrawThemedButton(*item);
+            return TRUE;
+        }
+        break;
     }
     case WM_ERASEBKGND:
         return 1;

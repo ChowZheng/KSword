@@ -62,13 +62,7 @@ std::wstring FormatWin32Error(const DWORD errorCode) {
 }
 
 std::wstring SanitizeTsvCell(const std::wstring& text) {
-    std::wstring sanitized = text;
-    for (wchar_t& ch : sanitized) {
-        if (ch == L'\t' || ch == L'\r' || ch == L'\n') {
-            ch = L' ';
-        }
-    }
-    return sanitized;
+    return Ksword::Ui::SanitizeTsvCell(text);
 }
 
 std::wstring BuildTsv(

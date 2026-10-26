@@ -5,6 +5,7 @@
 #include "EvidenceSession.h"
 #include "ListViewUtil.h"
 #include "Theme.h"
+#include "VirtualListView.h"
 
 #include <commctrl.h>
 
@@ -27,7 +28,10 @@ constexpr int kEvidenceListId = 53905;
 constexpr int kPreviewEditId = 53906;
 constexpr int kStatusTextId = 53907;
 constexpr UINT kEvidenceComparisonComplete = WM_APP + 794;
+constexpr UINT kEvidenceSnapshotComplete = WM_APP + 795;
 constexpr std::size_t kPreviewTextLimit = 64U * 1024U;
+constexpr int kEvidenceColumnCount = 5;
+constexpr std::size_t kNoModelIndex = static_cast<std::size_t>(-1);
 
 HWND g_evidenceSessionInspector = nullptr;
 
@@ -38,17 +42,35 @@ struct EvidenceComparison final {
     std::wstring preview;
 };
 
+// EvidenceSnapshotRows is the materialized page snapshot: the row table the
+// owner-data ListView displays plus the evidence snapshot its itemData points
+// into. The two travel together so a row index can never address a different
+// evidence item than the one the row was built from.
+struct EvidenceSnapshotRows final {
+    std::uint64_t generation = 0;
+    EvidenceSession::SharedSnapshot items;
+    std::shared_ptr<const std::vector<VirtualListRow>> rows;
+    std::size_t total = 0;
+    std::size_t shown = 0;
+};
+
 struct EvidenceSessionViewState final {
     HWND hwnd = nullptr;
     HWND refreshButton = nullptr;
     HWND compareButton = nullptr;
     HWND deleteButton = nullptr;
     HWND clearButton = nullptr;
-    HWND list = nullptr;
+    VirtualListView list;
     HWND previewEdit = nullptr;
     HWND statusText = nullptr;
     EvidenceSession::SharedSnapshot items;
+    std::uint64_t displayGeneration = 0;
+    // pendingStatus replaces the row-count status of the refresh it belongs to,
+    // so "已删除证据 #N。" and "证据会话已清空。" are still the message the user
+    // ends up seeing now that the refresh itself completes asynchronously.
+    std::wstring pendingStatus;
     std::unique_ptr<AsyncSnapshotTask<EvidenceComparison>> comparisonTask;
+    std::unique_ptr<AsyncSnapshotTask<EvidenceSnapshotRows>> snapshotTask;
 };
 
 int Width(const RECT& rect) {
@@ -79,23 +101,44 @@ std::wstring TimestampText(const std::uint64_t timestamp100ns) {
     return text;
 }
 
+// ModelIndexForPosition maps one ListView position back to the evidence
+// snapshot. The control only knows positions, visibleIndexes() maps a position
+// to a backing row, and that row's itemData carries the snapshot index. Reading
+// lParam off the control directly would be a position, not a snapshot index, so
+// preview and delete must go through both steps or they act on the wrong item.
+std::size_t ModelIndexForPosition(const EvidenceSessionViewState& state, const int position) {
+    if (position < 0) {
+        return kNoModelIndex;
+    }
+    const std::vector<std::size_t>& visible = state.list.visibleIndexes();
+    if (static_cast<std::size_t>(position) >= visible.size()) {
+        return kNoModelIndex;
+    }
+    const std::vector<VirtualListRow>& rows = state.list.rows();
+    const std::size_t rowIndex = visible[static_cast<std::size_t>(position)];
+    if (rowIndex >= rows.size()) {
+        return kNoModelIndex;
+    }
+    const LPARAM itemData = rows[rowIndex].itemData;
+    if (itemData < 0) {
+        return kNoModelIndex;
+    }
+    const std::size_t modelIndex = static_cast<std::size_t>(itemData);
+    return modelIndex < state.items.size() ? modelIndex : kNoModelIndex;
+}
+
 std::vector<std::size_t> SelectedItemIndexes(const EvidenceSessionViewState& state) {
     std::vector<std::size_t> indexes;
-    if (!state.list) {
+    const HWND list = state.list.hwnd();
+    if (!list) {
         return indexes;
     }
-    for (int row = ListView_GetNextItem(state.list, -1, LVNI_SELECTED);
-         row >= 0;
-         row = ListView_GetNextItem(state.list, row, LVNI_SELECTED)) {
-        LVITEMW item{};
-        item.mask = LVIF_PARAM;
-        item.iItem = row;
-        if (!ListView_GetItem(state.list, &item)) {
-            continue;
-        }
-        const LPARAM modelIndex = item.lParam;
-        if (modelIndex >= 0 && static_cast<std::size_t>(modelIndex) < state.items.size()) {
-            indexes.push_back(static_cast<std::size_t>(modelIndex));
+    for (int position = ListView_GetNextItem(list, -1, LVNI_SELECTED);
+         position >= 0;
+         position = ListView_GetNextItem(list, position, LVNI_SELECTED)) {
+        const std::size_t modelIndex = ModelIndexForPosition(state, position);
+        if (modelIndex != kNoModelIndex) {
+            indexes.push_back(modelIndex);
         }
     }
     return indexes;
@@ -157,26 +200,90 @@ void UpdatePreviewForSelection(EvidenceSessionViewState& state) {
         L"比较按列表顺序将较早项作为 before、较晚项作为 after。");
 }
 
-void RefreshSessionSnapshot(EvidenceSessionViewState& state) {
-    state.items = GlobalEvidenceSession().sharedSnapshot();
-    if (state.list) {
-        ScopedListViewRedrawLock redrawLock(state.list);
-        ListView_DeleteAllItems(state.list);
-        for (std::size_t index = 0; index < state.items.size(); ++index) {
-            const EvidenceItem& item = *state.items[index];
-            InsertListViewTextRow(state.list, {
-                std::to_wstring(item.sequence),
-                TimestampText(item.timestamp100ns),
-                item.source,
-                item.format,
-                std::to_wstring(item.text.size()),
-            }, static_cast<LPARAM>(index));
-        }
+// BuildSnapshotRows runs on the snapshot worker. It formats every timestamp and
+// materializes the immutable owner-data row table off the UI thread; the cap is
+// applied here so a huge session never reaches the control at all.
+EvidenceSnapshotRows BuildSnapshotRows(EvidenceSession::SharedSnapshot items, const std::uint64_t generation) {
+    EvidenceSnapshotRows result{};
+    result.generation = generation;
+    result.total = items.size();
+    result.shown = (std::min)(items.size(), kMaxDisplayRows);
+    auto rows = std::make_shared<std::vector<VirtualListRow>>();
+    rows->reserve(result.shown);
+    for (std::size_t index = 0; index < result.shown; ++index) {
+        const EvidenceItem& item = *items[index];
+        VirtualListRow row{};
+        // The capture sequence is monotonic per session, so it survives a
+        // refresh as a stable key where a row position would not.
+        row.stableKey = std::to_wstring(item.sequence);
+        row.itemData = static_cast<LPARAM>(index);
+        row.cells.reserve(kEvidenceColumnCount);
+        row.cells.push_back(std::to_wstring(item.sequence));
+        row.cells.push_back(TimestampText(item.timestamp100ns));
+        row.cells.push_back(item.source);
+        row.cells.push_back(item.format);
+        row.cells.push_back(std::to_wstring(item.text.size()));
+        rows->push_back(std::move(row));
     }
-    SetStatus(state, state.items.empty()
-        ? L"证据会话为空；模块复制或导出成功后会留下可检查的文本快照。"
-        : L"证据会话: " + std::to_wstring(state.items.size()) + L" 项。单选预览，选择两项比较。");
+    result.items = std::move(items);
+    result.rows = std::move(rows);
+    return result;
+}
+
+void ApplySnapshotRows(EvidenceSessionViewState& state, const std::uint64_t generation,
+    std::optional<EvidenceSnapshotRows>&& snapshot, const std::exception_ptr& error) {
+    if (generation != state.displayGeneration) {
+        return;
+    }
+    if (error || !snapshot.has_value() || snapshot->generation != generation) {
+        SetStatus(state, L"证据会话快照读取失败。");
+        return;
+    }
+    EvidenceSnapshotRows& result = *snapshot;
+    const std::size_t total = result.total;
+    const std::size_t shown = result.shown;
+    state.items = std::move(result.items);
+    state.list.setSharedRows(std::move(result.rows));
+
+    std::wstring status;
+    if (state.items.empty()) {
+        status = L"证据会话为空；模块复制或导出成功后会留下可检查的文本快照。";
+    } else if (shown < total) {
+        status = L"证据会话: 仅显示前 " + std::to_wstring(shown) + L" 项 / 共 " + std::to_wstring(total) +
+            L" 项。单选预览，选择两项比较。";
+    } else {
+        status = L"证据会话: " + std::to_wstring(total) + L" 项。单选预览，选择两项比较。";
+    }
+    if (!state.pendingStatus.empty()) {
+        status = std::move(state.pendingStatus);
+        state.pendingStatus.clear();
+    }
+    SetStatus(state, status);
     UpdatePreviewForSelection(state);
+}
+
+void RefreshSessionSnapshot(EvidenceSessionViewState& state) {
+    const std::uint64_t generation = ++state.displayGeneration;
+    if (state.items.empty() && state.pendingStatus.empty()) {
+        SetStatus(state, L"正在后台读取证据会话快照…");
+    }
+    if (!state.snapshotTask) {
+        return;
+    }
+    const HWND hwnd = state.hwnd;
+    state.snapshotTask->request(
+        [generation]() {
+            // The session snapshot is taken on the worker as well, so a delete
+            // or clear issued here is already visible to the rows it builds.
+            return BuildSnapshotRows(GlobalEvidenceSession().sharedSnapshot(), generation);
+        },
+        [hwnd, generation](std::uint64_t, std::optional<EvidenceSnapshotRows>&& snapshot, std::exception_ptr error) {
+            EvidenceSessionViewState* liveState = StateFromWindow(hwnd);
+            if (!liveState) {
+                return;
+            }
+            ApplySnapshotRows(*liveState, generation, std::move(snapshot), error);
+        });
 }
 
 void CompareSelectedItems(EvidenceSessionViewState& state) {
@@ -254,8 +361,8 @@ void DeleteSelectedItem(EvidenceSessionViewState& state) {
         SetStatus(*liveState, L"证据会话已变化，无法删除所选项目；请刷新后重试。");
         return;
     }
+    liveState->pendingStatus = L"已删除证据 #" + std::to_wstring(sequence) + L"。";
     RefreshSessionSnapshot(*liveState);
-    SetStatus(*liveState, L"已删除证据 #" + std::to_wstring(sequence) + L"。");
 }
 
 void ClearSession(EvidenceSessionViewState& state) {
@@ -273,8 +380,8 @@ void ClearSession(EvidenceSessionViewState& state) {
         return;
     }
     GlobalEvidenceSession().clear();
+    liveState->pendingStatus = L"证据会话已清空。";
     RefreshSessionSnapshot(*liveState);
-    SetStatus(*liveState, L"证据会话已清空。");
 }
 
 void Layout(EvidenceSessionViewState& state) {
@@ -302,8 +409,8 @@ void Layout(EvidenceSessionViewState& state) {
     const int listHeight = (std::max)(100, availableHeight / 2);
     const int previewTop = listTop + listHeight + pad;
     const int previewHeight = (std::max)(80, height - previewTop - statusHeight - pad);
-    if (state.list) {
-        ::MoveWindow(state.list, pad, listTop, (std::max)(0, width - (pad * 2)), listHeight, TRUE);
+    if (HWND list = state.list.hwnd()) {
+        ::MoveWindow(list, pad, listTop, (std::max)(0, width - (pad * 2)), listHeight, TRUE);
     }
     if (state.previewEdit) {
         ::MoveWindow(state.previewEdit, pad, previewTop, (std::max)(0, width - (pad * 2)), previewHeight, TRUE);
@@ -319,10 +426,11 @@ bool CreateChildControls(EvidenceSessionViewState& state) {
     state.compareButton = CreateButton(state.hwnd, kCompareButtonId, L"比较两项", 0, 0, 0, 0);
     state.deleteButton = CreateButton(state.hwnd, kDeleteButtonId, L"删除选中", 0, 0, 0, 0);
     state.clearButton = CreateButton(state.hwnd, kClearButtonId, L"清空会话", 0, 0, 0, 0);
-    state.list = ::CreateWindowExW(WS_EX_CLIENTEDGE, WC_LISTVIEWW, L"",
-        WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_CLIPSIBLINGS | LVS_REPORT | LVS_SHOWSELALWAYS,
-        0, 0, 0, 0, state.hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kEvidenceListId)),
-        ::GetModuleHandleW(nullptr), nullptr);
+    // Owner-data rows: the control only asks for the cells it paints, so a
+    // refresh installs one frozen row table instead of five messages per row.
+    if (!state.list.create(state.hwnd, kEvidenceListId, 0, 0, 0, 0, LVS_SHOWSELALWAYS)) {
+        return false;
+    }
     state.previewEdit = ::CreateWindowExW(WS_EX_CLIENTEDGE, WC_EDITW, L"",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_MULTILINE | ES_AUTOHSCROLL | ES_AUTOVSCROLL | ES_READONLY | ES_WANTRETURN |
             WS_HSCROLL | WS_VSCROLL,
@@ -330,15 +438,23 @@ bool CreateChildControls(EvidenceSessionViewState& state) {
         ::GetModuleHandleW(nullptr), nullptr);
     state.statusText = CreateText(state.hwnd, kStatusTextId, L"", 0, 0, 0, 0);
     if (!state.refreshButton || !state.compareButton || !state.deleteButton || !state.clearButton ||
-        !state.list || !state.previewEdit || !state.statusText) {
+        !state.list.hwnd() || !state.previewEdit || !state.statusText) {
         return false;
     }
     state.comparisonTask = std::make_unique<AsyncSnapshotTask<EvidenceComparison>>(state.hwnd, kEvidenceComparisonComplete);
-    ::SendMessageW(state.list, WM_SETFONT, reinterpret_cast<WPARAM>(SystemUIFont()), TRUE);
-    ListView_SetExtendedListViewStyleEx(state.list,
+    state.snapshotTask = std::make_unique<AsyncSnapshotTask<EvidenceSnapshotRows>>(state.hwnd, kEvidenceSnapshotComplete);
+    const HWND list = state.list.hwnd();
+    ::SendMessageW(list, WM_SETFONT, reinterpret_cast<WPARAM>(SystemUIFont()), TRUE);
+    // Comparing two rows needs both selected at once. The shared report-list
+    // helper creates single-select controls, so that style bit is cleared here;
+    // without it the second click would silently drop the first selection and
+    // "比较两项" could never succeed.
+    const LONG_PTR style = ::GetWindowLongPtrW(list, GWL_STYLE);
+    ::SetWindowLongPtrW(list, GWL_STYLE, style & ~static_cast<LONG_PTR>(LVS_SINGLESEL));
+    ListView_SetExtendedListViewStyleEx(list,
         LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER | LVS_EX_LABELTIP,
         LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER | LVS_EX_LABELTIP);
-    AddListViewColumns(state.list, {
+    state.list.addColumns({
         { 0, 68, LVCFMT_RIGHT, L"序号" },
         { 1, 152, LVCFMT_LEFT, L"采集时间" },
         { 2, 220, LVCFMT_LEFT, L"来源" },
@@ -395,12 +511,26 @@ LRESULT CALLBACK EvidenceSessionViewProc(HWND hwnd, UINT message, WPARAM wParam,
             return 0;
         }
         return 0;
+    case kEvidenceSnapshotComplete:
+        if (state && state->snapshotTask && state->snapshotTask->consume(hwnd, wParam, lParam)) {
+            return 0;
+        }
+        return 0;
     case WM_NOTIFY:
         if (state) {
             const auto* notification = reinterpret_cast<const NMHDR*>(lParam);
-            if (notification && notification->hwndFrom == state->list && notification->code == LVN_ITEMCHANGED) {
-                UpdatePreviewForSelection(*state);
-                return 0;
+            if (notification) {
+                // Owner-data text and row colors are produced on demand; the
+                // view forwards those notifications to the row snapshot instead
+                // of populating items up front.
+                LRESULT result = 0;
+                if (state->list.handleNotify(*notification, result)) {
+                    return result;
+                }
+                if (notification->hwndFrom == state->list.hwnd() && notification->code == LVN_ITEMCHANGED) {
+                    UpdatePreviewForSelection(*state);
+                    return 0;
+                }
             }
         }
         break;
@@ -409,10 +539,17 @@ LRESULT CALLBACK EvidenceSessionViewProc(HWND hwnd, UINT message, WPARAM wParam,
         SetWindowFontRecursive(hwnd);
         ::InvalidateRect(hwnd, nullptr, TRUE);
         return 0;
-    case WM_CTLCOLORSTATIC:
-        ::SetBkMode(reinterpret_cast<HDC>(wParam), TRANSPARENT);
-        ::SetTextColor(reinterpret_cast<HDC>(wParam), AppTheme().textColor);
-        return reinterpret_cast<LRESULT>(AppTheme().windowBrush());
+    case WM_CTLCOLORSTATIC: {
+        // The evidence preview is a read-only multi-line EDIT: it reports through
+        // this message, and a transparent background smears its text on scroll.
+        HDC dc = reinterpret_cast<HDC>(wParam);
+        const LRESULT labelBrush = PaintLabelBackground(dc,
+            reinterpret_cast<HWND>(lParam), AppTheme().windowBrush(), AppTheme().textColor);
+        if (labelBrush != 0) {
+            return labelBrush;
+        }
+        break;
+    }
     case WM_CTLCOLOREDIT:
         ::SetBkMode(reinterpret_cast<HDC>(wParam), OPAQUE);
         ::SetBkColor(reinterpret_cast<HDC>(wParam), AppTheme().panelColor);
@@ -438,6 +575,12 @@ LRESULT CALLBACK EvidenceSessionViewProc(HWND hwnd, UINT message, WPARAM wParam,
         }
         if (state && state->comparisonTask) {
             state->comparisonTask->cancel();
+        }
+        if (state && state->snapshotTask) {
+            state->snapshotTask->cancel();
+        }
+        if (state) {
+            state->list.detach();
         }
         delete state;
         ::SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);

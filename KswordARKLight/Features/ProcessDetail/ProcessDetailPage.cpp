@@ -26,6 +26,7 @@ constexpr int kRootMargin = 8;
 constexpr UINT kCopyCellCommand = 64001;
 constexpr UINT kCopyRowCommand = 64002;
 constexpr UINT kCopyAllCommand = 64003;
+constexpr UINT kExportTsvCommand = 64004;
 constexpr UINT kMsgSnapshotCompleted = WM_APP + 610;
 constexpr UINT kMsgThreadFilterCompleted = WM_APP + 611;
 constexpr UINT kMsgModuleFilterCompleted = WM_APP + 612;
@@ -246,7 +247,18 @@ LRESULT ProcessDetailPage::HandleMessage(HWND hwnd, UINT message, WPARAM wParam,
             return 0;
         }
         break;
-    case WM_CTLCOLORSTATIC:
+    case WM_CTLCOLORSTATIC: {
+        // Read-only EDIT controls report through this message too; leaving them
+        // transparent smears text while scrolling, so theme STATIC labels only.
+        HDC dc = reinterpret_cast<HDC>(wParam);
+        const LRESULT labelBrush = Ksword::Ui::PaintLabelBackground(dc,
+            reinterpret_cast<HWND>(lParam), Ksword::Ui::AppTheme().windowBrush(),
+            Ksword::Ui::AppTheme().textColor);
+        if (labelBrush != 0) {
+            return labelBrush;
+        }
+        break;
+    }
     case WM_CTLCOLORBTN:
         ::SetBkMode(reinterpret_cast<HDC>(wParam), TRANSPARENT);
         ::SetTextColor(reinterpret_cast<HDC>(wParam), Ksword::Ui::AppTheme().textColor);
@@ -407,7 +419,18 @@ LRESULT ProcessDetailPage::HandlePageMessage(
         }
         break;
     }
-    case WM_CTLCOLORSTATIC:
+    case WM_CTLCOLORSTATIC: {
+        // Read-only EDIT controls report through this message too; leaving them
+        // transparent smears text while scrolling, so theme STATIC labels only.
+        HDC dc = reinterpret_cast<HDC>(wParam);
+        const LRESULT labelBrush = Ksword::Ui::PaintLabelBackground(dc,
+            reinterpret_cast<HWND>(lParam), Ksword::Ui::AppTheme().windowBrush(),
+            Ksword::Ui::AppTheme().textColor);
+        if (labelBrush != 0) {
+            return labelBrush;
+        }
+        break;
+    }
     case WM_CTLCOLORBTN:
         ::SetBkMode(reinterpret_cast<HDC>(wParam), TRANSPARENT);
         ::SetTextColor(reinterpret_cast<HDC>(wParam), Ksword::Ui::AppTheme().textColor);
@@ -1039,6 +1062,27 @@ void ProcessDetailPage::AddListRow(
     if (!list || values.empty()) {
         return;
     }
+    // Display cap only: the backing entry vectors stay complete, so context-menu
+    // copies and detail lookups keep using full indices. Rows beyond the cap are
+    // dropped instead of being renumbered.
+    if (row >= static_cast<int>(Ksword::Ui::kMaxDisplayRows)) {
+        HWND page = ::GetParent(list);
+        const int listId = ::GetDlgCtrlID(list);
+        const int statusId = listId == HotkeyList ? HotkeyStatus
+            : (listId == KeyboardList ? KeyboardStatus : 0);
+        HWND status = page && statusId ? ::GetDlgItem(page, statusId) : nullptr;
+        if (status) {
+            // Status text is refreshed before each rebuild, so appending the hint
+            // again is idempotent and does not need extra state.
+            const std::wstring notice =
+                L"已达显示上限 " + std::to_wstring(Ksword::Ui::kMaxDisplayRows) + L" 行";
+            const std::wstring current = ReadWindowText(status);
+            if (current.find(notice) == std::wstring::npos) {
+                ::SetWindowTextW(status, (current.empty() ? notice : current + L" | " + notice).c_str());
+            }
+        }
+        return;
+    }
     LVITEMW item{};
     item.mask = LVIF_TEXT | LVIF_PARAM;
     item.iItem = row;
@@ -1118,11 +1162,96 @@ void ProcessDetailPage::CopyListRow(HWND list) {
     CopyText(hwnd_, text.str());
 }
 
-void ProcessDetailPage::CopyListAll(HWND list) {
-    const int rows = list ? ListView_GetItemCount(list) : 0;
-    const int columns = listColumnCounts_.contains(list) ? listColumnCounts_[list] : 0;
-    if (rows <= 0 || columns <= 0) {
+namespace {
+
+constexpr UINT_PTR kTextActionsSubclassId = 0x54585445U; // "TXTE"
+constexpr UINT kTextCopyCommand = 64010;
+constexpr UINT kTextExportCommand = 64011;
+
+std::wstring ReadTextPanelText(HWND window) {
+    const int length = window ? ::GetWindowTextLengthW(window) : 0;
+    if (length <= 0) {
+        return {};
+    }
+    std::wstring text(static_cast<std::size_t>(length) + 1U, L'\0');
+    ::GetWindowTextW(window, text.data(), static_cast<int>(text.size()));
+    text.resize(std::wcslen(text.c_str()));
+    return text;
+}
+
+LRESULT CALLBACK TextActionsSubclassProc(
+    HWND hwnd,
+    UINT message,
+    WPARAM wParam,
+    LPARAM lParam,
+    UINT_PTR subclassId,
+    DWORD_PTR referenceData) {
+    if (message == WM_CONTEXTMENU) {
+        POINT point{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+        if (point.x == -1 && point.y == -1) {
+            RECT bounds{};
+            ::GetWindowRect(hwnd, &bounds);
+            point = { bounds.left + 16, bounds.top + 16 };
+        }
+        const bool hasText = ::GetWindowTextLengthW(hwnd) > 0;
+        HMENU menu = ::CreatePopupMenu();
+        if (!menu) {
+            return 0;
+        }
+        ::AppendMenuW(menu, MF_STRING | (hasText ? 0U : MF_GRAYED), kTextCopyCommand, L"复制");
+        ::AppendMenuW(menu, MF_STRING | (hasText ? 0U : MF_GRAYED), kTextExportCommand, L"导出为文本…");
+        const UINT command = ::TrackPopupMenu(
+            menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, point.x, point.y, 0, hwnd, nullptr);
+        ::DestroyMenu(menu);
+        if (command == kTextCopyCommand) {
+            Ksword::Ui::CopyTextToClipboard(hwnd, ReadTextPanelText(hwnd), L"进程详情文本");
+        } else if (command == kTextExportCommand) {
+            const std::wstring text = ReadTextPanelText(hwnd);
+            if (!text.empty()) {
+                // This panel is a report, not a table: a .txt file keeps the
+                // layout the user is reading, while TSV would only add noise.
+                std::wstring error;
+                const Ksword::Ui::SaveTextFileResult result = Ksword::Ui::SaveUtf8TextFileWithDialog(
+                    hwnd,
+                    reinterpret_cast<const wchar_t*>(referenceData),
+                    L"导出进程详情文本",
+                    L"文本文件 (*.txt)\0*.txt\0所有文件 (*.*)\0*.*\0",
+                    L"txt",
+                    text,
+                    &error);
+                if (result == Ksword::Ui::SaveTextFileResult::Failed) {
+                    const std::wstring failure = error.empty() ? std::wstring(L"导出失败。") : error;
+                    ::MessageBoxW(hwnd, failure.c_str(), L"导出失败", MB_OK | MB_ICONWARNING);
+                }
+            }
+        }
+        return 0;
+    }
+    if (message == WM_NCDESTROY) {
+        ::RemoveWindowSubclass(hwnd, TextActionsSubclassProc, subclassId);
+    }
+    return ::DefSubclassProc(hwnd, message, wParam, lParam);
+}
+
+} // namespace
+
+void AttachTextActionsToTextPanel(HWND control, const wchar_t* suggestedName) {
+    if (!control) {
         return;
+    }
+    ::SetWindowSubclass(
+        control,
+        TextActionsSubclassProc,
+        kTextActionsSubclassId,
+        reinterpret_cast<DWORD_PTR>(suggestedName && *suggestedName ? suggestedName : L"process_detail.txt"));
+}
+
+std::wstring ProcessDetailPage::BuildListTsv(HWND list) const {
+    const int rows = list ? ListView_GetItemCount(list) : 0;
+    const auto columnCount = listColumnCounts_.find(list);
+    const int columns = columnCount != listColumnCounts_.end() ? columnCount->second : 0;
+    if (rows <= 0 || columns <= 0) {
+        return {};
     }
     std::wostringstream text;
     wchar_t headerText[512]{};
@@ -1140,11 +1269,70 @@ void ProcessDetailPage::CopyListAll(HWND list) {
     for (int row = 0; row < rows; ++row) {
         for (int column = 0; column < columns; ++column) {
             if (column) { text << L'\t'; }
-            text << ListCell(list, row, column);
+            text << Ksword::Ui::SanitizeTsvCell(ListCell(list, row, column));
         }
         if (row + 1 < rows) { text << L"\r\n"; }
     }
-    CopyText(hwnd_, text.str());
+    return text.str();
+}
+
+void ProcessDetailPage::CopyListAll(HWND list) {
+    CopyText(hwnd_, BuildListTsv(list));
+}
+
+std::wstring ProcessDetailPage::ListExportLabel(HWND list) const {
+    const auto found = listExportLabels_.find(list);
+    return found != listExportLabels_.end() && !found->second.empty() ? found->second : std::wstring(L"table");
+}
+
+void ProcessDetailPage::ExportListTsv(HWND list, const wchar_t* label) {
+    // The table is read straight off the control, so an in-flight refresh that
+    // empties it must not produce an empty file.
+    const std::wstring tsv = BuildListTsv(list);
+    if (tsv.empty()) {
+        ::MessageBoxW(hwnd_, L"当前表格没有可导出的行。", L"导出表格为 TSV", MB_OK | MB_ICONINFORMATION);
+        return;
+    }
+    const std::wstring suggested = L"process_" + std::to_wstring(processId_) + L"_" +
+        (label && *label ? label : L"table") + L".tsv";
+    std::wstring error;
+    const Ksword::Ui::SaveTextFileResult result = Ksword::Ui::SaveUtf8TextFileWithDialog(
+        hwnd_,
+        suggested.c_str(),
+        L"导出进程详情表格为 TSV",
+        L"制表符分隔文件 (*.tsv)\0*.tsv\0所有文件 (*.*)\0*.*\0",
+        L"tsv",
+        tsv,
+        &error);
+    if (result == Ksword::Ui::SaveTextFileResult::Failed) {
+        // This page has no status line of its own, so a failed write is the one
+        // case that has to interrupt.
+        const std::wstring message = error.empty() ? std::wstring(L"导出失败。") : error;
+        ::MessageBoxW(hwnd_, message.c_str(), L"导出失败", MB_OK | MB_ICONWARNING);
+    }
+}
+
+bool ProcessDetailPage::ShowListOnlyContextMenu(HWND list, POINT screenPoint, const wchar_t* label) {
+    if (!list) {
+        return true;
+    }
+    const bool hasRows = ListView_GetItemCount(list) > 0;
+    HMENU menu = ::CreatePopupMenu();
+    if (!menu) {
+        return true;
+    }
+    ::AppendMenuW(menu, MF_STRING | (hasRows ? 0U : MF_GRAYED), kCopyAllCommand, L"复制全部");
+    ::AppendMenuW(menu, MF_STRING | (hasRows ? 0U : MF_GRAYED), kExportTsvCommand, L"导出为 TSV…");
+    const UINT command = ::TrackPopupMenu(
+        menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, screenPoint.x, screenPoint.y, 0, hwnd_, nullptr);
+    ::DestroyMenu(menu);
+    if (command == kCopyAllCommand) {
+        CopyListAll(list);
+    } else if (command == kExportTsvCommand) {
+        const std::wstring exportLabel = label && *label ? std::wstring(label) : ListExportLabel(list);
+        ExportListTsv(list, exportLabel.c_str());
+    }
+    return true;
 }
 
 bool ProcessDetailPage::HandleGenericContextMenu(HWND source, POINT screenPoint) {
@@ -1162,7 +1350,8 @@ bool ProcessDetailPage::HandleGenericContextMenu(HWND source, POINT screenPoint)
         ListView_SetItemState(source, hitRow, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
     }
     if (SelectedListRow(source) < 0) {
-        return true;
+        const std::wstring label = ListExportLabel(source);
+        return ShowListOnlyContextMenu(source, screenPoint, label.c_str());
     }
 
     if (source == Control(TabIndex::Threads, ThreadList)) {
@@ -1176,12 +1365,18 @@ bool ProcessDetailPage::HandleGenericContextMenu(HWND source, POINT screenPoint)
     ::AppendMenuW(menu, MF_STRING, kCopyCellCommand, L"复制当前单元格");
     ::AppendMenuW(menu, MF_STRING, kCopyRowCommand, L"复制当前行");
     ::AppendMenuW(menu, MF_STRING, kCopyAllCommand, L"复制全部");
+    ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    ::AppendMenuW(menu, MF_STRING, kExportTsvCommand, L"导出为 TSV…");
     const UINT command = ::TrackPopupMenu(
         menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, screenPoint.x, screenPoint.y, 0, hwnd_, nullptr);
     ::DestroyMenu(menu);
     if (command == kCopyCellCommand) { CopyListCell(source); }
     if (command == kCopyRowCommand) { CopyListRow(source); }
     if (command == kCopyAllCommand) { CopyListAll(source); }
+    if (command == kExportTsvCommand) {
+        const std::wstring label = ListExportLabel(source);
+        ExportListTsv(source, label.c_str());
+    }
     return true;
 }
 

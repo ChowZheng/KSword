@@ -21,6 +21,9 @@
     <ClCompile Include="KswordCLI.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
+    <ClCompile Include="CliArgs.cpp"><Filter>源文件</Filter></ClCompile>
+    <ClCompile Include="CliCore.cpp"><Filter>源文件</Filter></ClCompile>
+    <ClCompile Include="CliText.cpp"><Filter>源文件</Filter></ClCompile>
     <ClCompile Include="ArkDriverExtended.cpp"><Filter>源文件</Filter></ClCompile>
     <ClCompile Include="..\Ksword5.1\Ksword5.1\ArkDriverClient\ArkDriverClient.cpp"><Filter>源文件\ArkDriverClient</Filter></ClCompile>
     <ClCompile Include="..\Ksword5.1\Ksword5.1\ArkDriverClient\ArkDriverAudit.cpp"><Filter>源文件\ArkDriverClient</Filter></ClCompile>
@@ -49,6 +52,9 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="ArkDriverExtended.h"><Filter>头文件</Filter></ClInclude>
+    <ClInclude Include="CliArgs.h"><Filter>头文件</Filter></ClInclude>
+    <ClInclude Include="CliCore.h"><Filter>头文件</Filter></ClInclude>
+    <ClInclude Include="CliText.h"><Filter>头文件</Filter></ClInclude>
     <ClInclude Include="..\shared\driver\KswordArkMemoryResult.h"><Filter>头文件</Filter></ClInclude>
   </ItemGroup>
   <ItemGroup>

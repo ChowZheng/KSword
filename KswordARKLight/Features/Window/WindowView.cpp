@@ -14,6 +14,7 @@
 #include "../../Ui/FilterBar.h"
 #include "../../Ui/ListViewUtil.h"
 #include "../../Ui/LoadingOverlay.h"
+#include "../../Ui/TableCompareActions.h"
 #include "../../Ui/Theme.h"
 #include "../../Ui/EntityNavigation.h"
 #include "../../Ui/VirtualListView.h"
@@ -71,6 +72,8 @@ constexpr UINT kWindowMenuExcludeFromCapture = 62616;
 constexpr UINT kWindowMenuOpenProcess = 62617;
 constexpr UINT kWindowMenuOpenImageDirectory = 62618;
 constexpr UINT kWindowMenuExportDetail = 62619;
+constexpr UINT kWindowMenuExportVisible = 62620;
+constexpr UINT kWindowMenuExportAll = 62621;
 constexpr UINT kMsgWindowRefreshCompleted = WM_APP + 610;
 constexpr UINT kMsgWindowFilterCompleted = WM_APP + 611;
 constexpr UINT kMsgWindowDetailCompleted = WM_APP + 612;
@@ -239,8 +242,20 @@ struct WindowViewState {
     std::vector<AuditEntry> auditRows;
     WindowViewMode viewMode = WindowViewMode::WindowList;
     std::wstring statusText;
+    // Windows come and go between two refreshes; the snapshot pair answers "what
+    // appeared since I last looked", which the list by itself cannot.
+    Ksword::Ui::TableSnapshotEngine snapshotEngine;
     std::wstring filterQuery;
     bool filterUseRegex = false;
+    // selectedStableKey keeps the identity of the selected display row, so a
+    // sort or refresh re-selects the same window instead of the same row number.
+    // restoringSelection marks the programmatic re-selection so LVN_ITEMCHANGED
+    // does not start a second detail query for the same row.
+    std::wstring selectedStableKey;
+    bool restoringSelection = false;
+    // columnsUserSized is set when the user drags a column divider; subsequent
+    // refreshes then keep updating titles without resetting the chosen widths.
+    bool columnsUserSized = false;
     std::uint64_t snapshotGeneration = 0;
     int contextColumn = 0;
     Ksword::Ui::VirtualListView virtualList;
@@ -256,30 +271,6 @@ std::vector<std::wstring> WindowColumnTitles(const WindowViewState& state) {
         return { L"进程 / PID", L"HWND", L"Title", L"Class", L"State" };
     }
     return { L"类别", L"数据源", L"入口 / 对象", L"状态", L"说明" };
-}
-
-// AppendTsvCell appends one strictly single-line TSV cell. Inputs are the
-// current rendered string and an output buffer; tabs/newlines are flattened so
-// a copied window title or driver diagnostic cannot add columns or rows.
-void AppendTsvCell(std::wstring& output, const std::wstring& cell) {
-    for (const wchar_t character : cell) {
-        output.push_back(character == L'\t' || character == L'\r' || character == L'\n' ? L' ' : character);
-    }
-}
-
-// AppendTsvRow writes exactly columnCount cells from one retained display row.
-// The Window list keeps additional cells for filtering, but export intentionally
-// stops at the currently visible column count so headers and data remain aligned.
-void AppendTsvRow(std::wstring& output, const std::vector<std::wstring>& cells, const std::size_t columnCount) {
-    for (std::size_t column = 0U; column < columnCount; ++column) {
-        if (column != 0U) {
-            output.push_back(L'\t');
-        }
-        if (column < cells.size()) {
-            AppendTsvCell(output, cells[column]);
-        }
-    }
-    output += L"\r\n";
 }
 
 // BuildVisibleRowsTsv serializes the already-filtered display snapshot. It
@@ -301,10 +292,11 @@ std::wstring BuildVisibleRowsTsv(const WindowViewState& state) {
             continue;
         }
         if (!wroteHeader) {
-            AppendTsvRow(text, columns, columns.size());
+            // 行拼装统一走 ExportUtil：它按列数补齐截断，表头和数据行不会对不齐。
+            Ksword::Ui::AppendTsvRow(text, columns, columns.size());
             wroteHeader = true;
         }
-        AppendTsvRow(text, rows[index].cells, columns.size());
+        Ksword::Ui::AppendTsvRow(text, rows[index].cells, columns.size());
     }
     return text;
 }
@@ -353,6 +345,16 @@ void SetColumn(HWND list, int index, const wchar_t* title, int width) {
     column.mask = LVCF_TEXT | LVCF_WIDTH;
     column.pszText = const_cast<LPWSTR>(title);
     column.cx = width;
+    ListView_SetColumn(list, index, &column);
+}
+
+// SetColumnTitle updates only a report-view column title. Inputs are list HWND,
+// column index and title; it is used once the user has sized the columns so a
+// refresh cannot undo the width they chose.
+void SetColumnTitle(HWND list, int index, const wchar_t* title) {
+    LVCOLUMNW column{};
+    column.mask = LVCF_TEXT;
+    column.pszText = const_cast<LPWSTR>(title);
     ListView_SetColumn(list, index, &column);
 }
 
@@ -431,15 +433,9 @@ std::wstring BuildRenderedDetailTsv(HWND detailList) {
     }
 
     std::wstring text;
-    AppendTsvCell(text, L"Property");
-    text.push_back(L'\t');
-    AppendTsvCell(text, L"Value");
-    text += L"\r\n";
+    Ksword::Ui::AppendTsvRow(text, { L"Property", L"Value" }, 2);
     for (int row = 0; row < rows; ++row) {
-        AppendTsvCell(text, ListText(detailList, row, 0));
-        text.push_back(L'\t');
-        AppendTsvCell(text, ListText(detailList, row, 1));
-        text += L"\r\n";
+        Ksword::Ui::AppendTsvRow(text, { ListText(detailList, row, 0), ListText(detailList, row, 1) }, 2);
     }
     return text;
 }
@@ -550,6 +546,88 @@ int SelectedModelIndex(WindowViewState* state) {
         return -1;
     }
     return static_cast<int>(rows[source].itemData);
+}
+
+// StableKeyAtDisplayRow returns the stable display key of one visible row.
+// Inputs are page state and a ListView item index; output is empty when the
+// index no longer maps onto the retained snapshot.
+std::wstring StableKeyAtDisplayRow(const WindowViewState* state, const int displayIndex) {
+    if (!state || displayIndex < 0) {
+        return {};
+    }
+    const auto& visible = state->virtualList.visibleIndexes();
+    const auto& rows = state->virtualList.rows();
+    if (static_cast<std::size_t>(displayIndex) >= visible.size()) {
+        return {};
+    }
+    const std::size_t source = visible[static_cast<std::size_t>(displayIndex)];
+    return source < rows.size() ? rows[source].stableKey : std::wstring{};
+}
+
+// RememberSelectedWindow records the stable key of the selected row. Input is
+// page state; the key survives a rebuild that renumbers every display index, so
+// a later sort or refresh can select the same window again.
+void RememberSelectedWindow(WindowViewState* state) {
+    if (!state || !state->windowList) {
+        return;
+    }
+    state->selectedStableKey = StableKeyAtDisplayRow(state, ListView_GetNextItem(state->windowList, -1, LVNI_SELECTED));
+}
+
+// FindDisplayRowByStableKey maps one stable key back to a ListView item index
+// under the currently installed visible indexes; output is -1 when the object
+// is absent from the retained snapshot.
+int FindDisplayRowByStableKey(const WindowViewState* state, const std::wstring& stableKey) {
+    if (!state || stableKey.empty()) {
+        return -1;
+    }
+    const auto& visible = state->virtualList.visibleIndexes();
+    const auto& rows = state->virtualList.rows();
+    for (std::size_t display = 0U; display < visible.size(); ++display) {
+        const std::size_t source = visible[display];
+        if (source < rows.size() && rows[source].stableKey == stableKey) {
+            return static_cast<int>(display);
+        }
+    }
+    return -1;
+}
+
+// RestoreSelectedWindow re-selects the remembered window after PopulateList or
+// a completed filter replaced the display indexes. The programmatic selection
+// is announced through restoringSelection so LVN_ITEMCHANGED does not launch a
+// duplicate detail query; output is true when the selected item index moved and
+// the caller still owes exactly one detail refresh.
+bool RestoreSelectedWindow(WindowViewState* state) {
+    if (!state || !state->windowList || state->selectedStableKey.empty()) {
+        return false;
+    }
+    const int previous = ListView_GetNextItem(state->windowList, -1, LVNI_SELECTED);
+    int target = FindDisplayRowByStableKey(state, state->selectedStableKey);
+    const bool rememberedRowFound = target >= 0;
+    if (!rememberedRowFound && state->virtualList.rowCount() > 0U) {
+        // The remembered window left the snapshot; keep the page usable by
+        // selecting the first row instead of blanking the detail pane.
+        target = 0;
+    }
+    if (target < 0) {
+        return false;
+    }
+    if (rememberedRowFound && target == previous &&
+        (ListView_GetItemState(state->windowList, target, LVIS_SELECTED) & LVIS_SELECTED) != 0) {
+        // The same item is still selected, so nothing has to move and the detail
+        // pane keeps the row it already describes.
+        RememberSelectedWindow(state);
+        return false;
+    }
+    state->restoringSelection = true;
+    ListView_SetItemState(state->windowList, -1, 0, LVIS_SELECTED | LVIS_FOCUSED);
+    ListView_SetItemState(state->windowList, target, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
+    ListView_EnsureVisible(state->windowList, target, FALSE);
+    state->restoringSelection = false;
+    RememberSelectedWindow(state);
+    // A fallback to the first row always re-derives the detail pane, because the
+    // identity the pane was describing is no longer part of the snapshot.
+    return !rememberedRowFound || target != previous;
 }
 
 // Win32kHookScopeText renders the protocol-level thread/global scope while
@@ -868,6 +946,17 @@ void ConfigureWindowColumns(WindowViewState* state) {
     if (!state || !state->windowList) {
         return;
     }
+    // A user-sized layout keeps its widths; only the titles are refreshed so a
+    // background refresh never snaps the dividers back. Columns are created once
+    // in CreateChildControls and are never removed, so titles stay consistent.
+    if (state->columnsUserSized) {
+        SetColumnTitle(state->windowList, 0, L"进程 / PID");
+        SetColumnTitle(state->windowList, 1, L"HWND");
+        SetColumnTitle(state->windowList, 2, L"Title");
+        SetColumnTitle(state->windowList, 3, L"Class");
+        SetColumnTitle(state->windowList, 4, L"State");
+        return;
+    }
     SetColumn(state->windowList, 0, L"进程 / PID", 190);
     SetColumn(state->windowList, 1, L"HWND", 120);
     SetColumn(state->windowList, 2, L"Title", 300);
@@ -879,6 +968,14 @@ void ConfigureWindowColumns(WindowViewState* state) {
 // page state; output is visible column metadata only.
 void ConfigureAuditColumns(WindowViewState* state) {
     if (!state || !state->windowList) {
+        return;
+    }
+    if (state->columnsUserSized) {
+        SetColumnTitle(state->windowList, 0, L"类别");
+        SetColumnTitle(state->windowList, 1, L"数据源");
+        SetColumnTitle(state->windowList, 2, L"入口 / 对象");
+        SetColumnTitle(state->windowList, 3, L"状态");
+        SetColumnTitle(state->windowList, 4, L"说明");
         return;
     }
     SetColumn(state->windowList, 0, L"类别", 150);
@@ -1070,8 +1167,14 @@ void RequestWindowFilter(WindowViewState* state, std::wstring query) {
                 return;
             }
             state->virtualList.setVisibleIndexes(std::move(result->visibleIndexes));
+            // Installing a filtered visible set renumbers the display indexes as
+            // well, so the highlight is re-anchored on the same stable key.
+            const bool selectionMoved = RestoreSelectedWindow(state);
             if (!state->filterQuery.empty()) {
                 state->statusText = L"窗口筛选结果：" + std::to_wstring(state->virtualList.rowCount()) + L" 项。";
+            }
+            if (selectionMoved) {
+                ShowDetail(state, SelectedModelIndex(state));
             }
         });
 }
@@ -1082,13 +1185,27 @@ void PopulateList(WindowViewState* state) {
     if (!state || !state->windowList || !state->filterRows) {
         return;
     }
-    if (state->viewMode != WindowViewMode::WindowList) {
-        ConfigureAuditColumns(state);
-    } else {
-        ConfigureWindowColumns(state);
+    // Column reconfiguration and snapshot replacement each repaint the control,
+    // so without the lock the user sees an intermediate frame with the new rows
+    // and the old columns. The filter request below runs after the lock is gone.
+    {
+        Ksword::Ui::ScopedListViewRedrawLock listRedraw(state->virtualList.hwnd());
+        if (state->viewMode != WindowViewMode::WindowList) {
+            ConfigureAuditColumns(state);
+        } else {
+            ConfigureWindowColumns(state);
+        }
+        state->virtualList.setSharedRows(state->filterRows);
     }
-    state->virtualList.setSharedRows(state->filterRows);
+    // The rebuilt rows renumber every index, so the previously selected window
+    // is resolved back through its stable key instead of keeping the old item
+    // number, which would leave the highlight and the detail pane on two
+    // different windows. Only a moved selection pays for one extra detail query.
+    const bool selectionMoved = RestoreSelectedWindow(state);
     RequestWindowFilter(state, state->filterBar ? Ksword::Ui::GetFilterBarText(state->filterBar) : state->filterQuery);
+    if (selectionMoved) {
+        ShowDetail(state, SelectedModelIndex(state));
+    }
 }
 
 // RefreshWindows performs the R3 EnumWindows and optional R0 audit snapshot on
@@ -1151,14 +1268,18 @@ void RefreshWindows(WindowViewState* state) {
             if (snapshot->mode == WindowViewMode::WindowList) {
                 state->statusText = state->model.rows().empty() ? L"Windows: 0" : L"Windows: " + std::to_wstring(state->model.rows().size());
             } else if (snapshot->mode == WindowViewMode::Win32kGuiAudit) {
-                state->statusText = L"Win32K GUI 审计快照已刷新。";
+                state->statusText = state->auditRows.empty()
+                    ? L"未获取到 Win32K GUI 审计记录。"
+                    : L"Win32K GUI 审计已刷新：" + std::to_wstring(state->auditRows.size()) + L" 行。";
             } else if (snapshot->mode == WindowViewMode::Win32kMessageHookAudit) {
                 state->statusText = L"Win32K 消息 Hook 审计快照已刷新：" + std::to_wstring(state->auditRows.size()) + L" 行。";
             } else if (snapshot->mode == WindowViewMode::Win32kTimerAudit) {
                 state->statusText = L"Win32K 定时器只读证据快照已刷新：" + std::to_wstring(state->auditRows.size()) +
                     L" 行；首行保留返回计数、完整性和布局来源。";
             } else {
-                state->statusText = L"GPU / Display / Watchdog 审计快照已刷新。";
+                state->statusText = state->auditRows.empty()
+                    ? L"未获取到 GPU / Display / Watchdog 审计记录。"
+                    : L"GPU / Display / Watchdog 审计已刷新：" + std::to_wstring(state->auditRows.size()) + L" 行。";
             }
             PopulateList(state);
             WindowTools::UpdateWindowHierarchyReportView(state->hierarchyReportView,
@@ -1175,6 +1296,7 @@ void UpdateViewModeFromCombo(WindowViewState* state) {
     if (!state || !state->auditModeCombo) {
         return;
     }
+    const WindowViewMode previousMode = state->viewMode;
     const LRESULT selected = ::SendMessageW(state->auditModeCombo, CB_GETCURSEL, 0, 0);
     if (selected == 1) {
         state->viewMode = WindowViewMode::Win32kGuiAudit;
@@ -1219,6 +1341,17 @@ void UpdateViewModeFromCombo(WindowViewState* state) {
     }
     if (state->viewMode != WindowViewMode::WindowList) {
         WindowTools::UpdateWindowHierarchyReportView(state->hierarchyReportView, nullptr);
+    }
+    if (state->viewMode != previousMode) {
+        // Each mode has its own column meanings and default widths, so a mode
+        // switch starts from the defaults instead of inheriting the other mode's
+        // user-sized layout.
+        state->columnsUserSized = false;
+        // Same reason for the sort: column 3 is Class in the window list but
+        // 状态 in the audit list, so an inherited sort would order the new view
+        // by an unrelated field.
+        state->virtualList.applySort(Ksword::Ui::SortSpec{});
+        Ksword::Ui::ShowSortIndicator(state->windowList, Ksword::Ui::SortSpec{});
     }
     RefreshWindows(state);
 }
@@ -1486,6 +1619,50 @@ void OpenSelectedWindowImageDirectory(WindowViewState* state) {
 // itself. Inputs are page state and screen coordinates; processing selects the
 // hit row when needed, groups detail/window actions into submenus, then
 // dispatches the chosen menu command; no value is returned.
+// WindowColumnTitles is the caption list shared by the header row, the TSV
+// export and the snapshot capture, so a captured column can never be compared
+// against a column that means something else.
+const std::vector<std::wstring>& WindowColumnTitles() {
+    static const std::vector<std::wstring> titles{
+        L"进程 / PID", L"HWND", L"Title", L"Class", L"State"
+    };
+    return titles;
+}
+
+// ExportWindowList writes one scope of the window list to disk. A window list is
+// a point-in-time desktop snapshot; once the owning process exits there is no
+// way to reconstruct what was on screen, so copy-only was the wrong ceiling.
+void ExportWindowList(WindowViewState* state, const Ksword::Ui::ExportRowScope scope) {
+    if (!state) {
+        return;
+    }
+    Ksword::Ui::ExportRowCount count{};
+    std::wstring error;
+    const Ksword::Ui::SaveTextFileResult result = Ksword::Ui::ExportVirtualListTsvWithDialog(
+        state->hwnd,
+        state->virtualList,
+        WindowColumnTitles(),
+        scope,
+        L"window_list.tsv",
+        scope == Ksword::Ui::ExportRowScope::Visible
+            ? L"导出窗口列表（可见行）"
+            : L"导出窗口列表（全部行）",
+        L"窗口列表导出",
+        &count,
+        &error);
+    if (result == Ksword::Ui::SaveTextFileResult::Failed) {
+        state->statusText = error.empty() ? L"窗口列表导出失败。" : L"窗口列表导出失败：" + error;
+    } else if (result == Ksword::Ui::SaveTextFileResult::Saved) {
+        std::wstring summary = L"已导出 " + std::to_wstring(count.exportedRows) + L" / " +
+            std::to_wstring(count.totalRows) + L" 个窗口";
+        if (count.filteredRows) {
+            summary += L"（筛选隐藏的 " + std::to_wstring(count.totalRows - count.exportedRows) + L" 个未写入）";
+        }
+        state->statusText = summary + L"。";
+    }
+    ::InvalidateRect(state->hwnd, nullptr, TRUE);
+}
+
 void ShowWindowContextMenu(WindowViewState* state, POINT screenPoint) {
     if (!state || !state->windowList) {
         return;
@@ -1557,6 +1734,15 @@ void ShowWindowContextMenu(WindowViewState* state, POINT screenPoint) {
         ::AppendMenuW(copyMenu, MF_STRING | (!state->virtualList.visibleIndexes().empty() ? 0U : MF_GRAYED), kWindowMenuCopyVisible, L"复制可见结果");
         ::AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(copyMenu), L"复制");
     }
+    HMENU exportMenu = ::CreatePopupMenu();
+    if (exportMenu) {
+        const bool hasVisible = !state->virtualList.visibleIndexes().empty();
+        ::AppendMenuW(exportMenu, MF_STRING | (hasVisible ? 0U : MF_GRAYED), kWindowMenuExportVisible, L"导出可见行为 TSV…");
+        ::AppendMenuW(exportMenu, MF_STRING | (hasVisible ? 0U : MF_GRAYED), kWindowMenuExportAll, L"导出全部行为 TSV…");
+        ::AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(exportMenu), L"导出");
+    }
+    ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    Ksword::Ui::AppendTableCompareMenuItems(menu, state->snapshotEngine);
 
     const UINT command = ::TrackPopupMenu(menu,
         TPM_RETURNCMD | TPM_RIGHTBUTTON,
@@ -1625,7 +1811,17 @@ void ShowWindowContextMenu(WindowViewState* state, POINT screenPoint) {
     case kWindowMenuOpenImageDirectory:
         OpenSelectedWindowImageDirectory(state);
         break;
+    case kWindowMenuExportVisible:
+        ExportWindowList(state, Ksword::Ui::ExportRowScope::Visible);
+        break;
+    case kWindowMenuExportAll:
+        ExportWindowList(state, Ksword::Ui::ExportRowScope::All);
+        break;
     default:
+        if (Ksword::Ui::HandleTableCompareCommand(state->snapshotEngine, command,
+                state->virtualList, WindowColumnTitles(), state->statusText)) {
+            ::InvalidateRect(state->hwnd, nullptr, TRUE);
+        }
         break;
     }
 }
@@ -1741,13 +1937,15 @@ bool CreateChildControls(WindowViewState* state, HWND hwnd) {
     if (state->processImageList != nullptr) {
         ListView_SetImageList(state->windowList, state->processImageList, LVSIL_SMALL);
     }
-    state->virtualList.addColumns({
-        { 0, 190, LVCFMT_LEFT, L"进程 / PID" },
-        { 1, 120, LVCFMT_LEFT, L"HWND" },
-        { 2, 300, LVCFMT_LEFT, L"Title" },
-        { 3, 190, LVCFMT_LEFT, L"Class" },
-        { 4, 220, LVCFMT_LEFT, L"State" },
-    });
+    {
+        const std::vector<std::wstring>& titles = WindowColumnTitles();
+        std::vector<Ksword::Ui::ListViewColumn> columns;
+        static const int widths[] = { 190, 120, 300, 190, 220 };
+        for (std::size_t index = 0; index < titles.size(); ++index) {
+            columns.push_back({ static_cast<int>(index), widths[index], LVCFMT_LEFT, titles[index] });
+        }
+        state->virtualList.addColumns(columns);
+    }
     AddColumn(state->detailList, 0, L"Property", 170);
     AddColumn(state->detailList, 1, L"Value", 720);
     state->loadingOverlay = Ksword::Ui::CreateLoadingOverlay(hwnd, kLoadingOverlayId, { 0, 0, 1, 1 });
@@ -1844,9 +2042,36 @@ bool RegisterWindowViewClass() {
                     return result;
                 }
             }
+            // The ListView forwards its header notifications to the parent. Once
+            // the user has dragged a column divider the width becomes theirs, so
+            // later refreshes only update titles instead of resetting the layout.
+            if (state && notify && state->windowList && notify->code == HDN_ENDDRAG &&
+                notify->hwndFrom == ListView_GetHeader(state->windowList)) {
+                state->columnsUserSized = true;
+                return 0;
+            }
+            if (state && notify && notify->idFrom == kWindowListId &&
+                notify->code == LVN_COLUMNCLICK) {
+                auto* clicked = reinterpret_cast<NMLISTVIEW*>(lParam);
+                // The click cycle is unsorted -> ascending -> descending ->
+                // unsorted. The sort lives in VirtualListView, so it survives the
+                // periodic refresh and any filter change instead of being thrown
+                // away with the next snapshot.
+                const Ksword::Ui::SortSpec next =
+                    Ksword::Ui::NextSortSpec(state->virtualList.sortSpec(), clicked->iSubItem);
+                state->virtualList.applySort(next);
+                Ksword::Ui::ShowSortIndicator(state->windowList, next);
+                return 0;
+            }
             if (state && notify && notify->idFrom == kWindowListId && notify->code == LVN_ITEMCHANGED) {
                 auto* changed = reinterpret_cast<NMLISTVIEW*>(lParam);
                 if ((changed->uNewState & LVIS_SELECTED) != 0) {
+                    // Restoring the selection after a rebuild already recalculated
+                    // the detail pane once; re-entering here would duplicate it.
+                    if (state->restoringSelection) {
+                        return 0;
+                    }
+                    RememberSelectedWindow(state);
                     if (state->viewMode == WindowViewMode::WindowList) {
                         ShowDetail(state, SelectedModelIndex(state));
                     } else {
@@ -1892,7 +2117,9 @@ bool RegisterWindowViewClass() {
             ::GetClientRect(hwnd, &rc);
             ::FillRect(dc, &rc, Ksword::Ui::AppTheme().panelBrush());
             const int leftWidth = (std::max)(1, (Width(rc) - kGap * 3) * 2 / 3);
-            RECT textRc{ 510, 7, kGap + leftWidth, kHeaderHeight };
+            // 第一行控件（下拉框 + 刷新/导出）结束于 x=510，状态文字接在同一行；
+            // 原来 p 到 kHeaderHeight 会被 y=66 的筛选框压住半行。
+            RECT textRc{ 510, kGap, kGap + leftWidth, kGap + 24 };
             const std::wstring title = state ? state->statusText : L"Windows";
             Ksword::Ui::DrawTextLine(dc, title, textRc, Ksword::Ui::AppTheme().mutedTextColor,
                 Ksword::Ui::SystemUIFont(), DT_SINGLELINE | DT_LEFT | DT_VCENTER);

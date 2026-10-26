@@ -5,9 +5,11 @@
 #include "../../Ui/AsyncTask.h"
 #include "../../Ui/Controls.h"
 #include "../../Ui/EntityNavigation.h"
+#include "../../Ui/ExportUtil.h"
 #include "../../Ui/FilterBar.h"
 #include "../../Ui/ListViewUtil.h"
 #include "../../Ui/LoadingOverlay.h"
+#include "../../Ui/TableCompareActions.h"
 #include "../../Ui/TextFindSupport.h"
 #include "../../Ui/Theme.h"
 #include "../../Ui/VirtualListView.h"
@@ -18,6 +20,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
+#include <iterator>
 #include <memory>
 #include <optional>
 #include <sstream>
@@ -41,6 +44,8 @@ constexpr int kLoadingOverlayId = 67208;
 
 constexpr UINT kMenuCopyRow = 67611;
 constexpr UINT kMenuCopyVisible = 67612;
+constexpr UINT kMenuExportVisible = 67616;
+constexpr UINT kMenuExportAll = 67617;
 constexpr UINT kMenuCopyMessage = 67613;
 constexpr UINT kMenuRefresh = 67614;
 constexpr UINT kMenuOpenProcess = 67615;
@@ -54,6 +59,20 @@ constexpr int kHeaderHeight = kGap * 3 + kRowHeight * 2;
 constexpr int kDetailHeight = 140;
 constexpr int kStatusHeight = 22;
 constexpr int kColumnCount = 6;
+
+// kColumnTitles is the single source of truth for the six captions: the header
+// row, the report columns and the TSV export all read it, so an exported file
+// cannot end up labelled differently from the screen it came from.
+constexpr const wchar_t* kColumnTitles[kColumnCount] = {
+    L"时间", L"级别", L"来源", L"事件 ID", L"PID", L"描述"
+};
+
+// EventLogColumnTitles exposes the same captions as a vector for the export and
+// the snapshot capture, so neither can drift from the header row.
+const std::vector<std::wstring>& EventLogColumnTitles() {
+    static const std::vector<std::wstring> titles(std::begin(kColumnTitles), std::end(kColumnTitles));
+    return titles;
+}
 
 int Width(const RECT& rc) {
     return rc.right > rc.left ? static_cast<int>(rc.right - rc.left) : 0;
@@ -86,36 +105,22 @@ struct EventLogViewState final {
     std::wstring filterQuery;
     bool filterUseRegex = false;
     std::uint64_t displayGeneration = 0;
+    // 事件日志是一段会滚动的窗口，两次读取之间新记录把旧记录挤出查询范围，
+    // 只有并排比对两份快照才能指出哪些记录是新出现的。
+    Ksword::Ui::TableSnapshotEngine snapshotEngine;
     std::unique_ptr<Ksword::Ui::AsyncSnapshotTask<EventLogQueryResult>> queryTask;
     std::unique_ptr<Ksword::Ui::AsyncSnapshotTask<EventLogFilterResult>> filterTask;
 };
 
 bool CopyText(HWND owner, const std::wstring& text) {
-    if (text.empty() || !::OpenClipboard(owner)) {
+    // An empty payload stays a failure: the callers show "复制失败" and a
+    // clipboard that silently keeps its previous contents would contradict
+    // that message. Otherwise use the shared writer so the copied text also
+    // reaches the evidence session.
+    if (text.empty()) {
         return false;
     }
-    ::EmptyClipboard();
-    const SIZE_T bytes = (text.size() + 1) * sizeof(wchar_t);
-    HGLOBAL memory = ::GlobalAlloc(GMEM_MOVEABLE, bytes);
-    if (!memory) {
-        ::CloseClipboard();
-        return false;
-    }
-    void* target = ::GlobalLock(memory);
-    if (!target) {
-        ::GlobalFree(memory);
-        ::CloseClipboard();
-        return false;
-    }
-    std::memcpy(target, text.c_str(), bytes);
-    ::GlobalUnlock(memory);
-    if (!::SetClipboardData(CF_UNICODETEXT, memory)) {
-        ::GlobalFree(memory);
-        ::CloseClipboard();
-        return false;
-    }
-    ::CloseClipboard();
-    return true;
+    return Ksword::Ui::CopyTextToClipboard(owner, text, L"事件日志导出");
 }
 
 std::wstring CellText(const EventLogEntry& entry, const int column) {
@@ -267,7 +272,7 @@ void BuildRows(EventLogViewState& state) {
         rows.push_back(std::move(row));
     }
     auto filterRows = std::make_shared<std::vector<Ksword::Ui::VirtualListRow>>(std::move(rows));
-    state.list.setRows(*filterRows);
+    state.list.setSharedRows(filterRows);
     state.filterRows = std::move(filterRows);
     ++state.displayGeneration;
 }
@@ -397,6 +402,40 @@ void OpenSelectedEventProcess(EventLogViewState& state) {
     ::InvalidateRect(state.hwnd, nullptr, TRUE);
 }
 
+// ExportRows writes one scope of the event log to disk. The whole point is that
+// an event log scrolls: the record the user wants is often the one that already
+// rotated out, so the export has to be able to leave with everything the current
+// query returned, not only with what survived the filter.
+void ExportRows(EventLogViewState& state, const Ksword::Ui::ExportRowScope scope) {
+    const std::vector<std::wstring>& titles = EventLogColumnTitles();
+    Ksword::Ui::ExportRowCount count{};
+    std::wstring error;
+    const Ksword::Ui::SaveTextFileResult result = Ksword::Ui::ExportVirtualListTsvWithDialog(
+        state.hwnd,
+        state.list,
+        titles,
+        scope,
+        L"event_log.tsv",
+        scope == Ksword::Ui::ExportRowScope::Visible
+            ? L"导出事件日志（可见行）"
+            : L"导出事件日志（全部行）",
+        L"事件日志导出",
+        &count,
+        &error);
+    if (result == Ksword::Ui::SaveTextFileResult::Failed) {
+        state.statusText = error.empty() ? L"事件日志导出失败。" : L"事件日志导出失败：" + error;
+    } else if (result == Ksword::Ui::SaveTextFileResult::Saved) {
+        std::wostringstream summary;
+        summary << L"已导出 " << count.exportedRows << L" / " << count.totalRows << L" 条事件记录";
+        if (count.filteredRows) {
+            summary << L"（筛选隐藏的 " << (count.totalRows - count.exportedRows) << L" 条未写入）";
+        }
+        summary << L"。";
+        state.statusText = summary.str();
+    }
+    ::InvalidateRect(state.hwnd, nullptr, TRUE);
+}
+
 void ShowContextMenu(EventLogViewState& state, POINT screenPoint) {
     SelectRowAtPoint(state, screenPoint);
     HMENU menu = ::CreatePopupMenu();
@@ -410,10 +449,15 @@ void ShowContextMenu(EventLogViewState& state, POINT screenPoint) {
     ::AppendMenuW(menu, MF_STRING, kMenuCopyVisible, L"复制可见行");
     ::AppendMenuW(menu, MF_STRING | (hasSelection ? MF_ENABLED : MF_GRAYED), kMenuCopyMessage, L"复制完整描述");
     ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    ::AppendMenuW(menu, MF_STRING, kMenuExportVisible, L"导出可见行为 TSV…");
+    ::AppendMenuW(menu, MF_STRING, kMenuExportAll, L"导出全部行为 TSV…");
+    ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     ::AppendMenuW(menu, MF_STRING | (hasCurrentProcess ? MF_ENABLED : MF_GRAYED),
         kMenuOpenProcess, L"查看当前 PID 的进程详细信息");
     ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     ::AppendMenuW(menu, MF_STRING, kMenuRefresh, L"刷新");
+    ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    Ksword::Ui::AppendTableCompareMenuItems(menu, state.snapshotEngine);
 
     const int command = ::TrackPopupMenu(
         menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, screenPoint.x, screenPoint.y, 0, state.hwnd, nullptr);
@@ -440,10 +484,21 @@ void ShowContextMenu(EventLogViewState& state, POINT screenPoint) {
     case kMenuOpenProcess:
         OpenSelectedEventProcess(state);
         break;
+    case kMenuExportVisible:
+        ExportRows(state, Ksword::Ui::ExportRowScope::Visible);
+        break;
+    case kMenuExportAll:
+        ExportRows(state, Ksword::Ui::ExportRowScope::All);
+        break;
     case kMenuRefresh:
         BeginQuery(state);
         break;
     default:
+        // 快照命令 id 在所有表之间共用一段，不是本页的一律交给引擎判定。
+        if (Ksword::Ui::HandleTableCompareCommand(state.snapshotEngine, static_cast<UINT>(command),
+                state.list, EventLogColumnTitles(), state.statusText, L"事件日志")) {
+            ::InvalidateRect(state.hwnd, nullptr, TRUE);
+        }
         break;
     }
 }
@@ -530,12 +585,12 @@ bool CreateChildControls(EventLogViewState& state) {
         return false;
     }
     state.list.addColumns({
-        { 0, 140, LVCFMT_LEFT, L"时间" },
-        { 1, 60, LVCFMT_LEFT, L"级别" },
-        { 2, 210, LVCFMT_LEFT, L"来源" },
-        { 3, 80, LVCFMT_RIGHT, L"事件 ID" },
-        { 4, 70, LVCFMT_RIGHT, L"PID" },
-        { 5, 620, LVCFMT_LEFT, L"描述" },
+        { 0, 140, LVCFMT_LEFT, kColumnTitles[0] },
+        { 1, 60, LVCFMT_LEFT, kColumnTitles[1] },
+        { 2, 210, LVCFMT_LEFT, kColumnTitles[2] },
+        { 3, 80, LVCFMT_RIGHT, kColumnTitles[3] },
+        { 4, 70, LVCFMT_RIGHT, kColumnTitles[4] },
+        { 5, 620, LVCFMT_LEFT, kColumnTitles[5] },
     });
     if (HWND list = state.list.hwnd()) {
         ListView_SetExtendedListViewStyle(list,
@@ -621,6 +676,17 @@ LRESULT CALLBACK EventLogViewProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 if (state->list.handleNotify(*header, result)) {
                     return result;
                 }
+                // The click cycle is unsorted -> ascending -> descending ->
+                // unsorted. The sort lives in VirtualListView, so the periodic
+                // refresh replays it instead of dropping it with the snapshot.
+                if (header->hwndFrom == state->list.hwnd() && header->code == LVN_COLUMNCLICK) {
+                    auto* clicked = reinterpret_cast<NMLISTVIEW*>(lParam);
+                    const Ksword::Ui::SortSpec next =
+                        Ksword::Ui::NextSortSpec(state->list.sortSpec(), clicked->iSubItem);
+                    state->list.applySort(next);
+                    Ksword::Ui::ShowSortIndicator(state->list.hwnd(), next);
+                    return 0;
+                }
                 if (header->hwndFrom == state->list.hwnd() && header->code == LVN_ITEMCHANGED) {
                     const auto* changed = reinterpret_cast<const NMLISTVIEW*>(lParam);
                     if (changed && (changed->uNewState & LVIS_SELECTED) != 0) {
@@ -655,10 +721,16 @@ LRESULT CALLBACK EventLogViewProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
         }
         break;
     case WM_CTLCOLORSTATIC: {
+        // Read-only EDIT controls report through this message too; leaving them
+        // transparent smears text while scrolling, so theme STATIC labels only.
         HDC dc = reinterpret_cast<HDC>(wParam);
-        ::SetBkMode(dc, TRANSPARENT);
-        ::SetTextColor(dc, Ksword::Ui::AppTheme().textColor);
-        return reinterpret_cast<LRESULT>(Ksword::Ui::AppTheme().windowBrush());
+        const LRESULT labelBrush = Ksword::Ui::PaintLabelBackground(dc,
+            reinterpret_cast<HWND>(lParam), Ksword::Ui::AppTheme().windowBrush(),
+            Ksword::Ui::AppTheme().textColor);
+        if (labelBrush != 0) {
+            return labelBrush;
+        }
+        break;
     }
     default:
         if (state) {

@@ -6,6 +6,7 @@
 #include "../../Ui/Controls.h"
 #include "../../Ui/ExportUtil.h"
 #include "../../Ui/NumericSortKey.h"
+#include "../../Ui/TableCompareActions.h"
 #include "../../Ui/TextFindSupport.h"
 #include "../../Ui/Theme.h"
 
@@ -38,10 +39,20 @@ constexpr UINT kModuleMenuUnload = 64105;
 constexpr UINT kModuleMenuSuspendThread = 64106;
 constexpr UINT kModuleMenuResumeThread = 64107;
 constexpr UINT kModuleMenuTerminateThread = 64108;
+constexpr UINT kModuleMenuExport = 64109;
 
 constexpr UINT_PTR kModulePageVisualSubclassId = 0x4D4F4455U; // "MODU"
 constexpr UINT_PTR kModuleHeaderSubclassId = 0x4D4F4448U;     // "MODH"
 constexpr UINT_PTR kModuleStatusSubclassId = 0x4D4F4453U;     // "MODS"
+
+// ModuleColumnTitles 同时喂表头和快照采集。模块表会随 LoadLibrary 变化，两次快照
+// 才看得出这次多挂了哪个 DLL；列序分叉则会把"数字签名"当成"大小"来比。
+const std::vector<std::wstring>& ModuleColumnTitles() {
+    static const std::vector<std::wstring> titles{
+        L"模块路径", L"大小", L"数字签名", L"入口偏移量", L"运行状态", L"ThreadID"
+    };
+    return titles;
+}
 
 constexpr wchar_t kModuleDetailClass[] = L"KswordARKLight.ProcessDetail.ModuleDetail";
 constexpr int kModuleDetailSummaryId = 65101;
@@ -164,20 +175,14 @@ bool OpenFolderAndSelectPath(HWND owner, const std::wstring& path) {
 }
 
 void UpdateSortIndicator(HWND list, int sortColumn, bool descending) {
-    HWND header = list ? ListView_GetHeader(list) : nullptr;
-    const int count = header ? Header_GetItemCount(header) : 0;
-    for (int index = 0; index < count; ++index) {
-        HDITEMW item{};
-        item.mask = HDI_FORMAT;
-        if (!Header_GetItem(header, index, &item)) {
-            continue;
-        }
-        item.fmt &= ~(HDF_SORTUP | HDF_SORTDOWN);
-        if (index == sortColumn) {
-            item.fmt |= descending ? HDF_SORTDOWN : HDF_SORTUP;
-        }
-        Header_SetItem(header, index, &item);
-    }
+    // The arrow drawing moved to Ui::ShowSortIndicator so the module table and
+    // every page that adopts column sorting share one implementation. A negative
+    // column means "no sort", which clears the arrows on every column.
+    Ksword::Ui::ShowSortIndicator(
+        list,
+        Ksword::Ui::SortSpec{
+            sortColumn,
+            descending ? Ksword::Ui::SortDirection::Descending : Ksword::Ui::SortDirection::Ascending });
 }
 
 COLORREF SignatureColor(const std::wstring& text) {
@@ -516,7 +521,18 @@ LRESULT CALLBACK ModuleDetailWindowProc(HWND hwnd, UINT message, WPARAM wParam, 
     case WM_CLOSE:
         ::DestroyWindow(hwnd);
         return 0;
-    case WM_CTLCOLORSTATIC:
+    case WM_CTLCOLORSTATIC: {
+        // Read-only EDIT controls report through this message too; leaving them
+        // transparent smears text while scrolling, so theme STATIC labels only.
+        HDC dc = reinterpret_cast<HDC>(wParam);
+        const LRESULT labelBrush = Ksword::Ui::PaintLabelBackground(dc,
+            reinterpret_cast<HWND>(lParam), Ksword::Ui::AppTheme().windowBrush(),
+            Ksword::Ui::AppTheme().textColor);
+        if (labelBrush != 0) {
+            return labelBrush;
+        }
+        break;
+    }
     case WM_CTLCOLORBTN:
         ::SetBkMode(reinterpret_cast<HDC>(wParam), TRANSPARENT);
         ::SetTextColor(reinterpret_cast<HDC>(wParam), Ksword::Ui::AppTheme().textColor);
@@ -654,13 +670,15 @@ bool ProcessDetailPage::CreateModuleTab() {
     }
 
     ::SendMessageW(verify, BM_SETCHECK, BST_CHECKED, 0);
-    AddListColumn(list, 0, L"模块路径", 560);
-    AddListColumn(list, 1, L"大小", 110);
-    AddListColumn(list, 2, L"数字签名", 260);
-    AddListColumn(list, 3, L"入口偏移量", 120);
-    AddListColumn(list, 4, L"运行状态", 90);
-    AddListColumn(list, 5, L"ThreadID", 180);
+    {
+        static const int widths[] = { 560, 110, 260, 120, 90, 180 };
+        const std::vector<std::wstring>& titles = ModuleColumnTitles();
+        for (std::size_t index = 0; index < titles.size(); ++index) {
+            AddListColumn(list, static_cast<int>(index), titles[index].c_str(), widths[index]);
+        }
+    }
     listColumnCounts_[list] = 6;
+    listExportLabels_[list] = L"modules";
     if (moduleFilterRows_) {
         moduleVirtualList_.setSharedRows(moduleFilterRows_);
         moduleVirtualList_.setVisibleIndexes(moduleVisibleIndexes_);
@@ -853,8 +871,11 @@ LRESULT CALLBACK ProcessDetailPage::ModuleHeaderSubclassProc(
 
 bool ProcessDetailPage::HandleModuleContextMenu(POINT screenPoint) {
     HWND list = Control(TabIndex::Modules, ModuleList);
-    if (!list || SelectedListRow(list) < 0) {
+    if (!list) {
         return true;
+    }
+    if (SelectedListRow(list) < 0) {
+        return ShowListOnlyContextMenu(list, screenPoint, L"modules");
     }
     HMENU menu = ::CreatePopupMenu();
     if (!menu) {
@@ -863,12 +884,18 @@ bool ProcessDetailPage::HandleModuleContextMenu(POINT screenPoint) {
     ::AppendMenuW(menu, MF_STRING, kModuleMenuCopyCell, L"复制单元格");
     ::AppendMenuW(menu, MF_STRING, kModuleMenuCopyRow, L"复制行");
     ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    // The loaded-module list is the answer to "what did this process pull in",
+    // and it dies with the process, so it needs a file path out.
+    ::AppendMenuW(menu, MF_STRING, kModuleMenuExport, L"导出模块表为 TSV…");
+    ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     ::AppendMenuW(menu, MF_STRING, kModuleMenuDetail, L"查看模块详情");
     ::AppendMenuW(menu, MF_STRING, kModuleMenuOpenFolder, L"打开文件夹");
     ::AppendMenuW(menu, MF_STRING, kModuleMenuUnload, L"卸载");
     ::AppendMenuW(menu, MF_STRING, kModuleMenuSuspendThread, L"挂起Thread");
     ::AppendMenuW(menu, MF_STRING, kModuleMenuResumeThread, L"取消挂起Thread");
     ::AppendMenuW(menu, MF_STRING, kModuleMenuTerminateThread, L"结束Thread");
+    ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    Ksword::Ui::AppendTableCompareMenuItems(menu, moduleSnapshotEngine_);
     const UINT command = ::TrackPopupMenu(
         menu,
         TPM_RETURNCMD | TPM_RIGHTBUTTON,
@@ -882,13 +909,21 @@ bool ProcessDetailPage::HandleModuleContextMenu(POINT screenPoint) {
     switch (command) {
     case kModuleMenuCopyCell: CopyListCell(list); break;
     case kModuleMenuCopyRow: CopyListRow(list); break;
+    case kModuleMenuExport: ExportListTsv(list, L"modules"); break;
     case kModuleMenuDetail: ShowModuleDetailDialog(); break;
     case kModuleMenuOpenFolder: OpenSelectedModuleFolder(); break;
     case kModuleMenuUnload: UnloadSelectedModule(); break;
     case kModuleMenuSuspendThread: SuspendSelectedModuleThread(); break;
     case kModuleMenuResumeThread: ResumeSelectedModuleThread(); break;
     case kModuleMenuTerminateThread: TerminateSelectedModuleThread(); break;
-    default: break;
+    default: {
+        std::wstring snapshotMessage;
+        if (Ksword::Ui::HandleTableCompareCommand(moduleSnapshotEngine_, command,
+                moduleVirtualList_, ModuleColumnTitles(), snapshotMessage, L"模块")) {
+            SetPageStatus(TabIndex::Modules, ModuleStatus, snapshotMessage);
+        }
+        break;
+    }
     }
     return true;
 }

@@ -20,6 +20,7 @@
     { "name": "G entity graph",      "minAssertions": 351 },
     { "name": "C offline dump facts","minAssertions": 461 },
     { "name": "D snapshot compare",  "minAssertions": 387 },
+    { "name": "T table snapshot stress", "minAssertions": 151 },
     { "name": "S security state",    "minAssertions": 442 },
     { "name": "N wfp analysis",      "minAssertions": 545 },
     { "name": "T timeline",          "minAssertions": 381 },

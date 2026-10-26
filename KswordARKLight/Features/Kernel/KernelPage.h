@@ -18,7 +18,19 @@
 
 namespace Ksword::Features::Kernel {
 
-struct KernelObjectNamespaceTreeNodeState;
+// KernelObjectNamespaceTreeNodeState is the per-TreeView node payload used by
+// the Win32 object namespace port. Inputs are copied from the current table
+// cache when the tree is rebuilt; processing stores this object behind
+// TVITEM::lParam; return behavior is pointer-based selection with ownership kept
+// by KernelPage::objectNamespaceTreeNodeStorage_.
+struct KernelObjectNamespaceTreeNodeState {
+    int rowIndex = -1;
+    std::wstring nodeKind;
+    std::wstring nodeName;
+    std::wstring nodeType;
+    std::wstring nodePath;
+    std::wstring nodeDescription;
+};
 
 // KernelR0EvidenceSnapshot is the immutable result of a client-side R0
 // evidence projection. Worker tasks own this value completely before the UI
@@ -248,6 +260,12 @@ private:
     void ClearResultTable();
     void ClearResultGridOnly();
     void AddResultTableColumn(int index, const std::wstring& title, int width);
+    // 表格只建 IsKernelTableColumn 认可的列。映射表记住第 n 个表头槽位对应
+    // currentColumns_ 的哪一个下标，详情/复制/导出仍然按数据下标走全量。
+    void AppendResultTableColumn(int dataColumn, int width);
+    int DataColumnForSubItem(int subItem) const;
+    int SubItemForDataColumn(int dataColumn) const;
+    std::vector<int> resultColumnData_;
     void AddResultTableRow(const std::vector<std::wstring>& cells);
     void AddResultTableRow(const std::vector<std::wstring>& cells, int indent);
     int CurrentPrimaryIndex() const;

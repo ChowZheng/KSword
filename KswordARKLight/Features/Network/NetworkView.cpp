@@ -10,6 +10,7 @@
 #include "../../Ui/FilterBar.h"
 #include "../../Ui/ListViewUtil.h"
 #include "../../Ui/LoadingOverlay.h"
+#include "../../Ui/TableCompareActions.h"
 #include "../../Ui/TabUtil.h"
 #include "../../Ui/Theme.h"
 #include "../../Ui/VirtualListView.h"
@@ -83,6 +84,9 @@ struct NetworkAuditPageState final {
     std::uint64_t displayGeneration = 0;
     std::uint64_t renderedModelGeneration = 0;
     int contextColumn = 0;
+    // Per-page snapshot slots. Each audit page shows a different column set, so
+    // one shared engine would compare captions that never belonged together.
+    Ksword::Ui::TableSnapshotEngine snapshotEngine;
     std::unique_ptr<Ksword::Ui::AsyncSnapshotTask<NetworkFilterResult>> filterTask;
 };
 
@@ -309,7 +313,21 @@ void BeginNetworkRefresh(NetworkViewState& state) {
             state.model.replacePages(std::move(*pages));
             ++state.modelGeneration;
             RenderAllAuditPages(state);
-            SetAuditStatusForAll(state, L"Network R0 与 R3 审计快照已刷新。");
+            // Each audit tab keeps its own row count so an empty tab reads as
+            // "no records" instead of a finished-but-silent refresh.
+            for (int auditIndex = 0; auditIndex < kAuditTabCount; ++auditIndex) {
+                NetworkAuditPageState* page = AuditPageFor(state, auditIndex);
+                if (!page) {
+                    continue;
+                }
+                const NetworkAuditPage* audit = state.model.pageAt(auditIndex);
+                const std::size_t rowCount = audit ? audit->rows.size() : 0;
+                if (rowCount == 0) {
+                    SetStatus(*page, L"未获取到 Network 审计记录。");
+                } else {
+                    SetStatus(*page, L"Network 审计已刷新：" + std::to_wstring(rowCount) + L" 项。");
+                }
+            }
         });
 }
 
@@ -370,6 +388,8 @@ void ShowListContextMenu(NetworkAuditPageState& page, POINT point) {
     ::AppendMenuW(menu, MF_STRING | (hasSelection ? 0U : MF_GRAYED), kMenuCopyCell, L"复制单元格");
     ::AppendMenuW(menu, MF_STRING | (hasSelection ? 0U : MF_GRAYED), kMenuCopyRow, L"复制行");
     ::AppendMenuW(menu, MF_STRING | (!page.list.visibleIndexes().empty() ? 0U : MF_GRAYED), kMenuCopyVisible, L"复制可见结果");
+    ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    Ksword::Ui::AppendTableCompareMenuItems(menu, page.snapshotEngine);
     const UINT command = ::TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, point.x, point.y, 0, page.hwnd, nullptr);
     ::DestroyMenu(menu);
     if (command == kMenuCopyCell) {
@@ -378,6 +398,13 @@ void ShowListContextMenu(NetworkAuditPageState& page, POINT point) {
         SetStatus(page, CopyTextToClipboard(page.hwnd, SelectedRowsText(page, false)) ? L"已复制行。" : L"复制行失败。");
     } else if (command == kMenuCopyVisible) {
         SetStatus(page, CopyTextToClipboard(page.hwnd, SelectedRowsText(page, true)) ? L"已复制可见结果。" : L"复制可见结果失败。");
+    } else if (page.owner) {
+        const NetworkAuditPage* audit = page.owner->model.pageAt(page.auditIndex);
+        std::wstring outcome;
+        if (audit && Ksword::Ui::HandleTableCompareCommand(page.snapshotEngine, command, page.list,
+                ColumnTitles(*audit), outcome)) {
+            SetStatus(page, outcome);
+        }
     }
 }
 

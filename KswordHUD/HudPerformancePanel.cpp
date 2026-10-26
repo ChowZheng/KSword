@@ -25,6 +25,7 @@
 #include <QProcess>
 #include <QResizeEvent>
 #include <QScrollArea>
+#include <QScopeGuard>
 #include <QShowEvent>
 #include <QStackedWidget>
 #include <QTimer>
@@ -672,14 +673,16 @@ void HudPerformancePanel::showEvent(QShowEvent* showEventPointer)
     QWidget::showEvent(showEventPointer);
     refreshCorePresentation(1.0, true);
     refreshVisiblePresentation(true);
-    QTimer::singleShot(0, this, [this]()
-    {
-        adjustChartHeights();
-    });
-    QTimer::singleShot(80, this, [this]()
-    {
-        adjustChartHeights();
-    });
+    // Resolve the known page layouts before their first frame. Viewport/page
+    // Resize events below maintain the final geometry when Qt lays out children.
+    const QPointer<HudPerformancePanel> alive(this);
+    if (layout() != nullptr) layout()->activate();
+    if (!alive) return;
+    if (m_detailStack != nullptr && m_detailStack->currentWidget() != nullptr
+        && m_detailStack->currentWidget()->layout() != nullptr)
+        m_detailStack->currentWidget()->layout()->activate();
+    if (!alive) return;
+    adjustChartHeights();
 }
 
 
@@ -755,6 +758,12 @@ void HudPerformancePanel::initializeUi()
     initializeNetworkPage();
     initializeGpuPage();
     initializeSidebarCards();
+
+    // Only these owned layout surfaces affect chart height; no global scan or
+    // fixed-delay correction is needed after native page/viewport geometry settles.
+    for (QWidget* page : {m_cpuPage, m_memoryPage, m_diskPage, m_networkPage, m_gpuPage})
+        page->installEventFilter(this);
+    m_coreChartScrollArea->viewport()->installEventFilter(this);
 
     connect(m_sidebarList, &QListWidget::currentRowChanged, this, [this](const int rowIndex)
     {
@@ -1282,32 +1291,54 @@ void HudPerformancePanel::syncSidebarSelection(const int selectedRowIndex)
     if (m_gpuNavCard != nullptr) m_gpuNavCard->setSelectedState(boundedIndex == 4);
 
     adjustChartHeights();
-    QTimer::singleShot(0, this, [this]() { adjustChartHeights(); });
-    QTimer::singleShot(80, this, [this]() { adjustChartHeights(); });
+}
+
+bool HudPerformancePanel::eventFilter(QObject* watched, QEvent* event)
+{
+    const bool heightChanged = event->type() == QEvent::Resize
+        && static_cast<QResizeEvent*>(event)->size().height() != static_cast<QResizeEvent*>(event)->oldSize().height();
+    QWidget* const currentPage = m_detailStack != nullptr ? m_detailStack->currentWidget() : nullptr;
+    const bool currentViewport = currentPage == m_cpuPage && m_coreChartScrollArea != nullptr
+        && watched == m_coreChartScrollArea->viewport();
+    const bool textLayoutChanged = watched == m_gpuPage && event->type() == QEvent::LayoutRequest;
+    if ((heightChanged || event->type() == QEvent::Show || textLayoutChanged)
+        && (watched == currentPage || currentViewport) && isVisible())
+    {
+        const QPointer<HudPerformancePanel> alive(this);
+        const QPointer<QObject> target(watched);
+        adjustChartHeights();
+        if (!alive) return target.isNull();
+    }
+    return QWidget::eventFilter(watched, event);
 }
 
 void HudPerformancePanel::adjustChartHeights()
 {
+    if (m_adjustingChartHeights) return;
+    m_adjustingChartHeights = true;
+    const QPointer<HudPerformancePanel> alive(this);
+    const auto release = qScopeGuard([alive]() { if (alive) alive->m_adjustingChartHeights = false; });
+    // A height constraint can synchronously resize a child and run external event
+    // filters. Stop the pass if that callback destroys the panel or target.
+    const auto setHeightLimits = [alive](QWidget* widget, const int minimum, const int maximum)
+    {
+        if (widget == nullptr) return true;
+        const QPointer<QWidget> target(widget);
+        if (target->minimumHeight() != minimum) target->setMinimumHeight(minimum);
+        if (!alive) return false;
+        if (!target) return false;
+        if (target->maximumHeight() != maximum) target->setMaximumHeight(maximum);
+        return !alive.isNull() && !target.isNull();
+    };
     if (m_cpuPage != nullptr
         && m_coreChartHostWidget != nullptr
         && m_coreChartGridLayout != nullptr
         && !m_coreChartEntries.empty())
     {
-        auto applyFixedHeightIfChanged =
-            [](QWidget* widgetPointer, const int heightValue)
-            {
-                if (widgetPointer == nullptr || heightValue <= 0)
-                {
-                    return;
-                }
-                if (widgetPointer->minimumHeight() == heightValue
-                    && widgetPointer->maximumHeight() == heightValue)
-                {
-                    return;
-                }
-                widgetPointer->setMinimumHeight(heightValue);
-                widgetPointer->setMaximumHeight(heightValue);
-            };
+        const auto applyFixedHeightIfChanged = [&setHeightLimits](QWidget* widget, const int height)
+        {
+            return height <= 0 || setHeightLimits(widget, height, height);
+        };
 
         int chartViewportHeight = 0;
         if (m_coreChartScrollArea != nullptr && m_coreChartScrollArea->viewport() != nullptr)
@@ -1343,25 +1374,24 @@ void HudPerformancePanel::adjustChartHeights()
         {
             if (chartEntry.containerWidget != nullptr)
             {
-                applyFixedHeightIfChanged(chartEntry.containerWidget, cellHeight);
+                if (!applyFixedHeightIfChanged(chartEntry.containerWidget, cellHeight)) return;
             }
             if (chartEntry.chartWidget != nullptr)
             {
-                applyFixedHeightIfChanged(chartEntry.chartWidget, std::max(10, cellHeight - 12));
+                if (!applyFixedHeightIfChanged(chartEntry.chartWidget, std::max(10, cellHeight - 12))) return;
             }
         }
 
         const int hostHeight = gridRows * cellHeight + gridSpacing * (gridRows - 1);
-        applyFixedHeightIfChanged(m_coreChartHostWidget, hostHeight);
+        if (!applyFixedHeightIfChanged(m_coreChartHostWidget, hostHeight)) return;
         if (m_coreChartScrollArea != nullptr)
         {
-            m_coreChartScrollArea->setMinimumHeight(0);
-            m_coreChartScrollArea->setMaximumHeight(QWIDGETSIZE_MAX);
+            if (!setHeightLimits(m_coreChartScrollArea, 0, QWIDGETSIZE_MAX)) return;
         }
     }
 
     auto adjustMainChartHeight =
-        [](
+        [&setHeightLimits](
             QWidget* pageWidget,
             QChartView* chartView,
             const double ratioValue,
@@ -1370,37 +1400,25 @@ void HudPerformancePanel::adjustChartHeights()
         {
             if (pageWidget == nullptr || chartView == nullptr)
             {
-                return;
+                return true;
             }
             const int pageHeight = pageWidget->contentsRect().height();
             const int maxAllowedHeight = std::max(minHeightValue, pageHeight - reserveHeightValue);
             const int expectedHeight = static_cast<int>(std::round(static_cast<double>(pageHeight) * ratioValue));
             const int finalHeight = qBound(minHeightValue, expectedHeight, maxAllowedHeight);
-            chartView->setMinimumHeight(finalHeight);
-            chartView->setMaximumHeight(finalHeight);
+            return setHeightLimits(chartView, finalHeight, finalHeight);
         };
 
-    adjustMainChartHeight(m_memoryPage, m_memoryChartView, 0.36, 56, 116);
-    adjustMainChartHeight(m_diskPage, m_diskChartView, 0.40, 58, 120);
-    adjustMainChartHeight(m_networkPage, m_networkChartView, 0.40, 58, 120);
+    if (!adjustMainChartHeight(m_memoryPage, m_memoryChartView, 0.36, 56, 116)
+        || !adjustMainChartHeight(m_diskPage, m_diskChartView, 0.40, 58, 120)
+        || !adjustMainChartHeight(m_networkPage, m_networkChartView, 0.40, 58, 120)) return;
 
     if (m_gpuPage != nullptr)
     {
-        auto applyMaxHeightIfChanged =
-            [](QWidget* widgetPointer, const int maxHeightValue)
-            {
-                if (widgetPointer == nullptr || maxHeightValue <= 0)
-                {
-                    return;
-                }
-                if (widgetPointer->minimumHeight() == 0
-                    && widgetPointer->maximumHeight() == maxHeightValue)
-                {
-                    return;
-                }
-                widgetPointer->setMinimumHeight(0);
-                widgetPointer->setMaximumHeight(maxHeightValue);
-            };
+        const auto applyMaxHeightIfChanged = [&setHeightLimits](QWidget* widget, const int maximum)
+        {
+            return maximum <= 0 || setHeightLimits(widget, 0, maximum);
+        };
 
         int gpuReferenceHeight = 0;
         if (m_detailStack != nullptr)
@@ -1438,24 +1456,23 @@ void HudPerformancePanel::adjustChartHeights()
             {
                 if (chartEntry.chartView != nullptr)
                 {
-                    applyMaxHeightIfChanged(chartEntry.chartView, std::max(18, cellHeight - 10));
+                    if (!applyMaxHeightIfChanged(chartEntry.chartView, std::max(18, cellHeight - 10))) return;
                 }
                 if (chartEntry.titleLabel != nullptr)
                 {
-                    chartEntry.titleLabel->setMinimumHeight(14);
-                    chartEntry.titleLabel->setMaximumHeight(18);
+                    if (!setHeightLimits(chartEntry.titleLabel, 14, 18)) return;
                 }
             }
-            applyMaxHeightIfChanged(m_gpuEngineHostWidget, engineAreaHeight);
+            if (!applyMaxHeightIfChanged(m_gpuEngineHostWidget, engineAreaHeight)) return;
         }
 
         if (m_gpuDedicatedMemoryChartView != nullptr)
         {
-            applyMaxHeightIfChanged(m_gpuDedicatedMemoryChartView, memoryAreaEachHeight);
+            if (!applyMaxHeightIfChanged(m_gpuDedicatedMemoryChartView, memoryAreaEachHeight)) return;
         }
         if (m_gpuSharedMemoryChartView != nullptr)
         {
-            applyMaxHeightIfChanged(m_gpuSharedMemoryChartView, memoryAreaEachHeight);
+            if (!applyMaxHeightIfChanged(m_gpuSharedMemoryChartView, memoryAreaEachHeight)) return;
         }
     }
 }

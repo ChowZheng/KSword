@@ -1,4 +1,6 @@
 #include "ProcessActions.h"
+
+#include "../../Ui/ExportUtil.h"
 #include "../../../shared/usermode/backend/process/ProcessControls.h"
 #include "../../../shared/ProcessTerminateMethods.h"
 
@@ -78,30 +80,10 @@ using ks::r3::process::PriorityClassForAction;
 // Input is owner HWND (optional) and text; processing transfers GMEM_MOVEABLE
 // memory to the OS clipboard; output reports whether the copy succeeded.
 bool WriteClipboardText(HWND owner, const std::wstring& text) {
-    if (!::OpenClipboard(owner)) {
-        return false;
-    }
-    ::EmptyClipboard();
-    const SIZE_T bytes = (text.size() + 1) * sizeof(wchar_t);
-    HGLOBAL memory = ::GlobalAlloc(GMEM_MOVEABLE, bytes);
-    if (!memory) {
-        ::CloseClipboard();
-        return false;
-    }
-    void* target = ::GlobalLock(memory);
-    if (!target) {
-        ::GlobalFree(memory);
-        ::CloseClipboard();
-        return false;
-    }
-    std::memcpy(target, text.c_str(), bytes);
-    ::GlobalUnlock(memory);
-    const bool ok = ::SetClipboardData(CF_UNICODETEXT, memory) != nullptr;
-    if (!ok) {
-        ::GlobalFree(memory);
-    }
-    ::CloseClipboard();
-    return ok;
+    // Forward to the shared writer: one implementation means a copied
+    // value also lands in the evidence session, which the local copies
+    // never did.
+    return Ksword::Ui::CopyTextToClipboard(owner, text, L"进程动作");
 }
 
 

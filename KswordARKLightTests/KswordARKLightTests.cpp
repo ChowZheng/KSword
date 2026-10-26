@@ -586,6 +586,7 @@ int wmain() {
     failures += RunMemoryTamperCrossViewTests();
     failures += RunDmaProcessOpPlanTests();
     failures += RunHookPatchComposeTests();
+    failures += RunTableSnapshotStressTests();
     // 内存工作台逻辑层：写前复核/回读、同意范围、陈旧代次这些安全不变式的离线判据。
     failures += RunMemwbSessionTests();
     failures += RunMemwbOverlayTests();

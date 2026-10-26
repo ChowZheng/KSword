@@ -125,6 +125,13 @@ void NtfsSpaceMapWidget::setSelectedReference(quint64 reference)
     update();
 }
 
+void NtfsSpaceMapWidget::setEmptyMessage(const QString& source)
+{
+    if (m_emptyMessage == source) return;
+    m_emptyMessage = source;
+    update();
+}
+
 void NtfsSpaceMapWidget::rebuildLayout()
 {
     m_tiles.clear();
@@ -190,7 +197,8 @@ void NtfsSpaceMapWidget::paintEvent(QPaintEvent* event)
     {
         painter.setPen(KswordTheme::TextSecondaryColor());
         painter.drawText(rect().adjusted(12, 12, -12, -12), Qt::AlignCenter | Qt::TextWordWrap,
-            ks::i18n::sourceText(QStringLiteral("没有可显示的已知大小文件")));
+            ks::i18n::sourceText(m_emptyMessage.isEmpty()
+                ? QStringLiteral("没有可显示的已知大小文件") : m_emptyMessage));
         return;
     }
     for (qsizetype i = 0; i < m_tiles.size(); ++i)

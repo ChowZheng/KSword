@@ -1,4 +1,4 @@
-<?xml version='1.0' encoding='utf-8'?>
+﻿<?xml version='1.0' encoding='utf-8'?>
 <Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003" DefaultTargets="Build">
   <ItemGroup Label="ProjectConfigurations">
     <ProjectConfiguration Include="Debug|x64">
@@ -146,10 +146,16 @@
     <ClCompile Include="Features\Kernel\KernelObjectTypeMatrixFeature.cpp" />
     <ClCompile Include="Features\Kernel\KernelPage.cpp" />
     <ClCompile Include="Features\Kernel\KernelPageLayout.cpp" />
+    <ClCompile Include="Features\Kernel\KernelProjectionBuilderCore.cpp" />
+    <ClCompile Include="Features\Kernel\KernelProjectionBuilderDiagnostics.cpp" />
+    <ClCompile Include="Features\Kernel\KernelProjectionBuilderEvidence.cpp" />
+    <ClCompile Include="Features\Kernel\KernelProjectionBuilderHooks.cpp" />
+    <ClCompile Include="Features\Kernel\KernelProjectionBuilderNamespace.cpp" />
     <ClCompile Include="Features\Kernel\KernelR0ExtendedFeature.cpp" />
     <ClCompile Include="Features\Kernel\KernelShadowSsdtFeature.cpp" />
     <ClCompile Include="Features\Kernel\KernelSsdtFeature.cpp" />
     <ClCompile Include="Features\Kernel\KernelSymbolicLinkFeature.cpp" />
+    <ClCompile Include="Features\Kernel\KernelValueSupport.cpp" />
     <ClCompile Include="Features\Memory\DriverMemoryClient.cpp" />
     <ClCompile Include="Features\Memory\DriverMemoryModel.cpp" />
     <ClCompile Include="Features\Memory\DriverMemoryView.cpp" />
@@ -158,6 +164,8 @@
     <ClCompile Include="Features\Memory\MemorySnapshot.cpp" />
     <ClCompile Include="Features\Memory\MemoryWritePlan.cpp" />
     <ClCompile Include="Features\Misc\MiscFeature.cpp" />
+    <ClCompile Include="Features\Misc\MiscAuditCollectors.cpp" />
+    <ClCompile Include="Features\Monitor\EtwEventClassifier.cpp" />
     <ClCompile Include="Features\Monitor\EtwFilterDialog.cpp" />
     <ClCompile Include="Features\Monitor\EtwMonitorView.cpp" />
     <ClCompile Include="Features\Monitor\MonitorFeature.cpp" />
@@ -237,8 +245,14 @@
     <ClCompile Include="Ui\PlaceholderPage.cpp" />
     <ClCompile Include="Ui\SplitterUtil.cpp" />
     <ClCompile Include="Ui\TabUtil.cpp" />
+    <ClCompile Include="Ui\TableCompareActions.cpp" />
+    <ClCompile Include="Ui\TableCompareRowSource.cpp" />
+    <ClCompile Include="Ui\TableCompareResultWindow.cpp" />
+    <ClCompile Include="Ui\TableSnapshotCompare.cpp" />
     <ClCompile Include="Ui\TextFindSupport.cpp" />
     <ClCompile Include="Ui\Theme.cpp" />
+    <ClCompile Include="Ui\Dpi.cpp" />
+    <ClCompile Include="Ui\LazyTreeView.cpp" />
     <ClCompile Include="Ui\TreeViewUtil.cpp" />
     <ClCompile Include="Ui\VirtualListView.cpp" />
     <ClCompile Include="Ui\WorkspaceHost.cpp" />
@@ -347,14 +361,15 @@
     <ClInclude Include="Features\Kernel\KernelObjectNamespaceFeature.h" />
     <ClInclude Include="Features\Kernel\KernelObjectTypeMatrixFeature.h" />
     <ClInclude Include="Features\Kernel\KernelDynamicProjection.h" />
+    <ClInclude Include="Features\Kernel\KernelProjectionBuilder.h" />
     <ClInclude Include="Features\Kernel\KernelProjectionValues.h" />
-    <ClInclude Include="Features\Kernel\KernelProjectionValues.inl" />
     <ClInclude Include="Features\Kernel\KernelPage.h" />
     <ClInclude Include="Features\Kernel\KernelPageLayout.h" />
     <ClInclude Include="Features\Kernel\KernelR0ExtendedFeature.h" />
     <ClInclude Include="Features\Kernel\KernelShadowSsdtFeature.h" />
     <ClInclude Include="Features\Kernel\KernelSsdtFeature.h" />
     <ClInclude Include="Features\Kernel\KernelSymbolicLinkFeature.h" />
+    <ClInclude Include="Features\Kernel\KernelValueSupport.h" />
     <ClInclude Include="Features\Memory\DriverMemoryClient.h" />
     <ClInclude Include="Features\Memory\DriverMemoryModel.h" />
     <ClInclude Include="Features\Memory\DriverMemoryView.h" />
@@ -363,6 +378,7 @@
     <ClInclude Include="Features\Memory\MemorySnapshot.h" />
     <ClInclude Include="Features\Memory\MemoryWritePlan.h" />
     <ClInclude Include="Features\Misc\MiscFeature.h" />
+    <ClInclude Include="Features\Misc\MiscAuditPage.h" />
     <ClInclude Include="Features\Monitor\EtwEventModel.h" />
     <ClInclude Include="Features\Monitor\EtwFilterDialog.h" />
     <ClInclude Include="Features\Monitor\EtwFilterModel.h" />
@@ -465,8 +481,13 @@
     <ClInclude Include="Ui\PlaceholderPage.h" />
     <ClInclude Include="Ui\SplitterUtil.h" />
     <ClInclude Include="Ui\TabUtil.h" />
+    <ClInclude Include="Ui\TableCompareActions.h" />
+    <ClInclude Include="Ui\TableCompareResultWindow.h" />
+    <ClInclude Include="Ui\TableSnapshotCompare.h" />
     <ClInclude Include="Ui\TextFindSupport.h" />
     <ClInclude Include="Ui\Theme.h" />
+    <ClInclude Include="Ui\Dpi.h" />
+    <ClInclude Include="Ui\LazyTreeView.h" />
     <ClInclude Include="Ui\TreeViewUtil.h" />
     <ClInclude Include="Ui\VirtualListView.h" />
     <ClInclude Include="Ui\WorkspaceHost.h" />

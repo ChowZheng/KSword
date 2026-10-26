@@ -7,6 +7,8 @@ metadata:
 
 KSword 主程序位于 `Ksword5.1/Ksword5.1`（Qt 6.9.3 Widgets + Qt Advanced Docking System，MSVC vcxproj 构建）。
 
+- 2026-10-25 默认 UI 与首帧收口见 [默认 UI 状态与首帧](ksword-ui-input-first-frame.md)：普通按钮按真实输入来源显示焦点，通用几何在共享入口准备，原生 heightForWidth/sizeHint 参与首次布局；无变化 Show、颜色或焦点不重复归一。必须用首个实际 Paint 对比稳定后几何验证，不能见到 singleShot 就直接前移到 Show/UpdateRequest，Qt 子树遍历与私有视口布局可能因此新增崩溃或抖动。
+
 - 2026-10-01 虚拟化 Dock 按驱动后端适配：AMD 使用“准备 → 全核 SVM 自检 → 常驻”，隐藏 EPT watch/分离视图/执行域/Hook/VMCS 策略/SOAK，保留通用内存、事件、停止和释放。第三方 VM 页为四步嵌套 SVM 流程，Intel 仍五步；实际启用必须读取驱动位，不能从本地开关或 VMware 服务 Running 推断。证据页校验 metrics 版本/长度/行数、代次与 CPU 身份，raw/general/hotspots 各自检查有效位与偶数序列，无效显示暂不可用。
 - 离屏 UI 回归入口 `tools/hvm_lab/build-ui-tests.cmd`：链接实际 Dock、Guest、Evidence、KvmControl 与 DriverClient，仅替换 IOCTL 传输、确认和 SCM。测试源码由该独立构建清单登记，不进入主程序 vcxproj。Windows Qt offscreen 需显式加载中文字体，配合 `SetDarkModeEnabled` 与完整 palette（包括 PlaceholderText/AlternateBase/disabled roles）；否则缺字或默认浅色 palette 会制造错误的窄窗口/深色截图。Qt DLL 需部署到测试 exe 目录。
 

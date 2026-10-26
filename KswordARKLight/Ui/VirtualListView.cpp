@@ -1,5 +1,7 @@
 #include "VirtualListView.h"
 
+#include "NumericSortKey.h"
+
 #include <algorithm>
 #include <cwctype>
 #include <regex>
@@ -37,13 +39,15 @@ bool VirtualListView::addColumns(const std::vector<ListViewColumn>& columns) {
 }
 
 void VirtualListView::setRows(std::vector<VirtualListRow> rows) {
+    captureViewportAnchor();
     rows_ = std::make_shared<const std::vector<VirtualListRow>>(std::move(rows));
-    resetVisibleIndexes();
+    rebuildVisibleIndexes();
 }
 
 void VirtualListView::setSharedRows(std::shared_ptr<const std::vector<VirtualListRow>> rows) {
+    captureViewportAnchor();
     rows_ = std::move(rows);
-    resetVisibleIndexes();
+    rebuildVisibleIndexes();
 }
 
 const std::vector<VirtualListRow>& VirtualListView::rows() const noexcept {
@@ -56,18 +60,134 @@ const std::vector<std::size_t>& VirtualListView::visibleIndexes() const noexcept
 }
 
 void VirtualListView::setVisibleIndexes(std::vector<std::size_t> indexes) {
+    captureViewportAnchor();
     const std::size_t rowCount = rows_ ? rows_->size() : 0;
     indexes.erase(std::remove_if(indexes.begin(), indexes.end(), [rowCount](const std::size_t index) { return index >= rowCount; }), indexes.end());
     visibleIndexes_ = std::move(indexes);
+    // A filter narrows the set; the sort the user already chose still applies to
+    // what is left, so it is re-applied here rather than only on applySort.
+    sortVisibleIndexes();
     updateItemCount();
 }
 
 void VirtualListView::resetVisibleIndexes() {
+    captureViewportAnchor();
+    rebuildVisibleIndexes();
+}
+
+void VirtualListView::applySort(const SortSpec& spec) {
+    if (!hwnd_ || !rows_) {
+        sortSpec_ = spec;
+        return;
+    }
+    // Sorting only permutes the visible index list; the backing snapshot is not
+    // touched. That makes the backing row number an exact identity, so the
+    // selection is carried over by row rather than by stableKey: several pages
+    // build their key out of the row position (NetworkView uses the bare index),
+    // and those keys would point at a different record after a reorder.
+    const int previousSelected = ListView_GetNextItem(hwnd_, -1, LVNI_SELECTED);
+    const bool hasSelection = previousSelected >= 0 &&
+        static_cast<std::size_t>(previousSelected) < visibleIndexes_.size();
+    const std::size_t selectedRow = hasSelection
+        ? visibleIndexes_[static_cast<std::size_t>(previousSelected)]
+        : 0U;
+    captureViewportAnchor();
+    sortSpec_ = spec;
+    sortVisibleIndexes();
+    updateItemCount();
+    if (hasSelection) {
+        restoreSelectionToBackingRow(selectedRow, previousSelected);
+    }
+}
+
+SortSpec VirtualListView::sortSpec() const noexcept {
+    return sortSpec_;
+}
+
+void VirtualListView::sortVisibleIndexes() {
+    if (!sortSpec_.active() || !rows_) {
+        return;
+    }
+    const std::vector<VirtualListRow>& snapshot = *rows_;
+    const std::size_t column = static_cast<std::size_t>(sortSpec_.column);
+    const bool descending = sortSpec_.descending();
+    const auto cellAt = [&snapshot, column](const std::size_t rowIndex) -> const std::wstring& {
+        static const std::wstring empty;
+        if (rowIndex >= snapshot.size()) {
+            return empty;
+        }
+        const std::vector<std::wstring>& cells = snapshot[rowIndex].cells;
+        return column < cells.size() ? cells[column] : empty;
+    };
+    // stable_sort keeps rows with equal keys in their loaded order, so a repeated
+    // sort of a column with many duplicates never shuffles the table.
+    std::stable_sort(
+        visibleIndexes_.begin(),
+        visibleIndexes_.end(),
+        [&cellAt, descending](const std::size_t left, const std::size_t right) {
+            const int compared = descending ? CompareCellsNumericAware(cellAt(right), cellAt(left))
+                                            : CompareCellsNumericAware(cellAt(left), cellAt(right));
+            return compared < 0;
+        });
+}
+
+void VirtualListView::restoreSelectionToBackingRow(const std::size_t backingRow, const int previousPosition) {
+    if (!hwnd_) {
+        return;
+    }
+    // A stale selection in an owner-data ListView is a row *position*, so after a
+    // reorder it highlights a different record. Clear it first; leaving it in
+    // place would also make an "already selected" check skip the restore.
+    int target = -1;
+    for (std::size_t position = 0; position < visibleIndexes_.size(); ++position) {
+        if (visibleIndexes_[position] == backingRow) {
+            target = static_cast<int>(position);
+            break;
+        }
+    }
+    if (target == previousPosition) {
+        return;
+    }
+    if (previousPosition >= 0) {
+        ListView_SetItemState(hwnd_, previousPosition, 0, LVIS_SELECTED | LVIS_FOCUSED);
+    }
+    if (target < 0) {
+        // The row is no longer visible; a cleared selection is honest where
+        // keeping the old position would point at an unrelated row.
+        return;
+    }
+    ListView_SetItemState(
+        hwnd_,
+        target,
+        LVIS_SELECTED | LVIS_FOCUSED,
+        LVIS_SELECTED | LVIS_FOCUSED);
+    ListView_EnsureVisible(hwnd_, target, FALSE);
+}
+
+void VirtualListView::rebuildVisibleIndexes() {
     visibleIndexes_.resize(rows_ ? rows_->size() : 0);
     for (std::size_t index = 0; index < visibleIndexes_.size(); ++index) {
         visibleIndexes_[index] = index;
     }
+    sortVisibleIndexes();
     updateItemCount();
+}
+
+void VirtualListView::captureViewportAnchor() {
+    hasViewportAnchor_ = false;
+    viewportAnchorKey_.clear();
+    viewportAnchorRow_ = 0;
+    if (!hwnd_ || visibleIndexes_.empty()) {
+        return;
+    }
+    const int topVisible = ListView_GetTopIndex(hwnd_);
+    const VirtualListRow* row = rowAtVisibleIndex(topVisible);
+    if (!row) {
+        return;
+    }
+    viewportAnchorKey_ = row->stableKey;
+    viewportAnchorRow_ = visibleIndexes_[static_cast<std::size_t>(topVisible)];
+    hasViewportAnchor_ = true;
 }
 
 bool VirtualListView::IsValidFilterRegex(const std::wstring& query) {
@@ -187,10 +307,33 @@ void VirtualListView::updateItemCount() {
     if (!hwnd_) {
         return;
     }
-    const int topIndex = ListView_GetTopIndex(hwnd_);
     ListView_SetItemCountEx(hwnd_, static_cast<int>(visibleIndexes_.size()), LVSICF_NOINVALIDATEALL | LVSICF_NOSCROLL);
-    if (topIndex >= 0 && static_cast<std::size_t>(topIndex) < visibleIndexes_.size()) {
-        ListView_EnsureVisible(hwnd_, topIndex, FALSE);
+    // Restore the viewport by identity. Keeping the old top row *number* is what
+    // made filtering and sorting jump to an unrelated record: the visible set is
+    // reordered, so position 0 no longer means the same row.
+    if (hasViewportAnchor_) {
+        int target = -1;
+        const auto& snapshot = rows();
+        if (!viewportAnchorKey_.empty()) {
+            for (std::size_t position = 0; position < visibleIndexes_.size(); ++position) {
+                const std::size_t rowIndex = visibleIndexes_[position];
+                if (rowIndex < snapshot.size() && snapshot[rowIndex].stableKey == viewportAnchorKey_) {
+                    target = static_cast<int>(position);
+                    break;
+                }
+            }
+        }
+        if (target < 0) {
+            for (std::size_t position = 0; position < visibleIndexes_.size(); ++position) {
+                if (visibleIndexes_[position] == viewportAnchorRow_) {
+                    target = static_cast<int>(position);
+                    break;
+                }
+            }
+        }
+        // The anchor row itself may be filtered out; then the list starts at the
+        // beginning, which is the only predictable position left.
+        ListView_EnsureVisible(hwnd_, target < 0 ? 0 : target, FALSE);
     }
     ::InvalidateRect(hwnd_, nullptr, FALSE);
 }

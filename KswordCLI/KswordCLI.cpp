@@ -64,126 +64,21 @@
 #include "../shared/driver/KswordArkWslSiloIoctl.h"
 #include "../shared/driver/KswordArkClipboardPolicyIoctl.h"
 #include "ArkDriverExtended.h"
+#include "CliArgs.h"
+#include "CliCore.h"
+#include "CliText.h"
 #include "CommandRegistry.h"
 
 #pragma comment(lib, "Iphlpapi.lib")
 #pragma comment(lib, "Ws2_32.lib")
 
-namespace
+namespace ks::cli::legacy
 {
-    constexpr DWORD kDefaultShareMode = FILE_SHARE_READ | FILE_SHARE_WRITE;
-    constexpr DWORD kDefaultDesiredAccess = GENERIC_READ | GENERIC_WRITE;
-    constexpr std::size_t kSmallResponseBytes = 64U * 1024U;
-    constexpr std::size_t kLargeResponseBytes = 2U * 1024U * 1024U;
-    constexpr std::size_t kHugeResponseBytes = 4U * 1024U * 1024U;
-    constexpr std::size_t kMaxCommandBytes = 64U * 1024U * 1024U;
-    constexpr std::size_t kMaxHexBytes = 256U;
-    DWORD lastIoctlError = ERROR_SUCCESS;
-    DWORD lastOpenError = ERROR_SUCCESS;
-    int responseFailureRc = 0;
-
-    // Transport success does not imply that the operation in the packet succeeded.
-    int operationStatusRc(long status)
-    {
-        const auto value = static_cast<std::uint32_t>(status);
-        if (value == 0xC00000BBU || value == 0xC0000002U || value == 0xC000007AU) return 5;
-        return status < 0 || value == 0x102U ? 3 : 0;
-    }
-
-    // IoctlResult mirrors the Win32 DeviceIoControl completion state.
-    // Inputs: fields are assigned by sendIoctl after each kernel request.
-    // Processing: no ownership is stored here; this is a plain result packet.
-    // Returns: no behavior; callers inspect ok, win32Error, and bytesReturned.
-    struct IoctlResult
-    {
-        bool ok = false;
-        DWORD win32Error = ERROR_SUCCESS;
-        DWORD bytesReturned = 0;
-    };
-
-    // DriverHandle owns a Win32 HANDLE returned by CreateFileW.
-    // Inputs: constructed from a raw HANDLE or default-invalid state.
-    // Processing: closes the handle in reset/destructor and supports moves.
-    // Returns: native() exposes the raw handle for Win32 calls without transfer.
-    class DriverHandle
-    {
-    public:
-        DriverHandle() noexcept = default;
-
-        explicit DriverHandle(HANDLE handle) noexcept
-            : handle_(handle)
-        {
-        }
-
-        ~DriverHandle()
-        {
-            reset();
-        }
-
-        DriverHandle(const DriverHandle&) = delete;
-        DriverHandle& operator=(const DriverHandle&) = delete;
-
-        DriverHandle(DriverHandle&& other) noexcept
-            : handle_(other.release())
-        {
-        }
-
-        DriverHandle& operator=(DriverHandle&& other) noexcept
-        {
-            if (this != &other)
-            {
-                reset(other.release());
-            }
-            return *this;
-        }
-
-        bool valid() const noexcept
-        {
-            return handle_ != nullptr && handle_ != INVALID_HANDLE_VALUE;
-        }
-
-        HANDLE native() const noexcept
-        {
-            return handle_;
-        }
-
-        HANDLE release() noexcept
-        {
-            HANDLE detached = handle_;
-            handle_ = INVALID_HANDLE_VALUE;
-            return detached;
-        }
-
-        void reset(HANDLE next = INVALID_HANDLE_VALUE) noexcept
-        {
-            if (valid())
-            {
-                ::CloseHandle(handle_);
-            }
-            handle_ = next;
-        }
-
-    private:
-        HANDLE handle_ = INVALID_HANDLE_VALUE;
-    };
-
     struct ParsedOption
     {
         bool present = false;
         std::wstring value;
     };
-
-    struct NamedArgs
-    {
-        std::vector<std::wstring> positionals;
-        std::map<std::wstring, std::wstring> options;
-    };
-
-    // Numeric parser forward declarations are needed because option helpers are
-    // defined before the concrete parser implementations in this single-file
-    // CLI. Inputs are raw argv tokens; return values are unsigned scalars.
-    std::uint32_t parseU32(const wchar_t* token, const char* name);
-    std::uint64_t parseU64(const wchar_t* token, const char* name);
 
     // queryCallbackInventory is implemented after the kernel command family in
     // this single translation unit. Inputs are parsed named arguments for the
@@ -191,359 +86,10 @@ namespace
     // enumeration IOCTL; return value is the CLI process exit code.
     int queryCallbackInventory(const NamedArgs& args);
 
-    // printWin32Error renders a failed Win32 operation in a compact form.
-    // Inputs: operation describes the API/IOCTL; error is GetLastError output.
-    // Processing: prints decimal and hexadecimal forms for quick triage.
-    // Returns: no value; output goes to stderr.
-    void printWin32Error(const wchar_t* operation, DWORD error)
-    {
-        std::wcerr << L"error: " << operation << L" failed, win32=" << error
-                   << L" (0x" << std::hex << error << std::dec << L")\n";
-        if ((error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND) &&
-            std::wcsstr(operation, L"CreateFileW(") == operation)
-            std::wcerr << L"hint: run 'sc start KswordARK' for an installed service, "
-                       << L"or run Launcher.exe / Ksword5.1.exe as administrator to load the driver.\n";
-        // Some callers retain GetLastError after diagnostics; stream writes
-        // must not replace the original failed operation's error.
-        ::SetLastError(error);
-    }
+    // parseNamedArgs、getOptionText/U32/U64/Bool、requireOptionText/U32/U64、hasOption、
+    // findOptionValue 已移至 CliArgs.cpp。
 
-    // openDriver opens the shared KswordARK control/log device.
-    // Inputs: desiredAccess usually includes read/write because some IOCTLs are gated.
-    // Processing: calls CreateFileW on the path exported by shared protocol headers.
-    // Returns: RAII DriverHandle; caller checks valid() before issuing requests.
-    DriverHandle openDriver(DWORD desiredAccess = kDefaultDesiredAccess)
-    {
-        DriverHandle handle(::CreateFileW(
-            KSWORD_ARK_LOG_WIN32_PATH,
-            desiredAccess,
-            kDefaultShareMode,
-            nullptr,
-            OPEN_EXISTING,
-            FILE_ATTRIBUTE_NORMAL,
-            nullptr));
-        lastOpenError = handle.valid() ? ERROR_SUCCESS : ::GetLastError();
-        return handle;
-    }
-
-    // sendIoctl wraps synchronous DeviceIoControl for fixed and variable buffers.
-    // Inputs: open handle, control code, optional input and output buffers.
-    // Processing: forwards arguments without interpreting protocol contents.
-    // Returns: IoctlResult with Win32 success bit, error code, and returned byte count.
-    IoctlResult sendIoctl(
-        DriverHandle& handle,
-        DWORD code,
-        void* input,
-        DWORD inputBytes,
-        void* output,
-        DWORD outputBytes)
-    {
-        IoctlResult result{};
-        if (!handle.valid())
-        {
-            result.ok = false;
-            result.win32Error = ERROR_INVALID_HANDLE;
-            return result;
-        }
-
-        DWORD bytesReturned = 0;
-        const BOOL ok = ::DeviceIoControl(
-            handle.native(),
-            code,
-            input,
-            inputBytes,
-            output,
-            outputBytes,
-            &bytesReturned,
-            nullptr);
-        result.ok = (ok != FALSE);
-        result.win32Error = result.ok ? ERROR_SUCCESS : ::GetLastError();
-        lastIoctlError = result.win32Error;
-        result.bytesReturned = bytesReturned;
-        return result;
-    }
-
-    // parseNamedArgs collects positional tokens after the command family/subcommand.
-    // Inputs: argc/argv plus the start index for first option token.
-    // Processing: preserves ordering for positional file/blob paths and flags.
-    // Returns: NamedArgs with a positional list; option helpers scan argv directly.
-    NamedArgs parseNamedArgs(int argc, wchar_t* argv[], int startIndex)
-    {
-        NamedArgs args{};
-        for (int index = startIndex; index < argc; ++index)
-        {
-            if (argv[index] == nullptr || argv[index][0] == L'\0')
-            {
-                continue;
-            }
-
-            if (argv[index][0] == L'-')
-            {
-                if (index + 1 < argc && argv[index + 1] != nullptr && argv[index + 1][0] != L'-')
-                {
-                    args.options[argv[index]] = argv[index + 1];
-                    ++index;
-                }
-                else
-                {
-                    args.options[argv[index]] = L"";
-                }
-                continue;
-            }
-
-            args.positionals.emplace_back(argv[index]);
-        }
-        return args;
-    }
-
-    // getOptionText returns a named option value from parsed args.
-    // Inputs: option map and key with leading dashes.
-    // Processing: caller can use fallback when the option is absent.
-    // Returns: pointer to the stable internal string or nullptr.
-    const std::wstring* getOptionText(const NamedArgs& args, const wchar_t* key)
-    {
-        const auto it = args.options.find(key);
-        return it == args.options.end() ? nullptr : &it->second;
-    }
-
-    // getOptionU32 parses an option value as unsigned 32-bit.
-    // Inputs: parsed args, key, and default value.
-    // Processing: falls back to default when the switch is absent.
-    // Returns: parsed or default value.
-    std::uint32_t getOptionU32(const NamedArgs& args, const wchar_t* key, std::uint32_t defaultValue)
-    {
-        const std::wstring* value = getOptionText(args, key);
-        return value == nullptr ? defaultValue : parseU32(value->c_str(), "option");
-    }
-
-    // getOptionU64 parses an option value as unsigned 64-bit.
-    // Inputs: parsed args, key, and default value.
-    // Processing: falls back to default when the switch is absent.
-    // Returns: parsed or default value.
-    std::uint64_t getOptionU64(const NamedArgs& args, const wchar_t* key, std::uint64_t defaultValue)
-    {
-        const std::wstring* value = getOptionText(args, key);
-        return value == nullptr ? defaultValue : parseU64(value->c_str(), "option");
-    }
-
-    // getOptionBool reports whether the option is present.
-    // Inputs: parsed args and key.
-    // Processing: presence-only flag; no value is consumed.
-    // Returns: true when present.
-    bool getOptionBool(const NamedArgs& args, const wchar_t* key)
-    {
-        return args.options.find(key) != args.options.end();
-    }
-
-    // requireOptionText fetches a mandatory named option.
-    // Inputs: parsed args and key.
-    // Processing: throws when the switch is absent.
-    // Returns: option value reference.
-    const std::wstring& requireOptionText(const NamedArgs& args, const wchar_t* key)
-    {
-        const std::wstring* value = getOptionText(args, key);
-        std::string keyText;
-        for (const wchar_t* cursor = key; *cursor; ++cursor) keyText.push_back(static_cast<char>(*cursor));
-        if (value == nullptr)
-        {
-            throw std::invalid_argument("missing option " + keyText);
-        }
-        if (value->empty())
-            throw std::invalid_argument("missing value for option " + keyText);
-        return *value;
-    }
-
-    // requireOptionU32 parses a mandatory unsigned 32-bit option.
-    // Inputs: parsed args and key.
-    // Processing: throws when the switch is absent or malformed.
-    // Returns: parsed value.
-    std::uint32_t requireOptionU32(const NamedArgs& args, const wchar_t* key)
-    {
-        return parseU32(requireOptionText(args, key).c_str(), "option");
-    }
-
-    // requireOptionU64 parses a mandatory unsigned 64-bit option.
-    // Inputs: parsed args and key.
-    // Processing: throws when the switch is absent or malformed.
-    // Returns: parsed value.
-    std::uint64_t requireOptionU64(const NamedArgs& args, const wchar_t* key)
-    {
-        return parseU64(requireOptionText(args, key).c_str(), "option");
-    }
-
-    // hasOption reports whether a named switch is present in argv.
-    // Inputs: option name includes the leading dashes, for example "--pid".
-    // Processing: exact case-sensitive match against the command line.
-    // Returns: true when the option exists.
-    bool hasOption(int argc, wchar_t* argv[], const wchar_t* option)
-    {
-        for (int index = 0; index < argc; ++index)
-        {
-            if (argv[index] != nullptr && std::wcscmp(argv[index], option) == 0)
-            {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    // findOptionValue returns the next token after a named switch.
-    // Inputs: argv and option name; if missing, returns nullptr.
-    // Processing: scans for exact option match and returns following token.
-    // Returns: pointer to the following argument or nullptr.
-    const wchar_t* findOptionValue(int argc, wchar_t* argv[], const wchar_t* option)
-    {
-        for (int index = 0; index + 1 < argc; ++index)
-        {
-            if (argv[index] != nullptr && std::wcscmp(argv[index], option) == 0)
-            {
-                return argv[index + 1];
-            }
-        }
-        return nullptr;
-    }
-
-    // readFileBytes loads a whole file into memory for blob-style IOCTL inputs.
-    // Inputs: path and an upper size bound to reject oversized protocol blobs.
-    // Processing: opens the file in binary mode and validates the actual length.
-    // Returns: byte vector on success; throws on IO or size violations.
-    std::vector<std::uint8_t> readFileBytes(const std::wstring& path, std::size_t maxBytes)
-    {
-        if (path.empty())
-        {
-            throw std::invalid_argument("file path");
-        }
-
-        HANDLE file = ::CreateFileW(
-            path.c_str(),
-            GENERIC_READ,
-            FILE_SHARE_READ,
-            nullptr,
-            OPEN_EXISTING,
-            FILE_ATTRIBUTE_NORMAL,
-            nullptr);
-        if (file == INVALID_HANDLE_VALUE)
-        {
-            throw std::runtime_error("open file");
-        }
-
-        LARGE_INTEGER size{};
-        if (::GetFileSizeEx(file, &size) == FALSE)
-        {
-            ::CloseHandle(file);
-            throw std::runtime_error("file size");
-        }
-        if (size.QuadPart < 0 || static_cast<std::uint64_t>(size.QuadPart) > maxBytes)
-        {
-            ::CloseHandle(file);
-            throw std::out_of_range("file too large");
-        }
-
-        std::vector<std::uint8_t> bytes(static_cast<std::size_t>(size.QuadPart));
-        DWORD readBytes = 0;
-        if (!bytes.empty())
-        {
-            if (::ReadFile(file, bytes.data(), static_cast<DWORD>(bytes.size()), &readBytes, nullptr) == FALSE)
-            {
-                ::CloseHandle(file);
-                throw std::runtime_error("file read");
-            }
-            bytes.resize(readBytes);
-        }
-        ::CloseHandle(file);
-        return bytes;
-    }
-
-    // parseHexBytes accepts either 0x-prefixed numbers or raw hex byte strings.
-    // Inputs: text token containing bytes like "DE AD BE EF" or "0x1234".
-    // Processing: strips separators and decodes two hex digits per byte.
-    // Returns: decoded bytes; throws on malformed input.
-    std::vector<std::uint8_t> parseHexBytes(const std::wstring& text)
-    {
-        std::wstring normalized = text;
-        if (normalized.size() >= 2U && normalized[0] == L'0' && (normalized[1] == L'x' || normalized[1] == L'X'))
-        {
-            normalized.erase(0U, 2U);
-        }
-
-        std::wstring cleaned;
-        cleaned.reserve(text.size());
-        for (wchar_t ch : normalized)
-        {
-            if (std::iswxdigit(ch))
-            {
-                cleaned.push_back(static_cast<wchar_t>(std::towupper(ch)));
-            }
-        }
-
-        if (cleaned.empty())
-        {
-            return {};
-        }
-        if ((cleaned.size() % 2U) != 0U)
-        {
-            throw std::invalid_argument("hex bytes");
-        }
-
-        std::vector<std::uint8_t> bytes;
-        bytes.reserve(cleaned.size() / 2U);
-        for (std::size_t index = 0U; index < cleaned.size(); index += 2U)
-        {
-            const wchar_t hi = cleaned[index];
-            const wchar_t lo = cleaned[index + 1U];
-            const auto nibble = [](wchar_t c) -> int {
-                if (c >= L'0' && c <= L'9') return static_cast<int>(c - L'0');
-                if (c >= L'A' && c <= L'F') return static_cast<int>(10 + (c - L'A'));
-                return -1;
-            };
-            const int hiValue = nibble(hi);
-            const int loValue = nibble(lo);
-            if (hiValue < 0 || loValue < 0)
-            {
-                throw std::invalid_argument("hex bytes");
-            }
-            bytes.push_back(static_cast<std::uint8_t>((hiValue << 4) | loValue));
-        }
-        return bytes;
-    }
-
-    // fixedAnsi copies a fixed char array into std::string safely.
-    // Inputs: text points at protocol storage; maxBytes is the field capacity.
-    // Processing: scans until NUL or capacity, whichever comes first.
-    // Returns: a possibly empty string without embedded protocol padding.
-    std::string fixedAnsi(const char* text, std::size_t maxBytes)
-    {
-        if (text == nullptr || maxBytes == 0U)
-        {
-            return {};
-        }
-
-        std::size_t length = 0U;
-        while (length < maxBytes && text[length] != '\0')
-        {
-            ++length;
-        }
-        return std::string(text, text + length);
-    }
-
-    // fixedWide copies a fixed wchar_t array into std::wstring safely.
-    // Inputs: text points at protocol storage; maxChars is the field capacity.
-    // Processing: scans until NUL or capacity, whichever comes first.
-    // Returns: a possibly empty wide string without trailing padding.
-    std::wstring fixedWide(const wchar_t* text, std::size_t maxChars)
-    {
-        if (text == nullptr || maxChars == 0U)
-        {
-            return {};
-        }
-
-        std::size_t length = 0U;
-        while (length < maxChars && text[length] != L'\0')
-        {
-            ++length;
-        }
-        return std::wstring(text, text + length);
-    }
+    // readFileBytes、parseHexBytes、fixedAnsi、fixedWide 已移至 CliText.cpp。
 
     // ipcSummaryStatusName renders KSWORD_ARK_IPC_SUMMARY_STATUS_* values.
     // Inputs: status is a shared protocol enum returned by query IPC summary.
@@ -568,181 +114,8 @@ namespace
         }
     }
 
-    // fixedUtf16 copies unsigned-short UTF-16 protocol fields into std::wstring.
-    // Inputs: text points at UTF-16 code units; maxChars bounds the scan.
-    // Processing: casts code units to wchar_t, matching Windows UTF-16 wchar_t.
-    // Returns: a std::wstring suitable for console output on Windows.
-    std::wstring fixedUtf16(const unsigned short* text, std::size_t maxChars)
-    {
-        if (text == nullptr || maxChars == 0U)
-        {
-            return {};
-        }
-
-        std::wstring value;
-        for (std::size_t index = 0U; index < maxChars && text[index] != 0U; ++index)
-        {
-            value.push_back(static_cast<wchar_t>(text[index]));
-        }
-        return value;
-    }
-
-    // copyWideToFixed writes a command-line string into a protocol wchar_t field.
-    // Inputs: destination/capacity are the protocol field; source is user text.
-    // Processing: truncates to leave room for NUL and clears the destination first.
-    // Returns: no value; destination is always NUL terminated when capacity > 0.
-    void copyWideToFixed(wchar_t* destination, std::size_t capacity, const std::wstring& source)
-    {
-        if (destination == nullptr || capacity == 0U)
-        {
-            return;
-        }
-
-        std::fill(destination, destination + capacity, L'\0');
-        const std::size_t chars = std::min<std::size_t>(source.size(), capacity - 1U);
-        if (chars != 0U)
-        {
-            std::copy(source.data(), source.data() + chars, destination);
-        }
-    }
-
-    // parseU32 parses a decimal or 0x-prefixed unsigned 32-bit number.
-    // Inputs: token is a command-line argument; name is used in error text.
-    // Processing: wcstoull is used so both decimal and hex are accepted.
-    // Returns: parsed value, or throws invalid_argument/out_of_range.
-    std::uint32_t parseU32(const wchar_t* token, const char* name)
-    {
-        if (token == nullptr || token[0] == L'\0')
-        {
-            throw std::invalid_argument(name);
-        }
-
-        wchar_t* end = nullptr;
-        const unsigned long long value = std::wcstoull(token, &end, 0);
-        if (end == token || *end != L'\0')
-        {
-            throw std::invalid_argument(name);
-        }
-        if (value > std::numeric_limits<std::uint32_t>::max())
-        {
-            throw std::out_of_range(name);
-        }
-        return static_cast<std::uint32_t>(value);
-    }
-
-    // parseU64 parses a decimal or 0x-prefixed unsigned 64-bit number.
-    // Inputs: token is a command-line argument; name is used in error text.
-    // Processing: wcstoull is used to preserve native Windows argument encoding.
-    // Returns: parsed value, or throws invalid_argument.
-    std::uint64_t parseU64(const wchar_t* token, const char* name)
-    {
-        if (token == nullptr || token[0] == L'\0')
-        {
-            throw std::invalid_argument(name);
-        }
-
-        wchar_t* end = nullptr;
-        const unsigned long long value = std::wcstoull(token, &end, 0);
-        if (end == token || *end != L'\0')
-        {
-            throw std::invalid_argument(name);
-        }
-        return static_cast<std::uint64_t>(value);
-    }
-
-    // parsePidListText converts a delimiter-separated PID list into unique PID values.
-    // Inputs: text accepts decimal or 0x-prefixed numbers separated by comma, semicolon, pipe, or whitespace.
-    // Processing: PID zero is ignored and duplicates are removed while preserving first-seen order.
-    // Returns: normalized PID vector; throws when a token is malformed or the protocol maximum is exceeded.
-    std::vector<std::uint32_t> parsePidListText(const std::wstring& text)
-    {
-        std::vector<std::uint32_t> processIds;
-        std::wstring token;
-
-        const auto flushToken = [&]()
-        {
-            if (token.empty())
-            {
-                return;
-            }
-
-            const std::uint32_t processId = parseU32(token.c_str(), "pid list");
-            token.clear();
-            if (processId == 0U)
-            {
-                return;
-            }
-            if (std::find(processIds.begin(), processIds.end(), processId) != processIds.end())
-            {
-                return;
-            }
-            if (processIds.size() >= KSWORD_ARK_MINIFILTER_BYPASS_PID_MAX_COUNT)
-            {
-                throw std::out_of_range("too many pids");
-            }
-            processIds.push_back(processId);
-        };
-
-        for (const wchar_t ch : text)
-        {
-            if (ch == L',' || ch == L';' || ch == L'|' || std::iswspace(ch) != 0)
-            {
-                flushToken();
-                continue;
-            }
-            token.push_back(ch);
-        }
-        flushToken();
-        return processIds;
-    }
-
-    // hex64 formats a 64-bit integer as a fixed-width hexadecimal value.
-    // Inputs: value is the integer to render.
-    // Processing: uses an isolated stringstream to avoid mutating global cout state.
-    // Returns: wide string in 0xNNNN form.
-    std::wstring hex64(std::uint64_t value)
-    {
-        std::wostringstream stream;
-        stream << L"0x" << std::hex << std::uppercase << value;
-        return stream.str();
-    }
-
-    // hexdump prints raw bytes in a stable offset+ASCII layout.
-    // Inputs: source bytes and an optional row width.
-    // Processing: emits to stdout only; suitable for debugging variable payloads.
-    // Returns: no value.
-    void hexdump(const std::uint8_t* data, std::size_t size, std::size_t width = 16U)
-    {
-        if (data == nullptr || size == 0U)
-        {
-            std::wcout << L"(empty)\n";
-            return;
-        }
-
-        for (std::size_t offset = 0U; offset < size; offset += width)
-        {
-            const std::size_t lineBytes = std::min(width, size - offset);
-            std::wcout << std::hex << std::setw(8) << std::setfill(L'0') << offset << L": ";
-            for (std::size_t index = 0U; index < width; ++index)
-            {
-                if (index < lineBytes)
-                {
-                    std::wcout << std::setw(2) << static_cast<unsigned int>(data[offset + index]) << L' ';
-                }
-                else
-                {
-                    std::wcout << L"   ";
-                }
-            }
-            std::wcout << L"|";
-            for (std::size_t index = 0U; index < lineBytes; ++index)
-            {
-                const unsigned char ch = data[offset + index];
-                std::wcout << (ch >= 32U && ch < 127U ? static_cast<wchar_t>(ch) : L'.');
-            }
-            std::wcout << L"|\n" << std::dec << std::setfill(L' ');
-        }
-    }
+    // fixedUtf16、copyWideToFixed、parseU32、parseU64、parsePidListText、hex64、hexdump
+    // 已移至 CliText.cpp。
 
     // dumpWideText prints a fixed wide string only when it is non-empty.
     // Inputs: label and the decoded wide string.
@@ -802,327 +175,12 @@ namespace
         return std::min({ reported, available, limit });
     }
 
-    // currentUtc100ns returns the current UTC FILETIME tick count.
-    // Inputs: none.
-    // Processing: converts GetSystemTimePreciseAsFileTime into a 64-bit scalar.
-    // Returns: UTC time in 100ns units.
-    std::uint64_t currentUtc100ns()
-    {
-        FILETIME fileTime{};
-        ::GetSystemTimePreciseAsFileTime(&fileTime);
-        ULARGE_INTEGER value{};
-        value.HighPart = fileTime.dwHighDateTime;
-        value.LowPart = fileTime.dwLowDateTime;
-        return static_cast<std::uint64_t>(value.QuadPart);
-    }
+    // currentUtc100ns, formatGuid128 and parseGuid128 are declared by CliCore.h.
 
-    // formatGuid128 renders the callback GUID packet in the same shape as UI code.
-    // Inputs: fixed 16-byte GUID packet.
-    // Processing: prints uppercase hexadecimal with 8-4-4-4-12 grouping.
-    // Returns: formatted GUID text.
-    std::wstring formatGuid128(const KSWORD_ARK_GUID128& guid)
-    {
-        std::wostringstream stream;
-        const unsigned char* bytes = guid.bytes;
-        stream << std::hex << std::uppercase << std::setfill(L'0')
-               << std::setw(2) << static_cast<unsigned int>(bytes[0])
-               << std::setw(2) << static_cast<unsigned int>(bytes[1])
-               << std::setw(2) << static_cast<unsigned int>(bytes[2])
-               << std::setw(2) << static_cast<unsigned int>(bytes[3]) << L"-"
-               << std::setw(2) << static_cast<unsigned int>(bytes[4])
-               << std::setw(2) << static_cast<unsigned int>(bytes[5]) << L"-"
-               << std::setw(2) << static_cast<unsigned int>(bytes[6])
-               << std::setw(2) << static_cast<unsigned int>(bytes[7]) << L"-"
-               << std::setw(2) << static_cast<unsigned int>(bytes[8])
-               << std::setw(2) << static_cast<unsigned int>(bytes[9]) << L"-"
-               << std::setw(2) << static_cast<unsigned int>(bytes[10])
-               << std::setw(2) << static_cast<unsigned int>(bytes[11])
-               << std::setw(2) << static_cast<unsigned int>(bytes[12])
-               << std::setw(2) << static_cast<unsigned int>(bytes[13])
-               << std::setw(2) << static_cast<unsigned int>(bytes[14])
-               << std::setw(2) << static_cast<unsigned int>(bytes[15]);
-        return stream.str();
-    }
+    // loadBytesFromHexOrFile 已移至 CliText.cpp。
 
-    // parseGuid128 decodes a 32-hex-digit callback GUID string.
-    // Inputs: GUID text with or without dashes.
-    // Processing: strips separators and decodes byte pairs in order.
-    // Returns: GUID packet or throws on malformed text.
-    KSWORD_ARK_GUID128 parseGuid128(const std::wstring& text)
-    {
-        const std::vector<std::uint8_t> bytes = parseHexBytes(text);
-        if (bytes.size() != 16U)
-        {
-            throw std::invalid_argument("guid");
-        }
-
-        KSWORD_ARK_GUID128 guid{};
-        std::memcpy(guid.bytes, bytes.data(), 16U);
-        return guid;
-    }
-
-    // loadBytesFromHexOrFile loads write payload bytes from --hex or --data-file.
-    // Inputs: parsed args and the option names to consult.
-    // Processing: enforces maxBytes and optional mandatory payload presence.
-    // Returns: decoded bytes or throws on invalid/missing combinations.
-    std::vector<std::uint8_t> loadBytesFromHexOrFile(
-        const NamedArgs& args,
-        const wchar_t* hexKey,
-        const wchar_t* fileKey,
-        std::size_t maxBytes,
-        bool required)
-    {
-        const std::wstring* hexText = getOptionText(args, hexKey);
-        const std::wstring* fileText = getOptionText(args, fileKey);
-        if (hexText != nullptr && fileText != nullptr)
-        {
-            throw std::invalid_argument("mutually exclusive payload");
-        }
-        if (hexText == nullptr && fileText == nullptr)
-        {
-            if (required)
-            {
-                throw std::invalid_argument("payload");
-            }
-            return {};
-        }
-
-        std::vector<std::uint8_t> bytes =
-            (hexText != nullptr) ? parseHexBytes(*hexText) : readFileBytes(*fileText, maxBytes);
-        if (bytes.size() > maxBytes)
-        {
-            throw std::out_of_range("payload too large");
-        }
-        return bytes;
-    }
-
-    // openDriverOrReport opens the shared control device and emits a uniform error.
-    // Inputs: desired access for the pending IOCTL.
-    // Processing: caller receives a possibly-invalid handle and may stop on failure.
-    // Returns: DriverHandle RAII wrapper.
-    DriverHandle openDriverOrReport(DWORD desiredAccess = kDefaultDesiredAccess)
-    {
-        DriverHandle handle = openDriver(desiredAccess);
-        if (!handle.valid())
-        {
-            printWin32Error(L"CreateFileW(" KSWORD_ARK_LOG_WIN32_PATH L")", ::GetLastError());
-        }
-        return handle;
-    }
-
-    // runNoOutputIoctl issues a control code whose success is mostly transport-level.
-    // Inputs: control code and optional request buffer.
-    // Processing: prints bytesReturned and Win32 completion information.
-    // Returns: CLI exit code.
-    int runNoOutputIoctl(
-        const wchar_t* label,
-        DWORD code,
-        void* input,
-        DWORD inputBytes,
-        DWORD desiredAccess = kDefaultDesiredAccess)
-    {
-        DriverHandle handle = openDriverOrReport(desiredAccess);
-        if (!handle.valid())
-        {
-            return 2;
-        }
-
-        IoctlResult io = sendIoctl(handle, code, input, inputBytes, nullptr, 0U);
-        if (!io.ok)
-        {
-            printWin32Error(label, io.win32Error);
-            return 3;
-        }
-
-        std::wcout << L"bytesReturned=" << io.bytesReturned
-                   << L" win32Error=" << io.win32Error << L"\n";
-        return 0;
-    }
-
-    // printSimpleProcessEntry renders one process row with the most useful stable fields.
-    // Inputs: shared process entry from a variable response.
-    // Processing: prints IDs, field flags, object pointers and decoded names.
-    // Returns: no value.
-    void printSimpleProcessEntry(const KSWORD_ARK_PROCESS_ENTRY& entry)
-    {
-        std::wcout << L"  pid=" << entry.processId
-                   << L" ppid=" << entry.parentProcessId
-                   << L" flags=0x" << std::hex << entry.flags
-                   << L" fieldFlags=0x" << entry.fieldFlags
-                   << L" r0Status=" << std::dec << entry.r0Status
-                   << L" image='" << fixedAnsi(entry.imageName, sizeof(entry.imageName)).c_str() << L"'\n";
-        const std::wstring imagePath = fixedUtf16(entry.imagePath, KSWORD_ARK_PROCESS_IMAGE_PATH_CHARS);
-        dumpWideText(L"imagePath", imagePath);
-    }
-
-    // printSimpleThreadEntry renders one thread row with cross-view relevant fields.
-    // Inputs: shared thread entry.
-    // Processing: prints ID, flags, stack info availability and counter sources.
-    // Returns: no value.
-    void printSimpleThreadEntry(const KSWORD_ARK_THREAD_ENTRY& entry)
-    {
-        std::wcout << L"  tid=" << entry.threadId
-                   << L" pid=" << entry.processId
-                   << L" flags=0x" << std::hex << entry.flags
-                   << L" fieldFlags=0x" << entry.fieldFlags
-                   << L" r0Status=" << std::dec << entry.r0Status
-                   << L" stackBase=" << hex64(entry.stackBase)
-                   << L" kernelStack=" << hex64(entry.kernelStack) << L"\n";
-    }
-
-    template <typename TResponse>
-    bool sendFixedNoInput(
-        DWORD code,
-        const wchar_t* label,
-        TResponse& response,
-        IoctlResult& io,
-        DWORD desiredAccess = kDefaultDesiredAccess)
-    {
-        DriverHandle handle = openDriverOrReport(desiredAccess);
-        if (!handle.valid())
-        {
-            io.win32Error = ::GetLastError();
-            return false;
-        }
-
-        io = sendIoctl(handle, code, nullptr, 0U, &response, static_cast<DWORD>(sizeof(response)));
-        if (!io.ok)
-        {
-            printWin32Error(label, io.win32Error);
-            return false;
-        }
-        if (io.bytesReturned < sizeof(response))
-        {
-            std::wcerr << L"error: " << label << L" response too small: " << io.bytesReturned << L" bytes\n";
-            io.ok = false;
-            io.win32Error = ERROR_INSUFFICIENT_BUFFER;
-            return false;
-        }
-        return true;
-    }
-
-    template <typename TRequest, typename TResponse>
-    bool sendFixedRequestResponse(
-        DWORD code,
-        const wchar_t* label,
-        const TRequest& request,
-        TResponse& response,
-        IoctlResult& io,
-        DWORD desiredAccess = kDefaultDesiredAccess)
-    {
-        DriverHandle handle = openDriverOrReport(desiredAccess);
-        if (!handle.valid())
-        {
-            io.win32Error = ::GetLastError();
-            return false;
-        }
-
-        io = sendIoctl(
-            handle,
-            code,
-            const_cast<TRequest*>(&request),
-            static_cast<DWORD>(sizeof(request)),
-            &response,
-            static_cast<DWORD>(sizeof(response)));
-        if (!io.ok)
-        {
-            printWin32Error(label, io.win32Error);
-            return false;
-        }
-        if (io.bytesReturned < sizeof(response))
-        {
-            std::wcerr << L"error: " << label << L" response too small: " << io.bytesReturned << L" bytes\n";
-            io.ok = false;
-            io.win32Error = ERROR_INSUFFICIENT_BUFFER;
-            return false;
-        }
-        return true;
-    }
-
-
-
-
-    // copyBytesToFixed copies a byte vector into a fixed protocol array.
-    // Inputs: destination array, destination capacity, and source bytes.
-    // Processing: zero-fills destination and copies at most capacity bytes.
-    // Returns: no value; destination remains deterministic for METHOD_BUFFERED.
-    void copyBytesToFixed(unsigned char* destination, std::size_t capacity, const std::vector<std::uint8_t>& source)
-    {
-        if (destination == nullptr || capacity == 0U)
-        {
-            return;
-        }
-        std::fill(destination, destination + capacity, 0U);
-        const std::size_t copyBytes = std::min<std::size_t>(capacity, source.size());
-        if (copyBytes != 0U)
-        {
-            std::copy(source.begin(), source.begin() + static_cast<std::ptrdiff_t>(copyBytes), destination);
-        }
-    }
-
-    // checkedDwordSize converts vector sizes into Win32 DWORD byte counts.
-    // Inputs: byte count in size_t.
-    // Processing: rejects values that DeviceIoControl cannot represent.
-    // Returns: DWORD byte count.
-    DWORD checkedDwordSize(std::size_t bytes)
-    {
-        if (bytes > std::numeric_limits<DWORD>::max())
-        {
-            throw std::out_of_range("buffer too large");
-        }
-        return static_cast<DWORD>(bytes);
-    }
-
-    // boundedPathLength validates a fixed WCHAR path protocol field.
-    // Inputs: command line path and target field capacity including terminator.
-    // Processing: rejects empty or over-capacity paths before copying.
-    // Returns: character length excluding NUL.
-    unsigned short boundedPathLength(const std::wstring& pathText, std::size_t capacity)
-    {
-        if (pathText.empty() || pathText.size() >= capacity)
-        {
-            throw std::out_of_range("path length");
-        }
-        return static_cast<unsigned short>(pathText.size());
-    }
-
-    // sendRawIoctl opens the driver and performs one synchronous IOCTL call.
-    // Inputs: label/code, optional input buffer, output buffer vector and access.
-    // Processing: handles CreateFile/DeviceIoControl transport errors uniformly.
-    // Returns: CLI-style exit code; io/output receive raw completion data.
-    int sendRawIoctl(
-        const wchar_t* label,
-        DWORD code,
-        void* input,
-        DWORD inputBytes,
-        std::vector<std::uint8_t>& output,
-        IoctlResult& io,
-        DWORD desiredAccess = kDefaultDesiredAccess)
-    {
-        DriverHandle handle = openDriverOrReport(desiredAccess);
-        if (!handle.valid())
-        {
-            // 打不开设备时也要把真实错误码留在 io 里：调用方普遍会在失败分支上
-            // 打印 io.win32Error，不填就会印出一个 0，把"设备不存在(2)"说成
-            // "没有错误"。姊妹函数 sendFixedRequestResponse 本来就是这么做的。
-            io.win32Error = ::GetLastError();
-            io.ok = false;
-            return 2;
-        }
-        io = sendIoctl(
-            handle,
-            code,
-            input,
-            inputBytes,
-            output.empty() ? nullptr : output.data(),
-            checkedDwordSize(output.size()));
-        if (!io.ok)
-        {
-            printWin32Error(label, io.win32Error);
-            return 3;
-        }
-        return 0;
-    }
+    // openDriverOrReport, runNoOutputIoctl, the fixed/blobs response helpers,
+    // checkedDwordSize, boundedPathLength and sendRawIoctl live in CliCore.cpp.
 
     // FamilyHelp describes one top-level command family for overview output.
     // Inputs: name is argv[1] and summary is human-readable help text.
@@ -1181,7 +239,7 @@ namespace
 
     constexpr CommandHelp kCommandHelps[] = {
         { L"log", L"", L"KswordCLI.exe log [--max-frames N]", L"Read up to N log frames from the shared log device.", L"--max-frames defaults to 64.", L"No subcommand is used for the log family. Output is UTF-8; legacy log bytes use the system ANSI code page." },
-        { L"process", L"terminate", L"KswordCLI.exe process terminate --pid PID [--exit-status NTSTATUS]", L"Terminate one process through the driver.", L"Required: --pid. Optional: --exit-status defaults to 0xC000013A.", L"" },
+        { L"process", L"terminate", L"KswordCLI.exe process terminate --pid PID [--exit-status NTSTATUS] --confirm", L"Terminate one process through the driver.", L"Required: --pid, --confirm. Optional: --exit-status defaults to 0xC000013A.", L"" },
         { L"process", L"suspend", L"KswordCLI.exe process suspend --pid PID", L"Suspend one process.", L"Required: --pid.", L"" },
         { L"process", L"resume", L"KswordCLI.exe process resume --pid PID", L"Resume one suspended process.", L"Required: --pid.", L"Pairs with process suspend; the driver prefers PsResumeProcess and falls back to Zw/NtResumeProcess." },
         { L"process", L"set-ppl", L"KswordCLI.exe process set-ppl --pid PID --level LEVEL", L"Set the process protection level byte.", L"Required: --pid, --level.", L"" },
@@ -1197,9 +255,9 @@ namespace
         { L"process", L"runtime-fields", L"KswordCLI.exe process runtime-fields --pid PID --items id:offset:size[:flags][,id:offset:size[:flags]...] [--flags 0xN] [--hexdump] [--limit N]", L"Sample bounded EPROCESS runtime fields by checked offsets.", L"Required: --pid, --items. Optional: --flags, --hexdump, --limit.", L"Backed by IOCTL_KSWORD_ARK_QUERY_PROCESS_RUNTIME_FIELDS; each item is bounded by KSWORD_ARK_RUNTIME_FIELD_SAMPLE_MAX_VALUE_BYTES." },
         { L"memory", L"query-va", L"KswordCLI.exe memory query-va --pid PID --address VA [--flags 0xN]", L"Query virtual memory metadata for one address.", L"Required: --pid, --address. Optional: --flags.", L"" },
         { L"memory", L"read-va", L"KswordCLI.exe memory read-va --pid PID --address VA --bytes N [--flags 0xN] [--hexdump]", L"Read virtual memory bytes.", L"Required: --pid, --address, --bytes. Optional: --flags, --hexdump.", L"With the kernel-address read flag, --pid may be omitted." },
-        { L"memory", L"write-va", L"KswordCLI.exe memory write-va --pid PID --address VA (--hex HEX | --data-file PATH) [--flags 0xN]", L"Write virtual memory bytes.", L"Required: --pid, --address, and exactly one payload option. Optional: --flags.", L"With the kernel-address write flag, --pid may be omitted." },
+        { L"memory", L"write-va", L"KswordCLI.exe memory write-va --pid PID --address VA (--hex HEX | --data-file PATH) [--flags 0xN] --confirm", L"Write virtual memory bytes.", L"Required: --pid, --address, --confirm, and exactly one payload option. Optional: --flags.", L"With the kernel-address write flag, --pid may be omitted." },
         { L"memory", L"read-phys", L"KswordCLI.exe memory read-phys --address PA --bytes N [--hexdump]", L"Read physical memory bytes.", L"Required: --address, --bytes. Optional: --hexdump.", L"" },
-        { L"memory", L"write-phys", L"KswordCLI.exe memory write-phys --address PA (--hex HEX | --data-file PATH) [--flags 0xN]", L"Write physical memory bytes.", L"Required: --address and exactly one payload option. Optional: --flags.", L"" },
+        { L"memory", L"write-phys", L"KswordCLI.exe memory write-phys --address PA (--hex HEX | --data-file PATH) [--flags 0xN] --confirm", L"Write physical memory bytes.", L"Required: --address, --confirm, and exactly one payload option. Optional: --flags.", L"" },
         { L"memory", L"translate-va", L"KswordCLI.exe memory translate-va --pid PID --address VA [--flags 0xN]", L"Translate a virtual address to page-table evidence.", L"Required: --pid, --address. Optional: --flags.", L"" },
         { L"memory", L"query-pte", L"KswordCLI.exe memory query-pte --pid PID --address VA [--flags 0xN]", L"Query page-table entries for one virtual address.", L"Required: --pid, --address. Optional: --flags.", L"" },
         { L"memory", L"scan-kexec", L"KswordCLI.exe memory scan-kexec [--flags 0xN] [--max-entries N] [--start VA] [--end VA] [--limit N]", L"Scan executable kernel memory evidence.", L"Optional: --flags, --max-entries, --start, --end, --limit.", L"" },
@@ -1209,7 +267,7 @@ namespace
         { L"memory", L"scan-evidence", L"KswordCLI.exe memory scan-evidence [--flags 0xN] [--max-rows N] [--start VA] [--end VA] [--max-bytes N] [--max-bigpool-rows N] [--sample-bytes N] [--limit N]", L"Scan kernel memory evidence rows.", L"Optional: --flags, --max-rows, --start, --end, --max-bytes, --max-bigpool-rows, --sample-bytes, --limit.", L"" },
         { L"memory", L"change-mapped-protection", L"KswordCLI.exe memory change-mapped-protection --address VA [--protection 0xN] [--flags 0xN]", L"MDL-based page protection change (HVCI research).", L"Required: --address. Optional: --protection (default PAGE_READWRITE=0x04), --flags (0x1=write test).", L"Exit 1 if a required/requested stage fails or remains pending; exit 4 for an incompatible response." },
         { L"memory", L"change-image-protection", L"KswordCLI.exe memory change-image-protection --address VA [--operation N] [--flags 0xN] [--func-addr VA]", L"MmChangeImageProtection on kernel image page (HVCI research).", L"Required: --address. Optional: --operation (1=RX, 2=READONLY_NX, default 2), --flags (0x1=write test, 0x2=restore), --func-addr (manual MmChangeImageProtection VA).", L"Exit 1 if a required/requested stage fails or remains pending; exit 4 for an incompatible response." },
-        { L"file", L"delete-path", L"KswordCLI.exe file delete-path --path PATH [--flags 0xN]", L"Delete one path through the driver.", L"Required: --path. Optional: --flags.", L"" },
+        { L"file", L"delete-path", L"KswordCLI.exe file delete-path --path PATH [--flags 0xN] --confirm", L"Delete one path through the driver.", L"Required: --path, --confirm. Optional: --flags.", L"" },
         { L"file", L"query-info", L"KswordCLI.exe file query-info --path PATH [--flags 0xN]", L"Query file object and basic file metadata.", L"Required: --path. Optional: --flags.", L"" },
         { L"file", L"set-integrity", L"KswordCLI.exe file set-integrity --path PATH (--rid RID | --level untrusted|low|medium|medium-plus|high|system) [--directory] [--flags 0xN] [--confirm]", L"Set a file or directory mandatory integrity label through R0.", L"Required: --path and one integrity selector. Optional: --directory, --flags, --confirm adds UI-confirmed protocol bit.", L"Win32/UNC paths are normalized to the driver NT path convention before IOCTL_KSWORD_ARK_SET_FILE_INTEGRITY." },
         { L"file", L"fileobject", L"KswordCLI.exe file fileobject --path PATH [--flags 0xN]", L"Alias for file query-info.", L"Required: --path. Optional: --flags.", L"Prints an alias banner before query-info output." },
@@ -1229,7 +287,7 @@ namespace
         { L"kernel", L"patch-inline-hook", L"KswordCLI.exe kernel patch-inline-hook --mode MODE --function VA (--expected-hex HEX | --expected-file PATH) [--restore-hex HEX | --restore-file PATH] [--flags 0xN]", L"Patch or restore an inline hook using bounded byte evidence.", L"Required: --mode, --function, and expected payload. Optional: restore payload, --flags.", L"Hex and file payload forms are mutually exclusive per payload." },
         { L"kernel", L"query-driver-object", L"KswordCLI.exe kernel query-driver-object --driver NAME [--flags 0xN] [--max-devices N] [--max-attached N] [--limit N]", L"Query one DriverObject and device chain.", L"Required: --driver. Optional: --flags, --max-devices, --max-attached, --limit.", L"" },
         { L"kernel", L"query-driver-integrity", L"KswordCLI.exe kernel query-driver-integrity [--driver NAME] [--module-base VA] [--flags 0xN] [--max-rows N] [--max-idt-vectors N] [--max-devices N] [--max-attached N] [--limit N]", L"Query driver integrity evidence rows.", L"Optional: --driver, --module-base, --flags, --max-rows, --max-idt-vectors, --max-devices, --max-attached, --limit.", L"" },
-        { L"kernel", L"force-unload-driver", L"KswordCLI.exe kernel force-unload-driver --driver NAME [--module-base VA] [--timeout-ms N] [--flags 0xN]", L"Force an unload path for one driver.", L"Required: --driver. Optional: --module-base, --timeout-ms, --flags.", L"Exit 0 requires UNLOADED; routine-called/cleanup-only returns 6 and queries DriverObject presence. Print requested/effective flags and preflight evidence; detailed step statuses are in driver log." },
+        { L"kernel", L"force-unload-driver", L"KswordCLI.exe kernel force-unload-driver --driver NAME [--module-base VA] [--timeout-ms N] [--flags 0xN] --confirm", L"Force an unload path for one driver.", L"Required: --driver, --confirm. Optional: --module-base, --timeout-ms, --flags.", L"Exit 0 requires UNLOADED; routine-called/cleanup-only returns 6 and queries DriverObject presence. Print requested/effective flags and preflight evidence; detailed step statuses are in driver log." },
         { L"kernel", L"query-cpu", L"KswordCLI.exe kernel query-cpu", L"Query CPU hardware summary.", L"No options.", L"" },
         { L"kernel", L"query-phys-layout", L"KswordCLI.exe kernel query-phys-layout", L"Query physical memory layout summary.", L"No options.", L"" },
         { L"kernel", L"cid", L"KswordCLI.exe kernel cid [--flags 0xN] [--max-entries N] [--max-visits N] [--start-cid CID] [--end-cid CID] [--limit N]", L"Enumerate CID table evidence.", L"Optional: --flags, --max-entries, --max-visits, --start-cid, --end-cid, --limit.", L"" },
@@ -1246,8 +304,8 @@ namespace
         { L"callback", L"wait-event", L"KswordCLI.exe callback wait-event [--waiter-tag N]", L"Wait for one callback event packet.", L"Optional: --waiter-tag.", L"" },
         { L"callback", L"answer-event", L"KswordCLI.exe callback answer-event --event-guid GUID --decision N --source-session-id N [--answered-at UTC100NS]", L"Answer one pending callback event.", L"Required: --event-guid, --decision, --source-session-id. Optional: --answered-at.", L"" },
         { L"callback", L"cancel-pending", L"KswordCLI.exe callback cancel-pending", L"Cancel all pending callback decisions.", L"No options.", L"" },
-        { L"callback", L"remove", L"KswordCLI.exe callback remove --class N --callback VA [--flags 0xN]", L"Remove a callback through an address-based public API path.", L"Required: --class, --callback. Object, Registry, and ETW classes are not supported by this legacy command.", L"" },
-        { L"callback", L"remove-ex", L"KswordCLI.exe callback remove-ex --class N --callback VA [--registration VA] [--raw-storage VA] [--generation N] [--identity-hash N] [--source N] [--operation-mask 0xN] [--object-type-mask 0xN] [--trust-flags 0xN] [--remove-behavior N] [--flags 0xN]", L"Remove an external callback with extended row identity.", L"Object removal requires every identity field copied from one verified V3 enumeration row plus revalidation flags. Registry and ETW removal are disabled.", L"" },
+        { L"callback", L"remove", L"KswordCLI.exe callback remove --class N --callback VA [--flags 0xN] --confirm", L"Remove a callback through an address-based public API path.", L"Required: --class, --callback, --confirm. Object, Registry, and ETW classes are not supported by this legacy command.", L"" },
+        { L"callback", L"remove-ex", L"KswordCLI.exe callback remove-ex --class N --callback VA [--registration VA] [--raw-storage VA] [--generation N] [--identity-hash N] [--source N] [--operation-mask 0xN] [--object-type-mask 0xN] [--trust-flags 0xN] [--remove-behavior N] [--flags 0xN] --confirm", L"Remove an external callback with extended row identity.", L"Required: --class, --callback, --confirm. Object removal requires every identity field copied from one verified V3 enumeration row plus revalidation flags. Registry and ETW removal are disabled.", L"" },
         { L"callback", L"set-minifilter-bypass-pids", L"KswordCLI.exe callback set-minifilter-bypass-pids --pids PID[,PID...] [--flags 0xN]", L"Set minifilter bypass PID list.", L"Required: --pids. Optional: --flags.", L"" },
         { L"callback", L"query-minifilter-bypass-pids", L"KswordCLI.exe callback query-minifilter-bypass-pids", L"Query minifilter bypass PID list.", L"No options.", L"" },
         { L"callback", L"enum", L"KswordCLI.exe callback enum [--flags 0xN] [--max-entries N] [--limit N]", L"Enumerate callback inventory.", L"Optional: --flags, --max-entries, --limit.", L"" },
@@ -1372,26 +430,7 @@ namespace
         { L"mutation", L"query-audit", L"KswordCLI.exe mutation query-audit [--flags 0xN] [--max-entries N] [--start-sequence N] [--limit N] [--hexdump]", L"Query mutation audit ring entries.", L"Optional: --flags, --max-entries, --start-sequence, --limit, --hexdump.", L"" },
     };
 
-    // sameToken compares an argv token with a metadata token.
-    // Inputs: value may be null; expected is a static command token.
-    // Processing: uses exact case-sensitive comparison to match dispatch behavior.
-    // Returns: true when both tokens contain the same text.
-    bool sameToken(const wchar_t* value, const wchar_t* expected)
-    {
-        return value != nullptr && expected != nullptr && std::wcscmp(value, expected) == 0;
-    }
-
-    // isHelpToken reports whether a token requests CLI help.
-    // Inputs: raw argv token, possibly null.
-    // Processing: accepts the same spellings that dispatch historically treated as help.
-    // Returns: true for help, --help, -h, or /?.
-    bool isHelpToken(const wchar_t* token)
-    {
-        return sameToken(token, L"help") ||
-               sameToken(token, L"--help") ||
-               sameToken(token, L"-h") ||
-               sameToken(token, L"/?");
-    }
+    // sameToken、isHelpToken 已移至 CliText.cpp。
 
     // findFamilyHelp returns metadata for one top-level family.
     // Inputs: family token from argv.
@@ -1653,88 +692,10 @@ namespace
                    << L" returnedCount=" << returned << L"\n";
     }
 
-    // containsIgnoreCase 作用：在 CLI 文本投影中做宽字符包含匹配。
-    // 输入：haystack 为待搜索文本，needle 为目标片段。
-    // 处理：逐字符转小写后比较，避免不同 R0 detail 大小写导致漏报。
-    // 返回：命中返回 true；needle 为空时按“不过滤”返回 true。
-    bool containsIgnoreCase(const std::wstring& haystack, const wchar_t* needle)
-    {
-        if (needle == nullptr || needle[0] == L'\0')
-        {
-            return true;
-        }
+    // containsIgnoreCase 已移至 CliText.cpp。
 
-        std::wstring loweredHaystack;
-        loweredHaystack.reserve(haystack.size());
-        for (const wchar_t ch : haystack)
-        {
-            loweredHaystack.push_back(static_cast<wchar_t>(std::towlower(ch)));
-        }
-
-        std::wstring loweredNeedle;
-        for (const wchar_t* cursor = needle; *cursor != L'\0'; ++cursor)
-        {
-            loweredNeedle.push_back(static_cast<wchar_t>(std::towlower(*cursor)));
-        }
-        return loweredHaystack.find(loweredNeedle) != std::wstring::npos;
-    }
-
-    // validateVariable validates header + variable entries before parsing rows.
-    // Inputs: returned bytes, header size, entry size and minimum row size.
-    // Processing: checks short buffers and invalid row sizes.
-    // Returns: available row count in the returned buffer.
-    std::size_t validateVariable(DWORD bytesReturned, std::size_t headerSize, std::uint32_t entrySize, std::size_t minEntrySize, const wchar_t* label)
-    {
-        if (bytesReturned < headerSize)
-        {
-            std::wcerr << L"error: " << label << L" response too small: " << bytesReturned << L" bytes\n";
-            throw std::runtime_error("small response");
-        }
-        if (entrySize < minEntrySize)
-        {
-            std::wcerr << L"error: " << label << L" invalid entrySize=" << entrySize << L"\n";
-            throw std::runtime_error("entry size");
-        }
-        return (static_cast<std::size_t>(bytesReturned) - headerSize) / static_cast<std::size_t>(entrySize);
-    }
-
-    // isUnsupportedTransportError recognizes old-driver or missing-IOCTL results.
-    // Inputs: Win32 error returned by DeviceIoControl.
-    // Processing: maps common unsupported/unimplemented transport statuses.
-    // Returns: true when the caller should print "unsupported / unavailable".
-    bool isUnsupportedTransportError(DWORD error)
-    {
-        return error == ERROR_INVALID_FUNCTION ||
-               error == ERROR_NOT_SUPPORTED ||
-               error == ERROR_CALL_NOT_IMPLEMENTED ||
-               error == ERROR_PROC_NOT_FOUND;
-    }
-
-    // normalizeIoctlRc keeps new audit commands graceful on older drivers.
-    // Inputs: feature label, IoctlResult and the raw helper return code.
-    // Processing: rewrites missing IOCTL failures into a clear audit message.
-    // Returns: CLI exit code; 5 means supported by CLI but unavailable in driver.
-    int normalizeIoctlRc(const wchar_t* feature, const IoctlResult& io, int rc)
-    {
-        if (rc == 3 && isUnsupportedTransportError(io.win32Error))
-        {
-            std::wcerr << L"unsupported / unavailable: " << feature
-                       << L" (driver does not expose this read-only IOCTL)\n";
-            return 5;
-        }
-        return rc;
-    }
-
-    // commandUnsupported reports a known command whose protocol is not present.
-    // Inputs: feature and reason strings.
-    // Processing: prints a stable phrase required by acceptance checks.
-    // Returns: non-zero CLI status to let scripts detect degraded support.
-    int commandUnsupported(const wchar_t* feature, const wchar_t* reason)
-    {
-        std::wcerr << L"unsupported / unavailable: " << feature
-                   << L" (" << reason << L")\n";
-        return 5;
-    }
+    // validateVariable, isUnsupportedTransportError, normalizeIoctlRc and
+    // commandUnsupported live in CliCore.cpp.
 
     std::wstring fixedAnsiWide(const char* text, std::size_t maxBytes);
     bool copyOptionalWideOption(const NamedArgs& args, const wchar_t* key, wchar_t* destination, std::size_t capacity);
@@ -2630,6 +1591,7 @@ namespace
             KSWORD_ARK_TERMINATE_PROCESS_REQUEST request{};
             request.processId = requireOptionU32(args, L"--pid");
             request.exitStatus = static_cast<long>(getOptionU32(args, L"--exit-status", 0xC000013AUL));
+            requireConfirmOption(args, "process terminate requires --confirm");
             return runNoOutputIoctl(L"IOCTL_KSWORD_ARK_TERMINATE_PROCESS", IOCTL_KSWORD_ARK_TERMINATE_PROCESS, &request, sizeof(request));
         }
         if (sub == L"suspend")
@@ -2990,12 +1952,14 @@ namespace
         }
         if (sub == L"write-va")
         {
+            requireConfirmOption(args, "memory write-va requires --confirm");
             const std::vector<std::uint8_t> bytes = loadBytesFromHexOrFile(args, L"--hex", L"--data-file", KSWORD_ARK_MEMORY_WRITE_MAX_BYTES, true);
             if (bytes.empty()) { std::wcerr << L"error: write-va payload is empty\n"; return 1; }
             constexpr std::size_t headerSize = offsetof(KSWORD_ARK_WRITE_VIRTUAL_MEMORY_REQUEST, data);
             std::vector<std::uint8_t> input(headerSize + bytes.size(), 0U);
             auto* request = reinterpret_cast<KSWORD_ARK_WRITE_VIRTUAL_MEMORY_REQUEST*>(input.data());
-            request->flags = getOptionU32(args, L"--flags", KSWORD_ARK_MEMORY_WRITE_FLAG_UI_CONFIRMED);
+            request->flags = getOptionU32(args, L"--flags", 0U);
+            if (getOptionBool(args, L"--confirm")) request->flags |= KSWORD_ARK_MEMORY_WRITE_FLAG_UI_CONFIRMED;
             request->processId = ((request->flags & KSWORD_ARK_MEMORY_WRITE_FLAG_KERNEL_ADDRESS) != 0UL)
                 ? getOptionU32(args, L"--pid", 0U)
                 : requireOptionU32(args, L"--pid");
@@ -3048,12 +2012,14 @@ namespace
         }
         if (sub == L"write-phys")
         {
+            requireConfirmOption(args, "memory write-phys requires --confirm");
             const std::vector<std::uint8_t> bytes = loadBytesFromHexOrFile(args, L"--hex", L"--data-file", KSWORD_ARK_MEMORY_PHYSICAL_WRITE_MAX_BYTES, true);
             if (bytes.empty()) { std::wcerr << L"error: write-phys payload is empty\n"; return 1; }
             constexpr std::size_t headerSize = sizeof(KSWORD_ARK_WRITE_PHYSICAL_MEMORY_REQUEST) - sizeof(((KSWORD_ARK_WRITE_PHYSICAL_MEMORY_REQUEST*)nullptr)->data);
             std::vector<std::uint8_t> input(headerSize + bytes.size(), 0U);
             auto* request = reinterpret_cast<KSWORD_ARK_WRITE_PHYSICAL_MEMORY_REQUEST*>(input.data());
-            request->flags = getOptionU32(args, L"--flags", KSWORD_ARK_PHYSICAL_WRITE_FLAG_UI_CONFIRMED);
+            request->flags = getOptionU32(args, L"--flags", 0U);
+            if (getOptionBool(args, L"--confirm")) request->flags |= KSWORD_ARK_PHYSICAL_WRITE_FLAG_UI_CONFIRMED;
             request->physicalAddress = requireOptionU64(args, L"--address");
             request->bytesToWrite = static_cast<unsigned long>(bytes.size());
             std::copy(bytes.begin(), bytes.end(), request->data);
@@ -4989,6 +3955,7 @@ namespace
 
         if (sub == L"delete-path")
         {
+            requireConfirmOption(args, "file delete-path requires --confirm");
             KSWORD_ARK_DELETE_PATH_REQUEST request{};
             request.flags = getOptionU32(args, L"--flags", 0U);
             const std::wstring& pathText = requireOptionText(args, L"--path");
@@ -5247,41 +4214,7 @@ namespace
         return bytes;
     }
 
-    // sendBlobFixedResponse sends a raw input blob and receives one fixed response.
-    // Inputs: IOCTL label/code, blob bytes, response object, result packet, access.
-    // Processing: performs METHOD_BUFFERED DeviceIoControl with size validation.
-    // Returns: true on a transport-level success with a full fixed response.
-    template <typename TResponse>
-    bool sendBlobFixedResponse(
-        DWORD code,
-        const wchar_t* label,
-        std::vector<std::uint8_t>& input,
-        TResponse& response,
-        IoctlResult& io,
-        DWORD desiredAccess = kDefaultDesiredAccess)
-    {
-        DriverHandle handle = openDriverOrReport(desiredAccess);
-        if (!handle.valid())
-        {
-            io.win32Error = ::GetLastError();
-            return false;
-        }
-
-        io = sendIoctl(handle, code, input.data(), checkedDwordSize(input.size()), &response, static_cast<DWORD>(sizeof(response)));
-        if (!io.ok)
-        {
-            printWin32Error(label, io.win32Error);
-            return false;
-        }
-        if (io.bytesReturned < sizeof(response))
-        {
-            std::wcerr << L"error: " << label << L" response too small: " << io.bytesReturned << L" bytes\n";
-            io.ok = false;
-            io.win32Error = ERROR_INSUFFICIENT_BUFFER;
-            return false;
-        }
-        return true;
-    }
+    // sendBlobFixedResponse lives in CliCore.h as an inline template.
 
     // printModuleIdentity renders a DynData module identity packet.
     // Inputs: label and module packet.
@@ -5540,6 +4473,7 @@ namespace
 
         if (sub == L"force-unload-driver")
         {
+            requireConfirmOption(args, "kernel force-unload-driver requires --confirm");
             KSWORD_ARK_FORCE_UNLOAD_DRIVER_REQUEST request{};
             KSWORD_ARK_FORCE_UNLOAD_DRIVER_RESPONSE response{};
             request.version = KSWORD_ARK_FORCE_UNLOAD_DRIVER_PROTOCOL_VERSION;
@@ -6007,6 +4941,7 @@ namespace
         }
         if (sub == L"remove")
         {
+            requireConfirmOption(args, "callback remove requires --confirm");
             KSWORD_ARK_REMOVE_EXTERNAL_CALLBACK_REQUEST request{};
             KSWORD_ARK_REMOVE_EXTERNAL_CALLBACK_RESPONSE response{};
             request.size = sizeof(request);
@@ -6027,6 +4962,7 @@ namespace
         }
         if (sub == L"remove-ex")
         {
+            requireConfirmOption(args, "callback remove-ex requires --confirm");
             KSWORD_ARK_REMOVE_EXTERNAL_CALLBACK_EX_REQUEST request{};
             KSWORD_ARK_REMOVE_EXTERNAL_CALLBACK_EX_RESPONSE response{};
             request.size = sizeof(request);
@@ -8812,6 +7748,7 @@ namespace
 // Returns: process exit code; zero means the requested operation completed.
 int wmain(int argc, wchar_t* argv[])
 {
+    using namespace ks::cli::legacy;
     configureConsole();
     try
     {

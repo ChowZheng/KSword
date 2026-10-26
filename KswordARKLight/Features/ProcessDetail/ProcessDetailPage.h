@@ -6,6 +6,7 @@
 #include "../../Core/Common.h"
 #include "../../Core/Win32Lean.h"
 #include "../../Ui/AsyncTask.h"
+#include "../../Ui/TableSnapshotCompare.h"
 #include "../../Ui/VirtualListView.h"
 
 #include <commctrl.h>
@@ -22,6 +23,13 @@
 #include <vector>
 
 namespace Ksword::Features::ProcessDetail {
+
+// AttachTextActionsToTextPanel installs the shared right-click menu on a
+// read-only text panel: copy, and export as a UTF-8 text file. It is a free
+// function because the panels are created by several translation units and none
+// of them needs page state to answer either command. suggestedName must have
+// static lifetime; it becomes the default file name in the save dialog.
+void AttachTextActionsToTextPanel(HWND control, const wchar_t* suggestedName);
 
 // ProcessDetailPage is the native Win32 conversion of the full process-detail
 // layout. It owns native tab pages and does not load foreign UI sources,
@@ -74,6 +82,9 @@ private:
         DetailRam,
         DetailDisk,
         DetailSignature,
+        // ExportDetailReport writes the whole detail tab as one text report;
+        // the per-field copy buttons only ever carry a single value.
+        DetailExportReport,
 
         ThreadRefresh = 1200,
         ThreadSample,
@@ -383,9 +394,28 @@ private:
     void CopyListCell(HWND list);
     void CopyListRow(HWND list);
     void CopyListAll(HWND list);
+    // BuildListTsv serializes an entire report table with its header row. It is
+    // shared by the clipboard path and the file path so an exported table and a
+    // copied table can never drift apart.
+    std::wstring BuildListTsv(HWND list) const;
+    // ExportListTsv writes one table to disk. Every table on this page is
+    // investigation data — modules and threads disappear when the process exits
+    // — so none of them should be clipboard-only.
+    void ExportListTsv(HWND list, const wchar_t* label);
+    // ListExportLabel names the table behind one report list, so exporting the
+    // thread table and the hook table does not produce two files called
+    // process_1234_table.tsv. Falls back to "table" for an unknown list.
+    std::wstring ListExportLabel(HWND list) const;
+    // ShowListOnlyContextMenu is the menu for a populated table with nothing
+    // selected: the row actions have no target, but copying and exporting the
+    // whole table still do.
+    bool ShowListOnlyContextMenu(HWND list, POINT screenPoint, const wchar_t* label);
     int SelectedListRow(HWND list) const;
 
     void PopulateDetailTab();
+    // ExportDetailReport reads every field back off its control, so the saved
+    // report can never disagree with what the operator is looking at.
+    void ExportDetailReport();
     void PopulateThreadTab();
     void PopulateModuleTab();
     void PopulateTokenTab();
@@ -465,6 +495,7 @@ private:
     TabIndex currentTab_ = TabIndex::Count;
     std::array<PageState, static_cast<std::size_t>(TabIndex::Count)> pages_{};
     std::unordered_map<HWND, int> listColumnCounts_;
+    std::unordered_map<HWND, std::wstring> listExportLabels_;
     std::unordered_map<HWND, int> listContextColumns_;
     ProcessDetailSnapshot snapshot_{};
     std::unique_ptr<Ksword::Ui::AsyncSnapshotTask<ProcessDetailSnapshot>> snapshotTask_;
@@ -479,6 +510,9 @@ private:
     std::unique_ptr<Ksword::Ui::AsyncSnapshotTask<DetailTableFilterResult>> moduleFilterTask_;
     Ksword::Ui::VirtualListView threadVirtualList_;
     Ksword::Ui::VirtualListView moduleVirtualList_;
+    // 线程表与模块表列集不同，各持一个快照槽：共用会把"优先级"和"大小"当成同一列。
+    Ksword::Ui::TableSnapshotEngine threadSnapshotEngine_;
+    Ksword::Ui::TableSnapshotEngine moduleSnapshotEngine_;
     std::shared_ptr<const std::vector<ProcessThreadInfo>> threadEntries_;
     std::shared_ptr<const std::vector<ProcessThreadInfo>> pendingThreadEntries_;
     std::shared_ptr<const std::vector<ProcessModuleInfo>> moduleEntries_;

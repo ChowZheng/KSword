@@ -5,9 +5,12 @@
 
 #include "ProcessDetailPage.h"
 
+#include "../../Ui/ExportUtil.h"
+
 #include <algorithm>
 #include <array>
 #include <iomanip>
+#include <iterator>
 #include <sstream>
 #include <string>
 
@@ -49,13 +52,23 @@ bool AllCreated(std::initializer_list<HWND> controls) {
     });
 }
 
+// kDetailFieldLabels is walked by the layout loop and by the report export, so a
+// saved report always lists the rows in the order they are shown on screen. The
+// control ids are read by offset from DetailStartTime; the static_assert in
+// CreateDetailTab keeps that arithmetic honest.
+constexpr const wchar_t* kDetailFieldLabels[12] = {
+    L"启动时间", L"用户", L"管理员", L"架构", L"优先级", L"Session ID",
+    L"线程数量", L"句柄数量", L"CPU 占用", L"RAM 占用", L"DISK 吞吐", L"数字签名"
+};
+
 } // namespace
 
 bool ProcessDetailPage::CreateDetailTab() {
     const TabIndex tab = TabIndex::Detail;
 
-    HWND title = AddLabel(tab, DetailTitle, L"Unknown  (PID: 0)", 6, 6, -12, 40);
+    HWND title = AddLabel(tab, DetailTitle, L"Unknown  (PID: 0)", 6, 6, -190, 40);
     ApplyFont(title, titleFont_);
+    HWND exportReport = AddButton(tab, DetailExportReport, L"导出详情报告…", -184, 12, 178, 28);
 
     HWND pathLabel = AddLabel(tab, 0, L"程序路径:", 6, 54, 92, 28);
     MakeRightAligned(pathLabel);
@@ -77,37 +90,25 @@ bool ProcessDetailPage::CreateDetailTab() {
 
     HWND detailGroup = AddGroup(tab, L"更多进程详细数据", 6, 158, -12, -12);
 
-    struct DetailField {
-        const wchar_t* label;
-        int controlId;
-    };
-    constexpr std::array<DetailField, 12> fields{
-        DetailField{ L"启动时间", DetailStartTime },
-        DetailField{ L"用户", DetailUser },
-        DetailField{ L"管理员", DetailAdmin },
-        DetailField{ L"架构", DetailArchitecture },
-        DetailField{ L"优先级", DetailPriority },
-        DetailField{ L"Session ID", DetailSession },
-        DetailField{ L"线程数量", DetailThreadCount },
-        DetailField{ L"句柄数量", DetailHandleCount },
-        DetailField{ L"CPU 占用", DetailCpu },
-        DetailField{ L"RAM 占用", DetailRam },
-        DetailField{ L"DISK 吞吐", DetailDisk },
-        DetailField{ L"数字签名", DetailSignature }
-    };
+    static_assert(
+        static_cast<int>(DetailSignature) - static_cast<int>(DetailStartTime) + 1 ==
+            static_cast<int>(std::size(kDetailFieldLabels)),
+        "详情字段控件 id 必须连续：布局与导出都按下标从 DetailStartTime 推算");
 
     bool fieldsCreated = true;
     int y = 184;
-    for (const DetailField& field : fields) {
-        HWND label = AddLabel(tab, 0, field.label, 24, y, kDetailLabelWidth, 25);
+    for (std::size_t index = 0; index < std::size(kDetailFieldLabels); ++index) {
+        HWND label = AddLabel(tab, 0, kDetailFieldLabels[index], 24, y, kDetailLabelWidth, 25);
         MakeRightAligned(label);
-        HWND value = AddLabel(tab, field.controlId, L"-", kDetailValueLeft, y, -188, 25);
+        HWND value = AddLabel(tab, DetailStartTime + static_cast<int>(index), L"-",
+            kDetailValueLeft, y, -188, 25);
         fieldsCreated = fieldsCreated && label && value;
         y += 30;
     }
 
     return fieldsCreated && AllCreated({
         title,
+        exportReport,
         pathLabel,
         path,
         copyPath,
@@ -178,6 +179,41 @@ void ProcessDetailPage::PopulateDetailTab() {
         !basic.imagePath.empty());
 }
 
+void ProcessDetailPage::ExportDetailReport() {
+    const auto valueOf = [this](const int controlId) {
+        std::wstring value = ControlText(TabIndex::Detail, controlId);
+        return value.empty() ? std::wstring(L"-") : value;
+    };
+    const auto row = [](const wchar_t* label, const std::wstring& value) {
+        return std::wstring(label) + L"：" + value + L"\r\n";
+    };
+
+    std::wstring text = L"进程详细信息\r\n============\r\n";
+    text += row(L"进程", valueOf(DetailTitle));
+    text += row(L"程序路径", valueOf(DetailPath));
+    text += row(L"启动命令行", valueOf(DetailCommandLine));
+    text += row(L"父进程", valueOf(DetailParentText));
+    for (std::size_t index = 0; index < std::size(kDetailFieldLabels); ++index) {
+        text += row(kDetailFieldLabels[index], valueOf(DetailStartTime + static_cast<int>(index)));
+    }
+
+    const std::wstring suggested = L"process_" + std::to_wstring(processId_) + L"_detail.txt";
+    std::wstring error;
+    const Ksword::Ui::SaveTextFileResult result = Ksword::Ui::SaveUtf8TextFileWithDialog(
+        hwnd_,
+        suggested.c_str(),
+        L"导出进程详细信息",
+        L"文本文件 (*.txt)\0*.txt\0所有文件 (*.*)\0*.*\0",
+        L"txt",
+        text,
+        &error);
+    if (result == Ksword::Ui::SaveTextFileResult::Failed) {
+        // 详情页没有状态行，写盘失败是唯一需要打断操作者的情形。
+        const std::wstring failure = error.empty() ? std::wstring(L"导出失败。") : error;
+        ::MessageBoxW(hwnd_, failure.c_str(), L"导出失败", MB_OK | MB_ICONWARNING);
+    }
+}
+
 bool ProcessDetailPage::HandleDetailCommand(int controlId) {
     switch (controlId) {
     case DetailCopyPath:
@@ -203,6 +239,9 @@ bool ProcessDetailPage::HandleDetailCommand(int controlId) {
     }
     case DetailCopyCommand:
         CopyText(hwnd_, ControlText(TabIndex::Detail, DetailCommandLine));
+        return true;
+    case DetailExportReport:
+        ExportDetailReport();
         return true;
     case DetailOpenHandles:
         ::MessageBoxW(

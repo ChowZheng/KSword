@@ -1,4 +1,6 @@
 #include "FileActions.h"
+
+#include "../../Ui/ExportUtil.h"
 #include "../../../shared/usermode/backend/file/PeSnapshot.h"
 #include "../../../shared/usermode/backend/file/FileAnalysis.h"
 #include "../../../shared/usermode/backend/file/Ownership.h"
@@ -401,7 +403,17 @@ FileActionId FileActions::showContextMenu(HWND owner, const FileActionContext& c
         appendAction(copyMenu, FileActionId::CopyKernelModeAddress, L"复制内核模式路径", true);
         appendAction(copyMenu, FileActionId::CopyShortFileName, L"复制短文件名", true);
         appendAction(copyMenu, FileActionId::CopyLinkTarget, L"复制链接目标", true);
+        ::AppendMenuW(copyMenu, MF_SEPARATOR, 0, nullptr);
+        appendAction(copyMenu, FileActionId::CopySelectedRow, L"复制整行", true);
+        appendAction(copyMenu, FileActionId::CopyVisibleRows, L"复制可见行", false);
         ::AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(copyMenu), L"复制");
+    }
+
+    HMENU exportMenu = ::CreatePopupMenu();
+    if (exportMenu) {
+        appendAction(exportMenu, FileActionId::ExportVisibleTsv, L"导出可见行为 TSV...", false);
+        appendAction(exportMenu, FileActionId::ExportAllTsv, L"导出全部行为 TSV...", false);
+        ::AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(exportMenu), L"导出");
     }
 
     HMENU fileMenu = ::CreatePopupMenu();
@@ -870,31 +882,10 @@ FileActionResult FileActions::execute(FileActionId action, const FileActionConte
 }
 
 bool FileActions::copyTextToClipboard(HWND owner, const std::wstring& text) {
-    if (!::OpenClipboard(owner)) {
-        return false;
-    }
-    ::EmptyClipboard();
-    const SIZE_T bytes = (text.size() + 1) * sizeof(wchar_t);
-    HGLOBAL memory = ::GlobalAlloc(GMEM_MOVEABLE, bytes);
-    if (!memory) {
-        ::CloseClipboard();
-        return false;
-    }
-    void* target = ::GlobalLock(memory);
-    if (!target) {
-        ::GlobalFree(memory);
-        ::CloseClipboard();
-        return false;
-    }
-    std::memcpy(target, text.c_str(), bytes);
-    ::GlobalUnlock(memory);
-    if (!::SetClipboardData(CF_UNICODETEXT, memory)) {
-        ::GlobalFree(memory);
-        ::CloseClipboard();
-        return false;
-    }
-    ::CloseClipboard();
-    return true;
+    // Forward to the shared writer: one implementation means a copied
+    // value also lands in the evidence session, which the local copies
+    // never did.
+    return Ksword::Ui::CopyTextToClipboard(owner, text, L"文件动作");
 }
 
 } // namespace Ksword::Features::File
